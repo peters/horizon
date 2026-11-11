@@ -168,8 +168,6 @@ fn restored_remote_sessions_are_removed_before_rendering_and_stay_out_of_saved_s
 
 #[test]
 fn a_person_engine_that_cannot_start_says_why_before_its_panel_goes() {
-    use std::time::Instant;
-
     let (_temp, mut app) = test_support::test_app();
     let workspace = app.board.create_workspace("Synthetic workspace");
     let failed = browser(
@@ -181,7 +179,7 @@ fn a_person_engine_that_cannot_start_says_why_before_its_panel_goes() {
         },
         true,
     );
-    app.person_browser_creates.note(failed, Instant::now(), None);
+    app.person_browser_creates.note(failed, None);
 
     assert!(app.close_ended_browser_panels());
 
@@ -214,4 +212,83 @@ fn an_agent_engine_that_cannot_start_says_nothing_to_the_person() {
         app.sidebar_notice, None,
         "the agent's create answers the agent with its typed failure, not the person"
     );
+}
+
+#[test]
+fn a_panel_that_lost_the_browser_of_its_host_stays_with_its_address() {
+    use horizon_core::browser::AttachedHost;
+
+    let (_temp, mut app) = test_support::test_app();
+    let workspace = app.board.create_workspace("Synthetic workspace");
+    let id = PanelId(100);
+    let state = BrowserPanelState::lost_attached_host_for_tests(
+        &AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name"),
+        "https://example.test/inbox",
+        "CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake",
+    );
+    let mut panel = Panel::from_content(
+        id,
+        workspace,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(state)),
+    );
+    panel.visible = true;
+    app.board.panels.push(panel);
+    app.board.workspace_mut(workspace).expect("workspace").add_panel(id);
+    app.board.focus(id);
+    app.person_browser_creates.note(id, None);
+
+    assert!(!app.close_ended_browser_panels());
+
+    let panel = app.board.panel(id).expect("the panel stays where the person put it");
+    let browser = panel.browser().expect("browser state");
+    let failure = browser.attached_host_failure().expect("a typed reason");
+    assert_eq!(failure.code(), "attached_host_connection_lost");
+    assert_eq!(browser.display_url(), "https://example.test/inbox");
+    assert_eq!(
+        app.sidebar_notice, None,
+        "the panel itself says why, so the sidebar stays for a panel that goes"
+    );
+    let saved = RuntimeState::from_board(&app.board, WindowConfig::default(), CanvasViewState::default());
+    assert_eq!(
+        saved.workspaces[0].panels[0]
+            .browser_profile
+            .as_ref()
+            .and_then(|profile| profile.host.clone())
+            .map(|host| host.ssh_target),
+        Some("browser-vm".to_string()),
+        "the saved panel keeps the browser host that Retry reaches"
+    );
+}
+
+#[test]
+fn a_local_panel_that_ends_with_an_error_later_also_says_why() {
+    let (_temp, mut app) = test_support::test_app();
+    let workspace = app.board.create_workspace("Synthetic workspace");
+    let failed = browser(
+        &mut app,
+        workspace,
+        100,
+        BrowserStatus::Error {
+            message:
+                "CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"
+                    .into(),
+        },
+        true,
+    );
+    app.person_browser_creates.note(failed, None);
+
+    assert!(app.close_ended_browser_panels());
+
+    assert!(app.board.panel(failed).is_none(), "a local panel that ends still goes");
+    assert_eq!(
+        app.sidebar_notice.as_deref(),
+        Some(
+            "Browser panel: CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"
+        ),
+        "the person reads the words of the engine, however long the panel lived"
+    );
+    app.sidebar_notice = None;
+    assert!(!app.close_ended_browser_panels(), "one notice per panel");
+    assert_eq!(app.sidebar_notice, None, "a gone panel says nothing again");
 }

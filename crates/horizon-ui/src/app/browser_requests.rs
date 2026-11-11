@@ -70,6 +70,8 @@ pub(super) struct BrowserCreateHostState {
     pub(super) visibility_in_flight: Vec<super::browser_visibility_requests::VisibilityInFlight>,
     /// Does the coordination file work in order, off the UI thread.
     pub(super) io: HostIo,
+    /// The panels whose kept reason this host published for the agents.
+    pub(super) kept_failures: super::browser_kept_failures::KeptBrowserFailures,
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +117,7 @@ impl HorizonApp {
         if poll_due {
             self.browser_create_host.last_request_poll = Some(now);
             changed |= self.close_ended_browser_panels();
+            changed |= self.sync_kept_browser_failures();
             changed |= self.poll_host_requests();
             self.browser_create_host.forget_stamped_placement();
         }

@@ -10,8 +10,6 @@
 //! engine that cannot start says the same reason, because its panel ends at once
 //! and the cleanup that removes it reports the reason first.
 
-use std::time::Instant;
-
 use egui::Context;
 use horizon_core::{PanelId, PanelKind, PanelOptions, WorkspaceId};
 
@@ -37,7 +35,6 @@ impl HorizonApp {
                 // cleanup then says why this press opened no page.
                 self.person_browser_creates.note(
                     opened,
-                    Instant::now(),
                     Some(LinkOrigin {
                         card: panel_id,
                         url: url.to_owned(),

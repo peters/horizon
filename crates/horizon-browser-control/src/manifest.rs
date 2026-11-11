@@ -47,6 +47,7 @@ mod capture;
 mod close;
 mod create;
 pub mod device;
+mod kept;
 mod ownership;
 pub mod provider_usage;
 pub mod recovery;
@@ -70,6 +71,9 @@ pub use create::{
     CreateNavigation, PendingCreate, RemoteCreateParameters, admit_create, claim_create_request,
     complete_create_request, enqueue_create, enqueue_create_oriented, enqueue_duplicate, list_create_requests,
     record_create_status, take_create_result,
+};
+pub use kept::{
+    KeptPanel, ManifestFailure, kept_panel_failure, publish_kept_panel_failure, release_kept_panel_failure,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{
@@ -192,6 +196,11 @@ pub struct BrowserManifest {
     /// Bounded host queue consumed only while the user is not steering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<horizon_browser::AgentAction>,
+    /// The typed reason this panel cannot serve a page while the person keeps
+    /// it, such as a browser host whose browser stopped. A driver writes its
+    /// own manifest when it starts, so a reason describes a panel without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<ManifestFailure>,
     pub updated_at: i64,
 }
 
@@ -1024,6 +1033,7 @@ mod tests {
             user_active_at: 0,
             handoff: None,
             actions: Vec::new(),
+            failure: None,
             updated_at: 0,
         }
     }

@@ -180,6 +180,8 @@ impl HorizonApp {
         self.keep_transcripts_of_saved_board(runtime_state);
         // Coordination work asked for on the board this replaces no longer applies to a board.
         self.browser_create_host.io.replace_board();
+        // The kept panels of the previous board do not stand on this one.
+        self.forget_kept_browser_failures();
         self.reset_native_file_input();
         self.arranged_panel_drag = None;
         self.window_config = runtime_state.window_or(&self.template_config.window).clone();

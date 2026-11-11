@@ -229,7 +229,9 @@ impl Board {
 
     /// Browser sessions that ended or failed, including stopped remote
     /// placeholders restored from a previous run. Hidden live browsers and
-    /// page navigation errors do not end a session.
+    /// page navigation errors do not end a session, and neither does a panel of
+    /// a browser host that lost its browser after it showed a page: that panel
+    /// stays with its last address and the person's Retry.
     pub fn ended_browser_panels(&self) -> impl Iterator<Item = PanelId> + '_ {
         self.panels
             .iter()

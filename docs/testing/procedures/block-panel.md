@@ -1127,7 +1127,11 @@ stop the server in step 8.
    Result: No browser panel stays on the board. Two lines say why, and both use
    the words of the engine: the sidebar notice reads `Browser panel: <reason>`
    for ten seconds, and the card draws `Could not open: <reason>` in the danger
-   colour under the host of the address. The log holds both lines.
+   colour under the host of the address. The log holds both lines. A browser
+   panel of this computer that ends with an error after it showed a page says the
+   same reason in the same notice, and it goes the same way. A panel of a browser
+   host does not: it stays, and it says why in its own body (see the
+   [remote browser tunnel](remote-browser-tunnel.md) procedure).
 
 9. Call `block_panel` again with the document of step 2.
 

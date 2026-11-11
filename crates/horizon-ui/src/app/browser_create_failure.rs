@@ -19,22 +19,29 @@ pub(super) const CREATE_TIMEOUT: (&str, &str) = (
 /// result.
 pub(super) fn terminal_create_failure(
     browser: &horizon_core::browser::BrowserPanelState,
-) -> Option<(&'static str, &'static str)> {
+) -> Option<(&'static str, &str)> {
     match &browser.status {
         BrowserStatus::Starting | BrowserStatus::Ready => None,
-        BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } => Some(browser.remote_failure().map_or_else(
-            || match &browser.status {
-                BrowserStatus::Error { .. } => (
-                    "backend_start_failed",
-                    "the selected browser backend did not start; inspect the local logs",
-                ),
-                _ => (
-                    "backend_stopped",
-                    "the selected browser backend stopped before it became controllable",
-                ),
-            },
-            |failure| (failure.code, failure.message),
-        )),
+        BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } => {
+            // A browser host names its own typed failures: the agent reads why
+            // its panel did not reach that machine's browser.
+            if let Some(failure) = browser.attached_host_failure() {
+                return Some((failure.code(), failure.message()));
+            }
+            Some(browser.remote_failure().map_or_else(
+                || match &browser.status {
+                    BrowserStatus::Error { .. } => (
+                        "backend_start_failed",
+                        "the selected browser backend did not start; inspect the local logs",
+                    ),
+                    _ => (
+                        "backend_stopped",
+                        "the selected browser backend stopped before it became controllable",
+                    ),
+                },
+                |failure| (failure.code, failure.message),
+            ))
+        }
     }
 }
 
@@ -130,6 +137,24 @@ mod tests {
         assert_eq!(
             terminal_create_failure(&unknown).map(|(code, _)| code),
             Some("remote_allocation_unknown")
+        );
+
+        let mut attached = BrowserPanelState::lost_attached_host_for_tests(
+            &horizon_core::browser::AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name"),
+            "https://example.test/",
+            "CDP connection lost: connection reset",
+        );
+        let (code, message) = terminal_create_failure(&attached).expect("terminal");
+        assert_eq!(code, "attached_host_connection_lost");
+        assert!(
+            message.contains("Connection reset") || message.contains("connection reset"),
+            "the agent reads the words of the lost connection: {message}"
+        );
+        attached.status = BrowserStatus::Stopped { code: None };
+        assert_eq!(
+            terminal_create_failure(&attached).map(|(code, _)| code),
+            Some("attached_host_connection_lost"),
+            "the typed code of a browser host survives the stop that follows"
         );
 
         let mut local = BrowserPanelState::inert();

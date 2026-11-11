@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/browser/attached_host.rs,crates/horizon-core/src/browser/attached_host/**,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/ssh_forward.rs,crates/horizon-browser-control/src/ssh_forward/**,crates/horizon-browser/src/process/attach.rs,crates/horizon-browser/src/process/attach/**,crates/horizon-browser/src/session/shared.rs"
+applyTo: "crates/horizon-core/src/browser/attached_host.rs,crates/horizon-core/src/browser/attached_host/**,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/ssh_forward.rs,crates/horizon-browser-control/src/ssh_forward/**,crates/horizon-browser-control/src/manifest/kept.rs,crates/horizon-browser-control/src/manifest/kept/**,crates/horizon-browser/src/process/attach.rs,crates/horizon-browser/src/process/attach/**,crates/horizon-browser/src/session/shared.rs,crates/horizon-ui/src/app/browser_kept_failures.rs,crates/horizon-ui/src/app/browser_kept_failures/**"
 ---
 
 # Trust boundary of the remote browser tunnel
@@ -57,6 +57,9 @@ The host machine answers every call, writes the endpoint file and serves the
 - The page, its frames and its results are untrusted as for a local browser, and
   the rules of `docs/review/trust-boundaries/browser-semantic-actions.md` and
   `docs/review/trust-boundaries/browser-downloads.md` apply to the page itself.
+- The words of a lost connection are text of that machine. The panel shows them
+  and does not run them, and the browser manifest holds them as the message of
+  one typed code.
 
 ## What the tunnel guarantees
 
@@ -75,6 +78,16 @@ The host machine answers every call, writes the endpoint file and serves the
   reap of a killed child.
 - The panel closes only its own page (`Target.closeTarget`) and never sends
   `Browser.close`, so a browser that Horizon did not start keeps running.
+- A panel that loses its browser after it showed a page does not go away. It
+  keeps its place, its last address and the typed reason
+  `attached_host_connection_lost`, it holds no forward, and the person's **Retry**
+  connects again with a fresh forward and a new page at that address. The host
+  writes that code, that message and the last address into the panel's browser
+  manifest, under the same workspace stamp as a live panel and with no endpoint
+  and no credential, so an agent of that workspace reads the reason in
+  `failure` instead of losing the panel. A panel that never showed a page is not
+  kept: it ends as it did before, and the create that opened it answers the same
+  typed code.
 - The panel sets no download path (`Browser.setDownloadBehavior` is not sent) and
   reports `reporting: false`. A file upload or a file drop is refused with
   `remote_file_upload_unsupported`, so no file of this computer crosses the
@@ -100,7 +113,12 @@ The host machine answers every call, writes the endpoint file and serves the
   them.
 - **The browser is not stopped, and no page of an earlier session is closed.** A
   connect that loses its link leaves its page behind, and a Retry opens a new
-  page in the same browser.
+  page in the same browser. The kept panel holds no page while it waits, so
+  every control call on it fails until the person retries.
+- **The kept reason outlives a crash of Horizon.** The manifest that the host
+  writes stays if the process ends without clearing it, exactly as the manifest
+  of a live panel does when its driver dies with the process. The next driver of
+  that panel replaces it.
 - **The forward gives no confidentiality of its own.** The bytes cross the SSH
   transport that OpenSSH builds with the algorithms of the two machines. Horizon
   adds no layer.
@@ -128,3 +146,6 @@ The host machine answers every call, writes the endpoint file and serves the
 - No `Browser.close`, and no download path, and no file of this computer.
 - The forward ends with the session, the panel and the process. The browser of
   the host does not.
+- A lost link keeps the panel and publishes one typed code with the words of that
+  machine. It deletes no profile, no page of that machine and no file of this
+  computer, and it starts no `ssh` before the person retries.

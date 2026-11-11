@@ -77,7 +77,9 @@ boundary pages went away with their features.
     loopback `DevTools` port and use the sign-ins of the profile; the browser
     keeps running after Horizon exits; the panels of one profile share its
     cookies and storage; a download stays on that machine and is not reported;
-    the host key is the trust of the OpenSSH configuration of the person.
+    the host key is the trust of the OpenSSH configuration of the person. A
+    panel that loses its browser keeps its place and publishes one typed reason
+    with the words of that machine for the agents of its workspace.
 - [`standalone-remote-host`](trust-boundaries/standalone-remote-host.md)
   - Untrusted: the MCP client and its tool calls.
   - Guarantees: the client cannot supply an endpoint, a capability or a

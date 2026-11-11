@@ -28,7 +28,7 @@ as a panel of this computer. It also proves the typed refusals of that path.
 
 ## 3. Safety
 
-> **CAUTION:** THE PROCEDURE STARTS A CHROMIUM ON THE HOST MACHINE AND KEEPS IT RUNNING AFTER HORIZON STOPS. That browser holds the sign-ins of the profile. Use a host machine and a profile that you can leave running, and stop the browser yourself in task RBT-9.
+> **CAUTION:** THE PROCEDURE STARTS A CHROMIUM ON THE HOST MACHINE AND KEEPS IT RUNNING AFTER HORIZON STOPS. That browser holds the sign-ins of the profile. Use a host machine and a profile that you can leave running, and stop the browser yourself in task RBT-10.
 
 > **CAUTION:** SIGN IN ONLY WITH A TEST ACCOUNT. A page that you sign in to stays signed in on the host machine, and every local account of that machine can reach the browser through its loopback port.
 
@@ -228,7 +228,45 @@ A report uses the ID of each task to give a result.
    `a browser host serves Chromium only: the page of that host runs in the Chromium of its profile, so run this panel on the browser of this computer instead`.
    No panel appears.
 
-### 6.9 RBT-9 — downloads and file upload have their typed text
+### 6.9 RBT-9 — a lost browser keeps the panel and says why
+
+1. With the panel of task RBT-1 open on a page, stop the browser of the host
+   machine:
+
+   > **CAUTION:** THE COMMAND STOPS EVERY CHROMIUM ON THE HOST MACHINE THAT
+   > HORIZON STARTED. Use a host machine that has no other work in a browser.
+
+   ```bash
+   ssh <SSH-TARGET> 'pkill -f "remote-debugging-port=0"'
+   ```
+
+   Result: the panel does not go away. It stays where it is on the canvas, the
+   address bar keeps its last address, and the body of the panel states
+   `Browser error: the browser of <SSH-TARGET> in the profile <PROFILE> lost its connection while this panel had it open: <words of the lost connection>; the panel keeps its last address, and Retry connects again`,
+   with the button **Retry**. The sidebar shows no notice, because the panel
+   itself says why.
+
+2. Read the state of that panel as an agent. Call `browser_panel` with its
+   `panel_id`.
+
+   Result: the answer holds `failure.code` `attached_host_connection_lost` and
+   the words of step 1 in `failure.message`. `browser_list` still shows the
+   panel. A control call on it, for example `browser_navigate`, fails with
+   `browser_unavailable`, because the panel has no browser until the person
+   retries.
+
+3. Click **Retry**.
+
+   Result: Horizon starts the browser of the host machine again, opens one new
+   page at the address of step 1, and the panel paints that page in the same
+   place on the canvas.
+
+4. Stop the browser of the host machine a second time, and close the panel with
+   its close button.
+
+   Result: the panel goes, and the panel leaves `browser_list`.
+
+### 6.10 RBT-10 — downloads and file upload have their typed text
 
 1. On the page, start a download of a small file, then call
    `browser_downloads` on the panel.
@@ -261,7 +299,10 @@ A report uses the ID of each task to give a result.
 - Two panels of one profile share the sign-in, and a restart of Horizon keeps
   it.
 - A host that does not answer, a host without a Chromium, another engine, a
-  download and a file upload each give the typed text of section 6.
+  lost browser, a download and a file upload each give the typed text of
+  section 6.
+- A panel that loses its browser stays on the canvas with its last address, and
+  `browser_panel` reports the typed code of that loss for an agent.
 - No step runs an `ssh` command on the UI thread, and Horizon shows no frozen
   window while it connects.
 
@@ -272,7 +313,7 @@ A report uses the ID of each task to give a result.
    Result: the forwards end. No `ssh` process of the run remains on the client
    machine.
 
-2. Stop the browser of the host machine, when task RBT-9 did not do it.
+2. Stop the browser of the host machine, when task RBT-10 did not do it.
 
    Result: `pgrep -fl remote-debugging-port=0` on the host machine prints
    nothing.

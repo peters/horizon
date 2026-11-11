@@ -82,6 +82,11 @@ pub(crate) struct BrowserPanel {
     pub(crate) orientation_support: Option<orientation::Support>,
     pub(crate) url: String,
     pub(crate) title: String,
+    /// The typed reason this panel cannot serve a page while the person keeps
+    /// it, such as a browser host whose browser stopped. The panel stays in
+    /// Horizon with its last address and the person has Retry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) failure: Option<PanelFailure>,
     /// Host presentation state (shown or hidden). It says nothing about
     /// workspace membership: for a Horizon-injected agent identity every
     /// returned panel is already in that agent's workspace, while identities
@@ -102,6 +107,15 @@ pub(crate) struct BrowserPanel {
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
     pub(crate) video_capture: VideoCaptureCapability,
+}
+
+/// The typed reason a kept panel cannot serve a page now. `code` is the fixed
+/// identifier an agent acts on and `message` keeps the words of the tool that
+/// failed.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct PanelFailure {
+    pub(crate) code: String,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -143,6 +157,10 @@ impl BrowserPanel {
             }),
             url: value.url,
             title: value.title,
+            failure: value.failure.map(|failure| PanelFailure {
+                code: failure.code,
+                message: failure.message,
+            }),
             visible: !value.hidden,
             owner,
             agent_state: BrowserPanelAgentState {
@@ -1153,6 +1171,45 @@ mod tests {
         let mut reload = act(ActKind::Reload);
         reload.key = Some("Tab".to_string());
         assert!(reload.build_action().is_err());
+    }
+
+    #[test]
+    fn a_kept_panel_reports_the_reason_its_host_published() {
+        let kept = BrowserPanel::from_manifest(
+            BrowserManifest {
+                panel_local_id: "kept-1".to_string(),
+                backend: BackendKind::ChromiumCdp,
+                url: "https://example.test/inbox".to_string(),
+                failure: Some(horizon_browser_control::manifest::ManifestFailure::new(
+                    "attached_host_connection_lost",
+                    "the browser of browser-vm in the profile mail lost its connection while this panel had it open",
+                )),
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        let failure = kept.failure.as_ref().expect("a typed reason");
+        assert_eq!(failure.code, "attached_host_connection_lost");
+        assert!(failure.message.contains("browser-vm"));
+        assert_eq!(kept.url, "https://example.test/inbox");
+        let encoded = serde_json::to_string(&kept).expect("json");
+        assert!(
+            encoded.contains("\"failure\":{\"code\":\"attached_host_connection_lost\""),
+            "an agent reads the typed code of a kept panel: {encoded}"
+        );
+
+        let live = BrowserPanel::from_manifest(
+            BrowserManifest {
+                panel_local_id: "live-1".to_string(),
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert!(live.failure.is_none());
+        assert!(
+            !serde_json::to_string(&live).expect("json").contains("failure"),
+            "a panel with no reason says nothing about one"
+        );
     }
 
     #[test]

@@ -28,6 +28,9 @@ pub enum AttachedHostFailureKind {
     NotStarted,
     /// The endpoint of that browser gave no answer through the forward.
     NoEndpoint,
+    /// The browser answered when the panel connected and then stopped, so the
+    /// page of that panel lost its connection.
+    ConnectionLost,
 }
 
 impl AttachedHostFailureKind {
@@ -39,6 +42,7 @@ impl AttachedHostFailureKind {
             Self::NoBrowser => "attached_host_no_browser",
             Self::NotStarted => "attached_host_not_started",
             Self::NoEndpoint => "attached_host_no_endpoint",
+            Self::ConnectionLost => "attached_host_connection_lost",
         }
     }
 }
@@ -107,6 +111,20 @@ impl AttachedHostFailure {
             kind: AttachedHostFailureKind::NoEndpoint,
             message: format!(
                 "the browser of {} in the profile {} gave no answer on its DevTools port through the forward: {reason}; use Retry",
+                host.ssh_target(),
+                host.profile()
+            ),
+        }
+    }
+
+    /// The failure of a panel whose browser answered and then stopped. The
+    /// reason keeps the words of the lost WebSocket, so a reset connection and
+    /// a stopped browser read differently.
+    pub(super) fn connection_lost(host: &AttachedHost, reason: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::ConnectionLost,
+            message: format!(
+                "the browser of {} in the profile {} lost its connection while this panel had it open: {reason}; the panel keeps its last address, and Retry connects again",
                 host.ssh_target(),
                 host.profile()
             ),

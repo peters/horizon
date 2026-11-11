@@ -1,9 +1,12 @@
 //! The browser panels that ended, and the reason that the person reads.
 //!
-//! A browser panel whose engine cannot start ends within a second of its
-//! creation, and this cleanup takes the panel away. The person who pressed the
-//! link or the picker gets no chance to read that panel, so its reason goes to
-//! the sidebar first, and to the card whose link opened it.
+//! A browser panel whose engine cannot start ends at once, and this cleanup
+//! takes the panel away. A local panel whose engine stops later ends the same
+//! way. The panel of a browser host is not one of these: it keeps the page's
+//! place and says its own reason, because the person can retry it. The person
+//! who pressed the link or the picker gets no chance to read a panel that goes,
+//! so its reason goes to the sidebar first, and to the card whose link opened
+//! it.
 
 use horizon_core::PanelKind;
 use horizon_core::browser::BrowserStatus;
@@ -30,7 +33,7 @@ impl HorizonApp {
                 .map(|b| b.status.clone());
             if let Some(status) = &status {
                 tracing::info!(panel_id = id.0, status = ?status, "closing ended browser panel");
-                self.say_why_a_browser_panel_ended_at_once(id, status);
+                self.say_why_a_browser_panel_ended(id, status);
             }
             if self.fullscreen_panel == Some(id) {
                 self.fullscreen_panel = None;
@@ -44,19 +47,16 @@ impl HorizonApp {
         true
     }
 
-    /// Says why a browser panel that a person's action opened ended at once,
-    /// before the cleanup takes it away: its engine could not start.
+    /// Says why a browser panel that a person's action opened ended, before the
+    /// cleanup takes it away.
     ///
-    /// A panel that lived past the window was a page that ended, and it says
-    /// nothing. An agent's create answers the agent with its own typed failure,
-    /// so it is not one of these.
-    fn say_why_a_browser_panel_ended_at_once(&mut self, panel_id: horizon_core::PanelId, status: &BrowserStatus) {
+    /// An agent's create answers the agent with its own typed failure, so it is
+    /// not one of these; and one panel says one reason, so a panel that the
+    /// person opened once cannot repeat its notice.
+    fn say_why_a_browser_panel_ended(&mut self, panel_id: horizon_core::PanelId, status: &BrowserStatus) {
         let Some(ended) = self.person_browser_creates.take(panel_id) else {
             return;
         };
-        if !ended.inside_window {
-            return;
-        }
         let Some(reason) = super::creation_notice::engine_failure_reason(status) else {
             return;
         };

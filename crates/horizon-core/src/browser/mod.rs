@@ -134,10 +134,15 @@ pub struct BrowserDrainOutput {
 
 impl BrowserPanelState {
     /// Whether the session has ended, rather than reporting a warning while
-    /// its driver is still recovering or waiting to relaunch.
+    /// its driver is still recovering or waiting to relaunch. A panel of a
+    /// browser host that lost its browser after it was ready has not ended: it
+    /// waits for the person's Retry with its last address.
     #[must_use]
     pub fn has_ended(&self) -> bool {
-        !self.status.is_alive() && self.session.is_none() && self.pending_relaunch.is_none()
+        !self.attached_kept_after()
+            && !self.status.is_alive()
+            && self.session.is_none()
+            && self.pending_relaunch.is_none()
     }
 
     /// Driver-less panel for tests that only exercise command dispatch.
@@ -765,6 +770,7 @@ impl BrowserPanelState {
                 // Loading(false); a real navigation queues Loading(true)
                 // immediately after Ready.
                 self.loading = false;
+                self.attached_reached_ready();
                 output.had_output = true;
             }
             BrowserEvent::Title(title) => {
@@ -862,6 +868,13 @@ impl BrowserPanelState {
         let keep_error = matches!(self.status, BrowserStatus::Error { .. });
         if !keep_error || code.is_some() {
             self.status = BrowserStatus::Stopped { code };
+        }
+        // A panel that showed the page of a browser host keeps its reason and
+        // its last address: the browser of that machine stopped answering, and
+        // only Retry replaces the session.
+        if let BrowserStatus::Error { message } = &self.status {
+            let reason = message.clone();
+            self.attached_lost_after_ready(&reason);
         }
         if self.handoff_resolution_pending {
             self.handoff_resolution_pending = false;

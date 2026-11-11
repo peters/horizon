@@ -403,6 +403,15 @@ computer.
   `attached_host_not_started` and `attached_host_no_endpoint`. Each answer keeps
   the words of `ssh` or of the start snippet, and the person has the button
   **Retry**, which connects with a fresh forward.
+- A browser that stops while a panel has it open is not a lost panel: it keeps
+  its place and its last address, and it reports `attached_host_connection_lost`
+  in `failure.code` of `browser_panel`, with the words of the lost connection in
+  `failure.message`. A panel that never showed a page does not stay, and its
+  `browser_create` answers that code instead. Read `failure` before you act:
+  the panel has no driver, so every control call fails with
+  `browser_unavailable` until the person presses **Retry** there or starts the
+  panel again. Tell the person the code and the words of the failure; do not
+  create a second panel to replace a panel they can retry.
 - Every local account of that machine can reach the loopback `DevTools` port of
   that browser and use its sign-ins. Never claim that the browser is isolated
   from the other users of that machine.

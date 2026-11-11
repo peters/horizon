@@ -190,6 +190,9 @@ pub(super) struct AttachedHostSlot {
     pending: Option<mpsc::Receiver<AttachOutcome>>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
     failure: Option<AttachedHostFailure>,
+    /// Whether the session of this connect became ready, so the panel showed the
+    /// page of that browser. A link that is lost after that keeps the panel.
+    reached_ready: bool,
     /// Tells a running connect that its panel stopped, so no `ssh` call starts
     /// for a panel that is gone.
     stop: Arc<AtomicBool>,
@@ -213,6 +216,7 @@ impl AttachedHostSlot {
             pending: None,
             waker,
             failure: None,
+            reached_ready: false,
             stop,
         };
         let worker = std::thread::Builder::new()
@@ -314,6 +318,48 @@ impl BrowserPanelState {
         }
         state.remote_status = Some(slot.note());
         state.attached = Some(slot);
+        state
+    }
+
+    /// A panel of `host` whose connect is done, for a test that has no machine
+    /// to connect to. It holds no forward, runs no `ssh` and has no session.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn attached_host_for_tests(host: &AttachedHost, last_url: &str) -> Self {
+        let mut state = Self::inert();
+        state.panel_local_id = "attached-for-tests".to_string();
+        state.url = Some(last_url.to_string());
+        state.requested_url = Some(last_url.to_string());
+        state.status = BrowserStatus::Starting;
+        state.remote_status = Some(format!(
+            "browser of {} in the profile {}, over SSH",
+            host.ssh_target(),
+            host.profile()
+        ));
+        state.attached = Some(AttachedHostSlot {
+            host: host.clone(),
+            ssh: Ssh::default(),
+            forward: None,
+            pending: None,
+            waker: Arc::default(),
+            failure: None,
+            reached_ready: false,
+            // No connect runs for this slot, so a stop finds it stopped and no
+            // `ssh` call starts for it.
+            stop: Arc::new(AtomicBool::new(true)),
+        });
+        state
+    }
+
+    /// A panel of `host` that lost its browser after it showed a page, for a
+    /// test that has no machine to lose. Only the failure state, its last
+    /// address and its Retry matter.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn lost_attached_host_for_tests(host: &AttachedHost, last_url: &str, reason: &str) -> Self {
+        let mut state = Self::attached_host_for_tests(host, last_url);
+        state.attached_reached_ready();
+        state.attached_failed(AttachedHostFailure::connection_lost(host, reason));
         state
     }
 
@@ -454,6 +500,40 @@ impl BrowserPanelState {
             slot.pending = None;
             slot.failure = Some(failure);
         }
+    }
+
+    /// The panel of a browser host that lost its browser after it was ready, or
+    /// that never reached it. Such a panel keeps the last address that it
+    /// showed and the person's Retry connects again, so no cleanup takes it
+    /// away: the reason stays where the page was.
+    pub(super) fn attached_kept_after(&self) -> bool {
+        self.attached
+            .as_ref()
+            .is_some_and(|slot| slot.failure.is_some() && slot.reached_ready)
+    }
+
+    /// Remember that the session of this connect showed a page, so a later lost
+    /// link is a page that the person had.
+    pub(super) fn attached_reached_ready(&mut self) {
+        if let Some(slot) = self.attached.as_mut() {
+            slot.reached_ready = true;
+        }
+    }
+
+    /// Put a panel that lost the browser of its host into the failure state of a
+    /// connect that never reached it, in the words of the lost connection. A
+    /// panel that never showed a page ends as it did before: its create reports
+    /// the failure, so nothing stays for a page the person never read.
+    pub(super) fn attached_lost_after_ready(&mut self, reason: &str) {
+        let Some(host) = self
+            .attached
+            .as_ref()
+            .filter(|slot| slot.reached_ready)
+            .map(|slot| slot.host().clone())
+        else {
+            return;
+        };
+        self.attached_failed(AttachedHostFailure::connection_lost(&host, reason));
     }
 
     pub(super) fn needs_attached_waker(&self) -> bool {

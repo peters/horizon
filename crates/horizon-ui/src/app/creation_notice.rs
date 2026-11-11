@@ -4,17 +4,11 @@
 //! placed workspace, and every one of those reasons used to reach the log only.
 //! The person who pressed the button is the one who has to act on it, so the
 //! reason goes to the sidebar notice in the tool's own words, and a browser
-//! engine that dies at startup says it before the cleanup takes its panel away.
-
-use std::time::{Duration, Instant};
+//! engine whose panel ends with an error says it before the cleanup takes its
+//! panel away.
 
 use horizon_core::PanelId;
 use horizon_core::browser::BrowserStatus;
-
-/// How long after its creation a browser panel that ends with an error is a
-/// panel whose engine could not start. A panel that ends later was a page the
-/// person closed, and needs no notice.
-pub(in crate::app) const ENGINE_START_WINDOW: Duration = Duration::from_secs(3);
 
 /// The card link that opened a browser panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,7 +23,6 @@ pub(in crate::app) struct LinkOrigin {
 #[derive(Clone, Debug)]
 struct PersonBrowserCreate {
     panel: PanelId,
-    created: Instant,
     /// The card link that opened the panel, when a link opened it.
     link: Option<LinkOrigin>,
 }
@@ -37,42 +30,33 @@ struct PersonBrowserCreate {
 /// A browser panel of the person that ended, and the card link that opened it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::app) struct EndedPersonBrowser {
-    /// Whether the panel ended inside the window, so an engine that could not
-    /// start is why it ended.
-    pub(in crate::app) inside_window: bool,
     /// The card link that opened the panel, when a link opened it.
     pub(in crate::app) link: Option<LinkOrigin>,
 }
 
-/// The browser panels that the person opened and that can still end at once,
-/// with the card link that opened each one.
+/// The browser panels that the person opened and that can still end, with the
+/// card link that opened each one.
 ///
 /// An agent's create answers the agent with its own typed failure, so it is not
 /// here: the person never sees it. A record stays until the cleanup reads the
-/// end of its panel, and an end outside the window says nothing.
+/// end of its panel, so one panel says one reason.
 #[derive(Default)]
 pub(in crate::app) struct PersonBrowserCreates {
     panels: Vec<PersonBrowserCreate>,
 }
 
 impl PersonBrowserCreates {
-    /// Remembers that the person's action opened `panel` at `now`.
-    pub(in crate::app) fn note(&mut self, panel: PanelId, now: Instant, link: Option<LinkOrigin>) {
+    /// Remembers that the person's action opened `panel`.
+    pub(in crate::app) fn note(&mut self, panel: PanelId, link: Option<LinkOrigin>) {
         self.panels.retain(|create| create.panel != panel);
-        self.panels.push(PersonBrowserCreate {
-            panel,
-            created: now,
-            link,
-        });
+        self.panels.push(PersonBrowserCreate { panel, link });
     }
 
     /// Takes the record of `panel`, so one end of a panel says one reason.
     pub(in crate::app) fn take(&mut self, panel: PanelId) -> Option<EndedPersonBrowser> {
         let index = self.panels.iter().position(|create| create.panel == panel)?;
-        let create = self.panels.remove(index);
         Some(EndedPersonBrowser {
-            inside_window: create.created.elapsed() <= ENGINE_START_WINDOW,
-            link: create.link,
+            link: self.panels.remove(index).link,
         })
     }
 
@@ -107,9 +91,7 @@ pub(in crate::app) fn panel_creation_notice(kind: horizon_core::PanelKind, reaso
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::{ENGINE_START_WINDOW, LinkOrigin, PersonBrowserCreates, engine_failure_reason, panel_creation_notice};
+    use super::{LinkOrigin, PersonBrowserCreates, engine_failure_reason, panel_creation_notice};
     use horizon_core::PanelId;
     use horizon_core::browser::BrowserStatus;
 
@@ -146,45 +128,45 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_that_ends_inside_the_window_keeps_its_link_and_its_reason_is_taken_once() {
+    fn a_panel_that_ends_keeps_its_link_and_its_reason_is_taken_once() {
         let mut creates = PersonBrowserCreates::default();
         let panel = PanelId(7);
         let link = LinkOrigin {
             card: PanelId(3),
             url: "https://cloud.example.test/sessions/7".into(),
         };
-        creates.note(panel, Instant::now(), Some(link.clone()));
+        creates.note(panel, Some(link.clone()));
 
         let ended = creates.take(panel).expect("the record of the panel");
 
-        assert!(ended.inside_window, "the panel ended inside the window");
         assert_eq!(ended.link, Some(link));
         assert_eq!(creates.take(panel), None, "one end says one reason");
     }
 
     #[test]
-    fn a_panel_that_ends_after_the_window_is_not_a_panel_that_could_not_start() {
+    fn a_panel_that_ends_long_after_it_opened_still_has_its_record() {
         let mut creates = PersonBrowserCreates::default();
         let panel = PanelId(8);
-        let before_the_window = Instant::now()
-            .checked_sub(ENGINE_START_WINDOW + Duration::from_secs(1))
-            .expect("the test clock is past the window");
-        creates.note(panel, before_the_window, None);
+        creates.note(panel, None);
 
-        let ended = creates.take(panel).expect("the record of the panel");
+        let ended = creates.take(panel).expect("the record of a panel that lived");
 
-        assert!(
-            !ended.inside_window,
-            "a panel that lived past the window ended normally"
-        );
         assert_eq!(ended.link, None);
+        assert_eq!(
+            engine_failure_reason(&BrowserStatus::Error {
+                message: "CDP connection lost: connection reset".into()
+            })
+            .as_deref(),
+            Some("CDP connection lost: connection reset"),
+            "a panel that ends with any error keeps the words of the engine"
+        );
     }
 
     #[test]
     fn the_records_of_closed_panels_are_dropped() {
         let mut creates = PersonBrowserCreates::default();
-        creates.note(PanelId(1), Instant::now(), None);
-        creates.note(PanelId(2), Instant::now(), None);
+        creates.note(PanelId(1), None);
+        creates.note(PanelId(2), None);
 
         creates.retain(|panel| panel == PanelId(2));
 

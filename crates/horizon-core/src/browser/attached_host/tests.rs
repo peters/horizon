@@ -9,10 +9,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use horizon_browser::{BackendKind, BrowserButton, BrowserCommand, BrowserInput, BrowserModifiers};
+use horizon_browser::{BackendKind, BrowserButton, BrowserCommand, BrowserEvent, BrowserInput, BrowserModifiers};
 use horizon_browser_control::ssh_forward::Ssh;
 
-use super::super::{BrowserConfig, BrowserPanelState, BrowserStatus};
+use super::super::{BrowserConfig, BrowserDrainOutput, BrowserPanelState, BrowserStatus};
 use super::{AttachedHost, AttachedHostFailureKind, attached_host_backend_refusal, connect};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -602,4 +602,70 @@ fn a_panel_of_a_browser_host_records_that_host_and_profile() {
         "the Chromium of another machine owns its profile folder there"
     );
     assert!(record.session_id.is_none(), "no local profile group holds this page");
+}
+
+#[test]
+fn a_browser_that_stops_after_a_page_keeps_the_panel_at_its_last_address() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+
+    // The events of a session that showed a page and then lost its WebSocket.
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::UrlChanged("https://example.test/inbox".to_string()),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Ready, &mut output);
+    panel.apply_event(
+        BrowserEvent::Warning(
+            "CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"
+                .to_string(),
+        ),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Stopped { code: None }, &mut output);
+
+    let failure = panel.attached_host_failure().expect("a typed reason");
+    assert_eq!(failure.kind(), AttachedHostFailureKind::ConnectionLost);
+    assert_eq!(failure.code(), "attached_host_connection_lost");
+    assert!(
+        failure.message().contains("Connection reset without closing handshake"),
+        "the reason keeps the words of the lost connection: {}",
+        failure.message()
+    );
+    assert!(
+        failure.message().contains("browser-vm"),
+        "the reason names the browser host: {}",
+        failure.message()
+    );
+    assert!(!panel.has_ended(), "the panel stays where the person put it");
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the last address stays in the panel"
+    );
+    assert!(panel.can_retry(), "the panel offers the Retry of a connect");
+    assert!(panel.retry_ready(), "nothing waits before that Retry");
+}
+
+#[test]
+fn a_browser_that_never_showed_a_page_ends_the_panel_of_the_host() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", None).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::Warning("CDP connect failed: the handshake timed out".to_string()),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Stopped { code: None }, &mut output);
+
+    assert_eq!(
+        panel.attached_host_failure(),
+        None,
+        "a panel that showed no page keeps no reason of a lost page"
+    );
+    assert!(panel.has_ended(), "the create reports why no page opened");
 }

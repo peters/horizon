@@ -80,8 +80,7 @@ impl HorizonApp {
         {
             // An engine that cannot start ends its panel at once, and the
             // cleanup then says why this press opened no page.
-            self.person_browser_creates
-                .note(panel_id, std::time::Instant::now(), None);
+            self.person_browser_creates.note(panel_id, None);
         }
         created
     }
