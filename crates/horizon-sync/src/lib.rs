@@ -83,6 +83,7 @@ pub use store::{
 };
 pub use supervisor::{
     LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, Supervisor, SupervisorConfig, SyncHandle,
-    SyncedMachineStore, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
+    SyncedMachineStore, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN, proposed_device_name, stored_device_name,
+    write_device_name,
 };
 pub use tip::tip;

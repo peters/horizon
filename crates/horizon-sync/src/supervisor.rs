@@ -121,6 +121,34 @@ impl Default for LinkBounds {
     }
 }
 
+/// A name that a computer without a login proposes for itself: the prefix of
+/// every name that Horizon makes, and eight characters of random.
+#[must_use]
+pub fn proposed_device_name() -> String {
+    files::proposed_device_name()
+}
+
+/// The device name that this computer wrote, or `None` when its machine directory
+/// holds no name that passes the rule. This reads one file and writes nothing.
+///
+/// # Errors
+/// Returns why the file cannot be read.
+pub fn stored_device_name(directory: &Path) -> Result<Option<String>, SyncError> {
+    files::stored_device_name(directory)
+}
+
+/// Writes `name` as the device name of this computer.
+///
+/// A join writes this file before it takes the token of its server, so the name of
+/// the join is the name that every later link of this computer presents.
+///
+/// # Errors
+/// Refuses a text that is not one device name, and returns why the file cannot be
+/// written.
+pub fn write_device_name(directory: &Path, name: &str) -> Result<(), SyncError> {
+    files::write_device_name(directory, name)
+}
+
 /// The settings of one supervisor: where the server is, how to reach it and which
 /// files of this computer hold the queue and the mirror.
 #[derive(Clone, Debug)]
@@ -171,19 +199,47 @@ impl SupervisorConfig {
         directory: &Path,
         secrets: Arc<dyn SecretTarget>,
     ) -> Result<Self, SyncError> {
-        Ok(Self {
+        let device = device_name(directory)?;
+        Ok(Self::at(target, command, directory, device, secrets))
+    }
+
+    /// The settings of the link of a computer that holds the token of a server.
+    ///
+    /// The name of the link is the name of that login, which the join wrote before
+    /// it took the token: this call never proposes another name. `None` answers
+    /// when this computer holds no name for its login, so its link has nothing to
+    /// present and a person joins it again.
+    ///
+    /// # Errors
+    /// Returns why the device name of this computer cannot be read.
+    pub fn for_login(
+        target: &str,
+        command: &str,
+        directory: &Path,
+        secrets: Arc<dyn SecretTarget>,
+    ) -> Result<Option<Self>, SyncError> {
+        let Some(device) = files::stored_device_name(directory)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::at(target, command, directory, device, secrets)))
+    }
+
+    /// The settings of a link of this computer under `device`, with the files and
+    /// the secrets that its home gives.
+    fn at(target: &str, command: &str, directory: &Path, device: String, secrets: Arc<dyn SecretTarget>) -> Self {
+        Self {
             target: target.to_owned(),
             command: command.to_owned(),
             program: horizon_browser_control::ssh_forward::ssh_program(),
             address: None,
             token_store: None,
-            device: device_name(directory)?,
+            device,
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
             machines_dir: directory.to_path_buf(),
             secrets,
             bounds: LinkBounds::STANDARD,
-        })
+        }
     }
 
     /// The command of the child, with the program, the flags and the target.
@@ -1007,5 +1063,55 @@ mod tests {
         let name = device_name(directory.path()).expect("a name");
         assert!(check_device_name(&name), "{name}");
         assert!(name.starts_with("horizon-"), "{name}");
+    }
+
+    #[test]
+    fn a_login_reads_the_name_of_its_join_and_never_proposes_another() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let keys = horizon_core::MachineKeys::new(directory.path().join("keys"));
+        let proposed = proposed_device_name();
+        assert!(check_device_name(&proposed), "{proposed}");
+        assert_eq!(
+            stored_device_name(directory.path()).expect("no name yet"),
+            None,
+            "a fresh computer has no name until a start or a join writes one"
+        );
+
+        // A join writes the name of this computer before it takes the token, so the
+        // link of the login reads the name of the join.
+        write_device_name(directory.path(), "window-b").expect("the name of the join");
+        assert_eq!(
+            stored_device_name(directory.path()).expect("a name"),
+            Some("window-b".to_owned())
+        );
+        let config = SupervisorConfig::for_login(
+            "server-vm",
+            "/opt/horizon --server-link",
+            directory.path(),
+            keys_of_a_test(keys),
+        )
+        .expect("the settings of the link")
+        .expect("the name of the login");
+        assert_eq!(config.device, "window-b");
+
+        // A login that holds no name is no link: the name is never invented for it.
+        let nameless = tempfile::tempdir().expect("a directory");
+        let keys = horizon_core::MachineKeys::new(nameless.path().join("keys"));
+        assert!(
+            SupervisorConfig::for_login(
+                "server-vm",
+                "/opt/horizon --server-link",
+                nameless.path(),
+                keys_of_a_test(keys),
+            )
+            .expect("the settings of the link")
+            .is_none()
+        );
+        assert_eq!(
+            stored_device_name(nameless.path()).expect("no name"),
+            None,
+            "a login that read no name wrote none"
+        );
+        assert!(write_device_name(nameless.path(), "Not A Name").is_err());
     }
 }

@@ -52,6 +52,9 @@ pub(in crate::app) struct ServerView {
     pub(in crate::app) linked: bool,
     /// Whether the server removed this computer, or does not know its token.
     pub(in crate::app) logged_out: bool,
+    /// Whether the name of this computer belongs to the token of a login, so the
+    /// field of the name is read-only.
+    pub(in crate::app) name_locked: bool,
 }
 
 /// The state of the tab, which outlives the answers that it polls.
@@ -61,7 +64,9 @@ pub(in crate::app) struct ServerTabState {
     pub(in crate::app) link: String,
     /// The name that this computer takes on the server.
     pub(in crate::app) device: String,
-    /// Whether the device field was filled from the link of this computer.
+    /// Whether the tab filled the device field, from the link of this computer or
+    /// from the name that a first link would take. A field that a person cleared
+    /// stays empty.
     device_filled: bool,
     /// The join that waits for its answer.
     pub(in crate::app) joining: bool,
@@ -317,6 +322,12 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, state: &mut ServerTabStat
         state.device.clone_from(&view.device);
         state.device_filled = true;
     }
+    if state.device.trim().is_empty() && !view.name_locked && !state.device_filled {
+        // A computer without a name proposes the one that its first link would
+        // take, so a person pastes the link and presses Join without typing a name.
+        state.device = horizon_sync::proposed_device_name();
+        state.device_filled = true;
+    }
     render_state_line(ui, view);
     // The work of a logged-in computer comes first: the invitation of another
     // computer and the list of the computers. The join and the fields of the entry
@@ -441,7 +452,8 @@ fn render_join_section(ui: &mut Ui, state: &mut ServerTabState, view: &ServerVie
                         .size(TEXT_SIZE),
                 );
                 let mut device = state.device.clone();
-                let response = ui.add(
+                let response = ui.add_enabled(
+                    !view.name_locked,
                     egui::TextEdit::singleline(&mut device)
                         .hint_text("a name of a-z, 0-9 and -")
                         .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
@@ -453,6 +465,12 @@ fn render_join_section(ui: &mut Ui, state: &mut ServerTabState, view: &ServerVie
                 }
                 ui.end_row();
             });
+        if view.name_locked {
+            super::dim_label(
+                ui,
+                "This name belongs to the login of this computer, so a new name needs a new link.",
+            );
+        }
         ui.add_space(8.0);
         let busy = state.joining;
         let error = state.join_error.clone();
@@ -778,6 +796,7 @@ mod tests {
             device: "laptop-a".to_owned(),
             linked: true,
             logged_out: false,
+            name_locked: true,
         };
         let mut config = Config::default();
         let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));

@@ -63,6 +63,10 @@ pub(in crate::app) struct ServerSync {
     /// The credential values of this computer: the addresses of their references
     /// follow the remote browser settings.
     credentials: Arc<CredentialVault>,
+    /// Whether the link of this computer started with the token of a join, so the
+    /// name of this computer is the name of that login and a join cannot take
+    /// another one while the token stands.
+    token: bool,
     /// The generation of the records that the app read last.
     generation: u64,
     /// A read of the list is on the coordination worker.
@@ -81,9 +85,20 @@ impl ServerSync {
         Self {
             supervisor,
             credentials,
+            // A link that a test starts holds no token of a login.
+            token: false,
             generation,
             reloading: false,
         }
+    }
+
+    /// Whether this computer holds the token of a login now, so the name of this
+    /// computer belongs to that login.
+    ///
+    /// The supervisor deletes the token of a link that the server removed, or of
+    /// one whose token the server does not know, so those two states answer no.
+    pub(in crate::app) fn holds_token(&self) -> bool {
+        self.token && !matches!(self.snapshot().state(), LinkState::Removed | LinkState::NotLoggedIn)
     }
 
     /// Takes the addresses of the credential references that the remote browser
@@ -230,23 +245,38 @@ pub(in crate::app) fn load(
             named_secrets: secrets.named.clone(),
         });
     };
-    let mut config = match SupervisorConfig::for_server(
-        server.ssh_target().unwrap_or_default(),
-        server.command(),
-        registry.root(),
-        secrets.target,
-    ) {
-        Ok(config) => config,
-        Err(error) => return file_list(registry, error.to_string(), secrets.named),
-    };
     // A link of the TCP listener needs an address and the token of a join. An
     // address without a token falls back to the `ssh` child, as the entry did
     // before a join existed.
-    config.token_store.clone_from(&secrets.store);
     let token = secrets
         .store
         .as_deref()
         .and_then(|store| horizon_core::secret_store::read_token(store).ok().flatten());
+    let target = server.ssh_target().unwrap_or_default();
+    let command = server.command();
+    // The name of a link that holds a token is the name of that login, which the
+    // join wrote before it took the token. A start of such a link never proposes
+    // another name, so the name of the join is the name of every later link.
+    let mut config = if token.is_some() {
+        match SupervisorConfig::for_login(target, command, registry.root(), secrets.target) {
+            Ok(Some(config)) => config,
+            Ok(None) => {
+                return file_list(
+                    registry,
+                    "This computer holds the login of a server but not the name of it. Join it again with a link from a computer that is logged in."
+                        .to_owned(),
+                    secrets.named,
+                );
+            }
+            Err(error) => return file_list(registry, error.to_string(), secrets.named),
+        }
+    } else {
+        match SupervisorConfig::for_server(target, command, registry.root(), secrets.target) {
+            Ok(config) => config,
+            Err(error) => return file_list(registry, error.to_string(), secrets.named),
+        }
+    };
+    config.token_store.clone_from(&secrets.store);
     config.address = server.address().map(str::to_owned).filter(|_| token.is_some());
     if server.address().is_some() && config.address.is_none() && server.ssh_target().is_none() {
         return file_list(
@@ -256,10 +286,12 @@ pub(in crate::app) fn load(
             secrets.named,
         );
     }
+    let holds_token = token.is_some();
     drop(token);
     match Supervisor::start(config, wake) {
         Ok(supervisor) => {
-            let sync = ServerSync::new(supervisor, secrets.credentials);
+            let mut sync = ServerSync::new(supervisor, secrets.credentials);
+            sync.token = holds_token;
             match Machines::from_store(&registry, sync.store()) {
                 Ok(machines) => Ok(MachineLoad {
                     machines,
@@ -312,6 +344,9 @@ impl HorizonApp {
             // invitation or read the list, so the tab shows the join alone.
             linked: !logged_out,
             logged_out,
+            // A login owns its name: the field of the name belongs to the join that
+            // made the token, so it is read-only until the token is gone.
+            name_locked: sync.holds_token(),
         }
     }
 
@@ -358,10 +393,16 @@ impl HorizonApp {
     /// Joins the server of one link as one name. The join opens a socket, so it
     /// runs on the coordination worker and never on the UI thread; its answer
     /// writes the address of the server and starts the link of it.
+    ///
+    /// The worker writes the device name of this computer before it takes the
+    /// token, so the name of the join is the name of the link that follows it, and
+    /// the supervisor reads that name instead of proposing another one.
     fn start_server_join(&mut self, link: String, device: String, ctx: egui::Context) {
         let home = self.session_store.home().clone();
+        let directory = self.machine_registry().root().to_path_buf();
         self.browser_create_host.io.then(
             move || -> Result<String, String> {
+                horizon_sync::write_device_name(&directory, &device).map_err(|error| error.to_string())?;
                 let store = horizon_core::secret_store::SecretStore::open(home.secrets_path())
                     .map_err(|error| error.to_string())?;
                 horizon_sync::join(&link, &device, &store).map_err(|error| error.sentence())?;
