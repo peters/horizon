@@ -14,11 +14,11 @@ fn the_store_sits_next_to_its_configuration() {
         Path::new("/tmp/a/settings.sqlite")
     );
     assert_eq!(
-        ConfigStore::resolve(Path::new("/tmp/a/horizon.yaml")).path(),
+        ConfigStore::resolve(Path::new("/tmp/a/horizon.json")).path(),
         Path::new("/tmp/a/settings.sqlite")
     );
     assert_eq!(
-        ConfigStore::resolve(Path::new("/tmp/a/smoke.yml")).path(),
+        ConfigStore::resolve(Path::new("/tmp/a/smoke.json")).path(),
         Path::new("/tmp/a/smoke.settings.sqlite"),
         "a second configuration in one folder keeps its own store"
     );

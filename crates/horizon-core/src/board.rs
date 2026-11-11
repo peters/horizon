@@ -143,7 +143,7 @@ impl Board {
         }
     }
 
-    /// Build a board from a YAML config.
+    /// Build a board from the settings of a run.
     ///
     /// # Errors
     ///
