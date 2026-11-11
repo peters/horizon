@@ -330,9 +330,28 @@ def extra_column(placed):
     return right + 40
 
 
+def speech_section(recorder=None, transcriber_command=None, service=None):
+    """The `speech` section of the fixture config, or `None` while a run names no speech.
+
+    The section is off until a recorder and a transcriber are set, so a run that
+    names neither writes no section and the candidate keeps its defaults. One
+    transcriber wins: a service, or a command.
+    """
+    if not (recorder or transcriber_command or service):
+        return None
+    section = {}
+    if recorder:
+        section['recorder'] = recorder
+    if service:
+        section['transcriber'] = {'kind': 'service', 'endpoint': service}
+    elif transcriber_command:
+        section['transcriber'] = {'kind': 'command', 'command': transcriber_command}
+    return section
+
+
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
-                         server_command=None, server_address=None, secret_names=None):
+                         server_command=None, server_address=None, secret_names=None, speech=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -392,6 +411,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         if server_address:
             entry['address'] = server_address
         fixture['server'] = entry
+    if speech:
+        # The hotkey, the recorder line and the transcriber of speech input, so a
+        # procedure proves a take with a stand-in recorder and a stand-in service.
+        fixture['speech'] = speech
     if secret_names:
         # The named secrets that the candidate reads as the environment of an agent
         # panel. The section holds the names: the values are in the private state of
@@ -442,6 +465,8 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('server_target', '--server-target'), ('server_command', '--server-command'),
     ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
     ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
+    ('speech_recorder', '--speech-recorder'), ('speech_transcriber_command', '--speech-transcriber-command'),
+    ('speech_service', '--speech-service'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
 )
 
@@ -519,6 +544,23 @@ def arguments():
              'of the fixture, such as credential/HETZNER_API_TOKEN=a-value, so a remote '
              'browser provider of the fixture reads it. Repeat for more than one.')
     parser.add_argument(
+        '--speech-recorder',
+        metavar='LINE',
+        help='Write speech.recorder in the fixture config, one command line with {file}, such as the '
+             'stand-in recorder scripts/device-smoke/speech_standin_recorder.py. Speech input also '
+             'needs --speech-service or --speech-transcriber-command.')
+    parser.add_argument(
+        '--speech-transcriber-command',
+        metavar='LINE',
+        help='Write speech.transcriber as command with this line in the fixture config, one command '
+             'with {file} whose standard output is the text')
+    parser.add_argument(
+        '--speech-service',
+        metavar='ENDPOINT',
+        help='Write speech.transcriber as service with this endpoint in the fixture config, such as '
+             'http://127.0.0.1:40913/v1/audio/transcriptions of the stand-in service. Its key is the '
+             'named secret SPEECH_API_KEY of --named-secret.')
+    parser.add_argument(
         '--presets',
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
@@ -576,6 +618,12 @@ def main():
         parser.error('--browser-host-profile needs --browser-host')
     if args.server_command and not args.server_target:
         parser.error('--server-command needs --server-target')
+    if args.speech_service and args.speech_transcriber_command:
+        parser.error('--speech-service and --speech-transcriber-command name one transcriber; give one')
+    if (args.speech_service or args.speech_transcriber_command) and not args.speech_recorder:
+        parser.error('--speech-service and --speech-transcriber-command need --speech-recorder')
+    if args.speech_recorder and not (args.speech_service or args.speech_transcriber_command):
+        parser.error('--speech-recorder needs --speech-service or --speech-transcriber-command')
     if args.resume_session and args.saved_session:
         parser.error('--resume-session starts the saved board; do not give --saved-session as well')
     if args.plain_start:
@@ -697,10 +745,11 @@ def main():
         if named_secrets or secret_rows:
             seed_secret_rows(secrets_file, named_secrets, secret_rows)
         held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
+        speech = speech_section(args.speech_recorder, args.speech_transcriber_command, args.speech_service)
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
-            args.server_command, args.server_address, named_secret_names(held))
+            args.server_command, args.server_address, named_secret_names(held), speech)
         if not args.plain_start:
             # A plain start keeps the home as its own settings writer: the fixture
             # writes no settings file into that home.
