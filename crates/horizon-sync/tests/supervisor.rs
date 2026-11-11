@@ -646,11 +646,18 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         )
         .then_some(())
     });
-    let started = Instant::now();
+    // The bound of the request runs from the instant that the request left, and
+    // not from the instant that this test read the state: the state was already
+    // greeted, so its first request was on its way before this line ran. A test
+    // clock that started here reported a loss 9 ms early under load.
+    let sent = supervisor
+        .handle()
+        .open_request_since()
+        .expect("the request that the silent stand-in did not answer");
     eventually("the link that is reported away", || {
         matches!(supervisor.handle().state(), LinkState::Away { .. }).then_some(())
     });
-    let lost = started.elapsed();
+    let lost = sent.elapsed();
     assert!(
         lost >= bounds.request,
         "a link is not lost before its bound of {:?}: {lost:?}",

@@ -11,6 +11,7 @@ use std::{
         Arc, Mutex, MutexGuard, PoisonError,
         mpsc::{self, Sender},
     },
+    time::Instant,
 };
 
 use horizon_core::machines::MachineBindings;
@@ -191,6 +192,10 @@ pub(crate) struct SyncState {
     /// covered yet. The value of the server that follows decides whether the local
     /// value differs at all.
     pub(crate) refused_secrets: BTreeSet<String>,
+    /// When the request that the link has sent and not had answered left. The
+    /// link times the bound of that request from this instant, so a reader that
+    /// measures the same bound measures it from the same instant.
+    pub(crate) request_since: Option<Instant>,
 }
 
 impl SyncState {
@@ -328,6 +333,7 @@ impl SyncHandle {
                 generation: 0,
                 mirror_dirty: true,
                 refused_secrets: BTreeSet::new(),
+                request_since: None,
             })),
             view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
             notices: Arc::new(Mutex::new(Vec::new())),
@@ -357,6 +363,15 @@ impl SyncHandle {
     pub fn state(&self) -> LinkState {
         self.snapshot().state.clone()
     }
+
+    /// When the request that the link waits for left, or `None` while it has
+    /// none. The link times the bound of that request from this instant, so a
+    /// test of the bound reads it here instead of guessing a later start.
+    #[must_use]
+    pub fn open_request_since(&self) -> Option<Instant> {
+        self.lock().request_since
+    }
+
 
     /// The number of changes of the records, so a caller reads them again only
     /// when one of them changed.

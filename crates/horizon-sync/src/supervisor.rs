@@ -629,6 +629,9 @@ impl Link<'_> {
             return false;
         }
         self.waiting = Some(Instant::now());
+        // The state publishes the instant that the bound of this request runs
+        // from, so a reader measures the same bound from the same start.
+        self.handle.lock().request_since = self.waiting;
         true
     }
 
@@ -643,6 +646,7 @@ impl Link<'_> {
             }
             Frame::Changes(changes) => {
                 self.waiting = None;
+                self.handle.lock().request_since = None;
                 self.first = false;
                 if let Err(error) = apply_changes(self.handle, &changes, self.asking_from) {
                     tracing::warn!(%error, "the changes of the server were not applied");
