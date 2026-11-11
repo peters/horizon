@@ -55,6 +55,15 @@ impl LinkState {
         }
     }
 
+    /// The state of a link whose hello starts now. Only the first attempt of a
+    /// link says `connecting`: an attempt after a link that failed keeps the state
+    /// that the failure left, so a server that does not answer does not read
+    /// `connecting` for as long as it stays silent.
+    #[must_use]
+    pub fn started(self, first_attempt: bool) -> Self {
+        if first_attempt { Self::Connecting } else { self }
+    }
+
     /// The intents that wait for the server, which is none for a link that
     /// answers.
     #[must_use]
@@ -162,6 +171,10 @@ pub struct Client {
     file: PathBuf,
     state: ClientState,
     link: LinkState,
+    /// Whether this link already started an attempt. The first attempt of a link
+    /// says that it connects; an attempt after one that failed keeps the state
+    /// that the failure left.
+    attempted: bool,
     /// The mark that the next request must use instead of the index of this
     /// computer, because a refusal of a secret named a version that the mirror
     /// already passed. The answer to that request brings the row again, and then
@@ -200,6 +213,7 @@ impl Client {
             file: path,
             state,
             link: LinkState::Off,
+            attempted: false,
             replay: None,
         })
     }
@@ -421,7 +435,8 @@ impl Client {
     /// The hello of this computer, for a caller that owns the two halves of the
     /// link itself, such as the supervisor of a child process.
     pub fn hello_frame(&mut self) -> Frame {
-        self.link = LinkState::Connecting;
+        self.link = std::mem::replace(&mut self.link, LinkState::Off).started(!self.attempted);
+        self.attempted = true;
         Frame::Hello(Hello {
             protocol: PROTOCOL_VERSION,
             device: self.state.device.clone(),
@@ -819,5 +834,42 @@ fn frame_name(frame: &Frame) -> &'static str {
         Frame::Changes(_) => "changes",
         Frame::Wait(_) => "wait",
         Frame::Error(_) => "error",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Client, Frame, HelloOk, LinkState, PROTOCOL_VERSION};
+
+    fn client() -> (tempfile::TempDir, Client) {
+        let directory = tempfile::tempdir().expect("a directory");
+        let client = Client::open(directory.path().join("server-queue.json"), "mbp-7c1").expect("a queue");
+        (directory, client)
+    }
+
+    #[test]
+    fn only_the_first_attempt_of_a_link_says_that_it_connects() {
+        let (_directory, mut client) = client();
+        // A start leaves the queue of an away server, as the supervisor does.
+        client.away();
+        assert!(matches!(client.hello_frame(), Frame::Hello(_)));
+        assert_eq!(client.state(), &LinkState::Connecting, "the first attempt connects");
+
+        // The attempt that failed leaves `away`, and the next attempt keeps it
+        // until a hello answers: a server that does not answer does not read
+        // `connecting` for as long as it stays silent.
+        client.away();
+        let _ = client.hello_frame();
+        assert_eq!(client.state(), &LinkState::Away { pending: 0 });
+
+        client
+            .accept_hello(&HelloOk {
+                protocol: PROTOCOL_VERSION,
+                store: "6f1c".to_owned(),
+                now_millis: 1_760_000_000_000,
+                secrets_lost: false,
+            })
+            .expect("the hello");
+        assert_eq!(client.state(), &LinkState::Behind, "a hello that answers moves on");
     }
 }

@@ -253,6 +253,31 @@ gone, and that it catches up when the server returns.
    Client computer B shows `build-2`, its list is the list of the server, and the
    `pending` mark of client computer A goes away.
 
+6. Prove that a server which does not answer does not read `Server: connecting`
+   for ever. On the server computer, make the port that the link uses drop
+   packets instead of refusing them:
+
+   > **CAUTION:** The next command changes the firewall of the server computer.
+   > Run it on a test computer only, and keep the second command ready to undo it.
+
+   ```bash
+   sudo nft add rule inet filter input tcp dport 22 drop
+   ```
+
+7. On client computer B, watch the Machines section for one minute.
+
+   Result: the line reads `Server away`, with the number of intents that wait
+   when one waits. It does not read `Server: connecting` after the first attempt
+   of the link, and it does not stay on that line while the server is silent.
+
+8. Undo the rule, and start no server: the link of client computer B still reads
+   `Server away`. Start the server again with the command of step 5.1, and the
+   line reads `Server: in step` within a few seconds.
+
+   ```bash
+   sudo nft delete rule inet filter input tcp dport 22 drop
+   ```
+
 ### 6.7 S7 — a key that one computer makes logs in from the other
 
 1. On client computer B, stay at the machine list of the server with `build-1`.
@@ -341,7 +366,11 @@ gone, and that it catches up when the server returns.
 
 4. Start client computer B. Look at its key folder.
 
-   Result: client computer B holds `build-1` with its two files, as in step 6.6.
+   Result: client computer B holds `build-1` with its two files, as in step 6.6,
+   and its key folder holds no file whose name starts with `build-1.conflict-`.
+   Client computer B reads no notice about the key: the server now holds the same
+   private key and the same public line, so the value that client computer B sent
+   again is no conflict.
 
 ## 7. Pass criteria
 
@@ -364,6 +393,11 @@ gone, and that it catches up when the server returns.
 - A server that stops while a computer is idle makes that computer say
   `Server away` within 70 seconds, and the computer is in step with the change of
   the other computer when the server returns.
+- A server that does not answer reads `Server away`, and not
+  `Server: connecting`, after the first attempt of the link.
+- After the key file of the server is lost, the computers send their values again,
+  and no computer keeps a `*.conflict-*` copy of a value that the server holds the
+  same way.
 - `server.sqlite`, `server.sqlite-wal` and `server.sqlite-shm` have mode 0600,
   and `server.lock` stays in the home after a stop of the server.
 - A computer without a server in its settings behaves as before, and it starts

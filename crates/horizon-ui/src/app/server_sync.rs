@@ -39,6 +39,9 @@ impl ServerLine {
 
     /// The line that the sidebar shows. `None` would name no server, which is the
     /// case where the section shows no line at all.
+    ///
+    /// `connecting` is short: only the first attempt of a link reads it, and an
+    /// attempt after one that failed reads `away` until a hello answers.
     pub(in crate::app) fn text(&self) -> String {
         match self.state {
             "away" if self.pending == 0 => "Server away".to_owned(),
@@ -285,6 +288,25 @@ mod tests {
     use horizon_sync::LinkState;
 
     use super::ServerLine;
+
+    #[test]
+    fn the_line_of_a_server_that_does_not_answer_is_away_after_the_first_attempt() {
+        // The state of a link that a start leaves, and of every attempt that a
+        // hello did not answer.
+        let away = LinkState::Away { pending: 0 };
+        assert_eq!(ServerLine::of(&away).text(), "Server away");
+        assert_eq!(
+            ServerLine::of(&LinkState::Away { pending: 2 }).text(),
+            "Server away · 2 pending"
+        );
+        // Only the first attempt of a link reads `connecting`.
+        assert_eq!(ServerLine::of(&away.clone().started(true)).text(), "Server: connecting");
+        assert_eq!(
+            ServerLine::of(&away.started(false)).text(),
+            "Server away",
+            "a second attempt of a hung server does not read connecting"
+        );
+    }
 
     #[test]
     fn every_state_of_the_link_has_one_short_line() {

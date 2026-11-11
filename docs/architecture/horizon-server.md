@@ -87,7 +87,11 @@ and starts the delay of the next attempt. The bounds are the constants of
 
 The thread publishes one state for the UI: `off`, `connecting`, `in_step`,
 `behind`, or `away` with the number of intents that wait. The sidebar shows it,
-and `machines` reports its code.
+and `machines` reports its code. `connecting` belongs to the first attempt of a
+link alone: an attempt that follows a link that failed keeps `away` with the
+number of intents that wait, until a hello answers. A server that does not answer
+therefore reads `Server away`, and not `Server: connecting`, while the link waits
+for it.
 
 ## The machine list of a computer
 
