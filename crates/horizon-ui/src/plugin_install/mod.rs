@@ -68,6 +68,41 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/browser-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/browser-machine/Dockerfile",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/Dockerfile"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/browser-machine/entrypoint.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/entrypoint.sh"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/browser-machine/setup.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/setup.sh"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-machines/references/azure.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -136,6 +171,41 @@ const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/codex/skills/horizon-machines/references/aws.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/browser-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/browser-machine/Dockerfile",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/Dockerfile"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/browser-machine/entrypoint.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/entrypoint.sh"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/browser-machine/horizon-browser-wrapper.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/browser-machine/setup.sh",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/setup.sh"
         )),
     },
     EmbeddedFile {
@@ -918,12 +988,17 @@ mod tests {
             vec![
                 "SKILL.md",
                 "references/aws.md",
+                "references/browser-machine.md",
+                "references/browser-machine/Dockerfile",
+                "references/browser-machine/entrypoint.sh",
+                "references/browser-machine/horizon-browser-wrapper.sh",
+                "references/browser-machine/setup.sh",
                 "references/azure.md",
                 "references/gcp.md",
                 "references/hetzner.md",
                 "references/runpod.md",
             ],
-            "the body and the five provider references"
+            "the body, the five provider references and the browser machine"
         );
         let body = MACHINES_SKILL_FILES[0].content;
         assert!(body.contains("block_panel"), "the skill draws cards with the card tool");
@@ -933,11 +1008,29 @@ mod tests {
         );
         for file in &MACHINES_SKILL_FILES[1..] {
             let reference = file.relative_path.trim_start_matches("references/");
+            // The four files of the browser machine are read and copied as they
+            // are, so the reference document links them and they are no prose.
+            if reference.starts_with("browser-machine/") {
+                assert!(!file.content.is_empty(), "{reference} holds its file");
+                continue;
+            }
             assert!(
                 body.contains(&format!("](references/{reference})")),
                 "the body links {reference}"
             );
             assert!(file.content.starts_with("# "), "{reference} starts with a heading");
+        }
+        let browser_machine = MACHINES_SKILL_FILES
+            .iter()
+            .find(|file| file.relative_path == "references/browser-machine.md")
+            .expect("the browser machine reference");
+        for file in &MACHINES_SKILL_FILES[1..] {
+            if let Some(name) = file.relative_path.strip_prefix("references/browser-machine/") {
+                assert!(
+                    browser_machine.content.contains(name),
+                    "the reference names the file {name}"
+                );
+            }
         }
         let temp = tempfile::tempdir().expect("temp dir");
         let dir = temp.path().join(HORIZON_MACHINES_SKILL);
@@ -961,9 +1054,13 @@ mod tests {
             &user_home.join(".grok/skills/horizon-machines/SKILL.md"),
             MACHINES_SKILL_FILES[0].content,
         );
+        let hetzner = MACHINES_SKILL_FILES
+            .iter()
+            .find(|file| file.relative_path == "references/hetzner.md")
+            .expect("the Hetzner reference");
         assert_installed_skill(
             &user_home.join(".codex/skills/horizon-machines/references/hetzner.md"),
-            MACHINES_SKILL_FILES[4].content,
+            hetzner.content,
         );
         assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-machines/SKILL.md");
         assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-machines/references/aws.md");

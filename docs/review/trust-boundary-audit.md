@@ -80,6 +80,11 @@ boundary pages went away with their features.
     the host key is the trust of the OpenSSH configuration of the person. A
     panel that loses its browser keeps its place and publishes one typed reason
     with the words of that machine for the agents of its workspace.
+  - The browser machine lane (`packaging/browser-machine/`) publishes one Docker
+    port on the loopback of the destination and installs a wrapper as
+    `google-chrome`, which shadows a real browser name there; Chromium runs as
+    root with no sandbox and with software graphics, so its profile files belong
+    to root and a local account of that machine drives it.
 - [`standalone-remote-host`](trust-boundaries/standalone-remote-host.md)
   - Untrusted: the MCP client and its tool calls.
   - Guarantees: the client cannot supply an endpoint, a capability or a

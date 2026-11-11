@@ -408,6 +408,17 @@ After the delete and the key removal, update the card to this document:
   of that name, connect as in step 8; without it, say on the overview and on the
   machine card that the key is gone, and offer `Delete` only.
 
+## A machine without a browser
+
+A rented Linux machine has no graphical session and usually no browser, so its
+browser panels need a browser that Horizon can drive. When the person wants a
+browser panel of such a machine, use [browser-machine](references/browser-machine.md):
+one Chromium in a container on that machine, started by `setup.sh` with one
+profile name, and reached by the ordinary browser host tunnel of Horizon. The
+reference holds the four files, the steps, the proven lanes and the limits. Use
+it only when the machine has no real Chrome or Chromium: a real browser is the
+better browser host.
+
 ## Providers
 
 | Provider | CLI | SSH user | sudo | Stop and start | Firewall | tmux on the default image | Reference |

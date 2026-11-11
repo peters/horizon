@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/browser/attached_host.rs,crates/horizon-core/src/browser/attached_host/**,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/ssh_forward.rs,crates/horizon-browser-control/src/ssh_forward/**,crates/horizon-browser-control/src/manifest/kept.rs,crates/horizon-browser-control/src/manifest/kept/**,crates/horizon-browser/src/process/attach.rs,crates/horizon-browser/src/process/attach/**,crates/horizon-browser/src/session/shared.rs,crates/horizon-ui/src/app/browser_kept_failures.rs,crates/horizon-ui/src/app/browser_kept_failures/**"
+applyTo: "crates/horizon-core/src/browser/attached_host.rs,crates/horizon-core/src/browser/attached_host/**,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/ssh_forward.rs,crates/horizon-browser-control/src/ssh_forward/**,crates/horizon-browser-control/src/manifest/kept.rs,crates/horizon-browser-control/src/manifest/kept/**,crates/horizon-browser/src/process/attach.rs,crates/horizon-browser/src/process/attach/**,crates/horizon-browser/src/session/shared.rs,crates/horizon-ui/src/app/browser_kept_failures.rs,crates/horizon-ui/src/app/browser_kept_failures/**,packaging/browser-machine/**,assets/plugins/codex/skills/horizon-machines/references/browser-machine/**,assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/**"
 ---
 
 # Trust boundary of the remote browser tunnel
@@ -97,6 +97,45 @@ The host machine answers every call, writes the endpoint file and serves the
   `UnsupportedByBackend`, because the launch switches belong to the machine, not
   to Horizon.
 
+## The browser machine case
+
+`packaging/browser-machine/` prepares a destination that has no browser: one
+Chromium in a container, started by a wrapper that Horizon finds as
+`google-chrome`. The tunnel above is the same. This case adds these properties:
+
+- The container publishes its bridge port on the loopback of the destination
+  only (`--publish 127.0.0.1::9222`), and Docker chooses the host port. Chromium
+  itself listens on the loopback of the container, and a `socat` bridge on the
+  container interface carries the published port to it.
+- The wrapper writes the published port as line 1 of the `DevToolsActivePort`
+  file of the profile, which is the file that Horizon reads. Chromium writes its
+  own container port into the same file; the wrapper replaces it after the
+  endpoint answers.
+- The wrapper starts, but never pulls and never builds, an image, so the start
+  fits the 20-second budget of the snippet. It exits 3 with one line when the
+  destination cannot start a container, and 5 when the endpoint does not answer.
+  Horizon shows those words and its typed code, as for every other connect.
+- Chromium runs as root with `--no-sandbox`, under `Xvfb` and `openbox`, because
+  the default Docker seccomp profile refuses the user namespaces that the
+  Chromium sandbox needs.
+
+What this case does not guarantee:
+
+- **Every local account of the destination can drive that browser.** The
+  published port is bound to the loopback of the destination and it asks for no
+  credential, and every container of its Docker networks reaches the bridge port.
+  A local user has the cookies and the sign-ins of the profile, and Docker
+  membership is root on that machine.
+- **The wrapper shadows a browser name on that machine.** `/usr/local/bin/google-chrome`
+  is the first name that Horizon looks for, so every Horizon panel of that
+  destination gets the container and no real browser. `setup.sh` stops on a
+  machine that already has a browser unless the person passes `--force`.
+- **The page runs without its sandbox and with software graphics.** A page that
+  reads a resource of the destination, or that needs a GPU, behaves differently
+  than on a real desktop, and a site can refuse the browser.
+- **The profile files belong to root,** because Chromium runs as root in the
+  container, and the profile is a bind mount of a folder of the destination.
+
 ## What the tunnel does not guarantee
 
 - **Every local account of the host machine can drive that browser.** The
@@ -146,6 +185,8 @@ The host machine answers every call, writes the endpoint file and serves the
 - No `Browser.close`, and no download path, and no file of this computer.
 - The forward ends with the session, the panel and the process. The browser of
   the host does not.
+- A browser machine publishes one port on the loopback of the destination, and
+  the setup installs no listener of its own on another interface.
 - A lost link keeps the panel and publishes one typed code with the words of that
   machine. It deletes no profile, no page of that machine and no file of this
   computer, and it starts no `ssh` before the person retries.
