@@ -16,6 +16,11 @@ fn frames_id() -> egui::Id {
 
 /// Ask the toolkit to read the clipboard for the focused terminal.
 pub(crate) fn request(ctx: &egui::Context) {
+    // The toolkit reads the desktop clipboard of this paste in its own event
+    // handling, on this thread: the framework offers no way to read it on a
+    // worker. Horizon asks for the paste here and does no clipboard work itself.
+    let _accepted = horizon_core::ui_thread::exception("clipboard paste: the toolkit reads the desktop clipboard");
+    horizon_core::ui_thread::blocking("the toolkit reads the desktop clipboard for a paste");
     ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     ctx.data_mut(|data| data.insert_temp(frames_id(), FRAMES));
     ctx.request_repaint();
