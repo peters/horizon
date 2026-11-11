@@ -90,18 +90,6 @@ pub(super) fn read_bindings(machines_dir: &Path) -> Result<BTreeMap<String, Stri
     Ok(bindings.names().clone())
 }
 
-/// Writes the key bindings of this computer into `machines/keys.json`, so the
-/// machine list of this computer reads the key that the server decided.
-pub(super) fn write_bindings(machines_dir: &Path, names: &BTreeMap<String, String>) -> Result<(), SyncError> {
-    let mut bindings = MachineBindings::in_directory(machines_dir);
-    for (machine, key) in names {
-        bindings.set(machine, Some(key));
-    }
-    bindings
-        .save()
-        .map_err(|error| SyncError::Queue(format!("the machine keys of this computer: {error}")))
-}
-
 /// The device name of this computer: the one that it wrote at its first link, or
 /// a name that it writes now. The name is 1 to 40 characters of `a-z`, `0-9` and
 /// `-`, and it stays the same across restarts, so the server sees one computer.

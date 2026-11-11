@@ -47,7 +47,7 @@ use crate::protocol::{Frame, HelloOk};
 use crate::store::Changes;
 use files::{
     MIRROR_FILE, MIRROR_FORMAT, MirrorFile, MirroredMachine, QUEUE_FILE, device_name, read_bindings, read_mirror,
-    seed_records, write_bindings, write_mirror,
+    seed_records, write_mirror,
 };
 
 mod files;
@@ -205,15 +205,10 @@ impl std::fmt::Debug for SyncHandle {
 struct SyncState {
     client: Client,
     mirror_file: PathBuf,
-    /// The directory of `machines/keys.json`, which holds the key of each machine.
-    machines_dir: PathBuf,
     mirror: BTreeMap<String, MirroredMachine>,
     owned: BTreeSet<String>,
     /// The key that each machine uses, as the server gave it.
     bindings: BTreeMap<String, String>,
-    /// The bindings that the last save answered, so a save turns only what its
-    /// caller changed into an intent.
-    bindings_view: BTreeMap<String, String>,
     /// The bindings that this computer kept before its first link.
     local_bindings: BTreeMap<String, String>,
     /// The machine keys that this computer holds now, so the machine section
@@ -266,7 +261,6 @@ impl SyncHandle {
             inner: Arc::new(Mutex::new(SyncState {
                 client,
                 mirror_file: config.mirror_file.clone(),
-                machines_dir: config.machines_dir.clone(),
                 mirror: file
                     .machines
                     .into_iter()
@@ -277,7 +271,6 @@ impl SyncHandle {
                     .collect(),
                 owned: file.owned,
                 bindings: file.bindings,
-                bindings_view: BTreeMap::new(),
                 local_bindings,
                 machine_keys,
                 secrets: Arc::clone(&config.secrets),
@@ -323,6 +316,13 @@ impl SyncHandle {
     #[must_use]
     pub fn has_machine_key(&self, name: &str) -> bool {
         self.lock().machine_keys.contains(name)
+    }
+
+    /// The version of the secret `id` that this computer saw, when it saw one.
+    /// A local change of that secret is an intent on that version.
+    #[must_use]
+    pub fn secret_version(&self, id: &str) -> Option<u64> {
+        self.lock().client.secret_version(id)
     }
 
     /// The lines for the person about a secret that the server decided
@@ -374,7 +374,7 @@ impl SyncHandle {
     pub fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
         let mut state = self.lock();
         let next = bindings.names().clone();
-        let previous = state.bindings_view.clone();
+        let previous = merged_bindings(&state);
         let mut asked = Vec::new();
         for (machine, key) in &next {
             if previous.get(machine) != Some(key) {
@@ -394,7 +394,6 @@ impl SyncHandle {
                 .map_err(|error| queue_error(&error))?;
             written = true;
         }
-        state.bindings_view = next;
         if written {
             state.generation = state.generation.wrapping_add(1);
             let file = mirror_of(&state);
@@ -432,13 +431,7 @@ impl SyncHandle {
     /// of the server between the two never becomes an intent of this computer.
     #[must_use]
     pub fn records(&self) -> Vec<Machine> {
-        let mut state = self.lock();
-        let merged = merged_records(&state);
-        state.view = merged
-            .iter()
-            .map(|machine| (machine.name.clone(), machine.clone()))
-            .collect();
-        merged
+        records_of(&mut self.lock())
     }
 
     /// Whether this computer compared the machine list that it kept before the
@@ -513,6 +506,18 @@ impl SyncHandle {
         let file = mirror_of(&state);
         write_mirror(&state.mirror_file, &file)
     }
+}
+
+/// The records of the state with its waiting intents applied, and remembered as
+/// the answer of this load, so a save turns only what its caller changed into an
+/// intent.
+fn records_of(state: &mut SyncState) -> Vec<Machine> {
+    let merged = merged_records(state);
+    state.view = merged
+        .iter()
+        .map(|machine| (machine.name.clone(), machine.clone()))
+        .collect();
+    merged
 }
 
 /// The records of the state with its waiting intents applied, in name order.
@@ -1000,10 +1005,7 @@ fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<PullOutcome, 
     state.generation = state.generation.wrapping_add(1);
     let file = mirror_of(&state);
     write_mirror(&state.mirror_file, &file)?;
-    let names = merged_bindings(&state);
-    let machines_dir = state.machines_dir.clone();
     drop(state);
-    write_bindings(&machines_dir, &names)?;
     tracing::debug!(
         index = applied.index,
         rows = applied.rows,
@@ -1377,10 +1379,10 @@ impl SyncedMachineStore {
 
 impl MachineStore for SyncedMachineStore {
     fn load(&self) -> Result<LoadedMachines, MachineError> {
-        Ok(LoadedMachines {
-            records: self.handle.records(),
-            keys: Vec::new(),
-        })
+        let mut state = self.handle.lock();
+        let records = records_of(&mut state);
+        let keys = merged_bindings(&state).into_iter().collect();
+        Ok(LoadedMachines { records, keys })
     }
 
     fn save(&self, records: &[Machine]) -> Result<(), MachineError> {
