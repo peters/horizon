@@ -29,8 +29,8 @@ use crate::intent::{Intent, PushReply};
 use writer::Job;
 
 pub use link::{
-    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, UNJOINED_GRACE_MILLIS,
-    WRONG_CODE_WINDOW_MILLIS,
+    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, REMOVED_KEPT_MILLIS, TokenLogin,
+    UNJOINED_GRACE_MILLIS, WRONG_CODE_WINDOW_MILLIS,
 };
 pub use rows::{Changes, Row};
 
@@ -292,12 +292,12 @@ impl Store {
         answer.recv().map_err(|_| StoreError::Stopped)?
     }
 
-    /// Whether `token_hash` is the login of `device`, and when the server saw that
-    /// device last.
+    /// What the hash of one greeting is on this server: the login of `device`, the
+    /// record of the removal of `device`, or the hash of nothing of this server.
     ///
     /// # Errors
-    /// Returns why the row cannot be read or written.
-    pub fn present_token(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+    /// Returns why the rows cannot be read or written.
+    pub fn present_token(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<TokenLogin, StoreError> {
         self.inner.link_present(token_hash, device, now_millis)
     }
 
@@ -310,13 +310,14 @@ impl Store {
         self.inner.read(|connection| link::devices(connection, caller))
     }
 
-    /// Forgets the token and the row of `device`, and answers whether the server
-    /// held it. The links of that device end with the answer.
+    /// Forgets the token and the row of `device`, keeps the record of its removal
+    /// for [`REMOVED_KEPT_MILLIS`], and answers whether the server held it. The links
+    /// of that device end with the answer.
     ///
     /// # Errors
     /// Returns why the row cannot be removed.
-    pub fn remove_device(&self, device: &str) -> Result<bool, StoreError> {
-        self.inner.link_remove(device)
+    pub fn remove_device(&self, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+        self.inner.link_remove(device, now_millis)
     }
 
     /// The number of open invitations at `now_millis`.
@@ -421,8 +422,8 @@ impl Inner {
         answer.recv().map_err(|_| StoreError::Stopped)?
     }
 
-    /// Whether a token is the login of a device.
-    fn link_present(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+    /// What the hash of one greeting is on this server.
+    fn link_present(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<link::TokenLogin, StoreError> {
         let (reply, answer) = mpsc::sync_channel(1);
         self.send(Job::PresentToken {
             token_hash: token_hash.to_owned(),
@@ -433,11 +434,12 @@ impl Inner {
         answer.recv().map_err(|_| StoreError::Stopped)?
     }
 
-    /// Forgets the login of one device.
-    fn link_remove(&self, device: &str) -> Result<bool, StoreError> {
+    /// Forgets the login of one device, and keeps the record of its removal.
+    fn link_remove(&self, device: &str, now_millis: i64) -> Result<bool, StoreError> {
         let (reply, answer) = mpsc::sync_channel(1);
         self.send(Job::RemoveDevice {
             device: device.to_owned(),
+            now_millis,
             reply,
         })?;
         answer.recv().map_err(|_| StoreError::Stopped)?

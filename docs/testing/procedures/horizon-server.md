@@ -575,19 +575,41 @@ gone, and that it catches up when the server returns.
 5. Look at the store of the server.
 
    Result: `SELECT COUNT(*) FROM devices WHERE name = 'window-b';` answers 0, and
-   the connection of that computer is closed.
+   the connection of that computer is closed. `SELECT COUNT(*) FROM removed WHERE
+   name = 'window-b';` answers 1: the server keeps the hash of the old token for 30
+   days, so that computer reads the same sentence when it comes back.
 
 6. On the first client computer, press `Add a computer`. On the third client
    computer, paste the new link, type the name `window-b`, and press Join.
 
    Result: the join works again, because the name is free. The third computer
    reads `Server: in step`, the field `This computer` is read-only again, and the
-   server holds one row `window-b` with a token.
+   server holds one row `window-b` with a token. `SELECT COUNT(*) FROM removed
+   WHERE name = 'window-b';` answers 0, because the join cleared the record.
+
+7. Stop the third client computer. Wait until the list of the first client computer
+   shows `window-b` as away.
+
+8. On the first client computer, press `Remove` beside `window-b` and then `Remove`
+   in the confirmation.
+
+   Result: the row of `window-b` goes from the list, and no connection of that
+   computer is open.
+
+9. Start the third client computer again with the same state.
+
+   Result: within a few seconds the state line and the sidebar read `This computer
+   was removed from the server.`. The state line does not read `This computer is not
+   logged in` and does not stay at `Server away`. The invitation and the list of
+   the computers are gone, the section `Join with a link` is shown, and the field
+   `This computer` is read-only no more.
 
 ## 7. Pass criteria
 
 - A machine that one computer adds appears on the other computer within a few
   seconds, and a removal travels back.
+- A computer that was away when a person removed it reads that it was removed, and
+  it does not read that it is not logged in.
 - With the server away, both computers keep their last list, a change shows
   `pending`, and the change settles when the server returns.
 - The queue of a computer survives its restart while the server is away.

@@ -38,6 +38,29 @@ pub const WRONG_CODE_WINDOW_MILLIS: i64 = 600_000;
 /// row that no hello reached inside this window is a row that no computer can use.
 pub const UNJOINED_GRACE_MILLIS: i64 = 60_000;
 
+/// How long the server keeps the name and the hash of the token of a computer that
+/// it removed, so a computer that comes back after its removal reads `removed`.
+///
+/// A computer that was away when a person removed it greets the server with the
+/// token of a row that is gone. Without this record the server would answer
+/// `not_logged_in`, and one act of the person would have two answers. The record is
+/// pruned at the next removal or join, and a hash of a token that no longer works
+/// is the whole of it.
+pub const REMOVED_KEPT_MILLIS: i64 = 30 * 24 * 60 * 60 * 1_000;
+
+/// What the server says about the hash of one greeting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenLogin {
+    /// The hash is the token of a device of that name, and the server stamped the
+    /// time that it saw it.
+    Present,
+    /// The name and the hash are those of a computer that this server removed
+    /// inside [`REMOVED_KEPT_MILLIS`].
+    Removed,
+    /// No device and no removed computer of this server holds that hash.
+    Unknown,
+}
+
 /// What the server did with the code of a join.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinAnswer {
@@ -137,6 +160,7 @@ pub(super) fn join(
     now_millis: i64,
 ) -> Result<JoinAnswer, StoreError> {
     prune_unjoined(transaction, now_millis)?;
+    prune_removed(transaction, now_millis)?;
     let expires: Option<i64> = transaction
         .query_row(
             "SELECT expires_millis FROM invitations WHERE code_hash = ?1",
@@ -162,6 +186,9 @@ pub(super) fn join(
         return Ok(JoinAnswer::NameTaken);
     }
     transaction.execute("DELETE FROM invitations WHERE code_hash = ?1", [code_hash])?;
+    // A join of this name is a computer that a person joined again, so the record
+    // of its removal is the record of a computer that is on the server once more.
+    transaction.execute("DELETE FROM removed WHERE name = ?1", [device])?;
     transaction.execute(
         "INSERT INTO devices (name, first_seen, last_seen, last_intent, token_hash, created_millis, login, greeted)
          VALUES (?1, ?2, ?2, 0, ?3, ?2, 'token', 0)
@@ -171,6 +198,14 @@ pub(super) fn join(
         params![device, now_millis, token_hash],
     )?;
     Ok(JoinAnswer::Joined)
+}
+
+/// Drops every record of a removed computer that is older than
+/// [`REMOVED_KEPT_MILLIS`], and answers how many records went.
+pub(super) fn prune_removed(transaction: &Transaction<'_>, now_millis: i64) -> Result<usize, StoreError> {
+    let oldest = now_millis.saturating_sub(REMOVED_KEPT_MILLIS);
+    let removed = transaction.execute("DELETE FROM removed WHERE removed_millis <= ?1", [oldest])?;
+    Ok(removed)
 }
 
 /// Drops every row that a join wrote and that no hello of that computer reached
@@ -210,39 +245,70 @@ pub(super) fn touch(
     Ok(())
 }
 
-/// Whether `token_hash` is the token of `device`, and when the server saw that
+/// What the hash of one greeting is on this server, and when the server saw that
 /// device last.
 ///
+/// A hash that no device holds is the hash of the token of a removed computer when
+/// the record of that removal names the same device, so a computer that comes back
+/// after its removal reads why it cannot come back.
+///
 /// # Errors
-/// Returns why the row cannot be read or written.
+/// Returns why the rows cannot be read or written.
 pub(super) fn present(
     transaction: &Transaction<'_>,
     token_hash: &str,
     device: &str,
     now_millis: i64,
-) -> Result<bool, StoreError> {
+) -> Result<TokenLogin, StoreError> {
     let name: Option<String> = transaction
         .query_row("SELECT name FROM devices WHERE token_hash = ?1", [token_hash], |row| {
             row.get(0)
         })
         .optional()?;
-    if name.as_deref() != Some(device) {
-        return Ok(false);
+    if name.as_deref() == Some(device) {
+        transaction.execute(
+            "UPDATE devices SET last_seen = ?2, greeted = 1 WHERE name = ?1",
+            params![device, now_millis],
+        )?;
+        return Ok(TokenLogin::Present);
     }
-    transaction.execute(
-        "UPDATE devices SET last_seen = ?2, greeted = 1 WHERE name = ?1",
-        params![device, now_millis],
-    )?;
-    Ok(true)
+    let removed: Option<String> = transaction
+        .query_row("SELECT name FROM removed WHERE token_hash = ?1", [token_hash], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match removed.as_deref() {
+        Some(name) if name == device => Ok(TokenLogin::Removed),
+        _ => Ok(TokenLogin::Unknown),
+    }
 }
 
-/// Forgets the token and the row of `device`, and answers whether the server held
-/// it.
+/// Forgets the token and the row of `device`, keeps the record of its removal, and
+/// answers whether the server held it.
+///
+/// The record holds the hash of the token, which is the login of nothing once the
+/// row is gone, and it is what a later greeting of that computer reads. A computer
+/// of the socket has no token and needs no record: `ssh` is its login, and a removal
+/// proves nothing about the login that `ssh` grants.
 ///
 /// # Errors
 /// Returns why the row cannot be removed.
-pub(super) fn remove(transaction: &Transaction<'_>, device: &str) -> Result<bool, StoreError> {
+pub(super) fn remove(transaction: &Transaction<'_>, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+    prune_removed(transaction, now_millis)?;
+    let token_hash: Option<Option<String>> = transaction
+        .query_row("SELECT token_hash FROM devices WHERE name = ?1", [device], |row| {
+            row.get(0)
+        })
+        .optional()?;
     let removed = transaction.execute("DELETE FROM devices WHERE name = ?1", [device])?;
+    if let Some(Some(token_hash)) = token_hash {
+        transaction.execute(
+            "INSERT INTO removed (token_hash, name, removed_millis) VALUES (?1, ?2, ?3)
+             ON CONFLICT (token_hash) DO UPDATE SET name = excluded.name,
+                 removed_millis = excluded.removed_millis",
+            params![token_hash, device, now_millis],
+        )?;
+    }
     Ok(removed > 0)
 }
 

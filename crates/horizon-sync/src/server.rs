@@ -43,7 +43,7 @@ use crate::protocol::{
     DeviceList, DeviceRemoved, Frame, Hello, HelloOk, Invited, Join, Joined, LinkError, LinkErrorCode,
     PROTOCOL_VERSION, check_device_name,
 };
-use crate::store::{JoinAnswer, Store};
+use crate::store::{JoinAnswer, Store, TokenLogin};
 
 /// The most waits that one link holds open at once.
 pub const MAX_OPEN_WAITS: usize = 32;
@@ -62,6 +62,10 @@ const WAIT_SLICE: Duration = Duration::from_millis(200);
 /// How long the server waits for the error frame of an ended link to reach the
 /// computer before it closes the transport.
 const END_FLUSH: Duration = Duration::from_secs(1);
+
+/// The one sentence of a computer that a person removed: the end of its open link
+/// and the answer to its later greeting read the same.
+const REMOVED_TEXT: &str = "This computer was removed from the server.";
 
 /// What a server process knows about itself: the listener that it opened, the
 /// links that are open, and its clock.
@@ -583,7 +587,7 @@ fn remove_device(
     ticket: &Arc<LinkTicket>,
     target: &str,
 ) -> bool {
-    let removed = match store.remove_device(target) {
+    let removed = match store.remove_device(target, info.now_millis()) {
         Ok(removed) => removed,
         Err(error) => {
             tracing::warn!(%error, "the server could not remove a computer");
@@ -602,12 +606,8 @@ fn remove_device(
     if !removed {
         return true;
     }
-    info.registry.end_device(
-        target,
-        Some(ticket.id),
-        LinkErrorCode::Removed,
-        "This computer was removed from the server.",
-    );
+    info.registry
+        .end_device(target, Some(ticket.id), LinkErrorCode::Removed, REMOVED_TEXT);
     target != device
 }
 
@@ -697,8 +697,12 @@ fn accept_hello(
         };
         let hash = login_hash(token);
         match store.present_token(&hash, &hello.device, info.now_millis()) {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(TokenLogin::Present) => {}
+            Ok(TokenLogin::Removed) => {
+                post(frames, error_frame(LinkErrorCode::Removed, REMOVED_TEXT));
+                return None;
+            }
+            Ok(TokenLogin::Unknown) => {
                 post(frames, error_frame(LinkErrorCode::NotLoggedIn, not_logged_in()));
                 return None;
             }

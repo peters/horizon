@@ -51,11 +51,13 @@ pub(super) enum Job {
         token_hash: String,
         device: String,
         now_millis: i64,
-        reply: mpsc::SyncSender<Result<bool, StoreError>>,
+        reply: mpsc::SyncSender<Result<link::TokenLogin, StoreError>>,
     },
-    /// Forgets the token and the row of one device.
+    /// Forgets the token and the row of one device, and keeps the record of its
+    /// removal.
     RemoveDevice {
         device: String,
+        now_millis: i64,
         reply: mpsc::SyncSender<Result<bool, StoreError>>,
     },
     /// Deletes every open invitation.
@@ -132,8 +134,14 @@ pub(super) fn run(path: &Path, signal: &Signal, key: &SecretKey, jobs: &mpsc::Re
                 });
                 let _ = reply.send(result);
             }
-            Job::RemoveDevice { device, reply } => {
-                let result = in_transaction(&mut connection, |transaction| link::remove(transaction, &device));
+            Job::RemoveDevice {
+                device,
+                now_millis,
+                reply,
+            } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::remove(transaction, &device, now_millis)
+                });
                 let _ = reply.send(result);
             }
             Job::ClearInvites { reply } => {

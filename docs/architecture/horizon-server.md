@@ -201,11 +201,15 @@ code, and one token for each computer after that.
   `caller: true`.
 - **A removal ends the links of that computer.** `device_remove { device }`
   deletes the row and the token of that computer and ends its open links with
-  `error { code: "removed" }`, after the error frame reached them. The removed
-  computer writes `This computer was removed from the server.`, deletes its own
-  token row and stops until a person joins it again. It keeps every copy of every
-  machine key and every credential value that it already had, because the server
-  rotates nothing: a person who loses a computer makes new keys and new values.
+  `error { code: "removed" }`, after the error frame reached them. The server keeps
+  the name and the hash of that token in its `removed` table for 30 days, pruned at
+  the next removal or join, so a computer that greets the server after its removal
+  reads `removed` instead of `not_logged_in`: one act of a person has one answer. A
+  join of that name clears the record. The removed computer writes
+  `This computer was removed from the server.`, deletes its own token row and stops
+  until a person joins it again. It keeps every copy of every machine key and every
+  credential value that it already had, because the server rotates nothing: a
+  person who loses a computer makes new keys and new values.
 
 The frame of the hello carries the token only on the listener. A link of the
 socket sends no token, because `ssh` let its computer in, and the server takes
@@ -265,6 +269,7 @@ file to the two files that it makes. `PRAGMA journal_mode=WAL`,
 | `objects` | `kind`, `id`, `body_json`, `version`, `deleted`, primary key `(kind, id)` | The state that a computer pulls: the `machine` rows, the `binding` rows and the internal `probe` rows. A removed object is a row with `deleted = 1`. |
 | `secrets` | `id`, `nonce`, `sealed`, `version`, `deleted`, primary key `id` | One secret: a sealed body, and the log index of its last change. The body is never in `objects`, because that table holds JSON that a person's server copy would show. |
 | `devices` | `name`, `first_seen`, `last_seen`, `last_intent` | One row for each computer that sent an intent, with the highest counter that it spent. |
+| `removed` | `token_hash`, `name`, `removed_millis` | The name of a computer that a person removed and the hash of the token that it presented, for 30 days. The hash is the login of nothing: it answers `removed` to a greeting of that computer and it is pruned at the next removal or join. |
 
 The schema version is one integer. A file of a newer Horizon is refused, never
 migrated down. Version 2 adds the `secrets` table, and `MIGRATIONS` in

@@ -385,7 +385,7 @@ fn a_hello_presents_the_token_of_exactly_one_device() {
 }
 
 #[test]
-fn the_removal_of_a_computer_ends_its_link_and_its_token() {
+fn the_removal_of_a_computer_ends_its_link_and_frees_its_name() {
     let server = Server::start();
     let invited = server.invite();
     let directory = tempfile::tempdir().expect("a directory");
@@ -406,20 +406,18 @@ fn the_removal_of_a_computer_ends_its_link_and_its_token() {
     assert_eq!(device, "laptop-b");
     assert!(held);
 
-    // The open link of B ends with the typed error, and the token is gone.
+    // The open link of B ends with the typed error, and the row of B is gone.
     let ended = receive(&mut open);
     assert_eq!(error_code(&ended), "removed");
-    let mut again = TcpStream::connect(server.address()).expect("the listener");
-    let refused = exchange(
-        &mut again,
-        &Frame::Hello(Hello {
-            protocol: PROTOCOL_VERSION,
-            device: "laptop-b".to_owned(),
-            store: None,
-            token: Some(b.token.clone()),
-        }),
+    assert!(
+        server
+            .store
+            .devices("laptop-a")
+            .expect("the computers")
+            .iter()
+            .all(|row| row.name != "laptop-b"),
+        "the removal deletes the row of the computer"
     );
-    assert_eq!(error_code(&refused), "not_logged_in");
 
     // The link of A is still open, and the name of B is free again.
     let rows = ask_devices(&mut a);
@@ -427,6 +425,121 @@ fn the_removal_of_a_computer_ends_its_link_and_its_token() {
     let invited = server.invite();
     let joined = join(&invited.link, "laptop-b", &store).expect("a new join takes the name again");
     assert_eq!(joined.device, "laptop-b");
+}
+
+/// One greeting of the listener with `token`, which answers the frame of the
+/// server as it is: the greeting of a computer that is not in step.
+fn greet_with(server: &Server, device: &str, token: &str) -> Frame {
+    let mut stream = TcpStream::connect(server.address()).expect("the listener");
+    stream
+        .set_read_timeout(Some(PATIENCE))
+        .expect("a read bound of the test");
+    exchange(
+        &mut stream,
+        &Frame::Hello(Hello {
+            protocol: PROTOCOL_VERSION,
+            device: device.to_owned(),
+            store: None,
+            token: Some(token.to_owned()),
+        }),
+    )
+}
+
+#[test]
+fn a_computer_whose_row_was_removed_while_it_was_away_reads_that_it_was_removed() {
+    let server = Server::start();
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    let b = join(&invited.link, "laptop-b", &secrets(directory.path())).expect("the join");
+
+    // B greeted the server once and is away now: its link is gone before the
+    // removal, so the removal ends no link of B and only the row goes.
+    drop(server.tcp("laptop-b", &b.token));
+    let mut a = server.ssh("laptop-a");
+    let removed = exchange(
+        &mut a,
+        &Frame::DeviceRemove(DeviceRemove {
+            device: "laptop-b".to_owned(),
+        }),
+    );
+    assert!(matches!(
+        removed,
+        Frame::DeviceRemoved(DeviceRemoved { ref device, removed: true }) if device == "laptop-b"
+    ));
+
+    // The computer of B comes back with the token of its old row, and it reads the
+    // reason that the person gave it instead of a login that it never had.
+    let answer = greet_with(&server, "laptop-b", &b.token);
+    assert_eq!(error_code(&answer), "removed");
+
+    // A token that belongs to no computer of this server reads the same as before.
+    let unknown = greet_with(&server, "laptop-b", "not-a-token-of-this-server");
+    assert_eq!(error_code(&unknown), "not_logged_in");
+
+    // A computer of the socket has no token, so a removal keeps no record of it and
+    // `ssh` greets the same name again.
+    let mut socket = server.ssh("laptop-a");
+    exchange(
+        &mut socket,
+        &Frame::DeviceRemove(DeviceRemove {
+            device: "laptop-a".to_owned(),
+        }),
+    );
+    let mut again = server.ssh("laptop-a");
+    let rows = ask_devices(&mut again);
+    assert!(rows.iter().any(|row| row.name == "laptop-a"), "{rows:?}");
+}
+
+#[test]
+fn a_join_of_the_same_name_clears_the_record_of_a_removal() {
+    let server = Server::start();
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    let store = secrets(directory.path());
+    let b = join(&invited.link, "laptop-b", &store).expect("the join");
+    let mut a = server.ssh("laptop-a");
+    exchange(
+        &mut a,
+        &Frame::DeviceRemove(DeviceRemove {
+            device: "laptop-b".to_owned(),
+        }),
+    );
+    assert_eq!(error_code(&greet_with(&server, "laptop-b", &b.token)), "removed");
+
+    // The person joins this computer again under the name that it already had: the
+    // name belongs to the new token, and the old one is the token of nothing.
+    let invited = server.invite();
+    let joined = join(&invited.link, "laptop-b", &store).expect("the join of the same name");
+    assert_eq!(joined.device, "laptop-b");
+    assert_ne!(joined.token, b.token, "a join answers a new token");
+    let _open = server.tcp("laptop-b", &joined.token);
+    assert_eq!(error_code(&greet_with(&server, "laptop-b", &b.token)), "not_logged_in");
+}
+
+#[test]
+fn the_record_of_a_removal_is_kept_for_thirty_days() {
+    let clock = Arc::new(TestClock::at(1_760_000_000_000));
+    let server = Server::with_clock(Arc::clone(&clock));
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    let b = join(&invited.link, "laptop-b", &secrets(directory.path())).expect("the join");
+    assert!(
+        server
+            .store
+            .remove_device("laptop-b", clock.now_millis())
+            .expect("the removal of a computer"),
+        "the server held the computer"
+    );
+    assert_eq!(error_code(&greet_with(&server, "laptop-b", &b.token)), "removed");
+
+    // The record of a removal is pruned at the next removal or join, and one that
+    // is older than the bound of the record goes: the token then reads as the token
+    // of nothing, and the token itself never worked again.
+    clock.advance(horizon_sync::REMOVED_KEPT_MILLIS + 1);
+    let invited = server.invite();
+    let directory = tempfile::tempdir().expect("a directory");
+    join(&invited.link, "laptop-c", &secrets(directory.path())).expect("the join of another computer");
+    assert_eq!(error_code(&greet_with(&server, "laptop-b", &b.token)), "not_logged_in");
 }
 
 #[test]

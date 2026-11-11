@@ -19,7 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
-pub(super) const SCHEMA_VERSION: i64 = 4;
+pub(super) const SCHEMA_VERSION: i64 = 5;
 
 /// The mode of the file of the store, which SQLite copies to its `-wal` and
 /// `-shm` files: the server user alone reads or writes the store.
@@ -118,7 +118,22 @@ ALTER TABLE devices ADD COLUMN greeted INTEGER NOT NULL DEFAULT 0;
 UPDATE devices SET greeted = 1;
 ";
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS, SCHEMA_V4_GREETED];
+/// Version 5 keeps the name and the hash of the token of a computer that this server
+/// removed, for [`crate::store::REMOVED_KEPT_MILLIS`]. A computer that greets the
+/// server after its removal reads `removed` instead of `not_logged_in`, so one act
+/// of a person has one answer whichever moment of a link it hits. The hash is the
+/// hash of a token that no longer works: it proves the name of a removed computer
+/// and it is the login of nothing.
+const SCHEMA_V5_REMOVED: &str = "
+CREATE TABLE removed (
+    token_hash TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    removed_millis INTEGER NOT NULL
+) STRICT;
+CREATE INDEX removed_by_time ON removed (removed_millis);
+";
+
+const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS, SCHEMA_V4_GREETED, SCHEMA_V5_REMOVED];
 
 /// The key of the store id in the meta table.
 const META_STORE_ID: &str = "store_id";

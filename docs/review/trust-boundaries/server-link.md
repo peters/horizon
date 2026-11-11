@@ -123,9 +123,13 @@ the network that carries it, because Horizon encrypts nothing on it.
   refuses it, so no server can send a token and no link sends one, and no token
   reaches a queue file, a mirror file or a line of the log.
 - **A removal ends a link and nothing else.** `device_remove` deletes the token row
-  of that device and ends its open links with `error{code: "removed"}`. The removed
-  computer writes one sentence, deletes its own token row and stops until a person
-  joins it again. It keeps every copy of every machine key and every credential
+  of that device and ends its open links with `error{code: "removed"}`. The server
+  keeps the name and the hash of the token of that device for 30 days, so a
+  computer that comes back after its removal reads the same answer, and the kept
+  hash is the hash of a token that no longer works: it proves the name of a removed
+  computer and it is the login of nothing. A join of that name, a later removal and
+  the end of the 30 days drop the record. The removed computer writes one sentence,
+  deletes its own token row and stops until a person joins it again. It keeps every copy of every machine key and every credential
   value that it already had: the server rotates nothing. A person who loses a
   computer removes it, then makes new machine keys and new credential values. A
   computer of the socket comes back at its next link whatever a removal did,

@@ -84,7 +84,9 @@ impl TestServer {
     /// goes and the links of that computer end with the typed error.
     fn remove(&self, name: &str) {
         assert!(
-            self.store.remove_device(name).expect("the removal of a computer"),
+            self.store
+                .remove_device(name, SystemClock.now_millis())
+                .expect("the removal of a computer"),
             "the server held {name}"
         );
         self.registry.end_device(
