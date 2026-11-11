@@ -84,10 +84,10 @@ impl RemoteBrowserConfig {
                 return Err(RemoteConfigError::InvalidProviderName { provider: name.clone() });
             }
             provider.validate_definition(name)?;
-            // The OS store addresses items by endpoint origin and slot, so two
+            // A binding addresses an item by its reference and its slot, so two
             // bindings with the same address would silently share one item.
             for (reference, binding) in &provider.credential_bindings {
-                if binding.store != CredentialStoreKind::OsKeychain {
+                if binding.store != CredentialStoreKind::File {
                     continue;
                 }
                 let Some(slot) = binding.slot.clone() else {

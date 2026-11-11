@@ -1,7 +1,7 @@
-//! The change list that a link to a server reads: one entry for each OS-store value
+//! The change list that a link to a server reads: one entry for each value of the file
 //! that this computer stored or removed, with the reference and never the value.
 
-use super::{CredentialValueChange, KeychainState, basic_profile, fake_opener, wait_until};
+use super::{CredentialValueChange, SecretsState, basic_profile, memory_opener, wait_until};
 use crate::remote_browser_credential::{
     CredentialReference, CredentialState, CredentialStoreKind, CredentialWorkbench,
 };
@@ -11,14 +11,14 @@ use crate::remote_browser_credential::{
 /// was stored or removed, never the value.
 #[test]
 fn a_credential_change_reaches_the_link_once_and_without_its_value() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut workbench, |w| w.secrets_state() == &SecretsState::Ready);
     let user = CredentialReference::from("user");
     assert!(workbench.take_value_changes().is_empty(), "nothing changed yet");
 
     workbench
-        .store_in_keychain("grid", &profile, &user, b"alice")
+        .store_value("grid", &profile, &user, b"alice")
         .expect("store request accepted");
     wait_until(&mut workbench, |w| {
         w.readiness(&profile)[0].state == CredentialState::Present

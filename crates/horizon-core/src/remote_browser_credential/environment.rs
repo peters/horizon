@@ -104,8 +104,8 @@ mod tests {
 
     use super::EnvironmentCredentialStore;
     use crate::remote_browser_credential::{
-        CredentialLocator, CredentialState, CredentialStores, CredentialWorkbench, FakeCredentialStore,
-        RemoteCredentialError, RemoteCredentialStore, SessionCredentialStore, readiness, resolve_authorization,
+        CredentialLocator, CredentialState, CredentialStores, CredentialWorkbench, RemoteCredentialError,
+        RemoteCredentialStore, SessionCredentialStore, readiness, resolve_authorization,
     };
 
     fn endpoint() -> ControlEndpoint {
@@ -158,7 +158,7 @@ mod tests {
         let environment = environment_store_with(b"alice", b"s3cret-key");
         let stores = CredentialStores {
             session: &SessionCredentialStore::new(),
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(&environment),
         };
         let authorization = resolve_authorization(&profile, &stores)
@@ -182,20 +182,20 @@ mod tests {
     }
 
     #[test]
-    fn environment_bindings_do_not_fall_back_to_session_or_keychain() {
+    fn environment_bindings_do_not_fall_back_to_another_store() {
         let profile = environment_profile();
         let mut session = SessionCredentialStore::new();
         session.put(&locator(&profile, "user"), b"alice").expect("session user");
         session
             .put(&locator(&profile, "key"), b"s3cret-key")
             .expect("session key");
-        let mut keychain = FakeCredentialStore::new();
-        keychain.put(&locator(&profile, "user"), b"alice").expect("os user");
-        keychain.put(&locator(&profile, "key"), b"s3cret-key").expect("os key");
+        let mut file = crate::secret_store::SecretStore::in_memory().expect("a store in memory");
+        file.put(&locator(&profile, "user"), b"alice").expect("os user");
+        file.put(&locator(&profile, "key"), b"s3cret-key").expect("os key");
         let environment = EnvironmentCredentialStore::new();
         let stores = CredentialStores {
             session: &session,
-            os_keychain: Some(&keychain),
+            secrets_file: Some(&file),
             environment: Some(&environment),
         };
         let report = readiness(&profile, &stores);
@@ -219,7 +219,7 @@ mod tests {
         let environment = environment_store_with(b"alice", b"s3cret-key");
         let stores = CredentialStores {
             session: &SessionCredentialStore::new(),
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(&environment),
         };
         assert!(
@@ -244,7 +244,7 @@ mod tests {
         let environment = EnvironmentCredentialStore::from_values(values);
         let stores = CredentialStores {
             session: &SessionCredentialStore::new(),
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(&environment),
         };
         let report = readiness(&profile, &stores);
@@ -285,12 +285,15 @@ mod tests {
         let mut remote = RemoteBrowserConfig::default();
         remote.providers.insert("grid".into(), profile.clone());
         let mut workbench = CredentialWorkbench::with_opener(Box::new(|| {
-            Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
+            Ok(
+                Box::new(crate::secret_store::SecretStore::in_memory().expect("a store in memory"))
+                    as Box<dyn RemoteCredentialStore + Send>,
+            )
         }));
         workbench.load_environment_bindings(&remote);
         let stores = CredentialStores {
             session: workbench.session_store(),
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(workbench.environment_store()),
         };
         assert_eq!(
@@ -336,7 +339,10 @@ mod tests {
         let mut remote = RemoteBrowserConfig::default();
         remote.providers.insert("grid".into(), profile.clone());
         let mut workbench = CredentialWorkbench::with_opener(Box::new(|| {
-            Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
+            Ok(
+                Box::new(crate::secret_store::SecretStore::in_memory().expect("a store in memory"))
+                    as Box<dyn RemoteCredentialStore + Send>,
+            )
         }));
         workbench.load_environment_bindings(&remote);
         let report = workbench.readiness(&profile);
@@ -366,19 +372,17 @@ mod tests {
             .clone(),
         );
         let mut session = SessionCredentialStore::new();
-        let mut keychain = FakeCredentialStore::new();
+        let mut file = crate::secret_store::SecretStore::in_memory().expect("a store in memory");
         let key = CredentialReference::from("key");
         let mut mixed = first.clone();
         mixed.credential_bindings.get_mut(&key).expect("key").store = CredentialStoreKind::Session;
         session
             .put(&locator(&mixed, "key"), b"session-key")
             .expect("session value");
-        keychain
-            .put(&locator(&mixed, "key"), b"keychain-key")
-            .expect("keychain value");
+        file.put(&locator(&mixed, "key"), b"file-key").expect("file value");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: Some(&keychain),
+            secrets_file: Some(&file),
             environment: Some(&environment),
         };
         for (profile, expected, origin) in [
@@ -390,7 +394,7 @@ mod tests {
             assert_eq!(header.header_value(), expected);
             assert_eq!(header.origin(), origin);
         }
-        mixed.credential_bindings.get_mut(&key).expect("key").store = CredentialStoreKind::OsKeychain;
+        mixed.credential_bindings.get_mut(&key).expect("key").store = CredentialStoreKind::File;
         assert_eq!(
             resolve_authorization(&mixed, &stores)
                 .expect("ready")
@@ -402,7 +406,7 @@ mod tests {
         environment.values.remove("SECOND_REMOTE_BROWSER_ACCESS_KEY");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(&environment),
         };
         assert!(resolve_authorization(&first, &stores).is_ok());
@@ -442,7 +446,7 @@ mod tests {
             let environment = environment_store_with(&user, &key);
             let stores = CredentialStores {
                 session: &SessionCredentialStore::new(),
-                os_keychain: None,
+                secrets_file: None,
                 environment: Some(&environment),
             };
             let actual = resolve_authorization(&profile, &stores).expect_err("invalid credential");
@@ -456,7 +460,7 @@ mod tests {
         let environment = environment_store_with(b"unused", b"invalid token-secret");
         let stores = CredentialStores {
             session: &SessionCredentialStore::new(),
-            os_keychain: None,
+            secrets_file: None,
             environment: Some(&environment),
         };
         let error = resolve_authorization(&profile, &stores).expect_err("invalid bearer");

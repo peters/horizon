@@ -1,5 +1,6 @@
-//! The vault of one computer: a machine key as three files, a credential value in
-//! the OS store behind the trait, and the copy that a lost value keeps.
+//! The vault of one computer: a machine key as three files, a credential value and a
+//! named secret in the secrets file behind the trait, and the copy that a lost value
+//! keeps.
 
 use std::{
     collections::BTreeMap,
@@ -13,16 +14,17 @@ use horizon_browser::remote::{
 };
 
 use super::*;
-use crate::remote_browser_credential::{CredentialLocator, FakeCredentialStore, SharedCredentialStore};
+use crate::remote_browser_credential::{CredentialLocator, SharedCredentialStore};
+use crate::secret_store::SecretStore;
 
-/// One provider profile whose two references are both bound to the OS store.
+/// One provider profile whose two references are both bound to the secrets file.
 fn profile(slot: &str) -> RemoteProviderProfile {
     let mut credential_bindings = BTreeMap::new();
     for (reference, name) in [("user", "username"), ("key", "password")] {
         credential_bindings.insert(
             CredentialReference::from(reference),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some(format!("remote-browser/{slot}/{name}")),
             },
         );
@@ -51,15 +53,18 @@ fn vault() -> (
     tempfile::TempDir,
     SecretVault,
     Arc<CredentialVault>,
-    Arc<Mutex<FakeCredentialStore>>,
+    Arc<Mutex<SecretStore>>,
 ) {
     let home = tempfile::tempdir().expect("a directory");
     let keys = crate::MachineKeys::new(home.path().join("machine-keys"));
-    let fake = Arc::new(Mutex::new(FakeCredentialStore::new()));
+    let fake = Arc::new(Mutex::new(SecretStore::in_memory().expect("a store in memory")));
     let shared = SharedCredentialStore::new(Arc::clone(&fake));
     let credentials = Arc::new(CredentialVault::new(Box::new(shared)));
     credentials.register(&config("a"));
-    let vault = SecretVault::new(keys, Some(Arc::clone(&credentials)));
+    let named = Arc::new(NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(
+        &fake,
+    )))));
+    let vault = SecretVault::new(keys, Arc::clone(&credentials), named);
     (home, vault, credentials, fake)
 }
 
@@ -237,9 +242,9 @@ fn a_credential_value_lives_under_its_reference_in_the_os_store() {
         vec!["credential/key".to_string()]
     );
     assert_eq!(
-        fake.lock().expect("the store").len(),
+        fake.lock().expect("the store").ids().expect("the ids").len(),
         1,
-        "the value is one item of the OS store"
+        "the value is one row of the secrets file"
     );
 
     // The existing read path of a provider finds it.
@@ -260,7 +265,7 @@ fn a_credential_value_lives_under_its_reference_in_the_os_store() {
     let refused = vault.write(&elsewhere, b"value").expect_err("no place for it");
     assert_eq!(refused.code(), "unsupported_secret");
 
-    // A local value that loses is one line for the person: the OS store holds one
+    // A local value that loses is one line for the person: the file holds one
     // value per reference and the person decides which one is right.
     let notice = vault
         .take_over(&id, b"theirs", true, 5)

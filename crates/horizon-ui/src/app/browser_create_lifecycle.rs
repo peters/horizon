@@ -42,7 +42,7 @@ pub(super) struct PendingBrowserCreate {
     /// The panel the create opened: `None` while a remote create still waits
     /// for its credential values or its provider slot, so no panel exists.
     pub(super) panel: Option<CreatedPanel>,
-    /// The OS-store credential values a remote create still waits for; `None`
+    /// The file-backed credential values a remote create still waits for; `None`
     /// once they are at hand, and for a create that reads none.
     pub(super) remote_credentials: Option<super::browser_remote_credentials::RemoteCredentialRead>,
 }
@@ -71,7 +71,7 @@ pub(super) struct CreatedPanel {
 }
 
 impl PendingBrowserCreate {
-    /// A remote create as it waits for the values only the OS store holds, and
+    /// A remote create as it waits for the values only the secrets file holds, and
     /// then for its provider slot: no panel exists yet.
     pub(super) fn resolving(request: BrowserCreateRequest, started_at: Instant, board: BoardFence) -> Self {
         Self {
@@ -89,7 +89,7 @@ impl PendingBrowserCreate {
 /// poll; the others wait for their coordination work, which ends them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CreateStage {
-    /// A remote create's OS-store credential values are read on the workbench
+    /// A remote create's file credential values are read on the workbench
     /// thread; a later frame plans the request once the last value is at hand.
     ReadingCredentials,
     /// A remote create's provider slot lease runs on the coordination worker;

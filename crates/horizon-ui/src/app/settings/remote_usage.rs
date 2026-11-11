@@ -70,7 +70,7 @@ mod tests {
         ControlEndpoint, RemoteAdapterKind, RemoteAuthentication, RemoteSessionLimits,
     };
     use horizon_core::browser::remote_usage::ProviderUsage;
-    use horizon_core::remote_browser_credential::FakeCredentialStore;
+    use horizon_core::secret_store::SecretStore;
 
     #[test]
     fn switching_to_an_unsupported_adapter_discards_cached_usage() {
@@ -91,7 +91,9 @@ mod tests {
             std::time::Instant::now(),
         ));
         let mut panels = UsagePanels::from([("remote".into(), monitor)]);
-        let credentials = CredentialWorkbench::with_opener(Box::new(|| Ok(Box::new(FakeCredentialStore::new()))));
+        let credentials = CredentialWorkbench::with_opener(Box::new(|| {
+            Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
+        }));
         let context = egui::Context::default();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             render(ui, "remote", &profile, &credentials, &mut panels);

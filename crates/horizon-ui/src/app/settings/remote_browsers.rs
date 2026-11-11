@@ -13,7 +13,7 @@ use horizon_core::browser::remote::{
 };
 use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
-    CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
+    CredentialReadiness, CredentialState, CredentialWorkbench, NoticeKind, RemoteCredentialError, SecretsState,
     WorkbenchNotice, credential_destination,
 };
 use zeroize::{Zeroize as _, Zeroizing};
@@ -274,7 +274,7 @@ pub(super) fn render(
 }
 
 /// A machine-local binding for a reference the imported profile left
-/// unbound: the session store, or the OS store under a slot derived from the
+/// unbound: the session store, or the secrets file under the reference of the
 /// provider and reference. Returns whether the editing configuration changed;
 /// Save writes it to the store.
 fn bind_reference(
@@ -291,7 +291,7 @@ fn bind_reference(
     }
     let slot = match store {
         CredentialStoreKind::Session | CredentialStoreKind::Environment => None,
-        CredentialStoreKind::OsKeychain => Some(format!("remote-browser/{provider}/{}", reference.as_str())),
+        CredentialStoreKind::File => Some(format!("remote-browser/{provider}/{}", reference.as_str())),
     };
     profile
         .credential_bindings
@@ -344,13 +344,12 @@ fn render_portable_section(ui: &mut Ui, config: &mut Config, portable: &mut Port
 fn render_stores_section(ui: &mut Ui, workbench: &mut CredentialWorkbench) {
     super::section_heading(ui, "Credential stores");
     super::section_card(ui, |ui| {
-        let (label, color) = match workbench.keychain_state() {
-            KeychainState::Opening => ("OS credential store: checking".to_string(), theme::FG_DIM()),
-            KeychainState::Available => ("OS credential store: available".to_string(), theme::PALETTE_GREEN()),
-            KeychainState::Unavailable(error) => (
-                format!("OS credential store: unavailable ({error})"),
-                theme::PALETTE_YELLOW(),
-            ),
+        let (label, color) = match workbench.secrets_state() {
+            SecretsState::Opening => ("Secrets file: checking".to_string(), theme::FG_DIM()),
+            SecretsState::Ready => ("Secrets file: available".to_string(), theme::PALETTE_GREEN()),
+            SecretsState::Unavailable(error) => {
+                (format!("Secrets file: unavailable ({error})"), theme::PALETTE_YELLOW())
+            }
         };
         ui.label(egui::RichText::new(label).color(color).size(12.0));
         ui.add_space(4.0);
@@ -367,7 +366,7 @@ fn render_stores_section(ui: &mut Ui, workbench: &mut CredentialWorkbench) {
         });
         super::dim_label(
             ui,
-            "Session-only values are discarded when Horizon exits. OS-store values persist on this computer only \
+            "Session-only values are discarded when Horizon exits. Values in the secrets file persist on this computer only \
              and are never exported. Environment bindings are read from the named launch variables; \
              agent and terminal children inherit them normally.",
         );
@@ -477,12 +476,12 @@ fn render_reference(
             if ui.small_button("This session only").clicked() {
                 chosen = Some(CredentialStoreKind::Session);
             }
-            let available = workbench.keychain_state() == &KeychainState::Available;
+            let available = workbench.secrets_state() == &SecretsState::Ready;
             if ui
-                .add_enabled(available, egui::Button::new("OS credential store").small())
+                .add_enabled(available, egui::Button::new("Secrets file").small())
                 .clicked()
             {
-                chosen = Some(CredentialStoreKind::OsKeychain);
+                chosen = Some(CredentialStoreKind::File);
             }
         });
         return chosen;
@@ -515,14 +514,14 @@ fn render_reference(
                     let _ = workbench.set_session_value(provider, profile, reference, &value);
                 }
             }
-            CredentialStoreKind::OsKeychain => {
-                let available = workbench.keychain_state() == &KeychainState::Available;
+            CredentialStoreKind::File => {
+                let available = workbench.secrets_state() == &SecretsState::Ready;
                 if ui
-                    .add_enabled(has_text && available, egui::Button::new("Save to OS store"))
+                    .add_enabled(has_text && available, egui::Button::new("Save to the secrets file"))
                     .clicked()
                 {
                     let value = inputs.take(&key);
-                    let _ = workbench.store_in_keychain(provider, profile, reference, &value);
+                    let _ = workbench.store_value(provider, profile, reference, &value);
                 }
             }
             CredentialStoreKind::Environment => {}
@@ -565,7 +564,7 @@ fn store_label(store: CredentialStoreKind, bound: bool) -> &'static str {
     match (store, bound) {
         (_, false) => "unbound",
         (CredentialStoreKind::Session, true) => "session-only",
-        (CredentialStoreKind::OsKeychain, true) => "OS store",
+        (CredentialStoreKind::File, true) => "secrets file",
         (CredentialStoreKind::Environment, true) => "environment",
     }
 }
@@ -574,7 +573,6 @@ fn state_badge(state: CredentialState) -> (&'static str, egui::Color32) {
     match state {
         CredentialState::Present => ("present", theme::PALETTE_GREEN()),
         CredentialState::Missing => ("missing", theme::PALETTE_YELLOW()),
-        CredentialState::Locked => ("locked", theme::PALETTE_RED()),
         CredentialState::StoreUnavailable => ("store unavailable", theme::PALETTE_RED()),
         CredentialState::Checking => ("checking", theme::FG_DIM()),
     }
@@ -589,8 +587,8 @@ fn notice_agrees_with(notice: &WorkbenchNotice, state: CredentialState) -> bool 
         return true;
     }
     match notice.kind {
-        NoticeKind::SessionValueSet | NoticeKind::StoredInKeychain => state == CredentialState::Present,
-        NoticeKind::SessionValueCleared | NoticeKind::DeletedFromKeychain => state == CredentialState::Missing,
+        NoticeKind::SessionValueSet | NoticeKind::StoredInFile => state == CredentialState::Present,
+        NoticeKind::SessionValueCleared | NoticeKind::DeletedFromFile => state == CredentialState::Missing,
     }
 }
 
@@ -598,16 +596,12 @@ fn notice_line(kind: NoticeKind, error: Option<&RemoteCredentialError>) -> (Stri
     match (kind, error) {
         (NoticeKind::SessionValueSet, None) => ("Held for this session.".to_string(), theme::PALETTE_GREEN()),
         (NoticeKind::SessionValueCleared, None) => ("Session value cleared.".to_string(), theme::FG_DIM()),
-        (NoticeKind::StoredInKeychain, None) => {
-            ("Saved to the OS credential store.".to_string(), theme::PALETTE_GREEN())
-        }
-        (NoticeKind::DeletedFromKeychain, None) => {
-            ("Deleted from the OS credential store.".to_string(), theme::FG_DIM())
-        }
-        (NoticeKind::SessionValueSet | NoticeKind::StoredInKeychain, Some(error)) => {
+        (NoticeKind::StoredInFile, None) => ("Saved to the secrets file.".to_string(), theme::PALETTE_GREEN()),
+        (NoticeKind::DeletedFromFile, None) => ("Deleted from the secrets file.".to_string(), theme::FG_DIM()),
+        (NoticeKind::SessionValueSet | NoticeKind::StoredInFile, Some(error)) => {
             (format!("Not saved: {error}."), theme::PALETTE_RED())
         }
-        (NoticeKind::SessionValueCleared | NoticeKind::DeletedFromKeychain, Some(error)) => {
+        (NoticeKind::SessionValueCleared | NoticeKind::DeletedFromFile, Some(error)) => {
             (format!("Not deleted: {error}."), theme::PALETTE_RED())
         }
     }
@@ -626,7 +620,7 @@ mod tests {
         bindings.insert(
             CredentialReference::from("key"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some(slot.to_string()),
             },
         );
@@ -722,10 +716,10 @@ mod tests {
             &mut config,
             "grid",
             &reference,
-            CredentialStoreKind::OsKeychain
+            CredentialStoreKind::File
         ));
         let binding = &config.browser.remote.providers["grid"].credential_bindings[&reference];
-        assert_eq!(binding.store, CredentialStoreKind::OsKeychain);
+        assert_eq!(binding.store, CredentialStoreKind::File);
         assert_eq!(binding.slot.as_deref(), Some("remote-browser/grid/key"));
 
         // Already bound: nothing changes, whatever store is asked for.
@@ -737,7 +731,7 @@ mod tests {
         ));
         assert_eq!(
             config.browser.remote.providers["grid"].credential_bindings[&reference].store,
-            CredentialStoreKind::OsKeychain
+            CredentialStoreKind::File
         );
         assert!(!bind_reference(
             &mut config,
@@ -826,7 +820,7 @@ mod tests {
             provider: "grid".to_string(),
             reference: reference.clone(),
             destination: credential_destination(&profile, &reference),
-            kind: NoticeKind::StoredInKeychain,
+            kind: NoticeKind::StoredInFile,
             error: None,
         };
         assert!(notice_agrees_with(&saved, CredentialState::Present));
@@ -835,7 +829,7 @@ mod tests {
             "a delete through an aliased row hides the stale Saved"
         );
         let failed = WorkbenchNotice {
-            error: Some(RemoteCredentialError::Locked),
+            error: Some(RemoteCredentialError::StoreUnavailable),
             ..saved.clone()
         };
         assert!(
@@ -873,7 +867,7 @@ mod tests {
             provider: "grid".to_string(),
             reference: reference.clone(),
             destination: credential_destination(&old_profile, &reference),
-            kind: NoticeKind::StoredInKeychain,
+            kind: NoticeKind::StoredInFile,
             error: None,
         }]);
         assert!(inputs.last_notice(&old_key).is_some());

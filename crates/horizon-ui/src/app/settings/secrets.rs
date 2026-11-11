@@ -334,7 +334,7 @@ fn state_label(state: NamedSecretState) -> (&'static str, egui::Color32) {
     match state {
         NamedSecretState::Present => (NamedSecretState::Present.text(), theme::PALETTE_GREEN()),
         NamedSecretState::NoValue => (NamedSecretState::NoValue.text(), theme::PALETTE_YELLOW()),
-        NamedSecretState::Locked | NamedSecretState::StoreUnavailable => (state.text(), theme::PALETTE_RED()),
+        NamedSecretState::Unavailable => (state.text(), theme::PALETTE_RED()),
         NamedSecretState::Checking => (state.text(), theme::FG_DIM()),
     }
 }

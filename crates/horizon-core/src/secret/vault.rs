@@ -2,8 +2,8 @@
 //! uses.
 //!
 //! A machine key is a file family under `machine-keys/` of the Horizon home, a
-//! credential value is an item of the OS credential store, and a named secret is one
-//! item of that store under the reference `named/<NAME>` that the agent panels of
+//! credential value is a row of the secrets file under `credential/<reference>`, and
+//! a named secret is a row of that file under `named/<NAME>` that the agent panels of
 //! this computer read as an environment variable. All are reached here, so the link
 //! has one place that reads the value of an id, writes the value that the server
 //! decided, and keeps a local value that lost.
@@ -11,8 +11,8 @@
 //! The version rule of the server decides between two computers that changed one
 //! secret: the first write on a version wins. The loser keeps its own value as
 //! `<name>.conflict-<time>` for a machine key, and only as one line for the person
-//! for a credential value, because the OS store holds one value per reference and
-//! the person must decide which one is right.
+//! for a credential value, because the file holds one value per reference and the
+//! person must decide which one is right.
 
 use std::{fmt, sync::Arc};
 
@@ -25,8 +25,8 @@ use crate::named_secrets::{NamedSecretVault, SecretName};
 /// What this computer keeps of every secret.
 pub struct SecretVault {
     keys: MachineKeys,
-    credentials: Option<Arc<CredentialVault>>,
-    named: Option<Arc<NamedSecretVault>>,
+    credentials: Arc<CredentialVault>,
+    named: Arc<NamedSecretVault>,
 }
 
 impl fmt::Debug for SecretVault {
@@ -34,47 +34,35 @@ impl fmt::Debug for SecretVault {
         formatter
             .debug_struct("SecretVault")
             .field("keys", &self.keys.key_directory())
-            .field("credentials", &self.credentials.is_some())
-            .field("named_secrets", &self.named.is_some())
+            .field("credentials", &self.credentials.references().len())
+            .field("named_secrets", &self.named.names().len())
             .finish()
     }
 }
 
 impl SecretVault {
-    /// The keys of `keys`, and the credential values of `credentials` when this
-    /// computer has an OS credential store.
+    /// The keys of `keys`, the credential values of `credentials`, and the named
+    /// secrets of `named`, so a value that a server holds becomes the environment of
+    /// an agent panel here.
     #[must_use]
-    pub fn new(keys: MachineKeys, credentials: Option<Arc<CredentialVault>>) -> Self {
+    pub fn new(keys: MachineKeys, credentials: Arc<CredentialVault>, named: Arc<NamedSecretVault>) -> Self {
         Self {
             keys,
             credentials,
-            named: None,
+            named,
         }
     }
 
-    /// The same secrets, with the named secrets of this computer's credential
-    /// store, so a value that a server holds becomes the environment of an agent
-    /// panel here.
+    /// The credential values of this computer.
     #[must_use]
-    pub fn with_named(mut self, named: Arc<NamedSecretVault>) -> Self {
-        self.named = Some(named);
-        self
+    pub fn credentials(&self) -> &Arc<CredentialVault> {
+        &self.credentials
     }
 
-    /// The keys of `keys` alone, for a computer without an OS credential store.
+    /// The named secrets of this computer.
     #[must_use]
-    pub fn keys_only(keys: MachineKeys) -> Self {
-        Self {
-            keys,
-            credentials: None,
-            named: None,
-        }
-    }
-
-    /// The credential values of this computer, when it has an OS store.
-    #[must_use]
-    pub fn credentials(&self) -> Option<&Arc<CredentialVault>> {
-        self.credentials.as_ref()
+    pub fn named(&self) -> &Arc<NamedSecretVault> {
+        &self.named
     }
 
     fn key_files(&self, id: &SecretId) -> Result<Option<MachineKeyFiles>, SecretError> {
@@ -102,18 +90,11 @@ impl SecretTarget for SecretVault {
                 }),
                 None => Ok(None),
             },
-            SecretKind::Credential => match self.credentials.as_deref() {
-                Some(credentials) => credentials.value(id.name()),
-                None => Err(SecretError::Unsupported {
-                    reason: "This computer has no OS credential store, so it holds no credential value".to_owned(),
-                }),
-            },
-            SecretKind::Named => match self.named.as_deref() {
-                Some(named) => named
-                    .value(&named_secret_name(id)?)
-                    .map_err(|error| named_failure(&error)),
-                None => Ok(None),
-            },
+            SecretKind::Credential => self.credentials.value(id.name()),
+            SecretKind::Named => self
+                .named
+                .value(&named_secret_name(id)?)
+                .map_err(|error| named_failure(&error)),
         }
     }
 
@@ -140,24 +121,14 @@ impl SecretTarget for SecretVault {
                         reason: error.to_string(),
                     })
             }
-            SecretKind::Credential => match self.credentials.as_deref() {
-                Some(credentials) => credentials.write(id.name(), body),
-                None => Err(SecretError::Unsupported {
-                    reason: "This computer has no OS credential store, so it keeps no credential value".to_owned(),
-                }),
-            },
-            SecretKind::Named => match self.named.as_deref() {
-                Some(named) => {
-                    let name = named_secret_name(id)?;
-                    named
-                        .put(&name, body)
-                        .map(|_| ())
-                        .map_err(|error| named_failure(&error))
-                }
-                None => Err(SecretError::Unsupported {
-                    reason: "This computer has no OS credential store, so it keeps no named secret".to_owned(),
-                }),
-            },
+            SecretKind::Credential => self.credentials.write(id.name(), body),
+            SecretKind::Named => {
+                let name = named_secret_name(id)?;
+                self.named
+                    .put(&name, body)
+                    .map(|_| ())
+                    .map_err(|error| named_failure(&error))
+            }
         }
     }
 
@@ -171,17 +142,14 @@ impl SecretTarget for SecretVault {
                     reason: error.to_string(),
                 })
             }
-            SecretKind::Credential => match self.credentials.as_deref() {
-                Some(credentials) => credentials.remove(id.name()),
-                None => Ok(()),
-            },
-            SecretKind::Named => match self.named.as_deref() {
-                Some(named) => {
-                    let name = named_secret_name(id)?;
-                    named.remove(&name).map(|_| ()).map_err(|error| named_failure(&error))
-                }
-                None => Ok(()),
-            },
+            SecretKind::Credential => self.credentials.remove(id.name()),
+            SecretKind::Named => {
+                let name = named_secret_name(id)?;
+                self.named
+                    .remove(&name)
+                    .map(|_| ())
+                    .map_err(|error| named_failure(&error))
+            }
         }
     }
 
@@ -241,19 +209,14 @@ impl SecretTarget for SecretVault {
                         .collect()
                 })
                 .unwrap_or_default(),
-            SecretKind::Credential => match self.credentials.as_deref() {
-                Some(credentials) => credentials
-                    .present()
-                    .into_iter()
-                    .filter_map(|reference| SecretId::credential(&reference).ok())
-                    .map(|id| id.as_str().to_owned())
-                    .collect(),
-                None => Vec::new(),
-            },
-            SecretKind::Named => match self.named.as_deref() {
-                Some(named) => named.local_ids(),
-                None => Vec::new(),
-            },
+            SecretKind::Credential => self
+                .credentials
+                .present()
+                .into_iter()
+                .filter_map(|reference| SecretId::credential(&reference).ok())
+                .map(|id| id.as_str().to_owned())
+                .collect(),
+            SecretKind::Named => self.named.local_ids(),
         }
     }
 }
@@ -276,7 +239,7 @@ fn named_failure(error: &crate::named_secrets::NamedSecretError) -> SecretError 
         | crate::named_secrets::NamedSecretError::ReservedName { .. } => SecretError::Unreadable {
             message: error.to_string(),
         },
-        _ => SecretError::Unavailable {
+        crate::named_secrets::NamedSecretError::Unavailable { .. } => SecretError::Unavailable {
             reason: error.to_string(),
         },
     }

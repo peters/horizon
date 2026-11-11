@@ -1,16 +1,16 @@
-//! One credential value of a remote browser provider, in the OS credential store
-//! of this computer.
+//! One credential value of a remote browser provider, in the secrets file of this
+//! computer.
 //!
-//! A value lives under the reference that the provider names, and this computer
-//! decides where that reference points: the origin of the provider endpoint and
-//! the slot of its binding. Two computers that hold the same provider
+//! A value lives under the reference that the provider names: the id
+//! `credential/<reference>` of the file, which this computer resolves from the
+//! origin and the slot of the reference. Two computers that hold the same provider
 //! configuration therefore read the same value, and a value that arrives from the
 //! server is written where the code of this computer already reads it.
 //!
-//! This module is the only place outside the workbench that reads or writes an OS
+//! This module is the only place outside the workbench that reads or writes a
 //! credential value, and it does it through the sealed store trait: no method here
 //! returns a value except [`read_secret_value`], whose answer is zeroized, and no
-//! text of a value reaches a log line, a refusal or a file.
+//! text of a value reaches a log line or a refusal.
 
 use std::{
     collections::BTreeMap,
@@ -26,13 +26,13 @@ use crate::remote_browser_credential::{
     CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink,
 };
 
-/// The credential references of this computer that only the OS store answers, in
-/// reference order, each with every address that its providers use.
+/// The credential references of this computer that only the secrets file answers,
+/// in reference order, each with every address that its providers use.
 ///
 /// A reference is one name inside a provider: two providers may name the same
-/// reference with different endpoints, so one reference can mean two items of the
-/// OS store. Both are written with the one value, because the value is bound to
-/// the reference and not to one provider.
+/// reference with different endpoints, so one reference can mean two addresses of
+/// the file. Both are written with the one value, because the value is bound to the
+/// reference and not to one provider.
 #[must_use]
 pub fn os_locators(remote: &RemoteBrowserConfig) -> BTreeMap<String, Vec<CredentialLocator>> {
     let mut locators: BTreeMap<String, Vec<CredentialLocator>> = BTreeMap::new();
@@ -41,7 +41,7 @@ pub fn os_locators(remote: &RemoteBrowserConfig) -> BTreeMap<String, Vec<Credent
             let Some(binding) = profile.credential_bindings.get(reference) else {
                 continue;
             };
-            if binding.store != CredentialStoreKind::OsKeychain {
+            if binding.store != CredentialStoreKind::File {
                 continue;
             }
             let locator = CredentialLocator::new(&profile.endpoint, reference, binding);
@@ -54,11 +54,11 @@ pub fn os_locators(remote: &RemoteBrowserConfig) -> BTreeMap<String, Vec<Credent
     locators
 }
 
-/// The value of one OS-store item, in a zeroizing buffer.
+/// The value of one item of the file, in a zeroizing buffer.
 ///
 /// # Errors
-/// Returns a locked or unavailable store, a missing item, or a value that the
-/// sink refuses.
+/// Returns a store that cannot be read, a missing item, or a value that the sink
+/// refuses.
 pub fn read_secret_value(
     store: &dyn RemoteCredentialStore,
     locator: &CredentialLocator,
@@ -85,7 +85,7 @@ impl SecretSink for ValueSink {
 }
 
 /// The credential values of this computer: the addresses that its configuration
-/// gives to each reference, and the OS credential store that holds them.
+/// gives to each reference, and the secrets file that holds them.
 pub struct CredentialVault {
     /// The addresses of the references, taken from the remote browser
     /// configuration of this computer. A save of the settings replaces them, and
@@ -113,7 +113,7 @@ impl CredentialVault {
         }
     }
 
-    /// Takes the addresses of the references that `remote` binds to the OS store.
+    /// Takes the addresses of the references that `remote` binds to the file.
     /// A provider that the person adds or removes applies at the next call.
     pub fn register(&self, remote: &RemoteBrowserConfig) {
         let locators = os_locators(remote);
@@ -135,7 +135,7 @@ impl CredentialVault {
     ///
     /// # Errors
     /// Returns why the value cannot be read, and refuses a reference that no
-    /// provider of this computer binds to the OS store.
+    /// provider of this computer binds to the file.
     pub fn value(&self, reference: &str) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
         let locators = self.locators(reference)?;
         let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
@@ -152,8 +152,8 @@ impl CredentialVault {
     /// Writes `value` at every address of `reference`.
     ///
     /// # Errors
-    /// Refuses a reference that no provider of this computer binds to the OS
-    /// store, and returns why the store refused the value.
+    /// Refuses a reference that no provider of this computer binds to the file, and
+    /// returns why the store refused the value.
     pub fn write(&self, reference: &str, value: &[u8]) -> Result<(), SecretError> {
         let locators = self.locators(reference)?;
         let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
@@ -169,8 +169,8 @@ impl CredentialVault {
     /// value is already forgotten.
     ///
     /// # Errors
-    /// Refuses a reference that no provider of this computer binds to the OS
-    /// store, and returns why the store refused the removal.
+    /// Refuses a reference that no provider of this computer binds to the file, and
+    /// returns why the store refused the removal.
     pub fn remove(&self, reference: &str) -> Result<(), SecretError> {
         let locators = self.locators(reference)?;
         let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
@@ -197,15 +197,18 @@ impl CredentialVault {
             .collect()
     }
 
-    /// The addresses of `reference`, or the refusal of a reference that no
-    /// provider of this computer binds to the OS store.
+    /// The addresses of `reference`, or the refusal of a reference that no provider
+    /// of this computer binds to the file.
     fn locators(&self, reference: &str) -> Result<Vec<CredentialLocator>, SecretError> {
         let locators = self.locators.lock().unwrap_or_else(PoisonError::into_inner);
-        locators.get(reference).cloned().ok_or_else(|| SecretError::Unsupported {
-            reason: format!(
-                "No provider of this computer binds the credential reference {reference:?} to the OS credential store"
-            ),
-        })
+        locators
+            .get(reference)
+            .cloned()
+            .ok_or_else(|| SecretError::Unsupported {
+                reason: format!(
+                    "No provider of this computer binds the credential reference {reference:?} to the secrets file"
+                ),
+            })
     }
 }
 

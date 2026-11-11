@@ -149,6 +149,7 @@ impl HorizonApp {
             rename_buffer: String::new(),
             renaming_panel: None,
             panel_rename_buffer: String::new(),
+            remote_browser_credentials: spawn_remote_browser_credentials(config, session_store.home()),
             session_store,
             active_session: None,
             startup_chooser: None,
@@ -174,7 +175,6 @@ impl HorizonApp {
             remote_hosts_last_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, settings_io: super::settings_io::SettingsIo::new(), settings_reload_pending: false,
-            remote_browser_credentials: spawn_remote_browser_credentials(config),
             named_secrets: named_secret_workbench(config), named_secret_vault: None,
             session_manager: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
@@ -222,14 +222,14 @@ fn empty_machine_list(home: &horizon_core::HorizonHome) -> horizon_core::Machine
 }
 
 /// The named secrets of this start. The startup read of the machine list opens the
-/// credential store on its worker thread and replaces this with the names that the
-/// store answered, so the window never waits for a keychain here.
+/// secrets file on its worker thread and replaces this with the names that the file
+/// answered, so the window never waits for a disk read here.
 fn named_secret_workbench(config: &Config) -> horizon_core::named_secrets::NamedSecretWorkbench {
     horizon_core::named_secrets::NamedSecretWorkbench::new(None, &config.secrets.secret_names())
 }
 
-fn spawn_remote_browser_credentials(config: &Config) -> CredentialWorkbench {
-    let mut workbench = CredentialWorkbench::spawn_platform();
+fn spawn_remote_browser_credentials(config: &Config, home: &horizon_core::HorizonHome) -> CredentialWorkbench {
+    let mut workbench = CredentialWorkbench::spawn_file(home.secrets_path());
     workbench.load_environment_bindings(&config.browser.remote);
     workbench
 }

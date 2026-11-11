@@ -1,9 +1,9 @@
 //! The named secrets of the settings window, and the worker thread that reads them.
 //!
 //! The Settings window draws a list of names and one hidden field per value. The
-//! credential store is a wait: a locked keychain asks for an unlock, and the Secret
-//! Service of Linux answers over a socket. Both run on the worker thread here, and
-//! the window reads a cached state that [`NamedSecretWorkbench::poll`] keeps.
+//! secrets file is a wait: a disk read and a commit. Both run on the worker thread
+//! here, and the window reads a cached state that
+//! [`NamedSecretWorkbench::poll`] keeps.
 //!
 //! A value is never part of a state that the window reads: the window learns whether
 //! this computer holds a value for a name, and it hands one in when the person types
@@ -19,8 +19,9 @@ use zeroize::Zeroizing;
 
 use super::{NamedSecretChange, NamedSecretError, NamedSecretState, NamedSecretVault, SecretName};
 
-/// How long a state that the worker answered stands before it is asked again. A
-/// keychain can lock under a running Horizon, and a value can arrive from a server.
+/// How long a state that the worker answered stands before it is asked again.
+/// Another process of this home can write the file, and a value can arrive from a
+/// server.
 const REVALIDATE_AFTER: Duration = Duration::from_secs(10);
 
 enum Command {
@@ -113,7 +114,9 @@ impl NamedSecretWorkbench {
                 asked_at: None,
                 in_flight: 0,
                 changes: Vec::new(),
-                failure: Some(NamedSecretError::StoreUnavailable),
+                failure: Some(NamedSecretError::Unavailable {
+                    reason: "the worker of the named secrets cannot start".to_owned(),
+                }),
             };
         }
         let mut bench = Self {
@@ -268,10 +271,12 @@ impl NamedSecretWorkbench {
             self.in_flight = 0;
             for state in self.states.values_mut() {
                 if *state == NamedSecretState::Checking {
-                    *state = NamedSecretState::StoreUnavailable;
+                    *state = NamedSecretState::Unavailable;
                 }
             }
-            self.failure = Some(NamedSecretError::StoreUnavailable);
+            self.failure = Some(NamedSecretError::Unavailable {
+                reason: "the worker of this computer ended".to_owned(),
+            });
             self.commands = None;
             self.events = None;
         }
@@ -297,14 +302,17 @@ impl NamedSecretWorkbench {
     }
 
     fn send(&mut self, command: Command) {
+        let ended = || NamedSecretError::Unavailable {
+            reason: "the worker of this computer ended".to_owned(),
+        };
         let Some(commands) = &self.commands else {
             self.in_flight = self.in_flight.saturating_sub(1);
-            self.failure = Some(NamedSecretError::StoreUnavailable);
+            self.failure = Some(ended());
             return;
         };
         if commands.send(command).is_err() {
             self.in_flight = self.in_flight.saturating_sub(1);
-            self.failure = Some(NamedSecretError::StoreUnavailable);
+            self.failure = Some(ended());
         }
     }
 }
@@ -312,12 +320,11 @@ impl NamedSecretWorkbench {
 /// The state of every name after a failure of the store.
 fn state_of_failure(error: &NamedSecretError) -> NamedSecretState {
     match error {
-        NamedSecretError::Locked => NamedSecretState::Locked,
         NamedSecretError::InvalidName { .. }
         | NamedSecretError::ReservedName { .. }
         | NamedSecretError::InvalidValue { .. }
         | NamedSecretError::ValueNotText { .. } => NamedSecretState::NoValue,
-        NamedSecretError::StoreUnavailable | NamedSecretError::Platform { .. } => NamedSecretState::StoreUnavailable,
+        NamedSecretError::Unavailable { .. } => NamedSecretState::Unavailable,
     }
 }
 

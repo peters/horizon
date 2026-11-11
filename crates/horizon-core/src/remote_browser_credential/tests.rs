@@ -5,10 +5,8 @@ use horizon_browser::remote::{
     RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits,
 };
 
-use std::sync::Arc;
-
-use super::keyring_store::map_error;
 use super::*;
+use crate::secret_store::{SecretStore, UnreadableStore};
 
 fn endpoint() -> ControlEndpoint {
     ControlEndpoint::parse("https://grid.example.net/wd/hub").expect("endpoint")
@@ -21,7 +19,7 @@ fn basic_profile(username_store: CredentialStoreKind, password_store: Credential
         CredentialBinding {
             store: username_store,
             slot: match username_store {
-                CredentialStoreKind::OsKeychain => Some("remote-browser/grid/user".to_string()),
+                CredentialStoreKind::File => Some("remote-browser/grid/user".to_string()),
                 CredentialStoreKind::Environment => Some("REMOTE_BROWSER_USERNAME".to_string()),
                 CredentialStoreKind::Session => None,
             },
@@ -32,7 +30,7 @@ fn basic_profile(username_store: CredentialStoreKind, password_store: Credential
         CredentialBinding {
             store: password_store,
             slot: match password_store {
-                CredentialStoreKind::OsKeychain => Some("remote-browser/grid/key".to_string()),
+                CredentialStoreKind::File => Some("remote-browser/grid/key".to_string()),
                 CredentialStoreKind::Environment => Some("REMOTE_BROWSER_ACCESS_KEY".to_string()),
                 CredentialStoreKind::Session => None,
             },
@@ -63,7 +61,7 @@ fn basic_header_is_built_from_session_values_and_never_exposed() {
     session.put(&locator(&profile, "key"), b"s3cret-key").expect("put key");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let authorization = resolve_authorization(&profile, &stores)
@@ -89,7 +87,7 @@ fn session_values_are_scoped_to_the_endpoint_origin() {
     other.endpoint = ControlEndpoint::parse("https://other.example.net/wd/hub").expect("endpoint");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let error = resolve_authorization(&other, &stores).expect_err("other origin has no values");
@@ -112,7 +110,7 @@ fn bearer_header_and_none_authentication() {
     session.put(&locator(&profile, "key"), b"tok-123").expect("put token");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let authorization = resolve_authorization(&profile, &stores)
@@ -127,19 +125,19 @@ fn bearer_header_and_none_authentication() {
 
 #[test]
 fn readiness_reports_missing_locked_and_unavailable_without_values() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
     let session = SessionCredentialStore::new();
-    let mut keychain = FakeCredentialStore::new();
-    keychain.put(&locator(&profile, "user"), b"alice").expect("put user");
+    let mut file = SecretStore::in_memory().expect("a store in memory");
+    file.put(&locator(&profile, "user"), b"alice").expect("put user");
 
     let stores = CredentialStores {
         session: &session,
-        os_keychain: Some(&keychain),
+        secrets_file: Some(&file),
         environment: None,
     };
     let report = readiness(&profile, &stores);
     assert_eq!(report[0].state, CredentialState::Present);
-    assert_eq!(report[0].store, CredentialStoreKind::OsKeychain);
+    assert_eq!(report[0].store, CredentialStoreKind::File);
     assert_eq!(report[1].state, CredentialState::Missing);
     assert_eq!(report[1].store, CredentialStoreKind::Session);
     let error = resolve_authorization(&profile, &stores).expect_err("password missing");
@@ -148,24 +146,13 @@ fn readiness_reports_missing_locked_and_unavailable_without_values() {
         ("key", RemoteCredentialError::Missing)
     );
 
-    keychain.lock();
     let stores = CredentialStores {
         session: &session,
-        os_keychain: Some(&keychain),
-        environment: None,
-    };
-    assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::Locked);
-    let error = resolve_authorization(&profile, &stores).expect_err("locked store");
-    assert_eq!(error.error, RemoteCredentialError::Locked);
-    assert_eq!(error.to_string(), "credential `user`: credential store is locked");
-
-    let stores = CredentialStores {
-        session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::StoreUnavailable);
-    let error = resolve_authorization(&profile, &stores).expect_err("no OS store");
+    let error = resolve_authorization(&profile, &stores).expect_err("no store of this value");
     assert_eq!(error.error, RemoteCredentialError::StoreUnavailable);
 }
 
@@ -176,7 +163,7 @@ fn unbound_reference_is_reported_as_missing_not_a_panic() {
     let session = SessionCredentialStore::new();
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let report = readiness(&profile, &stores);
@@ -204,7 +191,7 @@ fn values_must_be_bounded_and_header_safe() {
     session.put(&locator(&profile, "key"), b"k").expect("put key");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let error = resolve_authorization(&profile, &stores).expect_err("control characters");
@@ -252,7 +239,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
     session.put(&locator(&profile, "key"), b"k").expect("stored");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     let error = resolve_authorization(&profile, &stores).expect_err("colon in username");
@@ -267,7 +254,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
         session.put(&locator(&bearer, "key"), bad).expect("stored");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: None,
+            secrets_file: None,
             environment: None,
         };
         let error = resolve_authorization(&bearer, &stores).expect_err("bad token68");
@@ -276,7 +263,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
     session.put(&locator(&bearer, "key"), b"abc-._~+/=").expect("stored");
     let stores = CredentialStores {
         session: &session,
-        os_keychain: None,
+        secrets_file: None,
         environment: None,
     };
     assert_eq!(
@@ -289,291 +276,57 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
 }
 
 #[test]
-fn a_failing_store_is_reported_unavailable_not_missing() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+fn a_store_that_cannot_be_read_is_reported_unavailable_not_missing() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
     let session = SessionCredentialStore::new();
-    let failing = KeyringCredentialStore::with_store(Arc::new(MockStore::failing()));
+    let failing = UnreadableStore::new(RemoteCredentialError::File {
+        path: std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite"),
+        reason: "it is read-only".to_owned(),
+    });
     let stores = CredentialStores {
         session: &session,
-        os_keychain: Some(&failing),
+        secrets_file: Some(&failing),
         environment: None,
     };
     assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::StoreUnavailable);
-    assert_eq!(
-        resolve_authorization(&profile, &stores)
-            .expect_err("platform failure")
-            .error,
-        RemoteCredentialError::Platform {
-            kind: "platform_failure"
-        }
-    );
-}
-
-#[test]
-fn keyring_errors_map_to_value_free_states() {
-    use keyring_core::Error;
-    let boxed = || Box::new(std::io::Error::other("platform detail")) as Box<dyn std::error::Error + Send + Sync>;
-    assert_eq!(map_error(&Error::NoEntry), RemoteCredentialError::Missing);
-    assert_eq!(
-        map_error(&Error::NoStorageAccess(boxed())),
-        RemoteCredentialError::Locked
-    );
-    assert_eq!(
-        map_error(&Error::NoDefaultStore),
-        RemoteCredentialError::StoreUnavailable
-    );
-    assert_eq!(
-        map_error(&Error::NotSupportedByStore("x".into())),
-        RemoteCredentialError::StoreUnavailable
-    );
-    assert_eq!(
-        map_error(&Error::TooLong("user".into(), 1)),
-        RemoteCredentialError::InvalidValue
-    );
-    assert_eq!(
-        map_error(&Error::Invalid("a".into(), "b".into())),
-        RemoteCredentialError::InvalidValue
-    );
-    assert_eq!(
-        map_error(&Error::PlatformFailure(boxed())),
-        RemoteCredentialError::Platform {
-            kind: "platform_failure"
-        }
-    );
-    assert!(!format!("{}", map_error(&Error::PlatformFailure(boxed()))).contains("platform detail"));
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn locked_macos_keychain_statuses_map_to_locked() {
-    use keyring_core::Error;
-    use security_framework::base::Error as SecurityError;
-
-    for status in [-25_308, -25_293] {
-        let platform_error = SecurityError::from_code(status);
-        assert_eq!(
-            map_error(&Error::PlatformFailure(Box::new(platform_error))),
-            RemoteCredentialError::Locked,
-            "OSStatus {status}"
-        );
-    }
-}
-
-#[test]
-fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mock = Arc::new(MockStore::default());
-    let mut store = KeyringCredentialStore::with_store(mock.clone());
-    let user = locator(&profile, "user");
-    assert!(!store.contains(&user).expect("absent"));
-    store.put(&user, b"alice").expect("stored");
-    assert!(store.contains(&user).expect("present"));
-    let mut prefix = user.clone();
-    prefix.slot = Some("remote-browser/grid/use".into());
+    let error = resolve_authorization(&profile, &stores).expect_err("a file that cannot be read");
     assert!(
-        !store.contains(&prefix).expect("prefix slot absent"),
-        "a loose search match must not count as presence"
+        error.to_string().contains("secrets.sqlite"),
+        "the refusal names the file: {error}"
     );
-    assert_eq!(mock.reads(), 0, "presence probes never read a value");
-    let keys = mock.keys();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].0, KEYRING_SERVICE);
-    assert_eq!(keys[0].1, "https://grid.example.net|remote-browser/grid/user");
-    let mut capture = Capture(Vec::new());
-    store.with_secret(&user, &mut capture).expect("copied into the sink");
-    assert_eq!(capture.0, b"alice");
-    assert_eq!(mock.reads(), 1);
-    store.delete(&user).expect("deleted");
-    assert!(!store.contains(&user).expect("absent again"));
-    store.delete(&user).expect("deleting twice is fine");
-
-    let mut slotless = user.clone();
-    slotless.slot = None;
-    assert_eq!(
-        store.put(&slotless, b"x").expect_err("slot required"),
-        RemoteCredentialError::Missing
+    assert!(
+        error.to_string().starts_with("credential `user`: the secrets file"),
+        "the refusal names the value and the file: {error}"
     );
-    assert_eq!(
-        store.contains(&slotless).expect_err("slot required"),
-        RemoteCredentialError::Missing
-    );
-}
-
-type MockItems = Arc<std::sync::Mutex<std::collections::HashMap<(String, String), Vec<u8>>>>;
-
-/// In-memory keyring-core store: exercises the adapter without any platform.
-/// Counts value reads so tests can prove which operations never read one.
-#[derive(Default)]
-struct MockStore {
-    items: MockItems,
-    reads: Arc<std::sync::atomic::AtomicUsize>,
-    failing: bool,
-}
-
-impl MockStore {
-    fn failing() -> Self {
-        Self {
-            failing: true,
-            ..Self::default()
-        }
-    }
-
-    fn keys(&self) -> Vec<(String, String)> {
-        self.items.lock().expect("lock").keys().cloned().collect()
-    }
-
-    fn reads(&self) -> usize {
-        self.reads.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
-    fn platform_down() -> keyring_core::Error {
-        keyring_core::Error::PlatformFailure(Box::new(std::io::Error::other("down")))
-    }
-}
-
-impl std::fmt::Debug for MockStore {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("MockStore")
-    }
-}
-
-impl keyring_core::api::CredentialStoreApi for MockStore {
-    fn vendor(&self) -> String {
-        "horizon-test".into()
-    }
-
-    fn id(&self) -> String {
-        "mock".into()
-    }
-
-    fn build(
-        &self,
-        service: &str,
-        user: &str,
-        _modifiers: Option<&std::collections::HashMap<&str, &str>>,
-    ) -> keyring_core::Result<keyring_core::Entry> {
-        if self.failing {
-            return Err(Self::platform_down());
-        }
-        Ok(keyring_core::Entry::new_with_credential(Arc::new(MockCredential {
-            store: Arc::clone(&self.items),
-            reads: Arc::clone(&self.reads),
-            key: (service.to_string(), user.to_string()),
-        })))
-    }
-
-    /// Matches loosely on purpose, like the platform searches may: the
-    /// adapter must compare specifiers exactly.
-    fn search(&self, spec: &std::collections::HashMap<&str, &str>) -> keyring_core::Result<Vec<keyring_core::Entry>> {
-        if self.failing {
-            return Err(Self::platform_down());
-        }
-        let service = spec.get("service").copied().unwrap_or_default();
-        let user = spec.get("user").copied().unwrap_or_default();
-        Ok(self
-            .keys()
-            .into_iter()
-            .filter(|key| key.0.contains(service) && key.1.contains(user))
-            .map(|key| {
-                keyring_core::Entry::new_with_credential(Arc::new(MockCredential {
-                    store: Arc::clone(&self.items),
-                    reads: Arc::clone(&self.reads),
-                    key,
-                }))
-            })
-            .collect())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-struct MockCredential {
-    store: MockItems,
-    reads: Arc<std::sync::atomic::AtomicUsize>,
-    key: (String, String),
-}
-
-impl std::fmt::Debug for MockCredential {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("MockCredential")
-    }
-}
-
-impl keyring_core::api::CredentialApi for MockCredential {
-    fn set_secret(&self, secret: &[u8]) -> keyring_core::Result<()> {
-        self.store
-            .lock()
-            .expect("lock")
-            .insert(self.key.clone(), secret.to_vec());
-        Ok(())
-    }
-
-    fn get_secret(&self) -> keyring_core::Result<Vec<u8>> {
-        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.store
-            .lock()
-            .expect("lock")
-            .get(&self.key)
-            .cloned()
-            .ok_or(keyring_core::Error::NoEntry)
-    }
-
-    fn delete_credential(&self) -> keyring_core::Result<()> {
-        self.store
-            .lock()
-            .expect("lock")
-            .remove(&self.key)
-            .map(|_| ())
-            .ok_or(keyring_core::Error::NoEntry)
-    }
-
-    fn get_credential(&self) -> keyring_core::Result<Option<Arc<keyring_core::Credential>>> {
-        if self.store.lock().expect("lock").contains_key(&self.key) {
-            Ok(None)
-        } else {
-            Err(keyring_core::Error::NoEntry)
-        }
-    }
-
-    fn get_specifiers(&self) -> Option<(String, String)> {
-        Some(self.key.clone())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[test]
-fn fake_store_addresses_items_like_the_os_adapter() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+fn one_reference_is_one_row_whatever_its_slot_says() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut store = SecretStore::in_memory().expect("a store in memory");
+    assert_eq!(store.kind(), CredentialStoreKind::File);
+
+    // A binding without a slot is one row like any other: the file addresses a
+    // value by its reference and never by a slot of the keyring.
     let mut slotless = locator(&profile, "user");
     slotless.slot = None;
-    let mut fake = FakeCredentialStore::new();
-    assert_eq!(fake.kind(), CredentialStoreKind::OsKeychain);
-    assert_eq!(
-        fake.contains(&slotless).expect_err("slot required"),
-        RemoteCredentialError::Missing
-    );
-    assert_eq!(
-        fake.put(&slotless, b"x").expect_err("slot required"),
-        RemoteCredentialError::Missing
-    );
+    store.put(&slotless, b"alice").expect("a reference without a slot");
+    let mut capture = Capture(Vec::new());
+    store.with_secret(&slotless, &mut capture).expect("the value");
+    assert_eq!(capture.0, b"alice");
 
-    // Two references bound to one slot are one OS item: the later write wins.
+    // Two references that name one slot are two rows, so a value of one provider
+    // reference never answers another reference.
     let user = locator(&profile, "user");
     let mut aliased = locator(&profile, "key");
     aliased.slot = user.slot.clone();
-    fake.put(&user, b"alice").expect("stored");
-    fake.put(&aliased, b"bob").expect("replaced through the alias");
+    store.put(&aliased, b"bob").expect("the second reference");
     let mut capture = Capture(Vec::new());
-    fake.with_secret(&user, &mut capture).expect("present");
-    assert_eq!(capture.0, b"bob");
-    fake.delete(&aliased).expect("deleted through the alias");
-    assert!(!fake.contains(&user).expect("gone for both references"));
-    assert_eq!(KEYRING_SERVICE, "horizon-remote-browser");
+    store.with_secret(&user, &mut capture).expect("present");
+    assert_eq!(capture.0, b"alice", "the second reference wrote its own row");
+    store.delete(&aliased).expect("deleted");
+    assert!(store.contains(&user).expect("still there"));
+    assert!(!store.contains(&aliased).expect("gone"));
 }
 
 fn wait_until(workbench: &mut CredentialWorkbench, mut done: impl FnMut(&mut CredentialWorkbench) -> bool) {
@@ -587,35 +340,32 @@ fn wait_until(workbench: &mut CredentialWorkbench, mut done: impl FnMut(&mut Cre
     panic!("workbench did not reach the expected state");
 }
 
-fn fake_opener(locked: bool) -> StoreOpener {
-    Box::new(move || {
-        let mut store = FakeCredentialStore::new();
-        if locked {
-            store.lock();
-        }
-        Ok(Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
+/// The opener of a workbench whose file holds no value, and that a test can fill.
+fn memory_opener() -> StoreOpener {
+    Box::new(|| {
+        Ok(Box::new(SecretStore::in_memory().expect("a store in memory")) as Box<dyn RemoteCredentialStore + Send>)
     })
 }
 
 #[test]
-fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
-    assert_eq!(workbench.keychain_state(), &KeychainState::Opening);
+fn workbench_probes_stores_and_deletes_file_values_off_thread() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(memory_opener());
+    assert_eq!(workbench.secrets_state(), &SecretsState::Opening);
     assert_eq!(
         workbench.readiness(&profile)[0].state,
         CredentialState::Checking,
         "before the store opens the OS value is unknown"
     );
-    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+    wait_until(&mut workbench, |w| w.secrets_state() == &SecretsState::Ready);
     wait_until(&mut workbench, |w| {
         w.readiness(&profile)[0].state == CredentialState::Missing
     });
-    assert!(workbench.keychain_store().is_some());
+    assert!(workbench.store_handle().is_some());
 
     let user = CredentialReference::from("user");
     workbench
-        .store_in_keychain("grid", &profile, &user, b"alice")
+        .store_value("grid", &profile, &user, b"alice")
         .expect("store request accepted");
     assert_eq!(workbench.readiness(&profile)[0].state, CredentialState::Checking);
     wait_until(&mut workbench, |w| {
@@ -623,10 +373,7 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     });
     let notices = workbench.take_notices();
     assert_eq!(notices.len(), 1);
-    assert_eq!(
-        (notices[0].kind, &notices[0].error),
-        (NoticeKind::StoredInKeychain, &None)
-    );
+    assert_eq!((notices[0].kind, &notices[0].error), (NoticeKind::StoredInFile, &None));
     assert_eq!(notices[0].provider, "grid");
     assert!(!workbench.is_busy(), "no probe or write is in flight");
 
@@ -635,7 +382,7 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     let user_slot = aliased.credential_bindings[&user].slot.clone();
     let key = CredentialReference::from("key");
     let key_binding = aliased.credential_bindings.get_mut(&key).expect("bound");
-    key_binding.store = CredentialStoreKind::OsKeychain;
+    key_binding.store = CredentialStoreKind::File;
     key_binding.slot = user_slot;
     let report = workbench.readiness(&aliased);
     assert_eq!(
@@ -653,14 +400,14 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     let deleted = workbench.take_notices();
     assert_eq!(
         (deleted[0].kind, &deleted[0].error),
-        (NoticeKind::DeletedFromKeychain, &None)
+        (NoticeKind::DeletedFromFile, &None)
     );
 
     // A second provider on the same origin, reference and slot shows the
     // same profile; the answer to the first provider's save still lands on
     // the row that asked.
     workbench
-        .store_in_keychain("grid", &profile, &user, b"alice")
+        .store_value("grid", &profile, &user, b"alice")
         .expect("store request accepted");
     wait_until(&mut workbench, |w| !w.is_busy());
     let stored = workbench.take_notices();
@@ -671,7 +418,7 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
             stored[0].reference.as_str(),
             stored[0].kind
         ),
-        ("grid", "user", NoticeKind::StoredInKeychain),
+        ("grid", "user", NoticeKind::StoredInFile),
         "the notice names the row that asked"
     );
     workbench
@@ -681,7 +428,7 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     let mirrored = workbench.take_notices();
     assert_eq!(
         (mirrored[0].provider.as_str(), mirrored[0].kind),
-        ("mirror", NoticeKind::DeletedFromKeychain),
+        ("mirror", NoticeKind::DeletedFromFile),
         "and a second provider's request answers on its own row"
     );
 
@@ -693,10 +440,10 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
 
     // Two writes queued for one OS address stay in flight until both answer.
     workbench
-        .store_in_keychain("grid", &aliased, &user, b"alice")
+        .store_value("grid", &aliased, &user, b"alice")
         .expect("first write");
     workbench
-        .store_in_keychain("grid", &aliased, &key, b"bob")
+        .store_value("grid", &aliased, &key, b"bob")
         .expect("second write to the same address");
     assert!(workbench.is_busy());
     wait_until(&mut workbench, |w| !w.is_busy());
@@ -708,28 +455,33 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
 }
 
 #[test]
-fn workbench_reports_an_unavailable_or_locked_store_without_values() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut unavailable = CredentialWorkbench::with_opener(Box::new(|| Err(RemoteCredentialError::Locked)));
+fn workbench_reports_a_file_that_cannot_be_opened_without_values() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let path = std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite");
+    let reason = RemoteCredentialError::File {
+        path: path.clone(),
+        reason: "it is a directory".to_owned(),
+    };
+    let mut unavailable = CredentialWorkbench::with_opener(Box::new({
+        let reason = reason.clone();
+        move || Err(reason)
+    }));
     wait_until(&mut unavailable, |w| {
-        matches!(w.keychain_state(), KeychainState::Unavailable(_))
+        matches!(w.secrets_state(), SecretsState::Unavailable(_))
     });
-    // The worker exits after a failed open; its disconnect must not erase
-    // the specific reason it reported.
+    // The worker exits after a failed open; its disconnect must not erase the
+    // specific reason it reported.
     for _ in 0..20 {
         unavailable.poll();
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert_eq!(
-        unavailable.keychain_state(),
-        &KeychainState::Unavailable(RemoteCredentialError::Locked)
-    );
+    assert_eq!(unavailable.secrets_state(), &SecretsState::Unavailable(reason.clone()));
     assert!(!unavailable.is_busy());
 
-    // A worker that dies with probes in flight must not leave the app
-    // polling for answers that will never come.
-    let mut dying = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut dying, |w| w.keychain_state() == &KeychainState::Available);
+    // A worker that dies with probes in flight must not leave the app polling for
+    // answers that will never come.
+    let mut dying = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut dying, |w| w.secrets_state() == &SecretsState::Ready);
     dying.readiness(&profile);
     dying.simulate_worker_loss_for_tests();
     dying.poll();
@@ -737,34 +489,28 @@ fn workbench_reports_an_unavailable_or_locked_store_without_values() {
     assert_eq!(dying.readiness(&profile)[0].state, CredentialState::StoreUnavailable);
     assert_eq!(
         unavailable.readiness(&profile)[0].state,
-        CredentialState::Locked,
+        CredentialState::StoreUnavailable,
         "readiness carries the store's own reason"
     );
     assert_eq!(
         unavailable
-            .store_in_keychain("grid", &profile, &CredentialReference::from("user"), b"alice")
+            .store_value("grid", &profile, &CredentialReference::from("user"), b"alice")
             .expect_err("no store"),
-        RemoteCredentialError::Locked
+        reason
     );
     let refused = unavailable.take_notices();
     assert_eq!(
         (refused[0].kind, &refused[0].error),
-        (NoticeKind::StoredInKeychain, &Some(RemoteCredentialError::Locked)),
+        (NoticeKind::StoredInFile, &Some(reason)),
         "a request the worker never received is still reported"
     );
-    assert!(unavailable.keychain_store().is_none());
-
-    let mut locked = CredentialWorkbench::with_opener(fake_opener(true));
-    wait_until(&mut locked, |w| w.keychain_state() == &KeychainState::Available);
-    wait_until(&mut locked, |w| {
-        w.readiness(&profile)[0].state == CredentialState::Locked
-    });
+    assert!(unavailable.store_handle().is_none());
 }
 
 #[test]
 fn workbench_session_values_are_immediate_and_store_bound() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(memory_opener());
     let key = CredentialReference::from("key");
     workbench
         .set_session_value("grid", &profile, &key, b"s3cret")
@@ -776,12 +522,12 @@ fn workbench_session_values_are_immediate_and_store_bound() {
     assert_eq!(
         workbench
             .set_session_value("grid", &profile, &CredentialReference::from("user"), b"alice")
-            .expect_err("user is bound to the OS store"),
+            .expect_err("user is bound to the file"),
         RemoteCredentialError::StoreUnavailable
     );
     assert_eq!(
         workbench
-            .store_in_keychain("grid", &profile, &key, b"s3cret")
+            .store_value("grid", &profile, &key, b"s3cret")
             .expect_err("key is bound to the session store"),
         RemoteCredentialError::StoreUnavailable
     );
@@ -806,43 +552,11 @@ fn workbench_session_values_are_immediate_and_store_bound() {
     );
 }
 
-/// Opt-in smoke against this computer's real OS store; it creates and then
-/// deletes one item under a unique slot. Run with `--ignored` on a desktop
-/// session where the store is unlocked.
 #[test]
-#[ignore = "touches the real OS credential store"]
-fn os_store_round_trip_smoke() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut store = KeyringCredentialStore::open().expect("OS store available");
-    let mut item = locator(&profile, "user");
-    item.slot = Some(format!("remote-browser/smoke/{}", std::process::id()));
-    assert!(!store.contains(&item).expect("probe before put"));
-    store.put(&item, b"smoke-value").expect("put");
-    assert!(store.contains(&item).expect("probe after put"));
-    let stores = CredentialStores {
-        session: &SessionCredentialStore::new(),
-        os_keychain: Some(&store),
-        environment: None,
-    };
-    let mut smoke = profile.clone();
-    smoke
-        .credential_bindings
-        .get_mut(&CredentialReference::from("user"))
-        .expect("bound")
-        .slot = item.slot.clone();
-    assert_eq!(readiness(&smoke, &stores)[0].state, CredentialState::Present);
-    let mut capture = Capture(Vec::new());
-    store.with_secret(&item, &mut capture).expect("read back");
-    assert_eq!(capture.0, b"smoke-value");
-    store.delete(&item).expect("delete");
-    assert!(!store.contains(&item).expect("probe after delete"));
-}
-
-#[test]
-fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_reads() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+fn workbench_generation_tracks_session_and_file_mutations_without_secret_reads() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut workbench, |w| w.secrets_state() == &SecretsState::Ready);
     let key = CredentialReference::from("key");
     for value in [b"original".as_slice(), b"replacement".as_slice()] {
         let before = workbench.generation();
@@ -863,9 +577,7 @@ fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_rea
         if deleting {
             workbench.delete("grid", &profile, &user).unwrap();
         } else {
-            workbench
-                .store_in_keychain("grid", &profile, &user, b"account")
-                .unwrap();
+            workbench.store_value("grid", &profile, &user, b"account").unwrap();
         }
         let queued = workbench.generation();
         assert_ne!(queued, before, "invalidate before the asynchronous store mutation");
@@ -880,12 +592,12 @@ fn workbench_generation_tracks_session_and_keychain_mutations_without_secret_rea
 
 #[test]
 fn a_workbench_read_answers_one_value_to_the_caller_that_asked() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
+    let mut workbench = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut workbench, |w| w.secrets_state() == &SecretsState::Ready);
     let user = CredentialReference::from("user");
     workbench
-        .store_in_keychain("grid", &profile, &user, b"alice")
+        .store_value("grid", &profile, &user, b"alice")
         .expect("store request accepted");
     wait_until(&mut workbench, |w| !w.is_busy());
 
@@ -908,17 +620,17 @@ fn a_workbench_read_answers_one_value_to_the_caller_that_asked() {
             .request_value(&profile, &CredentialReference::from("key"))
             .err(),
         Some(RemoteCredentialError::StoreUnavailable),
-        "a reference bound to another store is not an OS-store read"
+        "a reference bound to another store is not a read of the file"
     );
 }
 
 #[test]
-fn a_workbench_read_names_a_missing_locked_or_ended_store() {
-    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+fn a_workbench_read_names_a_missing_or_ended_store() {
+    let profile = basic_profile(CredentialStoreKind::File, CredentialStoreKind::Session);
     let user = CredentialReference::from("user");
 
-    let mut empty = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut empty, |w| w.keychain_state() == &KeychainState::Available);
+    let mut empty = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut empty, |w| w.secrets_state() == &SecretsState::Ready);
     let mut missing = empty.request_value(&profile, &user).expect("the store is available");
     assert_eq!(
         read_answer(&mut missing),
@@ -926,26 +638,28 @@ fn a_workbench_read_names_a_missing_locked_or_ended_store() {
         "an item the store does not hold is missing, not a value"
     );
 
-    let mut locked = CredentialWorkbench::with_opener(fake_opener(true));
-    wait_until(&mut locked, |w| w.keychain_state() == &KeychainState::Available);
-    let mut refused = locked.request_value(&profile, &user).expect("the store is available");
-    assert_eq!(read_answer(&mut refused), Err(RemoteCredentialError::Locked));
-
-    let mut unavailable = CredentialWorkbench::with_opener(Box::new(|| Err(RemoteCredentialError::Locked)));
+    let reason = RemoteCredentialError::File {
+        path: std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite"),
+        reason: "it is a directory".to_owned(),
+    };
+    let mut unavailable = CredentialWorkbench::with_opener(Box::new({
+        let reason = reason.clone();
+        move || Err(reason)
+    }));
     wait_until(&mut unavailable, |w| {
-        matches!(w.keychain_state(), KeychainState::Unavailable(_))
+        matches!(w.secrets_state(), SecretsState::Unavailable(_))
     });
-    assert!(!unavailable.keychain_available());
+    assert!(!unavailable.store_available());
     assert_eq!(
         unavailable.request_value(&profile, &user).err(),
-        Some(RemoteCredentialError::Locked),
+        Some(reason),
         "a store that never opened answers with its own reason"
     );
 
-    // A worker that ended takes no read, so the caller refuses its request
-    // instead of waiting for a value that will never arrive.
-    let mut dying = CredentialWorkbench::with_opener(fake_opener(false));
-    wait_until(&mut dying, |w| w.keychain_state() == &KeychainState::Available);
+    // A worker that ended takes no read, so the caller refuses its request instead
+    // of waiting for a value that will never arrive.
+    let mut dying = CredentialWorkbench::with_opener(memory_opener());
+    wait_until(&mut dying, |w| w.secrets_state() == &SecretsState::Ready);
     dying.simulate_worker_loss_for_tests();
     assert_eq!(
         dying.request_value(&profile, &user).err(),
@@ -964,8 +678,4 @@ fn read_answer(reply: &mut CredentialValueReply) -> Result<Vec<u8>, RemoteCreden
     panic!("the workbench did not answer the read");
 }
 
-#[cfg(target_os = "linux")]
-mod native_keyring;
-
-mod relock;
 mod value_changes;

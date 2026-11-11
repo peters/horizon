@@ -13,9 +13,9 @@
 use std::sync::Arc;
 
 use horizon_browser::remote::RemoteBrowserConfig;
+use horizon_core::HorizonHome;
 use horizon_core::machines::{MachineRegistry, MachineStore, Machines};
 use horizon_core::named_secrets::{self, NamedSecretVault};
-use horizon_core::remote_browser_credential::KeyringCredentialStore;
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
 use horizon_sync::{LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
@@ -56,9 +56,9 @@ impl ServerLine {
 /// The link of this Horizon to its server.
 pub(in crate::app) struct ServerSync {
     supervisor: Supervisor,
-    /// The credential values of this computer, when it has an OS store: the
-    /// addresses of their references follow the remote browser settings.
-    credentials: Option<Arc<CredentialVault>>,
+    /// The credential values of this computer: the addresses of their references
+    /// follow the remote browser settings.
+    credentials: Arc<CredentialVault>,
     /// The generation of the records that the app read last.
     generation: u64,
     /// A read of the list is on the coordination worker.
@@ -66,7 +66,7 @@ pub(in crate::app) struct ServerSync {
 }
 
 impl ServerSync {
-    fn new(supervisor: Supervisor, credentials: Option<Arc<CredentialVault>>) -> Self {
+    fn new(supervisor: Supervisor, credentials: Arc<CredentialVault>) -> Self {
         let generation = supervisor.handle().generation();
         Self {
             supervisor,
@@ -77,12 +77,10 @@ impl ServerSync {
     }
 
     /// Takes the addresses of the credential references that the remote browser
-    /// settings bind to the OS store of this computer, so a value that the server
+    /// settings bind to the secrets file of this computer, so a value that the server
     /// holds is written where the settings of this computer read it.
     pub(in crate::app) fn refresh_credentials(&self, remote: &RemoteBrowserConfig) {
-        if let Some(credentials) = &self.credentials {
-            credentials.register(remote);
-        }
+        self.credentials.register(remote);
     }
 
     /// The state and the queue of the link.
@@ -115,9 +113,9 @@ pub(in crate::app) struct MachineLoad {
     /// computer, so a damaged mirror costs the link and not the machines.
     pub(in crate::app) server_failure: Option<String>,
     /// The named secrets of this computer: the names of its settings and the
-    /// values that its credential store holds. A start that names no server keeps
-    /// them too, because an agent panel reads them without any server.
-    pub(in crate::app) named_secrets: Option<Arc<NamedSecretVault>>,
+    /// values that its secrets file holds. A start that names no server keeps them
+    /// too, because an agent panel reads them without any server.
+    pub(in crate::app) named_secrets: Arc<NamedSecretVault>,
 }
 
 /// What one computer keeps of the secrets that a server holds: its machine keys,
@@ -125,59 +123,46 @@ pub(in crate::app) struct MachineLoad {
 /// that its agent panels read.
 pub(in crate::app) struct SecretHandles {
     pub(in crate::app) target: Arc<dyn SecretTarget>,
-    pub(in crate::app) credentials: Option<Arc<CredentialVault>>,
-    pub(in crate::app) named: Option<Arc<NamedSecretVault>>,
+    pub(in crate::app) credentials: Arc<CredentialVault>,
+    pub(in crate::app) named: Arc<NamedSecretVault>,
 }
 
-/// The secrets of this Horizon home that follow a server: its machine keys, and
-/// its credential values when this computer has an OS credential store. Both are
-/// written where the code of this computer already reads them.
+/// The secrets of this Horizon home that follow a server: its machine keys, the
+/// credential values of its remote browser providers, and the named secrets of its
+/// agent panels. All are written where the code of this computer already reads
+/// them.
 ///
-/// This opens the OS credential store, so it runs on the worker thread that starts
-/// the link and never on the UI thread. A computer without an OS store keeps its
-/// machine keys alone; a credential value of the server then stays unread here,
-/// with one line of the log.
-pub(in crate::app) fn secret_vault(keys: MachineKeys, remote: &RemoteBrowserConfig, names: &[String]) -> SecretHandles {
-    let credentials = match KeyringCredentialStore::open() {
-        Ok(store) => {
-            let vault = Arc::new(CredentialVault::new(Box::new(store)));
-            vault.register(remote);
-            Some(vault)
-        }
-        Err(error) => {
-            tracing::info!(
-                %error,
-                "this computer has no OS credential store, so only its machine keys follow the server"
-            );
-            None
-        }
-    };
-    let named_store = named_secret_vault(names);
-
-    let vault = SecretVault::new(keys, credentials.clone()).with_named(Arc::clone(&named_store));
+/// This opens the secrets file, so it runs on the worker thread that starts the
+/// link and never on the UI thread. A file that cannot be opened is one typed
+/// error that the caller logs and the window shows; the machine keys still follow
+/// the server.
+pub(in crate::app) fn secret_vault(
+    home: &HorizonHome,
+    keys: MachineKeys,
+    remote: &RemoteBrowserConfig,
+    names: &[String],
+) -> SecretHandles {
+    let credentials = Arc::new(CredentialVault::new(named_secrets::open_store(home)));
+    credentials.register(remote);
+    let secrets = named_secret_vault(home, names);
+    let vault = SecretVault::new(keys, Arc::clone(&credentials), Arc::clone(&secrets));
     SecretHandles {
         target: Arc::new(vault),
         credentials,
-        named: Some(named_store),
+        named: secrets,
     }
 }
 
-/// The named secrets of this computer, with the values that its credential store
-/// holds published for the next agent panel.
+/// The named secrets of this computer, with the values that its secrets file holds
+/// published for the next agent panel.
 ///
-/// This opens a credential store and reads one value per name, so it runs on the
-/// worker thread that starts the link and never on the UI thread. A computer
-/// without a store keeps the names of its settings and publishes no value, so its
-/// panels start without the variables and the Settings window says that this
-/// computer holds no value.
-fn named_secret_vault(names: &[String]) -> Arc<NamedSecretVault> {
-    let store = named_secrets::open_store();
-    let vault = Arc::new(NamedSecretVault::new(store));
+/// This reads one value per name, so it runs on the worker thread that starts the
+/// link and never on the UI thread. A file that cannot be read keeps the names of
+/// its settings and publishes no value, so its panels start without the variables
+/// and the Settings window says why.
+fn named_secret_vault(home: &HorizonHome, names: &[String]) -> Arc<NamedSecretVault> {
+    let vault = Arc::new(NamedSecretVault::new(named_secrets::open_store(home)));
     vault.set_names(names.iter().cloned());
-    if !vault.has_store() {
-        tracing::info!("this computer has no credential store, so its agent panels get no named secret");
-        return vault;
-    }
     match vault.refresh() {
         Ok(present) => {
             tracing::info!(count = present.len(), "the named secrets of this computer are ready");
@@ -206,7 +191,7 @@ pub(in crate::app) fn load(
             machines,
             server: None,
             server_failure: None,
-            named_secrets: secrets.named,
+            named_secrets: secrets.named.clone(),
         });
     };
     let config = match SupervisorConfig::for_server(
@@ -226,7 +211,7 @@ pub(in crate::app) fn load(
                     machines,
                     server: Some(sync),
                     server_failure: None,
-                    named_secrets: secrets.named,
+                    named_secrets: secrets.named.clone(),
                 }),
                 // The list of the link cannot be read, so the file of this
                 // computer is used and the link stops with it.
@@ -242,7 +227,7 @@ pub(in crate::app) fn load(
 fn file_list(
     registry: MachineRegistry,
     reason: String,
-    named_secrets: Option<Arc<NamedSecretVault>>,
+    named_secrets: Arc<NamedSecretVault>,
 ) -> Result<MachineLoad, MachineError> {
     tracing::error!(%reason, "the link to the Horizon server did not start");
     Machines::load(registry).map(|machines| MachineLoad {
@@ -292,13 +277,10 @@ impl HorizonApp {
 
     /// Takes the named secrets of the startup read: the worker of the window reads
     /// the store again, and the settings of this run keep their names.
-    pub(super) fn adopt_named_secrets(&mut self, loaded: Option<Arc<NamedSecretVault>>) {
-        let names = match loaded.as_ref() {
-            Some(vault) => vault.names(),
-            None => self.template_config.secrets.secret_names(),
-        };
-        self.named_secrets = named_secrets::NamedSecretWorkbench::new(loaded.clone(), &names);
-        self.named_secret_vault = loaded;
+    pub(super) fn adopt_named_secrets(&mut self, loaded: Arc<NamedSecretVault>) {
+        let names = loaded.names();
+        self.named_secrets = named_secrets::NamedSecretWorkbench::new(Some(Arc::clone(&loaded)), &names);
+        self.named_secret_vault = Some(loaded);
     }
 
     /// Runs the worker of the named secrets for this frame. A store that is still

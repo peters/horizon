@@ -2,7 +2,7 @@
 //!
 //! A panel reads its environment once, when its program starts, so the values of
 //! the named secrets must be in this process before a panel starts. A worker
-//! thread reads them from the credential store and publishes them here, and
+//! thread reads them from the secrets file and publishes them here, and
 //! [`apply`] copies them into the environment of one agent panel. Nothing else
 //! reads this map, so no frame of the UI and no command line ever holds a value.
 //!

@@ -30,7 +30,7 @@ fn start(
     let cloned = profile.clone();
     cache.start(name, profile, move |progress| {
         provider_catalog::validate_provider(&cloned)?;
-        // An OS keychain read happens here, inside the credential stage's budget.
+        // A read of the secrets file happens here, inside the credential stage's budget.
         let authorization = prepared?.authorization().map_err(|_| CatalogError::Credentials)?;
         provider_catalog::fetch(&provider, &cloned, authorization.header_value(), progress)
     });
@@ -39,27 +39,29 @@ fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::remote_browser_credential::FakeCredentialStore;
+    use crate::secret_store::SecretStore;
     use horizon_browser::provider_catalog::CatalogStage;
     use std::{sync::mpsc::channel, time::Duration};
 
     #[test]
-    fn a_blocked_keychain_read_is_shared_then_reported_as_a_credential_stall() {
+    fn a_blocked_file_read_is_shared_then_reported_as_a_credential_stall() {
         let profile: RemoteProviderProfile = serde_json::from_str(
             r#"{"adapter":"browserstack","endpoint":"https://hub-cloud.browserstack.com/wd/hub",
                 "authentication":{"kind":"bearer","token_ref":"key"},
                 "credential_bindings":{"key":{"store":"os_keychain","slot":"fixture"}}}"#,
         )
         .unwrap();
-        let credentials = CredentialWorkbench::with_opener(Box::new(|| Ok(Box::new(FakeCredentialStore::new()))));
+        let credentials = CredentialWorkbench::with_opener(Box::new(|| {
+            Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
+        }));
         let (entered, reading) = channel();
         let (release, resume) = channel::<()>();
         let prepared = PreparedUsage::new(&profile, &credentials)
             .unwrap()
-            .with_keychain(Box::new(move || {
+            .with_reader(Box::new(move || {
                 entered.send(()).unwrap();
                 let _ = resume.recv();
-                Ok(Box::new(FakeCredentialStore::new()))
+                Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
             }));
         let mut cache = CatalogCache::default();
         start(&mut cache, "account", &profile, Ok(prepared));

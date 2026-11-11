@@ -4,7 +4,7 @@
 //! the credential workbench, and refuses with a typed reason that never
 //! carries a credential value.
 //!
-//! The plan reads the in-memory stores only. The values that only the OS store
+//! The plan reads the in-memory stores only. The values that only the secrets file
 //! holds are read on the workbench thread before it runs
 //! ([`browser_remote_credentials`](super::browser_remote_credentials)), and the
 //! provider slot is leased on the coordination worker
@@ -59,9 +59,9 @@ impl CreateRefusal {
         if matches!(
             error.error,
             RemoteCredentialError::Missing
-                | RemoteCredentialError::Locked
                 | RemoteCredentialError::StoreUnavailable
                 | RemoteCredentialError::Checking
+                | RemoteCredentialError::File { .. }
         ) {
             Self {
                 code: "credentials_not_ready",
@@ -83,8 +83,8 @@ impl CreateRefusal {
 /// Resolve `target` into a session request, so allocation later never touches a
 /// credential store and a missing or locked credential is reported to the agent
 /// before any panel exists. The session and environment stores are in memory; a
-/// value that only the OS store holds arrives in `os_values`, read on the
-/// workbench thread, so this never takes the store mutex or asks the keychain.
+/// value that only the secrets file holds arrives in `os_values`, read on the
+/// workbench thread, so this never takes the store mutex or reads the file here.
 pub(super) fn plan_remote_create(
     remote: &RemoteBrowserConfig,
     workbench: &CredentialWorkbench,
@@ -105,7 +105,7 @@ pub(super) fn plan_remote_create(
         .unwrap_or_default();
     let stores = CredentialStores {
         session: workbench.session_store(),
-        os_keychain: os_values.map(|values| -> &dyn RemoteCredentialStore { values }),
+        secrets_file: os_values.map(|values| -> &dyn RemoteCredentialStore { values }),
         environment: Some(workbench.environment_store()),
     };
     let request = build_remote_session_request(remote, target, &stores).map_err(|error| match error {
@@ -230,7 +230,8 @@ pub(super) mod tests {
         ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAdapterKind,
         RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits, RemoteTargetProfile,
     };
-    use horizon_core::remote_browser_credential::{FakeCredentialStore, RemoteCredentialError, RemoteCredentialStore};
+    use horizon_core::remote_browser_credential::{RemoteCredentialError, RemoteCredentialStore};
+    use horizon_core::secret_store::SecretStore;
 
     use super::*;
 
@@ -275,7 +276,7 @@ pub(super) mod tests {
 
     pub(in crate::app) fn workbench() -> CredentialWorkbench {
         CredentialWorkbench::with_opener(Box::new(|| {
-            Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
+            Ok(Box::new(SecretStore::in_memory().expect("a store in memory")) as Box<dyn RemoteCredentialStore + Send>)
         }))
     }
 

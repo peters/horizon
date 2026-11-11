@@ -23,10 +23,11 @@ use horizon_browser::remote::{
 use horizon_core::machines::{MachineBindings, MachineRegistry, Machines};
 use horizon_core::named_secrets::{NamedSecretVault, SecretName, published_names};
 use horizon_core::remote_browser_credential::{
-    CredentialLocator, CredentialStores, FakeCredentialStore, RemoteCredentialStore, SessionCredentialStore,
-    SharedCredentialStore, resolve_authorization,
+    CredentialLocator, CredentialStores, RemoteCredentialStore, SessionCredentialStore, SharedCredentialStore,
+    resolve_authorization,
 };
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
+use horizon_core::secret_store::SecretStore;
 use horizon_core::{Machine, MachineKeyFiles, MachineKeys};
 use horizon_sync::{
     LinkBounds, LinkState, SocketServer, Store, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
@@ -105,7 +106,7 @@ fn provider(slot: &str) -> RemoteProviderProfile {
         credential_bindings.insert(
             CredentialReference::from(reference),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some(format!("remote-browser/{slot}/{name}")),
             },
         );
@@ -126,6 +127,19 @@ fn remote() -> RemoteBrowserConfig {
     let mut remote = RemoteBrowserConfig::default();
     remote.providers.insert("grid".to_owned(), provider("a"));
     remote
+}
+
+/// The vault of one computer whose secrets file holds no value, for a test that
+/// writes a machine key and no credential.
+fn keys_only(keys: MachineKeys) -> SecretVault {
+    let credentials = Arc::new(CredentialVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    credentials.register(&remote());
+    let named = Arc::new(NamedSecretVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    SecretVault::new(keys, credentials, named)
 }
 
 /// The bytes of one machine key, as the server holds them.
@@ -274,9 +288,9 @@ struct Computer {
     machines_dir: PathBuf,
     keys: MachineKeys,
     credentials: Arc<CredentialVault>,
-    values: Arc<Mutex<FakeCredentialStore>>,
+    values: Arc<Mutex<SecretStore>>,
     /// The credential store of the named secrets of this computer.
-    named_values: Arc<Mutex<FakeCredentialStore>>,
+    named_values: Arc<Mutex<SecretStore>>,
     named: Arc<NamedSecretVault>,
     supervisor: Option<Supervisor>,
     server: PathBuf,
@@ -287,16 +301,22 @@ impl Computer {
         fs::create_dir_all(home).expect("the machine directory");
         let machines_dir = home.to_path_buf();
         let keys = MachineKeys::new(home.join("machine-keys"));
-        let values = Arc::new(Mutex::new(FakeCredentialStore::new()));
+        // The one secrets file of this computer, not a store in memory: a value that
+        // arrives from the server is a row of the file that the code of this
+        // computer reads.
+        let secrets_file = home.join(horizon_core::secret_store::SECRETS_FILE_NAME);
+        let values = Arc::new(Mutex::new(
+            SecretStore::open(secrets_file.clone()).expect("the secrets file"),
+        ));
         let credentials = Arc::new(CredentialVault::new(Box::new(SharedCredentialStore::new(Arc::clone(
             &values,
         )))));
         credentials.register(&remote());
-        let named_values = Arc::new(Mutex::new(FakeCredentialStore::new()));
-        let named = Arc::new(NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(
-            Arc::clone(&named_values),
+        let named_values = Arc::new(Mutex::new(SecretStore::open(secrets_file).expect("the secrets file")));
+        let named = Arc::new(NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(
+            &named_values,
         )))));
-        let vault = SecretVault::new(keys.clone(), Some(Arc::clone(&credentials))).with_named(Arc::clone(&named));
+        let vault = SecretVault::new(keys.clone(), Arc::clone(&credentials), Arc::clone(&named));
         let mut config = SupervisorConfig::for_server(
             "server-vm",
             "/opt/horizon --server-link",
@@ -320,8 +340,11 @@ impl Computer {
     }
 
     fn start_again(&mut self) {
-        let vault = SecretVault::new(self.keys.clone(), Some(Arc::clone(&self.credentials)))
-            .with_named(Arc::clone(&self.named));
+        let vault = SecretVault::new(
+            self.keys.clone(),
+            Arc::clone(&self.credentials),
+            Arc::clone(&self.named),
+        );
         let mut config = SupervisorConfig::for_server(
             "server-vm",
             "/opt/horizon --server-link",
@@ -392,7 +415,7 @@ impl Computer {
         let store = self.values.lock().expect("the store");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: Some(&*store as &dyn RemoteCredentialStore),
+            secrets_file: Some(&*store as &dyn RemoteCredentialStore),
             environment: None,
         };
         resolve_authorization(&profile, &stores)
@@ -622,6 +645,28 @@ fn a_credential_value_set_on_one_computer_reads_on_the_other() {
     eventually("the value at the second computer", || b.credential("key"));
     eventually("the user of the second computer", || b.credential("user"));
     assert_eq!(a.credential("key"), b.credential("key"), "one value on both computers");
+    // Two computers on one machine are two private homes and two files, so a value
+    // of one is a row of the file of the other only after the link carried it.
+    let file_a = home
+        .path()
+        .join("a")
+        .join(horizon_core::secret_store::SECRETS_FILE_NAME);
+    let file_b = home
+        .path()
+        .join("b")
+        .join(horizon_core::secret_store::SECRETS_FILE_NAME);
+    assert!(file_a.is_file() && file_b.is_file(), "each computer holds its own file");
+    assert_ne!(file_a, file_b);
+    assert_eq!(
+        mode(&file_a),
+        0o600,
+        "the secrets file of the first computer is private"
+    );
+    assert_eq!(
+        mode(&file_b),
+        0o600,
+        "the secrets file of the second computer is private"
+    );
     let header = b.header().expect("the header of the provider");
     assert!(header.starts_with("Basic "), "the provider builds its header: {header}");
     assert_eq!(Some(header), a.header(), "the two computers build one header");
@@ -702,8 +747,8 @@ fn the_loser_of_the_version_rule_keeps_its_key_as_a_conflict_copy() {
     a.handle().queue_secret(&theirs).expect("the queue of the first");
     b.handle().queue_secret(&theirs).expect("the queue of the second");
     // The values are written where a local change writes them.
-    let vault_a = SecretVault::new(a.keys.clone(), None);
-    let vault_b = SecretVault::new(b.keys.clone(), None);
+    let vault_a = keys_only(a.keys.clone());
+    let vault_b = keys_only(b.keys.clone());
     vault_a.write(&theirs, &value_a).expect("the first value");
     vault_b.write(&theirs, &value_b).expect("the second value");
 
@@ -852,7 +897,7 @@ fn the_first_link_of_a_computer_that_already_has_keys_keeps_the_value_of_the_ser
     fs::create_dir_all(b_home.join("machine-keys")).expect("the key folder");
     fs::set_permissions(b_home.join("machine-keys"), fs::Permissions::from_mode(0o700)).expect("the mode");
     let b_keys = MachineKeys::new(b_home.join("machine-keys"));
-    let local = SecretVault::new(b_keys.clone(), None);
+    let local = keys_only(b_keys.clone());
     let theirs = SecretId::machine_key("build-1").expect("an id");
     let value_b = key_files(&format!("PRIVATE-B-{MARKER}"));
     local.write(&theirs, &value_b).expect("the local key");
@@ -895,7 +940,7 @@ fn the_body_of_a_secret_reaches_no_file_of_a_computer_and_no_line_of_the_log() {
     a.add("build-1", "203.0.113.10");
     // The key holds a marker, so a test can look for its private text everywhere.
     let id = SecretId::machine_key("build-1").expect("an id");
-    let vault = SecretVault::new(a.keys.clone(), None);
+    let vault = keys_only(a.keys.clone());
     vault
         .write(
             &id,

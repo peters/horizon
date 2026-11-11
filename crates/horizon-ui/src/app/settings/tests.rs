@@ -244,20 +244,18 @@ fn the_secrets_tab_draws_the_names_the_hidden_field_and_the_missing_value() {
     use std::sync::{Arc, Mutex};
 
     use horizon_core::named_secrets::{NamedSecretVault, SecretName};
-    use horizon_core::remote_browser_credential::{FakeCredentialStore, RemoteCredentialStore, SharedCredentialStore};
+    use horizon_core::remote_browser_credential::SharedCredentialStore;
+    use horizon_core::secret_store::SecretStore;
 
-    let values = Arc::new(Mutex::new(FakeCredentialStore::new()));
+    let values = Arc::new(Mutex::new(SecretStore::in_memory().expect("a store in memory")));
     let stored = SecretName::parse("HETZNER_TOKEN").expect("a name");
     values
         .lock()
         .expect("the store")
-        .put(
-            &horizon_core::named_secrets::locator(&stored),
-            b"a-value-of-this-computer",
-        )
+        .write("named/HETZNER_TOKEN", b"a-value-of-this-computer")
         .expect("the value");
-    let vault = Arc::new(NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(
-        Arc::clone(&values),
+    let vault = Arc::new(NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(
+        &values,
     )))));
     let mut config = Config::default();
     config.secrets.names = vec!["HETZNER_TOKEN".to_string(), "CLOUD_KEY".to_string()];

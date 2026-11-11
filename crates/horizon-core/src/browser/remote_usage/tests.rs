@@ -3,7 +3,7 @@ use horizon_browser::remote::RemoteAdapterKind;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 
-use crate::remote_browser_credential::FakeCredentialStore;
+use crate::secret_store::SecretStore;
 use horizon_browser::remote::{
     ControlEndpoint, CredentialBinding, CredentialReference, RemoteAuthentication, RemoteSessionLimits,
 };
@@ -30,7 +30,9 @@ fn profile() -> RemoteProviderProfile {
 }
 
 fn credentials() -> CredentialWorkbench {
-    CredentialWorkbench::with_opener(Box::new(|| Ok(Box::new(FakeCredentialStore::new()))))
+    CredentialWorkbench::with_opener(Box::new(|| {
+        Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
+    }))
 }
 
 #[test]
@@ -209,7 +211,7 @@ fn memory_snapshot_survives_credential_clear_and_unsupported_providers_do_not_fe
         &prepared.profile,
         &CredentialStores {
             session: &prepared.memory,
-            os_keychain: None,
+            secrets_file: None,
             environment: None,
         },
     )
@@ -226,22 +228,22 @@ fn memory_snapshot_survives_credential_clear_and_unsupported_providers_do_not_fe
 }
 
 #[test]
-fn session_credentials_do_not_wait_for_an_unrelated_keychain_lock() {
+fn session_credentials_do_not_wait_for_an_unrelated_file_read() {
     let profile = profile();
     let mut credentials = credentials();
     credentials
         .set_session_value("remote", &profile, &CredentialReference::from("key"), b"synthetic-key")
         .expect("credential");
     let deadline = Instant::now() + Duration::from_secs(2);
-    let keychain = loop {
+    let file = loop {
         credentials.poll();
-        if let Some(store) = credentials.keychain_store() {
+        if let Some(store) = credentials.store_handle() {
             break store;
         }
-        assert!(Instant::now() < deadline, "fake keychain did not open");
+        assert!(Instant::now() < deadline, "the file did not open");
         std::thread::sleep(Duration::from_millis(1));
     };
-    let guard = keychain.lock().expect("hold unrelated OS operation");
+    let guard = file.lock().expect("hold an unrelated read of the file");
     let prepared = PreparedUsage::new(&profile, &credentials).expect("snapshot");
     let (sender, receiver) = channel();
     let worker = std::thread::spawn(move || {
@@ -363,19 +365,19 @@ fn stalled_workers_settle_with_an_error_and_keep_the_last_sample() {
 }
 
 #[test]
-fn stalled_usage_keychain_does_not_hold_the_allocation_store() {
+fn stalled_usage_read_does_not_hold_the_allocation_store() {
     let mut profile = profile();
     let binding = profile
         .credential_bindings
         .get_mut(&CredentialReference::from("key"))
         .expect("binding");
-    binding.store = CredentialStoreKind::OsKeychain;
+    binding.store = CredentialStoreKind::File;
     binding.slot = Some("test-slot".into());
     let mut credentials = credentials();
     let deadline = Instant::now() + Duration::from_secs(2);
     let shared = loop {
         credentials.poll();
-        if let Some(shared) = credentials.keychain_store() {
+        if let Some(shared) = credentials.store_handle() {
             break shared;
         }
         assert!(Instant::now() < deadline);
@@ -384,10 +386,10 @@ fn stalled_usage_keychain_does_not_hold_the_allocation_store() {
     let mut prepared = PreparedUsage::new(&profile, &credentials).expect("prepare independent reader");
     let (entered, reading) = channel();
     let (release, resume) = channel();
-    prepared.keychain = Some(Box::new(move || {
+    prepared.reader = Some(Box::new(move || {
         entered.send(()).expect("reading");
         resume.recv().expect("release");
-        Ok(Box::new(FakeCredentialStore::new()))
+        Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
     }));
     let worker = std::thread::spawn(move || prepared.authorization());
     reading.recv_timeout(Duration::from_secs(1)).expect("reader started");

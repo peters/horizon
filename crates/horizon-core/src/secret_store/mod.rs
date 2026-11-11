@@ -182,7 +182,7 @@ impl Sealed for SecretStore {}
 
 impl RemoteCredentialStore for SecretStore {
     fn kind(&self) -> CredentialStoreKind {
-        CredentialStoreKind::OsKeychain
+        CredentialStoreKind::File
     }
 
     fn put(&mut self, locator: &CredentialLocator, secret: &[u8]) -> Result<(), RemoteCredentialError> {
@@ -240,7 +240,7 @@ impl Sealed for UnreadableStore {}
 
 impl RemoteCredentialStore for UnreadableStore {
     fn kind(&self) -> CredentialStoreKind {
-        CredentialStoreKind::OsKeychain
+        CredentialStoreKind::File
     }
 
     fn put(&mut self, _: &CredentialLocator, _: &[u8]) -> Result<(), RemoteCredentialError> {

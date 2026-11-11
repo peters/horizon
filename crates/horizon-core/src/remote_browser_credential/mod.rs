@@ -3,8 +3,8 @@
 //! secret to callers.
 //!
 //! Values reach the transport through [`ProviderAuthorization`], whose only
-//! exit is the header value. Stores expose presence, locked state and a
-//! sink-based copy; both the store and sink traits are sealed, so no code
+//! exit is the header value. Stores expose presence and a sink-based copy; both
+//! the store and sink traits are sealed, so no code
 //! outside this crate can implement a sink that captures bytes. Every
 //! intermediate buffer is a `zeroize` type that is wiped when dropped, on
 //! success and on every error path alike. Nothing here serializes, logs or
@@ -12,8 +12,6 @@
 //! are read at capture; normal child-process environment inheritance is unchanged.
 
 mod environment;
-mod fake;
-mod keyring_store;
 mod resolved;
 mod session;
 mod shared;
@@ -29,13 +27,11 @@ use horizon_browser_control::remote_authorization::{CredentialValueError, author
 use zeroize::Zeroizing;
 
 pub use environment::EnvironmentCredentialStore;
-pub use fake::FakeCredentialStore;
-pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
 pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;
 pub use shared::SharedCredentialStore;
 pub use workbench::{
-    CredentialValueChange, CredentialValueReply, CredentialWorkbench, KeychainState, NoticeKind, SharedStore,
+    CredentialValueChange, CredentialValueReply, CredentialWorkbench, NoticeKind, SecretsState, SharedStore,
     StoreOpener, WorkbenchNotice, credential_destination,
 };
 
@@ -49,7 +45,7 @@ mod private {
 pub(crate) use private::Sealed;
 
 /// Where one bound value lives: the endpoint origin it may be sent to, the
-/// reference the configuration uses, and the OS-store slot when persisted.
+/// reference the configuration uses, and the slot of its binding.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct CredentialLocator {
     pub origin: String,
@@ -96,32 +92,32 @@ pub trait RemoteCredentialStore: Sealed {
     fn kind(&self) -> CredentialStoreKind;
 
     /// # Errors
-    /// Locked store, platform failure, or an oversized or empty value.
+    /// The store that cannot be read or written, or an oversized or empty value.
     fn put(&mut self, locator: &CredentialLocator, secret: &[u8]) -> Result<(), RemoteCredentialError>;
 
     /// Missing items succeed as already absent.
     /// # Errors
-    /// Locked store or platform failure.
+    /// The store that cannot be read or written.
     fn delete(&mut self, locator: &CredentialLocator) -> Result<(), RemoteCredentialError>;
 
     /// # Errors
-    /// Locked store or platform failure.
+    /// The store that cannot be read.
     fn contains(&self, locator: &CredentialLocator) -> Result<bool, RemoteCredentialError>;
 
     /// Copy the value into `sink` only.
     /// # Errors
-    /// Locked store, missing item, platform failure, or sink failure.
+    /// A store that cannot be read, a missing item, or a sink failure.
     fn with_secret(&self, locator: &CredentialLocator, sink: &mut dyn SecretSink) -> Result<(), RemoteCredentialError>;
 }
 
 /// Typed, value-free failure.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RemoteCredentialError {
-    #[error("credential store is locked")]
-    Locked,
     #[error("credential is missing")]
     Missing,
-    #[error("no OS credential store is available on this computer")]
+    /// The store of this value is not part of the run: a reference that this build
+    /// does not bind to any store, or a store that a caller did not offer.
+    #[error("the store of this value is not available")]
     StoreUnavailable,
     /// The one file of the secret values of this computer cannot be used. It is a
     /// fault of this computer and not a way of life, so the text names the file.
@@ -135,10 +131,10 @@ pub enum RemoteCredentialError {
     InvalidUsername,
     #[error("a Bearer token may only contain letters, digits, - . _ ~ + / and trailing =")]
     InvalidBearerToken,
-    #[error("credential store failed: {kind}")]
+    #[error("the credential store failed: {kind}")]
     Platform { kind: &'static str },
-    /// The OS store has not answered yet; try again after the next poll.
-    #[error("credential store is still being checked")]
+    /// The store has not answered yet; try again after the next poll.
+    #[error("the credential store is still being checked")]
     Checking,
 }
 
@@ -158,9 +154,8 @@ impl From<CredentialValueError> for RemoteCredentialError {
 pub enum CredentialState {
     Present,
     Missing,
-    Locked,
     StoreUnavailable,
-    /// An OS-store probe is in flight.
+    /// A presence probe is in flight.
     Checking,
 }
 
@@ -171,13 +166,14 @@ pub struct CredentialReadiness {
     pub state: CredentialState,
 }
 
-/// The stores a resolver may consult. The OS store is optional because a
-/// computer without one must still run session-only credentials. The
-/// environment store is optional so tests can omit it; production always
-/// supplies the launch snapshot. There is no implicit fallback between stores.
+/// The stores a resolver may consult. The secrets file is optional so a caller
+/// that must run session-only credentials can say so, and because a caller that
+/// read its values already offers them back as that store. The environment store
+/// is optional so tests can omit it; production always supplies the launch
+/// snapshot. There is no implicit fallback between stores.
 pub struct CredentialStores<'a> {
     pub session: &'a dyn RemoteCredentialStore,
-    pub os_keychain: Option<&'a dyn RemoteCredentialStore>,
+    pub secrets_file: Option<&'a dyn RemoteCredentialStore>,
     pub environment: Option<&'a dyn RemoteCredentialStore>,
 }
 
@@ -185,7 +181,7 @@ impl CredentialStores<'_> {
     fn store_for(&self, kind: CredentialStoreKind) -> Result<&dyn RemoteCredentialStore, RemoteCredentialError> {
         match kind {
             CredentialStoreKind::Session => Ok(self.session),
-            CredentialStoreKind::OsKeychain => self.os_keychain.ok_or(RemoteCredentialError::StoreUnavailable),
+            CredentialStoreKind::File => self.secrets_file.ok_or(RemoteCredentialError::StoreUnavailable),
             CredentialStoreKind::Environment => self.environment.ok_or(RemoteCredentialError::StoreUnavailable),
         }
     }
@@ -193,8 +189,8 @@ impl CredentialStores<'_> {
 
 /// The provider profile a configured target authenticates against, or `None`
 /// when the target or its provider is not configured. A caller that must read
-/// values from the OS store before the request is built resolves them for this
-/// profile; [`build_remote_session_request`](crate::browser::build_remote_session_request)
+/// values from the secrets file before the request is built resolves them for
+/// this profile; [`build_remote_session_request`](crate::browser::build_remote_session_request)
 /// refuses an unconfigured target or provider itself, with its own code and text.
 #[must_use]
 pub fn target_provider_profile<'a>(
@@ -205,11 +201,11 @@ pub fn target_provider_profile<'a>(
     remote.providers.get(&target.provider)
 }
 
-/// The references of `profile` whose value only the OS store can answer, in
+/// The references of `profile` whose value only the secrets file answers, in
 /// authentication order. Each must be read on the workbench thread before the
 /// request is built, and offered back to it as a [`ReadCredentialStore`].
 #[must_use]
-pub fn os_store_references(profile: &RemoteProviderProfile) -> Vec<CredentialReference> {
+pub fn secrets_file_references(profile: &RemoteProviderProfile) -> Vec<CredentialReference> {
     profile
         .authentication
         .references()
@@ -218,7 +214,7 @@ pub fn os_store_references(profile: &RemoteProviderProfile) -> Vec<CredentialRef
             profile
                 .credential_bindings
                 .get(*reference)
-                .is_some_and(|binding| binding.store == CredentialStoreKind::OsKeychain)
+                .is_some_and(|binding| binding.store == CredentialStoreKind::File)
         })
         .cloned()
         .collect()
@@ -248,7 +244,6 @@ pub fn readiness(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>)
             {
                 Ok(true) => CredentialState::Present,
                 Ok(false) | Err(RemoteCredentialError::Missing) => CredentialState::Missing,
-                Err(RemoteCredentialError::Locked) => CredentialState::Locked,
                 Err(RemoteCredentialError::Checking) => CredentialState::Checking,
                 Err(_) => CredentialState::StoreUnavailable,
             };

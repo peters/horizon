@@ -65,7 +65,7 @@ pub enum CredentialReferenceProblem {
     /// `store: environment` names a variable that is not a POSIX identifier.
     MalformedVariable,
     /// Another binding for the same endpoint origin uses the same slot, so
-    /// both would read and overwrite one OS-store item.
+    /// both would read and overwrite one item of the secrets file.
     DuplicateSlot,
 }
 
@@ -81,7 +81,7 @@ impl CredentialReferenceProblem {
             Self::MalformedVariable => {
                 "needs a 1-128 character environment variable name starting with an ASCII letter or _, followed by ASCII letters, digits, or _"
             }
-            Self::DuplicateSlot => "shares its OS-store slot with another binding for the same endpoint origin",
+            Self::DuplicateSlot => "shares its slot with another binding for the same endpoint origin",
         }
     }
 }

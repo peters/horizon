@@ -124,12 +124,8 @@ pub enum NamedSecretError {
     InvalidValue { name: String },
     #[error("The value of {name} holds a NUL byte or a line break, or it is not text")]
     ValueNotText { name: String },
-    #[error("This computer has no credential store, so it keeps no named secret")]
-    StoreUnavailable,
-    #[error("The credential store of this computer is locked")]
-    Locked,
-    #[error("The credential store of this computer failed: {kind}")]
-    Platform { kind: &'static str },
+    #[error("{reason}")]
+    Unavailable { reason: String },
 }
 
 impl NamedSecretError {
@@ -141,9 +137,7 @@ impl NamedSecretError {
             Self::ReservedName { .. } => "reserved_secret_name",
             Self::InvalidValue { .. } => "invalid_secret_value",
             Self::ValueNotText { .. } => "secret_value_not_text",
-            Self::StoreUnavailable => "secret_store_unavailable",
-            Self::Locked => "secret_store_locked",
-            Self::Platform { .. } => "secret_store_failed",
+            Self::Unavailable { .. } => "secret_store_unavailable",
         }
     }
 }

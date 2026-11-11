@@ -5,7 +5,6 @@
 
 mod panels;
 mod rules;
-mod test_file;
 
 use std::sync::MutexGuard;
 

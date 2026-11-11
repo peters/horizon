@@ -42,7 +42,7 @@ use std::{
 use horizon_browser_control::ssh_forward::ssh_command;
 use horizon_core::SecretTarget;
 use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
-use horizon_core::secret::{SecretId, SecretKind, SecretVault};
+use horizon_core::secret::{SecretId, SecretKind};
 use horizon_core::{Machine, MachineError};
 
 use crate::client::{Client, LinkState};
@@ -169,13 +169,6 @@ impl SupervisorConfig {
             secrets,
             bounds: LinkBounds::STANDARD,
         })
-    }
-
-    /// The machine keys of this Horizon home alone, for a caller that has no
-    /// credential store at hand, such as a test.
-    #[must_use]
-    pub fn keys_only(keys: horizon_core::MachineKeys) -> Arc<dyn SecretTarget> {
-        Arc::new(SecretVault::keys_only(keys))
     }
 
     /// The command of the child, with the program, the flags and the target.

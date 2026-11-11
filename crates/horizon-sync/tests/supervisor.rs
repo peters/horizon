@@ -65,8 +65,21 @@ except Exception:
 ";
 
 /// A computer of a test keeps machine keys and no credential value.
+/// The machine keys of a computer whose secrets file holds no value: one store in
+/// memory for the credential values and one for the named secrets.
 fn keys_only(keys: horizon_core::MachineKeys) -> std::sync::Arc<dyn horizon_core::SecretTarget> {
-    SupervisorConfig::keys_only(keys)
+    use horizon_core::named_secrets::NamedSecretVault;
+    use horizon_core::secret::{CredentialVault, SecretVault};
+    use horizon_core::secret_store::SecretStore;
+
+    let credentials = std::sync::Arc::new(CredentialVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
+    let named = std::sync::Arc::new(NamedSecretVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    std::sync::Arc::new(SecretVault::new(keys, credentials, named))
 }
 
 fn machine(name: &str, host: &str) -> Machine {

@@ -1,4 +1,4 @@
-//! The values a remote create needs that only the OS credential store holds,
+//! The values a remote create needs that only the secrets file holds,
 //! read off the frame. The workbench thread reads one value at a time, a frame
 //! polls its answer without waiting, and the create plans its request once the
 //! last value is at hand. The panel opens only after the plan leased its
@@ -10,7 +10,7 @@ use std::time::Instant;
 use horizon_core::browser::manifest::{self, BrowserCreateRequest};
 use horizon_core::browser::remote::{CredentialReference, RemoteProviderProfile};
 use horizon_core::remote_browser_credential::{
-    CredentialValueReply, ReadCredentialStore, RemoteCredentialError, ResolveError, os_store_references,
+    CredentialValueReply, ReadCredentialStore, RemoteCredentialError, ResolveError, secrets_file_references,
     target_provider_profile,
 };
 
@@ -21,7 +21,7 @@ use super::browser_remote_create::{CreateRefusal, RemoteTarget};
 use super::browser_request_claims::{HOST_RETIRING, fail_create};
 use super::browser_requests::ActorPanel;
 
-/// A remote create's OS-store values that have not all arrived yet, and what
+/// A remote create's file-backed values that have not all arrived yet, and what
 /// the host needs to plan the request once they have: the configuration, the
 /// target in it, and the agent panel the panel is created beside.
 pub(super) struct RemoteCredentialRead {
@@ -35,7 +35,7 @@ pub(super) struct RemoteCredentialRead {
     reply: CredentialValueReply,
     /// The references still to ask for, in authentication order.
     remaining: VecDeque<CredentialReference>,
-    /// The values that arrived, offered to the request as the OS store.
+    /// The values that arrived, offered to the request as the secrets file.
     values: ReadCredentialStore,
 }
 
@@ -56,7 +56,7 @@ enum RemoteCredentialStep {
 
 impl HorizonApp {
     /// Starts a remote create: resolves its target from configuration, asks the
-    /// workbench for the values only the OS store holds, and leases the
+    /// workbench for the values only the secrets file holds, and leases the
     /// provider's slot on the coordination worker. The panel opens when both
     /// are at hand, so a missing or locked credential is still reported to the
     /// agent before any panel exists.
@@ -82,10 +82,10 @@ impl HorizonApp {
         let mut pending =
             PendingBrowserCreate::resolving(request, started_at, self.browser_create_host.io.board_fence());
         let profile = target_provider_profile(&target.remote, &target.name).cloned();
-        let references = match (&profile, self.remote_browser_credentials.keychain_available()) {
-            (Some(profile), true) => os_store_references(profile),
+        let references = match (&profile, self.remote_browser_credentials.store_available()) {
+            (Some(profile), true) => secrets_file_references(profile),
             // An unconfigured target is refused by the plan, with its own code
-            // and text, and a computer without an OS store resolves the request
+            // and text, and a request with no file value resolves
             // as it always did.
             _ => Vec::new(),
         };
@@ -190,7 +190,7 @@ impl HorizonApp {
 }
 
 /// The reference to read first, and the references to read after it, or `None`
-/// when the request needs no value from the OS store.
+/// when the request needs no value from the secrets file.
 fn split_first_read(
     references: Vec<CredentialReference>,
 ) -> Option<(CredentialReference, VecDeque<CredentialReference>)> {
@@ -226,15 +226,16 @@ mod tests {
     use horizon_core::Config;
     use horizon_core::browser::remote::{CredentialBinding, CredentialReference, CredentialStoreKind};
     use horizon_core::remote_browser_credential::{
-        CredentialLocator, CredentialWorkbench, FakeCredentialStore, RemoteCredentialError, RemoteCredentialStore,
+        CredentialLocator, CredentialWorkbench, RemoteCredentialError, RemoteCredentialStore,
     };
+    use horizon_core::secret_store::SecretStore;
     use horizon_core::{PanelId, WorkspaceId};
 
     use super::*;
     use crate::app::browser_remote_create::{plan_remote_create, tests::config};
     use crate::app::test_support::test_app;
 
-    /// `config()` with the provider's key kept in the OS store, so a create of
+    /// `config()` with the provider's key kept in the secrets file, so a create of
     /// its target reads the value there.
     fn os_config() -> Config {
         let mut config = config();
@@ -242,16 +243,16 @@ mod tests {
         profile.credential_bindings.insert(
             CredentialReference::from("key"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some("remote-browser/grid/key".into()),
             },
         );
         config
     }
 
-    /// The OS store the provider's key lives in, holding `value` for it.
-    fn os_store(value: Option<&[u8]>) -> FakeCredentialStore {
-        let mut store = FakeCredentialStore::new();
+    /// The secrets file the provider's key lives in, holding `value` for it.
+    fn secrets_file(value: Option<&[u8]>) -> SecretStore {
+        let mut store = SecretStore::in_memory().expect("a store in memory");
         let Some(value) = value else { return store };
         let profile = os_config().browser.remote.providers["grid"].clone();
         let key = CredentialReference::from("key");
@@ -260,17 +261,30 @@ mod tests {
         store
     }
 
-    /// A workbench whose OS store answers what `store` holds, on its own thread.
-    fn os_workbench(store: FakeCredentialStore) -> CredentialWorkbench {
+    /// A workbench whose file answers what `store` holds, on its own thread.
+    fn os_workbench(store: SecretStore) -> CredentialWorkbench {
         CredentialWorkbench::with_opener(Box::new(move || {
             Ok(Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
         }))
     }
 
-    fn wait_for_os_store(app: &mut HorizonApp) {
+    fn wait_for_secrets_file(app: &mut HorizonApp) {
+        wait_for_secrets_file_or_fault(app);
+        assert!(
+            app.remote_browser_credentials.store_available(),
+            "the workbench opened its file"
+        );
+    }
+
+    /// Waits until the workbench answered about its file, whether the file opened
+    /// or it reported why it did not.
+    fn wait_for_secrets_file_or_fault(app: &mut HorizonApp) {
         for _ in 0..200 {
             app.remote_browser_credentials.poll();
-            if app.remote_browser_credentials.keychain_available() {
+            if !matches!(
+                app.remote_browser_credentials.secrets_state(),
+                horizon_core::remote_browser_credential::SecretsState::Opening
+            ) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -307,26 +321,6 @@ mod tests {
         panic!("the create did not reach the expected state");
     }
 
-    /// The read of the configured target's key, as a create holds it while it
-    /// waits for the value.
-    fn reading_key(app: &mut HorizonApp) -> RemoteCredentialRead {
-        let profile = os_config().browser.remote.providers["grid"].clone();
-        let reference = CredentialReference::from("key");
-        let reply = app
-            .remote_browser_credentials
-            .request_value(&profile, &reference)
-            .expect("the store is available");
-        RemoteCredentialRead {
-            actor: remote_request(app).1,
-            target: app.remote_target("ios_phone").expect("configured target"),
-            profile,
-            reference,
-            reply,
-            remaining: VecDeque::new(),
-            values: ReadCredentialStore::new(),
-        }
-    }
-
     /// Waits for the answer the workbench gives one read, as the frames of a
     /// running Horizon would.
     fn read_answer(reply: &mut CredentialValueReply) -> Result<zeroize::Zeroizing<Vec<u8>>, RemoteCredentialError> {
@@ -339,27 +333,36 @@ mod tests {
         panic!("the workbench did not answer the read");
     }
 
-    /// The locked store a test reads a value from without an unlock.
-    fn locked_store() -> FakeCredentialStore {
-        let mut store = os_store(Some(b"tok-en"));
-        store.lock();
-        store
-    }
-
     #[test]
     fn a_read_the_store_cannot_answer_refuses_with_the_credential_reason() {
-        for (store, reason) in [
-            (os_store(None), RemoteCredentialError::Missing),
-            (locked_store(), RemoteCredentialError::Locked),
-        ] {
+        let path = std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite");
+        let unreadable = RemoteCredentialError::File {
+            path,
+            reason: "it is a directory".to_owned(),
+        };
+        let cases = [
+            (os_workbench(secrets_file(None)), RemoteCredentialError::Missing),
+            (
+                CredentialWorkbench::with_opener(Box::new({
+                    let unreadable = unreadable.clone();
+                    move || Err(unreadable)
+                })),
+                unreadable,
+            ),
+        ];
+        for (workbench, reason) in cases {
             let (_temp, mut app) = test_app();
             app.template_config = os_config();
-            app.remote_browser_credentials = os_workbench(store);
-            wait_for_os_store(&mut app);
-            let mut read = reading_key(&mut app);
-
-            let error = read_answer(&mut read.reply).expect_err("the store cannot answer this read");
-            let refusal = credential_refusal(&read.profile, &read.reference, error);
+            app.remote_browser_credentials = workbench;
+            wait_for_secrets_file_or_fault(&mut app);
+            let profile = os_config().browser.remote.providers["grid"].clone();
+            let reference = CredentialReference::from("key");
+            let error = match app.remote_browser_credentials.request_value(&profile, &reference) {
+                Ok(mut reply) => read_answer(&mut reply).expect_err("the store cannot answer this read"),
+                // A store that never opened refuses the read at once.
+                Err(error) => error,
+            };
+            let refusal = credential_refusal(&profile, &reference, error);
             assert_eq!(refusal.code, "credentials_not_ready");
             assert!(
                 refusal.message.contains("credential `key`"),
@@ -420,21 +423,33 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_locked_os_credential_ends_the_create_without_a_panel() {
-        for store in [os_store(None), locked_store()] {
+    fn a_missing_value_or_an_unreadable_file_ends_the_create_without_a_panel() {
+        let unreadable = RemoteCredentialError::File {
+            path: std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite"),
+            reason: "it is a directory".to_owned(),
+        };
+        let cases = [
+            os_workbench(secrets_file(None)),
+            CredentialWorkbench::with_opener(Box::new(move || Err(unreadable))),
+        ];
+        for workbench in cases {
             let (_temp, mut app) = test_app();
             app.template_config = os_config();
-            app.remote_browser_credentials = os_workbench(store);
-            wait_for_os_store(&mut app);
+            app.remote_browser_credentials = workbench;
+            wait_for_secrets_file_or_fault(&mut app);
             let (request, actor) = remote_request(&mut app);
             let panels = app.board.panels.len();
 
             app.begin_remote_create(request, actor, Instant::now());
-            assert_eq!(
-                app.browser_create_host.pending[0].stage,
-                CreateStage::ReadingCredentials,
-                "the value is read before any panel exists"
-            );
+            // A file that this computer can read is asked for the value in the
+            // frame; a file that never opened refuses the create at once.
+            if let Some(pending) = app.browser_create_host.pending.first() {
+                assert_eq!(
+                    pending.stage,
+                    CreateStage::ReadingCredentials,
+                    "the value is read before any panel exists"
+                );
+            }
             pump_until(&mut app, |app| app.browser_create_host.pending.is_empty());
             assert!(
                 app.browser_create_host.io.busy(),
@@ -462,8 +477,8 @@ mod tests {
             .expect("provider")
             .adapter = horizon_core::browser::remote::RemoteAdapterKind::Browserstack;
         app.template_config = config;
-        app.remote_browser_credentials = os_workbench(os_store(Some(b"tok-en")));
-        wait_for_os_store(&mut app);
+        app.remote_browser_credentials = os_workbench(secrets_file(Some(b"tok-en")));
+        wait_for_secrets_file(&mut app);
         let (request, actor) = remote_request(&mut app);
         let id = request.request_id.clone();
         let panels = app.board.panels.len();
@@ -492,7 +507,7 @@ mod tests {
         app.remote_browser_credentials = CredentialWorkbench::with_opener(Box::new(move || {
             // A store that waits for the user stands here until the test ends.
             let _ = opened.recv();
-            Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
+            Ok(Box::new(SecretStore::in_memory().expect("a store in memory")) as Box<dyn RemoteCredentialStore + Send>)
         }));
         let (request, actor) = remote_request(&mut app);
         let panels = app.board.panels.len();
@@ -505,7 +520,7 @@ mod tests {
             "the frame waited {elapsed:?} for the credential store"
         );
         assert!(
-            !app.remote_browser_credentials.keychain_available(),
+            !app.remote_browser_credentials.store_available(),
             "the store is still opening"
         );
 
@@ -519,8 +534,8 @@ mod tests {
     fn a_create_plans_from_the_value_the_workbench_read() {
         let (_temp, mut app) = test_app();
         app.template_config = os_config();
-        app.remote_browser_credentials = os_workbench(os_store(Some(b"tok-en")));
-        wait_for_os_store(&mut app);
+        app.remote_browser_credentials = os_workbench(secrets_file(Some(b"tok-en")));
+        wait_for_secrets_file(&mut app);
         let (request, actor) = remote_request(&mut app);
         let panels = app.board.panels.len();
         // The lease is taken on the coordination worker; holding it keeps the
@@ -565,8 +580,8 @@ mod tests {
     fn a_read_of_a_replaced_board_opens_no_panel_and_answers_once() {
         let (_temp, mut app) = test_app();
         app.template_config = os_config();
-        app.remote_browser_credentials = os_workbench(os_store(Some(b"tok-en")));
-        wait_for_os_store(&mut app);
+        app.remote_browser_credentials = os_workbench(secrets_file(Some(b"tok-en")));
+        wait_for_secrets_file(&mut app);
         let (request, actor) = remote_request(&mut app);
         let panels = app.board.panels.len();
         app.begin_remote_create(request, actor, Instant::now());

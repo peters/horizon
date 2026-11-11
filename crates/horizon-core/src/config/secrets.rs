@@ -1,8 +1,9 @@
 //! The `secrets` section of the settings: the names of the named secrets of a
 //! person, and never a value.
 //!
-//! A value lives in the OS credential store, so this section is the list that the
-//! Settings window draws and the list that the panels of this computer read. A name
+//! A value lives in the secrets file of this Horizon home, so this section is the
+//! list that the Settings window draws and the list that the panels of this
+//! computer read. A name
 //! whose value this computer does not hold yet is still a name here: the server of
 //! the person brings the value, and a computer that has not received it yet shows
 //! that it holds none.
@@ -43,7 +44,7 @@ impl SecretsConfig {
     }
 
     /// The names of this section that pass the rule, in name order, for the code
-    /// that reads the credential store. A name that the rule refuses is dropped, so
+    /// that reads the secrets file. A name that the rule refuses is dropped, so
     /// one bad name does not stop the others.
     #[must_use]
     pub fn secret_names(&self) -> Vec<SecretName> {

@@ -1,6 +1,6 @@
 //! Credential entry state for the settings UI: synchronous session-only
-//! values, and OS-store operations run on a worker thread so a locked store
-//! or an unlock prompt never stalls the render loop.
+//! values, and secrets-file operations run on a worker thread so a disk write
+//! never stalls the render loop.
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -14,21 +14,24 @@ use zeroize::Zeroizing;
 
 use super::{
     CredentialLocator, CredentialReadiness, CredentialState, CredentialStores, EnvironmentCredentialStore,
-    KeyringCredentialStore, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore,
-    readiness,
+    RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore, readiness,
 };
+use crate::secret_store::{SecretStore, UnreadableStore};
 
 /// Boxed store the worker thread owns; the allocation path borrows it later.
 pub type SharedStore = Arc<Mutex<Box<dyn RemoteCredentialStore + Send>>>;
 
-/// How the worker obtains the OS store. Injectable so tests use the fake.
+/// How the worker obtains the secrets file. Injectable so tests use their own store.
 pub type StoreOpener = Box<dyn FnOnce() -> Result<Box<dyn RemoteCredentialStore + Send>, RemoteCredentialError> + Send>;
 
-/// Whether the OS store can be used right now.
+/// Whether the secrets file can be used right now.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum KeychainState {
+pub enum SecretsState {
+    /// The worker is opening the file.
     Opening,
-    Available,
+    /// The file answered, so a value can be read or written.
+    Ready,
+    /// The file cannot be used, with the typed reason and its path.
     Unavailable(RemoteCredentialError),
 }
 
@@ -77,7 +80,7 @@ pub fn credential_destination(profile: &RemoteProviderProfile, reference: &Crede
     )
 }
 
-/// One OS-store value that this computer stored or removed, for a link to a
+/// One file value that this computer stored or removed, for a link to a
 /// server that holds the same values. It carries the reference and never the
 /// value.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,12 +96,11 @@ pub struct CredentialValueChange {
 pub enum NoticeKind {
     SessionValueSet,
     SessionValueCleared,
-    StoredInKeychain,
-    DeletedFromKeychain,
+    StoredInFile,
+    DeletedFromFile,
 }
 
-/// How the OS store addresses an item: endpoint origin plus slot. Two
-/// Longest time that a cached presence stands before the store is asked again.
+/// Longest time that a cached presence stands before the file is asked again.
 const REVALIDATE_AFTER: Duration = Duration::from_secs(10);
 
 /// references bound to one slot are one item, so presence is cached per
@@ -146,16 +148,16 @@ enum Event {
     Deleted(CredentialLocator, Result<(), RemoteCredentialError>, Row),
 }
 
-struct KeychainLink {
+struct StoreLink {
     commands: Sender<Command>,
     events: Receiver<Event>,
     store: SharedStore,
 }
 
-/// The worker's answer to one read of a value that only the OS store holds.
+/// The worker's answer to one read of a value that only the secrets file holds.
 /// The value is a zeroizing buffer, and it reaches nothing but the caller that
-/// asked for it: polling never waits, so a locked store or an unlock prompt
-/// holds only the workbench thread.
+/// asked for it: polling never waits, so a disk read holds only the workbench
+/// thread.
 pub struct CredentialValueReply {
     answer: Receiver<Result<Zeroizing<Vec<u8>>, RemoteCredentialError>>,
     answered: bool,
@@ -181,17 +183,20 @@ impl CredentialValueReply {
     }
 }
 
-/// Session store plus a keychain worker, with a presence cache the UI reads.
+/// Session store plus a store worker, with a presence cache the UI reads.
 pub struct CredentialWorkbench {
     generation: u64,
     session: SessionCredentialStore,
     environment: EnvironmentCredentialStore,
-    keychain: Option<KeychainLink>,
-    keychain_state: KeychainState,
+    store: Option<StoreLink>,
+    /// The secrets file of this workbench, when it has one, so a caller of this
+    /// crate can open the same file on its own thread.
+    secrets_file: Option<std::path::PathBuf>,
+    secrets_state: SecretsState,
     presence: BTreeMap<OsAddress, CredentialState>,
-    /// When the presence of each OS item was last asked for, so a store that
-    /// locks under a running Horizon is noticed without a restart. One entry per
-    /// address, because Settings reads one profile at a time.
+    /// When the presence of each item was last asked for, so a file that another
+    /// process changed is noticed without a restart. One entry per address,
+    /// because Settings reads one profile at a time.
     probed_at: BTreeMap<OsAddress, Instant>,
     /// How long a cached presence may stand before the workbench asks again.
     revalidate_after: Duration,
@@ -201,7 +206,7 @@ pub struct CredentialWorkbench {
     /// Commands sent to the worker whose answers have not arrived.
     in_flight: usize,
     notices: Vec<WorkbenchNotice>,
-    /// The OS-store values that changed and wait for the next call, so a server
+    /// The file values that changed and wait for the next call, so a server
     /// holds them too.
     value_changes: Vec<CredentialValueChange>,
 }
@@ -217,11 +222,26 @@ impl CredentialWorkbench {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Open the platform store on a worker thread.
+    /// Open the secrets file at `path` on a worker thread.
     #[must_use]
-    pub fn spawn_platform() -> Self {
-        Self::with_opener(Box::new(|| {
-            KeyringCredentialStore::open().map(|store| Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
+    pub fn spawn_file(path: std::path::PathBuf) -> Self {
+        let mut bench = Self::with_opener(Box::new({
+            let path = path.clone();
+            move || SecretStore::open(path).map(|store| Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
+        }));
+        bench.secrets_file = Some(path);
+        bench
+    }
+
+    /// A handle that opens the secrets file of this workbench again, for a caller
+    /// that must read a value on its own thread and never wait for the settings
+    /// worker. `None` for a workbench that has no file of its own, which is what a
+    /// test injects.
+    #[must_use]
+    pub fn file_opener(&self) -> Option<StoreOpener> {
+        let path = self.secrets_file.clone()?;
+        Some(Box::new(move || {
+            SecretStore::open(path).map(|store| Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
         }))
     }
 
@@ -230,22 +250,23 @@ impl CredentialWorkbench {
     pub fn with_opener(opener: StoreOpener) -> Self {
         let (command_tx, command_rx) = channel::<Command>();
         let (event_tx, event_rx) = channel::<Event>();
-        let store: SharedStore = Arc::new(Mutex::new(Box::new(super::FakeCredentialStore::new())));
+        let store: SharedStore = Arc::new(Mutex::new(placeholder_store()));
         let worker_store = Arc::clone(&store);
         thread::Builder::new()
-            .name("remote-browser-keychain".into())
+            .name("remote-browser-secrets".into())
             .spawn(move || worker(opener, &worker_store, &command_rx, &event_tx))
             .ok();
         Self {
             generation: 0,
             session: SessionCredentialStore::new(),
             environment: EnvironmentCredentialStore::new(),
-            keychain: Some(KeychainLink {
+            store: Some(StoreLink {
                 commands: command_tx,
                 events: event_rx,
                 store,
             }),
-            keychain_state: KeychainState::Opening,
+            secrets_file: None,
+            secrets_state: SecretsState::Opening,
             presence: BTreeMap::new(),
             probed_at: BTreeMap::new(),
             revalidate_after: REVALIDATE_AFTER,
@@ -256,8 +277,8 @@ impl CredentialWorkbench {
         }
     }
 
-    /// The OS-store values that this computer stored or removed since the last
-    /// call, oldest first. A link to a server queues each of them as one secret,
+    /// The values that the secrets file stored or removed since the last call,
+    /// oldest first. A link to a server queues each of them as one secret,
     /// so the other computers hold the same value; a computer without a server
     /// drops the list and needs no other change.
     #[must_use]
@@ -269,7 +290,7 @@ impl CredentialWorkbench {
     pub fn poll(&mut self) {
         let mut events = Vec::new();
         let mut disconnected = false;
-        if let Some(link) = &self.keychain {
+        if let Some(link) = &self.store {
             loop {
                 match link.events.try_recv() {
                     Ok(event) => events.push(event),
@@ -283,8 +304,8 @@ impl CredentialWorkbench {
         }
         for event in events {
             match event {
-                Event::Opened(Ok(())) => self.keychain_state = KeychainState::Available,
-                Event::Opened(Err(error)) => self.keychain_state = KeychainState::Unavailable(error),
+                Event::Opened(Ok(())) => self.secrets_state = SecretsState::Ready,
+                Event::Opened(Err(error)) => self.secrets_state = SecretsState::Unavailable(error),
                 Event::Presence(locator, result) => {
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result));
@@ -300,7 +321,7 @@ impl CredentialWorkbench {
                         });
                     }
                     self.notices
-                        .push(WorkbenchNotice::new(&row, NoticeKind::StoredInKeychain, result));
+                        .push(WorkbenchNotice::new(&row, NoticeKind::StoredInFile, result));
                 }
                 Event::Deleted(locator, result, row) => {
                     self.credentials_changed();
@@ -313,17 +334,17 @@ impl CredentialWorkbench {
                         });
                     }
                     self.notices
-                        .push(WorkbenchNotice::new(&row, NoticeKind::DeletedFromKeychain, result));
+                        .push(WorkbenchNotice::new(&row, NoticeKind::DeletedFromFile, result));
                 }
             }
         }
         if disconnected {
             // A worker that failed to open reports the specific reason and
             // then exits; that reason must outlive the disconnect.
-            if !matches!(self.keychain_state, KeychainState::Unavailable(_)) {
-                self.keychain_state = KeychainState::Unavailable(RemoteCredentialError::StoreUnavailable);
+            if !matches!(self.secrets_state, SecretsState::Unavailable(_)) {
+                self.secrets_state = SecretsState::Unavailable(RemoteCredentialError::StoreUnavailable);
             }
-            self.keychain = None;
+            self.store = None;
             // Nothing will answer an in-flight probe or write now; settle
             // every pending entry so the UI stops waiting for it.
             self.in_flight = 0;
@@ -340,10 +361,10 @@ impl CredentialWorkbench {
     /// entries are still checking.
     #[cfg(test)]
     pub(crate) fn simulate_worker_loss_for_tests(&mut self) {
-        if let Some(link) = self.keychain.take() {
+        if let Some(link) = self.store.take() {
             let (_, events) = channel::<Event>();
             drop(link.commands);
-            self.keychain = Some(KeychainLink {
+            self.store = Some(StoreLink {
                 commands: channel::<Command>().0,
                 events,
                 store: link.store,
@@ -355,7 +376,7 @@ impl CredentialWorkbench {
     /// until the store has opened and every probe or write has answered.
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.keychain_state == KeychainState::Opening || self.in_flight > 0
+        self.secrets_state == SecretsState::Opening || self.in_flight > 0
     }
 
     fn cache_presence(&mut self, locator: &CredentialLocator, state: CredentialState) {
@@ -365,27 +386,26 @@ impl CredentialWorkbench {
     }
 
     #[must_use]
-    pub fn keychain_state(&self) -> &KeychainState {
-        &self.keychain_state
+    pub fn secrets_state(&self) -> &SecretsState {
+        &self.secrets_state
     }
 
-    /// Readiness for display. Session values are answered immediately; OS-store
+    /// Readiness for display. Session values are answered immediately; file
     /// values come from the presence cache and show `Checking` until probed.
     pub fn readiness(&mut self, profile: &RemoteProviderProfile) -> Vec<CredentialReadiness> {
-        // A store can lock under a running Horizon: the Secret Service daemon
-        // restarts, or the person locks the keychain. The cached presence then
-        // says `Present` while every read answers `Locked`, so each address is
-        // asked again on its own bound instead of once per start. The cached
-        // state stays visible until the answer arrives, so a list does not
-        // flicker every interval.
+        // Another process of this home can write the file under a running
+        // Horizon, and a person can copy another secrets file over it. Each address
+        // is asked again on its own bound instead of once per start, and the cached
+        // state stays visible until the answer arrives, so a list does not flicker
+        // every interval.
         self.request_probe(profile);
-        let cache = CachedKeychain {
+        let cache = CachedStore {
             presence: &self.presence,
-            state: &self.keychain_state,
+            state: &self.secrets_state,
         };
         let stores = CredentialStores {
             session: &self.session,
-            os_keychain: Some(&cache),
+            secrets_file: Some(&cache),
             environment: Some(&self.environment),
         };
         readiness(profile, &stores)
@@ -416,13 +436,13 @@ impl CredentialWorkbench {
         result
     }
 
-    /// Persist a value in the OS store on the worker thread. A request the
+    /// Persist a value in the secrets file on the worker thread. A request the
     /// worker never receives is reported as a notice, like a worker failure.
     ///
     /// # Errors
-    /// The reference must be bound to the OS store, which must be available,
+    /// The reference must be bound to the secrets file, which must be available,
     /// and the value must be non-empty and bounded.
-    pub fn store_in_keychain(
+    pub fn store_value(
         &mut self,
         provider: &str,
         profile: &RemoteProviderProfile,
@@ -433,7 +453,7 @@ impl CredentialWorkbench {
         if let Err(error) = &result {
             self.notices.push(WorkbenchNotice::new(
                 &Row::new(provider, profile, reference),
-                NoticeKind::StoredInKeychain,
+                NoticeKind::StoredInFile,
                 Err(error.clone()),
             ));
         }
@@ -448,7 +468,7 @@ impl CredentialWorkbench {
         value: &[u8],
     ) -> Result<(), RemoteCredentialError> {
         super::validate_secret(value)?;
-        let locator = Self::locator(profile, reference, CredentialStoreKind::OsKeychain)?;
+        let locator = Self::locator(profile, reference, CredentialStoreKind::File)?;
         let commands = self.available_link()?.commands.clone();
         self.cache_presence(&locator, CredentialState::Checking);
         commands
@@ -466,7 +486,7 @@ impl CredentialWorkbench {
     /// Forget a value wherever its binding says it lives.
     ///
     /// # Errors
-    /// Unbound references and an unavailable OS store.
+    /// Unbound references and an unavailable secrets file.
     pub fn delete(
         &mut self,
         provider: &str,
@@ -492,7 +512,7 @@ impl CredentialWorkbench {
                 result
             }
             CredentialStoreKind::Environment => Err(RemoteCredentialError::StoreUnavailable),
-            CredentialStoreKind::OsKeychain => {
+            CredentialStoreKind::File => {
                 let result = self
                     .available_link()
                     .map(|link| link.commands.clone())
@@ -509,7 +529,7 @@ impl CredentialWorkbench {
                 if let Err(error) = &result {
                     self.notices.push(WorkbenchNotice::new(
                         &Row::new(provider, profile, reference),
-                        NoticeKind::DeletedFromKeychain,
+                        NoticeKind::DeletedFromFile,
                         Err(error.clone()),
                     ));
                 }
@@ -560,7 +580,7 @@ impl CredentialWorkbench {
         self.environment.capture_from_process(&names);
     }
 
-    /// Stores for allocation-time resolution. The OS store is only offered once opened.
+    /// Stores for allocation-time resolution. The file is only offered once opened.
     #[must_use]
     pub fn session_store(&self) -> &SessionCredentialStore {
         &self.session
@@ -571,19 +591,19 @@ impl CredentialWorkbench {
         &self.environment
     }
 
-    /// Ask the workbench thread to read one value from the OS store. The
+    /// Ask the workbench thread to read one value from the secrets file. The
     /// answer arrives through the reply, so the caller never takes the store
-    /// mutex and never asks the keychain on its own thread. The value is read
+    /// mutex and never reads the file on its own thread. The value is read
     /// as the store holds it, and every check of it belongs to the caller.
     ///
     /// # Errors
-    /// The reference must be bound to the OS store, which must be available.
+    /// The reference must be bound to the secrets file, which must be available.
     pub fn request_value(
         &mut self,
         profile: &RemoteProviderProfile,
         reference: &CredentialReference,
     ) -> Result<CredentialValueReply, RemoteCredentialError> {
-        let locator = Self::locator(profile, reference, CredentialStoreKind::OsKeychain)?;
+        let locator = Self::locator(profile, reference, CredentialStoreKind::File)?;
         let commands = self.available_link()?.commands.clone();
         let (answers, answer) = channel();
         commands
@@ -595,22 +615,19 @@ impl CredentialWorkbench {
         })
     }
 
-    /// Whether the OS store answered and a value can be read from it: the same
-    /// state [`Self::keychain_store`] offers the store in.
+    /// Whether the file answered and a value can be read from it: the same
+    /// state [`Self::store_handle`] offers the store in.
     #[must_use]
-    pub fn keychain_available(&self) -> bool {
-        matches!(
-            (&self.keychain, &self.keychain_state),
-            (Some(_), KeychainState::Available)
-        )
+    pub fn store_available(&self) -> bool {
+        matches!((&self.store, &self.secrets_state), (Some(_), SecretsState::Ready))
     }
 
     #[must_use]
-    pub fn keychain_store(&self) -> Option<SharedStore> {
-        if !self.keychain_available() {
+    pub fn store_handle(&self) -> Option<SharedStore> {
+        if !self.store_available() {
             return None;
         }
-        self.keychain.as_ref().map(|link| Arc::clone(&link.store))
+        self.store.as_ref().map(|link| Arc::clone(&link.store))
     }
 
     /// How long until the next cached address is due for another probe, so a
@@ -618,7 +635,7 @@ impl CredentialWorkbench {
     /// address is cached and nothing is due.
     #[must_use]
     pub fn next_revalidation_in(&self) -> Option<Duration> {
-        if self.keychain_state != KeychainState::Available {
+        if self.secrets_state != SecretsState::Ready {
             return None;
         }
         self.probed_at
@@ -631,17 +648,11 @@ impl CredentialWorkbench {
             .min()
     }
 
-    /// Ask the store again on the next read, whatever the bound says.
-    #[cfg(test)]
-    pub(crate) fn revalidate_on_next_read(&mut self) {
-        self.revalidate_after = Duration::ZERO;
-    }
-
     fn request_probe(&mut self, profile: &RemoteProviderProfile) {
-        let Some(commands) = self.keychain.as_ref().map(|link| link.commands.clone()) else {
+        let Some(commands) = self.store.as_ref().map(|link| link.commands.clone()) else {
             return;
         };
-        if self.keychain_state != KeychainState::Available {
+        if self.secrets_state != SecretsState::Ready {
             return;
         }
         let mut wanted = Vec::new();
@@ -649,7 +660,7 @@ impl CredentialWorkbench {
             let Some(binding) = profile.credential_bindings.get(reference) else {
                 continue;
             };
-            if binding.store != CredentialStoreKind::OsKeychain {
+            if binding.store != CredentialStoreKind::File {
                 continue;
             }
             let locator = CredentialLocator::new(&profile.endpoint, reference, binding);
@@ -700,10 +711,10 @@ impl CredentialWorkbench {
         Ok(CredentialLocator::new(&profile.endpoint, reference, binding))
     }
 
-    fn available_link(&self) -> Result<&KeychainLink, RemoteCredentialError> {
-        match (&self.keychain, &self.keychain_state) {
-            (Some(link), KeychainState::Available) => Ok(link),
-            (_, KeychainState::Unavailable(error)) => Err(error.clone()),
+    fn available_link(&self) -> Result<&StoreLink, RemoteCredentialError> {
+        match (&self.store, &self.secrets_state) {
+            (Some(link), SecretsState::Ready) => Ok(link),
+            (_, SecretsState::Unavailable(error)) => Err(error.clone()),
             _ => Err(RemoteCredentialError::StoreUnavailable),
         }
     }
@@ -713,12 +724,20 @@ fn state_from(result: &Result<bool, RemoteCredentialError>) -> CredentialState {
     match result {
         Ok(true) => CredentialState::Present,
         Ok(false) | Err(RemoteCredentialError::Missing) => CredentialState::Missing,
-        Err(RemoteCredentialError::Locked) => CredentialState::Locked,
         Err(_) => CredentialState::StoreUnavailable,
     }
 }
 
-/// Accepts one value from the OS store into a zeroizing buffer, for a caller
+/// The store that the worker holds until `opener` answers. It holds no value and
+/// no caller reads it before the answer, so a value in memory is enough.
+fn placeholder_store() -> Box<dyn RemoteCredentialStore + Send> {
+    match SecretStore::in_memory() {
+        Ok(store) => Box::new(store),
+        Err(error) => Box::new(UnreadableStore::new(error)),
+    }
+}
+
+/// Accepts one value from the secrets file into a zeroizing buffer, for a caller
 /// on another thread. It checks nothing: the caller checks the value when it
 /// builds the request, with the same checks the store's own path applies.
 #[derive(Default)]
@@ -736,16 +755,16 @@ impl SecretSink for StoreValueSink {
 }
 
 /// Read-only view of the presence cache in store form, for [`readiness`].
-struct CachedKeychain<'a> {
+struct CachedStore<'a> {
     presence: &'a BTreeMap<OsAddress, CredentialState>,
-    state: &'a KeychainState,
+    state: &'a SecretsState,
 }
 
-impl Sealed for CachedKeychain<'_> {}
+impl Sealed for CachedStore<'_> {}
 
-impl RemoteCredentialStore for CachedKeychain<'_> {
+impl RemoteCredentialStore for CachedStore<'_> {
     fn kind(&self) -> CredentialStoreKind {
-        CredentialStoreKind::OsKeychain
+        CredentialStoreKind::File
     }
 
     fn put(&mut self, _: &CredentialLocator, _: &[u8]) -> Result<(), RemoteCredentialError> {
@@ -758,14 +777,13 @@ impl RemoteCredentialStore for CachedKeychain<'_> {
 
     fn contains(&self, locator: &CredentialLocator) -> Result<bool, RemoteCredentialError> {
         match self.state {
-            KeychainState::Unavailable(error) => return Err(error.clone()),
-            KeychainState::Opening => return Err(RemoteCredentialError::Checking),
-            KeychainState::Available => {}
+            SecretsState::Unavailable(error) => return Err(error.clone()),
+            SecretsState::Opening => return Err(RemoteCredentialError::Checking),
+            SecretsState::Ready => {}
         }
         match os_address(locator).and_then(|address| self.presence.get(&address)) {
             Some(CredentialState::Present) => Ok(true),
             Some(CredentialState::Missing) => Ok(false),
-            Some(CredentialState::Locked) => Err(RemoteCredentialError::Locked),
             Some(CredentialState::StoreUnavailable) => Err(RemoteCredentialError::StoreUnavailable),
             Some(CredentialState::Checking) | None => Err(RemoteCredentialError::Checking),
         }

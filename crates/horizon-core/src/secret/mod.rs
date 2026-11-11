@@ -62,10 +62,10 @@ pub enum SecretKind {
     /// key of this Horizon home.
     MachineKey,
     /// The value under one credential reference of a remote browser provider, in
-    /// the OS credential store of this computer.
+    /// the secrets file of this computer.
     Credential,
-    /// The value of one named secret, in the OS credential store of this computer
-    /// under the reference `named/<NAME>`.
+    /// The value of one named secret, in the secrets file of this computer under
+    /// the id `named/<NAME>`.
     Named,
 }
 
@@ -214,7 +214,7 @@ pub enum SecretError {
     /// This computer has no place for this kind of value.
     #[error("{reason}")]
     Unsupported { reason: String },
-    /// A file or a credential store of this computer failed.
+    /// A file or a store of this computer failed.
     #[error("{reason}")]
     Unavailable { reason: String },
 }
@@ -237,7 +237,7 @@ impl SecretError {
 /// The two kinds live where the code of this computer already reads them, so a
 /// value that arrives from the server is used without another change: a machine
 /// key under `machine-keys/<name>` of the Horizon home, a credential value in the
-/// OS credential store under the reference of its provider.
+/// secrets file under the reference of its provider.
 pub trait SecretTarget: Send + Sync + fmt::Debug {
     /// The value of `id`, or `None` when this computer does not hold it.
     ///

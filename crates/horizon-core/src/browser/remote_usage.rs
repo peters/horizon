@@ -6,9 +6,8 @@ use std::time::{Duration, Instant};
 use horizon_browser::remote::{CredentialStoreKind, RemoteProviderProfile};
 
 use crate::remote_browser_credential::{
-    CredentialLocator, CredentialStores, CredentialWorkbench, KeyringCredentialStore, ProviderAuthorization,
-    RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore, StoreOpener,
-    resolve_authorization,
+    CredentialLocator, CredentialStores, CredentialWorkbench, ProviderAuthorization, RemoteCredentialError,
+    RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore, StoreOpener, resolve_authorization,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -63,7 +62,7 @@ impl ProviderUsageMonitor {
             .map_or(Duration::ZERO, |at| REFRESH_INTERVAL.saturating_sub(at.elapsed()))
     }
 
-    /// Called by active usage consumers. Network and OS-store reads run
+    /// Called by active usage consumers. Network and secrets-file reads run
     /// off the render thread. A changed profile drops results from the old binding.
     pub fn update(&mut self, profile: &RemoteProviderProfile, credentials: &CredentialWorkbench, force: bool) {
         self.poll(profile);
@@ -129,7 +128,8 @@ impl ProviderUsageMonitor {
 pub(super) struct PreparedUsage {
     profile: RemoteProviderProfile,
     memory: SessionCredentialStore,
-    keychain: Option<StoreOpener>,
+    /// The reader of the secrets file, opened on the thread that reads the value.
+    reader: Option<StoreOpener>,
 }
 
 impl PreparedUsage {
@@ -137,10 +137,11 @@ impl PreparedUsage {
         let mut snapshot = Self {
             profile: profile.clone(),
             memory: SessionCredentialStore::new(),
-            keychain: None,
+            reader: None,
         };
-        // Copy only this provider's in-memory credentials. OS-store access uses
-        // an independent connection on the worker, never the allocation store.
+        // Copy only this provider's in-memory credentials. A value of the secrets
+        // file is read through a connection of the worker, never the store that the
+        // settings window holds.
         for reference in profile.authentication.references() {
             let binding = profile
                 .credential_bindings
@@ -149,11 +150,8 @@ impl PreparedUsage {
             let store: &dyn RemoteCredentialStore = match binding.store {
                 CredentialStoreKind::Session => credentials.session_store(),
                 CredentialStoreKind::Environment => credentials.environment_store(),
-                CredentialStoreKind::OsKeychain => {
-                    snapshot.keychain = Some(Box::new(|| {
-                        KeyringCredentialStore::open()
-                            .map(|store| Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
-                    }));
+                CredentialStoreKind::File => {
+                    snapshot.reader = snapshot.reader.take().or_else(|| credentials.file_opener());
                     continue;
                 }
             };
@@ -175,14 +173,14 @@ impl PreparedUsage {
     }
 
     #[cfg(test)]
-    pub(super) fn with_keychain(mut self, opener: StoreOpener) -> Self {
-        self.keychain = Some(opener);
+    pub(super) fn with_reader(mut self, opener: StoreOpener) -> Self {
+        self.reader = Some(opener);
         self
     }
 
     pub(super) fn authorization(mut self) -> Result<ProviderAuthorization, UsageError> {
-        let keychain = self
-            .keychain
+        let reader = self
+            .reader
             .take()
             .map(|open| open())
             .transpose()
@@ -192,7 +190,7 @@ impl PreparedUsage {
             &CredentialStores {
                 session: &self.memory,
                 environment: None,
-                os_keychain: keychain.as_deref().map(|store| -> &dyn RemoteCredentialStore { store }),
+                secrets_file: reader.as_deref().map(|store| -> &dyn RemoteCredentialStore { store }),
             },
         )
         .map_err(|_| UsageError::Credentials)?

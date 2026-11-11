@@ -1,17 +1,17 @@
 //! The named secrets of this computer: the names that the settings hold, and the
-//! values that its credential store holds under `named/<NAME>`.
+//! values that its secrets file holds under `named/<NAME>`.
 //!
 //! The settings hold the names and nothing else, so no value is ever written into a
-//! settings document. A value lives in the credential store, sealed by the store of
-//! the operating system, and it leaves the store in exactly two ways: as the
+//! settings document. A value lives in the secrets file, which is `0600` in the
+//! `0700` home of this Horizon, and it leaves that file in exactly two ways: as the
 //! environment of an agent panel that this process starts, and as the body of a
 //! secret that the link to a Horizon server carries. Neither path writes it to a
-//! file, a log line or an error text.
+//! log line or an error text.
 //!
 //! The store is behind the sealed [`RemoteCredentialStore`] trait, so this module
-//! reads and writes values the same way through the OS store and through the
-//! in-memory store of a test. Every method here runs on a worker thread: a locked
-//! keychain or a D-Bus round trip never holds the UI thread.
+//! reads and writes values the same way through the file of this computer and
+//! through a store in memory in a test. Every method here runs on a worker thread:
+//! a disk read never holds the UI thread.
 
 use std::{
     collections::BTreeSet,
@@ -33,12 +33,12 @@ use crate::remote_browser_credential::{CredentialLocator, RemoteCredentialError,
 /// The prefix of the id of a named secret, as the server holds it.
 pub const NAMED_PREFIX: &str = "named/";
 
-/// The origin that the OS credential store keeps a named secret under. It is not
+/// The origin that the locator of a named secret names. It is not
 /// an endpoint of any provider, so a named secret and a provider credential never
 /// read each other's item.
 pub const NAMED_SECRET_ORIGIN: &str = "horizon:named";
 
-/// Where one named secret lives in the OS credential store: the reference
+/// Where one named secret lives in the secrets file: the id
 /// `named/<NAME>`, under an origin of Horizon's own.
 #[must_use]
 pub fn locator(name: &SecretName) -> CredentialLocator {
@@ -64,8 +64,8 @@ pub struct NamedSecretVault {
     /// The names that the settings list, and the names that the link learned from
     /// the server. Read by the UI for its list and by the link for its ids.
     names: RwLock<BTreeSet<SecretName>>,
-    /// The OS credential store, or nothing when this computer has none.
-    store: Option<Mutex<Box<dyn RemoteCredentialStore + Send>>>,
+    /// The secrets file of this computer.
+    store: Mutex<Box<dyn RemoteCredentialStore + Send>>,
     /// Counts the changes of the name list, so a reader asks the store again only
     /// when a name appeared or went, and never on every frame.
     names_changed: AtomicU64,
@@ -76,28 +76,21 @@ impl fmt::Debug for NamedSecretVault {
         formatter
             .debug_struct("NamedSecretVault")
             .field("names", &self.names())
-            .field("store", &self.store.is_some())
+            .field("store", &"a secrets file")
             .field("names_changed", &self.names_generation())
             .finish()
     }
 }
 
 impl NamedSecretVault {
-    /// The values of `store`. A computer without a credential store keeps its
-    /// names and holds no value, so a panel of that computer gets no named secret.
+    /// The names and the values of `store`.
     #[must_use]
-    pub fn new(store: Option<Box<dyn RemoteCredentialStore + Send>>) -> Self {
+    pub fn new(store: Box<dyn RemoteCredentialStore + Send>) -> Self {
         Self {
             names: RwLock::new(BTreeSet::new()),
-            store: store.map(Mutex::new),
+            store: Mutex::new(store),
             names_changed: AtomicU64::new(1),
         }
-    }
-
-    /// Whether this computer can keep a value at all.
-    #[must_use]
-    pub fn has_store(&self) -> bool {
-        self.store.is_some()
     }
 
     /// Replaces the list of names. A name that the rule refuses is dropped with
@@ -164,12 +157,9 @@ impl NamedSecretVault {
     /// The value of `name`, or `None` when this computer holds none.
     ///
     /// # Errors
-    /// A locked or unavailable store, or a store that failed.
+    /// The secrets file that cannot be read, or a store that failed.
     pub fn value(&self, name: &SecretName) -> Result<Option<Zeroizing<Vec<u8>>>, NamedSecretError> {
-        let Some(store) = self.store.as_ref() else {
-            return Ok(None);
-        };
-        let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+        let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
         match crate::secret::read_secret_value(store.as_ref(), &locator(name)) {
             Ok(value) => Ok(Some(value)),
             Err(RemoteCredentialError::Missing) => Ok(None),
@@ -180,12 +170,9 @@ impl NamedSecretVault {
     /// Whether this computer holds a value for `name`.
     ///
     /// # Errors
-    /// A locked or unavailable store, or a store that failed.
+    /// The secrets file that cannot be read, or a store that failed.
     pub fn contains(&self, name: &SecretName) -> Result<bool, NamedSecretError> {
-        let Some(store) = self.store.as_ref() else {
-            return Ok(false);
-        };
-        let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+        let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
         store
             .contains(&locator(name))
             .map_err(|error| map_store_error(name, &error))
@@ -199,11 +186,8 @@ impl NamedSecretVault {
     /// that failed.
     pub fn put(&self, name: &SecretName, value: &[u8]) -> Result<NamedSecretChange, NamedSecretError> {
         check_value(name, value)?;
-        let Some(store) = self.store.as_ref() else {
-            return Err(NamedSecretError::StoreUnavailable);
-        };
         {
-            let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
             store
                 .put(&locator(name), value)
                 .map_err(|error| map_store_error(name, &error))?;
@@ -220,10 +204,10 @@ impl NamedSecretVault {
     /// forgotten.
     ///
     /// # Errors
-    /// A locked or unavailable store, or a store that failed.
+    /// The secrets file that cannot be read, or a store that failed.
     pub fn remove(&self, name: &SecretName) -> Result<NamedSecretChange, NamedSecretError> {
-        if let Some(store) = self.store.as_ref() {
-            let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
+        {
+            let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
             store
                 .delete(&locator(name))
                 .map_err(|error| map_store_error(name, &error))?;
@@ -241,15 +225,9 @@ impl NamedSecretVault {
     /// names that this computer holds a value for.
     ///
     /// # Errors
-    /// A locked or unavailable store, or a store that failed. The published values
+    /// The secrets file that cannot be read, or a store that failed. The published values
     /// of the last successful read stay.
     pub fn refresh(&self) -> Result<Vec<SecretName>, NamedSecretError> {
-        if !self.has_store() {
-            // A computer without a credential store holds no value at all, so no
-            // panel of it gets one and the window says why.
-            environment::publish(std::collections::BTreeMap::new());
-            return Err(NamedSecretError::StoreUnavailable);
-        }
         let mut values = std::collections::BTreeMap::new();
         for name in self.names() {
             match self.value(&name) {
@@ -259,7 +237,7 @@ impl NamedSecretVault {
                     }
                 }
                 Ok(None) => {}
-                Err(error @ (NamedSecretError::Locked | NamedSecretError::StoreUnavailable)) => {
+                Err(error @ NamedSecretError::Unavailable { .. }) => {
                     environment::publish(values);
                     return Err(error);
                 }
@@ -283,11 +261,8 @@ impl NamedSecretVault {
     /// its value now.
     ///
     /// # Errors
-    /// A locked or unavailable store, or a store that failed.
+    /// The secrets file that cannot be read, or a store that failed.
     pub fn state(&self, name: &SecretName) -> Result<NamedSecretState, NamedSecretError> {
-        if !self.has_store() {
-            return Ok(NamedSecretState::StoreUnavailable);
-        }
         Ok(if self.contains(name)? {
             NamedSecretState::Present
         } else {

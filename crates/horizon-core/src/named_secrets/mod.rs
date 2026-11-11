@@ -4,9 +4,9 @@
 //! A tool that an agent starts often reads a key from the environment. A named
 //! secret is that key, kept once for the person instead of exported again in the
 //! shell of every computer. It has a name, which is an environment variable name,
-//! and a value. The name lives in the settings and the value lives in the OS
-//! credential store under the reference `named/<NAME>`, so no settings document
-//! ever holds a value.
+//! and a value. The name lives in the settings and the value lives in the one
+//! secrets file of this Horizon home under the id `named/<NAME>`, so no settings
+//! document ever holds a value.
 //!
 //! Where a value goes, and where it never goes:
 //!
@@ -32,16 +32,16 @@
 mod environment;
 mod name;
 mod store;
-mod test_file;
 mod workbench;
 
 pub use environment::{apply, publish, published_names};
 pub use name::{MAX_NAME_CHARS, NamedSecretError, SecretName, check_value, is_reserved};
 pub use store::{NAMED_PREFIX, NAMED_SECRET_ORIGIN, NamedSecretChange, NamedSecretVault, locator};
-pub use test_file::{TEST_FILE_ENV, TestFileNamedSecretStore};
 pub use workbench::NamedSecretWorkbench;
 
-use crate::remote_browser_credential::{KeyringCredentialStore, RemoteCredentialError, RemoteCredentialStore};
+use crate::HorizonHome;
+use crate::remote_browser_credential::{RemoteCredentialError, RemoteCredentialStore};
+use crate::secret_store::{SecretStore, UnreadableStore};
 
 /// The most named secrets that one computer keeps.
 pub const MAX_NAMED_SECRETS: usize = 64;
@@ -57,10 +57,8 @@ pub enum NamedSecretState {
     /// This computer holds no value, because the store refused it or because the
     /// value of the server has not arrived here yet.
     NoValue,
-    /// The OS credential store is locked.
-    Locked,
-    /// This computer has no OS credential store.
-    StoreUnavailable,
+    /// The secrets file of this computer cannot be read.
+    Unavailable,
     /// A read of the store is in flight.
     Checking,
 }
@@ -72,42 +70,30 @@ impl NamedSecretState {
         match self {
             Self::Present => "Stored on this computer",
             Self::NoValue => "no value on this computer",
-            Self::Locked => "The credential store of this computer is locked",
-            Self::StoreUnavailable => "This computer has no credential store",
+            Self::Unavailable => "The secrets file of this computer cannot be read",
             Self::Checking => "Checking this computer",
         }
     }
 }
 
-/// The store of the named secrets of this computer: the private file of an isolated
-/// smoke fixture when that fixture names one, otherwise the OS credential store.
+/// The store of the named secrets of this computer: the one secrets file of its
+/// Horizon home.
 ///
-/// It opens a credential store, so it runs on a worker thread and never on the UI
-/// thread.
+/// A file that cannot be opened is a fault of this computer, and the store that
+/// answers it says so with the path of the file, so the window and the link keep
+/// one code path.
+///
+/// It opens a file, so it runs on a worker thread and never on the UI thread.
 #[must_use]
-pub fn open_store() -> Option<Box<dyn RemoteCredentialStore + Send>> {
-    match TestFileNamedSecretStore::from_environment() {
-        Ok(Some(store)) => {
-            tracing::info!(
-                path = %store.path().display(),
-                "the named secrets of this run are in the file of the smoke fixture, and not in an OS credential store"
-            );
-            return Some(Box::new(store));
-        }
-        Ok(None) => {}
+pub fn open_store(home: &HorizonHome) -> Box<dyn RemoteCredentialStore + Send> {
+    match SecretStore::open(home.secrets_path()) {
+        Ok(store) => Box::new(store),
         Err(error) => {
-            tracing::warn!(%error, "the file of the named secrets of this run cannot be read");
-            return None;
-        }
-    }
-    match KeyringCredentialStore::open() {
-        Ok(store) => Some(Box::new(store)),
-        Err(error) => {
-            tracing::info!(
+            tracing::error!(
                 %error,
-                "this computer has no OS credential store, so it keeps no named secret"
+                "the secrets file of this computer cannot be opened, so it holds no named secret"
             );
-            None
+            Box::new(UnreadableStore::new(error))
         }
     }
 }
@@ -116,13 +102,12 @@ pub fn open_store() -> Option<Box<dyn RemoteCredentialStore + Send>> {
 /// shape that a store operation answers.
 pub(crate) fn map_store_error(name: &SecretName, error: &RemoteCredentialError) -> NamedSecretError {
     match error {
-        RemoteCredentialError::Locked => NamedSecretError::Locked,
-        RemoteCredentialError::StoreUnavailable => NamedSecretError::StoreUnavailable,
         RemoteCredentialError::InvalidValue | RemoteCredentialError::NotHeaderSafe => {
             NamedSecretError::InvalidValue { name: name.to_string() }
         }
-        RemoteCredentialError::Platform { kind } => NamedSecretError::Platform { kind },
-        _ => NamedSecretError::Platform { kind: "refused" },
+        other => NamedSecretError::Unavailable {
+            reason: other.to_string(),
+        },
     }
 }
 

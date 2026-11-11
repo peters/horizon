@@ -19,7 +19,7 @@ fn provider(endpoint: &str) -> RemoteProviderProfile {
     bindings.insert(
         CredentialReference::from("key"),
         CredentialBinding {
-            store: CredentialStoreKind::OsKeychain,
+            store: CredentialStoreKind::File,
             slot: Some("remote-browser/grid/key".to_string()),
         },
     );

@@ -181,8 +181,12 @@ impl RemoteAuthentication {
 pub enum CredentialStoreKind {
     /// Entered in Horizon, held in a scoped in-memory sink, discarded on exit.
     Session,
-    /// Persisted in the platform credential store under `slot`.
-    OsKeychain,
+    /// Persisted in the one secrets file of this Horizon home, under the reference
+    /// of the binding. `os_keychain` is the token that a settings file of an older
+    /// Horizon holds, when the value lived in the credential store of the
+    /// operating system, and it reads as this variant.
+    #[serde(rename = "secrets_file", alias = "os_keychain")]
+    File,
     /// Read at launch from the named process environment variable (`slot`).
     /// The value is copied into an in-memory sink.
     Environment,
@@ -193,7 +197,7 @@ pub enum CredentialStoreKind {
 #[serde(deny_unknown_fields)]
 pub struct CredentialBinding {
     pub store: CredentialStoreKind,
-    /// OS-store path, or the environment variable name when `store` is
+    /// The slot of an item, or the environment variable name when `store` is
     /// [`CredentialStoreKind::Environment`]. Never a secret value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
@@ -205,13 +209,13 @@ impl CredentialBinding {
     pub fn environment_variable(&self) -> Option<&str> {
         match self.store {
             CredentialStoreKind::Environment => self.slot.as_deref(),
-            CredentialStoreKind::Session | CredentialStoreKind::OsKeychain => None,
+            CredentialStoreKind::Session | CredentialStoreKind::File => None,
         }
     }
 
     fn problem(&self) -> Option<CredentialReferenceProblem> {
         match (self.store, self.slot.as_deref()) {
-            (CredentialStoreKind::OsKeychain | CredentialStoreKind::Environment, None) => {
+            (CredentialStoreKind::File | CredentialStoreKind::Environment, None) => {
                 Some(CredentialReferenceProblem::SlotRequired)
             }
             (CredentialStoreKind::Environment, Some(name)) if !valid_environment_variable(name) => {

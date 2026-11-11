@@ -42,7 +42,26 @@ fn sample_round_trips_and_canonicalizes_the_endpoint() {
     let encoded = serde_json::to_string(&config).expect("serializes");
     let decoded: RemoteBrowserConfig = serde_json::from_str(&encoded).expect("re-parses");
     assert_eq!(decoded, config);
-    assert!(!encoded.contains("secret"));
+    assert!(
+        encoded.contains(r#""store":"secrets_file""#),
+        "the sample of an older Horizon reads as the secrets file: {encoded}"
+    );
+    assert!(
+        encoded.contains("remote-browser/device-remote/username"),
+        "a binding keeps its slot: {encoded}"
+    );
+}
+
+#[test]
+fn the_token_of_an_older_settings_file_reads_as_the_secrets_file() {
+    let older: CredentialBinding =
+        serde_json::from_str(r#"{"store": "os_keychain", "slot": "remote-browser/device-remote/username"}"#)
+            .expect("the binding of an older Horizon");
+    assert_eq!(older.store, CredentialStoreKind::File);
+    assert_eq!(
+        serde_json::to_string(&older).expect("serializes"),
+        r#"{"store":"secrets_file","slot":"remote-browser/device-remote/username"}"#
+    );
 }
 
 #[test]
@@ -182,7 +201,7 @@ fn authentication_references_must_be_bound_exactly() {
         .insert(
             CredentialReference::from("remote-user"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: None,
             },
         );
@@ -206,7 +225,7 @@ fn malformed_present_bindings_fail_at_definition_time() {
         .insert(
             CredentialReference::from("remote-user"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: None,
             },
         );
@@ -486,7 +505,7 @@ fn portable_export_strips_bindings_and_reports_presence() {
     assert!(portable.validate().is_err(), "portable form has no bindings");
     let encoded = serde_json::to_string(&portable).expect("serializes");
     assert!(!encoded.contains("credential_bindings"));
-    assert!(!encoded.contains("os_keychain"));
+    assert!(!encoded.contains("secrets_file"));
     assert!(
         encoded.contains("remote-user"),
         "authentication references stay in the portable form"
@@ -628,7 +647,7 @@ fn duplicate_os_slots_on_one_origin_are_rejected_at_definition_time() {
         .insert(
             CredentialReference::from("remote-key"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some("remote-browser/device-remote/username".into()),
             },
         );

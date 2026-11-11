@@ -339,7 +339,7 @@ pub struct HorizonApp {
     settings_io: SettingsIo,
     /// A reload is in flight, so the window does not ask for another one.
     settings_reload_pending: bool,
-    /// Session-only and OS-store provider credentials for remote browser targets.
+    /// Session-only and file-backed provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     /// The named secrets of this computer: the names of the settings and the values
     /// that its credential store holds, read on a worker thread.

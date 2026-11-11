@@ -89,7 +89,7 @@ mod tests {
 
     use super::*;
     use crate::remote_browser_credential::{
-        CredentialLocator, FakeCredentialStore, RemoteCredentialError, RemoteCredentialStore, SessionCredentialStore,
+        CredentialLocator, RemoteCredentialError, RemoteCredentialStore, SessionCredentialStore,
     };
 
     fn config() -> RemoteBrowserConfig {
@@ -104,7 +104,7 @@ mod tests {
         bindings.insert(
             CredentialReference::from("key"),
             CredentialBinding {
-                store: CredentialStoreKind::OsKeychain,
+                store: CredentialStoreKind::File,
                 slot: Some("remote-browser/grid/key".into()),
             },
         );
@@ -164,11 +164,11 @@ mod tests {
         let config = config();
         let mut session = SessionCredentialStore::new();
         session.put(&locator(&config, "user"), b"alice").expect("user");
-        let mut keychain = FakeCredentialStore::new();
-        keychain.put(&locator(&config, "key"), b"s3cret").expect("key");
+        let mut file = crate::secret_store::SecretStore::in_memory().expect("a store in memory");
+        file.put(&locator(&config, "key"), b"s3cret").expect("key");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: Some(&keychain),
+            secrets_file: Some(&file),
             environment: None,
         };
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
@@ -216,11 +216,11 @@ mod tests {
         config.providers.get_mut("grid").expect("provider").adapter = RemoteAdapterKind::Browserstack;
         let mut session = SessionCredentialStore::new();
         session.put(&locator(&config, "user"), b"alice").expect("user");
-        let mut keychain = FakeCredentialStore::new();
-        keychain.put(&locator(&config, "key"), b"s3cret").expect("key");
+        let mut file = crate::secret_store::SecretStore::in_memory().expect("a store in memory");
+        file.put(&locator(&config, "key"), b"s3cret").expect("key");
         let stores = CredentialStores {
             session: &session,
-            os_keychain: Some(&keychain),
+            secrets_file: Some(&file),
             environment: None,
         };
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
@@ -256,7 +256,7 @@ mod tests {
         let session = SessionCredentialStore::new();
         let stores = CredentialStores {
             session: &session,
-            os_keychain: None,
+            secrets_file: None,
             environment: None,
         };
         assert_eq!(

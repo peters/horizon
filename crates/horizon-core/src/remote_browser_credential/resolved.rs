@@ -1,7 +1,7 @@
-//! The values a caller already read from the OS store, offered back as that
+//! The values a caller already read from the secrets file, offered back as that
 //! store. A request built from them takes the same path, and produces the same
 //! refusals, as one built from the store directly, without the caller taking
-//! the store mutex or asking the keychain on its own thread.
+//! the store mutex or reading the file on its own thread.
 
 use std::collections::BTreeMap;
 
@@ -10,10 +10,10 @@ use zeroize::Zeroizing;
 
 use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink};
 
-/// Values read from the OS store on the workbench thread, addressed by the
+/// Values read from the secrets file on the workbench thread, addressed by the
 /// reference they answer. A reference that was not read is missing here, and a
 /// value that cannot become part of a header fails at the sink, exactly as the
-/// value the OS store holds would. Every buffer is wiped when the store drops.
+/// value the file holds would. Every buffer is wiped when the store drops.
 #[derive(Default)]
 pub struct ReadCredentialStore {
     values: BTreeMap<CredentialReference, Zeroizing<Vec<u8>>>,
@@ -31,7 +31,7 @@ impl ReadCredentialStore {
     }
 
     /// Whether any value was read, so a caller that read none resolves the
-    /// request as a computer without an OS store does.
+    /// request as one with no value of the file does.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
@@ -42,7 +42,7 @@ impl Sealed for ReadCredentialStore {}
 
 impl RemoteCredentialStore for ReadCredentialStore {
     fn kind(&self) -> CredentialStoreKind {
-        CredentialStoreKind::OsKeychain
+        CredentialStoreKind::File
     }
 
     fn put(&mut self, _: &CredentialLocator, _: &[u8]) -> Result<(), RemoteCredentialError> {
@@ -74,7 +74,7 @@ mod tests {
     fn locator() -> CredentialLocator {
         let endpoint = ControlEndpoint::parse("https://grid.example.net/wd/hub").expect("endpoint");
         let binding = CredentialBinding {
-            store: CredentialStoreKind::OsKeychain,
+            store: CredentialStoreKind::File,
             slot: Some("remote-browser/grid/key".into()),
         };
         CredentialLocator::new(&endpoint, &CredentialReference::from("key"), &binding)

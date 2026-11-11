@@ -20,7 +20,7 @@ fn credential(reference: &str) -> CredentialLocator {
     let profile = (
         ControlEndpoint::parse("https://grid.example.net/wd/hub").expect("the endpoint"),
         CredentialBinding {
-            store: CredentialStoreKind::OsKeychain,
+            store: CredentialStoreKind::File,
             slot: Some(format!("remote-browser/{reference}")),
         },
     );

@@ -1,12 +1,13 @@
 //! The rules of a named secret: its name, its value, and what one computer keeps
-//! of it in the in-memory credential store.
+//! of it in a secrets file in memory.
 
 use std::sync::{Arc, Mutex};
 
 use super::super::{
     MAX_NAMED_SECRETS, MAX_VALUE_BYTES, NamedSecretError, NamedSecretState, NamedSecretVault, SecretName,
 };
-use crate::remote_browser_credential::{FakeCredentialStore, RemoteCredentialStore, SharedCredentialStore};
+use crate::remote_browser_credential::{RemoteCredentialError, SharedCredentialStore};
+use crate::secret_store::{SecretStore, UnreadableStore};
 
 const MARKER: &str = "MARKER-9c41-named-value";
 
@@ -28,9 +29,9 @@ fn held(vault: &NamedSecretVault, name: &SecretName) -> Vec<u8> {
         .to_vec()
 }
 
-fn vault() -> (NamedSecretVault, Arc<Mutex<FakeCredentialStore>>) {
-    let store = Arc::new(Mutex::new(FakeCredentialStore::new()));
-    let vault = NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(Arc::clone(&store)))));
+fn vault() -> (NamedSecretVault, Arc<Mutex<SecretStore>>) {
+    let store = Arc::new(Mutex::new(SecretStore::in_memory().expect("a store in memory")));
+    let vault = NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(&store))));
     (vault, store)
 }
 
@@ -151,13 +152,17 @@ fn a_value_is_stored_replaced_and_removed_through_the_vault() {
     assert!(change.stored);
     assert_eq!(vault.state(&token), Ok(NamedSecretState::Present));
     assert_eq!(held(&vault, &token), MARKER.as_bytes());
-    assert_eq!(store.lock().expect("the store").len(), 1, "one item of the store");
+    assert_eq!(
+        store.lock().expect("the store").ids().expect("the ids").len(),
+        1,
+        "one item of the store"
+    );
     assert_eq!(vault.local_ids(), vec!["named/HETZNER_TOKEN".to_owned()]);
 
     vault.put(&token, b"second-value").expect("the replacement");
     assert_eq!(held(&vault, &token), b"second-value");
     assert_eq!(
-        store.lock().expect("the store").len(),
+        store.lock().expect("the store").ids().expect("the ids").len(),
         1,
         "a replacement keeps one item"
     );
@@ -165,7 +170,10 @@ fn a_value_is_stored_replaced_and_removed_through_the_vault() {
     let removed = vault.remove(&token).expect("the removal");
     assert!(!removed.stored);
     assert_eq!(vault.state(&token), Ok(NamedSecretState::NoValue));
-    assert!(store.lock().expect("the store").is_empty(), "the item is gone");
+    assert!(
+        store.lock().expect("the store").ids().expect("the ids").is_empty(),
+        "the item is gone"
+    );
     assert!(vault.names().is_empty(), "the name goes with the value");
     // A name that this computer does not hold is already removed.
     vault.remove(&token).expect("a second removal");
@@ -233,7 +241,7 @@ fn a_refresh_reads_the_store_and_publishes_only_the_values_that_are_there() {
     store
         .lock()
         .expect("the store")
-        .put(&super::super::locator(&name("WITH_VALUE")), MARKER.as_bytes())
+        .write("named/WITH_VALUE", MARKER.as_bytes())
         .expect("the value");
 
     let present = vault.refresh().expect("the refresh");
@@ -243,34 +251,27 @@ fn a_refresh_reads_the_store_and_publishes_only_the_values_that_are_there() {
 }
 
 #[test]
-fn a_computer_without_a_credential_store_holds_its_names_and_no_value() {
+fn a_secrets_file_that_cannot_be_read_is_one_typed_refusal_and_no_value() {
     let _exclusive = exclusive();
-    let vault = NamedSecretVault::new(None);
+    let vault = NamedSecretVault::new(Box::new(UnreadableStore::new(RemoteCredentialError::File {
+        path: std::path::PathBuf::from("/home/person/.horizon/secrets.sqlite"),
+        reason: "it is a directory".to_owned(),
+    })));
     let token = name("HETZNER_TOKEN");
     vault.set_names(["HETZNER_TOKEN".to_owned()]);
-    assert!(!vault.has_store());
-    assert_eq!(vault.value(&token), Ok(None));
-    assert_eq!(
-        vault.put(&token, MARKER.as_bytes()),
-        Err(NamedSecretError::StoreUnavailable)
+    assert!(
+        matches!(vault.value(&token), Err(NamedSecretError::Unavailable { .. })),
+        "a file that cannot be read is a refusal and not a value"
     );
-    assert_eq!(vault.state(&token), Ok(NamedSecretState::StoreUnavailable));
-    assert_eq!(vault.refresh(), Err(NamedSecretError::StoreUnavailable));
+    let refused = vault.put(&token, MARKER.as_bytes()).expect_err("the file");
+    assert_eq!(refused.code(), "secret_store_unavailable");
+    assert!(
+        refused.to_string().contains("secrets.sqlite"),
+        "the refusal names the file: {refused}"
+    );
+    assert!(matches!(vault.state(&token), Err(NamedSecretError::Unavailable { .. })));
+    assert!(matches!(vault.refresh(), Err(NamedSecretError::Unavailable { .. })));
     assert!(vault.local_ids().is_empty(), "no value, so no secret travels");
-}
-
-#[test]
-fn a_locked_store_is_a_typed_refusal_and_never_a_value() {
-    let _exclusive = exclusive();
-    let store = Arc::new(Mutex::new(FakeCredentialStore::new()));
-    store.lock().expect("the store").lock();
-    let vault = NamedSecretVault::new(Some(Box::new(SharedCredentialStore::new(Arc::clone(&store)))));
-    let token = name("HETZNER_TOKEN");
-    vault.set_names(["HETZNER_TOKEN".to_owned()]);
-    assert_eq!(vault.put(&token, MARKER.as_bytes()), Err(NamedSecretError::Locked));
-    assert_eq!(vault.value(&token), Err(NamedSecretError::Locked));
-    assert_eq!(vault.state(&token), Err(NamedSecretError::Locked));
-    assert_eq!(NamedSecretError::Locked.code(), "secret_store_locked");
 }
 
 #[test]
