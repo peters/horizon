@@ -335,7 +335,9 @@ fn render_portable_section(ui: &mut Ui, config: &mut Config, portable: &mut Port
             } else {
                 theme::PALETTE_GREEN()
             };
-            ui.label(egui::RichText::new(text).color(color).size(12.0));
+            // An outcome names a path, and a path is as long as the person made
+            // it: it wraps inside the panel instead of widening it.
+            ui.add(egui::Label::new(egui::RichText::new(text).color(color).size(12.0)).wrap());
         }
     });
     changed
@@ -452,20 +454,28 @@ fn render_reference(
     let (reference, store, state) = (&entry.reference, entry.store, entry.state);
     let bound = profile.credential_bindings.contains_key(reference);
     let key = InputKey::new(provider, profile, reference);
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(reference.as_str())
-                .color(theme::FG())
-                .size(12.0)
-                .strong(),
+    // A long reference is cut inside its row, so the row never widens the panel
+    // beside the canvas.
+    ui.horizontal_wrapped(|ui| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(reference.as_str())
+                    .color(theme::FG())
+                    .size(12.0)
+                    .strong(),
+            )
+            .truncate(),
         );
-        ui.label(
-            egui::RichText::new(store_label(store, bound))
-                .color(theme::FG_DIM())
-                .size(11.0),
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(store_label(store, bound))
+                    .color(theme::FG_DIM())
+                    .size(11.0),
+            )
+            .truncate(),
         );
         let (state_text, color) = state_badge(state);
-        ui.label(egui::RichText::new(state_text).color(color).size(11.0));
+        ui.add(egui::Label::new(egui::RichText::new(state_text).color(color).size(11.0)).truncate());
     });
     if !bound {
         // An imported profile arrives without bindings: choose where this

@@ -165,16 +165,20 @@ fn render_names(
     let mut delete = None;
     let mut replace = None;
     for (_, name) in names {
-        // A name that the rule refuses has no row here.
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(name.as_str())
-                    .color(theme::FG())
-                    .size(12.0)
-                    .strong(),
+        // A name that the rule refuses has no row here. A long name is cut inside
+        // the row, so the row never widens the panel beside the canvas.
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(name.as_str())
+                        .color(theme::FG())
+                        .size(12.0)
+                        .strong(),
+                )
+                .truncate(),
             );
             let (text, color) = state_label(workbench.state_of(name.as_str()));
-            ui.label(egui::RichText::new(text).color(color).size(11.0));
+            ui.add(egui::Label::new(egui::RichText::new(text).color(color).size(11.0)).truncate());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Delete").clicked() {
                     delete = Some(name.clone());

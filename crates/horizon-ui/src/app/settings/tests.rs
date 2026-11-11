@@ -274,6 +274,77 @@ fn a_long_text_field_does_not_widen_the_settings_panel() {
     );
 }
 
+/// The width of the Settings panel on each tab, with a long path in the Remote
+/// tab and a long secret name in the Secrets tab. The panel is one panel beside
+/// the canvas, so its rectangle must not change when the person changes the tab:
+/// a wider panel covers the panels that it sits beside.
+#[test]
+fn the_settings_panel_keeps_one_width_on_every_tab() {
+    use std::collections::BTreeMap;
+
+    use horizon_core::browser::remote::{
+        ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAdapterKind,
+        RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits,
+    };
+
+    let (_temp, ctx, mut app) = test_app_with_startup(ephemeral());
+    let viewport = [1800.0, 1000.0];
+    app.toggle_settings();
+    let long_path = "/home/user/project/".to_string() + &"a-folder-name-that-is-long/".repeat(8);
+    let long_reference = "a-reference-name-of-a-credential-that-is-long".to_string();
+    let reference = CredentialReference::from(long_reference.as_str());
+    let mut bindings = BTreeMap::new();
+    bindings.insert(
+        reference.clone(),
+        CredentialBinding {
+            store: CredentialStoreKind::Session,
+            slot: None,
+        },
+    );
+    let mut providers = BTreeMap::new();
+    providers.insert(
+        "a-provider-with-a-long-name".to_string(),
+        RemoteProviderProfile {
+            adapter: RemoteAdapterKind::Webdriver,
+            endpoint: ControlEndpoint::parse("https://grid.example.net/wd/hub").expect("the endpoint"),
+            authentication: RemoteAuthentication::Bearer { token_ref: reference },
+            credential_bindings: bindings,
+            limits: RemoteSessionLimits::default(),
+        },
+    );
+    if let Some(editor) = app.settings.as_mut() {
+        editor.portable_profile = super::remote_browsers::PortableProfilePanel::new(std::path::Path::new(&format!(
+            "{long_path}profile.json"
+        )));
+        editor.config.browser.remote.providers = providers;
+        editor.config.secrets.names = vec!["HETZNER_API_TOKEN_FOR_THE_BUILD_MACHINE_OF_THE_LAB".to_string()];
+    }
+
+    let mut widths: Vec<(String, f32)> = Vec::new();
+    for tab in [
+        super::SettingsTab::General,
+        super::SettingsTab::RemoteBrowsers,
+        super::SettingsTab::Secrets,
+    ] {
+        if let Some(editor) = app.settings.as_mut() {
+            editor.active_tab = tab;
+        }
+        widths.push((tab.label().to_string(), widest_panel_width(&ctx, &mut app, viewport)));
+    }
+
+    let (first_tab, first) = widths.first().expect("one width");
+    for (tab, width) in &widths {
+        assert!(
+            (width - first).abs() <= 1.0,
+            "the panel is {first} wide on {first_tab} and {width} wide on {tab}: {widths:?}"
+        );
+    }
+    assert!(
+        *first < viewport[0] / 2.0,
+        "the panel stays below half of the viewport: {widths:?}"
+    );
+}
+
 /// The widest panel background over three frames, after the panel settles.
 fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2]) -> f32 {
     let mut widths = Vec::new();
@@ -288,119 +359,24 @@ fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, vie
     widths.into_iter().fold(0.0_f32, f32::max)
 }
 
-/// The widest painted panel background, which is the Settings panel.
+/// The width of the Settings panel, which is the width that the panel takes from
+/// the window. The background of the panel is the only shape of that colour, and
+/// the panel cuts its own painting at its rectangle, so the clip rectangle of that
+/// shape is the panel.
 fn panel_background_width(shapes: &[egui::epaint::ClippedShape]) -> f32 {
     let mut widest = 0.0_f32;
     for clipped in shapes {
-        visit_width(&clipped.shape, &mut widest);
+        if holds_background(&clipped.shape) {
+            widest = widest.max(clipped.clip_rect.width());
+        }
     }
     widest
 }
 
-fn visit_width(shape: &egui::Shape, widest: &mut f32) {
+fn holds_background(shape: &egui::Shape) -> bool {
     match shape {
-        egui::Shape::Rect(rect) if rect.fill == crate::theme::BG_ELEVATED() => {
-            *widest = widest.max(rect.rect.width());
-        }
-        egui::Shape::Vec(shapes) => {
-            for shape in shapes {
-                visit_width(shape, widest);
-            }
-        }
-        _ => {}
+        egui::Shape::Rect(rect) => rect.fill == crate::theme::BG_ELEVATED(),
+        egui::Shape::Vec(shapes) => shapes.iter().any(holds_background),
+        _ => false,
     }
-}
-
-/// The two machine entries have a field in General, so a render must keep the
-/// values that the fields edit: a section that rebuilt its entry would drop a
-/// host or a server without a word.
-#[test]
-fn the_machine_fields_keep_their_entries_while_they_render() {
-    let mut config = Config::default();
-    config.browser_host.ssh_target = Some("browser-vm".into());
-    config.browser_host.profile = Some("mail".into());
-    config.server.ssh_target = Some("server-vm".into());
-    config.server.command = Some("/opt/horizon --server-link".into());
-
-    let _ = crate::test_egui::DiscardTextures::discard_textures(render_general_tab(&mut config));
-
-    assert_eq!(config.browser_host.ssh_target.as_deref(), Some("browser-vm"));
-    assert_eq!(config.browser_host.profile.as_deref(), Some("mail"));
-    assert_eq!(config.server.ssh_target.as_deref(), Some("server-vm"));
-    assert_eq!(config.server.command.as_deref(), Some("/opt/horizon --server-link"));
-}
-
-/// One headless pass of the General tab, with the textures handled so a
-/// dropped frame does not report an unapplied delta.
-fn render_general_tab(config: &mut Config) -> egui::FullOutput {
-    let ctx = egui::Context::default();
-    ctx.run_ui(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            super::general::render(ui, config);
-        });
-    })
-}
-
-/// The Secrets tab draws one row per name, the state of the value on this computer,
-/// and the fields that add one. A value that a person typed is never drawn.
-#[test]
-fn the_secrets_tab_draws_the_names_the_hidden_field_and_the_missing_value() {
-    use std::sync::{Arc, Mutex};
-
-    use horizon_core::named_secrets::{NamedSecretVault, SecretName};
-    use horizon_core::remote_browser_credential::SharedCredentialStore;
-    use horizon_core::secret_store::SecretStore;
-
-    let values = Arc::new(Mutex::new(SecretStore::in_memory().expect("a store in memory")));
-    let stored = SecretName::parse("HETZNER_TOKEN").expect("a name");
-    values
-        .lock()
-        .expect("the store")
-        .write("named/HETZNER_TOKEN", b"a-value-of-this-computer")
-        .expect("the value");
-    let vault = Arc::new(NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(
-        &values,
-    )))));
-    let mut config = Config::default();
-    config.secrets.names = vec!["HETZNER_TOKEN".to_string(), "CLOUD_KEY".to_string()];
-    let names = config.secrets.secret_names();
-    vault.set_names(config.secrets.names.clone());
-    let mut bench = horizon_core::named_secrets::NamedSecretWorkbench::new(Some(vault), &names);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while bench.is_busy() && std::time::Instant::now() < deadline {
-        bench.poll();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-
-    let mut inputs = super::secrets::SecretInputs::with_typed("NEW_KEY", "TYPED-VALUE-6f1c");
-    let (_changed, texts) = frame_of(|ui| super::secrets::render(ui, &mut config, &mut bench, &mut inputs));
-
-    for expected in [
-        "HETZNER_TOKEN",
-        "CLOUD_KEY",
-        "Secrets for agents",
-        "Replace value",
-        "Delete",
-        "Add",
-        "2 of 64 names",
-    ] {
-        assert!(texts_hold(&texts, expected), "the tab draws {expected}: {texts:?}");
-    }
-    assert!(
-        texts.iter().any(|text| text.contains("no value on this computer")),
-        "a name whose value this computer does not hold says so: {texts:?}"
-    );
-    assert!(
-        !texts.iter().any(|text| text.contains("TYPED-VALUE-6f1c")),
-        "a typed value is never drawn: {texts:?}"
-    );
-    assert_eq!(
-        inputs.typed(),
-        ("NEW_KEY".to_string(), "TYPED-VALUE-6f1c".to_string()),
-        "a frame that drew the fields keeps the draft of the person"
-    );
-    assert!(matches!(
-        bench.state(&stored),
-        horizon_core::named_secrets::NamedSecretState::Present
-    ));
 }

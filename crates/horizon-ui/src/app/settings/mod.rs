@@ -360,9 +360,12 @@ fn render_settings_panel(
     let default_width = settings_panel_default_width(viewport_width);
 
     egui::Panel::right(SETTINGS_PANEL_ID)
-        .default_size(default_width)
-        .min_size(viewport_width * 0.15)
-        .max_size(viewport_width * 0.5)
+        // One width for every tab, and the same width that the panel opens with.
+        // A right panel takes the width of its widest child, so a tab with a long
+        // path or a long secret name would widen the panel, and its own left edge
+        // would move as the person changes the tab. The content wraps, scrolls or
+        // is cut inside this width instead.
+        .exact_size(default_width)
         .frame(
             egui::Frame::default()
                 .fill(theme::BG_ELEVATED())
@@ -417,23 +420,30 @@ fn render_tab(
     egui::ScrollArea::vertical()
         .max_height(available.y)
         .auto_shrink([false, false])
-        .show(ui, |ui| match active_tab {
-            SettingsTab::General => general::render(ui, config),
-            SettingsTab::Shortcuts => shortcuts::render(ui, config),
-            SettingsTab::Presets => presets::render(ui, config),
-            SettingsTab::Browser => browser::render(ui, config),
-            SettingsTab::RemoteBrowsers => {
-                remote_recovery::render(ui, allocations);
-                remote_browsers::render(
-                    ui,
-                    config,
-                    credentials,
-                    credential_inputs,
-                    portable_profile,
-                    provider_usage,
-                )
+        .show(ui, |ui| {
+            // The width that the scroll area gives is the width of the panel, with
+            // the scroll bar taken out. A tab that sized itself from the width
+            // before the bar would be wider than the panel, and the panel would
+            // take the width of its widest tab.
+            ui.set_width(ui.available_width());
+            match active_tab {
+                SettingsTab::General => general::render(ui, config),
+                SettingsTab::Shortcuts => shortcuts::render(ui, config),
+                SettingsTab::Presets => presets::render(ui, config),
+                SettingsTab::Browser => browser::render(ui, config),
+                SettingsTab::RemoteBrowsers => {
+                    remote_recovery::render(ui, allocations);
+                    remote_browsers::render(
+                        ui,
+                        config,
+                        credentials,
+                        credential_inputs,
+                        portable_profile,
+                        provider_usage,
+                    )
+                }
+                SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),
             }
-            SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),
         })
         .inner
 }
