@@ -62,6 +62,26 @@ struct State {
     /// The writes and removals of a lease, in the order the window sent them, with
     /// the answer of each one.
     leases: VecDeque<(LeaseWrite, Sender<Result<(), String>>)>,
+    /// The jobs on the recovery notices, in the order the window sent them, with
+    /// the answer of each one.
+    notices: VecDeque<(NoticeWrite, Sender<NoticeAnswer>)>,
+}
+
+/// The answer of one job on the recovery notices: the notices as text for a
+/// read, and `None` for a write.
+type NoticeAnswer = std::result::Result<Option<String>, String>;
+
+/// One job on the recovery notices of saved conversations. Each syncs the
+/// folders of the notices, so the session writer runs them and a frame never
+/// waits for the disk.
+#[derive(Clone, Debug)]
+pub(in crate::session_store) enum NoticeWrite {
+    /// Writes a notice that a person must read before it can be cleared.
+    Save(Box<crate::session_store::SessionDeletionNotice>),
+    /// Removes the notice that a person reviewed.
+    Acknowledge(String),
+    /// Reads the notices of this profile.
+    Read,
 }
 
 /// One write of the lease of a session, which the session writer runs.
@@ -77,6 +97,7 @@ enum Job {
     Index(IndexChange),
     Board(String, Box<Queued>),
     Lease(LeaseWrite, Sender<Result<(), String>>),
+    Notice(NoticeWrite, Sender<NoticeAnswer>),
 }
 
 struct Failure {
@@ -103,6 +124,7 @@ impl State {
         self.writing.is_some()
             || self.index.pending()
             || !self.leases.is_empty()
+            || !self.notices.is_empty()
             || self.queued.values().any(|queued| queued.retry.is_none())
     }
 }
@@ -166,6 +188,19 @@ impl Writer {
         let (answers, answer) = std::sync::mpsc::channel();
         let mut state = self.lock();
         state.leases.push_back((write, answers));
+        self.start(&mut state, store);
+        drop(state);
+        self.shared.changed.notify_all();
+        answer
+    }
+
+    /// Queues one job on the recovery notices; a worker of `store` runs it in
+    /// the order the window sent it, and answers it through the returned
+    /// receiver. A read answers the notices as text.
+    pub(super) fn queue_notice(&self, store: &SessionStore, write: NoticeWrite) -> Receiver<NoticeAnswer> {
+        let (answers, answer) = std::sync::mpsc::channel();
+        let mut state = self.lock();
+        state.notices.push_back((write, answers));
         self.start(&mut state, store);
         drop(state);
         self.shared.changed.notify_all();
@@ -360,6 +395,22 @@ impl Writer {
                     self.shared.changed.notify_all();
                     continue;
                 }
+                Some(Job::Notice(write, answers)) => {
+                    let answer = match &write {
+                        NoticeWrite::Save(notice) => store.save_session_deletion_notice(notice).map(|()| None),
+                        NoticeWrite::Acknowledge(expected) => {
+                            store.acknowledge_session_deletion_notice(expected).map(|()| None)
+                        }
+                        NoticeWrite::Read => store.saved_session_deletion_notice(),
+                    }
+                    .map_err(|error| error.to_string());
+                    if let Err(reason) = &answer {
+                        tracing::warn!(?write, %reason, "a notice of a saved conversation was not written");
+                    }
+                    let _ = answers.send(answer);
+                    self.shared.changed.notify_all();
+                    continue;
+                }
             };
             // Index changes queued before this board are written with it, so it never overtakes them.
             let ahead = self.lock().index.ahead_of(queued.generation);
@@ -406,6 +457,9 @@ impl Writer {
             let now = Instant::now();
             if let Some((write, answers)) = state.leases.pop_front() {
                 return Some(Job::Lease(write, answers));
+            }
+            if let Some((write, answers)) = state.notices.pop_front() {
+                return Some(Job::Notice(write, answers));
             }
             let due = (state.queued.iter())
                 .filter(|(session_id, _)| !state.direct.contains(*session_id))

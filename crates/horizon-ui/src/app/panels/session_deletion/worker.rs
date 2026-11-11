@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread::JoinHandle;
 
 use horizon_core::{AgentSessionBinding, AgentSessionDeletionReport, SessionDeletionNotice};
@@ -12,12 +13,40 @@ pub(in crate::app) struct SavedSessionDeletionState {
     notice: Option<String>,
     persisted_notice: Option<String>,
     unsaved_notices: Vec<SessionDeletionNotice>,
+    /// The jobs on the recovery notices that the session writer runs, in the
+    /// order that the frame sent them.
+    notices: Vec<NoticeJob>,
+}
+
+/// One job on the recovery notices, and the answer that the session writer gives.
+enum NoticeJob {
+    Read(Receiver<Result<Option<String>, String>>),
+    Save(Receiver<Result<Option<String>, String>>),
+    Acknowledge {
+        receiver: Receiver<Result<Option<String>, String>>,
+        expected: String,
+    },
 }
 
 pub(super) struct DeletionWorker {
     pub(super) handle: JoinHandle<()>,
     pub(super) context: egui::Context,
     pub(super) sessions: Arc<[AgentSessionBinding]>,
+}
+
+impl NoticeJob {
+    /// The answer of this job, if the session writer gave one. `None` while the
+    /// job runs.
+    fn poll(&mut self) -> Option<Result<Option<String>, String>> {
+        let receiver = match self {
+            Self::Read(receiver) | Self::Save(receiver) | Self::Acknowledge { receiver, .. } => receiver,
+        };
+        match receiver.try_recv() {
+            Ok(answer) => Some(answer),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err("the session writer stopped before it answered".to_owned())),
+        }
+    }
 }
 
 impl SavedSessionDeletionState {
@@ -27,20 +56,79 @@ impl SavedSessionDeletionState {
 }
 
 impl HorizonApp {
+    /// Asks the session writer for the notices of this profile. Each notice
+    /// file and each folder of it is synced, so no frame reads it.
     pub(in crate::app) fn restore_saved_session_deletion_notice(&mut self) {
-        // The read of the notices of this profile is the second half of F8: the
-        // notices move to the session writer with the lease, in the change that
-        // takes the frame off the session store.
-        let _accepted =
-            horizon_core::ui_thread::exception("part 2: F8 the notice of a saved conversation is read on the frame");
-        match self.session_store.saved_session_deletion_notice() {
-            Ok(notice) => {
+        let receiver = self.session_store.saved_session_deletion_notice_queued();
+        self.saved_session_deletion.notices.push(NoticeJob::Read(receiver));
+    }
+
+    /// Applies the answers of the notice jobs that the session writer gave, in
+    /// the order that the frame asked for them.
+    pub(in crate::app) fn poll_deletion_notice_answers(&mut self) {
+        loop {
+            let Some(job) = self.saved_session_deletion.notices.first_mut() else {
+                return;
+            };
+            let Some(answer) = job.poll() else {
+                return;
+            };
+            let job = self.saved_session_deletion.notices.remove(0);
+            self.apply_notice_answer(job, answer);
+        }
+    }
+
+    /// Applies the answers of the notice jobs that the session writer gives, for
+    /// a test that judges a notice right after the frame that asked for it.
+    #[cfg(test)]
+    pub(in crate::app) fn settle_deletion_notice_answers(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            self.poll_deletion_notice_answers();
+            if self.saved_session_deletion.notices.is_empty() {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the session writer did not answer a job on the notices"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    fn apply_notice_answer(&mut self, job: NoticeJob, answer: Result<Option<String>, String>) {
+        match (job, answer) {
+            (NoticeJob::Read(_), Ok(notice)) => {
                 self.saved_session_deletion.persisted_notice = notice;
                 self.refresh_deletion_notice(None);
             }
-            Err(error) => self.refresh_deletion_notice(Some(format!(
+            (NoticeJob::Read(_), Err(error)) => self.refresh_deletion_notice(Some(format!(
                 "Could not read saved conversation recovery information: {error}"
             ))),
+            (NoticeJob::Save(_), Ok(_)) => {
+                if let Some(pending) = self.saved_session_deletion.unsaved_notices.first().cloned() {
+                    self.saved_session_deletion.unsaved_notices.remove(0);
+                    self.saved_session_deletion.persisted_notice =
+                        Some(self.saved_session_deletion.persisted_notice.as_ref().map_or_else(
+                            || pending.text().to_owned(),
+                            |previous| format!("{previous}\n\n{}", pending.text()),
+                        ));
+                    self.refresh_deletion_notice(None);
+                }
+            }
+            (NoticeJob::Save(_), Err(error)) => self.refresh_deletion_notice(Some(format!(
+                "Could not save this notice: {error}. Keep these recovery paths before closing."
+            ))),
+            (NoticeJob::Acknowledge { expected, .. }, Ok(_)) => {
+                self.saved_session_deletion.persisted_notice = None;
+                self.refresh_deletion_notice(None);
+                self.restore_saved_session_deletion_notice();
+                let _ = expected;
+            }
+            (NoticeJob::Acknowledge { expected, .. }, Err(error)) => {
+                self.saved_session_deletion.persisted_notice = Some(expected);
+                self.refresh_deletion_notice(Some(format!("Could not acknowledge recovery information: {error}")));
+            }
         }
     }
 
@@ -140,21 +228,25 @@ impl HorizonApp {
         self.saved_session_deletion
             .unsaved_notices
             .push(SessionDeletionNotice::new(notice));
-        while let Some(pending) = self.saved_session_deletion.unsaved_notices.first() {
-            if let Err(error) = self.session_store.save_session_deletion_notice(pending) {
-                self.refresh_deletion_notice(Some(format!(
-                    "Could not save this notice: {error}. Keep these recovery paths before closing."
-                )));
-                return;
-            }
-            self.saved_session_deletion.persisted_notice =
-                Some(self.saved_session_deletion.persisted_notice.as_ref().map_or_else(
-                    || pending.text().to_owned(),
-                    |previous| format!("{previous}\n\n{}", pending.text()),
-                ));
-            self.saved_session_deletion.unsaved_notices.remove(0);
+        self.queue_pending_notice_saves();
+        self.refresh_deletion_notice(None);
+    }
+
+    /// Queues the save of every notice that has no save in flight, in order. A
+    /// save that failed keeps its notice, so a later notice of the same frame
+    /// tries again.
+    fn queue_pending_notice_saves(&mut self) {
+        let queued = self
+            .saved_session_deletion
+            .notices
+            .iter()
+            .filter(|job| matches!(job, NoticeJob::Save(_)))
+            .count();
+        let unsaved = self.saved_session_deletion.unsaved_notices.clone();
+        for notice in unsaved.into_iter().skip(queued) {
+            let receiver = self.session_store.save_session_deletion_notice_queued(&notice);
+            self.saved_session_deletion.notices.push(NoticeJob::Save(receiver));
         }
-        self.restore_saved_session_deletion_notice();
     }
 
     pub(in crate::app) fn render_saved_session_deletion_notice(&mut self, ctx: &egui::Context) {
@@ -177,19 +269,16 @@ impl HorizonApp {
             })
             .inner;
         if acknowledged {
-            if let Some(expected) = &self.saved_session_deletion.persisted_notice
-                && let Err(error) = self.session_store.acknowledge_session_deletion_notice(expected)
-            {
-                if matches!(error, horizon_core::Error::State(_)) {
-                    self.restore_saved_session_deletion_notice();
-                }
-                self.refresh_deletion_notice(Some(format!("Could not acknowledge recovery information: {error}")));
+            let Some(expected) = self.saved_session_deletion.persisted_notice.clone() else {
+                self.saved_session_deletion.notice = None;
                 return;
-            }
+            };
+            let receiver = self.session_store.acknowledge_session_deletion_notice_queued(&expected);
+            self.saved_session_deletion
+                .notices
+                .push(NoticeJob::Acknowledge { receiver, expected });
             self.saved_session_deletion.unsaved_notices.clear();
             self.saved_session_deletion.notice = None;
-            self.saved_session_deletion.persisted_notice = None;
-            self.restore_saved_session_deletion_notice();
         }
     }
 }
@@ -330,6 +419,7 @@ mod tests {
         });
         app.run_exit_cleanup();
         sender.join().expect("sender");
+        app.settle_deletion_notice_answers();
         assert!(!app.saved_session_deletion_is_running());
         assert!(app.saved_session_deletion.has_notice());
         assert_eq!(
@@ -362,8 +452,10 @@ mod tests {
             ..Default::default()
         };
         app.retain_saved_session_deletion_notice(&report);
+        app.settle_deletion_notice_answers();
         app.saved_session_deletion = SavedSessionDeletionState::default();
         app.restore_saved_session_deletion_notice();
+        app.settle_deletion_notice_answers();
         assert!(
             app.saved_session_deletion
                 .notice
@@ -381,8 +473,10 @@ mod tests {
         std::fs::create_dir_all(blocked.parent().expect("parent")).expect("runtime");
         std::fs::write(&blocked, "block directory creation").expect("block");
         app.retain_deletion_notice("First path: /synthetic/first");
+        app.settle_deletion_notice_answers();
         assert_eq!(app.saved_session_deletion.unsaved_notices.len(), 1);
         app.restore_saved_session_deletion_notice();
+        app.settle_deletion_notice_answers();
         assert!(
             app.saved_session_deletion
                 .notice
@@ -392,6 +486,7 @@ mod tests {
         );
         std::fs::remove_file(blocked).expect("repair");
         app.retain_deletion_notice("Second path: /synthetic/second");
+        app.settle_deletion_notice_answers();
         assert!(app.saved_session_deletion.unsaved_notices.is_empty());
         let saved = app
             .session_store
@@ -402,6 +497,7 @@ mod tests {
         assert_eq!(saved.matches("/synthetic/second").count(), 1);
         assert!(!saved.contains("Could not"));
         app.retain_deletion_notice("Third path: /synthetic/third");
+        app.settle_deletion_notice_answers();
         let saved = app
             .session_store
             .saved_session_deletion_notice()
@@ -420,6 +516,7 @@ mod tests {
             .expect("published before reported sync error");
         app.saved_session_deletion.unsaved_notices.push(pending);
         app.retain_deletion_notice("Second path: /synthetic/second");
+        app.settle_deletion_notice_answers();
         assert!(app.saved_session_deletion.unsaved_notices.is_empty());
         let saved = app
             .session_store

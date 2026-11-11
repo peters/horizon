@@ -450,6 +450,9 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn poll_saved_session_deletion(&mut self, ctx: &egui::Context) {
+        // The session writer answers the reads and writes of the notices of
+        // saved conversations, in the order that the frame asked for them.
+        self.poll_deletion_notice_answers();
         if !self.join_finished_saved_session_deletion() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
             return;

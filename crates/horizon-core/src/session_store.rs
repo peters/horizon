@@ -397,6 +397,38 @@ impl SessionStore {
         self.writer.pending()
     }
 
+    /// Reads the recovery notices of this profile on the session writer thread.
+    ///
+    /// The answer arrives through the receiver, so a frame never waits for the
+    /// folders of the notices.
+    #[must_use]
+    pub fn saved_session_deletion_notice_queued(
+        &self,
+    ) -> std::sync::mpsc::Receiver<std::result::Result<Option<String>, String>> {
+        self.writer.queue_notice(self, writer::NoticeWrite::Read)
+    }
+
+    /// Saves a recovery notice on the session writer thread, which syncs every
+    /// folder of the notice.
+    #[must_use]
+    pub fn save_session_deletion_notice_queued(
+        &self,
+        notice: &SessionDeletionNotice,
+    ) -> std::sync::mpsc::Receiver<std::result::Result<Option<String>, String>> {
+        self.writer
+            .queue_notice(self, writer::NoticeWrite::Save(Box::new(notice.clone())))
+    }
+
+    /// Removes the notice that a person reviewed, on the session writer thread.
+    #[must_use]
+    pub fn acknowledge_session_deletion_notice_queued(
+        &self,
+        expected: &str,
+    ) -> std::sync::mpsc::Receiver<std::result::Result<Option<String>, String>> {
+        self.writer
+            .queue_notice(self, writer::NoticeWrite::Acknowledge(expected.to_owned()))
+    }
+
     /// Waits up to `timeout` until every queued board is durable, as before an exit.
     #[must_use]
     pub fn flush_runtime_states(&self, timeout: Duration) -> bool {

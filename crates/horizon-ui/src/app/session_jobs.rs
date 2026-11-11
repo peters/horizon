@@ -186,7 +186,7 @@ impl HorizonApp {
         match answer {
             SessionJobAnswer::Sessions(Ok(sessions)) => self.show_session_manager_list(sessions, None),
             SessionJobAnswer::Sessions(Err(error)) => {
-                self.show_session_manager_list(Vec::new(), Some(format!("Failed to load sessions: {error}")))
+                self.show_session_manager_list(Vec::new(), Some(format!("Failed to load sessions: {error}")));
             }
             SessionJobAnswer::Activated {
                 action,
