@@ -9,9 +9,16 @@ document gives the configuration, the command contract and the trust boundary.
 The bridge is off by default. To turn it on, write the argv of the command in
 `browser.webauthn_command`:
 
-```yaml
-browser:
-  webauthn_command: ["/path/to/authenticator", "--profile", "work"]
+```json
+{
+  "browser": {
+    "webauthn_command": [
+      "/path/to/authenticator",
+      "--profile",
+      "work"
+    ]
+  }
+}
 ```
 
 - An empty list, or no key, keeps the bridge off. Horizon then adds no page

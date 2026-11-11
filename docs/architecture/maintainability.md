@@ -442,7 +442,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `app::settings::remote_browsers` renders provider readiness and credential
   entry for remote browser targets. It reads the editing config and the
   app-held `CredentialWorkbench`; typed values go to the workbench only, never
-  to the YAML buffer, and its input buffers are scrubbed when the settings
+  to the editing settings, and its input buffers are scrubbed when the settings
   editor closes.
 
 ## File Size Policy

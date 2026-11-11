@@ -96,14 +96,13 @@ host key fails that connect.
 
 ### 4. Tell the person to set the browser host
 
-Only the person can set this, in the YAML tab of the Settings window
-(**Ctrl+Shift+,**). Show this text on the card:
+Only the person can set this, in Settings (**Ctrl+Shift+,**) → **General** →
+**Browser host**. Show this on the card:
 
-```yaml
-browser_host:
-  ssh_target: bvm-1
-  profile: <profile>
-```
+| Field | Value |
+|---|---|
+| SSH target | `bvm-1` |
+| Profile | `<profile>` |
 
 `ssh_target` is the `Host` name of step 3, not the address. The change applies at
 the next start of Horizon.

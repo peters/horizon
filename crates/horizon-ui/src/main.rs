@@ -720,16 +720,16 @@ mod cli_args_tests {
 
     #[test]
     fn remote_profile_commands_take_one_real_operand_and_exclude_each_other() {
-        let args = parse(&["--config", "c.yaml", "--export-remote-profile", "p.yaml"]).expect("export");
+        let args = parse(&["--config", "c.json", "--export-remote-profile", "p.json"]).expect("export");
         assert_eq!(
             args.command,
-            Some(Command::RemoteProfile(RemoteProfileCommand::Export("p.yaml".into())))
+            Some(Command::RemoteProfile(RemoteProfileCommand::Export("p.json".into())))
         );
-        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.yaml")));
-        let args = parse(&["--import-remote-profile", "p.yaml", "--ephemeral"]).expect("import");
+        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.json")));
+        let args = parse(&["--import-remote-profile", "p.json", "--ephemeral"]).expect("import");
         assert_eq!(
             args.command,
-            Some(Command::RemoteProfile(RemoteProfileCommand::Import("p.yaml".into())))
+            Some(Command::RemoteProfile(RemoteProfileCommand::Import("p.json".into())))
         );
         assert!(args.ephemeral);
 
@@ -738,8 +738,8 @@ mod cli_args_tests {
             &["--import-remote-profile", "--ephemeral"],
             &["--export-remote-profile", ""],
             &["--config"],
-            &["--export-remote-profile", "a.yaml", "--import-remote-profile", "b.yaml"],
-            &["--export-remote-profile", "a.yaml", "--export-remote-profile", "b.yaml"],
+            &["--export-remote-profile", "a.json", "--import-remote-profile", "b.json"],
+            &["--export-remote-profile", "a.json", "--export-remote-profile", "b.json"],
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
@@ -814,7 +814,7 @@ mod tests {
             "the entry of the local browser starts the local server"
         );
         assert_eq!(
-            browser_mcp_mode(&["--config", "/etc/horizon.yaml"]),
+            browser_mcp_mode(&["--config", "/etc/horizon.json"]),
             Ok(false),
             "another start is not this mode"
         );
@@ -831,7 +831,7 @@ mod tests {
     fn chooser_with_sessions(session_count: usize) -> StartupChooser {
         StartupChooser {
             reason: StartupPromptReason::LiveConflict,
-            config_path: "/tmp/horizon.yaml".to_string(),
+            config_path: "/tmp/horizon.json".to_string(),
             sessions: (0..session_count)
                 .map(|index| SessionSummary {
                     session_id: format!("session-{index}"),
@@ -839,7 +839,7 @@ mod tests {
                     workspace_count: 1,
                     panel_count: 1,
                     last_active_at: 0,
-                    config_path: "/tmp/horizon.yaml".to_string(),
+                    config_path: "/tmp/horizon.json".to_string(),
                     is_live: index == 0,
                 })
                 .collect(),

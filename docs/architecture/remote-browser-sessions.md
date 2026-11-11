@@ -40,39 +40,54 @@ and optional, so existing files need no migration step and the config version
 stays at 10 until a later phase changes an existing key. Unknown keys are
 rejected.
 
-```yaml
-browser:
-  remote:
-    providers:
-      device_cloud:
-        adapter: webdriver            # generic adapter; named adapters only for demonstrated differences
-        endpoint: https://grid.example.net/wd/hub
-        authentication:               # exactly one variant, tagged by kind
-          kind: basic                 # basic: username_ref + password_ref
-          username_ref: device-cloud-user
-          password_ref: device-cloud-key
-          # kind: bearer              # bearer: token_ref only
-          # kind: none                # none: no other fields allowed
-        credential_bindings:
-          device-cloud-user: { store: os_keychain, slot: remote-browser/device-cloud/username }
-          device-cloud-key: { store: session }
-          # Unattended / container alternative (variable names only; values come
-          # from the launching process, never from this file):
-          # device-cloud-user: { store: environment, slot: REMOTE_BROWSER_USERNAME }
-          # device-cloud-key: { store: environment, slot: REMOTE_BROWSER_ACCESS_KEY }
-        limits:
-          max_sessions: 1
-          allocation_timeout_seconds: 120
-          idle_release_seconds: 180
-          max_session_seconds: 1800
-    targets:
-      ios_phone:
-        provider: device_cloud
-        browser_name: safari
-        platform_name: iOS
-        device: { kind: physical, model: iPhone 16, os_version: "18" }
-        capability_extensions:        # namespaced only; device, browser, platform and credential keys are rejected
-          appium:automationName: XCUITest
+```json
+{
+  "browser": {
+    "remote": {
+      "providers": {
+        "device_cloud": {
+          "adapter": "webdriver",
+          "endpoint": "https://grid.example.net/wd/hub",
+          "authentication": {
+            "kind": "basic",
+            "username_ref": "device-cloud-user",
+            "password_ref": "device-cloud-key"
+          },
+          "credential_bindings": {
+            "device-cloud-user": {
+              "store": "os_keychain",
+              "slot": "remote-browser/device-cloud/username"
+            },
+            "device-cloud-key": {
+              "store": "session"
+            }
+          },
+          "limits": {
+            "max_sessions": 1,
+            "allocation_timeout_seconds": 120,
+            "idle_release_seconds": 180,
+            "max_session_seconds": 1800
+          }
+        }
+      },
+      "targets": {
+        "ios_phone": {
+          "provider": "device_cloud",
+          "browser_name": "safari",
+          "platform_name": "iOS",
+          "device": {
+            "kind": "physical",
+            "model": "iPhone 16",
+            "os_version": "18"
+          },
+          "capability_extensions": {
+            "appium:automationName": "XCUITest"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Rules the configuration PR enforces:
@@ -111,7 +126,7 @@ Rules the configuration PR enforces:
   `REMOTE_BROWSER_USERNAME`). Horizon copies that variable from the launching
   process into the in-memory sink at startup and does not look at session or
   OS-store values for the same reference. There is no implicit interpolation of
-  arbitrary `$VARS` in YAML, and no silent fallback to another store. Spawned
+  arbitrary `$VARS` in the settings, and no silent fallback to another store. Spawned
   agent and terminal children inherit these variables normally. The Horizon
   process, its children, the container specification and process environment
   inspection can expose launch-time values. Use session or keychain bindings
@@ -123,12 +138,13 @@ Rules the configuration PR enforces:
   rebinds an existing reference to another origin without an explicit user
   confirmation: a conflicting file is refused whole and the local definition
   is left as it was.
-- The portable profile is its own document, `horizon_remote_browser_profile: 1`
-  followed by a `remote` map with the same `providers` and `targets` schema as
-  `browser.remote` (`horizon_core::browser::remote_profile`). Settings > Remote
-  browsers exports and imports it from a path next to the configuration file
-  by default (`remote-browser-profile.yaml`); an import lands in the editing
-  configuration and is written by Save. The same two operations are available
+- The portable profile is its own JSON document, one
+  `horizon_remote_browser_profile` number followed by a `remote` object with the
+  same `providers` and `targets` schema as `browser.remote`
+  (`horizon_core::browser::remote_profile`). Settings > Remote browsers exports
+  and imports it from a path next to the configuration file by default
+  (`remote-browser-profile.json`); an import lands in the editing configuration
+  and is written by Save. The same two operations are available
   without a window as `horizon --export-remote-profile <path>` and
   `horizon --import-remote-profile <path>`, which rewrite the configuration
   file atomically and exit, so a second computer reached over SSH can take a
@@ -150,32 +166,60 @@ Configuration names variables only. Values come from the invoking environment
 or CI secret bindings; they do not belong in the image, the target profile, or
 command-line arguments.
 
-```yaml
-browser:
-  remote:
-    providers:
-      device_cloud:
-        adapter: webdriver
-        endpoint: https://grid.example.net/wd/hub
-        authentication:
-          kind: basic
-          username_ref: device-cloud-user
-          password_ref: device-cloud-key
-        credential_bindings:
-          device-cloud-user: { store: environment, slot: REMOTE_BROWSER_USERNAME }
-          device-cloud-key: { store: environment, slot: REMOTE_BROWSER_ACCESS_KEY }
-      second_cloud:
-        adapter: webdriver
-        endpoint: https://second-grid.example.net/wd/hub
-        authentication: { kind: bearer, token_ref: api-token }
-        credential_bindings:
-          api-token: { store: environment, slot: SECOND_BROWSER_TOKEN }
-    targets:
-      ios_phone:
-        provider: device_cloud
-        browser_name: safari
-        platform_name: iOS
-        device: { kind: physical, model: configured-ios-model, os_version: "18" }
+```json
+{
+  "browser": {
+    "remote": {
+      "providers": {
+        "device_cloud": {
+          "adapter": "webdriver",
+          "endpoint": "https://grid.example.net/wd/hub",
+          "authentication": {
+            "kind": "basic",
+            "username_ref": "device-cloud-user",
+            "password_ref": "device-cloud-key"
+          },
+          "credential_bindings": {
+            "device-cloud-user": {
+              "store": "environment",
+              "slot": "REMOTE_BROWSER_USERNAME"
+            },
+            "device-cloud-key": {
+              "store": "environment",
+              "slot": "REMOTE_BROWSER_ACCESS_KEY"
+            }
+          }
+        },
+        "second_cloud": {
+          "adapter": "webdriver",
+          "endpoint": "https://second-grid.example.net/wd/hub",
+          "authentication": {
+            "kind": "bearer",
+            "token_ref": "api-token"
+          },
+          "credential_bindings": {
+            "api-token": {
+              "store": "environment",
+              "slot": "SECOND_BROWSER_TOKEN"
+            }
+          }
+        }
+      },
+      "targets": {
+        "ios_phone": {
+          "provider": "device_cloud",
+          "browser_name": "safari",
+          "platform_name": "iOS",
+          "device": {
+            "kind": "physical",
+            "model": "configured-ios-model",
+            "os_version": "18"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ```bash
@@ -185,29 +229,36 @@ docker run --rm \
   -e SECOND_BROWSER_TOKEN \
   -v "$PWD:/config" \
   example/browser-test-runner \
-  --config /config/config.yaml --ephemeral
+  --config /config/config.json --ephemeral
 ```
 
-Mount the folder, not the one file: the first start reads `/config/config.yaml`,
-keeps it as `/config/config.yaml.imported-<time>`, and writes the settings to
-`/config/settings.sqlite`. A later start reads that store only, so change a
-setting there or start in a new folder.
+Mount the folder, not the one file: the first start reads `/config/config.json`
+and writes the settings to `/config/settings.sqlite`. The file keeps its bytes.
+A later start reads that store only, so change a setting there or start in a new
+folder.
 
 GitHub Actions placeholder (the secret values stay in the runner's secret
 store; the workflow file contains only names):
 
-```yaml
-jobs:
-  remote-browser:
-    runs-on: ubuntu-latest
-    container: example/browser-test-runner
-    env:
-      REMOTE_BROWSER_USERNAME: ${{ secrets.REMOTE_BROWSER_USERNAME }}
-      REMOTE_BROWSER_ACCESS_KEY: ${{ secrets.REMOTE_BROWSER_ACCESS_KEY }}
-      SECOND_BROWSER_TOKEN: ${{ secrets.SECOND_BROWSER_TOKEN }}
-    steps:
-      # The first start imports /config/config.yaml into /config/settings.sqlite.
-      - run: horizon --config /config/config.yaml --ephemeral
+```json
+{
+  "jobs": {
+    "remote-browser": {
+      "runs-on": "ubuntu-latest",
+      "container": "example/browser-test-runner",
+      "env": {
+        "REMOTE_BROWSER_USERNAME": "${{ secrets.REMOTE_BROWSER_USERNAME }}",
+        "REMOTE_BROWSER_ACCESS_KEY": "${{ secrets.REMOTE_BROWSER_ACCESS_KEY }}",
+        "SECOND_BROWSER_TOKEN": "${{ secrets.SECOND_BROWSER_TOKEN }}"
+      },
+      "steps": [
+        {
+          "run": "horizon --config /config/config.json --ephemeral"
+        }
+      ]
+    }
+  }
+}
 ```
 
 Remote sessions still use the public `browser_*` MCP tools (`browser_create`
@@ -220,7 +271,7 @@ A server or CI host can drive remote device sessions without Horizon. It runs
 standalone `horizon-browser` with a host file:
 
 ```bash
-horizon-browser mcp --standalone --config /etc/horizon-browser/remote.yaml
+horizon-browser mcp --standalone --config /etc/horizon-browser/remote.json
 ```
 
 `HORIZON_BROWSER_CONFIG` can name the host file instead of `--config`. It holds
@@ -230,27 +281,42 @@ targets of the desktop configuration. A provider has no `credential_bindings`.
 `credential_files` names, for each provider, one file for each reference of its
 authentication block:
 
-```yaml
-browser:
-  remote:
-    providers:
-      device_cloud:
-        adapter: browserstack
-        endpoint: https://hub-cloud.browserstack.com/wd/hub
-        authentication:
-          kind: basic
-          username_ref: device-cloud-user
-          password_ref: device-cloud-key
-    targets:
-      ios_phone:
-        provider: device_cloud
-        browser_name: safari
-        platform_name: iOS
-        device: { kind: physical, model: configured-ios-model, os_version: "18" }
-credential_files:
-  device_cloud:
-    device-cloud-user: /run/secrets/device-cloud/username
-    device-cloud-key: /run/secrets/device-cloud/access-key
+```json
+{
+  "browser": {
+    "remote": {
+      "providers": {
+        "device_cloud": {
+          "adapter": "browserstack",
+          "endpoint": "https://hub-cloud.browserstack.com/wd/hub",
+          "authentication": {
+            "kind": "basic",
+            "username_ref": "device-cloud-user",
+            "password_ref": "device-cloud-key"
+          }
+        }
+      },
+      "targets": {
+        "ios_phone": {
+          "provider": "device_cloud",
+          "browser_name": "safari",
+          "platform_name": "iOS",
+          "device": {
+            "kind": "physical",
+            "model": "configured-ios-model",
+            "os_version": "18"
+          }
+        }
+      }
+    }
+  },
+  "credential_files": {
+    "device_cloud": {
+      "device-cloud-user": "/run/secrets/device-cloud/username",
+      "device-cloud-key": "/run/secrets/device-cloud/access-key"
+    }
+  }
+}
 ```
 
 Each credential file holds one value. One final line break is removed. The

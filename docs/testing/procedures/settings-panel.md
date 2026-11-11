@@ -21,9 +21,8 @@ panel and does not draw over the canvas.
 - Candidate: any build of Horizon with a Settings panel.
 - Platforms: Linux and macOS. Step 6.4 also needs X11 to send the key and
   pointer events from a terminal.
-- This procedure does not test: the settings themselves, the settings store and
-  the export of the configuration. Use
-  [the settings store procedure](settings-store.md) for those.
+- This procedure does not test: the settings themselves and the settings store.
+  Use [the settings store procedure](settings-store.md) for those.
 
 ## 3. Safety
 
@@ -32,12 +31,12 @@ None of the steps deletes data, rents compute or changes access.
 ## 4. Equipment and preconditions
 
 - A Horizon build that starts with `--ephemeral`.
-- A synthetic configuration file. Do not use the configuration of a real person:
-  a report and a recording of this procedure can become public. Give the file
-  `version: 11`, a window of 1600 x 1000 pixels, and at least one line of 100
-  characters or more, for example
-  `default_workspace: 'a-very-long-workspace-name-a-very-long-workspace-name-...'`
-  under `remote_hosts`. Use words that name no real host, person or path.
+- A synthetic settings file. Do not use the settings of a real person: a report
+  and a recording of this procedure can become public. Give the file
+  `version: 11`, a window of 1600 x 1000 pixels, and a value of 100 characters or
+  more, for example a `remote_hosts.default_workspace` of
+  `a-very-long-workspace-name-a-very-long-workspace-name-...`. Use words that name
+  no real host, person or path.
 - A free X display number. This procedure uses `:93`. Step 6.4 needs `Xvfb`,
   `openbox` and `xdotool`.
 
@@ -46,7 +45,7 @@ None of the steps deletes data, rents compute or changes access.
 1. Start a private desktop and a private home for the run.
 
    Result: A display at 1600 x 1000 pixels and a home that holds only the
-   synthetic configuration file, with an empty `sessions` folder.
+   synthetic settings file, with an empty `sessions` folder.
 
 2. Start the candidate with `--ephemeral` and the private home.
 
@@ -67,27 +66,27 @@ None of the steps deletes data, rents compute or changes access.
    Result: The panel takes about 30 percent of the window width. The canvas
    keeps the rest.
 
-### 6.2 S2 — The YAML tab keeps the panel width
+### 6.2 S2 — Every tab keeps the panel width
 
-1. Select the `YAML` tab.
+1. Select each tab in turn: General, Shortcuts, Presets and Remote browsers.
 
-   Result: The panel shows the highlighted YAML of the configuration file. The
-   panel keeps the width that it had on the General tab. The canvas stays
-   visible on the left.
+   Result: The panel keeps the width that it had on the General tab. The canvas
+   stays visible on the left. There is no tab of a text format.
 
 2. Read the tab row.
 
    Result: Each tab is in the panel. The panel does not push the tabs off its
    left edge.
 
-### 6.3 S3 — A long line scrolls inside the panel
+### 6.3 S3 — Long content scrolls inside the panel
 
-1. Point at the YAML text and keep `Shift` down while you turn the wheel down
-   three or more times.
+1. In General, write the long name of the synthetic settings into **Server** →
+   **SSH target**, and keep `Shift` down while you turn the wheel down three or
+   more times.
 
-   Result: The text moves to the left and shows the end of the long lines. A
-   horizontal scroll bar shows at the bottom of the editor. The panel width
-   does not change and the canvas stays visible.
+   Result: The field shows the end of the long value, and the panel scrolls.
+   The panel width does not change and the canvas stays visible. No field makes
+   the panel wider.
 
 2. Turn the wheel up without `Shift`.
 

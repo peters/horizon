@@ -26,13 +26,20 @@ adapter, device evidence and qualification through the same public interfaces.
 
 Add the optional field to an existing target in `browser.remote.targets`:
 
-```yaml
-tablet_demo:
-  provider: device_cloud
-  browser_name: safari
-  platform_name: iOS
-  device: { kind: physical, model: configured-tablet-model, os_version: "18" }
-  orientation: landscape
+```json
+{
+  "tablet_demo": {
+    "provider": "device_cloud",
+    "browser_name": "safari",
+    "platform_name": "iOS",
+    "device": {
+      "kind": "physical",
+      "model": "configured-tablet-model",
+      "os_version": "18"
+    },
+    "orientation": "landscape"
+  }
+}
 ```
 
 Use the real model and OS version from the provider's catalog. Provider

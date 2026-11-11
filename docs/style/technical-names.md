@@ -51,7 +51,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | browser tunnel | The one `ssh -N -L` process that forwards the loopback `DevTools` port of the browser of a host to a loopback port of this computer. | port forward, relay |
 | attached panel | A browser panel whose Chromium runs on a browser host. Its tools, frames and input are the ones of a local panel. | remote panel |
 | browser profile | The folder `~/.horizon/browser-profiles/<profile>` on a browser host, and the sign-ins in it. The pages of one profile share its cookies. | profile (alone) |
-| host file | The YAML file that `--config` gives to a standalone `horizon-browser`. It holds no credential value. | config file |
+| host file | The JSON file that `--config` gives to a standalone `horizon-browser`. It holds no credential value. | config file |
 | connect client | The process `horizon-browser mcp --connect`. It gives the browser tools of a host to one agent. | MCP proxy |
 
 ## Install and build

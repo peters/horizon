@@ -134,7 +134,7 @@ These names apply in the steps:
    env -u DISPLAY -u WAYLAND_DISPLAY HOME=<home> HORIZON_HOME=<run>/new/private <bin>/horizon 2>&1 | grep 'no config found'
    ```
 
-   Result: The line names `<run>/new/private/config.yaml`.
+   Result: The line names `<run>/new/private/config.json`.
 
 2. Examine the folder modes.
 
@@ -159,9 +159,9 @@ These names apply in the steps:
 
    ```sh
    mkdir -p <home>/.horizon <home>/.config/horizon
-   echo 'version: 11' > <home>/.horizon/config.yaml
-   echo 'version: 11' > <home>/.config/horizon/config.yaml
-   echo 'version: 11' > <run>/horizon.yaml
+   echo '{"version": 11}' > <home>/.horizon/config.json
+   echo '{"version": 11}' > <home>/.config/horizon/config.json
+   echo '{"version": 11}' > <run>/horizon.json
    ```
 
    Result: Three config files exist.
@@ -172,7 +172,7 @@ These names apply in the steps:
    cd <run> && env -u DISPLAY -u WAYLAND_DISPLAY HOME=<home> XDG_CONFIG_HOME=<home>/.config HORIZON_HOME=<run>/new/private <bin>/horizon 2>&1 | grep 'config'
    ```
 
-   Result: The output names only `<run>/new/private/config.yaml`. It does not
+   Result: The output names only `<run>/new/private/config.json`. It does not
    name the three files of step 1.
 
 3. Remove the three files of step 1 and `<home>/.horizon`.

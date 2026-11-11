@@ -71,10 +71,10 @@ computer: it writes an isolated configuration with the hosted grid's targets
 and exports the portable profile through `horizon --export-remote-profile`,
 checking that the file carries no binding, value or local path. `run` runs on
 the second computer with that file: `horizon --import-remote-profile` into a
-fresh configuration, the settings read back through `horizon --export-config`
-(Horizon keeps them in `settings.sqlite`, not in a YAML file), the machine-local
+fresh configuration, the settings read back from `settings.sqlite` (Horizon keeps
+them there, not in the settings file), the machine-local
 `os_keychain` bindings the Settings row would add, which the first start then
-imports with the rest of the settings, the credential entered into this
+reads with the rest of the settings, the credential entered into this
 computer's OS store from its own netrc (`HORIZON_NETRC`, default
 `~/.config/horizon-dev/browserstack.netrc`),
 then Horizon started and one target driven through the MCP tools, closed and

@@ -101,7 +101,7 @@ You do not need a config file to start. Launch Horizon, then:
 5. Press **Ctrl+Shift+K** again. Type a workspace name, a panel title, `@` for panels only, or `>` for presets and actions.
 6. Close Horizon. Reopen it tomorrow — the session, layout, canvas pan/zoom, and terminal history are still there.
 
-Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a [Browser panel](#browse-any-website) for any site on this machine or on BrowserStack, a [Device panel](#watch-an-app-over-vnc) for each VNC desktop you want to watch, or Settings (**Ctrl+Shift+,**) to change settings in YAML form with the canvas still visible behind it.
+Once that loop is familiar, the rest is optional: **New** in the sidebar for an empty workspace, **Ctrl+Shift+H** for SSH/Tailscale hosts, the workspace **Detach** control for a dedicated window, a [Browser panel](#browse-any-website) for any site on this machine or on BrowserStack, a [Device panel](#watch-an-app-over-vnc) for each VNC desktop you want to watch, or Settings (**Ctrl+Shift+,**) to change the settings with the canvas still visible behind it.
 
 ---
 
@@ -189,7 +189,7 @@ The same viewer also watches loopback VNC servers on this computer, one port per
 <td>
 
 ### Live Settings Editor
-**Ctrl+Shift+,** opens the config as a side panel with YAML highlighting and live preview. Toggle **light / dark / auto** themes; changes apply to the canvas behind the editor.
+**Ctrl+Shift+,** opens the settings as a side panel with live preview. Toggle **light / dark / auto** themes; changes apply to the canvas behind the panel.
 
 </td>
 </tr>
@@ -343,118 +343,163 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 
 ## Configuration
 
-Horizon keeps its settings in one SQLite file, `~/.horizon/settings.sqlite` (in [`HORIZON_HOME`](#state-folder) when you set it). The settings editor reads and writes that store; you never edit a file by hand to change a setting. To read the settings as YAML, or to keep a copy in version control, run `horizon --export-config [<path>]`. Horizon does not read that copy again: change a setting in the Settings window or in the store. You can seed workspaces, panel presets, feature flags, and shortcuts, and the YAML below is the form that the editor shows and that an export writes.
+Horizon keeps its settings in one SQLite file, `~/.horizon/settings.sqlite` (in [`HORIZON_HOME`](#state-folder) when you set it). Change a setting in the Settings window; you never edit a file by hand. A run that names its own settings with `--config <path>` reads a JSON file, and the sections below are its form. You can seed workspaces, panel presets, feature flags, and shortcuts that way.
 
 Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys are ignored, so a `panels:` block will not create anything.
 
-```yaml
-appearance:
-  theme: auto # auto, light, or dark
-
-shortcuts:
-  command_palette: Ctrl+Shift+K
-  new_terminal: Ctrl+Shift+N
-  focus_active_workspace: Ctrl+Shift+W
-  fit_active_workspace: Ctrl+Shift+9
-  open_remote_hosts: Ctrl+Shift+H
-  toggle_sessions: Ctrl+Shift+J
-  toggle_sidebar: Ctrl+Shift+B
-  toggle_hud: Ctrl+Shift+U
-  toggle_minimap: Ctrl+Shift+M
-  align_workspaces_horizontally: Ctrl+Shift+A
-  toggle_settings: Ctrl+Shift+Comma
-  zoom_reset: Ctrl+0
-  zoom_in: Ctrl+Plus
-  zoom_out: Ctrl+Minus
-  fullscreen_panel: F11
-  exit_fullscreen_panel: Escape
-  fullscreen_window: Ctrl+Shift+F11
-  save_editor: Ctrl+Shift+S
-  search: Ctrl+Shift+F
-
-remote_hosts:
-  default_workspace: Remote Sessions # receives SSH/VNC sessions from the Remote Hosts overlay
-  vnc_port: 5900 # VNC server port on the host's loopback, reached through ssh -W
-  vnc_ports: # per-host exceptions, by overlay label or SSH host name
-    lab: 5901
-
-workspaces:
-  - name: Backend
-    cwd: ~/projects/api
-    terminals:
-      - name: Shell
-        kind: shell
-      - name: Grok
-        kind: grok
-      - name: App
-        kind: browser
-        command: http://127.0.0.1:3000
-      - name: Git
-        kind: git_changes
-
-  - name: Frontend
-    cwd: ~/projects/web
-    terminals:
-      - name: Shell
-        kind: shell
-      - name: Claude
-        kind: claude
-
-presets:
-  - name: Shell
-    alias: sh
-    kind: shell
-  - name: Grok
-    alias: gb
-    kind: grok
-  - name: Claude Code
-    alias: cc
-    kind: claude
-    args:
-      - --permission-mode
-      - auto
-  - name: Codex
-    alias: cx
-    kind: codex
-    args:
-      - --no-alt-screen
-  - name: OpenCode
-    alias: oc
-    kind: open_code
-  - name: Gemini CLI
-    alias: gm
-    kind: gemini
-  - name: KiloCode
-    alias: kc
-    kind: kilo_code
-  - name: Pi
-    alias: pi
-    kind: pi
-  - name: Browser
-    alias: web
-    kind: browser
-  - name: Git Changes
-    alias: gc
-    kind: git_changes
-  - name: Markdown
-    alias: md
-    kind: editor
-  - name: Usage
-    alias: u
-    kind: usage
-
-features:
-  # Optional: align attached workspaces whenever a session loads, including startup
-  organize_workspaces_on_session_load: true
-  # Optional: collapse inactive workspaces in the sidebar
-  sidebar_accordion: true
+```json
+{
+  "appearance": {
+    "theme": "auto"
+  },
+  "shortcuts": {
+    "command_palette": "Ctrl+Shift+K",
+    "new_terminal": "Ctrl+Shift+N",
+    "focus_active_workspace": "Ctrl+Shift+W",
+    "fit_active_workspace": "Ctrl+Shift+9",
+    "open_remote_hosts": "Ctrl+Shift+H",
+    "toggle_sessions": "Ctrl+Shift+J",
+    "toggle_sidebar": "Ctrl+Shift+B",
+    "toggle_hud": "Ctrl+Shift+U",
+    "toggle_minimap": "Ctrl+Shift+M",
+    "align_workspaces_horizontally": "Ctrl+Shift+A",
+    "toggle_settings": "Ctrl+Shift+Comma",
+    "zoom_reset": "Ctrl+0",
+    "zoom_in": "Ctrl+Plus",
+    "zoom_out": "Ctrl+Minus",
+    "fullscreen_panel": "F11",
+    "exit_fullscreen_panel": "Escape",
+    "fullscreen_window": "Ctrl+Shift+F11",
+    "save_editor": "Ctrl+Shift+S",
+    "search": "Ctrl+Shift+F"
+  },
+  "remote_hosts": {
+    "default_workspace": "Remote Sessions",
+    "vnc_port": 5900,
+    "vnc_ports": {
+      "lab": 5901
+    }
+  },
+  "workspaces": [
+    {
+      "name": "Backend",
+      "cwd": "~/projects/api",
+      "terminals": [
+        {
+          "name": "Shell",
+          "kind": "shell"
+        },
+        {
+          "name": "Grok",
+          "kind": "grok"
+        },
+        {
+          "name": "App",
+          "kind": "browser",
+          "command": "http://127.0.0.1:3000"
+        },
+        {
+          "name": "Git",
+          "kind": "git_changes"
+        }
+      ]
+    },
+    {
+      "name": "Frontend",
+      "cwd": "~/projects/web",
+      "terminals": [
+        {
+          "name": "Shell",
+          "kind": "shell"
+        },
+        {
+          "name": "Claude",
+          "kind": "claude"
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "name": "Shell",
+      "alias": "sh",
+      "kind": "shell"
+    },
+    {
+      "name": "Grok",
+      "alias": "gb",
+      "kind": "grok"
+    },
+    {
+      "name": "Claude Code",
+      "alias": "cc",
+      "kind": "claude",
+      "args": [
+        "--permission-mode",
+        "auto"
+      ]
+    },
+    {
+      "name": "Codex",
+      "alias": "cx",
+      "kind": "codex",
+      "args": [
+        "--no-alt-screen"
+      ]
+    },
+    {
+      "name": "OpenCode",
+      "alias": "oc",
+      "kind": "open_code"
+    },
+    {
+      "name": "Gemini CLI",
+      "alias": "gm",
+      "kind": "gemini"
+    },
+    {
+      "name": "KiloCode",
+      "alias": "kc",
+      "kind": "kilo_code"
+    },
+    {
+      "name": "Pi",
+      "alias": "pi",
+      "kind": "pi"
+    },
+    {
+      "name": "Browser",
+      "alias": "web",
+      "kind": "browser"
+    },
+    {
+      "name": "Git Changes",
+      "alias": "gc",
+      "kind": "git_changes"
+    },
+    {
+      "name": "Markdown",
+      "alias": "md",
+      "kind": "editor"
+    },
+    {
+      "name": "Usage",
+      "alias": "u",
+      "kind": "usage"
+    }
+  ],
+  "features": {
+    "organize_workspaces_on_session_load": true,
+    "sidebar_accordion": true
+  }
+}
 ```
 
 `features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** (sidebar order, left to right) whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
-`features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features, or by setting the flag in the YAML of the settings editor. Like other General feature toggles, the Settings editor applies the change immediately as a live preview; save to persist it, or close/revert without saving to restore the previous value.
+`features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features. Like other General feature toggles, the Settings window applies the change immediately as a live preview; save to persist it, or close and revert without saving to restore the previous value.
 
-Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead of punctuation-only shortcut components such as `Ctrl++`.
+Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in a shortcut, not punctuation-only components such as `Ctrl++`.
 
 Fresh configs already ship the agent, browser, git, markdown, and usage presets above. Existing configs gain missing defaults through migration (Grok, Pi, Browser, and the others) without overwriting presets you renamed.
 
@@ -465,11 +510,17 @@ explicit local Unix socket; Horizon does not infer a Docker context, environment
 variable or default endpoint. Profile names must be unique and match the saved
 environment's profile exactly, including letter case.
 
-```yaml
-remote:
-  local_docker:
-    - name: development
-      docker_host: unix:///path/to/docker.sock
+```json
+{
+  "remote": {
+    "local_docker": [
+      {
+        "name": "development",
+        "docker_host": "unix:///path/to/docker.sock"
+      }
+    ]
+  }
+}
 ```
 
 Replace the example socket with your explicitly selected local daemon. The new
@@ -483,13 +534,12 @@ Provider-backed overview controls and workspace setup remain separate integratio
 
 | Flag | What it does |
 |:-----|:-------------|
-| `--config <path>` / `-c <path>` | Use an explicit settings location: the store is `settings.sqlite` in that folder, or `<stem>.settings.sqlite` for another name |
-| `--export-config [<path>]` | Write the settings as YAML and exit; the default path is the configuration path of this run |
+| `--config <path>` / `-c <path>` | Use an explicit settings location: the store is `settings.sqlite` in that folder, or `<stem>.settings.sqlite` for another name; the file is JSON |
 | `--ephemeral` | Do not persist this run |
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
 | `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
-| `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote browsers, or bound in YAML to environment variable names for unattended launches |
+| `--import-remote-profile <path>` | Merge a portable remote browser profile into the settings store and exit (one profile command per launch); credentials are entered afterwards in Settings > Remote browsers, or bound in the settings to environment variable names for unattended launches |
 
 Machine-local `credential_bindings` name a store, never a secret. `store:
 session` and `store: os_keychain` are entered in Settings > Remote browsers.
@@ -538,22 +588,33 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 
 Chromium and Firefox start headless and paint into the panel. A panel you create keeps its own profile under `~/.horizon/browser-profiles`. Duplicating a Chromium or Firefox panel shares that profile, including cookies. On Linux, Snap Chromium (`/snap/bin/chromium`) and Snap Firefox (`/snap/bin/firefox`, including Ubuntu's `/usr/bin/firefox` wrapper) use `~/Horizon/browser-profiles` instead, so a Snap-confined browser can read the profile. A workspace can open straight onto a URL:
 
-```yaml
-workspaces:
-  - name: Web
-    terminals:
-      - name: Docs
-        kind: browser
-        command: https://example.com
+```json
+{
+  "workspaces": [
+    {
+      "name": "Web",
+      "terminals": [
+        {
+          "name": "Docs",
+          "kind": "browser",
+          "command": "https://example.com"
+        }
+      ]
+    }
+  ]
+}
 ```
 
 Some sites refuse a headless browser. For those, run headed Chromium with its native window minimized behind the panel:
 
-```yaml
-browser:
-  backend: chromium
-  headless: false
-  hide_native_window: true
+```json
+{
+  "browser": {
+    "backend": "chromium",
+    "headless": false,
+    "hide_native_window": true
+  }
+}
 ```
 
 That needs a working desktop. The native window can appear briefly at startup and stays in the taskbar or Dock. The embedded page keeps running while the Horizon panel is unfocused.
@@ -562,12 +623,15 @@ That needs a working desktop. The native window can appear briefly at startup an
 
 A Browser panel can use the Chromium of a machine that you already log in to, over SSH — a build server, a mini PC, or a second laptop. The page renders in the panel here, and you click, type, scroll and resize it as usual. Your sign-ins live on that machine, so a site that refuses a headless browser there, or needs an account that is already signed in, still works.
 
-Name that machine and one profile in the settings YAML (**Settings**, **Ctrl+Shift+,**), in the section `browser_host`:
+Name that machine and one profile in **Settings** (**Ctrl+Shift+,**) → **General** → **Browser host**: **SSH target** and **Profile**. The section of a settings file is `browser_host`:
 
-```yaml
-browser_host:
-  ssh_target: build-server
-  profile: mail
+```json
+{
+  "browser_host": {
+    "ssh_target": "build-server",
+    "profile": "mail"
+  }
+}
 ```
 
 `ssh_target` is a name that `ssh` already understands, such as an alias from `~/.ssh/config`. The profile is a folder on that machine, `~/.horizon/browser-profiles/<profile>`, that keeps the cookies and sign-ins; leave it out and Horizon uses `default`. The next start of Horizon applies the entry.
@@ -584,36 +648,62 @@ What to expect:
 
 The same kind of panel can show a page running on BrowserStack: a desktop browser, or a physical phone. Horizon allocates the session, draws the live page, and releases the device when the panel closes.
 
-Name the account and the targets in Settings → **Remote browsers**, or in the `browser` section of the settings YAML that the editor shows. The settings store credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
+Name the account and the targets in Settings → **Remote browsers**, or in the `browser` section of a settings file. The settings store credential references, never the access key. The example below binds both references to the OS credential store. Open **Settings** (**Ctrl+Shift+,**) → **Remote browsers** and enter the BrowserStack username and access key there. To keep the values only until Horizon exits, bind both references with `store: session` and omit `slot`. Settings offers **This session only** when a reference has no binding yet. The same tab shows that account's running, allowed, and queued sessions.
 
-```yaml
-browser:
-  remote:
-    providers:
-      browserstack:
-        adapter: browserstack
-        endpoint: https://hub-cloud.browserstack.com/wd/hub
-        authentication:
-          kind: basic
-          username_ref: browserstack-user
-          password_ref: browserstack-key
-        credential_bindings:
-          browserstack-user: { store: os_keychain, slot: remote-browser/browserstack/username }
-          browserstack-key: { store: os_keychain, slot: remote-browser/browserstack/access-key }
-    targets:
-      windows_chrome:
-        provider: browserstack
-        browser_name: Chrome
-        platform_name: Windows
-        device: { kind: any, os_version: "11" }
-        capability_extensions:
-          bstack:options:
-            os: Windows
-      ios_phone:
-        provider: browserstack
-        browser_name: safari
-        platform_name: iOS
-        device: { kind: physical, model: iPhone 16, os_version: "18" }
+```json
+{
+  "browser": {
+    "remote": {
+      "providers": {
+        "browserstack": {
+          "adapter": "browserstack",
+          "endpoint": "https://hub-cloud.browserstack.com/wd/hub",
+          "authentication": {
+            "kind": "basic",
+            "username_ref": "browserstack-user",
+            "password_ref": "browserstack-key"
+          },
+          "credential_bindings": {
+            "browserstack-user": {
+              "store": "os_keychain",
+              "slot": "remote-browser/browserstack/username"
+            },
+            "browserstack-key": {
+              "store": "os_keychain",
+              "slot": "remote-browser/browserstack/access-key"
+            }
+          }
+        }
+      },
+      "targets": {
+        "windows_chrome": {
+          "provider": "browserstack",
+          "browser_name": "Chrome",
+          "platform_name": "Windows",
+          "device": {
+            "kind": "any",
+            "os_version": "11"
+          },
+          "capability_extensions": {
+            "bstack:options": {
+              "os": "Windows"
+            }
+          }
+        },
+        "ios_phone": {
+          "provider": "browserstack",
+          "browser_name": "safari",
+          "platform_name": "iOS",
+          "device": {
+            "kind": "physical",
+            "model": "iPhone 16",
+            "os_version": "18"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 `device.kind: any` skips the physical-or-emulated check. A model or OS version on the target is still checked against BrowserStack's session record. `windows_chrome` is a desktop browser because it names Chrome on Windows and leaves the phone model empty. `device.kind: physical` requires a real device, and Horizon keeps that panel only when the session record confirms it. Match `browser_name`, `platform_name`, `os_version`, and `model` to a combination your BrowserStack account offers. Two targets on this provider share the account. Each OS-store binding on one endpoint needs its own slot; Horizon rejects a repeated slot at that endpoint. A second provider on the same endpoint shares a username or access key when both bindings use `store: session` and the same reference name. Each distinct OS-store slot holds its own secret.
@@ -651,13 +741,21 @@ Local Chromium and Firefox panels also capture network traffic, record a WebM, a
 
 Browser panels render a real browser on the canvas through the first-party `horizon-browser` engine. [Browse any website](#browse-any-website) is the short path. This section is the engine, the profile, and the agent contract. Add a panel from the **Browser** (`web`) preset, or declare it in a workspace — `command` is the initial URL:
 
-```yaml
-workspaces:
-  - name: Web
-    terminals:
-      - name: App
-        kind: browser
-        command: http://127.0.0.1:3000
+```json
+{
+  "workspaces": [
+    {
+      "name": "Web",
+      "terminals": [
+        {
+          "name": "App",
+          "kind": "browser",
+          "command": "http://127.0.0.1:3000"
+        }
+      ]
+    }
+  ]
+}
 ```
 
 The panel is a shared human-and-agent session. It can:
@@ -679,23 +777,32 @@ Safari shares the semantic action and audit surface but currently reports networ
 
 Horizon scans the usual executable names and platform install locations. It never runs `safaridriver --enable`; follow Apple's one-time enablement flow yourself. Safari remains disabled in the picker on Linux.
 
-```yaml
-browser:
-  backend: chromium              # chromium, firefox, or safari
-  command: /path/to/chrome       # Chromium-family binary; omit to discover
-  firefox_command: /path/to/firefox
-  geckodriver_command: /path/to/geckodriver
-  safaridriver_command: /usr/bin/safaridriver
-  extra_args: []                 # managed browser switches are rejected
-  quality: 60                    # Chromium JPEG screencast quality, 1–100
-  every_nth_frame: 1             # Chromium screencast sampling
-  profile_root: ~/.horizon/browser-profiles
-  video:
-    quality: 90                  # WebM visual quality, 1–100
-    compression_level: 4         # 0 fastest/largest … 10 slowest/smallest
-    fps: 10                      # encoded frames per second, 1–30
-    max_file_bytes: 536870912    # stop ingest at this WebM size
+```json
+{
+  "browser": {
+    "backend": "chromium",
+    "command": "/path/to/chrome",
+    "firefox_command": "/path/to/firefox",
+    "geckodriver_command": "/path/to/geckodriver",
+    "safaridriver_command": "/usr/bin/safaridriver",
+    "extra_args": [],
+    "quality": 60,
+    "every_nth_frame": 1,
+    "profile_root": "~/.horizon/browser-profiles",
+    "video": {
+      "quality": 90,
+      "compression_level": 4,
+      "fps": 10,
+      "max_file_bytes": 536870912
+    }
+  }
+}
 ```
+
+`quality` is 1–100, `every_nth_frame` samples the Chromium screencast, and
+`profile_root` is the folder of the browser profiles. In `video`, `quality` is
+1–100, `compression_level` is 0 (fastest, largest) to 10 (slowest, smallest), and
+`fps` is 1–30.
 
 Recordings default to source-frame dimensions with codec-block alignment, bounded
 by a 3840-pixel longest side and 8,294,400 pixels (4K) to limit encoder memory and
@@ -709,11 +816,14 @@ All executable fields are optional. Chromium and Firefox get separate directorie
 Chromium and Firefox remain headless by default. To use a headed Chromium
 compositor with its native window minimized, explicitly configure:
 
-```yaml
-browser:
-  backend: chromium
-  headless: false
-  hide_native_window: true
+```json
+{
+  "browser": {
+    "backend": "chromium",
+    "headless": false,
+    "hide_native_window": true
+  }
+}
 ```
 
 This option needs a working desktop and window manager. The native window can
@@ -730,9 +840,16 @@ A headless browser has no authenticator of its own, so a passkey sign-in in a
 panel normally goes nowhere. Point Horizon at an authenticator command and local
 Chromium and Firefox panels hand each passkey request to it:
 
-```yaml
-browser:
-  webauthn_command: ["/path/to/authenticator", "--profile", "work"]
+```json
+{
+  "browser": {
+    "webauthn_command": [
+      "/path/to/authenticator",
+      "--profile",
+      "work"
+    ]
+  }
+}
 ```
 
 Horizon, not the page, decides which site is asking. It refuses cross-origin
@@ -770,16 +887,23 @@ A Device panel is a native VNC viewer on the canvas. Use one panel per running c
 
 You start each copy, on its own display, with a VNC server for that display listening on loopback. Give every copy its own port, then add a preset for each port:
 
-```yaml
-presets:
-  - name: App A
-    alias: va
-    kind: device
-    command: 127.0.0.1:5900
-  - name: App B
-    alias: vb
-    kind: device
-    command: 127.0.0.1:5901
+```json
+{
+  "presets": [
+    {
+      "name": "App A",
+      "alias": "va",
+      "kind": "device",
+      "command": "127.0.0.1:5900"
+    },
+    {
+      "name": "App B",
+      "alias": "vb",
+      "kind": "device",
+      "command": "127.0.0.1:5901"
+    }
+  ]
+}
 ```
 
 1. Start copy A so a VNC server accepts connections on `127.0.0.1:5900`, and copy B on `127.0.0.1:5901`. The address is a numeric loopback IP and a nonzero port: `127.0.0.1` or `[::1]`. Use a server that accepts a shared connection and does not ask for a VNC password. Horizon has no password field. On another machine, SSH is the access check.
@@ -799,16 +923,26 @@ An agent in the workspace can open these viewers with the `device_panel` tool: `
 
 There is no fallback to the ambient `DISPLAY`. The Device panel does not hand its VNC address to that tool. The panel remains the view.
 
-```yaml
-workspaces:
-  - name: App under test
-    terminals:
-      - name: Copy A
-        kind: device
-        command: 127.0.0.1:5900
-      - name: Copy B
-        kind: device
-        command: 127.0.0.1:5901
+```json
+{
+  "workspaces": [
+    {
+      "name": "App under test",
+      "terminals": [
+        {
+          "name": "Copy A",
+          "kind": "device",
+          "command": "127.0.0.1:5900"
+        },
+        {
+          "name": "Copy B",
+          "kind": "device",
+          "command": "127.0.0.1:5901"
+        }
+      ]
+    }
+  ]
+}
 ```
 
 ---

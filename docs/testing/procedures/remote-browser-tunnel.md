@@ -85,21 +85,9 @@ as a panel of this computer. It also proves the typed refusals of that path.
 
    Result: `target/debug/horizon` exists.
 
-4. On the client machine, close Horizon. Name the host in the settings:
-
-   ```bash
-   horizon --export-config /var/tmp/settings.yaml
-   ```
-
-   Result: the export holds a `browser_host` section. Add the SSH target and the
-   profile to that section, then set it with the YAML tab of the Settings window
-   (**Ctrl+Shift+,**):
-
-   ```yaml
-   browser_host:
-     ssh_target: <SSH-TARGET>
-     profile: mail
-   ```
+4. On the client machine, close Horizon. Name the host in the settings: open
+   Settings (**Ctrl+Shift+,**) → **General** → **Browser host**, and write the
+   SSH target and the profile.
 
    The SSH target is one name that `ssh` resolves: an alias of `~/.ssh/config`, a
    `user@host`, or an address. The profile is 1 to 40 of `a-z`, `0-9` and `-`,

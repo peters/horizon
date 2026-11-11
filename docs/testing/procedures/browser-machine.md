@@ -44,7 +44,7 @@ a panel after the container stops.
   free disk, with no browser program and no Docker.
 - A Horizon build on the client with a free workspace.
 - The person who runs Horizon, with a terminal to edit their own
-  `~/.ssh/config`, and the YAML tab of the Settings window.
+  `~/.ssh/config`, and the **Browser host** part of Settings → General.
 - The four files of `packaging/browser-machine/` on the client.
 
 ## 5. Setup
@@ -120,14 +120,9 @@ a panel after the container stops.
 
    Result: `ssh -T -o BatchMode=yes bvm-1 'echo ok'` on the client prints `ok`.
 
-7. Tell the person to set the browser host in the YAML tab of the Settings window
-   (**Ctrl+Shift+,**), and to start Horizon again:
-
-   ```yaml
-   browser_host:
-     ssh_target: bvm-1
-     profile: work
-   ```
+7. Tell the person to set the browser host in Settings (**Ctrl+Shift+,**) →
+   **General** → **Browser host**: **SSH target** `bvm-1` and **Profile** `work`.
+   Then start Horizon again.
 
    Result: the entry is in the settings store, and the start of Horizon reads it.
 

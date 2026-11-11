@@ -68,13 +68,22 @@ applies the origin rules, and that the panel shows a waiting request.
 
    Result: The fake authenticator can keep its keys there.
 
-6. Add this `browser` section to `data/horizon.yaml` of the fixture. Use the
+6. Add this `browser` section to `data/horizon.json` of the fixture. Use the
    paths of step 2 and step 5.
 
    ```json
-   {"backend": "firefox", "firefox_command": "/usr/lib/firefox/firefox",
-    "geckodriver_command": "<dir>/geckodriver",
-    "webauthn_command": ["<dir>/fake-authenticator", "--fake-authenticator", "<state>/authenticator"]}
+   {
+     "browser": {
+       "backend": "firefox",
+       "firefox_command": "/usr/lib/firefox/firefox",
+       "geckodriver_command": "<dir>/geckodriver",
+       "webauthn_command": [
+         "<dir>/fake-authenticator",
+         "--fake-authenticator",
+         "<state>/authenticator"
+       ]
+     }
+   }
    ```
 
    Result: The fixture log shows `config file changed`.

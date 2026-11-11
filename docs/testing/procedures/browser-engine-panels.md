@@ -53,25 +53,37 @@ engine still needs `allow_additional`.
 
    Result: The file exists.
 
-2. Write this configuration to `<work>/config.yaml`. Use your paths. The first
-   start in `<work>` imports this file into `<work>/settings.sqlite` and keeps the
-   file as `config.yaml.imported-<time>`:
+2. Write this settings file to `<work>/config.json`. Use your paths. The first
+   start in `<work>` reads this file into `<work>/settings.sqlite`, and the file
+   keeps its bytes:
 
-   ```yaml
-   version: 11
-   browser:
-     profile_root: <home folder>/profiles
-     downloads_root: <home folder>/downloads
-     firefox_command: /usr/lib/firefox/firefox
-     geckodriver_command: <path to geckodriver>
-   workspaces:
-     - name: Smoke
-       terminals:
-         - name: Agent
-           kind: codex
-           command: /usr/bin/python3
-           args: ["<work>/probe.py", "<work>/identity.json"]
-   ```
+   ```json
+{
+  "version": 11,
+  "browser": {
+    "profile_root": "<home folder>/profiles",
+    "downloads_root": "<home folder>/downloads",
+    "firefox_command": "/usr/lib/firefox/firefox",
+    "geckodriver_command": "<path to geckodriver>"
+  },
+  "workspaces": [
+    {
+      "name": "Smoke",
+      "terminals": [
+        {
+          "name": "Agent",
+          "kind": "codex",
+          "command": "/usr/bin/python3",
+          "args": [
+            "<work>/probe.py",
+            "<work>/identity.json"
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
 
    Result: The file exists.
 
@@ -96,7 +108,7 @@ engine still needs `allow_additional`.
    this Device panel open and watch each task in it.
 
 6. Start the candidate:
-   `env -u WAYLAND_DISPLAY -u HORIZON -u HORIZON_BROWSER_ACTOR HOME=<home folder> DISPLAY=:41 horizon --config <work>/config.yaml --ephemeral`.
+   `env -u WAYLAND_DISPLAY -u HORIZON -u HORIZON_BROWSER_ACTOR HOME=<home folder> DISPLAY=:41 horizon --config <work>/config.json --ephemeral`.
 
    Result: `<work>/identity.json` contains `HORIZON_BROWSER_ACTOR` and
    `HORIZON_BROWSER_HOST_INSTANCE`.

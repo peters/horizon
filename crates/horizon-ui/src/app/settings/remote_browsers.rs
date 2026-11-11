@@ -694,10 +694,10 @@ mod tests {
         assert_eq!(trusted.browser.remote, before);
 
         // A missing file is an error that names the path, not a panic.
-        panel.path = dir.path().join("absent.yaml").display().to_string();
+        panel.path = dir.path().join("absent.json").display().to_string();
         assert!(!panel.import(&mut second));
         let (notice, is_error) = panel.notice.clone().expect("notice");
-        assert!(is_error && notice.contains("absent.yaml"), "{notice}");
+        assert!(is_error && notice.contains("absent.json"), "{notice}");
 
         // The configuration file is never exported over or imported from.
         std::fs::write(&config_path, first.to_json().expect("json")).expect("config");

@@ -39,10 +39,13 @@ opens the store, so a home of a killed server starts again without a hand edit.
 
 The settings entry `server` names the computer that runs the server:
 
-```yaml
-server:
-  ssh_target: server-computer
-  command: /opt/horizon --server-link
+```json
+{
+  "server": {
+    "ssh_target": "server-computer",
+    "command": "/opt/horizon --server-link"
+  }
+}
 ```
 
 `ssh_target` follows the rule of the browser host target: one argument of `ssh`,

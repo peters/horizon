@@ -201,7 +201,7 @@ localci skill install
 
 ### Configuration Changes
 
-- When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local settings to match. The settings live in `~/.horizon/settings.sqlite`, which is the only settings file that Horizon reads. `~/.horizon/config.yaml` is not read: `horizon --export-config` writes it on request, and a change in it does nothing. Edit the store, change the setting in the Settings window, or start Horizon once with defaults that you changed. See [the settings store](docs/architecture/settings-store.md).
+- When you change default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, sync the settings of your own computer to match. The settings live in `~/.horizon/settings.sqlite`, which is the only settings file that Horizon reads. There is no YAML settings file and no export command. A run that names `--config <path>` reads a JSON file. Edit the store, change the setting in the Settings window, or start Horizon once with the defaults that you changed. See [the settings store](docs/architecture/settings-store.md).
 
 ### Code Quality Bar
 
