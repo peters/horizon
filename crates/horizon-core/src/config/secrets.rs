@@ -92,6 +92,22 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_document_that_names_secrets_parses_and_validates() {
+        // The document that the smoke fixture writes, so its first start imports the
+        // names and no value.
+        let document = r#"{"version": 11, "secrets": {"names": ["HETZNER_TOKEN"]}}"#;
+        let config = crate::Config::from_json(document).expect("the document of the fixture");
+        assert_eq!(config.secrets.names, vec!["HETZNER_TOKEN".to_owned()]);
+        assert_eq!(config.secrets.secret_names().len(), 1);
+
+        let refused = r#"{"version": 11, "secrets": {"names": ["HOME"]}}"#;
+        assert!(
+            crate::Config::from_json(refused).is_err(),
+            "a reserved name is refused before a start reads it"
+        );
+    }
+
+    #[test]
     fn the_section_holds_at_most_sixty_four_names() {
         let names = |count: usize| SecretsConfig {
             names: (0..count).map(|index| format!("KEY_{index}")).collect(),
