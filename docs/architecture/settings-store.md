@@ -22,12 +22,14 @@ A second configuration in one folder keeps its own store. A run that names
 user. See [the Horizon home procedure](../testing/procedures/horizon-home.md).
 
 Every secret value of the home is one file beside these: `secrets.sqlite`. The
-home is `0700`, the file and its `-wal` and `-shm` files are `0600` from the first
-byte, and the file holds the values of the credential references of the remote
-browser providers and of the named secrets. It holds no setting, and the settings
-store holds no value. A value is stored as it is, and the file mode is its whole
-protection; [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md)
-states what that does and does not protect.
+home is `0700`, the file is `0600` from the first byte, and it holds the values of
+the credential references of the remote browser providers and of the named
+secrets. It keeps a rollback journal and no write-ahead log, so it has no `-wal`
+or `-shm` file beside it, and one process opens one connection to it. It holds no
+setting, and the settings store holds no value. A value is stored as it is, and
+the file mode is its whole protection; [the boundary of the named
+secrets](../review/trust-boundaries/named-secrets.md) states what that does and
+does not protect.
 
 ## The tables
 

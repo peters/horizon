@@ -83,11 +83,11 @@ value are, where a value is allowed to go, and what it never reaches.
   `secrets(id TEXT PRIMARY KEY, body BLOB NOT NULL, version INTEGER NOT NULL,
   updated_millis INTEGER NOT NULL)` and the table `meta`. A named secret is the id
   `named/<NAME>`, and a provider credential is the id `credential/<reference>`.
-- **The file mode is the whole protection.** The Horizon home is `0700`. The file
-  and its `-wal` and `-shm` files are `0600` from the first byte: the store makes
-  the file private before SQLite opens it, and SQLite gives the two files beside it
-  the mode of that file. A file that a copy or a restore left readable is made
-  private again at the next open.
+- **The file mode is the whole protection.** The Horizon home is `0700`, and the
+  file is `0600` from the first byte: the store makes the file with `create_new`
+  and that mode before SQLite opens it. A file that a copy or a restore left
+  readable is made private again at the next open, by its path. The file keeps a
+  rollback journal, so it holds no `-wal` or `-shm` file beside it.
 - **A value is stored as it is, and it is not sealed.** A person who can read this
   file reads every value, and that is the same rule as the machine keys under
   `machine-keys/` of this home and as the person's own keys under `~/.ssh`.
@@ -105,10 +105,11 @@ value are, where a value is allowed to go, and what it never reaches.
   `server.sqlite` alone. The boundary of that copy is
   [`server-link.md`](server-link.md).
 - **One writer per process, and no write on the UI thread.** The settings worker,
-  the named-secrets worker and the link to a server each open the file on a worker
-  thread. One connection per process is behind one lock, each write is one
-  transaction with `synchronous=FULL`, and a write-ahead log lets a reader of
-  another process read while this one writes.
+  the named-secrets worker and the link to a server each reach the file on a worker
+  thread, and all of them share one connection: a second connection to one file
+  cannot be made in a process. Each write is one transaction with `synchronous=FULL`
+  and the rollback journal, and a reader of another process waits up to five
+  seconds for a write of this one.
 - **A file that cannot be read is one typed error with its path.** The Settings
   window shows that error under a name, the link writes one line of the log, and
   the machine keys still follow the server. There is no state that says that this

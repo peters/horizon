@@ -132,18 +132,27 @@ def seed_secret_rows(path, named=(), rows=()):
     """Write secret values into the secrets file of the private Horizon home.
 
     The file is `secrets.sqlite` of that home at 0600 in a 0700 directory, with the
-    schema that Horizon's own store includes. A named secret is `named/<NAME>`; a
-    credential row is a `credential/<reference>` id. A value of an earlier run of the
-    same state stays unless this call names the same id again, so a procedure can add
-    one secret to a private home that already holds another. Answers the ids that the
-    file holds.
+    schema that Horizon's own store includes and in the rollback-journal mode that
+    the store opens it with, so no `-wal` or `-shm` file stays beside it. A named
+    secret is `named/<NAME>`; a credential row is a `credential/<reference>` id. A
+    value of an earlier run of the same state stays unless this call names the same
+    id again, so a procedure can add one secret to a private home that already holds
+    another. Answers the ids that the file holds.
     """
     path = Path(path)
     values = {named_secret_id(name): value for name, value in named}
     values.update({object_id: value for object_id, value in rows})
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The file is private from the first byte, as the store of Horizon makes it.
+    if path.exists():
+        path.chmod(0o600)
+    else:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     connection = sqlite3.connect(path)
     try:
+        # A state that an earlier build left in write-ahead mode is converted here,
+        # as the store converts it at its next open.
+        connection.execute('PRAGMA journal_mode = DELETE')
         present = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'secrets'").fetchone()
         if present is None:
@@ -160,7 +169,6 @@ def seed_secret_rows(path, named=(), rows=()):
         connection.commit()
     finally:
         connection.close()
-    path.chmod(0o600)
     return read_secret_ids(path)
 
 

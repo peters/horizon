@@ -141,9 +141,8 @@ computer that follows one server reads the same value.
 > **CAUTION:** THIS STEP DELETES THE SECRETS FILE OF THE FIXTURE, AND WITH IT EVERY
 > VALUE OF THAT PRIVATE HOME. It is the file of this run only.
 
-1. Stop the fixture, delete `<evidence>/fixture/data/secrets.sqlite` and its
-   `-wal` and `-shm` files, and start it again with `--reuse-state
-   --resume-session`.
+1. Stop the fixture, delete `<evidence>/fixture/data/secrets.sqlite`, and start
+   it again with `--reuse-state --resume-session`.
 
    Result: The tab `Secrets` lists `HORIZON_TEST_TOKEN` and shows `no value on
    this computer`.
