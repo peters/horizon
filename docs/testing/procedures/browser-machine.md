@@ -198,14 +198,15 @@ a panel after the container stops.
 
    Result: the panel does not go away. It keeps its place and its last address,
    and its body states `Browser error: the browser of bvm-1 in the profile work
-   lost its connection while this panel had it open: <words of the lost
-   connection>; the panel keeps its last address, and Retry connects again`.
+   lost its connection, so this panel keeps its last page; Retry connects
+   again`. The body holds no word of the browser engine.
 
 2. Read the state of the panel as an agent, with `browser_panel`.
 
-   Result: `failure.code` is `attached_host_connection_lost` and
-   `failure.message` holds the words of step 1. `browser_list` still shows the
-   panel.
+   Result: `failure.code` is `attached_host_connection_lost`, and
+   `failure.message` holds the sentence of step 1 and then the words of the engine
+   in parentheses, such as `(CDP connection lost: ...)`. `browser_list` still
+   shows the panel.
 
 3. Click **Retry**.
 

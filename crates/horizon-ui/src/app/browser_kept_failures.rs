@@ -155,7 +155,7 @@ fn kept_reasons(board: &Board) -> Vec<KeptReason> {
                 url: browser.display_url().to_string(),
                 title: browser.title.clone(),
                 backend: browser.backend(),
-                failure: ManifestFailure::new(failure.code(), failure.message()),
+                failure: ManifestFailure::new(failure.code(), failure.report()),
             })
         })
         .collect()

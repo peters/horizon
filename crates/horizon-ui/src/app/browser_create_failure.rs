@@ -19,27 +19,28 @@ pub(super) const CREATE_TIMEOUT: (&str, &str) = (
 /// result.
 pub(super) fn terminal_create_failure(
     browser: &horizon_core::browser::BrowserPanelState,
-) -> Option<(&'static str, &str)> {
+) -> Option<(&'static str, String)> {
     match &browser.status {
         BrowserStatus::Starting | BrowserStatus::Ready => None,
         BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } => {
             // A browser host names its own typed failures: the agent reads why
-            // its panel did not reach that machine's browser.
+            // its panel did not reach that machine's browser, with the words of
+            // the tool, which the panel itself does not show.
             if let Some(failure) = browser.attached_host_failure() {
-                return Some((failure.code(), failure.message()));
+                return Some((failure.code(), failure.report()));
             }
             Some(browser.remote_failure().map_or_else(
                 || match &browser.status {
                     BrowserStatus::Error { .. } => (
                         "backend_start_failed",
-                        "the selected browser backend did not start; inspect the local logs",
+                        "the selected browser backend did not start; inspect the local logs".to_owned(),
                     ),
                     _ => (
                         "backend_stopped",
-                        "the selected browser backend stopped before it became controllable",
+                        "the selected browser backend stopped before it became controllable".to_owned(),
                     ),
                 },
-                |failure| (failure.code, failure.message),
+                |failure| (failure.code, failure.message.to_owned()),
             ))
         }
     }
@@ -149,6 +150,24 @@ mod tests {
         assert!(
             message.contains("Connection reset") || message.contains("connection reset"),
             "the agent reads the words of the lost connection: {message}"
+        );
+        assert!(
+            message.contains("browser-vm") && message.contains("mail") && message.contains("Retry connects again"),
+            "the agent reads the same plain sentence as the person: {message}"
+        );
+        let shown = attached
+            .attached_host_failure()
+            .expect("a typed reason")
+            .message()
+            .to_owned();
+        assert!(
+            shown.contains("the browser of browser-vm in the profile mail lost its connection")
+                && shown.contains("Retry connects again"),
+            "the panel names the machine, the profile and the Retry: {shown}"
+        );
+        assert!(
+            !shown.contains("CDP") && !shown.contains("WebSocket"),
+            "the panel shows no word of the engine: {shown}"
         );
         attached.status = BrowserStatus::Stopped { code: None };
         assert_eq!(

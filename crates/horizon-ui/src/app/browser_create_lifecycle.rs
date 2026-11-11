@@ -515,7 +515,7 @@ fn browser_create_is_terminal(board: &Board, io: &mut HostIo, pending: &PendingB
         return true;
     };
     if let Some((code, message)) = terminal_create_failure(browser) {
-        record_and_complete_failure(io, &pending.request, pending.panel.as_ref(), code, message);
+        record_and_complete_failure(io, &pending.request, pending.panel.as_ref(), code, &message);
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {

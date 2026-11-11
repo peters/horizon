@@ -629,15 +629,26 @@ fn a_browser_that_stops_after_a_page_keeps_the_panel_at_its_last_address() {
     let failure = panel.attached_host_failure().expect("a typed reason");
     assert_eq!(failure.kind(), AttachedHostFailureKind::ConnectionLost);
     assert_eq!(failure.code(), "attached_host_connection_lost");
-    assert!(
-        failure.message().contains("Connection reset without closing handshake"),
-        "the reason keeps the words of the lost connection: {}",
-        failure.message()
+    assert_eq!(
+        failure.message(),
+        "the browser of browser-vm in the profile mail lost its connection, so this panel keeps its last page; \
+         Retry connects again",
+        "the panel says one plain sentence, and no word of the engine"
+    );
+    assert_eq!(
+        failure.detail(),
+        Some("CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"),
+        "the log and an agent keep the words of the lost connection"
     );
     assert!(
-        failure.message().contains("browser-vm"),
-        "the reason names the browser host: {}",
-        failure.message()
+        failure.report().contains("Connection reset without closing handshake"),
+        "an agent reads the words of the tool: {}",
+        failure.report()
+    );
+    assert!(
+        failure.report().contains("browser-vm") && failure.report().contains("mail"),
+        "the reason of an agent names the host and its profile: {}",
+        failure.report()
     );
     assert!(!panel.has_ended(), "the panel stays where the person put it");
     assert_eq!(

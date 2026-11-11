@@ -242,16 +242,16 @@ A report uses the ID of each task to give a result.
 
    Result: the panel does not go away. It stays where it is on the canvas, the
    address bar keeps its last address, and the body of the panel states
-   `Browser error: the browser of <SSH-TARGET> in the profile <PROFILE> lost its connection while this panel had it open: <words of the lost connection>; the panel keeps its last address, and Retry connects again`,
-   with the button **Retry**. The sidebar shows no notice, because the panel
-   itself says why.
+   `Browser error: the browser of <SSH-TARGET> in the profile <PROFILE> lost its connection, so this panel keeps its last page; Retry connects again`,
+   with the button **Retry**. The body holds no word of the browser engine. The
+   sidebar shows no notice, because the panel itself says why.
 
 2. Read the state of that panel as an agent. Call `browser_panel` with its
    `panel_id`.
 
-   Result: the answer holds `failure.code` `attached_host_connection_lost` and
-   the words of step 1 in `failure.message`. `browser_list` still shows the
-   panel. A control call on it, for example `browser_navigate`, fails with
+   Result: the answer holds `failure.code` `attached_host_connection_lost`, and
+   `failure.message` holds the sentence of step 1 and then the words of the
+   engine in parentheses. `browser_list` still shows the panel. A control call on it, for example `browser_navigate`, fails with
    `browser_unavailable`, because the panel has no browser until the person
    retries.
 

@@ -49,10 +49,17 @@ impl AttachedHostFailureKind {
 
 /// Why a panel that follows a browser host could not attach to its browser, with
 /// the words of the host when it gave any.
+///
+/// [`Self::message`] is the sentence that the panel shows to the person: it names
+/// the machine, the profile and the work that is left. [`Self::detail`] keeps the
+/// words of `ssh` or of the browser engine, which name a refused host key or a
+/// lost connection. The detail goes to the log and to the `failure` field of an
+/// agent, and the panel keeps the plain sentence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachedHostFailure {
     kind: AttachedHostFailureKind,
     message: String,
+    detail: Option<String>,
 }
 
 impl AttachedHostFailure {
@@ -68,16 +75,35 @@ impl AttachedHostFailure {
         self.kind.code()
     }
 
-    /// What the panel shows. It keeps the words of `ssh` and of the start
-    /// snippet, so a refused host key and a missing browser read differently.
+    /// What the panel shows: one sentence that names the machine, the profile
+    /// and what the person can do next.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    /// The words of `ssh`, of the start snippet or of the browser engine, when it
+    /// gave any. The log and the reason of an agent carry them; the panel does
+    /// not.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
+    /// What an agent reads as the failure of this panel: the sentence that the
+    /// person sees, and then the words of the tool, so an agent can act on both.
+    #[must_use]
+    pub fn report(&self) -> String {
+        match self.detail.as_deref() {
+            Some(detail) => format!("{} ({detail})", self.message),
+            None => self.message.clone(),
+        }
+    }
+
     pub(super) fn unreachable(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::Unreachable,
+            detail: None,
             message: format!(
                 "the browser host {} could not be reached over SSH: {reason}; check the SSH target, then use Retry",
                 host.ssh_target()
@@ -88,6 +114,7 @@ impl AttachedHostFailure {
     fn no_browser(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::NoBrowser,
+            detail: None,
             message: format!(
                 "{} has no Chromium program to start: {reason}; install Chromium or Google Chrome on that machine, then use Retry",
                 host.ssh_target()
@@ -98,6 +125,7 @@ impl AttachedHostFailure {
     pub(super) fn not_started(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::NotStarted,
+            detail: None,
             message: format!(
                 "the browser of {} in the profile {} wrote no DevTools endpoint: {reason}; check that machine, then use Retry",
                 host.ssh_target(),
@@ -109,6 +137,7 @@ impl AttachedHostFailure {
     pub(super) fn no_endpoint(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::NoEndpoint,
+            detail: None,
             message: format!(
                 "the browser of {} in the profile {} gave no answer on its DevTools port through the forward: {reason}; use Retry",
                 host.ssh_target(),
@@ -118,16 +147,17 @@ impl AttachedHostFailure {
     }
 
     /// The failure of a panel whose browser answered and then stopped. The
-    /// reason keeps the words of the lost WebSocket, so a reset connection and
-    /// a stopped browser read differently.
+    /// panel says one plain sentence, because the words of a lost WebSocket do
+    /// not help the person; the log and an agent keep those words.
     pub(super) fn connection_lost(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::ConnectionLost,
             message: format!(
-                "the browser of {} in the profile {} lost its connection while this panel had it open: {reason}; the panel keeps its last address, and Retry connects again",
+                "the browser of {} in the profile {} lost its connection, so this panel keeps its last page; Retry connects again",
                 host.ssh_target(),
                 host.profile()
             ),
+            detail: Some(reason.to_owned()),
         }
     }
 

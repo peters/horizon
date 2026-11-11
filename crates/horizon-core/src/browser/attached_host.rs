@@ -488,6 +488,7 @@ impl BrowserPanelState {
             code = failure.code(),
             target = self.attached_host_target().unwrap_or_default(),
             profile = self.attached_host_profile().unwrap_or_default(),
+            detail = failure.detail().unwrap_or_default(),
             "a browser panel could not attach to its browser host"
         );
         self.frame_slot.clear();
