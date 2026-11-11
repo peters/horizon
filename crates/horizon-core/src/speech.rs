@@ -10,6 +10,9 @@
 //!
 //! - [`command`] splits one command line of the settings into arguments, with the
 //!   placeholder `{file}`. No shell reads the line.
+//! - [`endpoint`] checks the endpoint of a service: `https`, or `http` on a loopback
+//!   address.
+//! - [`service`] builds the multipart body of one request and reads one answer.
 //! - [`text`] cleans the text of an answer: no line break, no tab and no other
 //!   control character, trimmed, cut at 8 KiB.
 //!
@@ -17,9 +20,12 @@
 //! what leaves the computer, what this module guarantees and what it does not.
 
 pub mod command;
+pub mod endpoint;
+pub mod service;
 pub mod text;
 
 pub use command::{CommandLine, CommandLineError, FILE_PLACEHOLDER};
+pub use endpoint::{Endpoint, EndpointError};
 pub use text::{MAX_TEXT_BYTES, clean_text};
 
 /// One operating system that this build supports, where a default of speech input
