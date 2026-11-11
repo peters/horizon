@@ -117,7 +117,9 @@ fn every_value_of_the_v027_file_with_non_default_sections_arrives() {
     assert_eq!(config.overlays.minimap_width, 400.0);
 
     let written = config.to_json().expect("the settings as JSON");
-    for dropped in ["attention_feed", "speech", "desktop_injection"] {
+    // The `speech` block of this fixture is the removed feature, and the speech
+    // input of this build holds its own section with a recorder line.
+    for dropped in ["attention_feed", "whisper-small.bin", "desktop_injection"] {
         assert!(
             !written.contains(dropped),
             "{dropped} is a setting that this build removed, and the store holds it not: {written}"
@@ -208,7 +210,9 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
     assert!(config.features.organize_workspaces_on_session_load);
     assert!(config.features.sidebar_accordion);
     let written = config.to_json().expect("the settings as JSON");
-    for dropped in ["speech", "desktop_injection", "setup_board"] {
+    // The `speech` block of this fixture is the removed feature, and the speech
+    // input of this build holds its own section with a recorder line.
+    for dropped in ["whisper-small.bin", "desktop_injection", "setup_board"] {
         assert!(
             !written.contains(dropped),
             "{dropped} is a setting that this build removed, and the store holds it not: {written}"

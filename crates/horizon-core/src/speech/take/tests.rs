@@ -249,13 +249,12 @@ fn a_short_take_is_dropped_and_runs_no_transcriber() {
 
 #[test]
 fn a_take_of_one_second_is_transcribed_by_the_command_of_the_settings() {
-    let mut take = Take::new(Arc::new(()));
+    let take = Take::new(Arc::new(()));
     let prepared = take.prepared();
     let recorder = take.recorder("rec", &prepared);
     let (transcriber, marker) = transcriber_script(&take, "  hei\n");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.input.poll();
     take.wait_for("the recorder", || take.pid_file("rec").exists());
     take.clock.advance(Duration::from_millis(1000));
     take.input.end();

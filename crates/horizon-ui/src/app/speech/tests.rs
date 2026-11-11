@@ -94,7 +94,7 @@ fn a_hotkey_while_the_settings_name_no_transcriber_says_that_speech_input_is_off
 
 #[test]
 fn the_mark_counts_the_seconds_of_a_take_and_names_a_transcription() {
-    let mut speech = SpeechUi::new(std::path::PathBuf::from("/home/.horizon"));
+    let mut speech = SpeechUi::new();
     let started = Instant::now();
     speech.target = Some(PanelId(3));
     speech.phase = super::Phase::Listening;
@@ -121,7 +121,7 @@ fn the_mark_counts_the_seconds_of_a_take_and_names_a_transcription() {
 
 #[test]
 fn the_sentence_of_a_failed_take_shows_for_six_seconds_and_then_goes() {
-    let mut speech = SpeechUi::new(std::path::PathBuf::from("/home/.horizon"));
+    let mut speech = SpeechUi::new();
     let now = Instant::now();
     speech.fail("pw-record is not installed on this computer");
     let (message, tone) = speech.mark(now).expect("the sentence of the failure");
@@ -133,7 +133,7 @@ fn the_sentence_of_a_failed_take_shows_for_six_seconds_and_then_goes() {
 
 #[test]
 fn a_text_of_a_take_goes_to_the_panel_of_the_take_and_no_other() {
-    let mut speech = SpeechUi::new(std::path::PathBuf::from("/home/.horizon"));
+    let mut speech = SpeechUi::new();
     let target = PanelId(11);
     speech.phase = super::Phase::Listening;
     speech.target = Some(target);
@@ -155,7 +155,7 @@ fn a_text_of_a_take_goes_to_the_panel_of_the_take_and_no_other() {
 
 #[test]
 fn the_text_of_the_try_button_stays_in_the_settings_tab() {
-    let mut speech = SpeechUi::new(std::path::PathBuf::from("/home/.horizon"));
+    let mut speech = SpeechUi::new();
     speech.phase = super::Phase::Listening;
     speech.target = Some(SETTINGS_TRY);
 

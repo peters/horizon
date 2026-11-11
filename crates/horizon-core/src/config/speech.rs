@@ -335,7 +335,9 @@ mod tests {
                 assert_eq!(key_secret.as_str(), DEFAULT_SPEECH_KEY_SECRET);
                 assert_eq!(model, "gpt-transcribe");
             }
-            other => panic!("a service of a service kind: {other:?}"),
+            crate::speech::Transcriber::Command(command) => {
+                panic!("a service of a service kind: {command:?}")
+            }
         }
     }
 

@@ -131,7 +131,6 @@ impl HorizonApp {
             action_commands_cache,
         }: AppBootstrap,
     ) -> Self {
-        let speech_home = session_store.home().root().to_path_buf();
         Self {
             board,
             panels_to_close: Vec::new(), panels_to_restart: Vec::new(),
@@ -230,8 +229,7 @@ impl HorizonApp {
             shutdown_progress: None,
             pending_session_switch: None, exit_cleanup_complete: false,
             exit_save_deadline: None,
-            transcript_deletes: super::transcript_deletes::PendingTranscriptDeletes::default(),
-            speech: super::speech::SpeechUi::new(speech_home),
+            transcript_deletes: super::transcript_deletes::PendingTranscriptDeletes::default(), speech: super::speech::SpeechUi::new(),
         }
     }
 }

@@ -11,7 +11,7 @@
 
 mod pill;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -55,8 +55,9 @@ enum Phase {
 pub(in crate::app) struct SpeechUi {
     /// The worker thread of this window, started at its first take.
     input: Option<SpeechInput>,
-    /// The root of the Horizon home, where the takes live.
-    home: PathBuf,
+    /// The root of the Horizon home, where the takes live. It comes with the first
+    /// take, because the home of the window is known after the window exists.
+    home: Option<PathBuf>,
     /// The named secrets of this computer. The worker reads the value of the key
     /// from this one, on its own thread, at the moment of the request.
     keys: Option<Arc<NamedSecretVault>>,
@@ -79,10 +80,10 @@ pub(in crate::app) struct SpeechUi {
 }
 
 impl SpeechUi {
-    pub(in crate::app) fn new(home: PathBuf) -> Self {
+    pub(in crate::app) fn new() -> Self {
         Self {
             input: None,
-            home,
+            home: None,
             keys: None,
             binding: None,
             phase: Phase::Idle,
@@ -156,12 +157,12 @@ impl SpeechUi {
     }
 
     /// Start one take of `plan` into `target`.
-    fn begin(&mut self, ctx: &Context, plan: TakePlan, target: PanelId) -> bool {
+    fn begin(&mut self, ctx: &Context, plan: TakePlan, target: PanelId, home: &Path) -> bool {
         if !self.is_idle() {
             return false;
         }
+        let home = self.home.get_or_insert_with(|| home.to_path_buf()).clone();
         let wake_context = ctx.clone();
-        let home = self.home.clone();
         let keys = self.keys_reader();
         let input = self.input.get_or_insert_with(move || {
             SpeechInput::start(
@@ -213,9 +214,9 @@ impl SpeechUi {
     }
 
     /// Run one two-second take for the **Try** button of the Settings tab.
-    fn try_take(&mut self, ctx: &Context, plan: TakePlan) {
+    fn try_take(&mut self, ctx: &Context, plan: TakePlan, home: &Path) {
         self.try_answer = None;
-        if self.begin(ctx, plan, SETTINGS_TRY) {
+        if self.begin(ctx, plan, SETTINGS_TRY, home) {
             self.try_started = Some(Instant::now());
         }
     }
@@ -323,7 +324,7 @@ impl HorizonApp {
             self.speech.fail(NO_TERMINAL);
             return;
         };
-        self.speech.begin(ctx, plan, target);
+        self.speech.begin(ctx, plan, target, self.session_store.home().root());
     }
 
     /// The hotkey of the only section that speech input reads.
@@ -376,7 +377,7 @@ impl HorizonApp {
             self.speech.try_answer = Some(Err(NOT_SET.to_owned()));
             return;
         };
-        self.speech.try_take(ctx, plan);
+        self.speech.try_take(ctx, plan, self.session_store.home().root());
     }
 
     /// Draw the state mark of a take on the panel of that take, inside `rect`.

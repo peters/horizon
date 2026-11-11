@@ -125,7 +125,7 @@ pub trait SpeechKeyStore: Send + Sync + std::fmt::Debug {
 
 impl SpeechKeyStore for NamedSecretVault {
     fn value(&self, name: &SecretName) -> Result<Option<Zeroizing<String>>, String> {
-        let mut bytes = NamedSecretVault::value(self, name).map_err(secret_error_text)?;
+        let mut bytes = NamedSecretVault::value(self, name).map_err(|error| secret_error_text(&error))?;
         let Some(mut bytes) = bytes.take() else {
             return Ok(None);
         };
@@ -143,7 +143,7 @@ impl SpeechKeyStore for () {
 
 /// One sentence about a secrets file that could not be read. It names the secret
 /// and never quotes a value.
-fn secret_error_text(error: NamedSecretError) -> String {
+fn secret_error_text(error: &NamedSecretError) -> String {
     format!("The secrets of this computer cannot be read: {error}")
 }
 
@@ -266,6 +266,7 @@ impl SpeechInput {
     }
 
     /// One event of the worker, or `None` while it has none.
+    #[must_use]
     pub fn poll(&self) -> Option<SpeechEvent> {
         self.events.try_recv().ok()
     }
@@ -289,15 +290,15 @@ enum RecordEnd {
 
 /// The state of the worker thread.
 struct Worker {
-    worker: SpeechWorker,
+    settings: SpeechWorker,
     requests: Receiver<Request>,
     events: Sender<SpeechEvent>,
 }
 
 impl Worker {
-    fn new(worker: SpeechWorker, requests: Receiver<Request>, events: Sender<SpeechEvent>) -> Self {
+    fn new(settings: SpeechWorker, requests: Receiver<Request>, events: Sender<SpeechEvent>) -> Self {
         Self {
-            worker,
+            settings,
             requests,
             events,
         }
@@ -319,7 +320,7 @@ impl Worker {
             self.failed(target, "The folder of the takes in the Horizon home cannot be made");
             return;
         };
-        let started = self.worker.clock.now_ms();
+        let started = self.settings.clock.now_ms();
         let program = plan.recorder.program().to_owned();
         let args = plan.recorder.arguments_for(&file);
         let mut child = match StartedProgram::start(Path::new(&program), &args, &ProgramEnvironment::inherited()) {
@@ -338,7 +339,7 @@ impl Worker {
         self.send(target, SpeechEventKind::Listening);
         let end = self.record(&mut child, started);
         self.stop(&mut child);
-        let elapsed = self.worker.clock.now_ms().saturating_sub(started);
+        let elapsed = self.settings.clock.now_ms().saturating_sub(started);
         if matches!(end, RecordEnd::Cancelled) {
             remove_take_file(&file);
             self.send(target, SpeechEventKind::Dropped);
@@ -354,12 +355,12 @@ impl Worker {
             return;
         }
         let bytes = take_bytes(&file);
-        if bytes == 0 || elapsed < millis(self.worker.bounds.min_take) {
+        if bytes == 0 || elapsed < millis(self.settings.bounds.min_take) {
             remove_take_file(&file);
             self.send(target, SpeechEventKind::Dropped);
             return;
         }
-        if bytes > self.worker.bounds.max_file_bytes {
+        if bytes > self.settings.bounds.max_file_bytes {
             remove_take_file(&file);
             self.failed(target, "The recording of the take is larger than 25 MB");
             return;
@@ -390,19 +391,19 @@ impl Worker {
         loop {
             match self.requests.try_recv() {
                 Ok(Request::End) => return RecordEnd::KeyUp,
-                Ok(Request::Cancel | Request::Stop) => return RecordEnd::Cancelled,
                 // One take runs at a time: a second press changes nothing.
-                Ok(Request::Begin { .. }) => {}
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => return RecordEnd::Cancelled,
+                Ok(Request::Begin { .. }) | Err(TryRecvError::Empty) => {}
+                Ok(Request::Cancel | Request::Stop) | Err(TryRecvError::Disconnected) => {
+                    return RecordEnd::Cancelled;
+                }
             }
             if child.try_wait().is_some() {
                 return RecordEnd::EndedEarly;
             }
-            if self.worker.clock.now_ms().saturating_sub(started_ms) >= millis(self.worker.bounds.max_take) {
+            if self.settings.clock.now_ms().saturating_sub(started_ms) >= millis(self.settings.bounds.max_take) {
                 return RecordEnd::Maxed;
             }
-            self.worker.clock.sleep(self.worker.bounds.poll);
+            self.settings.clock.sleep(self.settings.bounds.poll);
         }
     }
 
@@ -417,18 +418,18 @@ impl Worker {
             return;
         }
         let deadline = self
-            .worker
+            .settings
             .clock
             .now_ms()
-            .saturating_add(millis(self.worker.bounds.stop_wait));
+            .saturating_add(millis(self.settings.bounds.stop_wait));
         loop {
             if child.try_wait().is_some() {
                 return;
             }
-            if self.worker.clock.now_ms() >= deadline {
+            if self.settings.clock.now_ms() >= deadline {
                 break;
             }
-            self.worker.clock.sleep(self.worker.bounds.poll);
+            self.settings.clock.sleep(self.settings.bounds.poll);
         }
         // The recorder ignored the signal, so this id alone is killed and reaped.
         child.kill();
@@ -445,7 +446,7 @@ impl Worker {
                 key_secret,
             } => {
                 let key = self
-                    .worker
+                    .settings
                     .keys
                     .value(key_secret)
                     .map_err(|error| cut_message(&error))?;
@@ -460,7 +461,7 @@ impl Worker {
                     file_name,
                     file: &bytes,
                     key: key.as_str(),
-                    bound: self.worker.bounds.transcribe,
+                    bound: self.settings.bounds.transcribe,
                 };
                 service::transcribe(&request).map_err(|error| error.to_string())
             }
@@ -473,13 +474,13 @@ impl Worker {
             Path::new(command.program()),
             &args,
             &ProgramEnvironment::inherited(),
-            self.worker.bounds.transcribe,
+            self.settings.bounds.transcribe,
         ) {
             Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
             Err(ProgramFailure::TimedOut) => Err(format!(
                 "{} did not answer in {} seconds",
                 command.program(),
-                self.worker.bounds.transcribe.as_secs()
+                self.settings.bounds.transcribe.as_secs()
             )),
             Err(ProgramFailure::Failed) => Err(format!("{} did not answer", command.program())),
         }
@@ -488,7 +489,7 @@ impl Worker {
     /// Delete every file that an earlier take left in the folder.
     fn clear_stale_takes(&self) {
         crate::ui_thread::blocking("the takes of an earlier run are deleted");
-        let folder = self.worker.home.join(TAKE_FOLDER);
+        let folder = self.settings.home.join(TAKE_FOLDER);
         let Ok(entries) = fs::read_dir(&folder) else {
             return;
         };
@@ -506,7 +507,7 @@ impl Worker {
     /// Make the folder of the takes and one empty file of this take.
     fn new_take_file(&self) -> Option<PathBuf> {
         crate::ui_thread::blocking("the folder of the takes is made");
-        let folder = self.worker.home.join(TAKE_FOLDER);
+        let folder = self.settings.home.join(TAKE_FOLDER);
         fs::DirBuilder::new().recursive(true).mode(0o700).create(&folder).ok()?;
         fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).ok()?;
         let name = format!("take-{}.wav", uuid::Uuid::new_v4().simple());
@@ -522,7 +523,7 @@ impl Worker {
 
     fn send(&self, target: PanelId, kind: SpeechEventKind) {
         let _ = self.events.send(SpeechEvent { target, kind });
-        if let Some(wake) = &self.worker.wake {
+        if let Some(wake) = &self.settings.wake {
             wake();
         }
     }

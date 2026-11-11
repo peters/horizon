@@ -60,10 +60,10 @@ impl SpeechPlatform {
 
     /// The recorder line that the settings hold until a person changes it.
     ///
-    /// PipeWire gives a recording of 16 kHz on one channel in the format that every
-    /// transcription service reads. macOS has no recorder command of the system, so
-    /// the line stays empty and the documents give two recipes that a person
-    /// installs.
+    /// `pw-record` of `PipeWire` gives a recording of 16 kHz on one channel in the
+    /// format that every transcription service reads. macOS has no recorder command
+    /// of the system, so the line stays empty and the documents give two recipes
+    /// that a person installs.
     #[must_use]
     pub const fn default_recorder(self) -> &'static str {
         match self {

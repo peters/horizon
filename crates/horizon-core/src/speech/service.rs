@@ -110,7 +110,7 @@ pub fn transcribe(request: &ServiceRequest<'_>) -> Result<String, ServiceError> 
     let boundary = boundary_for(request.file);
     let body = multipart_body(
         &boundary,
-        BoundaryFields {
+        &BoundaryFields {
             model: request.model,
             language: request.language,
             file_name: request.file_name,
@@ -163,7 +163,7 @@ pub struct BoundaryFields<'a> {
 
 /// The body of one `multipart/form-data` request.
 #[must_use]
-pub fn multipart_body(boundary: &str, fields: BoundaryFields<'_>) -> Vec<u8> {
+pub fn multipart_body(boundary: &str, fields: &BoundaryFields<'_>) -> Vec<u8> {
     let mut body = Vec::with_capacity(fields.file.len() + 512);
     for (name, value) in [
         (MODEL_FIELD, fields.model),
@@ -279,7 +279,7 @@ mod tests {
     fn the_multipart_body_of_one_take_is_the_expected_bytes() {
         let body = multipart_body(
             "a-boundary",
-            BoundaryFields {
+            &BoundaryFields {
                 model: "gpt-transcribe",
                 language: Some("no"),
                 file_name: "take-1.wav",
@@ -293,7 +293,7 @@ mod tests {
     fn a_take_without_a_language_leaves_that_part_out() {
         let body = multipart_body(
             "b",
-            BoundaryFields {
+            &BoundaryFields {
                 model: "m",
                 language: None,
                 file_name: "take.wav",
@@ -310,7 +310,7 @@ mod tests {
     fn a_file_name_of_a_take_cannot_break_the_header() {
         let body = multipart_body(
             "c",
-            BoundaryFields {
+            &BoundaryFields {
                 model: "m",
                 language: None,
                 file_name: "a\"b\\c\r\nd.wav",
