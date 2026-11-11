@@ -17,6 +17,25 @@ pub(super) const BOLD: f32 = 700.0;
 
 /// One line of `text` in Inter at `weight`, cut with an ellipsis at `max_width`.
 pub(super) fn line(ui: &egui::Ui, text: &str, size: f32, weight: f32, color: Color32, max_width: f32) -> Arc<Galley> {
+    layout(ui, text, format(size, weight, color), max_width, ONE_ROW)
+}
+
+/// One paragraph of `text` in Inter at `weight`, wrapped at `max_width` so every
+/// word that fits stays whole. A notice of the machine section names a machine,
+/// and the sidebar is narrow by design: one cut line would hide the name.
+pub(super) fn paragraph(
+    ui: &egui::Ui,
+    text: &str,
+    size: f32,
+    weight: f32,
+    color: Color32,
+    max_width: f32,
+) -> Arc<Galley> {
+    layout(ui, text, format(size, weight, color), max_width, ANY_ROW)
+}
+
+/// The format of one run of sidebar text at `size` and `weight`.
+fn format(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat {
         font_id: FontId::proportional(size),
         color,
@@ -25,8 +44,13 @@ pub(super) fn line(ui: &egui::Ui, text: &str, size: f32, weight: f32, color: Col
     if (weight - REGULAR).abs() > f32::EPSILON {
         format.coords = VariationCoords::new([(b"wght", weight)]);
     }
-    layout(ui, text, format, max_width)
+    format
 }
+
+/// A line shows one row and cuts the rest with an ellipsis.
+const ONE_ROW: usize = 1;
+/// A paragraph takes the rows that its words need.
+const ANY_ROW: usize = usize::MAX;
 
 /// One line of monospace text, for counts and kind labels.
 pub(super) fn mono(ui: &egui::Ui, text: &str, size: f32, color: Color32) -> Arc<Galley> {
@@ -35,15 +59,17 @@ pub(super) fn mono(ui: &egui::Ui, text: &str, size: f32, color: Color32) -> Arc<
         color,
         ..Default::default()
     };
-    layout(ui, text, format, f32::INFINITY)
+    layout(ui, text, format, f32::INFINITY, ONE_ROW)
 }
 
-fn layout(ui: &egui::Ui, text: &str, format: TextFormat, max_width: f32) -> Arc<Galley> {
+fn layout(ui: &egui::Ui, text: &str, format: TextFormat, max_width: f32, max_rows: usize) -> Arc<Galley> {
     let mut job = LayoutJob::single_section(text.to_owned(), format);
     job.wrap = TextWrapping {
         max_width: max_width.max(1.0),
-        max_rows: 1,
-        break_anywhere: true,
+        max_rows,
+        // A paragraph breaks between its words. A word that is longer than the
+        // width still breaks inside, so no text leaves the sidebar.
+        break_anywhere: max_rows == ONE_ROW,
         overflow_character: Some('\u{2026}'),
     };
     ui.painter().layout_job(job)

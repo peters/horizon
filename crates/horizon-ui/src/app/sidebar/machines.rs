@@ -221,7 +221,9 @@ impl HorizonApp {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
-                ui.label(text::line(
+                // The notice names a machine or a reason, and the sidebar is narrow
+                // by design, so it wraps instead of cutting its last word away.
+                ui.label(text::paragraph(
                     ui,
                     &notice,
                     11.0,

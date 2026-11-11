@@ -451,3 +451,46 @@ fn an_empty_workspace_is_removed_from_its_row_and_the_last_one_stays() {
     assert!(app.board.workspace(with_panel).is_some());
     assert!(app.board.workspace(lone).is_some());
 }
+
+/// The notice of a machine without a key names the machine, so it must reach the
+/// person whole: the sidebar is narrow and one cut line hides the name.
+#[test]
+fn the_notice_of_the_machine_section_wraps_so_its_name_is_readable() {
+    use crate::test_egui::DiscardTextures;
+    use egui::epaint::Shape;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let notice = "This computer has no key for build-a-long-machine-name yet";
+    app.set_sidebar_notice(notice.to_owned());
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::app::HorizonApp| {
+        let input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+        ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures()
+    };
+    // A panel shows from its second frame on.
+    frame(&mut app);
+    let output = frame(&mut app);
+    let galley = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(text) if text.galley.job.text == notice => Some(text.galley.clone()),
+            _ => None,
+        })
+        .expect("the notice of the machine section is drawn");
+    assert!(
+        galley.rows.len() >= 2,
+        "the notice wraps onto more than one line: {:?}",
+        galley.rows
+    );
+    assert!(
+        galley.rows.len() <= 4,
+        "and it stays one short notice: {} rows",
+        galley.rows.len()
+    );
+    let said: String = galley.rows.iter().map(|row| row.text()).collect::<Vec<_>>().join(" ");
+    assert!(
+        said.contains("build-a-long-machine-name"),
+        "every word of the notice is shown: {said:?}"
+    );
+}
