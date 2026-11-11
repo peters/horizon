@@ -87,6 +87,20 @@ mod tests {
             .map(|editor| (editor.saving, editor.dirty))
     }
 
+    /// Holds the coordination worker on a job that waits, so a wait of the UI
+    /// thread is the only thing that can let the write run. The returned thread
+    /// releases the worker after a delay that is longer than a frame.
+    fn hold_the_worker(app: &mut crate::app::HorizonApp) -> std::thread::JoinHandle<()> {
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            release.send(()).expect("the worker is released");
+        })
+    }
+
     #[test]
     fn closing_a_dirty_editor_panel_writes_its_text_on_the_coordination_worker() {
         let (temp, mut app) = test_app();
@@ -159,19 +173,21 @@ mod tests {
         let file = temp.path().join("notes.md");
         std::fs::write(&file, "the saved text\n").expect("the file of the editor");
         let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        let releasing = hold_the_worker(&mut app);
 
         {
             let _frame = horizon_core::ui_thread::FrameScope::enter();
             app.begin_shutdown();
+            // No frame and no settle: the cleanup itself waits for the write
+            // that the closing window asked for, inside its own scope.
+            app.run_exit_cleanup();
         }
-        // No frame, no bound and no settle: the cleanup itself waits for the
-        // write that the closing window asked for, inside its own scope.
-        app.run_exit_cleanup();
         assert_eq!(
             std::fs::read_to_string(&file).expect("the file of the editor"),
             "the text of the person\n",
             "the exit wrote the text of the editor before it ended"
         );
+        releasing.join().expect("the releasing thread ends");
     }
 
     #[test]
@@ -180,15 +196,43 @@ mod tests {
         let file = temp.path().join("notes.md");
         std::fs::write(&file, "the saved text\n").expect("the file of the editor");
         let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        let releasing = hold_the_worker(&mut app);
 
         {
             let _frame = horizon_core::ui_thread::FrameScope::enter();
+            // The shutdown of the panels is the only close request of this
+            // path, so it is what marks the buffer of the editor.
             app.run_exit_cleanup();
         }
         assert_eq!(
             std::fs::read_to_string(&file).expect("the file of the editor"),
             "the text of the person\n",
             "the cleanup wrote the text that no frame handed to the worker"
+        );
+        releasing.join().expect("the releasing thread ends");
+    }
+
+    #[test]
+    fn the_close_of_the_window_queues_the_write_of_a_dirty_editor_for_its_frames() {
+        let (temp, mut app) = test_app();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "the saved text\n").expect("the file of the editor");
+        let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        app.settle_browser_host_io();
+
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.begin_shutdown();
+            assert!(
+                app.browser_create_host.io.busy(),
+                "the frames of the exit have the write of the editor to wait for"
+            );
+        }
+        app.settle_browser_host_io();
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the file of the editor"),
+            "the text of the person\n",
+            "the write that the frames of the exit waited for reached the file"
         );
     }
 
