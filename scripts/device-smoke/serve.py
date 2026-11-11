@@ -48,10 +48,29 @@ with socket.socket() as listener:
 PRESET_RESUME_MODES = ('fresh', 'last')
 
 # The one file that holds every secret value of the private Horizon home of the
-# fixture, beside its `horizon.json`. The schema is the schema of
+# fixture. The schema is the schema of
 # `crates/horizon-core/src/secret_store/schema.sql`, which the store of Horizon
 # includes, so a file that this fixture writes is a file that Horizon reads.
 SECRETS_FILE_NAME = 'secrets.sqlite'
+
+# The folder of the Horizon home below `HOME`, from
+# `crates/horizon-browser-control/src/paths.rs` (`default_horizon_root`): the
+# candidate derives every default path of a person from `HOME`, and the fixture
+# binds `HOME` to its private home, so the home of the candidate inside the
+# fixture is `<private home>/.horizon`.
+HORIZON_HOME_FOLDER = '.horizon'
+
+
+def horizon_secrets_file(private_home):
+    """The secrets file that the candidate of the fixture reads.
+
+    The candidate resolves its home from `HOME`, which bwrap binds to the private
+    home of the state folder, and `HorizonHome::secrets_path` is
+    `<home>/secrets.sqlite` (`crates/horizon-core/src/horizon_home.rs`). A file at
+    another path is a file that no panel of the fixture reads, so a seeded value
+    would never reach an agent panel.
+    """
+    return Path(private_home) / HORIZON_HOME_FOLDER / SECRETS_FILE_NAME
 SECRETS_SCHEMA_FILE = (Path(__file__).resolve().parent.parent.parent
                        / 'crates' / 'horizon-core' / 'src' / 'secret_store' / 'schema.sql')
 
@@ -390,18 +409,41 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
     return fixture
 
 
-def application_command(app, config, saved_session, resume_session=False):
+def application_command(app, config, saved_session, resume_session=False, plain_start=False):
     """The command line of the candidate in the fixture.
 
     A saved session keeps its session file in the private home of the fixture. The
     default stays ephemeral, which writes no session file. A resumed session starts
     with no session argument, so the candidate loads the board that an earlier run
-    of the same private home saved.
+    of the same private home saved. A plain start gives the binary no argument at
+    all, so it reads and writes the default paths of its own home: that is what an
+    older release does, and it is how an upgrade starts.
     """
+    if plain_start:
+        return [str(app)]
     if resume_session:
         return [str(app), '--config', str(config)]
     session = '--new-session' if saved_session else '--ephemeral'
     return [str(app), '--config', str(config), session]
+
+
+# The options that a plain start refuses: each one writes the settings or the
+# session of the candidate, and a plain start proves that a home which an older
+# release made keeps its own settings and sessions. The flag comes from the parser
+# below, so the sentence that a procedure reads names the option that it typed.
+PLAIN_START_SETTINGS_OPTIONS = (
+    ('panels', '--panels'), ('presets', '--presets'), ('theme', '--theme'),
+    ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
+    ('server_target', '--server-target'), ('server_command', '--server-command'),
+    ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
+    ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
+    ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
+)
+
+
+def plain_start_conflicts(args):
+    """The options of `args` that `--plain-start` refuses, as the flags that wrote them."""
+    return [flag for name, flag in PLAIN_START_SETTINGS_OPTIONS if getattr(args, name)]
 
 
 def require_writable_tmp(directory=None):
@@ -451,20 +493,26 @@ def main():
         '--saved-session', action='store_true',
         help='Keep the session of the fixture in its private home')
     parser.add_argument(
+        '--plain-start', action='store_true',
+        help='Start the binary with no argument at all, in the private home of the state '
+             'folder, so it reads and writes the default paths of that home. An older binary '
+             'makes the home, and a later run with --reuse-state starts this build on it. '
+             'Refuses every option that writes the settings or the session of the fixture.')
+    parser.add_argument(
         '--resume-session', action='store_true',
         help='Start with no session argument, so the candidate resumes the board that an earlier '
              'run left in the private home. Use with --reuse-state and without --saved-session')
     parser.add_argument(
         '--named-secret', action='append', metavar='NAME=VALUE',
-        help='Write one named secret into the secrets file of the private home of the '
-             'fixture, so its agent panels read NAME as an environment variable. Repeat '
-             'for more than one. The value is in clear text in that file, which belongs '
-             'to one private home.')
+        help='Write one named secret into the secrets file of the private Horizon home of '
+             'the fixture, <private home>/.horizon/secrets.sqlite, so its agent panels read '
+             'NAME as an environment variable. Repeat for more than one. The value is in '
+             'clear text in that file, which belongs to one private home.')
     parser.add_argument(
         '--secret-row', action='append', metavar='ID=VALUE',
-        help='Write one credential value into the secrets file of the private home of the '
-             'fixture, such as credential/HETZNER_API_TOKEN=a-value, so a remote browser '
-             'provider of the fixture reads it. Repeat for more than one.')
+        help='Write one credential value into the secrets file of the private Horizon home '
+             'of the fixture, such as credential/HETZNER_API_TOKEN=a-value, so a remote '
+             'browser provider of the fixture reads it. Repeat for more than one.')
     parser.add_argument(
         '--presets',
         type=Path,
@@ -485,7 +533,7 @@ def main():
         help='Command of the link on that server, when the default `horizon --server-link` does not '
              'fit, such as a full path; needs --server-target')
     parser.add_argument(
-        '--theme', choices=('auto', 'dark', 'light'), default='dark',
+        '--theme', choices=('auto', 'dark', 'light'), default=None,
         help='Set appearance.theme in the fixture config, default dark. The first start at a '
              'state path imports the value; a run with --reuse-state keeps the theme that the '
              'stored settings of that private home hold')
@@ -515,6 +563,14 @@ def main():
         parser.error('--server-command needs --server-target')
     if args.resume_session and args.saved_session:
         parser.error('--resume-session starts the saved board; do not give --saved-session as well')
+    if args.plain_start:
+        refused = plain_start_conflicts(args)
+        if refused:
+            parser.error(
+                '--plain-start starts the binary with no argument, so the home of the fixture '
+                'holds its own settings and its own session; remove '
+                + ', '.join(refused))
+    args.theme = args.theme or 'dark'
     try:
         width, height = (int(part) for part in args.screen.lower().split('x', 1))
     except ValueError:
@@ -620,8 +676,9 @@ def main():
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
         # The values of this run, and a value that an earlier run of the same private
-        # home wrote, are both rows of the secrets file that the candidate reads.
-        secrets_file = data / SECRETS_FILE_NAME
+        # home wrote, are both rows of the secrets file that the candidate reads,
+        # which is the file of the Horizon home below its masked `HOME`.
+        secrets_file = horizon_secrets_file(box.private_home)
         if named_secrets or secret_rows:
             seed_secret_rows(secrets_file, named_secrets, secret_rows)
         held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
@@ -629,9 +686,13 @@ def main():
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
             args.server_command, named_secret_names(held))
-        config.write_text(json.dumps(fixture, indent=2))
+        if not args.plain_start:
+            # A plain start keeps the home as its own settings writer: the fixture
+            # writes no settings file into that home.
+            config.write_text(json.dumps(fixture, indent=2))
         # All client helpers see the same masked home and private XDG paths.
-        application_process = spawn('horizon', application_command(app, config, args.saved_session, args.resume_session))
+        application_process = spawn('horizon', application_command(
+            app, config, args.saved_session, args.resume_session, args.plain_start))
         vnc_log = log_path('vnc').open('wb')
         vnc = spawn_with_log('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
                                     '-localhost', '-autoport', '40000', '-viewonly', '-forever',
@@ -647,7 +708,9 @@ def main():
         manifest = {'display': env['DISPLAY'], 'viewer_url': url,
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
                     'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
-                    'session': 'resumed' if args.resume_session else ('saved' if args.saved_session else 'ephemeral'),
+                    'session': ('plain' if args.plain_start
+                                else ('resumed' if args.resume_session
+                                      else ('saved' if args.saved_session else 'ephemeral'))),
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))

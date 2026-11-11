@@ -152,6 +152,17 @@ board that an earlier run saved in the private home. Give it with `--reuse-state
 and without `--saved-session`; it is how a procedure quits the candidate and starts
 it again on the same board. The fixture refuses the combination that names both.
 
+`--plain-start` gives the binary no argument at all, so it starts in the private
+home of the state folder and reads and writes the default paths of that home:
+`<private home>/.horizon/settings.sqlite`, its sessions and its secrets file. Give
+it with `--reuse-state`, so a first run with the binary of an older release makes
+the home and a second run with the candidate starts on that same home. That is how
+the upgrade procedure shows an upgrade from a release. A plain start refuses every
+option that writes the settings or the session of the fixture, such as
+`--presets`, `--panels`, `--theme`, `--browser-host`, `--server-target`,
+`--named-secret` and `--saved-session`, because the home of the fixture holds its
+own settings and its own session in that run.
+
 `--panels FILE` opens extra workspace panels at start from a JSON list of
 terminal entries, so a procedure that needs an agent panel, a scripted client or
 another command keeps the same viewer and needs no click. An entry without a
