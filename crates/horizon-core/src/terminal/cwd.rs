@@ -186,11 +186,13 @@ fn parse_pgrep_pid(output: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use super::{CwdReader, parse_first_child_pid, parse_lsof_cwd, parse_pgrep_pid, read_cwd};
     use crate::bounded_program::ProgramEnvironment;
+    use crate::bounded_program::bound_clock::{self, TestClock};
     use crate::util::stand_in_program_in;
 
     /// A folder of stand-in programs that a test points the reader at, so no
@@ -285,6 +287,23 @@ printf 'p300\nfcwd\nn{0}\n'"#,
         assert!(calls.contains("-p 300 -Fn"), "lsof reads the deepest child: {calls}");
     }
 
+    /// The pid that a stand-in wrote, once it has written the whole of it.
+    fn pid_in(file: &Path) -> u32 {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(file)
+                && let Ok(pid) = text.trim().parse()
+            {
+                return pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in of this test never wrote its pid"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
     fn a_program_that_passes_its_bound_is_ended_by_its_pid() {
         let stand_ins = StandIns::new();
@@ -296,11 +315,66 @@ printf 'p300\nfcwd\nn{0}\n'"#,
             "lsof",
             &format!(
                 r#"printf '%s\n' "$$" > "{0}"
-exec sleep 60"#,
+exec /bin/sleep 60"#,
                 pid_file.display()
             ),
         );
 
+        // The bound of this read runs on a clock that this test moves, so the bound
+        // begins to count only after the stand-in has written its pid: a machine that
+        // starts `/bin/sh` more slowly than the bound allows cannot take the bound
+        // away from the program that the bound must end.
+        let clock = Arc::new(TestClock::new());
+        let environment = stand_ins.environment();
+        let (answered, answer) = std::sync::mpsc::channel();
+        let read = {
+            let clock = Arc::clone(&clock);
+            std::thread::spawn(move || {
+                let _installed = bound_clock::install(clock);
+                let cwd = read_cwd(
+                    CwdReader::Programs,
+                    std::process::id(),
+                    &environment,
+                    Duration::from_millis(300),
+                );
+                let _ = answered.send(cwd);
+            })
+        };
+        let pid = pid_in(&pid_file);
+        // The walk starts one program for each level of the tree and reads the
+        // directory with another one, so the test moves the clock past the bound of
+        // every program of the read until the read answers.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let cwd = loop {
+            clock.advance(Duration::from_millis(300));
+            match answer.recv_timeout(Duration::from_millis(50)) {
+                Ok(cwd) => break cwd,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => assert!(
+                    Instant::now() < deadline,
+                    "the read of this test did not answer at its bound"
+                ),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the read of this test ended without an answer")
+                }
+            }
+        };
+        read.join().expect("the read of this test");
+
+        assert_eq!(cwd, None, "a bound that passes answers no directory");
+        assert!(
+            !process_is_alive(pid),
+            "the bound kills the exact child that it started: {pid}"
+        );
+    }
+
+    #[test]
+    fn a_read_ends_a_program_that_passes_its_bound_without_waiting_for_it() {
+        let stand_ins = StandIns::new();
+        stand_ins.program("pgrep", "exit 1");
+        stand_ins.program("lsof", "exec /bin/sleep 60");
+
+        // The clock of this process: the bound of the 300 ms read ends the program
+        // and the caller waits that bound, and not the program.
         let started = Instant::now();
         let cwd = read_cwd(
             CwdReader::Programs,
@@ -308,20 +382,16 @@ exec sleep 60"#,
             &stand_ins.environment(),
             Duration::from_millis(300),
         );
+        let waited = started.elapsed();
 
         assert_eq!(cwd, None, "a bound that passes answers no directory");
         assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the bound ends the read instead of waiting for the program"
+            waited >= Duration::from_millis(300),
+            "the read waits for its bound: {waited:?}"
         );
-        let pid: u32 = std::fs::read_to_string(&pid_file)
-            .expect("the stand-in recorded its pid")
-            .trim()
-            .parse()
-            .expect("a process id");
         assert!(
-            !process_is_alive(pid),
-            "the bound kills the exact child that it started: {pid}"
+            waited < Duration::from_secs(5),
+            "the bound ends the read instead of waiting for the program: {waited:?}"
         );
     }
 

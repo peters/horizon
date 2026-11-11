@@ -1,5 +1,7 @@
 //! The three programs of the import, run as stand-ins on a private `PATH`.
 
+use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, test_kill_process};
@@ -8,6 +10,7 @@ use super::super::readers::{Bound, libsecret, platform, secret_tool, security};
 use super::super::{KeyringImportError, KeyringImportPlan, Platform, ProgramEnvironment};
 use super::fixtures::settings;
 use super::stand_in::{StandIns, found};
+use crate::bounded_program::bound_clock::{self, TestClock};
 
 /// The endpoint of the provider of these tests.
 const ENDPOINT: &str = "https://grid.example.net/wd/hub";
@@ -164,6 +167,23 @@ fn a_locked_keyring_names_the_lock() {
     );
 }
 
+/// The pid that a stand-in wrote, once it has written the whole of it.
+fn pid_in(file: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(text) = std::fs::read_to_string(file)
+            && let Ok(pid) = text.trim().parse()
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in of this test never wrote its pid"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[test]
 fn a_search_that_passes_the_bound_is_ended_and_its_pid_is_gone() {
     let stand_ins = StandIns::new();
@@ -175,30 +195,56 @@ fn a_search_that_passes_the_bound_is_ended_and_its_pid_is_gone() {
             pid_file.display()
         )),
     );
-    let started = Instant::now();
 
+    // The bound of this reading runs on a clock that this test moves, so the bound
+    // begins to count only after the stand-in has written its pid: the program that
+    // the bound ends is a program that runs, on a computer of any load.
+    let clock = Arc::new(TestClock::new());
+    let environment = stand_ins.environment();
+    let read = {
+        let clock = Arc::clone(&clock);
+        std::thread::spawn(move || {
+            let _installed = bound_clock::install(clock);
+            secret_tool::read(&program, &environment, Bound::WholeImport(Duration::from_millis(400)))
+        })
+    };
+    let pid = pid_in(&pid_file);
+    clock.advance(Duration::from_millis(400));
+    let error = read.join().expect("the reading of this test").expect_err("a refusal");
+
+    assert!(error == KeyringImportError::TimedOut { seconds: 0 }, "{error}");
+    let pid = Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
+    assert_eq!(
+        test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH),
+        "the child of this import is gone, so the bound ended this pid"
+    );
+}
+
+#[test]
+fn a_search_that_passes_the_bound_does_not_hold_the_import() {
+    let stand_ins = StandIns::new();
+    let program = stand_ins.program("secret-tool", &script("exec /bin/sleep 30\n"));
+
+    // The clock of this process: the import waits its bound for a program that does
+    // not answer, and it does not wait for the program.
+    let started = Instant::now();
     let error = secret_tool::read(
         &program,
         &stand_ins.environment(),
         Bound::WholeImport(Duration::from_millis(400)),
     )
     .expect_err("a refusal");
+    let waited = started.elapsed();
 
     assert!(error == KeyringImportError::TimedOut { seconds: 0 }, "{error}");
     assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "the bound of the import ends the program, it does not wait for it"
+        waited >= Duration::from_millis(400),
+        "the import waits for its bound: {waited:?}"
     );
-    let pid: u32 = std::fs::read_to_string(&pid_file)
-        .expect("the stand-in wrote its pid")
-        .trim()
-        .parse()
-        .expect("a pid");
-    let pid = Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
-    assert_eq!(
-        test_kill_process(pid),
-        Err(rustix::io::Errno::SRCH),
-        "the child of this import is gone, so the bound ended this pid"
+    assert!(
+        waited < Duration::from_secs(10),
+        "the bound of the import ends the program, it does not wait for it: {waited:?}"
     );
 }
 

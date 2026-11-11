@@ -164,6 +164,120 @@ pub enum ProgramFailure {
     Failed,
 }
 
+/// The clock that the bound of one program of this process runs on.
+///
+/// A bound starts when its program starts, and the start of a program is work of the
+/// machine: a busy computer stretches it, and a test that proves that a *running*
+/// program is ended by its own pid must not race it. A test of this crate gives the
+/// bound of its thread a [`bound_clock::TestClock`] and moves that clock itself, so
+/// the program that the bound ends is a program that has shown that it runs.
+/// Production code always runs on the clock of this process.
+enum BoundClock {
+    /// The clock of this process.
+    System,
+    /// The clock of a test, which the test moves.
+    #[cfg(test)]
+    Test(std::sync::Arc<bound_clock::TestClock>),
+}
+
+impl BoundClock {
+    /// The clock of the bounds that this thread starts: the one that a test of this
+    /// thread installed, or the clock of this process.
+    fn of_this_thread() -> Self {
+        #[cfg(test)]
+        if let Some(clock) = bound_clock::installed() {
+            return Self::Test(clock);
+        }
+        Self::System
+    }
+
+    /// The time of this clock now.
+    fn now(&self) -> Instant {
+        match self {
+            Self::System => Instant::now(),
+            #[cfg(test)]
+            Self::Test(clock) => clock.now(),
+        }
+    }
+}
+
+/// The clock that a test gives the bound of a program.
+///
+/// The value belongs to one thread: a test installs it on the thread that runs the
+/// programs of the test, so parallel tests never read the bound of another one.
+#[cfg(test)]
+pub(crate) mod bound_clock {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    thread_local! {
+        /// The clock of the bounds of this thread, while a test holds one.
+        static INSTALLED: RefCell<Option<Arc<TestClock>>> = const { RefCell::new(None) };
+    }
+
+    /// A clock that only a test moves, so the bound of a program waits for the test
+    /// and never for a slow start of a program.
+    ///
+    /// A test waits until its stand-in has written the proof that it runs, and only
+    /// then moves this clock past the bound. A program that the bound ends is then a
+    /// program that runs, on a computer of any load.
+    #[derive(Debug)]
+    pub(crate) struct TestClock {
+        start: Instant,
+        moved_ms: AtomicU64,
+    }
+
+    impl TestClock {
+        /// A clock at the instant that it is made.
+        pub(crate) fn new() -> Self {
+            Self {
+                start: Instant::now(),
+                moved_ms: AtomicU64::new(0),
+            }
+        }
+
+        /// The time of this clock now.
+        pub(crate) fn now(&self) -> Instant {
+            self.start + Duration::from_millis(self.moved_ms.load(Ordering::SeqCst))
+        }
+
+        /// Move the clock forward by `duration`.
+        pub(crate) fn advance(&self, duration: Duration) {
+            let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+            self.moved_ms.fetch_add(millis, Ordering::SeqCst);
+        }
+    }
+
+    /// The clock of the bounds of every program that this thread starts, until the
+    /// value goes.
+    #[must_use = "the clock of a test is installed while this value lives"]
+    pub(crate) struct Installed {
+        previous: Option<Arc<TestClock>>,
+    }
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            INSTALLED.with(|slot| {
+                *slot.borrow_mut() = previous;
+            });
+        }
+    }
+
+    /// Installs `clock` as the clock of the bounds that this thread starts.
+    pub(crate) fn install(clock: Arc<TestClock>) -> Installed {
+        let previous = INSTALLED.with(|slot| slot.borrow_mut().replace(clock));
+        Installed { previous }
+    }
+
+    /// The clock that this thread installed, if it holds one.
+    pub(crate) fn installed() -> Option<Arc<TestClock>> {
+        INSTALLED.with(|slot| slot.borrow().clone())
+    }
+}
+
 /// Run `program`, a path that [`ProgramEnvironment::find`] answered, with `args`
 /// and a cleared environment. The whole run is bounded by `bound`.
 ///
@@ -186,7 +300,8 @@ pub fn run(
     environment.apply(&mut command);
     let mut child = spawn(&mut command)?;
     let reading = reading(&mut child);
-    let deadline = Instant::now() + bound;
+    let clock = BoundClock::of_this_thread();
+    let deadline = clock.now() + bound;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -201,7 +316,7 @@ pub fn run(
                 return Err(ProgramFailure::Failed);
             }
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             // The bound passed: this pid alone, and then reap it.
             let _ = child.kill();
             let _ = child.wait();
