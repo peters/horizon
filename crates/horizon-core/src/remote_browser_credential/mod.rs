@@ -66,6 +66,21 @@ impl CredentialLocator {
             slot: binding.slot.clone(),
         }
     }
+
+    /// The id under which the secrets file of this computer holds the value:
+    /// `named/<NAME>` for a named secret, and `credential/<reference>` for the
+    /// value of a provider. A reference is 1 to 64 characters of letters, digits,
+    /// `.`, `_` and `-`, so it never starts with `named/` and the two kinds never
+    /// read each other's row.
+    #[must_use]
+    pub fn secret_id(&self) -> String {
+        let reference = self.reference.as_str();
+        if reference.starts_with(crate::secret::NAMED_PREFIX) {
+            reference.to_owned()
+        } else {
+            format!("{}{reference}", crate::secret::CREDENTIAL_PREFIX)
+        }
+    }
 }
 
 /// Destination for one copy of a secret. Sealed: implementations live in this
@@ -108,6 +123,10 @@ pub enum RemoteCredentialError {
     Missing,
     #[error("no OS credential store is available on this computer")]
     StoreUnavailable,
+    /// The one file of the secret values of this computer cannot be used. It is a
+    /// fault of this computer and not a way of life, so the text names the file.
+    #[error("the secrets file {path} cannot be read or written: {reason}")]
+    File { path: std::path::PathBuf, reason: String },
     #[error("credential value is empty or larger than {MAX_SECRET_BYTES} bytes")]
     InvalidValue,
     #[error("credential value is not printable ASCII without control characters")]

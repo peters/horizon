@@ -30,6 +30,7 @@ mod retired_panel_kinds;
 mod runtime_state;
 pub mod search;
 pub mod secret;
+pub mod secret_store;
 mod session_store;
 mod shortcuts;
 mod ssh;

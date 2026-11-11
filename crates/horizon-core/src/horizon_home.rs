@@ -139,6 +139,14 @@ impl HorizonHome {
         self.root.join("machines")
     }
 
+    /// The one file that holds every secret value of this home: the values of the
+    /// credential references of its remote browser providers and the values of its
+    /// named secrets. It is `0600` in this home, which is `0700`.
+    #[must_use]
+    pub fn secrets_path(&self) -> PathBuf {
+        self.root.join(crate::secret_store::SECRETS_FILE_NAME)
+    }
+
     #[must_use]
     pub fn claude_plugin_dir(&self) -> PathBuf {
         self.plugins_dir().join("claude-code")
@@ -351,6 +359,7 @@ mod tests {
             home.browser_profile_dir("panel-1"),
             PathBuf::from("/tmp/horizon-home/browser-profiles/%70616e656c2d31")
         );
+        assert_eq!(home.secrets_path(), PathBuf::from("/tmp/horizon-home/secrets.sqlite"));
         assert_eq!(
             home.browser_profile_dir("../outside"),
             PathBuf::from("/tmp/horizon-home/browser-profiles/%2e2e2f6f757473696465")
