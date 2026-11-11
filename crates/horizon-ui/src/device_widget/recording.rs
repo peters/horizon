@@ -446,12 +446,16 @@ mod tests {
                 // The drop queues the recursive delete of the folder for the
                 // coordination worker, which the exit flushes.
                 let queued = crate::app::take_queued_recording_directories();
-                let folder = std::path::Path::new(&path)
-                    .parent()
-                    .expect("the folder of the video")
-                    .to_path_buf();
+                let folder = std::path::Path::new(&path).parent().expect("the folder of the video");
+                // The encoder reports the resolved folder of the video, and macOS
+                // spells one folder below `/var` two ways: the folder that the
+                // recording made and the folder that its video names are the same
+                // folder, so compare the folders and not their spelling.
+                let folder = std::fs::canonicalize(folder).expect("the folder of the video exists");
                 assert!(
-                    queued.contains(&folder),
+                    queued
+                        .iter()
+                        .any(|candidate| std::fs::canonicalize(candidate).is_ok_and(|made| made == folder)),
                     "the drop queues the folder of the video: {queued:?}"
                 );
                 for queued in queued {
