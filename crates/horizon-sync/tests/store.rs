@@ -530,3 +530,42 @@ fn a_file_of_a_newer_horizon_is_refused_and_a_damaged_one_is_reported() {
     std::fs::write(&damaged, b"this is not a database").expect("a damaged file");
     assert!(Store::open(&damaged).is_err(), "a file that is not a store is refused");
 }
+
+/// The store and the two files that SQLite keeps beside it are private: the
+/// server user alone reads them, whatever the umask of the process that started
+/// the server.
+#[test]
+fn the_store_and_its_write_ahead_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sqlite");
+    let store = Store::open(&path).expect("a new store");
+    // One push makes the write-ahead log and its shared index, which a store
+    // that has not written yet may not have made.
+    applied(&store, "mbp-7c1", put_machine("mbp-7c1", 1, "build-1"));
+
+    let mode_of = |path: &std::path::Path| {
+        std::fs::metadata(path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let log = temp.path().join("server.sqlite-wal");
+    let index = temp.path().join("server.sqlite-shm");
+    assert_eq!(mode_of(&path), 0o600, "the store is the server user's alone");
+    assert!(log.exists(), "a written store keeps its write-ahead log");
+    assert_eq!(mode_of(&log), 0o600, "the write-ahead log is private too");
+    assert_eq!(mode_of(&index), 0o600, "the shared index is private too");
+    store.close();
+
+    // A file that an older Horizon made with the default mode is made private
+    // again instead of staying readable for everyone who reaches its directory.
+    let loose = temp.path().join("loose.sqlite");
+    std::fs::write(&loose, b"").expect("an empty file");
+    std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).expect("a loose mode");
+    let store = Store::open(&loose).expect("the store of a loose file");
+    assert_eq!(mode_of(&loose), 0o600, "a loose file is made private at the start");
+    store.close();
+}

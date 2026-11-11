@@ -6,7 +6,12 @@
 //! the schema version; a version that this Horizon does not know is refused, never
 //! migrated down.
 
-use std::{path::Path, time::Duration};
+use std::{
+    fs::{self, OpenOptions},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::Path,
+    time::Duration,
+};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
@@ -14,6 +19,10 @@ use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
 pub(super) const SCHEMA_VERSION: i64 = 1;
+
+/// The mode of the file of the store, which SQLite copies to its `-wal` and
+/// `-shm` files: the server user alone reads or writes the store.
+const STORE_MODE: u32 = 0o600;
 
 /// How long a connection waits for another connection of the same file.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,12 +88,50 @@ const META_SCHEMA_VERSION: &str = "schema_version";
 
 /// Opens the write connection with the pragmas of the store.
 ///
+/// The file is made private before SQLite opens it. A file that SQLite creates
+/// itself takes the mode of the umask of the process, which is 0644 for a process
+/// that a service manager started, and the server home protects the names of the
+/// files only: a person who can reach the directory of a shared home could read
+/// the store. SQLite copies the mode of the database file to the `-wal` and `-shm`
+/// files that it makes, so these two are private as well.
+///
 /// # Errors
 /// Returns why the file cannot be opened or configured.
 pub(super) fn open(path: &Path) -> Result<Connection, StoreError> {
+    make_private(path)?;
     let connection = Connection::open(path)?;
     connection.execute_batch(PRAGMAS)?;
     Ok(connection)
+}
+
+/// Makes the file of the store, or a file that an older Horizon made before this
+/// rule, reachable by the server user alone.
+///
+/// # Errors
+/// Returns why the file cannot be created or made private.
+fn make_private(path: &Path) -> Result<(), StoreError> {
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .mode(STORE_MODE)
+        .open(path)
+        .map_err(|error| file_error(path, &error))?;
+    let mode = file
+        .metadata()
+        .map_err(|error| file_error(path, &error))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if mode != STORE_MODE {
+        file.set_permissions(fs::Permissions::from_mode(STORE_MODE))
+            .map_err(|error| file_error(path, &error))?;
+    }
+    Ok(())
+}
+
+fn file_error(path: &Path, error: &std::io::Error) -> StoreError {
+    StoreError::File(format!("{}: {error}", path.display()))
 }
 
 /// Opens a read connection: no pragma that writes, so a reader never waits for
