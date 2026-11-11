@@ -33,6 +33,7 @@ mod shortcuts;
 mod ssh;
 mod terminal;
 mod transcript;
+pub mod ui_thread;
 mod util;
 mod view;
 mod workspace;
