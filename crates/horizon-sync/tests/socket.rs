@@ -153,3 +153,35 @@ fn the_stdio_link_reports_a_socket_that_is_not_there() {
         "the refusal names the path: {refused}"
     );
 }
+
+/// A link whose standard input stays open must still end when the socket ends.
+/// This is the state of an idle computer: nothing of this computer writes, the
+/// server stops or dies, and the mode of the link must end instead of waiting for
+/// a byte that never comes.
+#[test]
+fn a_relay_returns_within_a_second_when_the_socket_ends_while_the_input_stays_open() {
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sock");
+    let listener = UnixListener::bind(&path).expect("the socket listener");
+
+    // The two halves of the mode of a link: the standard input that nothing
+    // writes to, and the standard output that nothing reads. Both pipes stay open
+    // for the whole test, so neither side ends on its own.
+    let (requests, _requests_open) = std::io::pipe().expect("the input of the relay");
+    let (_answers_open, answers) = std::io::pipe().expect("the output of the relay");
+    let (returned, returning) = std::sync::mpsc::channel();
+    let relaying = thread::spawn(move || {
+        let result = relay(requests, answers, &path);
+        let _ = returned.send(result.is_ok());
+    });
+
+    // The server side of the link connects and then goes, as a stopped server does.
+    let (peer, _address) = listener.accept().expect("the link of the relay");
+    drop(peer);
+    assert_eq!(
+        returning.recv_timeout(Duration::from_secs(1)),
+        Ok(true),
+        "the relay returned at once after the socket ended"
+    );
+    relaying.join().expect("the relay thread");
+}

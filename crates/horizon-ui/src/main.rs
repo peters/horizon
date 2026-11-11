@@ -59,6 +59,12 @@ fn main() -> eframe::Result {
     // agent integration of the desktop, because a server must never read or
     // write the home of the person. The exit codes steer a service manager, so
     // they leave here and not through the window.
+    //
+    // The exit is also what ends the link mode: its relay returns when the socket
+    // of the server ends, and the thread that reads its standard input stays in
+    // a read that nothing of this process ends. A return through the window would
+    // wait for that thread, so a stopped server would leave one child of every
+    // idle computer alive for ever.
     if let Some(mode) = sync_mode() {
         std::process::exit(run_sync_mode(mode));
     }

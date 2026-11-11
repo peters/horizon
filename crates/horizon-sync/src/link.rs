@@ -179,6 +179,12 @@ fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool, links
 /// Relays the frames of one child of this computer: its stdin and stdout carry
 /// the bytes of the link, and the socket of the server is the other side.
 ///
+/// The call returns as soon as the socket ends, which is the case when the server
+/// stops or dies. The mode of this call must end its process after it returns:
+/// the thread that reads the standard input of the mode waits in a read that
+/// nothing of this process ends, so the process would stay alive with a link to
+/// nothing while the server is away.
+///
 /// # Errors
 /// Returns why the socket cannot be reached. A link that ends answers `Ok(())`.
 pub fn run_link_stdio_to_unix_socket(path: &Path) -> Result<(), SocketError> {
@@ -186,6 +192,14 @@ pub fn run_link_stdio_to_unix_socket(path: &Path) -> Result<(), SocketError> {
 }
 
 /// Relays one pair of streams to `path` until either side ends.
+///
+/// The socket side is the bound of this call. Three things end it, and each of
+/// them returns here at once: the end of the socket, a failed read or write of
+/// it, and the end of `reader`, whose thread then ends the write half of the
+/// socket. The read of `reader` is not waited for after the socket ended, so a
+/// server that stops ends the call of a mode whose standard input is still open
+/// and has no further byte to give. The thread that reads it stays with the
+/// process until the process ends.
 ///
 /// # Errors
 /// Returns why the socket cannot be reached.
@@ -207,7 +221,14 @@ where
     let mut inward = socket;
     let mut writer = writer;
     copy(&mut inward, &mut writer);
-    let _ = carrying.join();
+    // The socket reached its end, so the link is over in both directions and the
+    // caller must return now. The carrying thread may still wait in the read of
+    // `reader`, which is a read that this side cannot end: dropping its handle
+    // detaches it instead of holding the caller for as long as the other side
+    // stays open.
+    drop(carrying);
+    let _ = inward.shutdown(Shutdown::Both);
+    let _ = writer.flush();
     Ok(())
 }
 
