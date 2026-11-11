@@ -51,7 +51,7 @@ pub use models::{
     PanelTemplateRef, WorkspaceState, WorkspaceTemplateRef,
 };
 
-const RUNTIME_STATE_VERSION: u32 = 3;
+pub(crate) const RUNTIME_STATE_VERSION: u32 = 3;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_CLAUDE_SESSION_FILES: usize = 64;

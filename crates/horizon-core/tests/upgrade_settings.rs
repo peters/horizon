@@ -221,7 +221,10 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
     assert_eq!(config.remote_hosts.vnc_port, 5901);
     assert_eq!(config.remote_hosts.vnc_ports.get("build.example.net"), Some(&5902));
     assert_eq!(config.remote_hosts.vnc_ports.get("lab"), Some(&5903));
-    assert_eq!(config.browser_host.ssh_target.as_deref(), Some("browser-vm.example.net"));
+    assert_eq!(
+        config.browser_host.ssh_target.as_deref(),
+        Some("browser-vm.example.net")
+    );
     assert_eq!(config.browser_host.profile.as_deref(), Some("mail"));
 
     let browser = &config.browser;
@@ -236,8 +239,14 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
     assert_eq!(browser.extra_args, vec!["--disable-features=Translate".to_string()]);
     assert_eq!(browser.quality, 75);
     assert_eq!(browser.every_nth_frame, 2);
-    assert_eq!(browser.profile_root.as_deref(), Some(Path::new("/home/user/browser-profiles")));
-    assert_eq!(browser.downloads_root.as_deref(), Some(Path::new("/home/user/Downloads")));
+    assert_eq!(
+        browser.profile_root.as_deref(),
+        Some(Path::new("/home/user/browser-profiles"))
+    );
+    assert_eq!(
+        browser.downloads_root.as_deref(),
+        Some(Path::new("/home/user/Downloads"))
+    );
     assert_eq!(browser.video.quality, 70);
     assert_eq!(browser.video.compression_level, 6);
     assert_eq!(browser.video.fps, 15);

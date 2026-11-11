@@ -7,9 +7,11 @@ mod runtime_index;
 mod tests;
 pub(crate) mod writer;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -18,7 +20,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::retired_panel_kinds::RetiredPanels;
-use crate::runtime_state::RuntimeState;
+use crate::runtime_state::{RUNTIME_STATE_VERSION, RuntimeState};
 use index_file::{IndexChange, IndexFile};
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
 
@@ -51,18 +53,22 @@ pub struct SessionStore {
     profile_id: String,
     index: runtime_index::IndexCache,
     writer: writer::Writer,
+    /// The sessions whose board came from an older build or lost panels of a
+    /// removed kind, so the first write of this build keeps the old file.
+    boards_of_older_builds: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl SessionStore {
     #[must_use]
     pub fn new(home: HorizonHome, config_path: PathBuf) -> Self {
-        let profile_id = profile_id_for_config_path(&config_path);
+        let profile_id = profile_id_for_home(&home, &config_path);
         Self {
             home,
             config_path,
             profile_id,
             index: runtime_index::IndexCache::default(),
             writer: writer::Writer::default(),
+            boards_of_older_builds: Arc::default(),
         }
     }
 
@@ -379,6 +385,10 @@ impl SessionStore {
     }
 
     /// Writes the board, the runtime index and the metadata of `session_id` with `write`.
+    ///
+    /// A board that an older build wrote, or one that lost the panels of a
+    /// removed kind, keeps a copy beside its file at this first write, so a person
+    /// who goes back to the older build finds the board that it saved.
     fn write_runtime_state(
         &self,
         session_id: &str,
@@ -390,6 +400,7 @@ impl SessionStore {
         if let Some(parent) = runtime_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        self.keep_the_board_before_this_build(session_id, &runtime_path)?;
         let runtime_yaml = runtime_state.to_yaml()?;
         write(&runtime_path, runtime_yaml.as_bytes())?;
         self.index_runtime_state(session_id, runtime_state, &runtime_yaml);
@@ -405,6 +416,42 @@ impl SessionStore {
         let meta = existing_meta.updated(runtime_state, current_unix_millis());
         let meta_yaml = serde_yaml::to_string(&meta).map_err(|error| Error::State(error.to_string()))?;
         write(&meta_path, meta_yaml.as_bytes())
+    }
+
+    /// Copies the board of `session_id` to `runtime.yaml.before-<version>` once,
+    /// when it came from an older build or lost the panels of a removed kind. The
+    /// copy is made in the write that the caller already does, and never again: the
+    /// file next to the board is for the person who goes back to the older build.
+    fn keep_the_board_before_this_build(&self, session_id: &str, runtime_path: &Path) -> Result<()> {
+        let waits_for_a_copy = {
+            let mut waiting = self
+                .boards_of_older_builds
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            waiting.remove(session_id)
+        };
+        if !waits_for_a_copy || !runtime_path.is_file() {
+            return Ok(());
+        }
+        let before = self.home.session_runtime_before_path(session_id, RUNTIME_STATE_VERSION);
+        if before.exists() {
+            return Ok(());
+        }
+        fs::copy(runtime_path, &before)?;
+        tracing::info!(
+            session = session_id,
+            kept = %before.display(),
+            "the board of an older build stays beside the board of this build"
+        );
+        Ok(())
+    }
+
+    /// Remembers that the next write of `session_id` keeps the board that it read.
+    fn note_board_of_an_older_build(&self, session_id: &str) {
+        self.boards_of_older_builds
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(session_id.to_owned());
     }
 
     /// Writes `changes` in order to the session index under its locks, and returns the index
@@ -561,8 +608,23 @@ fn derive_session_label(runtime_state: &RuntimeState) -> Option<String> {
         .map(|workspace| workspace.name.clone())
 }
 
-fn profile_id_for_config_path(config_path: &Path) -> String {
-    let stable_path = fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+/// The profile id of a run: the hash of the settings path that the run of this
+/// home has always used.
+///
+/// A run of the usual home keeps the id that release v0.2.7 and the `main` build
+/// gave it, which is the id of `<home>/config.yaml`. The settings of this build
+/// are `<home>/config.json`, and the hash of that name would be a second profile
+/// with an empty board: the sessions, the last session and the browser profiles of
+/// the person would look gone, and a person who goes back to an older build would
+/// not find what this build wrote. A run that names its settings file keeps the
+/// id of that path, as before.
+fn profile_id_for_home(home: &HorizonHome, config_path: &Path) -> String {
+    let stable_path = if config_path == home.config_path() {
+        let root = fs::canonicalize(home.root()).unwrap_or_else(|_| home.root().to_path_buf());
+        root.join("config.yaml")
+    } else {
+        fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf())
+    };
     stable_state_key(&stable_path.to_string_lossy())
 }
 

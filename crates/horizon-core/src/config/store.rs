@@ -695,10 +695,7 @@ fn a_yaml_file_beside_a_store_is_not_read() {
 #[test]
 fn a_file_that_an_import_moved_aside_is_never_read() {
     let home = Home::new();
-    let moved = home
-        .root
-        .path()
-        .join("config.yaml.imported-1792777304");
+    let moved = home.root.path().join("config.yaml.imported-1792777304");
     std::fs::write(&moved, YAML_OF_THE_RELEASE).expect("write the moved file");
 
     let loaded = home.load_from_home().expect("a home with no settings at all");
@@ -739,7 +736,9 @@ fn a_yaml_file_of_a_newer_configuration_version_stops_the_start() {
     let text = format!("version: {}\nappearance:\n  theme: dark\n", CURRENT_CONFIG_VERSION + 1);
     let yaml = home.write_old_settings(&text);
 
-    let error = home.load_from_home().expect_err("a version above this build stops the start");
+    let error = home
+        .load_from_home()
+        .expect_err("a version above this build stops the start");
 
     let message = error.to_string();
     assert!(message.contains(&yaml.display().to_string()), "{message}");
@@ -747,7 +746,10 @@ fn a_yaml_file_of_a_newer_configuration_version_stops_the_start() {
         message.contains(&format!("newer Horizon, with version {}", CURRENT_CONFIG_VERSION + 1)),
         "{message}"
     );
-    assert!(!home.store_path().exists(), "no store is written from a version above this build");
+    assert!(
+        !home.store_path().exists(),
+        "no store is written from a version above this build"
+    );
 }
 
 #[test]
@@ -826,10 +828,7 @@ fn write_main_store(path: &std::path::Path, sections: &[(&str, &str)], mirror: &
 fn sections_of_main() -> Vec<(&'static str, &'static str)> {
     vec![
         ("version", "11"),
-        (
-            "window",
-            r#"{"width":1350.0,"height":860.0,"x":71.0,"y":39.0}"#,
-        ),
+        ("window", r#"{"width":1350.0,"height":860.0,"x":71.0,"y":39.0}"#),
         ("appearance", r#"{"theme":"dark"}"#),
         (
             "shortcuts",
@@ -857,10 +856,7 @@ fn sections_of_main() -> Vec<(&'static str, &'static str)> {
             r#"[{"name":"Git Changes","alias":"gc","kind":"git_changes","command":null,"args":[],"resume":"fresh"},{"name":"Markdown","alias":"md","kind":"editor","command":null,"args":[],"resume":"fresh"},{"name":"Usage","alias":"u","kind":"usage","command":null,"args":[],"resume":"fresh"}]"#,
         ),
         ("workspaces", "[]"),
-        (
-            "a_section_of_a_newer_build",
-            r#"{"keep":"me"}"#,
-        ),
+        ("a_section_of_a_newer_build", r#"{"keep":"me"}"#),
     ]
 }
 
@@ -884,10 +880,7 @@ fn the_store_that_main_wrote_opens_with_its_values() {
     assert_eq!(loaded.overlays.minimap_width, 360.0);
     assert!(loaded.features.organize_workspaces_on_session_load);
     assert!(loaded.features.sidebar_accordion);
-    assert_eq!(
-        loaded.browser.quality, 70,
-        "the browser section of main arrives"
-    );
+    assert_eq!(loaded.browser.quality, 70, "the browser section of main arrives");
     assert!(!loaded.browser.headless);
     assert_eq!(loaded.remote_hosts.default_workspace, "Remote Lab");
     assert_eq!(loaded.remote_hosts.vnc_ports.get("lab"), Some(&5902));
@@ -919,11 +912,7 @@ fn a_save_after_the_store_of_main_keeps_every_row_that_this_build_does_not_read(
     let connection = rusqlite::Connection::open(home.store_path()).expect("open the store");
     let section = |name: &str| -> Option<String> {
         connection
-            .query_row(
-                "SELECT data FROM settings WHERE section = ?1",
-                [name],
-                |row| row.get(0),
-            )
+            .query_row("SELECT data FROM settings WHERE section = ?1", [name], |row| row.get(0))
             .ok()
     };
     assert_eq!(
@@ -937,7 +926,9 @@ fn a_save_after_the_store_of_main_keeps_every_row_that_this_build_does_not_read(
         "the save wrote the section that changed"
     );
     let mirror: Option<String> = connection
-        .query_row("SELECT value FROM meta WHERE key = 'mirror_sha256'", [], |row| row.get(0))
+        .query_row("SELECT value FROM meta WHERE key = 'mirror_sha256'", [], |row| {
+            row.get(0)
+        })
         .ok();
     assert_eq!(
         mirror.as_deref(),

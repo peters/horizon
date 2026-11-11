@@ -14,7 +14,7 @@ use horizon_core::{Config, HorizonHome, PanelKind, SessionOpenDisposition, Sessi
 const SESSION_ID: &str = "9272f72e-d124-4012-9ca2-761544678156";
 /// The settings path that the release recorded. It names the profile of the
 /// saved session, so the store of this test is that profile.
-const CONFIG_PATH: &str = "/home/peters/.horizon/config.yaml";
+const CONFIG_PATH: &str = "/home/user/project/.horizon/config.yaml";
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

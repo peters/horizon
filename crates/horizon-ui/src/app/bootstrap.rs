@@ -91,7 +91,13 @@ impl HorizonApp {
         app.load_machines(egui_ctx);
 
         match startup {
-            StartupDecision::Open { session, .. } => app.activate_persistent_session(&session),
+            StartupDecision::Open { session, .. } => {
+                let left_out = session.retired_panels.clone();
+                app.activate_persistent_session(&session);
+                if let Some(notice) = super::board_notice::left_out_panels_notice(&left_out) {
+                    app.set_sidebar_notice(notice);
+                }
+            }
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
             StartupDecision::Choose(chooser) => app.startup_chooser = Some(StartupChooserState::new(chooser)),
         }

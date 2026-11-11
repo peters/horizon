@@ -407,8 +407,14 @@ impl Config {
             }
         };
 
-        let (mut config, migrated, origin) =
-            start_settings(stored, copy.as_deref(), require_settings, import_legacy, &store, &resolved)?;
+        let (mut config, migrated, origin) = start_settings(
+            stored,
+            copy.as_deref(),
+            require_settings,
+            import_legacy,
+            &store,
+            &resolved,
+        )?;
         let migrated = config_migration::migrate_in_memory(&mut config)? || migrated;
         config.validate()?;
         finish_start(&resolved, &config, migrated, origin);
@@ -725,7 +731,10 @@ enum SettingsFormat {
 /// a YAML mapping, so a document that reads as neither keeps the JSON error
 /// that names the format of this build.
 fn settings_format(text: &str) -> SettingsFormat {
-    if matches!(serde_json::from_str::<serde_json::Value>(text), Ok(serde_json::Value::Object(_))) {
+    if matches!(
+        serde_json::from_str::<serde_json::Value>(text),
+        Ok(serde_json::Value::Object(_))
+    ) {
         return SettingsFormat::Json;
     }
     match serde_yaml::from_str::<serde_yaml::Value>(text) {

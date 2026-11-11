@@ -377,3 +377,52 @@ fn a_store_in_memory_holds_a_value_and_no_file() {
     assert_eq!(value_of(&store, &credential("key")).as_deref(), Some(&b"one"[..]));
     assert!(!store.path().exists());
 }
+
+#[test]
+fn a_first_start_on_an_old_home_opens_its_secrets_file_once() {
+    let root = tempfile::tempdir().expect("a directory");
+    let path = home(root.path());
+    // The file of an older Horizon: it holds the schema and one value, and the
+    // last holder of the store let go of it, so this start is the first one to
+    // open it.
+    {
+        let mut old = SecretStore::open(path.clone()).expect("the file of the older build");
+        old.put(&crate::named_secrets::locator(&name()), b"a-value-of-the-older-build")
+            .expect("the value of the older build");
+    }
+    let opens_before = SecretStore::opens(&path);
+
+    let threads = 16;
+    let barrier = Arc::new(Barrier::new(threads));
+    let handles: Vec<_> = (0..threads)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                SecretStore::open(path).expect("the store of the one file")
+            })
+        })
+        .collect();
+    let stores: Vec<Arc<SecretStore>> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("the thread"))
+        .collect();
+
+    let first = &stores[0];
+    assert!(
+        stores.iter().all(|store| Arc::ptr_eq(first, store)),
+        "every reader of the start holds the one store of the file"
+    );
+    assert_eq!(
+        SecretStore::opens(&path),
+        opens_before + 1,
+        "a start makes one connection to the file, so its schema is made once and no error is \
+         logged"
+    );
+    assert_eq!(
+        value_of(first, &crate::named_secrets::locator(&name())).as_deref(),
+        Some(&b"a-value-of-the-older-build"[..]),
+        "the value of the older build is still in the file"
+    );
+}

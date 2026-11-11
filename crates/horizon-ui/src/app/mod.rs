@@ -6,6 +6,7 @@ mod block_machine_keys;
 mod block_machines;
 mod block_requests;
 mod block_terminals;
+mod board_notice;
 mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;

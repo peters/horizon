@@ -29,7 +29,7 @@ use serde::de::DeserializeOwned;
 use super::{SessionStore, current_unix_millis, stable_state_key};
 use crate::error::{Error, Result};
 use crate::retired_panel_kinds::{RetiredPanels, retired_kind_named};
-use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
+use crate::runtime_state::{PanelState, RUNTIME_STATE_VERSION, RuntimeState, WorkspaceState};
 use rows::{BoardRows, Encoded, Format};
 use schema::{check_header, header};
 
@@ -280,6 +280,9 @@ impl SessionStore {
                     .as_deref()
                     .is_none_or(|text| stored.yaml_digest.as_deref() == Some(yaml_digest(text).as_str())) =>
             {
+                if !stored.left_out.is_empty() {
+                    self.note_board_of_an_older_build(session_id);
+                }
                 return Ok(Some((stored.state, stored.left_out)));
             }
             Ok(Some(_)) => {
@@ -290,8 +293,26 @@ impl SessionStore {
             Err(error) if yaml.is_none() => return Err(error.into()),
             Err(error) => tracing::warn!("loading runtime.yaml of session {session_id}: {error}"),
         }
-        yaml.as_deref().map(RuntimeState::from_yaml_reporting).transpose()
+        let Some(text) = yaml.as_deref() else {
+            return Ok(None);
+        };
+        let (state, left_out) = RuntimeState::from_yaml_reporting(text)?;
+        if !left_out.is_empty() || board_version(text) < RUNTIME_STATE_VERSION {
+            self.note_board_of_an_older_build(session_id);
+        }
+        Ok(Some((state, left_out)))
     }
+}
+
+/// The board version of a `runtime.yaml` text, or `0` for a document that names
+/// none, which is a board of the first build that wrote one.
+fn board_version(yaml: &str) -> u32 {
+    #[derive(serde::Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: u32,
+    }
+    serde_yaml::from_str::<Version>(yaml).map_or(0, |named| named.version)
 }
 
 /// The digest of a `runtime.yaml` text, which tells whether the file changed after a save.

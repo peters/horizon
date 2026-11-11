@@ -103,6 +103,14 @@ impl HorizonHome {
         self.session_dir(session_id).join("runtime.yaml")
     }
 
+    /// The copy of a session's board from before the build `version` wrote it,
+    /// which the first write of that build leaves beside the board.
+    #[must_use]
+    pub fn session_runtime_before_path(&self, session_id: &str, version: u32) -> PathBuf {
+        self.session_dir(session_id)
+            .join(format!("runtime.yaml.before-{version}"))
+    }
+
     /// The SQLite runtime index of a session, next to its `runtime.yaml`.
     #[must_use]
     pub fn session_runtime_index_path(&self, session_id: &str) -> PathBuf {
