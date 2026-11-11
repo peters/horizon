@@ -1,7 +1,47 @@
 use horizon_core::{Config, RuntimeState, StartupDecision};
 
 use super::SettingsStatus;
-use crate::app::test_support::test_app_with_startup;
+use crate::app::test_support::{run_app_frame, test_app_with_startup};
+
+#[test]
+fn a_changed_store_reaches_the_window_through_the_settings_worker() {
+    // The frame path of the watch runs under the guard in strict mode: the time
+    // of the store and its content are read on the settings worker.
+    horizon_core::ui_thread::use_strict_mode();
+    let (temp, ctx, mut app) = crate::app::test_support::test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    // The first frame hears the time of the store, which is the baseline of this
+    // run and not a change.
+    run_app_frame(&ctx, &mut app);
+    app.wait_for_settings_io();
+    assert!(app.config_mtime_known, "the worker reported the time of the store");
+
+    // A watch within the two seconds of the last one reads nothing.
+    app.config_last_check = Some(std::time::Instant::now());
+    run_app_frame(&ctx, &mut app);
+    assert!(!app.config_probe_pending, "the watch waits for its two seconds");
+
+    // Another window writes the store of this home.
+    let changed = Config {
+        appearance: horizon_core::AppearanceConfig {
+            theme: horizon_core::AppearanceTheme::Light,
+        },
+        ..app.template_config.clone()
+    };
+    horizon_core::Config::save(&app.config_path, &changed).expect("the settings of another window");
+
+    app.config_last_check = None;
+    run_app_frame(&ctx, &mut app);
+    app.wait_for_settings_io();
+    app.wait_for_settings_io();
+    assert_eq!(
+        app.appearance_theme,
+        horizon_core::AppearanceTheme::Light,
+        "the window applied the settings that the worker read"
+    );
+    drop(temp);
+}
 
 /// The texts that one headless frame of `render` draws, and whether that frame
 /// changed a value of the draft.

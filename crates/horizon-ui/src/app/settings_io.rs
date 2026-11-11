@@ -12,10 +12,22 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 use horizon_core::Config;
 
+use std::time::SystemTime;
+
 /// One request for the worker thread.
 enum Request {
-    Save { path: PathBuf, config: Box<Config> },
-    Reload { path: PathBuf },
+    Save {
+        path: PathBuf,
+        config: Box<Config>,
+    },
+    Reload {
+        path: PathBuf,
+    },
+    /// Reads the time of the last write of the store, so a frame knows whether
+    /// the settings changed without reading the store itself.
+    Probe {
+        path: PathBuf,
+    },
 }
 
 /// What the worker did, for the window to apply.
@@ -25,6 +37,9 @@ pub(super) enum SettingsReply {
     /// The settings of `path`, or `None` when the store and the copy did not
     /// exist.
     Reloaded { path: PathBuf, config: Option<Box<Config>> },
+    /// The time of the last write of the store, which decides whether a frame
+    /// reads the settings again.
+    Probed { mtime: Option<SystemTime> },
     /// The request failed. `what` says which one.
     Failed { what: &'static str, error: String },
 }
@@ -82,6 +97,12 @@ impl SettingsIo {
         self.send(Request::Reload { path });
     }
 
+    /// Read the time of the last write of the store on the worker, so the frame
+    /// that watches the settings reads no file.
+    pub(super) fn probe(&self, path: PathBuf) {
+        self.send(Request::Probe { path });
+    }
+
     /// The next reply, when the worker has one. It never waits.
     pub(super) fn poll(&self) -> Option<SettingsReply> {
         match self.replies.try_recv() {
@@ -112,6 +133,9 @@ fn serve(request: Request) -> SettingsReply {
                 error: error.to_string(),
             },
         },
+        Request::Probe { path } => SettingsReply::Probed {
+            mtime: settings_mtime(&path),
+        },
         Request::Reload { path } => {
             let store = horizon_core::config_store::ConfigStore::resolve(&path);
             if !path.exists() && !store.path().exists() {
@@ -129,6 +153,20 @@ fn serve(request: Request) -> SettingsReply {
             }
         }
     }
+}
+
+/// The time of the last write of the settings store of `config_path`.
+///
+/// A settings file is not the store, so an edit of one does not reload the
+/// window. This reads the file system, so only the settings worker calls it.
+fn settings_mtime(config_path: &std::path::Path) -> Option<SystemTime> {
+    horizon_core::ui_thread::blocking("the time of the settings store is read");
+    let store_path = horizon_core::config_store::ConfigStore::resolve(config_path)
+        .path()
+        .to_path_buf();
+    std::fs::metadata(store_path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
 }
 
 #[cfg(test)]
@@ -165,7 +203,7 @@ mod tests {
                 assert_eq!(config.appearance.theme, horizon_core::AppearanceTheme::Light);
             }
             SettingsReply::Failed { error, .. } => panic!("{error}"),
-            SettingsReply::Reloaded { .. } => panic!("a save answered a reload"),
+            SettingsReply::Reloaded { .. } | SettingsReply::Probed { .. } => panic!("a save answered a reload"),
         }
         assert!(
             horizon_core::config_store::ConfigStore::resolve(&path).path().is_file(),
@@ -197,7 +235,7 @@ mod tests {
                 assert_eq!(config.appearance.theme, horizon_core::AppearanceTheme::Light);
             }
             SettingsReply::Failed { error, .. } => panic!("{error}"),
-            SettingsReply::Saved { .. } => panic!("a reload answered a save"),
+            SettingsReply::Saved { .. } | SettingsReply::Probed { .. } => panic!("a reload answered a save"),
         }
     }
 
@@ -209,7 +247,32 @@ mod tests {
         match wait(&io) {
             SettingsReply::Reloaded { config, .. } => assert!(config.is_none()),
             SettingsReply::Failed { error, .. } => panic!("{error}"),
-            SettingsReply::Saved { .. } => panic!("a reload answered a save"),
+            SettingsReply::Saved { .. } | SettingsReply::Probed { .. } => panic!("a reload answered a save"),
         }
+    }
+
+    #[test]
+    fn a_probe_reports_the_time_of_the_store_and_never_its_settings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        let io = SettingsIo::new();
+        assert!(matches!(
+            wait_after(&io, Request::Probe { path: path.clone() }),
+            SettingsReply::Probed { mtime: None }
+        ));
+
+        io.save_config(path.clone(), Config::default());
+        let _ = wait(&io);
+        match wait_after(&io, Request::Probe { path }) {
+            SettingsReply::Probed { mtime: Some(_) } => {}
+            SettingsReply::Probed { mtime: None } => panic!("a store that a save wrote has a time"),
+            SettingsReply::Failed { error, .. } => panic!("{error}"),
+            SettingsReply::Saved { .. } | SettingsReply::Reloaded { .. } => panic!("a probe answered settings"),
+        }
+    }
+
+    fn wait_after(io: &SettingsIo, request: Request) -> SettingsReply {
+        io.send(request);
+        wait(io)
     }
 }

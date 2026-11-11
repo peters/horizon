@@ -172,20 +172,14 @@ impl HorizonApp {
         }
         self.config_last_check = Some(now);
 
-        let current_mtime = super::util::settings_mtime(&self.config_path);
-
-        if current_mtime == self.config_last_mtime {
+        if self.config_probe_pending || self.settings_reload_pending {
+            // One read at a time; the reply of the worker applies the settings.
             return;
         }
-        if self.settings_reload_pending {
-            // One read at a time; the reply applies the settings.
-            return;
-        }
-        self.config_last_mtime = current_mtime;
-        self.settings_reload_pending = true;
-        // The read waits on the settings thread, and its reply applies the
-        // settings in a later frame.
-        self.settings_io.reload(self.config_path.clone());
+        // The time of the store is a read of the file system, so the settings
+        // worker reports it and a later frame decides.
+        self.config_probe_pending = true;
+        self.settings_io.probe(self.config_path.clone());
     }
 
     /// Restarts a panel now, because the person picked its "Reconnect" action

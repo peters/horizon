@@ -75,7 +75,9 @@ impl HorizonApp {
         let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 
-        let config_last_mtime = super::util::settings_mtime(&config_path);
+        // The time of the store comes from the settings worker on the first
+        // frame, so the window opens without reading it.
+        let config_last_mtime = None;
 
         let bootstrap = AppBootstrap {
             config_path,
@@ -171,7 +173,8 @@ impl HorizonApp {
             template_config: config.clone(),
             shortcuts,
             presets: config.ssh_presets(&[]), ssh_hosts: SshHostsRead::default(),
-            settings_hosts_refreshed: false, window_config: config.window.clone(),
+            settings_hosts_refreshed: false, config_mtime_known: false,
+            config_probe_pending: false, config_last_check: None, window_config: config.window.clone(),
             detached_workspaces: BTreeMap::new(),
             pending_detached_reattach: BTreeSet::new(),
             pending_detached_window_position_restore: BTreeSet::new(),
@@ -220,7 +223,6 @@ impl HorizonApp {
             clipboard_images: crate::clipboard_image::ClipboardImages::new(),
             terminal_selection_drag: TerminalSelectionDragState::default(),
             config_last_mtime,
-            config_last_check: None,
             shutdown_progress: None,
             pending_session_switch: None, exit_cleanup_complete: false,
             exit_save_deadline: None,

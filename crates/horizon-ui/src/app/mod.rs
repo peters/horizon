@@ -389,6 +389,11 @@ pub struct HorizonApp {
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     config_last_mtime: Option<std::time::SystemTime>,
+    /// Whether a frame heard the time of the store once, so the next report is a
+    /// change and not the start.
+    config_mtime_known: bool,
+    /// Whether the settings worker reads the time of the store now.
+    config_probe_pending: bool,
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,
     pending_session_switch: Option<PendingSessionSwitch>,

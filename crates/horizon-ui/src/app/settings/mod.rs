@@ -278,6 +278,19 @@ impl HorizonApp {
                     self.board.sync_workspace_metadata(&self.template_config);
                     tracing::info!(path = %path.display(), "settings saved");
                 }
+                SettingsReply::Probed { mtime } => {
+                    self.config_probe_pending = false;
+                    if !self.config_mtime_known {
+                        // The first report of this run is the baseline: nothing
+                        // changed while the window opened.
+                        self.config_mtime_known = true;
+                        self.config_last_mtime = mtime;
+                    } else if mtime != self.config_last_mtime && !self.settings_reload_pending {
+                        self.config_last_mtime = mtime;
+                        self.settings_reload_pending = true;
+                        self.settings_io.reload(self.config_path.clone());
+                    }
+                }
                 SettingsReply::Reloaded { path, config } => {
                     self.settings_reload_pending = false;
                     if let Some(config) = config {
