@@ -106,8 +106,8 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         browser_host: section(rows, "browser_host")?.unwrap_or(browser_host),
         server: section(rows, "server")?.unwrap_or(server),
         secrets: section(rows, "secrets")?.unwrap_or(secrets),
-        presets: section(rows, "presets")?.unwrap_or(presets),
-        workspaces: section(rows, "workspaces")?.unwrap_or(workspaces),
+        presets: panel_section(rows, "presets")?.unwrap_or(presets),
+        workspaces: panel_section(rows, "workspaces")?.unwrap_or(workspaces),
     })
 }
 
@@ -120,6 +120,19 @@ fn section<T: DeserializeOwned>(rows: &BTreeMap<String, String>, name: &str) -> 
         return Ok(None);
     };
     serde_json::from_str(data)
+        .map(Some)
+        .map_err(|error| Error::State(format!("settings section {name} cannot be read: {error}")))
+}
+
+/// A section that names a panel kind. An entry of a kind that a later release
+/// removed leaves it, as it leaves an imported settings document, so the rest of
+/// the section still reads.
+fn panel_section<T: DeserializeOwned>(rows: &BTreeMap<String, String>, name: &str) -> Result<Option<T>> {
+    let Some(data) = rows.get(name) else {
+        return Ok(None);
+    };
+    let data = crate::retired_panel_kinds::without_retired(data);
+    serde_json::from_str(data.as_ref())
         .map(Some)
         .map_err(|error| Error::State(format!("settings section {name} cannot be read: {error}")))
 }

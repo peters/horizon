@@ -7,7 +7,7 @@ use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 11;
+pub const CURRENT_CONFIG_VERSION: u32 = 12;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -43,6 +43,7 @@ pub fn migrate_in_memory(config: &mut Config) -> Result<bool> {
             8 => migrate_v8_to_v9(config),
             9 => migrate_v9_to_v10(config),
             10 => migrate_v10_to_v11(config),
+            11 => migrate_v11_to_v12(config),
             _ => {
                 return Err(Error::Config(format!(
                     "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
@@ -152,6 +153,16 @@ fn migrate_v9_to_v10(config: &mut Config) {
 /// part of Config and are omitted when the migrated value is serialized.
 /// Browser remote providers live under browser.remote and remain unchanged.
 fn migrate_v10_to_v11(_config: &mut Config) {}
+
+/// v11 -> v12: a preset of the removed Usage or Git Changes panel leaves the
+/// settings, so the New Terminal menu holds no entry that opens no panel.
+///
+/// `PanelKind` has no variant for those two kinds any more, so a stored preset
+/// of one of them cannot reach this typed step: `retired_panel_kinds` drops it
+/// from the document before the parse, for the store and for an imported file
+/// alike. This step records the change, and the start writes the store again
+/// with the presets that stayed.
+fn migrate_v11_to_v12(_config: &mut Config) {}
 
 /// Remove every preset matching `should_remove`, then insert `replacement()`
 /// at the slot of the first removed preset (unless a preset named

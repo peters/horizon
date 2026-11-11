@@ -455,3 +455,87 @@ fn a_server_section_of_a_copy_reaches_the_store_and_a_bad_one_is_refused() {
         "a refused setting writes no store, so the next start reads the copy again"
     );
 }
+
+/// The two presets that the last release shipped for the panels that this
+/// release removed, and the Markdown preset that stays.
+const COPY_WITH_REMOVED_PRESETS: &str = r#"{
+  "version": 11,
+  "presets": [
+    {"name": "Git Changes", "alias": "gc", "kind": "git_changes"},
+    {"name": "Markdown", "alias": "md", "kind": "editor"},
+    {"name": "Usage", "alias": "u", "kind": "usage"}
+  ]
+}"#;
+
+fn preset_names(config: &Config) -> Vec<&str> {
+    config.presets.iter().map(|preset| preset.name.as_str()).collect()
+}
+
+#[test]
+fn a_copy_with_a_preset_of_a_removed_panel_kind_loses_it_and_keeps_the_rest() {
+    let home = Home::new();
+    home.write_copy(COPY_WITH_REMOVED_PRESETS);
+
+    let loaded = home
+        .load()
+        .expect("a preset of a removed kind must not refuse the settings");
+
+    assert_eq!(loaded.version, CURRENT_CONFIG_VERSION, "the migration ran");
+    assert_eq!(preset_names(&loaded), vec!["Markdown"], "the other presets stay");
+    assert_eq!(
+        std::fs::read_to_string(home.config_path()).expect("read the copy"),
+        COPY_WITH_REMOVED_PRESETS,
+        "the imported file keeps every byte"
+    );
+
+    let stored = ConfigStore::resolve(&home.config_path())
+        .load()
+        .expect("store")
+        .expect("the store exists");
+    assert_eq!(
+        stored.config.version, CURRENT_CONFIG_VERSION,
+        "the store holds the migrated version"
+    );
+    assert_eq!(
+        preset_names(&stored.config),
+        vec!["Markdown"],
+        "the store keeps no preset that opens no panel"
+    );
+}
+
+#[test]
+fn a_store_with_a_preset_of_a_removed_panel_kind_loads_and_is_written_again() {
+    let home = Home::new();
+    home.write_copy(r#"{"version": 11, "window": {"width": 1010}}"#);
+    home.load().expect("first load, which writes the store");
+    let store = ConfigStore::resolve(&home.config_path());
+    // The presets row as the last release wrote it, with the two dead presets.
+    let connection = rusqlite::Connection::open(store.path()).expect("open the store");
+    let presets = r#"[{"name":"Git Changes","alias":"gc","kind":"git_changes"},{"name":"Markdown","alias":"md","kind":"editor"},{"name":"Usage","alias":"u","kind":"usage"}]"#;
+    connection
+        .execute("UPDATE settings SET data = ?1 WHERE section = 'presets'", [presets])
+        .expect("the presets of the last release");
+    connection
+        .execute("UPDATE settings SET data = '11' WHERE section = 'version'", [])
+        .expect("the version of the last release");
+    drop(connection);
+
+    let loaded = home
+        .load()
+        .expect("a store with a preset of a removed kind still loads");
+
+    assert_eq!(loaded.window.width, 1010.0, "the other settings stay");
+    assert_eq!(preset_names(&loaded), vec!["Markdown"]);
+    assert_eq!(loaded.version, CURRENT_CONFIG_VERSION);
+
+    let stored = ConfigStore::resolve(&home.config_path())
+        .load()
+        .expect("store")
+        .expect("the store exists");
+    assert_eq!(
+        preset_names(&stored.config),
+        vec!["Markdown"],
+        "the start wrote the store again"
+    );
+    assert_eq!(stored.config.version, CURRENT_CONFIG_VERSION);
+}
