@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-core/src/secret/**,crates/horizon-core/src/secret_store/**,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,packaging/horizon-server/**"
+applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-core/src/secret/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/server_link.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,crates/horizon-ui/src/app/settings/server.rs,packaging/horizon-server/**"
 ---
 
 # Trust boundary of the server store and its link
@@ -21,12 +21,23 @@ beside the database, in the same home and under the same login. The module comme
 the design page [`docs/architecture/horizon-server.md`](../../architecture/horizon-server.md)
 describe the same boundary.
 
-Two programs touch the boundary. The server is `horizon --server`: it holds the
-store and the socket of one server home and starts no other process. A computer
-is `horizon --server-link`, one child of one `ssh` call of that computer: it
-relays the bytes of its own standard input and output to the socket of the
-server and reads no file of the person. The computer that holds the link runs the
-child on a worker thread through `crates/horizon-sync/src/supervisor.rs` and
+Three transports reach the server, and the bytes of all three are the same
+frames:
+
+- The **Unix socket** of the server home, and `horizon --server-link`, one child
+  of one `ssh` call of a computer: the child relays the bytes of its own standard
+  input and output to that socket and reads no file of the person. `ssh` is the
+  login: a link of the socket carries no token.
+- The **TCP listener**, which `horizon --server --listen <ip>:<port>` opens when a
+  person asks for it. A computer that is not logged in sends a `join` with a code
+  of an invitation, and a computer that is logged in sends a `hello` with the
+  token of its device. The listener is off without `--listen`.
+
+Programs touch the boundary. The server is `horizon --server`: it holds the store
+and the socket of one server home and starts no other process. The first
+computer of a server is `horizon --server-invite`: it sends one request over the
+Unix socket of the server home and prints a link. A computer that holds the link
+runs it on a worker thread through `crates/horizon-sync/src/supervisor.rs` and
 never on the UI thread.
 
 ## Untrusted: every byte of the link and every field of an intent
@@ -59,6 +70,57 @@ never on the UI thread.
 - **A clock of a computer is never read.** An intent carries no time. The server
   stamps every change with its own clock.
 
+## Untrusted: the TCP link that a person opens with a code
+
+The TCP listener is the second transport, and it is opt-in. Its trust boundary is
+the network that carries it, because Horizon encrypts nothing on it.
+
+- **The address rule is the first check, on both sides.** The listener refuses to
+  start on any address that is not loopback, inside `100.64.0.0/10`, or inside
+  `fd7a:115c:a1e0::/48`. Those ranges belong to a private overlay network, whose
+  own encryption is the encryption of this link. A wildcard address (`0.0.0.0`,
+  `::`) and every other address are refused with a typed error that names the
+  rule. The computer checks the same rule on every address that the name of a
+  join link resolves to, before it sends one byte, and refuses the link with one
+  plain sentence.
+- **The invariant is that no byte leaves a computer or reaches the server outside
+  those ranges.** Nothing in Horizon proves that the network encrypts. A person
+  who listens on a loopback address and forwards that port to a public network
+  breaks the rule outside Horizon, and Horizon cannot see it.
+- **A code is a claim that the person has the server.** A `join` carries one code
+  of 12 characters of Crockford base32, which the server keeps as its SHA-256
+  only, for 10 minutes, for one use. A wrong code, an expired code and a used code
+  answer the same `wrong_code`, after one second, so the answer is no oracle. The
+  server deletes every open invitation after 20 wrong codes inside 10 minutes, and
+  `join` then answers `join_locked` until a person makes a new invitation. The
+  code is the whole proof: a person who reads it over a shoulder can join, and the
+  server then gives that computer every machine key and every credential value.
+- **A token is the whole login of one computer.** The `join` answers one token of
+  32 bytes from the OS random source. The store keeps the SHA-256 of the token and
+  never the token, and every later `hello` carries the token and hashes it to the
+  row of that device. An unknown hash and a device that differs from the device of
+  the token both answer `not_logged_in` and end the link, so a token is one device
+  and no other. A token in the frame is a bearer value: the server never writes it
+  to its log, its answers and its errors quote no token.
+- **A device name is a claim, as it is on the socket.** A `join` whose name is
+  not 1 to 40 characters of `a-z`, `0-9` and `-` answers `bad_device`. A name that
+  already holds a token answers `name_taken`, so the person removes the old entry
+  first and no join takes over the token of another computer.
+- **The computer keeps the token where its other secrets live.** The token is one
+  row of its `secrets.sqlite` under the id `server/token`, at the mode of that
+  file. The secret ids of the protocol are never that id: `SecretId::parse`
+  refuses it, so no server can send a token and no link sends one, and no token
+  reaches a queue file, a mirror file or a line of the log.
+- **A removal ends a link and nothing else.** `device_remove` deletes the token row
+  of that device and ends its open links with `error{code: "removed"}`. The removed
+  computer writes one sentence, deletes its own token row and stops until a person
+  joins it again. It keeps every copy of every machine key and every credential
+  value that it already had: the server rotates nothing. A person who loses a
+  computer removes it, then makes new machine keys and new credential values.
+- **The server still starts no program and opens no other port.** The listener
+  answers frames only. It reads no path and runs no command of a frame, and it
+  starts no `ssh`.
+
 ## Untrusted: the setting that names the server
 
 - **The target is one argument of `ssh`.** `server.ssh_target` is at most 255
@@ -74,6 +136,18 @@ never on the UI thread.
 - **Both values belong to the person.** A hand-edited setting runs the `ssh` that
   the person configured for that name. The boundary of this page starts at the
   bytes of the child, not at the setting.
+- **`server.address` is one `host:port`.** It is at most 255 characters, the host
+  is an IP address or a DNS name of at most 253 characters of letters, digits,
+  `.` and `-`, and the port is 1 to 65535. The computer resolves the name and
+  checks the address rule above on every address that it gets, so a name of the
+  person that points outside the allowed ranges ends the link with a plain
+  sentence and sends nothing.
+- **A join link is untrusted text that a person pastes.** The parser of
+  `crates/horizon-core/src/server_link.rs` accepts exactly
+  `horizon://<host>:<port>/join#<CODE>`, with no other scheme, no user part, no
+  query, no other path and a code of 12 characters of Crockford base32 in either
+  case and with or without dashes. Everything else is one typed refusal with a
+  sentence, and nothing of the text reaches a file, a program or a frame.
 
 ## What a computer accepts from the server
 
@@ -200,11 +274,23 @@ never on the UI thread.
 - **A clock of the server.** The time of a change is the clock of the server. A
   server whose clock is wrong stamps wrong times, and a reader that compares two
   changes of two servers compares two clocks.
-- **Who may reach the server.** The boundary is the SSH login of the server
-  computer. Whatever `ssh` lets in may claim any device name, read and write the
-  whole machine list, and read every machine key and every credential value: the
-  key of the secrets is a file of that same login. A hardware key on that login
-  and a list of the computers that may reach it are not part of this slice.
+- **Who may reach the server.** On the socket the boundary is the SSH login of the
+  server computer. Whatever `ssh` lets in may claim any device name, read and write
+  the whole machine list, and read every machine key and every credential value:
+  the key of the secrets is a file of that same login. On the TCP listener the
+  boundary is a token that one `join` with a code handed out, and the code is a
+  bearer value of 10 minutes. A hardware key on the login, a rotation of the
+  tokens and a list of the computers that may reach the server are not part of
+  this slice.
+- **The encryption of the TCP link.** Horizon adds none. The link is plain frames
+  on a network that the address rule trusts, so the overlay must encrypt and
+  authenticate every byte. A person who moves the listener to another address
+  breaks that rule, and a person who reads the code reads the token that follows.
+- **What a removal does not do.** It deletes one token and ends the links that are
+  open. The removed computer keeps every machine key and every credential value
+  that it already had, and a lost computer is still a computer that holds all of
+  them. Removal therefore needs new keys and new values to be a real repair, and
+  the person makes both.
 - **A computer that is lost.** Every linked computer holds a copy of every secret.
   A computer that a person loses is therefore a computer that holds every machine
   key and every credential value: remove its ssh login at the server, then replace
