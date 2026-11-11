@@ -13,7 +13,7 @@ use horizon_core::browser::remote::{
 };
 use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
-    CredentialReadiness, CredentialState, CredentialWorkbench, KeyringImport, KeyringImportPlan, NoticeKind,
+    CredentialReadiness, CredentialState, CredentialWorkbench, KeyringImport, KeyringImportPlan, NoticeKind, Platform,
     RemoteCredentialError, SecretsState, WorkbenchNotice, credential_destination,
 };
 use zeroize::{Zeroize as _, Zeroizing};
@@ -317,11 +317,14 @@ fn render_keyring_section(
                 keyring.start(plan.clone(), store);
                 ui.ctx().request_repaint();
             }
-            #[cfg(target_os = "macos")]
-            super::dim_label(
-                ui,
-                "macOS can ask for your permission once for each value, because the Keychain belongs to you.",
-            );
+            // The permission of macOS belongs to the Keychain, so the line follows the
+            // keyring that the import reads and not the system that compiles this tab.
+            if keyring.platform() == Platform::Keychain {
+                super::dim_label(
+                    ui,
+                    "macOS can ask for your permission once for each value, because the Keychain belongs to you.",
+                );
+            }
         }
         if let Some(answer) = answer {
             let color = if answer.error {

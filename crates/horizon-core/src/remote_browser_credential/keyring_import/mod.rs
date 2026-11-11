@@ -40,7 +40,7 @@ pub use import::import_from_keyring;
 pub use outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 pub use plan::KeyringImportPlan;
 pub use program::ProgramEnvironment;
-pub use readers::Bound;
+pub use readers::{Bound, Platform};
 
 #[cfg(test)]
 mod tests;

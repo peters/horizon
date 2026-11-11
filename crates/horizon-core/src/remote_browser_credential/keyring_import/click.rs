@@ -3,28 +3,13 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::thread;
-use std::time::Duration;
 
 use super::import::import_from_keyring;
 use super::outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 use super::plan::KeyringImportPlan;
 use super::program::ProgramEnvironment;
-use super::readers::Bound;
+use super::readers::{Bound, Platform};
 use crate::remote_browser_credential::{CredentialValueChange, SharedStore};
-
-/// The bound of one import on this system: the Secret Service answers every entry
-/// within one process, and the Keychain may ask the person once for each entry.
-#[must_use]
-fn platform_bound() -> Bound {
-    #[cfg(target_os = "macos")]
-    {
-        Bound::EachEntry(Duration::from_secs(60))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Bound::WholeImport(Duration::from_secs(20))
-    }
-}
 
 /// The line under the button of the import: the answer of the last click, and
 /// whether it is a refusal.
@@ -58,6 +43,7 @@ impl ImportLine {
 /// The struct owns a worker thread per click, so the UI thread never reads a
 /// keyring, never starts a program and never waits for one.
 pub struct KeyringImport {
+    platform: Platform,
     environment: ProgramEnvironment,
     bound: Bound,
     running: Option<Receiver<Result<KeyringImportOutcome, KeyringImportError>>>,
@@ -73,25 +59,36 @@ impl Default for KeyringImport {
 }
 
 impl KeyringImport {
-    /// An import that reads the programs of this system.
+    /// An import that reads the keyring of this system.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_programs(ProgramEnvironment::of_this_process(), platform_bound())
+        let platform = Platform::of_this_system();
+        Self::with_programs(platform, ProgramEnvironment::of_this_process(), platform.bound())
     }
 
-    /// An import that runs the programs of `environment` within `bound`.
+    /// An import that reads the keyring of `platform` with the programs of
+    /// `environment`, within `bound`.
     ///
-    /// A test points it at a folder of stand-in programs and gives it a short bound,
-    /// so a test never reads the keyring of the person who runs it.
+    /// A test names the platform and points it at a folder of stand-in programs with
+    /// a short bound, so a test never reads the keyring of the person who runs it,
+    /// and it reads the sentences of either system on either computer.
     #[must_use]
-    pub fn with_programs(environment: ProgramEnvironment, bound: Bound) -> Self {
+    pub fn with_programs(platform: Platform, environment: ProgramEnvironment, bound: Bound) -> Self {
         Self {
+            platform,
             environment,
             bound,
             running: None,
             line: None,
             changes: Vec::new(),
         }
+    }
+
+    /// The keyring that this import reads, which names its programs and the sentence
+    /// of a missing one.
+    #[must_use]
+    pub fn platform(&self) -> Platform {
+        self.platform
     }
 
     /// Whether an import is running now, so the tab asks for the next frame.
@@ -124,10 +121,11 @@ impl KeyringImport {
             return;
         }
         let (sender, answers) = channel();
+        let platform = self.platform;
         let environment = self.environment.clone();
         let bound = self.bound;
         let spawned = thread::Builder::new().name("keyring-import".into()).spawn(move || {
-            let outcome = import_from_keyring(&plan, &environment, bound, &store);
+            let outcome = import_from_keyring(platform, &plan, &environment, bound, &store);
             sender.send(outcome).ok();
         });
         match spawned {

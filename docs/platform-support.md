@@ -119,6 +119,10 @@ On macOS the system can ask the person for permission for each value, because th
 Keychain belongs to that person. The import waits up to 60 seconds for one entry,
 and up to 20 seconds for the whole import on Linux.
 
+When the program of a system is not found, the line under the button says what
+that system needs. Linux names the package `libsecret-tools`. macOS names the
+program `security`, which is a part of macOS.
+
 ## Agent skills
 
 Horizon installs the `horizon-browser` and `horizon-device` skills on both

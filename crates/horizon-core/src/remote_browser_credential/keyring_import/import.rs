@@ -6,12 +6,12 @@
 use super::outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 use super::plan::KeyringImportPlan;
 use super::program::ProgramEnvironment;
-use super::readers::{self, Bound};
+use super::readers::{Bound, Platform};
 use super::run;
 use crate::remote_browser_credential::SharedStore;
 
-/// The work of one click: read every entry that the system can name, then write the
-/// rows that these settings name.
+/// The work of one click: read every entry that the keyring of `platform` can name,
+/// then write the rows that these settings name.
 ///
 /// # Errors
 /// The typed refusal of the first rule that stops the import: a keyring that this
@@ -19,6 +19,7 @@ use crate::remote_browser_credential::SharedStore;
 /// reference rule, a value that the store refuses, or a secrets file that cannot be
 /// read or written.
 pub fn import_from_keyring(
+    platform: Platform,
     plan: &KeyringImportPlan,
     environment: &ProgramEnvironment,
     bound: Bound,
@@ -27,7 +28,7 @@ pub fn import_from_keyring(
     if plan.is_empty() {
         return Err(KeyringImportError::NothingToDo);
     }
-    let entries = readers::entries(plan, environment, bound)?;
+    let entries = platform.entries(plan, environment, bound)?;
     if entries.is_empty() {
         return Ok(KeyringImportOutcome::new(KeyringImportReport::default(), Vec::new()));
     }

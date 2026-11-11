@@ -3,10 +3,12 @@
 //! Three programs read them, and none of them is a crate: Linux reads the Secret
 //! Service with `secret-tool` from `libsecret-tools`, or with the `gi` binding of
 //! libsecret through `python3` when `secret-tool` is not installed; macOS reads the
-//! Keychain with `security`. Every reading is untrusted text that names an account
-//! and carries a value, so a reading that does not match the format of its program
-//! exactly is [`KeyringImportError::Unreadable`], and no value leaves this module
-//! except as a [`KeyringEntry`], whose [`Debug`](std::fmt::Debug) is redacted.
+//! Keychain with `security`. [`Platform`] is the value that chooses one of the two
+//! systems, so a test reads either of them on the computer that runs the tests.
+//! Every reading is untrusted text that names an account and carries a value, so a
+//! reading that does not match the format of its program exactly is
+//! [`KeyringImportError::Unreadable`], and no value leaves this module except as a
+//! [`KeyringEntry`], whose [`Debug`](std::fmt::Debug) is redacted.
 
 pub(crate) mod libsecret;
 pub(crate) mod secret_tool;
@@ -21,7 +23,7 @@ use zeroize::Zeroizing;
 use super::KeyringImportError;
 use super::program::{ProgramFailure, ProgramOutput};
 
-pub(crate) use platform::entries;
+pub use platform::Platform;
 
 /// The service name that an older Horizon gave every item of a remote browser
 /// provider, as `KEYRING_SERVICE` of that version wrote it.

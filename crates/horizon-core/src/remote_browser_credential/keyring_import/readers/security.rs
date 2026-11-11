@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
 use super::super::program::{ProgramEnvironment, run};
-use super::{Bound, SERVICE, ended, failure};
+use super::{Bound, Platform, SERVICE, ended, failure};
 
 /// The program that reads the Keychain.
 pub(crate) const PROGRAM: &str = "security";
@@ -45,7 +45,10 @@ pub(crate) fn read(
     bound: Bound,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, KeyringImportError> {
     let Some(program) = environment.find(PROGRAM) else {
-        return Err(KeyringImportError::ToolMissing);
+        // `security` is a part of macOS, so this system names it and no package.
+        return Err(KeyringImportError::ToolMissing {
+            platform: Platform::Keychain,
+        });
     };
     read_with(&program, environment, user, bound)
 }

@@ -20,7 +20,7 @@ use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
 use super::super::program::{ProgramEnvironment, run};
-use super::{Bound, KeyringEntry, SERVICE, ended, failure, mentions};
+use super::{Bound, KeyringEntry, Platform, SERVICE, ended, failure, mentions};
 
 /// The interpreter that the binding of libsecret runs in.
 pub(crate) const PROGRAM: &str = "python3";
@@ -69,7 +69,9 @@ fn arguments() -> Vec<OsString> {
 /// The entries of the service, read through the binding of libsecret.
 pub(crate) fn read(environment: &ProgramEnvironment, bound: Bound) -> Result<Vec<KeyringEntry>, KeyringImportError> {
     let Some(program) = environment.find(PROGRAM) else {
-        return Err(KeyringImportError::ToolMissing);
+        return Err(KeyringImportError::ToolMissing {
+            platform: Platform::SecretService,
+        });
     };
     let output =
         run(&program, &arguments(), environment, bound.program()).map_err(|failed| failure(PROGRAM, failed, bound))?;
@@ -77,7 +79,9 @@ pub(crate) fn read(environment: &ProgramEnvironment, bound: Bound) -> Result<Vec
         if lacks_binding(&output.stderr) {
             // The computer has Python and no binding of libsecret, so the package
             // that reads the keyring is the one that the person must install.
-            return Err(KeyringImportError::ToolMissing);
+            return Err(KeyringImportError::ToolMissing {
+                platform: Platform::SecretService,
+            });
         }
         if output.code() == Some(NO_VALUE) {
             return Err(KeyringImportError::Unreadable);

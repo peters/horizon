@@ -13,6 +13,7 @@ use std::fmt;
 use thiserror::Error;
 
 use super::super::{CredentialValueChange, RemoteCredentialError};
+use super::readers::Platform;
 
 /// The counts of one import, as the Settings tab writes them: "Imported 2 values.
 /// 1 was already here. 3 entries of the keyring are not used by this version."
@@ -102,10 +103,11 @@ impl fmt::Debug for KeyringImportOutcome {
 /// refused it.
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum KeyringImportError {
-    /// No program of this computer reads the keyring, and the settings offer the
-    /// package that holds one.
-    #[error("Install the package `libsecret-tools` to read the values that an older version stored in the keyring.")]
-    ToolMissing,
+    /// No program of the keyring of this system reads it, in the words of that
+    /// system: Linux names the package that holds its programs, and macOS names the
+    /// program `security` that is a part of it.
+    #[error("{}", .platform.missing_program())]
+    ToolMissing { platform: Platform },
     /// The keyring is there and it is locked.
     #[error("The keyring is locked. Unlock it and try the import again.")]
     Locked,
@@ -155,7 +157,7 @@ impl KeyringImportError {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
-            Self::ToolMissing => "keyring_tool_missing",
+            Self::ToolMissing { .. } => "keyring_tool_missing",
             Self::Locked => "keyring_locked",
             Self::Absent => "keyring_absent",
             Self::NotRunnable { .. } => "keyring_not_runnable",
