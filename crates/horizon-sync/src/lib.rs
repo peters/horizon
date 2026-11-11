@@ -1,8 +1,9 @@
 //! The Horizon server store, and the link that a computer uses to reach it.
 //!
 //! One server holds what more than one computer must agree on: today the machine
-//! list, later the machine public lines, cards, clicks and waits. The server is
-//! the only writer of that state. A computer never opens the server file: it
+//! list, the key that each machine uses, every machine key and every credential
+//! value of the person, later cards, clicks and waits. The server is the only
+//! writer of that state. A computer never opens the server file: it
 //! sends *intents* over a link, and the server applies them one at a time.
 //!
 //! The rules of this crate, in the words of the design page
@@ -23,9 +24,15 @@
 //! 6. A computer keeps its unsent intents in order in a local queue file, and it
 //!    resends them with the same identifiers.
 //!
-//! The store is the only writer and the only reader of the file. This slice has
-//! no binary entry: the next one wires `ssh` and the flags, and the frames reach
-//! it through [`serve`] over any pair of byte streams.
+//! A secret is one value of that state, and its body is sealed in a table of its
+//! own with a key of the server home, so a copy of the database alone holds no
+//! readable secret and the log row of a secret holds the kind, the id and the
+//! version only. The computer keeps the id of a secret in its queue and reads the
+//! body from its own key folder or credential store when it pushes.
+//!
+//! The store is the only writer and the only reader of the file. The frames reach
+//! a server through [`serve`] over any pair of byte streams, and the two modes of
+//! the binary run that over the standard input and output of one `ssh` child.
 
 #![forbid(unsafe_code)]
 
