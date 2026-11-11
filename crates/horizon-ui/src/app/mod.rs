@@ -268,6 +268,14 @@ pub struct HorizonApp {
     /// machine action that opens nothing both use it.
     pub(in crate::app) sidebar_notice: Option<String>,
     pub(in crate::app) sidebar_notice_until: Option<Instant>,
+    /// The line that stays until the person closes it: the panels that an opened
+    /// session left out, which a person who looks away at the start would never
+    /// read otherwise. It has its own close control and no timer, and a short
+    /// notice never replaces it.
+    pub(in crate::app) sidebar_sticky_notice: Option<String>,
+    /// The clock of the short notice, so a test moves it forward instead of
+    /// waiting for the ten seconds of a notice.
+    pub(in crate::app) notice_clock: sidebar::machines::NoticeClock,
     /// The rows of the sidebar's machine section, read when the list or a
     /// terminal of a machine changes.
     machine_rows: sidebar::machines::MachineRows,

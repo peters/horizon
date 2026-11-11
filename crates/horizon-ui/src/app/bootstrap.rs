@@ -95,7 +95,10 @@ impl HorizonApp {
                 let left_out = session.retired_panels.clone();
                 app.activate_persistent_session(&session);
                 if let Some(notice) = super::board_notice::left_out_panels_notice(&left_out) {
-                    app.set_sidebar_notice(notice);
+                    // The panels are gone for good, so this line stays until the
+                    // person closes it: a person who looks away at the start must
+                    // still read what left the session.
+                    app.set_sidebar_sticky_notice(notice);
                 }
             }
             StartupDecision::Ephemeral { runtime_state } => app.activate_ephemeral_session(&runtime_state),
@@ -136,7 +139,8 @@ impl HorizonApp {
             block_clicks: super::block_clicks::BlockClickState::default(),
             agent_terminals: super::block_terminals::AgentTerminals::default(),
             machine_list: empty_machine_list(session_store.home()),
-            sidebar_notice: None, sidebar_notice_until: None,
+            sidebar_notice: None, sidebar_notice_until: None, sidebar_sticky_notice: None,
+            notice_clock: super::sidebar::machines::NoticeClock::default(),
             person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
             machine_rows: super::sidebar::machines::MachineRows::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),

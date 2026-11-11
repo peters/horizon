@@ -494,3 +494,177 @@ fn the_notice_of_the_machine_section_wraps_so_its_name_is_readable() {
         "every word of the notice is shown: {said:?}"
     );
 }
+
+/// The drawn texts of one frame of the sidebar.
+fn sidebar_frame_texts(ctx: &egui::Context, app: &mut crate::app::HorizonApp) -> Vec<String> {
+    use crate::test_egui::DiscardTextures;
+
+    // A panel shows from its second frame on.
+    for _ in 0..2 {
+        let input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+        let output = ctx
+            .run_ui(input, |ui| app.render_sidebar(ui.ctx()))
+            .discard_textures();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_drawn_texts(&clipped.shape, &mut texts);
+        }
+        if !texts.is_empty() {
+            return texts;
+        }
+    }
+    Vec::new()
+}
+
+fn collect_drawn_texts(shape: &egui::Shape, texts: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_drawn_texts(shape, texts);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A pointer press and release at `pos`, in the frames that egui needs for a click.
+fn press_at(ctx: &egui::Context, app: &mut crate::app::HorizonApp, pos: egui::Pos2) {
+    use crate::app::test_support::run_app_frame_with_input;
+
+    let pointer = |pressed: Option<bool>| {
+        let mut input = crate::app::test_support::raw_input([1200.0, 900.0], Some([0.0, 0.0]));
+        input.events.push(egui::Event::PointerMoved(pos));
+        if let Some(pressed) = pressed {
+            input.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        input
+    };
+    run_app_frame_with_input(ctx, app, pointer(None));
+    run_app_frame_with_input(ctx, app, pointer(Some(true)));
+    run_app_frame_with_input(ctx, app, pointer(Some(false)));
+}
+
+/// The line about the panels that a session left out names something that is gone
+/// for good, so it stays after the ten seconds of the short notice beside it, and
+/// the short notice leaves on its own.
+#[test]
+fn the_line_about_left_out_panels_stays_after_a_short_notice_ends() {
+    use std::time::Duration;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let line = "This session had 2 panels of kinds that this Horizon removed, so they are left out: \
+                Git Changes 1, Usage 1.";
+    let reason = "build-a-machine: the terminal did not open";
+    app.set_sidebar_sticky_notice(line.to_owned());
+    app.set_sidebar_notice(reason.to_owned());
+    let ctx = egui::Context::default();
+
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
+        "the line that stays is drawn: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|drawn| drawn.contains(reason)),
+        "the short notice is drawn beside it: {texts:?}"
+    );
+
+    // The ten seconds of the short notice pass, which a test reads as a clock that
+    // is ahead of the computer.
+    app.notice_clock.ahead = super::machines::NOTICE + Duration::from_secs(1);
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|drawn| drawn.contains("panels of kinds that this Horizon removed")),
+        "the line that stays is still there: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|drawn| drawn.contains(reason)),
+        "the short notice ended on its own: {texts:?}"
+    );
+}
+
+/// The line leaves when the person closes it, and only then.
+#[test]
+fn the_line_about_left_out_panels_leaves_on_its_close_control() {
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let line = "This session had 1 panel of kinds that this Horizon removed, so it is left out: Usage 1.";
+    app.set_sidebar_sticky_notice(line.to_owned());
+    let ctx = egui::Context::default();
+
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|drawn| drawn.contains("so it is left out")),
+        "the line is drawn: {texts:?}"
+    );
+    let control = ctx
+        .read_response(super::machines::sticky_close_id())
+        .expect("the close control of the line");
+    press_at(&ctx, &mut app, control.rect.center());
+
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        !texts.iter().any(|drawn| drawn.contains("so it is left out")),
+        "the close control ended the line: {texts:?}"
+    );
+    assert!(
+        app.sidebar_sticky_notice.is_none(),
+        "the line that stays is gone from the window, not only from the frame"
+    );
+}
+
+/// A session that opened with panels of a kind that this Horizon removed sets the
+/// line that stays, not the short notice of an action.
+#[test]
+fn a_session_that_left_panels_out_sets_the_line_that_stays() {
+    use horizon_core::{
+        Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision,
+    };
+
+    use crate::app::HorizonApp;
+
+    // The board of an older session, read the way a start reads it.
+    let board = "workspaces:\n- name: Work\n  panels:\n  - name: Usage\n    kind: usage\n  - name: Changes\n    \
+                 kind: git_changes\n";
+    let (_state, retired) = RuntimeState::from_yaml_reporting(board).expect("the board of an older session");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("config.json");
+    let session_store = SessionStore::new(
+        HorizonHome::from_root(temp.path().join(".horizon")),
+        config_path.clone(),
+    );
+    let mut session = session_store
+        .create_session_from_runtime(RuntimeState::default())
+        .expect("a session of this home");
+    session.retired_panels = retired;
+    let ctx = egui::Context::default();
+    let app = HorizonApp::new_with_egui_context(
+        &ctx,
+        &Config::default(),
+        config_path,
+        session_store,
+        StartupDecision::Open {
+            disposition: SessionOpenDisposition::Resume,
+            session: Box::new(session),
+        },
+        crate::input::ObservedKeyboardInputs::default(),
+    );
+
+    assert_eq!(
+        app.sidebar_sticky_notice.as_deref(),
+        Some(
+            "This session had 2 panels of kinds that this Horizon removed, so they are left out: \
+             Git Changes 1, Usage 1."
+        ),
+        "the line that stays names what left the session"
+    );
+    assert!(
+        app.sidebar_notice.is_none(),
+        "the line that stays is not the short notice of an action"
+    );
+}
