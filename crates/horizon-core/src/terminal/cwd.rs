@@ -290,11 +290,13 @@ printf 'p300\nfcwd\nn{0}\n'"#,
         let stand_ins = StandIns::new();
         stand_ins.program("pgrep", "exit 1");
         let pid_file = stand_ins.folder.path().join("lsof-pid");
+        // `exec` keeps the process id of the script, so the program that hangs is
+        // the child that the bound ends and no second program waits beside it.
         stand_ins.program(
             "lsof",
             &format!(
                 r#"printf '%s\n' "$$" > "{0}"
-sleep 60"#,
+exec sleep 60"#,
                 pid_file.display()
             ),
         );
