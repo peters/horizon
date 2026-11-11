@@ -250,7 +250,6 @@ pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
         | PanelKind::Ssh
         | PanelKind::Command
         | PanelKind::Editor
-        | PanelKind::GitChanges
         | PanelKind::Usage
         | PanelKind::Browser
         | PanelKind::Device

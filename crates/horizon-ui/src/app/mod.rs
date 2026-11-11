@@ -81,9 +81,9 @@ use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
-    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, GitWatcher, PanelId,
-    PresetConfig, RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress,
-    StartupChooser, WindowConfig, WorkspaceId,
+    AgentSessionCatalog, AppShortcuts, AppearanceTheme, Board, CanvasViewState, Config, PanelId, PresetConfig,
+    RemoteHostCatalog, ResolvedSession, RuntimeState, SessionLease, SessionStore, ShutdownProgress, StartupChooser,
+    WindowConfig, WorkspaceId,
 };
 
 use self::browser_requests::BrowserCreateHostState;
@@ -367,7 +367,6 @@ pub struct HorizonApp {
     pending_editor_drops: file_drop::PendingEditorDrops,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
-    git_watchers: HashMap<WorkspaceId, GitWatcher>,
     config_last_mtime: Option<std::time::SystemTime>,
     config_last_check: Option<Instant>,
     shutdown_progress: Option<ShutdownProgress>,

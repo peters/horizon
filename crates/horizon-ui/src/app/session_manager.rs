@@ -424,7 +424,6 @@ impl HorizonApp {
     }
 
     fn finish_session_switch(&mut self) {
-        self.git_watchers.clear();
         self.release_active_session_lease();
         self.active_session = None;
         self.transcript_root = None;

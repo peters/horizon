@@ -48,10 +48,6 @@ impl Panel {
     /// also refuses stale authorization, unverifiable saved history or launch
     /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
-        if let PanelContent::GitChanges(_) = &self.content {
-            return Ok(());
-        }
-
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
             return Ok(());

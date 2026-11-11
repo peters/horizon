@@ -13,7 +13,6 @@ mod command_registry;
 mod device_widget;
 mod dir_picker;
 mod editor_widget;
-mod git_changes_widget;
 mod icon_button;
 mod input;
 #[cfg(any(test, target_os = "linux"))]

@@ -13,9 +13,6 @@ mod device;
 pub mod dir_search;
 mod editor;
 mod error;
-pub mod git_changes;
-pub mod git_status;
-pub mod git_watcher;
 mod horizon_home;
 mod layout;
 mod local_store;
@@ -66,9 +63,6 @@ pub use config::{
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
-pub use git_changes::DiffViewer;
-pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
-pub use git_watcher::GitWatcher;
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use machines::{

@@ -205,7 +205,6 @@ impl HorizonApp {
         self.startup_selection_restored = false;
         self.arm_root_viewport_stabilizer(false, [self.window_config.width, self.window_config.height]);
         self.runtime_dirty_since = None;
-        self.git_watchers.clear();
         let needs_bootstrap = Self::runtime_state_needs_session_bootstrap(runtime_state);
         self.startup_bootstrap_failure = None;
         self.pending_startup_runtime_state = needs_bootstrap.then(|| runtime_state.clone());

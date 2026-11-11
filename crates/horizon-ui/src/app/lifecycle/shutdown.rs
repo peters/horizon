@@ -34,7 +34,6 @@ impl HorizonApp {
 
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
-        self.git_watchers.clear();
         self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
         self.retire_browser_requests();
@@ -177,7 +176,6 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.flush_session_saves_for_exit();
-        self.git_watchers.clear();
         self.release_active_session_lease();
     }
 

@@ -5,7 +5,6 @@ use horizon_core::{
 };
 
 use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
-use super::super::git_changes_widget::GitChangesView;
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
@@ -181,7 +180,6 @@ fn show_panel_body_contents(
     match panel.kind {
         PanelKind::Editor => MarkdownEditorView::new(panel, body_context.editor_preview_cache)
             .show(ui, body_context.editor_save_shortcut),
-        PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
         PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {

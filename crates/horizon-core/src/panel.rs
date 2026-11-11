@@ -13,7 +13,6 @@ use crate::agent_work::ResumePolicy;
 use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
-use crate::git_changes::DiffViewer;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::Terminal;
@@ -56,7 +55,6 @@ pub enum PanelKind {
     Grok,
     Command,
     Editor,
-    GitChanges,
     Usage,
     Browser,
     Device,
@@ -74,7 +72,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage | Self::Device | Self::Block)
+        !matches!(self, Self::Usage | Self::Device | Self::Block)
     }
 
     #[must_use]
@@ -98,7 +96,6 @@ impl PanelKind {
             Self::Ssh => "SSH",
             Self::Command => "Command",
             Self::Editor => "Editor",
-            Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
             Self::Browser => "Browser",
             Self::Device => "Device",
@@ -556,17 +553,6 @@ impl Panel {
             .and_then(|device| device.identity.as_ref())
             .or(self.disconnected_device_identity.as_ref())
     }
-
-    /// Convenience accessor for the git changes content (if this panel holds one).
-    #[must_use]
-    pub fn git_changes(&self) -> Option<&DiffViewer> {
-        self.content.git_changes()
-    }
-
-    /// Mutable accessor for the git changes content.
-    pub fn git_changes_mut(&mut self) -> Option<&mut DiffViewer> {
-        self.content.git_changes_mut()
-    }
 }
 
 impl Panel {
@@ -837,8 +823,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
-            }
+            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -862,9 +847,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
-                true
-            }
+            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -877,9 +860,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => {
-                true
-            }
+            PanelContent::Usage(_) | PanelContent::Device(_) | PanelContent::Block(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -1330,7 +1311,7 @@ mod tests {
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::GitChanges, PanelKind::Usage, PanelKind::Block] {
+        for kind in [PanelKind::Usage, PanelKind::Block] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }

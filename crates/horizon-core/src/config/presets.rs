@@ -272,15 +272,6 @@ pub(super) fn default_presets() -> Vec<PresetConfig> {
     presets.extend(default_grok_presets());
     presets.extend([
         PresetConfig {
-            name: "Git Changes".to_string(),
-            alias: Some("gc".to_string()),
-            kind: PanelKind::GitChanges,
-            command: None,
-            args: Vec::new(),
-            resume: PanelResume::Fresh,
-            ssh_connection: None,
-        },
-        PresetConfig {
             name: "Markdown".to_string(),
             alias: Some("md".to_string()),
             kind: PanelKind::Editor,

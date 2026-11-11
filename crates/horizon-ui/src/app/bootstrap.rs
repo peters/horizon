@@ -201,7 +201,6 @@ impl HorizonApp {
             ime_commit_normalizer: input::ImeCommitNormalizer::default(),
             frame_keyboard_events: HashMap::new(),
             terminal_keyboard_events: Vec::new(),
-            git_watchers: HashMap::new(),
             terminal_body_screen_rects: HashMap::new(),
             primary_selection: PrimarySelection::new(),
             clipboard_images: crate::clipboard_image::ClipboardImages::new(),
