@@ -1,0 +1,167 @@
+version: 8
+window:
+  width: 1234.0
+  height: 777.0
+  x: 42.0
+  y: 24.0
+appearance:
+  theme: light
+shortcuts:
+  command_palette: Ctrl+Alt+K
+  new_terminal: Ctrl+Alt+N
+  focus_active_workspace: Ctrl+Alt+W
+  fit_active_workspace: Ctrl+Alt+9
+  open_remote_hosts: Ctrl+Alt+H
+  toggle_sessions: Ctrl+Alt+J
+  toggle_sidebar: Ctrl+Alt+B
+  toggle_hud: Ctrl+Alt+U
+  toggle_minimap: Ctrl+Alt+M
+  align_workspaces_horizontally: Ctrl+Alt+A
+  toggle_settings: Ctrl+Alt+S
+  zoom_reset: Ctrl+Alt+0
+  zoom_in: Ctrl+Alt+Plus
+  zoom_out: Ctrl+Alt+Minus
+  fullscreen_panel: Ctrl+Alt+F
+  exit_fullscreen_panel: Ctrl+Alt+Escape
+  fullscreen_window: Ctrl+Alt+F11
+  save_editor: Ctrl+Alt+V
+  search: Ctrl+Alt+R
+overlays:
+  attention_feed_height: 321.0
+  attention_feed_width: 210.0
+  minimap_height: 200.0
+  minimap_width: 400.0
+features:
+  attention_feed: false
+  speech:
+    enabled: true
+    model: /home/user/models/whisper-small.bin
+    language: no
+    task: translate
+    target_language: de
+    backend: cpu
+    input_device: USB microphone
+    hotkey: F10
+    hotkey_mode: toggle
+    preload: true
+    profiles:
+    - name: Desk
+      model: /home/user/models/whisper-small.bin
+      language: no
+      task: translate
+      target_language: de
+      hotkey: F8
+      preload: false
+presets:
+- name: Shell
+  alias: sh
+  kind: shell
+  command: /bin/zsh
+  args:
+  - --login
+  resume: fresh
+- name: Build host
+  alias: bh
+  kind: ssh
+  command: null
+  args: []
+  resume: fresh
+  ssh_connection:
+    host: build.example.net
+    port: 2222
+    user: builder
+    identity_file: /home/user/.ssh/build
+    proxy_jump: bastion.example.net
+    remote_command: tmux attach -t build
+    extra_args:
+    - -o
+    - ServerAliveInterval=30
+- name: Codex
+  alias: cx
+  kind: codex
+  command: null
+  args:
+  - --no-alt-screen
+  resume: fresh
+- name: Git Changes
+  alias: gc
+  kind: git_changes
+  command: null
+  args: []
+  resume: fresh
+- name: Markdown
+  alias: md
+  kind: editor
+  command: null
+  args: []
+  resume: fresh
+- name: Usage
+  alias: u
+  kind: usage
+  command: null
+  args: []
+  resume: fresh
+workspaces:
+- name: Release checks
+  color: '#3355ff'
+  cwd: /home/user/project
+  position:
+  - 120.0
+  - 60.0
+  terminals:
+  - name: Shell
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 30
+    cols: 100
+    kind: shell
+    resume: fresh
+    position:
+    - 120.0
+    - 60.0
+    size:
+    - 640.0
+    - 400.0
+  - name: Markdown
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    kind: editor
+    resume: fresh
+    position:
+    - 800.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+  - name: Usage
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    kind: usage
+    resume: fresh
+    position:
+    - 120.0
+    - 500.0
+    size:
+    - 520.0
+    - 340.0
+  - name: Git Changes
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 24
+    cols: 80
+    kind: git_changes
+    resume: fresh
+    position:
+    - 800.0
+    - 500.0
+    size:
+    - 520.0
+    - 340.0

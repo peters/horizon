@@ -1,0 +1,160 @@
+version: 3
+window:
+  width: 1600.0
+  height: 1000.0
+  x: 80.0
+  y: 40.0
+canvas_view:
+  pan_offset:
+  - 40.0
+  - 360.0
+  zoom: 1.0
+active_workspace_local_id: 6c1d2a70-3b4e-4f81-9a25-5e7c8d0b1f34
+focused_panel_local_id: 9b3c5d71-2e4f-4a60-8c1b-7d8e9f0a1b2c
+cloud_groups: []
+workspaces:
+- local_id: 11111111-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+  name: Workspace 1
+  cwd: null
+  position:
+  - -469.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels: []
+- local_id: 22222222-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+  name: Workspace 2
+  cwd: null
+  position:
+  - 100.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 33333333-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+    name: Shell
+    kind: shell
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 17
+    cols: 62
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 100.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: 44444444-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+  name: Workspace 3
+  cwd: null
+  position:
+  - 700.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 55555555-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+    name: Usage
+    kind: usage
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 700.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: 66666666-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+  name: Workspace 4
+  cwd: null
+  position:
+  - 1300.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 77777777-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+    name: Git Changes
+    kind: git_changes
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 1300.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+  - local_id: 88888888-1a2b-4c3d-8e4f-5a6b7c8d9e0f
+    name: Setup board
+    kind: setup_board
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 1300.0
+    - 500.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: 6c1d2a70-3b4e-4f81-9a25-5e7c8d0b1f34
+  name: Workspace 5
+  cwd: null
+  position:
+  - 1900.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 9b3c5d71-2e4f-4a60-8c1b-7d8e9f0a1b2c
+    name: Notes
+    kind: editor
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    work_resume:
+      enabled: false
+      max_downtime_seconds: 10800
+    position:
+    - 1900.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null

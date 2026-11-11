@@ -1,0 +1,242 @@
+version: 11
+window:
+  width: 1440.0
+  height: 900.0
+  x: 12.0
+  y: 34.0
+appearance:
+  theme: light
+shortcuts:
+  command_palette: Ctrl+Alt+K
+  new_terminal: Ctrl+Alt+N
+  focus_active_workspace: Ctrl+Alt+W
+  fit_active_workspace: Ctrl+Alt+9
+  open_remote_hosts: Ctrl+Alt+H
+  toggle_sessions: Ctrl+Alt+J
+  toggle_sidebar: Ctrl+Alt+B
+  toggle_hud: Ctrl+Alt+U
+  toggle_minimap: Ctrl+Alt+M
+  align_workspaces_horizontally: Ctrl+Alt+A
+  toggle_settings: Ctrl+Alt+S
+  zoom_reset: Ctrl+Alt+0
+  zoom_in: Ctrl+Alt+Plus
+  zoom_out: Ctrl+Alt+Minus
+  fullscreen_panel: Ctrl+Alt+F
+  exit_fullscreen_panel: Ctrl+Alt+Escape
+  fullscreen_window: Ctrl+Alt+F11
+  save_editor: Ctrl+Alt+V
+  search: Ctrl+Alt+R
+overlays:
+  minimap_height: 260.0
+  minimap_width: 380.0
+features:
+  organize_workspaces_on_session_load: true
+  sidebar_accordion: true
+  speech:
+    enabled: true
+    model: /home/user/models/whisper-small.bin
+    language: no
+    task: translate
+    target_language: de
+    backend: cpu
+    input_device: USB microphone
+    hotkey: F10
+    hotkey_mode: toggle
+    preload: true
+    profiles:
+    - name: Desk
+      model: /home/user/models/whisper-small.bin
+      language: no
+      task: translate
+      target_language: de
+      hotkey: F8
+      preload: false
+    desktop_injection: true
+browser:
+  backend: firefox
+  headless: false
+  hide_native_window: true
+  automation_disclosure: browser_default
+  firefox_system_access: true
+  command: /usr/bin/chromium
+  firefox_command: /usr/bin/firefox
+  geckodriver_command: /usr/bin/geckodriver
+  safaridriver_command: null
+  extra_args:
+  - --disable-features=Translate
+  quality: 75
+  every_nth_frame: 2
+  profile_root: /home/user/browser-profiles
+  downloads_root: /home/user/Downloads
+  video:
+    quality: 70
+    compression_level: 6
+    fps: 15
+    max_width: 1600
+    max_file_bytes: 104857600
+  remote:
+    providers:
+      device_grid:
+        adapter: webdriver
+        endpoint: https://grid.example.net/wd/hub
+        authentication:
+          kind: basic
+          username_ref: grid-user
+          password_ref: grid-key
+        credential_bindings:
+          grid-user:
+            store: os_keychain
+            slot: remote-browser/device-grid/username
+          grid-key:
+            store: session
+        limits:
+          max_sessions: 2
+          allocation_timeout_seconds: 120
+          idle_release_seconds: 300
+          max_session_seconds: 3600
+    targets:
+      phone:
+        provider: device_grid
+        browser_name: safari
+        platform_name: iOS
+        device:
+          kind: physical
+          model: iPhone 15
+        orientation: portrait
+  webauthn_command:
+  - /usr/bin/authenticator
+remote_hosts:
+  default_workspace: Remote Lab
+  vnc_port: 5901
+  vnc_ports:
+    build.example.net: 5902
+    lab: 5903
+browser_host:
+  ssh_target: browser-vm.example.net
+  profile: mail
+presets:
+- name: Shell
+  alias: sh
+  kind: shell
+  command: /bin/zsh
+  args:
+  - --login
+  resume: fresh
+- name: Build host
+  alias: bh
+  kind: ssh
+  command: null
+  args: []
+  resume: fresh
+  ssh_connection:
+    host: build.example.net
+    port: 2222
+    user: builder
+    identity_file: /home/user/.ssh/build
+    proxy_jump: bastion.example.net
+    remote_command: tmux attach -t build
+    extra_args:
+    - -o
+    - ServerAliveInterval=30
+- name: Git Changes
+  alias: gc
+  kind: git_changes
+  command: null
+  args: []
+  resume: fresh
+- name: Markdown
+  alias: md
+  kind: editor
+  command: null
+  args: []
+  resume: fresh
+- name: Usage
+  alias: u
+  kind: usage
+  command: null
+  args: []
+  resume: fresh
+- name: Browser
+  alias: web
+  kind: browser
+  command: null
+  args: []
+  resume: fresh
+workspaces:
+- name: Release checks
+  color: '#3355ff'
+  cwd: /home/user/project
+  position:
+  - 120.0
+  - 60.0
+  terminals:
+  - name: Shell
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 30
+    cols: 100
+    kind: shell
+    resume: fresh
+    position:
+    - 120.0
+    - 60.0
+    size:
+    - 640.0
+    - 400.0
+  - name: Markdown
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    kind: editor
+    resume: fresh
+    position:
+    - 800.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+  - name: Usage
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    kind: usage
+    resume: fresh
+    position:
+    - 120.0
+    - 500.0
+    size:
+    - 520.0
+    - 340.0
+  - name: Git Changes
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 24
+    cols: 80
+    kind: git_changes
+    resume: fresh
+    position:
+    - 800.0
+    - 500.0
+    size:
+    - 520.0
+    - 340.0
+  - name: Setup board
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    kind: setup_board
+    resume: fresh
+    position:
+    - 1340.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0

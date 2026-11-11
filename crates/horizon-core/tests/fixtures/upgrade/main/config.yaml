@@ -1,0 +1,147 @@
+version: 11
+window:
+  width: 1600.0
+  height: 1000.0
+  x: null
+  y: null
+appearance:
+  theme: auto
+shortcuts:
+  command_palette: Ctrl+Shift+K
+  new_terminal: Ctrl+Shift+N
+  focus_active_workspace: Ctrl+Shift+W
+  fit_active_workspace: Ctrl+Shift+9
+  open_remote_hosts: Ctrl+Shift+H
+  toggle_sessions: Ctrl+Shift+J
+  toggle_sidebar: Ctrl+Shift+B
+  toggle_hud: Ctrl+Shift+U
+  toggle_minimap: Ctrl+Shift+M
+  align_workspaces_horizontally: Ctrl+Shift+A
+  toggle_settings: Ctrl+Shift+Comma
+  zoom_reset: Ctrl+0
+  zoom_in: Ctrl+Plus
+  zoom_out: Ctrl+Minus
+  fullscreen_panel: F11
+  exit_fullscreen_panel: Escape
+  fullscreen_window: Ctrl+Shift+F11
+  save_editor: Ctrl+Shift+S
+  search: Ctrl+Shift+F
+overlays:
+  minimap_height: 180.0
+  minimap_width: 320.0
+features:
+  organize_workspaces_on_session_load: false
+  sidebar_accordion: false
+  speech:
+    enabled: false
+    model: ''
+    language: auto
+    task: transcribe
+    target_language: en
+    backend: auto
+    input_device: ''
+    hotkey: F9
+    hotkey_mode: hold
+    preload: false
+    profiles: []
+    desktop_injection: false
+browser:
+  backend: chromium
+  headless: true
+  hide_native_window: false
+  automation_disclosure: minimize_common_signals
+  firefox_system_access: false
+  command: null
+  firefox_command: null
+  geckodriver_command: null
+  safaridriver_command: null
+  extra_args: []
+  quality: 60
+  every_nth_frame: 1
+  profile_root: null
+  video:
+    quality: 90
+    compression_level: 4
+    fps: 10
+    max_file_bytes: 536870912
+remote_hosts:
+  default_workspace: Remote Sessions
+  vnc_port: 5900
+browser_host: {}
+presets:
+- name: Shell
+  alias: sh
+  kind: shell
+  command: null
+  args: []
+  resume: fresh
+- name: Codex
+  alias: cx
+  kind: codex
+  command: null
+  args:
+  - --no-alt-screen
+  resume: fresh
+- name: Claude Code
+  alias: cc
+  kind: claude
+  command: null
+  args:
+  - --permission-mode
+  - auto
+  resume: fresh
+- name: OpenCode
+  alias: oc
+  kind: open_code
+  command: null
+  args: []
+  resume: fresh
+- name: Gemini CLI
+  alias: gm
+  kind: gemini
+  command: null
+  args: []
+  resume: fresh
+- name: KiloCode
+  alias: kc
+  kind: kilo_code
+  command: null
+  args: []
+  resume: fresh
+- name: Pi
+  alias: pi
+  kind: pi
+  command: null
+  args: []
+  resume: fresh
+- name: Grok
+  alias: gb
+  kind: grok
+  command: null
+  args: []
+  resume: fresh
+- name: Git Changes
+  alias: gc
+  kind: git_changes
+  command: null
+  args: []
+  resume: fresh
+- name: Markdown
+  alias: md
+  kind: editor
+  command: null
+  args: []
+  resume: fresh
+- name: Usage
+  alias: u
+  kind: usage
+  command: null
+  args: []
+  resume: fresh
+- name: Browser
+  alias: web
+  kind: browser
+  command: null
+  args: []
+  resume: fresh
+workspaces: []

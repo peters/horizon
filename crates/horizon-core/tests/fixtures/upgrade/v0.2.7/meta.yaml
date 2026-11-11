@@ -1,7 +1,7 @@
 version: 1
 session_id: 9272f72e-d124-4012-9ca2-761544678156
-profile_id: b1f7e576c1bc2aa3
-config_path: /home/peters/.horizon/config.yaml
+profile_id: fb3eb95f246d8861
+config_path: /home/user/project/.horizon/config.yaml
 label: Workspace 1
 workspace_count: 3
 panel_count: 4
