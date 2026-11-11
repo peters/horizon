@@ -437,6 +437,11 @@ line is one `ui_thread::exception` in the code. Do not copy it into new code.
   ([`panel/lifecycle.rs`](../../crates/horizon-core/src/panel/lifecycle.rs))
   resolves the working directory, the saved work of an agent and the key of its
   machine on the frame. The next change moves that pre-flight to a worker.
+- `part 2: F11 a recording starts on the frame`: the Record control of a Device
+  panel and a `video` request start a recorder, which takes the manifest lock of
+  the capture and waits up to 2 s for another writer, and makes the folder of the
+  video ([`device_widget/recording.rs`](../../crates/horizon-ui/src/device_widget/recording.rs)).
+  The next change moves the start to the coordination worker.
 - `part 2: F8 the notice of a saved conversation is read on the frame`:
   `restore_saved_session_deletion_notice`
   ([`panels/session_deletion/worker.rs`](../../crates/horizon-ui/src/app/panels/session_deletion/worker.rs))

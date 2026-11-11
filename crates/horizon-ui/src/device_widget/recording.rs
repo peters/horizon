@@ -99,6 +99,11 @@ impl Recording {
             max_file_bytes: MAX_BYTES,
             ..Default::default()
         };
+        // The start of a recording takes the manifest lock of the capture, which
+        // waits up to 2 s for another writer, and it makes the folder of the
+        // video. Part 2 moves the start to the coordination worker.
+        let _starting = horizon_core::ui_thread::exception("part 2: F11 a recording starts on the frame");
+        horizon_core::ui_thread::blocking("the manifest lock of a video is taken");
         let mut recorder = PixelVideoRecorder::start(directory.path(), "vnc", Arc::clone(&frames), &options)
             .map_err(|error| error.message)?;
         let handle = recorder.handle();
