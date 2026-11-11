@@ -184,8 +184,8 @@ boundary pages went away with their features.
 
 - [`server-link`](trust-boundaries/server-link.md)
   - Untrusted: every byte of one link, the device name of its hello, the intents
-    and the records that a computer sends, and the fields of a body of an
-    internal object.
+    and the records that a computer sends, the fields of a body of an internal
+    object, and the machine rows that a server sends back to a computer.
   - Guarantees: one writer holds the SQLite file and each push is one transaction
     with no network call inside it, the answer leaves after the commit, and a
     reader uses its own connection; each decided intent takes the next log index;
@@ -198,12 +198,20 @@ boundary pages went away with their features.
     network connection, and holds no private key, token, terminal content or
     setting; a link that the server ends stops writing first, so the computer
     reads the typed error; the socket and the queue file are `0600` in a `0700`
-    directory.
+    directory; the computer checks every machine row of a pull again before it
+    reaches its mirror, the key of a machine stays a local binding, and a click on
+    a record that only arrived from the server opens no login with the keys of the
+    person; the two modes of the binary run before the Horizon home is prepared,
+    so they read no setting, open no window and install no agent integration; a
+    second server of one home refuses at its lock; a stop ends the links that are
+    open.
   - Does not guarantee: who the computer is, because the device name is a claim
     that the transport does not prove; availability, because a link holds a thread
     and another process of the same user can open the file; the content of a probe
     body, which is bounded JSON that the server does not read; the correctness of
-    the clock of the server.
+    the clock of the server; that a machine which arrived from another computer
+    has a key on this one, because the public lines of the keys are a later
+    slice.
 
 ## Follow-up work
 

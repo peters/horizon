@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs"
+applyTo: "crates/horizon-sync/src/**,crates/horizon-sync/Cargo.toml,crates/horizon-core/src/atomic_file.rs,crates/horizon-core/src/config/server.rs,crates/horizon-core/src/machines/registry.rs,crates/horizon-ui/src/app/server_sync.rs,packaging/horizon-server/**"
 ---
 
 # Trust boundary of the server store and its link
@@ -10,6 +10,14 @@ computer, and the server acts on it. The module comment of
 [`crates/horizon-sync/src/lib.rs`](../../../crates/horizon-sync/src/lib.rs) and
 the design page [`docs/architecture/horizon-server.md`](../../architecture/horizon-server.md)
 describe the same boundary.
+
+Two programs touch the boundary. The server is `horizon --server`: it holds the
+store and the socket of one server home and starts no other process. A computer
+is `horizon --server-link`, one child of one `ssh` call of that computer: it
+relays the bytes of its own standard input and output to the socket of the
+server and reads no file of the person. The computer that holds the link runs the
+child on a worker thread through `crates/horizon-sync/src/supervisor.rs` and
+never on the UI thread.
 
 ## Untrusted: every byte of the link and every field of an intent
 
@@ -31,6 +39,41 @@ describe the same boundary.
   typed error.
 - **A clock of a computer is never read.** An intent carries no time. The server
   stamps every change with its own clock.
+
+## Untrusted: the setting that names the server
+
+- **The target is one argument of `ssh`.** `server.ssh_target` is at most 255
+  characters, it does not start with `-`, and it holds no space and no control
+  character, because `ssh` takes it as one argument. `ssh` still reads the
+  person's own SSH configuration for that name, as it does for a browser host.
+- **The command is one line that the remote shell reads.** `server.command` is at
+  most 200 characters of letters, digits and `._:/=@+-`, with at most one space
+  between words, so it starts one program and no second command. It is empty by
+  default, and then the link runs `horizon --server-link`.
+- **Both values belong to the person.** A hand-edited setting runs the `ssh` that
+  the person configured for that name. The boundary of this page starts at the
+  bytes of the child, not at the setting.
+
+## What a computer accepts from the server
+
+- **A record is checked on the computer too.** A machine row of a pull passes
+  `horizon_core::machines::check_record` before it reaches the mirror or the
+  sidebar, so a record that the server holds in a state that breaks a rule is
+  refused and logged. The server checks the same record before it stores it.
+- **A restored or malicious server can change only the machine records.** It can
+  add, change or remove a machine row. It cannot make the computer run a command:
+  the only process is the `ssh` of the validated setting, and the tmux command of
+  a terminal is rebuilt from the record by Horizon's own text.
+- **It cannot make a computer use a key.** The key of a machine is a local
+  binding in `machines/keys.json`, and it is never sent. A machine that only
+  arrived from the server is marked in the mirror, so a click on it opens no
+  login with the keys of the person; the section says
+  `This computer has no key for <name> yet`.
+- **It cannot make a computer write outside its own files.** The mirror, the
+  queue and the device name are three files of the machine directory of the
+  Horizon home, at 0600 in a 0700 directory, and an object id is never a path.
+- **A refused intent is dropped, not retried for ever.** The queue of a computer
+  drops an intent that the server refused and logs the reason with its code.
 
 ## The guarantees
 
@@ -61,7 +104,17 @@ describe the same boundary.
   of the server user, a file that is not a socket is left alone, and a socket that
   a stopped server left is removed before the bind.
 - **The queue file is private.** The queue of a computer is `0600` in a `0700`
-  directory, written as a whole through a temporary file and a rename.
+  directory, written as a whole through a temporary file and a rename. The mirror
+  of the machine list and the device name are written the same way.
+- **The child is one program with bounded flags.** The computer runs `ssh -T`
+  with `BatchMode=yes`, a connect bound of 5 seconds and keepalives of 5 seconds
+  with two tries. It writes the frames to the standard input of that child and
+  reads them from its standard output; the standard error of the child goes to
+  the log, one bounded line at a time, and is never stored.
+- **A stop of the server ends the links.** A stop of the server or of its
+  process closes the socket of every open link, so a computer reads the end of
+  the link and reaches the server again when it is back. It never opens a port
+  and never starts a server of its own.
 
 ## What the guarantees do not cover
 
@@ -78,3 +131,10 @@ describe the same boundary.
 - **A clock of the server.** The time of a change is the clock of the server. A
   server whose clock is wrong stamps wrong times, and a reader that compares two
   changes of two servers compares two clocks.
+- **Who may reach the server.** The boundary is the SSH login of the server
+  computer. Whatever `ssh` lets in may claim any device name and read and write
+  the whole machine list. A hardware key on that login and a list of the
+  computers that may reach it are not part of this slice.
+- **A key on the server.** A later slice gives the server the public lines of the
+  machine keys. Until then a machine that arrived from another computer has no
+  key here, and the person adds it on this computer.

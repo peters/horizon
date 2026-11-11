@@ -7,9 +7,96 @@ code is [`docs/review/trust-boundaries/server-link.md`](../review/trust-boundari
 
 A computer talks to the server through the stdio of one child process,
 `ssh <host> horizon --server-link`. The child carries bytes only, so the protocol
-below runs over any pair of byte streams. This slice holds no binary entry and no
-`ssh`: the frames reach the server through `horizon_sync::serve`, and a test uses
-two in-memory sockets.
+below runs over any pair of byte streams. The store and the frames reached the
+server through `horizon_sync::serve` before the two modes existed, and a test can
+still give them two in-memory sockets.
+
+## The two modes of the binary
+
+The server and the link are the same `horizon` binary with one flag each, and
+both modes run before Horizon prepares its home:
+
+| Mode | What it does |
+|---|---|
+| `horizon --server` | Holds one server home: `server.sqlite`, `server.sock` at mode 0600 in a directory at 0700, and `server.lock`. It answers every link until `SIGTERM` or `SIGINT` sets its stop flag, and then it stops accepting, ends the links that are open, removes the socket and closes the store. |
+| `horizon --server-link` | Relays its own standard input and output to the socket of that home, for one `ssh` child. It starts no server and creates no file. A home without a server answers one typed line and exit code 3. |
+
+The server home is `HORIZON_SERVER_HOME`, or `~/.horizon-server`. It is a
+directory of its own, so neither mode reads or writes `~/.horizon` of the person:
+they read no setting, open no window and install no agent integration. A second
+server of the same home finds the lock held and refuses with one typed line
+instead of removing the socket of the first one. The module comment of
+`crates/horizon-sync/src/host.rs` states the same rules.
+
+## The setting of a computer
+
+The settings entry `server` names the computer that runs the server:
+
+```yaml
+server:
+  ssh_target: server-computer
+  command: /opt/horizon --server-link
+```
+
+`ssh_target` follows the rule of the browser host target: one argument of `ssh`,
+no leading dash, no space and no control character. `command` is optional and is
+`horizon --server-link` without it; it holds at most 200 characters of letters,
+digits and `._:/=@+-`, with single spaces, so the remote shell reads it as one
+program. A person writes the whole path when the `PATH` of a non-interactive
+`ssh` does not hold the binary. Without `ssh_target` the entry names no server,
+and the machine list of the computer is one file as before.
+
+## The supervisor of the link
+
+One worker thread of a computer owns one `ssh` child at a time. It starts
+`ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5
+-o ServerAliveCountMax=2 <target> <command>` with the flags that the browser
+forward already builds, and it speaks the frames over the standard input and
+output of that child. The standard error of the child goes to the log, one
+bounded line at a time.
+
+The thread sends the hello, pulls once, then pushes what the queue holds and
+waits with `wait`. A push that is ready leaves while a wait is open, so a change
+of this computer does not wait for the answer of the idle wait: the server
+answers the two frames separately. A local change wakes the thread at once
+instead of at the next answer. When the child ends, the thread starts it again
+on the delays of a lost machine terminal, 3, 6, 12 and 24 seconds and then every
+30 seconds, and a link that was up for 10 seconds starts the delays again.
+
+The thread publishes one state for the UI: `off`, `connecting`, `in_step`,
+`behind`, or `away` with the number of intents that wait. The sidebar shows it,
+and `machines` reports its code.
+
+## The machine list of a computer
+
+With a server in the settings, the machine list of a computer is the mirror of
+the server and the queue of that computer in one view:
+
+1. A record that an agent or the person adds or removes changes the view at
+   once, so the sidebar changes at once.
+2. The same call writes one intent to `machines/server-queue.json`. The record
+   shows `pending` until the server commits that intent.
+3. A change that arrives from the server replaces the row of the mirror, which
+   is `machines/server-mirror.json`. Both files are private, and both survive a
+   restart.
+4. The key of a machine is a local binding of `machines/keys.json` and is never
+   sent. A record that only arrived from the server is marked in the mirror, so a
+   click on it opens nothing and the section says `This computer has no key for
+   <name> yet`.
+
+### The first link of a computer that has a list
+
+A computer that kept its machine list in `machines/registry.json` before it
+followed a server keeps that list at its first link. The first pull of the server
+comes before any push, so the computer knows which records the server has:
+
+- A local record whose name the server does not have is pushed.
+- A name that both have keeps the record of the server, and the local record is
+  dropped.
+
+The mirror file records that this comparison happened, so a restart does not push
+the same list again. Until that comparison, the file store of the computer stays
+the source of its records.
 
 ## The rules
 

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>net.horizon.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/CHANGE-ME/bin/horizon</string>
+    <string>--server</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HORIZON_SERVER_HOME</key>
+    <string>/Users/CHANGE-ME/.horizon-server</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/CHANGE-ME/.horizon-server/log/server.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/CHANGE-ME/.horizon-server/log/server.log</string>
+
+  <key>ExitTimeOut</key>
+  <integer>10</integer>
+</dict>
+</plist>
