@@ -7,7 +7,6 @@ mod remote_usage;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
-mod yaml_editor;
 
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
@@ -30,7 +29,6 @@ enum SettingsTab {
     Shortcuts,
     Presets,
     RemoteBrowsers,
-    Yaml,
 }
 
 impl SettingsTab {
@@ -40,17 +38,10 @@ impl SettingsTab {
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
             Self::RemoteBrowsers => "Remote browsers",
-            Self::Yaml => "YAML",
         }
     }
 
-    const ALL: &[Self] = &[
-        Self::General,
-        Self::Shortcuts,
-        Self::Presets,
-        Self::RemoteBrowsers,
-        Self::Yaml,
-    ];
+    const ALL: &[Self] = &[Self::General, Self::Shortcuts, Self::Presets, Self::RemoteBrowsers];
 }
 
 pub(super) enum SettingsStatus {
@@ -63,30 +54,32 @@ pub(super) enum SettingsStatus {
 }
 
 pub(super) struct SettingsEditor {
-    pub(super) buffer: String,
-    pub(super) original: String,
+    /// The settings that the tabs edit.
+    pub(super) config: Config,
+    /// The settings of the store when the editor opened, for Revert.
+    pub(super) original: Config,
+    /// Whether a tab changed `config` since it was adopted.
+    pub(super) dirty: bool,
     pub(super) status: SettingsStatus,
     active_tab: SettingsTab,
-    editing_config: Option<Config>,
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
 }
 
 impl SettingsEditor {
-    /// Adopt config text that was just written to disk by another path, so
-    /// the YAML buffer, the saved baseline and the GUI tabs' parsed snapshot
-    /// all describe the file again.
-    pub(super) fn adopt_saved_text(&mut self, yaml: String) {
-        self.editing_config = Config::from_yaml(&yaml).ok();
-        self.buffer.clone_from(&yaml);
-        self.original = yaml;
+    /// Adopt settings that were just written to the store by another path, so
+    /// the tabs and the saved baseline describe the store again.
+    pub(super) fn adopt_saved(&mut self, config: Config) {
+        self.config = config.clone();
+        self.original = config;
+        self.dirty = false;
         self.status = SettingsStatus::Saved;
     }
 
     #[cfg(test)]
-    pub(super) fn editing_config(&self) -> Option<&Config> {
-        self.editing_config.as_ref()
+    pub(super) fn editing_config(&self) -> &Config {
+        &self.config
     }
 }
 
@@ -105,15 +98,14 @@ impl HorizonApp {
             self.close_settings();
         } else {
             // The store is the only settings source: the editor shows the settings
-            // of this run, never a YAML copy that the person exported or edited.
-            let content = self.template_config_yaml();
-            let editing_config = Config::from_yaml(&content).ok();
+            // of this run, never a file that a person exported and edited.
+            let config = self.template_config.clone();
             self.settings = Some(SettingsEditor {
-                original: content.clone(),
-                buffer: content,
+                original: config.clone(),
+                config,
+                dirty: false,
                 status: SettingsStatus::None,
                 active_tab: SettingsTab::General,
-                editing_config,
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
@@ -121,69 +113,41 @@ impl HorizonApp {
         }
     }
 
-    fn template_config_yaml(&self) -> String {
-        self.template_config.to_yaml().unwrap_or_else(|_| {
-            Config::default()
-                .to_yaml()
-                .unwrap_or_else(|_| "workspaces: []\n".to_string())
-        })
-    }
-
     pub(super) fn render_settings(&mut self, ui: &mut egui::Ui) {
-        let Some((buffer, original)) = self
-            .settings
-            .as_ref()
-            .map(|editor| (editor.buffer.clone(), editor.original.clone()))
-        else {
+        if self.settings.is_none() {
             return;
-        };
-
-        let parsed = Config::from_yaml(&buffer);
-        let is_valid = parsed.is_ok();
-        if let Ok(config) = &parsed {
-            self.apply_live_preview(config);
         }
-        if let Some(editor) = self.settings.as_mut() {
-            match &parsed {
-                // A save that is running or finished owns the status line: a
-                // preview must not replace it on the next frame.
-                Ok(_) if !matches!(editor.status, SettingsStatus::Saved | SettingsStatus::Saving) => {
-                    editor.status = SettingsStatus::LivePreview;
-                }
-                Err(error) => {
-                    editor.status = SettingsStatus::Error(error.to_string());
-                }
-                Ok(_) => {}
-            }
-        }
-
-        let has_changes = buffer != original;
-        let Some(editor) = self.settings.as_ref() else {
+        let Some(editor) = self.settings.as_mut() else {
             return;
         };
         let (status_text, status_color) = settings_status(&editor.status);
-        let configuration = true;
-        let config_path = self.config_path.display().to_string();
         let panel_state = PanelState {
-            config_path: &config_path,
             status_text: &status_text,
             status_color,
-            is_valid,
-            has_changes,
-            configuration,
+            has_changes: editor.dirty,
         };
-
-        if let Some(editor) = self.settings.as_mut() {
-            let action = render_settings_panel(
-                ui,
-                panel_state,
-                editor,
-                &mut self.remote_browser_credentials,
-                &mut self.browser_create_host.remote_allocations,
-            );
-            // A press in the bar is applied after the panel drew it.
-            self.apply_settings_action(action);
+        let (action, changed) = render_settings_panel(
+            ui,
+            panel_state,
+            editor,
+            &mut self.remote_browser_credentials,
+            &mut self.browser_create_host.remote_allocations,
+        );
+        if changed {
+            if let Some(editor) = self.settings.as_mut() {
+                editor.dirty = true;
+                if !matches!(editor.status, SettingsStatus::Saved | SettingsStatus::Saving) {
+                    editor.status = SettingsStatus::LivePreview;
+                }
+            }
+            // The tabs edit the draft in the editor, so one clone per changed
+            // frame carries it to the canvas behind the panel.
+            if let Some(config) = self.settings.as_ref().map(|editor| editor.config.clone()) {
+                self.apply_live_preview(&config);
+            }
         }
+        // A press in the bar is applied after the panel drew it.
+        self.apply_settings_action(action);
     }
 
     fn apply_live_preview(&mut self, config: &Config) {
@@ -192,10 +156,8 @@ impl HorizonApp {
     }
 
     fn close_settings(&mut self) {
-        if let Some(editor) = self.settings.take()
-            && let Ok(config) = Config::from_yaml(&editor.original)
-        {
-            self.apply_live_preview(&config);
+        if let Some(editor) = self.settings.take() {
+            self.apply_live_preview(&editor.original);
         }
     }
 
@@ -204,26 +166,22 @@ impl HorizonApp {
             SettingsAction::None => {}
             SettingsAction::Close => self.close_settings(),
             SettingsAction::Revert => {
-                let original = self.settings.as_ref().map(|e| e.original.clone());
+                let original = self.settings.as_ref().map(|editor| editor.original.clone());
                 if let Some(original) = original {
-                    let parsed = Config::from_yaml(&original).ok();
-                    if let Some(ref config) = parsed {
-                        self.apply_live_preview(config);
-                    }
+                    self.apply_live_preview(&original);
                     if let Some(editor) = self.settings.as_mut() {
-                        editor.buffer.clone_from(&original);
-                        editor.editing_config = parsed;
+                        editor.config = original;
+                        editor.dirty = false;
                         editor.status = SettingsStatus::None;
                     }
                 }
             }
             SettingsAction::ResetDefaults => {
-                let default_yaml = Config::default()
-                    .to_yaml()
-                    .unwrap_or_else(|_| "workspaces: []\n".to_string());
+                let defaults = Config::default();
+                self.apply_live_preview(&defaults);
                 if let Some(editor) = self.settings.as_mut() {
-                    editor.editing_config = Config::from_yaml(&default_yaml).ok();
-                    editor.buffer = default_yaml;
+                    editor.config = defaults;
+                    editor.dirty = true;
                     editor.status = SettingsStatus::LivePreview;
                 }
             }
@@ -234,15 +192,15 @@ impl HorizonApp {
     }
 
     fn save_settings(&mut self) {
-        let Some(buffer) = self.settings.as_ref().map(|editor| editor.buffer.clone()) else {
+        let Some(config) = self.settings.as_ref().map(|editor| editor.config.clone()) else {
             return;
         };
-        // The text is checked here, in memory; the write waits on the settings
+        // The draft is checked here, in memory; the write waits on the settings
         // thread, and a reply applies the saved settings in a later frame.
-        match Config::from_yaml(&buffer) {
-            Ok(config) => {
+        match config.validate() {
+            Ok(()) => {
                 self.apply_runtime_config(&config);
-                self.settings_io.save_text(self.config_path.clone(), buffer);
+                self.settings_io.save_config(self.config_path.clone(), config);
                 if let Some(editor) = self.settings.as_mut() {
                     editor.status = SettingsStatus::Saving;
                 }
@@ -251,7 +209,7 @@ impl HorizonApp {
                 if let Some(editor) = self.settings.as_mut() {
                     editor.status = SettingsStatus::Error(error.to_string());
                 }
-                tracing::error!("failed to validate config before save: {error}");
+                tracing::error!("failed to validate the settings before the save: {error}");
             }
         }
     }
@@ -273,11 +231,11 @@ impl HorizonApp {
         };
         {
             match reply {
-                SettingsReply::Saved { path, text, config } => {
-                    self.template_config = *config;
+                SettingsReply::Saved { path, config } => {
                     if let Some(editor) = self.settings.as_mut() {
-                        editor.adopt_saved_text(text);
+                        editor.adopt_saved((*config).clone());
                     }
+                    self.template_config = *config;
                     // Another window may have reloaded the presets meanwhile.
                     self.board.sync_workspace_metadata(&self.template_config);
                     tracing::info!(path = %path.display(), "settings saved");
@@ -353,16 +311,13 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     }
 }
 
-/// What the Settings panel shows besides its editor: the status bar and the
-/// path of the configuration that the YAML tab names.
+/// What the Settings panel shows besides its tabs: the status bar and whether
+/// the draft differs from the store.
 #[derive(Clone, Copy)]
 struct PanelState<'a> {
-    config_path: &'a str,
     status_text: &'a str,
     status_color: Color32,
-    is_valid: bool,
     has_changes: bool,
-    configuration: bool,
 }
 
 fn render_settings_panel(
@@ -371,7 +326,7 @@ fn render_settings_panel(
     editor: &mut SettingsEditor,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
-) -> SettingsAction {
+) -> (SettingsAction, bool) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
 
@@ -394,15 +349,9 @@ fn render_settings_panel(
             // sit with the settings instead of under the canvas.
             let action = bar::render(
                 ui,
-                if panel_state.configuration {
-                    panel_state.status_text
-                } else {
-                    ""
-                },
+                panel_state.status_text,
                 panel_state.status_color,
-                panel_state.is_valid,
                 panel_state.has_changes,
-                panel_state.configuration,
             );
             ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
             ui.add_space(16.0);
@@ -411,73 +360,52 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            match editor.active_tab {
-                SettingsTab::Yaml => {
-                    yaml_editor::render(ui, panel_state.config_path, &mut editor.buffer, available);
-                }
-                tab => render_gui_tab(ui, tab, editor, credentials, allocations, available),
-            }
-            action
+            let changed = render_tab(ui, editor, credentials, allocations, available);
+            (action, changed)
         })
         .inner
 }
 
-fn render_gui_tab(
+/// Draw the active tab. Returns whether it changed the draft.
+fn render_tab(
     ui: &mut egui::Ui,
-    tab: SettingsTab,
     editor: &mut SettingsEditor,
     credentials: &mut CredentialWorkbench,
     allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     available: Vec2,
-) {
+) -> bool {
     let SettingsEditor {
-        editing_config,
+        config,
         credential_inputs,
         portable_profile,
         provider_usage,
-        buffer,
+        active_tab,
         ..
     } = editor;
-    let Some(config) = editing_config else {
-        ui.label(
-            egui::RichText::new("Unable to parse current configuration")
-                .color(theme::PALETTE_RED())
-                .size(12.0),
-        );
-        return;
-    };
 
     egui::ScrollArea::vertical()
         .max_height(available.y)
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let changed = match tab {
-                SettingsTab::General => general::render(ui, config),
-                SettingsTab::Shortcuts => shortcuts::render(ui, config),
-                SettingsTab::Presets => presets::render(ui, config),
-                SettingsTab::RemoteBrowsers => {
-                    remote_recovery::render(ui, allocations);
-                    remote_browsers::render(
-                        ui,
-                        config,
-                        credentials,
-                        credential_inputs,
-                        portable_profile,
-                        provider_usage,
-                    )
-                }
-                // Yaml is handled before this function is called.
-                SettingsTab::Yaml => return,
-            };
-            if changed && let Ok(yaml) = config.to_yaml() {
-                *buffer = yaml;
+        .show(ui, |ui| match active_tab {
+            SettingsTab::General => general::render(ui, config),
+            SettingsTab::Shortcuts => shortcuts::render(ui, config),
+            SettingsTab::Presets => presets::render(ui, config),
+            SettingsTab::RemoteBrowsers => {
+                remote_recovery::render(ui, allocations);
+                remote_browsers::render(
+                    ui,
+                    config,
+                    credentials,
+                    credential_inputs,
+                    portable_profile,
+                    provider_usage,
+                )
             }
-        });
+        })
+        .inner
 }
 
 fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
-    let old_tab = editor.active_tab;
-
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
         for &tab in SettingsTab::ALL {
@@ -504,11 +432,6 @@ fn render_tab_bar(ui: &mut egui::Ui, editor: &mut SettingsEditor) {
             }
         }
     });
-
-    // Re-parse buffer when switching from YAML to a GUI tab.
-    if old_tab == SettingsTab::Yaml && editor.active_tab != SettingsTab::Yaml {
-        editor.editing_config = Config::from_yaml(&editor.buffer).ok();
-    }
 }
 
 // -- Shared section helpers used by tab modules --------------------------

@@ -1,7 +1,7 @@
 //! Remote browsers tab: provider readiness, credential entry and the portable
 //! profile. Values typed here go straight into the credential workbench and
-//! are never written to the YAML buffer, the config file, the process
-//! environment or an exported profile.
+//! are never written to the settings, the store, the process environment or
+//! an exported profile.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use crate::theme;
 const MAX_NOTICES: usize = 8;
 
 /// Identity of one text buffer: the row plus the exact destination a value
-/// typed there would be sent to. The YAML tab can change a provider's
+/// typed there would be sent to. The settings can change a provider's
 /// endpoint or a binding's store and slot while a draft is pending; a draft
 /// belongs to the destination it was typed for and is scrubbed, never
 /// rebound, when that destination changes.
@@ -97,8 +97,8 @@ impl CredentialInputs {
     }
 
     /// Scrub every draft whose row or destination is no longer in the parsed
-    /// configuration, so a provider removed or rebound in the YAML tab (or
-    /// by Reset) never keeps a secret that could reappear later.
+    /// configuration, so a provider removed or rebound by a field (or by
+    /// Reset) never keeps a secret that could reappear later.
     fn retain_current(&mut self, config: &Config) {
         let current: std::collections::BTreeSet<InputKey> = config
             .browser
@@ -143,7 +143,8 @@ impl Drop for CredentialInputs {
     }
 }
 
-/// Render the tab. Never returns a config change: this tab edits no YAML.
+/// Render the tab. Returns whether it changed the draft, which it does only
+/// for a binding or an import.
 /// The portable-profile row: the path the user edits and the outcome of the
 /// last export or import. Outcomes name counts and the path, never a value.
 pub(super) struct PortableProfilePanel {
@@ -185,8 +186,7 @@ impl PortableProfilePanel {
     }
 
     /// Merge the profile at the path into the editing configuration. Returns
-    /// whether the configuration changed; the caller re-serialises it into
-    /// the YAML buffer, and Save writes it to disk.
+    /// whether the configuration changed; Save writes it to the store.
     fn import(&mut self, config: &mut Config) -> bool {
         let path = Path::new(self.path.trim());
         let outcome = remote_profile::refuse_config_path(&self.config_path, path)
@@ -254,9 +254,9 @@ pub(super) fn render(
         super::section_card(ui, |ui| {
             super::dim_label(
                 ui,
-                "No remote device services are configured. Import a portable profile above or add a \
-                 browser.remote section in the YAML tab; see docs/architecture/remote-browser-sessions.md \
-                 for the schema.",
+                "No remote device services are configured. Import a portable profile above; see \
+                 docs/architecture/remote-browser-sessions.md for the form of the browser.remote \
+                 section.",
             );
         });
         return changed;
@@ -276,7 +276,7 @@ pub(super) fn render(
 /// A machine-local binding for a reference the imported profile left
 /// unbound: the session store, or the OS store under a slot derived from the
 /// provider and reference. Returns whether the editing configuration changed;
-/// the YAML buffer is re-serialised by the caller and Save writes it.
+/// Save writes it to the store.
 fn bind_reference(
     config: &mut Config,
     provider: &str,

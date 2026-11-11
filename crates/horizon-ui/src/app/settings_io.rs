@@ -12,28 +12,16 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 use horizon_core::Config;
 
-/// What a save writes.
-pub(super) enum SettingsWrite {
-    /// The canonical settings of the window.
-    Config(Box<Config>),
-    /// The YAML text of a person, and the settings that it parses to.
-    Text(String),
-}
-
 /// One request for the worker thread.
 enum Request {
-    Save { path: PathBuf, write: SettingsWrite },
+    Save { path: PathBuf, config: Box<Config> },
     Reload { path: PathBuf },
 }
 
 /// What the worker did, for the window to apply.
 pub(super) enum SettingsReply {
-    /// The save finished, and this is the YAML that describes the store now.
-    Saved {
-        path: PathBuf,
-        text: String,
-        config: Box<Config>,
-    },
+    /// The save finished, and these are the settings that the store holds now.
+    Saved { path: PathBuf, config: Box<Config> },
     /// The settings of `path`, or `None` when the store and the copy did not
     /// exist.
     Reloaded { path: PathBuf, config: Option<Box<Config>> },
@@ -85,15 +73,7 @@ impl SettingsIo {
     pub(super) fn save_config(&self, path: PathBuf, config: Config) {
         self.send(Request::Save {
             path,
-            write: SettingsWrite::Config(Box::new(config)),
-        });
-    }
-
-    /// Save the text that a person wrote.
-    pub(super) fn save_text(&self, path: PathBuf, text: String) {
-        self.send(Request::Save {
-            path,
-            write: SettingsWrite::Text(text),
+            config: Box::new(config),
         });
     }
 
@@ -125,44 +105,11 @@ impl SettingsIo {
 
 fn serve(request: Request) -> SettingsReply {
     match request {
-        Request::Save { path, write } => match write {
-            SettingsWrite::Config(config) => match Config::save(&path, &config) {
-                Ok(()) => match config.to_yaml() {
-                    Ok(text) => SettingsReply::Saved { path, text, config },
-                    Err(error) => SettingsReply::Failed {
-                        what: "save",
-                        error: error.to_string(),
-                    },
-                },
-                Err(error) => SettingsReply::Failed {
-                    what: "save",
-                    error: error.to_string(),
-                },
-            },
-            SettingsWrite::Text(text) => match Config::save_text(&path, &text) {
-                Ok(()) => match Config::from_yaml(&text) {
-                    // The store keeps settings, not text, so the window shows the
-                    // canonical YAML of what it saved.
-                    Ok(config) => match config.to_yaml() {
-                        Ok(text) => SettingsReply::Saved {
-                            path,
-                            text,
-                            config: Box::new(config),
-                        },
-                        Err(error) => SettingsReply::Failed {
-                            what: "save",
-                            error: error.to_string(),
-                        },
-                    },
-                    Err(error) => SettingsReply::Failed {
-                        what: "save",
-                        error: error.to_string(),
-                    },
-                },
-                Err(error) => SettingsReply::Failed {
-                    what: "save",
-                    error: error.to_string(),
-                },
+        Request::Save { path, config } => match Config::save(&path, &config) {
+            Ok(()) => SettingsReply::Saved { path, config },
+            Err(error) => SettingsReply::Failed {
+                what: "save",
+                error: error.to_string(),
             },
         },
         Request::Reload { path } => {
@@ -201,15 +148,20 @@ mod tests {
     }
 
     #[test]
-    fn a_text_save_writes_the_store() {
+    fn a_save_writes_the_store() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.yaml");
+        let path = dir.path().join("config.json");
         let io = SettingsIo::new();
-        io.save_text(path.clone(), "version: 11\nappearance:\n  theme: light\n".to_string());
+        let config = Config {
+            appearance: horizon_core::AppearanceConfig {
+                theme: horizon_core::AppearanceTheme::Light,
+            },
+            ..Config::default()
+        };
+        io.save_config(path.clone(), config);
 
         match wait(&io) {
-            SettingsReply::Saved { text, config, .. } => {
-                assert!(text.contains("theme: light"));
+            SettingsReply::Saved { config, .. } => {
                 assert_eq!(config.appearance.theme, horizon_core::AppearanceTheme::Light);
             }
             SettingsReply::Failed { error, .. } => panic!("{error}"),
@@ -219,18 +171,23 @@ mod tests {
             horizon_core::config_store::ConfigStore::resolve(&path).path().is_file(),
             "the store holds the settings"
         );
-        assert!(
-            !path.exists(),
-            "a save writes no YAML file; a person exports one on request"
-        );
+        assert!(!path.exists(), "a save writes no settings file of its own");
     }
 
     #[test]
     fn a_reload_reports_the_settings_of_the_store() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.yaml");
+        let path = dir.path().join("config.json");
         let io = SettingsIo::new();
-        io.save_text(path.clone(), "version: 11\nappearance:\n  theme: light\n".to_string());
+        io.save_config(
+            path.clone(),
+            Config {
+                appearance: horizon_core::AppearanceConfig {
+                    theme: horizon_core::AppearanceTheme::Light,
+                },
+                ..Config::default()
+            },
+        );
         let _ = wait(&io);
 
         io.reload(path);
@@ -248,7 +205,7 @@ mod tests {
     fn a_reload_of_nothing_reports_no_settings() {
         let dir = tempfile::tempdir().expect("tempdir");
         let io = SettingsIo::new();
-        io.reload(dir.path().join("config.yaml"));
+        io.reload(dir.path().join("config.json"));
         match wait(&io) {
             SettingsReply::Reloaded { config, .. } => assert!(config.is_none()),
             SettingsReply::Failed { error, .. } => panic!("{error}"),

@@ -14,8 +14,8 @@ fn a_save_shows_saving_and_then_saved() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
     app.toggle_settings();
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer = Config::default().to_yaml().expect("yaml");
-        editor.buffer = editor.buffer.replace("theme: auto", "theme: light");
+        editor.config.appearance.theme = horizon_core::AppearanceTheme::Light;
+        editor.dirty = true;
     }
 
     app.save_settings();
@@ -36,49 +36,44 @@ fn a_save_shows_saving_and_then_saved() {
     );
 }
 
-/// A YAML copy that a person exported and then edited is not a settings source:
-/// the editor shows the settings of this run, so a later save cannot put the
+/// A settings file that lies beside the store is not a settings source: the
+/// editor shows the settings of the store, so a later save cannot put the
 /// edited file into the store.
 #[test]
-fn an_edited_export_never_reaches_the_editor() {
+fn a_settings_file_beside_the_store_never_reaches_the_editor() {
     let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
-    let mut exported = app.template_config.to_yaml().expect("yaml");
-    exported = exported.replace("theme: auto", "theme: light");
-    std::fs::write(&app.config_path, &exported).expect("write the edited export");
+    Config::save(&app.config_path, &app.template_config).expect("write the store");
+    std::fs::write(
+        &app.config_path,
+        "{\n  \"version\": 11,\n  \"appearance\": {\n    \"theme\": \"light\"\n  }\n}\n",
+    )
+    .expect("write the edited file");
 
     app.toggle_settings();
 
     let editor = app.settings.as_ref().expect("open");
-    assert!(
-        !editor.buffer.contains("theme: light"),
-        "the editor holds the settings of this run, not the edited export: {}",
-        editor.buffer
+    assert_eq!(
+        editor.config.appearance.theme,
+        horizon_core::AppearanceTheme::Auto,
+        "the editor holds the settings of the store, not the file beside it"
     );
-    assert!(editor.buffer.contains("theme: auto"), "{}", editor.buffer);
 }
 
-/// The YAML tab shows long lines, which must scroll and must not widen the
-/// panel: the panel is a fraction of the viewport, and a wider panel covers the
-/// canvas it is meant to sit beside. The widths are compared with the same
-/// panel on the same machine, because the default width and the scroll bar
-/// differ by platform.
+/// A long value in a field must scroll and must not widen the panel: the panel
+/// is a fraction of the viewport, and a wider panel covers the canvas it is
+/// meant to sit beside. The widths are compared with the same panel on the same
+/// machine, because the default width and the scroll bar differ by platform.
 #[test]
-fn a_long_yaml_line_does_not_widen_the_settings_panel() {
-    use super::SettingsTab;
-
+fn a_long_text_field_does_not_widen_the_settings_panel() {
     let (_temp, ctx, mut app) = test_app_with_startup(ephemeral());
     let viewport = [1600.0, 1000.0];
     app.toggle_settings();
     if let Some(editor) = app.settings.as_mut() {
-        editor.active_tab = SettingsTab::Yaml;
-        editor.buffer = "version: 11\nremote_hosts:\n  default_workspace: 'a-short-name'\n".to_string();
+        editor.config.remote_hosts.default_workspace = "a-short-name".to_string();
     }
     let short = widest_panel_width(&ctx, &mut app, viewport);
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer = format!(
-            "version: 11\nremote_hosts:\n  default_workspace: '{}'\n",
-            "a-very-long-workspace-name-".repeat(20)
-        );
+        editor.config.remote_hosts.default_workspace = "a-very-long-workspace-name-".repeat(20);
     }
     let long = widest_panel_width(&ctx, &mut app, viewport);
 
@@ -92,7 +87,7 @@ fn a_long_yaml_line_does_not_widen_the_settings_panel() {
     );
 }
 
-/// The widest panel background over three frames, after the buffer settles.
+/// The widest panel background over three frames, after the panel settles.
 fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2]) -> f32 {
     let mut widths = Vec::new();
     for _ in 0..3 {

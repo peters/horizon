@@ -73,7 +73,6 @@ mod view;
 mod work_resume;
 mod workspace;
 mod workspace_destination;
-mod yaml_highlight;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;

@@ -239,52 +239,46 @@ fn set_default_waits_for_unsaved_settings_edits_and_refreshes_a_clean_editor() {
 
     // An unsaved edit in the editor blocks the write and stays intact.
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer.push_str("\n# draft\n");
+        editor.config.features.sidebar_accordion = true;
+        editor.dirty = true;
     }
     assert!(app.settings_has_unsaved_edits());
     assert!(!app.set_remote_hosts_default_workspace("Ops"));
     // A draft that already says the new name must not count as persisted.
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer = editor
-            .original
-            .replace("default_workspace: Remote Sessions", "default_workspace: Ops");
+        editor.config.remote_hosts.default_workspace = "Ops".to_string();
     }
     assert!(app.settings_has_unsaved_edits());
     assert!(!app.set_remote_hosts_default_workspace("Ops"));
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer.push_str("\n# draft\n");
+        editor.config.features.sidebar_accordion = true;
     }
     assert_eq!(
         app.template_config.remote_hosts.default_workspace_name(),
         "Remote Sessions"
     );
-    assert!(app.settings.as_ref().unwrap().buffer.ends_with("# draft\n"));
+    assert!(app.settings.as_ref().unwrap().config.features.sidebar_accordion);
 
     // A clean editor is moved onto the rewritten file so a later Save keeps the default.
     if let Some(editor) = app.settings.as_mut() {
-        editor.buffer.clone_from(&editor.original);
+        editor.config = editor.original.clone();
+        editor.dirty = false;
     }
     assert!(app.set_remote_hosts_default_workspace("Ops"));
     app.wait_for_settings_io();
     let editor = app.settings.as_ref().unwrap();
-    assert_eq!(editor.buffer, editor.original);
-    assert!(editor.buffer.contains("default_workspace: Ops"), "{}", editor.buffer);
+    assert!(!editor.dirty);
     assert_eq!(
-        editor
-            .editing_config()
-            .map(|config| config.remote_hosts.default_workspace_name()),
-        Some("Ops"),
-        "the GUI tabs' snapshot follows the file"
+        editor.editing_config().remote_hosts.default_workspace_name(),
+        "Ops",
+        "the tabs follow the store"
     );
     assert_eq!(
         Config::load(Some(&app.config_path))
             .expect("reload")
             .remote_hosts
             .default_workspace_name(),
-        editor
-            .editing_config()
-            .map(|config| config.remote_hosts.default_workspace_name())
-            .unwrap_or_default(),
+        editor.editing_config().remote_hosts.default_workspace_name(),
         "the editor and the store hold the same settings"
     );
 }

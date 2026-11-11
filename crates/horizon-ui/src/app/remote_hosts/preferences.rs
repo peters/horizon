@@ -28,9 +28,7 @@ impl HorizonApp {
     /// Whether the settings editor is open with edits that were not saved;
     /// `template_config` then mirrors that draft rather than the store.
     pub(in crate::app) fn settings_has_unsaved_edits(&self) -> bool {
-        self.settings
-            .as_ref()
-            .is_some_and(|editor| editor.buffer != editor.original)
+        self.settings.as_ref().is_some_and(|editor| editor.dirty)
     }
 
     /// Persist one change the way the settings editor saves: the store is

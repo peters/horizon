@@ -4,14 +4,7 @@ use super::SettingsAction;
 use crate::app::util::{chrome_button, primary_button};
 use crate::theme;
 
-pub(super) fn render(
-    ui: &mut egui::Ui,
-    status_text: &str,
-    status_color: Color32,
-    is_valid: bool,
-    has_changes: bool,
-    configuration: bool,
-) -> SettingsAction {
+pub(super) fn render(ui: &mut egui::Ui, status_text: &str, status_color: Color32, has_changes: bool) -> SettingsAction {
     let mut action = SettingsAction::None;
 
     egui::Panel::bottom(super::SETTINGS_BAR_ID)
@@ -27,20 +20,12 @@ pub(super) fn render(
                 if !status_text.is_empty() {
                     ui.label(egui::RichText::new(status_text).color(status_color).size(12.0));
                 }
-                if !is_valid {
-                    ui.label(
-                        egui::RichText::new("Invalid config")
-                            .color(theme::PALETTE_RED())
-                            .size(12.0),
-                    );
-                }
-
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if configuration && ui.add(primary_button("Save")).clicked() {
+                    if ui.add(primary_button("Save")).clicked() {
                         action = SettingsAction::Save;
-                    } else if configuration && ui.add(chrome_button("Reset Defaults")).clicked() {
+                    } else if ui.add(chrome_button("Reset Defaults")).clicked() {
                         action = SettingsAction::ResetDefaults;
-                    } else if configuration && has_changes && ui.add(chrome_button("Revert")).clicked() {
+                    } else if has_changes && ui.add(chrome_button("Revert")).clicked() {
                         action = SettingsAction::Revert;
                     } else if ui
                         .add(
