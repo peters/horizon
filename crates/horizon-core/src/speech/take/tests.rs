@@ -4,6 +4,15 @@
 //! waits for its signal, so a test proves the bounds of a take without a
 //! microphone and without a second of wall time: the clock of the take is the one
 //! of the test.
+//!
+//! The rule of these tests: **the clock of a test never runs ahead of a real
+//! program.** The worker reads [`TestClock`], whose time no wait moves, and a test
+//! moves that time only after its recorder has shown that it runs — it wrote its own
+//! pid and the file of the take holds its bytes. A bound of the code, such as the
+//! 120 seconds of a take or the two seconds of a stop, is then reached by the test
+//! and not by a machine that starts `/bin/sh` more slowly. A bound that the worker
+//! computes from an instant of its own is reached in steps while the worker reads it
+//! more than once.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -15,7 +24,7 @@ use std::time::{Duration, Instant};
 use rustix::process::Pid;
 
 use super::{
-    MAX_TAKE, SpeechEventKind, SpeechInput, SpeechKeyStore, SpeechWorker, TAKE_FOLDER, TakeBounds, TakePlan,
+    MAX_TAKE, POLL, SpeechEventKind, SpeechInput, SpeechKeyStore, SpeechWorker, TAKE_FOLDER, TakeBounds, TakePlan,
     Transcriber,
 };
 use crate::named_secrets::SecretName;
@@ -38,25 +47,15 @@ struct Take {
 }
 
 impl Take {
-    /// A take whose clock moves only when the test moves it, so the length of the
-    /// take is the one that the test set.
+    /// A take of the bounds of the code, whose clock only the test moves.
     fn new(keys: Arc<dyn SpeechKeyStore>) -> Self {
-        Self::with(keys, TakeBounds::default(), TestClock::frozen())
+        Self::with_bounds(keys, TakeBounds::default())
     }
 
-    /// A take whose clock moves with its own waits, so the bound of the take is
-    /// reached without wall time.
-    fn advancing(keys: Arc<dyn SpeechKeyStore>) -> Self {
-        Self::with(keys, TakeBounds::default(), TestClock::new())
-    }
-
+    /// A take of the bounds of `bounds`, whose clock only the test moves.
     fn with_bounds(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds) -> Self {
-        Self::with(keys, bounds, TestClock::frozen())
-    }
-
-    fn with(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds, clock: TestClock) -> Self {
         let home = tempfile::tempdir().expect("a home of a test");
-        let clock = Arc::new(clock);
+        let clock = Arc::new(TestClock::new());
         let worker = SpeechWorker::new(home.path().to_path_buf(), keys)
             .with_clock(Arc::clone(&clock) as Arc<dyn super::super::Clock>, bounds);
         let input = SpeechInput::start(worker);
@@ -126,6 +125,13 @@ impl Take {
         }
     }
 
+    /// Wait until the recorder of `name` runs: it wrote its own pid and the file of
+    /// the take holds the bytes that it copied. Only then may a test move the clock,
+    /// because a bound of the take may not pass a program that has not started.
+    fn wait_for_recorder(&self, name: &str) {
+        self.wait_for("the recorder", || self.pid_file(name).exists() && self.file_bytes() > 0);
+    }
+
     fn events(&self) -> Vec<SpeechEventKind> {
         let mut kinds = Vec::new();
         while let Some(event) = self.input.poll() {
@@ -137,9 +143,23 @@ impl Take {
 
     /// One event of one of `wanted`, or a failure that names what the worker said.
     fn wait_for_event(&self, wanted: &[&str]) -> Vec<SpeechEventKind> {
+        self.wait_for_event_on(None, wanted)
+    }
+
+    /// One event of one of `wanted`, with the clock of the test moved by `step`
+    /// before every look at the worker.
+    ///
+    /// A bound that the worker computes from an instant of its own, such as the two
+    /// seconds of a stop, is reached in steps: the worker sets its deadline when the
+    /// signal goes out, so a single step would move that deadline with it. `None`
+    /// leaves the clock where the test put it.
+    fn wait_for_event_on(&self, step: Option<Duration>, wanted: &[&str]) -> Vec<SpeechEventKind> {
         let deadline = Instant::now() + PATIENCE;
         let mut seen = Vec::new();
-        while Instant::now() < deadline {
+        loop {
+            if let Some(step) = step {
+                self.clock.advance(step);
+            }
             for kind in self.events() {
                 let named = match &kind {
                     SpeechEventKind::Listening => "listening",
@@ -157,9 +177,12 @@ impl Take {
                     panic!("the worker says {message:?} and not {wanted:?}");
                 }
             }
+            assert!(
+                Instant::now() < deadline,
+                "the test waited for {wanted:?} and saw {seen:?}"
+            );
             std::thread::sleep(Duration::from_millis(2));
         }
-        panic!("the test waited for {wanted:?} and saw {seen:?}");
     }
 
     /// A child of this test that no signal of a take may reach.
@@ -251,7 +274,7 @@ fn a_short_take_is_dropped_and_runs_no_transcriber() {
     let (transcriber, marker) = transcriber_script(&take, "never");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     // The clock of the test did not move, so the take is shorter than 0.3 seconds.
     take.input.end();
     take.wait_for_event(&["dropped"]);
@@ -267,7 +290,7 @@ fn a_take_of_one_second_is_transcribed_by_the_command_of_the_settings() {
     let (transcriber, marker) = transcriber_script(&take, "  hei\n");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_millis(1000));
     take.input.end();
     let events = take.wait_for_event(&["writing", "text"]);
@@ -287,7 +310,7 @@ fn escape_cancels_the_take_and_deletes_the_file() {
     let (transcriber, marker) = transcriber_script(&take, "never");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     let recorder_pid = pid_of(&take, "rec");
     take.clock.advance(Duration::from_secs(2));
     take.input.cancel();
@@ -299,16 +322,20 @@ fn escape_cancels_the_take_and_deletes_the_file() {
 
 #[test]
 fn a_take_that_reaches_its_bound_of_120_seconds_stops_by_itself() {
-    let take = Take::advancing(Arc::new(()));
+    let take = Take::new(Arc::new(()));
     let prepared = take.prepared();
     let recorder = take.recorder("rec", &prepared);
     let (transcriber, marker) = transcriber_script(&take, "long");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    // The recorder runs before the clock of the test moves, so the bound of the take
+    // is reached by this test and not by a machine that starts `/bin/sh` after the
+    // bound has passed.
+    take.wait_for_recorder("rec");
     // The bound of the take is the bound of the code: 120 seconds of the clock of
-    // the test. The worker moves that clock by its own waits, so no key event is
-    // sent and the take ends alone.
+    // the test. The test moves that clock, so no key event is sent and the take ends
+    // alone.
+    take.clock.advance(MAX_TAKE);
     let events = take.wait_for_event(&["writing", "text"]);
     assert!(
         matches!(events[1], SpeechEventKind::Text(ref text) if text == "long"),
@@ -354,7 +381,7 @@ fn a_recorder_that_ends_early_answers_its_last_line() {
 
 #[test]
 fn a_recorder_that_ignores_the_signal_is_killed_by_its_own_pid() {
-    let mut take = Take::advancing(Arc::new(()));
+    let mut take = Take::new(Arc::new(()));
     let bystander = take.bystander();
     let prepared = take.prepared();
     let pid_file = take.pid_file("stubborn");
@@ -370,13 +397,15 @@ fn a_recorder_that_ignores_the_signal_is_killed_by_its_own_pid() {
     let (transcriber, _marker) = transcriber_script(&take, "kept");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the stubborn recorder", || pid_file.exists());
+    take.wait_for("the stubborn recorder", || pid_file.exists() && take.file_bytes() > 0);
     let recorder_pid = pid_of(&take, "stubborn");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     // The recorder ignores SIGINT, so the stop of the take waits its bound of two
-    // seconds on the clock of the test and kills that one process id.
-    take.wait_for_event(&["writing", "text"]);
+    // seconds and kills that one process id. The worker sets the deadline of the stop
+    // from the instant of its own signal, so the test moves the clock in steps and the
+    // worker reads each one.
+    take.wait_for_event_on(Some(POLL), &["writing", "text"]);
     take.wait_for("the end of the stubborn recorder", || !alive(recorder_pid));
     assert!(
         alive(bystander),
@@ -392,7 +421,7 @@ fn no_file_of_a_take_stays_after_a_success() {
     let (transcriber, _marker) = transcriber_script(&take, "kept");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     take.wait_for_event(&["writing", "text"]);
@@ -436,15 +465,21 @@ fn a_recording_above_the_bound_of_the_file_is_refused() {
 #[test]
 fn a_take_of_no_byte_is_dropped() {
     let take = Take::new(Arc::new(()));
+    let started = take.pid_file("empty");
     let program = take.script(
         "rec",
-        "#!/bin/sh\nprintf '%s\\n' \"$$\" > /dev/null\ntrap 'exit 0' INT\nwhile :; do sleep 0.02; done\n",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\ntrap 'exit 0' INT\nwhile :; do sleep 0.02; done\n",
+            started.display()
+        ),
     );
     let recorder = CommandLine::parse(&format!("{program} {{file}}")).expect("a line");
     let (transcriber, marker) = transcriber_script(&take, "never");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    std::thread::sleep(Duration::from_millis(100));
+    // This recorder copies no byte, so its pid alone says that it runs and the clock
+    // of the test may move.
+    take.wait_for("the recorder", || started.exists());
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     take.wait_for_event(&["dropped"]);
@@ -464,7 +499,7 @@ fn a_missing_secret_of_the_service_starts_no_request() {
         key_secret: SecretName::parse("MY_SPEECH_KEY").expect("a name"),
     };
     take.input.begin(plan(recorder, service), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     let events = take.wait_for_event(&["failed"]);
@@ -490,7 +525,7 @@ fn a_transcriber_command_that_does_not_answer_hits_its_bound() {
     let transcriber = CommandLine::parse(&format!("{program} {{file}}")).expect("a line");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     let events = take.wait_for_event(&["failed"]);
@@ -563,7 +598,7 @@ fn a_take_that_records_when_the_window_closes_leaves_no_file_and_no_child() {
     let (transcriber, _marker) = transcriber_script(&take, "kept");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     let recorder_pid = pid_of(&take, "rec");
     // The window closes: the handle is dropped while the take records.
     let input = std::mem::replace(
@@ -645,7 +680,7 @@ fn the_value_of_the_key_reaches_one_request_and_no_file_of_the_take() {
         key_secret: SecretName::parse("MY_SPEECH_KEY").expect("a name"),
     };
     take.input.begin(plan(recorder, service), TARGET);
-    take.wait_for("the recorder", || take.pid_file("rec").exists());
+    take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
     let events = take.wait_for_event(&["writing", "text"]);
