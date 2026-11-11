@@ -633,8 +633,12 @@ fn render_devices_section(ui: &mut Ui, state: &mut ServerTabState) {
         }
         for row in &state.devices {
             let name = row.name.clone();
-            let confirming = state.confirming.as_deref() == Some(name.as_str());
-            let removing = state.removing.as_deref() == Some(name.as_str());
+            // The console of the server computer itself is not a computer that a
+            // person removes: the login of that console belongs to the server, and a
+            // removal reads as if it removed the server.
+            let server_computer = row.is_server_console();
+            let confirming = !server_computer && state.confirming.as_deref() == Some(name.as_str());
+            let removing = !server_computer && state.removing.as_deref() == Some(name.as_str());
             let detail = format!(
                 "{} · seen {} · joined {}",
                 if row.login == DeviceLogin::Token { "link" } else { "ssh" },
@@ -657,7 +661,13 @@ fn render_devices_section(ui: &mut Ui, state: &mut ServerTabState) {
                     });
                 },
                 |ui| {
-                    if confirming {
+                    if server_computer {
+                        ui.label(
+                            egui::RichText::new("this server")
+                                .color(theme::FG_DIM())
+                                .size(SMALL_SIZE),
+                        );
+                    } else if confirming {
                         if ui.add(crate::app::util::chrome_button("Remove")).clicked() {
                             state.removing = Some(name.clone());
                             state.confirming = None;

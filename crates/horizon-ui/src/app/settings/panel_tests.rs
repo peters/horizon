@@ -177,6 +177,10 @@ fn the_server_tab_draws_the_invitation_the_plate_and_the_computers() {
             "the Server tab draws {expected}: {texts:?}"
         );
     }
+    // The console of the server computer itself says what it is and offers no
+    // removal: that row holds the login of the server, and a removal of it reads as
+    // if it removed the server.
+    assert_row_of_the_server_computer(&shapes, &texts);
     // The row that confirms a removal and the rows of the computers fit the panel
     // of this window: no word of a row lies under a button of that row.
     assert_no_word_lies_under_a_button(&shapes);
@@ -199,6 +203,34 @@ fn the_server_tab_draws_the_invitation_the_plate_and_the_computers() {
         texts.iter().any(|text| text.ends_with("minutes left")),
         "the invitation says how long it lives: {texts:?}"
     );
+}
+
+/// The row of the server computer says that it is the server, and where the row of
+/// another computer holds its Remove button this row holds that word: no control of
+/// a removal is on its line.
+fn assert_row_of_the_server_computer(shapes: &[egui::epaint::ClippedShape], texts: &[String]) {
+    let name = text_rects(shapes, horizon_sync::SERVER_DEVICE)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| panic!("the list draws the row of the server computer: {texts:?}"));
+    let on_the_same_line = |rects: Vec<egui::Rect>| {
+        rects
+            .into_iter()
+            .filter(|rect| (rect.center().y - name.center().y).abs() <= 30.0)
+            .collect::<Vec<_>>()
+    };
+    let words = on_the_same_line(text_rects(shapes, "this server"));
+    assert_eq!(
+        words.len(),
+        1,
+        "the row of the server computer says that it is the server: {texts:?}"
+    );
+    for label in ["Remove", "Keep"] {
+        assert!(
+            on_the_same_line(text_rects(shapes, label)).is_empty(),
+            "the row of the server computer offers no {label}: {texts:?}"
+        );
+    }
 }
 
 /// No word of the panel lies under a button of the panel: the row of a computer
@@ -292,8 +324,11 @@ fn seed_server_tab(app: &mut crate::app::HorizonApp, directory: &std::path::Path
         now_millis: 1_759_999_999_000,
     }));
     // Three computers with the longest names that the rule of a device name
-    // allows, and one removal that waits for its confirmation.
+    // allows, and one removal that waits for its confirmation. The console of the
+    // server computer itself is one row above them, as the list of the server
+    // reports it.
     editor.server.devices = vec![
+        row(horizon_sync::SERVER_DEVICE, DeviceLogin::Ssh, false),
         row("workshop-laptop-of-the-north-window-01", DeviceLogin::Ssh, true),
         row("workshop-laptop-of-the-south-window-02", DeviceLogin::Token, false),
         row("workshop-laptop-of-the-east-window-003", DeviceLogin::Token, false),

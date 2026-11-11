@@ -128,6 +128,27 @@ pub struct DeviceRow {
     pub caller: bool,
 }
 
+impl DeviceRow {
+    /// Whether this row is the console of the server computer itself: the device
+    /// that `horizon --server-invite` claims on its own server, so that a person who
+    /// runs the server asks for the first link there.
+    ///
+    /// The server's store knows two things about a computer beyond its times: the
+    /// name it claimed and the way it logs in. The console of the server claims the
+    /// name [`SERVER_DEVICE`] over the `ssh` link of the server's own home, so both
+    /// decide. A computer that a person named `server` and joined with a link logs
+    /// in with its token, and a console of another computer holds the name of that
+    /// computer, so neither is the server computer.
+    ///
+    /// The row of the server computer is not a computer that a person removes: it
+    /// holds the login of the console of the server, and the server keeps running
+    /// after the removal.
+    #[must_use]
+    pub fn is_server_console(&self) -> bool {
+        self.login == DeviceLogin::Ssh && self.name == crate::invite::SERVER_DEVICE
+    }
+}
+
 /// The list of the computers of this server.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -324,6 +345,29 @@ mod tests {
         for name in ["", "MBP", "mbp_7", "-mbp", "mbp-", "mbp 7", &"a".repeat(41)] {
             assert!(!check_device_name(name), "{name:?} is not one device name");
         }
+    }
+
+    #[test]
+    fn the_console_of_the_server_computer_is_told_by_its_name_and_its_login() {
+        let row = |name: &str, login| DeviceRow {
+            name: name.to_owned(),
+            created_millis: 1,
+            last_seen_millis: 1,
+            login,
+            caller: false,
+        };
+        assert!(
+            row(crate::invite::SERVER_DEVICE, DeviceLogin::Ssh).is_server_console(),
+            "the console of the server computer over ssh is the server itself"
+        );
+        assert!(
+            !row(crate::invite::SERVER_DEVICE, DeviceLogin::Token).is_server_console(),
+            "a computer that a person named server and joined with a token is a computer"
+        );
+        assert!(
+            !row("mbp-7c1", DeviceLogin::Ssh).is_server_console(),
+            "the console of another computer holds the name of that computer"
+        );
     }
 
     #[test]

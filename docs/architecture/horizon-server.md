@@ -198,7 +198,12 @@ code, and one token for each computer after that.
   `device_list { rows, now_millis }`, one row for each computer with its name,
   the time that it joined, the time that the server saw it last, and the way that
   it logs in: `ssh` or `token`. The row of the computer that asked carries
-  `caller: true`.
+  `caller: true`. The console of the server computer itself is one row of this
+  list, under the name `server` and the login `ssh`, because
+  `horizon --server-invite` claimed it. The window shows that row with the words
+  "this server" and without a removal: a removal of that row ends the link of the
+  server's own console and reads as if it removed the server, while the server
+  keeps running.
 - **A removal ends the links of that computer.** `device_remove { device }`
   deletes the row and the token of that computer and ends its open links with
   `error { code: "removed" }`, after the error frame reached them. The server keeps
