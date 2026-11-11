@@ -29,7 +29,7 @@ fn held(vault: &NamedSecretVault, name: &SecretName) -> Vec<u8> {
         .to_vec()
 }
 
-fn vault() -> (NamedSecretVault, Arc<Mutex<SecretStore>>) {
+fn vault() -> (NamedSecretVault, Arc<Mutex<Arc<SecretStore>>>) {
     let store = Arc::new(Mutex::new(SecretStore::in_memory().expect("a store in memory")));
     let vault = NamedSecretVault::new(Box::new(SharedCredentialStore::new(Arc::clone(&store))));
     (vault, store)

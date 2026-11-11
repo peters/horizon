@@ -222,7 +222,8 @@ impl CredentialWorkbench {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Open the secrets file at `path` on a worker thread.
+    /// The one store of the secrets file of this home, opened on a worker thread.
+    /// The store is shared with every other holder of that file in this process.
     #[must_use]
     pub fn spawn_file(path: std::path::PathBuf) -> Self {
         let mut bench = Self::with_opener(Box::new({
@@ -233,10 +234,11 @@ impl CredentialWorkbench {
         bench
     }
 
-    /// A handle that opens the secrets file of this workbench again, for a caller
-    /// that must read a value on its own thread and never wait for the settings
-    /// worker. `None` for a workbench that has no file of its own, which is what a
-    /// test injects.
+    /// A handle that hands out the store of the secrets file of this workbench, for
+    /// a caller that must read a value on its own thread and never wait for the
+    /// settings worker. The store is the one connection of this process for that
+    /// file, so the reader shares it. `None` for a workbench that has no file of its
+    /// own, which is what a test injects.
     #[must_use]
     pub fn file_opener(&self) -> Option<StoreOpener> {
         let path = self.secrets_file.clone()?;

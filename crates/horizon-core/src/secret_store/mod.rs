@@ -8,25 +8,37 @@
 //!
 //! The file is the whole protection: the folder is `0700`, the file and its
 //! `-wal` and `-shm` are `0600` from the first byte, and a value is stored as it
-//! is, never sealed. A person who can read one file of that home reads every value,
-//! as a person who can read the machine keys under `machine-keys/` reads every key
-//! and a person who can read `~/.ssh` reads every ssh key. The pages
+//! is, never sealed. A person who can
+//! read one file of that home reads every value, as a person who can read the
+//! machine keys under `machine-keys/` reads every key and a person who can read
+//! `~/.ssh` reads every ssh key. The pages
 //! [`docs/review/trust-boundaries/named-secrets.md`](../../../../docs/review/trust-boundaries/named-secrets.md)
 //! and [`docs/architecture/settings-store.md`](../../../../docs/architecture/settings-store.md)
 //! state that plainly.
 //!
-//! The store is one connection behind one lock, so every write of this process is
-//! serialized, and no method here runs on the UI thread: the Settings workbench,
-//! the named secrets worker and the link to a server each open the file on their
-//! own worker thread. The write-ahead log lets a second Horizon process read while
-//! this one writes.
+//! **One file has one connection in this process.** [`SecretStore::open`] answers
+//! the store that this process already holds for that path, so the settings
+//! workbench, the credential vault and the named secret vault of the link, and
+//! every reader that a usage refresh starts, share one connection behind one
+//! lock. The table holds a weak reference, so the last holder of a store closes
+//! the file. A second connection to one file therefore cannot be made by
+//! construction: two connections of one process do not see each other's POSIX
+//! locks, which is what lets a write-ahead log of one of them be truncated while
+//! the other writes into its mapping.
+//!
+//! The connection is one lock, so every write of this process is serialized, and
+//! no method here runs on the UI thread: the Settings workbench, the named secrets
+//! worker and the link to a server each reach the store from a worker thread. The
+//! write-ahead log lets a second Horizon process read while this one writes.
 //!
 //! A machine key is not here. `ssh` needs the private key as a path, so a machine
 //! key stays the three files of `machine-keys/<name>`.
 
 use std::{
+    collections::BTreeMap,
+    fs,
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError, Weak},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -48,6 +60,67 @@ pub use schema::SECRETS_SCHEMA_VERSION;
 /// The name of the file of the secret values, in the Horizon home.
 pub const SECRETS_FILE_NAME: &str = "secrets.sqlite";
 
+/// The slot of each secrets file that this process opened, keyed by the canonical
+/// path of the file.
+static OPEN_FILES: Mutex<BTreeMap<PathBuf, Arc<FileSlot>>> = Mutex::new(BTreeMap::new());
+
+/// How many times this process opened the file at a path, so a test can show that
+/// one file is opened once.
+#[cfg(test)]
+static OPEN_COUNTS: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+/// The slot of one secrets file: the store that this process holds for that file,
+/// or none while no one holds it.
+///
+/// The lock of a slot is the lock of its own file, so a thread that opens one file
+/// never waits for another file to be opened, and no two threads open one file at
+/// the same moment. The slot holds a weak reference, so a store goes when its last
+/// holder goes.
+#[derive(Default)]
+struct FileSlot {
+    store: Mutex<Option<Weak<SecretStore>>>,
+}
+
+/// The key of one secrets file: the canonical path of the file, so two spellings of
+/// one path share one store.
+///
+/// A file that is not there yet is keyed by the canonical folder that is there and
+/// the rest of the path under it, so the key of a file does not change when the
+/// folder of the file is made.
+fn file_key(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut names = Vec::new();
+    let mut current = path;
+    loop {
+        let Some(name) = current.file_name() else {
+            return path.to_path_buf();
+        };
+        names.push(name.to_os_string());
+        let Some(parent) = current.parent() else {
+            return path.to_path_buf();
+        };
+        if let Ok(folder) = fs::canonicalize(parent) {
+            let mut key = folder;
+            for name in names.iter().rev() {
+                key.push(name);
+            }
+            return key;
+        }
+        if parent.as_os_str().is_empty() {
+            return path.to_path_buf();
+        }
+        current = parent;
+    }
+}
+
+/// The slot of one secrets file, made on its first open.
+fn slot_of(key: &Path) -> Arc<FileSlot> {
+    let mut files = OPEN_FILES.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(files.entry(key.to_path_buf()).or_default())
+}
+
 /// The secret values of one Horizon home.
 pub struct SecretStore {
     path: PathBuf,
@@ -66,15 +139,32 @@ impl std::fmt::Debug for SecretStore {
 impl SecretStore {
     /// The store of the file at `path`, made when it is not there.
     ///
+    /// This answers the store that this process already holds for the file. One
+    /// lock covers the lookup and the making of the file, so a second connection to
+    /// one file cannot be made and the tables of a new file are made once.
+    ///
     /// # Errors
     /// Returns the path and the reason when the folder or the file cannot be
     /// made, made private, read or written.
-    pub fn open(path: PathBuf) -> Result<Self, RemoteCredentialError> {
+    pub fn open(path: PathBuf) -> Result<Arc<Self>, RemoteCredentialError> {
+        let key = file_key(&path);
+        let slot = slot_of(&key);
+        let mut held = slot.store.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(store) = held.as_ref().and_then(Weak::upgrade) {
+            return Ok(store);
+        }
         let connection = schema::open(&path)?;
-        Ok(Self {
+        #[cfg(test)]
+        {
+            let mut counts = OPEN_COUNTS.lock().unwrap_or_else(PoisonError::into_inner);
+            *counts.entry(key).or_insert(0) += 1;
+        }
+        let store = Arc::new(Self {
             path,
             connection: Mutex::new(connection),
-        })
+        });
+        *held = Some(Arc::downgrade(&store));
+        Ok(store)
     }
 
     /// A store that holds its values in memory and no file, for a test and for a
@@ -82,12 +172,19 @@ impl SecretStore {
     ///
     /// # Errors
     /// Returns why a store in memory cannot be made.
-    pub fn in_memory() -> Result<Self, RemoteCredentialError> {
+    pub fn in_memory() -> Result<Arc<Self>, RemoteCredentialError> {
         let connection = schema::in_memory()?;
-        Ok(Self {
+        Ok(Arc::new(Self {
             path: PathBuf::from(schema::IN_MEMORY),
             connection: Mutex::new(connection),
-        })
+        }))
+    }
+
+    /// How many times this process opened the file at `path`.
+    #[cfg(test)]
+    pub(super) fn opens(path: &Path) -> usize {
+        let counts = OPEN_COUNTS.lock().unwrap_or_else(PoisonError::into_inner);
+        counts.get(&file_key(path)).copied().unwrap_or(0)
     }
 
     /// The file of this store.
@@ -179,9 +276,13 @@ impl SecretStore {
     }
 }
 
-impl Sealed for SecretStore {}
+impl Sealed for Arc<SecretStore> {}
 
-impl RemoteCredentialStore for SecretStore {
+/// The one store of a secrets file, as the window and the link hold it.
+///
+/// The trait asks for `&mut self` while the store serializes every write behind its
+/// own lock, so a shared handle to one file is the one store of that file.
+impl RemoteCredentialStore for Arc<SecretStore> {
     fn kind(&self) -> CredentialStoreKind {
         CredentialStoreKind::File
     }

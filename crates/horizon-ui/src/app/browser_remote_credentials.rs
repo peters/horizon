@@ -220,6 +220,7 @@ fn credential_refusal(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::mpsc::channel;
     use std::time::Duration;
 
@@ -251,7 +252,7 @@ mod tests {
     }
 
     /// The secrets file the provider's key lives in, holding `value` for it.
-    fn secrets_file(value: Option<&[u8]>) -> SecretStore {
+    fn secrets_file(value: Option<&[u8]>) -> Arc<SecretStore> {
         let mut store = SecretStore::in_memory().expect("a store in memory");
         let Some(value) = value else { return store };
         let profile = os_config().browser.remote.providers["grid"].clone();
@@ -262,7 +263,7 @@ mod tests {
     }
 
     /// A workbench whose file answers what `store` holds, on its own thread.
-    fn os_workbench(store: SecretStore) -> CredentialWorkbench {
+    fn os_workbench(store: Arc<SecretStore>) -> CredentialWorkbench {
         CredentialWorkbench::with_opener(Box::new(move || {
             Ok(Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
         }))

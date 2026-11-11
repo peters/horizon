@@ -10,6 +10,7 @@
 
 use std::{
     fs::{self, OpenOptions},
+    io::ErrorKind,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::Path,
 };
@@ -91,25 +92,37 @@ fn make_folder(path: &Path) -> Result<(), RemoteCredentialError> {
 
 /// Makes the file of the store, or a file that an older build left readable,
 /// reachable by its owner alone.
+///
+/// A file that is not there is made with `create_new` at [`FILE_MODE`], so it has
+/// that mode from the first byte and the descriptor goes away before SQLite opens
+/// the same file. A file that is there is corrected by its path: closing a plain
+/// descriptor of a database releases every POSIX lock that this process holds on
+/// it, and SQLite names that as a way to corrupt a database.
 fn make_private(path: &Path) -> Result<(), RemoteCredentialError> {
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
         .mode(FILE_MODE)
         .open(path)
-        .map_err(|error| file_error(path, &error.to_string()))?;
-    let mode = file
-        .metadata()
-        .map_err(|error| file_error(path, &error.to_string()))?
-        .permissions()
-        .mode()
-        & 0o777;
-    if mode != FILE_MODE {
-        file.set_permissions(fs::Permissions::from_mode(FILE_MODE))
-            .map_err(|error| file_error(path, &error.to_string()))?;
+    {
+        Ok(file) => {
+            drop(file);
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let mode = fs::metadata(path)
+                .map_err(|error| file_error(path, &error.to_string()))?
+                .permissions()
+                .mode()
+                & 0o777;
+            if mode != FILE_MODE {
+                fs::set_permissions(path, fs::Permissions::from_mode(FILE_MODE))
+                    .map_err(|error| file_error(path, &error.to_string()))?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(file_error(path, &error.to_string())),
     }
-    Ok(())
 }
 
 fn file_error(path: &Path, reason: &str) -> RemoteCredentialError {

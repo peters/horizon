@@ -288,9 +288,9 @@ struct Computer {
     machines_dir: PathBuf,
     keys: MachineKeys,
     credentials: Arc<CredentialVault>,
-    values: Arc<Mutex<SecretStore>>,
+    values: Arc<Mutex<Arc<SecretStore>>>,
     /// The credential store of the named secrets of this computer.
-    named_values: Arc<Mutex<SecretStore>>,
+    named_values: Arc<Mutex<Arc<SecretStore>>>,
     named: Arc<NamedSecretVault>,
     supervisor: Option<Supervisor>,
     server: PathBuf,

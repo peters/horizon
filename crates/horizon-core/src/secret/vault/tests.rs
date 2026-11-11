@@ -53,7 +53,7 @@ fn vault() -> (
     tempfile::TempDir,
     SecretVault,
     Arc<CredentialVault>,
-    Arc<Mutex<SecretStore>>,
+    Arc<Mutex<Arc<SecretStore>>>,
 ) {
     let home = tempfile::tempdir().expect("a directory");
     let keys = crate::MachineKeys::new(home.path().join("machine-keys"));
