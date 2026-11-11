@@ -253,7 +253,9 @@ fn static_shortcut_row(ui: &mut Ui, label: &str, value: &str, note: Option<&str>
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(LABEL_WIDTH);
-                ui.label(egui::RichText::new(note).color(note_color).size(11.0));
+                // A note is a sentence, and a sentence wraps inside the panel
+                // instead of widening it: a label of a row never wraps by itself.
+                ui.add(egui::Label::new(egui::RichText::new(note).color(note_color).size(11.0)).wrap());
             });
         }
     });

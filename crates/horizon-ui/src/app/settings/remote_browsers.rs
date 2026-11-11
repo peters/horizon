@@ -515,47 +515,11 @@ fn render_reference(
     let (reference, store, state) = (&entry.reference, entry.store, entry.state);
     let bound = profile.credential_bindings.contains_key(reference);
     let key = InputKey::new(provider, profile, reference);
-    // A long reference is cut inside its row, so the row never widens the panel
-    // beside the canvas.
-    ui.horizontal_wrapped(|ui| {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(reference.as_str())
-                    .color(theme::FG())
-                    .size(12.0)
-                    .strong(),
-            )
-            .truncate(),
-        );
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(store_label(store, bound))
-                    .color(theme::FG_DIM())
-                    .size(11.0),
-            )
-            .truncate(),
-        );
-        let (state_text, color) = state_badge(state);
-        ui.add(egui::Label::new(egui::RichText::new(state_text).color(color).size(11.0)).truncate());
-    });
+    readiness_row(ui, entry, bound);
     if !bound {
         // An imported profile arrives without bindings: choose where this
         // computer keeps the value, then the row takes it.
-        let mut chosen = None;
-        ui.horizontal(|ui| {
-            super::dim_label(ui, "Not bound on this computer. Keep the value in:");
-            if ui.small_button("This session only").clicked() {
-                chosen = Some(CredentialStoreKind::Session);
-            }
-            let available = workbench.secrets_state() == &SecretsState::Ready;
-            if ui
-                .add_enabled(available, egui::Button::new("Secrets file").small())
-                .clicked()
-            {
-                chosen = Some(CredentialStoreKind::File);
-            }
-        });
-        return chosen;
+        return unbound_row(ui, workbench);
     }
     if store == CredentialStoreKind::Environment {
         if let Some(variable) = profile
@@ -570,37 +534,19 @@ fn render_reference(
         }
         return None;
     }
-    ui.horizontal(|ui| {
-        password_field(ui, inputs.buffer(&key), provider, reference);
-        let has_text = !inputs.buffer(&key).is_empty();
-        match store {
-            CredentialStoreKind::Session => {
-                if ui
-                    .add_enabled(has_text, egui::Button::new("Set for this session"))
-                    .clicked()
-                {
-                    // Every outcome, including a synchronous refusal, arrives
-                    // as a workbench notice for this row.
-                    let value = inputs.take(&key);
-                    let _ = workbench.set_session_value(provider, profile, reference, &value);
-                }
-            }
-            CredentialStoreKind::File => {
-                let available = workbench.secrets_state() == &SecretsState::Ready;
-                if ui
-                    .add_enabled(has_text && available, egui::Button::new("Save to the secrets file"))
-                    .clicked()
-                {
-                    let value = inputs.take(&key);
-                    let _ = workbench.store_value(provider, profile, reference, &value);
-                }
-            }
-            CredentialStoreKind::Environment => {}
-        }
-        if state == CredentialState::Present && ui.button("Delete").clicked() {
-            let _ = workbench.delete(provider, profile, reference);
-        }
-    });
+    value_row(
+        ui,
+        ValueRow {
+            provider,
+            profile,
+            reference,
+            store,
+            state,
+            key: &key,
+        },
+        workbench,
+        inputs,
+    );
     if let Some(notice) = inputs.last_notice(&key)
         && notice_agrees_with(notice, state)
     {
@@ -610,12 +556,130 @@ fn render_reference(
     None
 }
 
-fn password_field(ui: &mut Ui, buffer: &mut String, provider: &str, reference: &CredentialReference) {
+/// The name of the reference, where this computer keeps its value and the state
+/// of that value. A long reference is cut inside its row, so the row never
+/// widens the panel beside the canvas.
+fn readiness_row(ui: &mut Ui, entry: &CredentialReadiness, bound: bool) {
+    ui.horizontal_wrapped(|ui| {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(entry.reference.as_str())
+                    .color(theme::FG())
+                    .size(12.0)
+                    .strong(),
+            )
+            .truncate(),
+        );
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(store_label(entry.store, bound))
+                    .color(theme::FG_DIM())
+                    .size(11.0),
+            )
+            .truncate(),
+        );
+        let (state_text, color) = state_badge(entry.state);
+        ui.add(egui::Label::new(egui::RichText::new(state_text).color(color).size(11.0)).truncate());
+    });
+}
+
+/// Asks where this computer keeps the value of a reference that no binding
+/// names yet, and answers the place that the person chose.
+fn unbound_row(ui: &mut Ui, workbench: &CredentialWorkbench) -> Option<CredentialStoreKind> {
+    let mut chosen = None;
+    ui.horizontal_wrapped(|ui| {
+        super::dim_label(ui, "Not bound on this computer. Keep the value in:");
+        if ui.small_button("This session only").clicked() {
+            chosen = Some(CredentialStoreKind::Session);
+        }
+        let available = workbench.secrets_state() == &SecretsState::Ready;
+        if ui
+            .add_enabled(available, egui::Button::new("Secrets file").small())
+            .clicked()
+        {
+            chosen = Some(CredentialStoreKind::File);
+        }
+    });
+    chosen
+}
+
+/// The place of one value, the state of that value and the buffers of the row
+/// that edits it.
+#[derive(Clone, Copy)]
+struct ValueRow<'a> {
+    provider: &'a str,
+    profile: &'a RemoteProviderProfile,
+    reference: &'a CredentialReference,
+    store: CredentialStoreKind,
+    state: CredentialState,
+    key: &'a InputKey,
+}
+
+/// The hidden field of a value with the actions of its row, and what a click of
+/// those actions does. Every outcome, including a synchronous refusal, arrives as
+/// a workbench notice for this row.
+fn value_row(ui: &mut Ui, row: ValueRow<'_>, workbench: &mut CredentialWorkbench, inputs: &mut CredentialInputs) {
+    let ValueRow {
+        provider,
+        profile,
+        reference,
+        store,
+        state,
+        key,
+    } = row;
+    let has_text = !inputs.buffer(key).is_empty();
+    let file_available = workbench.secrets_state() == &SecretsState::Ready;
+    let mut stored = false;
+    let mut deleted = false;
+    super::action_row(
+        ui,
+        |ui| password_field(ui, inputs.buffer(key), provider, reference, ui.available_width()),
+        |ui| {
+            // The actions are placed from the right, so `Delete` comes first and
+            // stays at the end of the row.
+            if state == CredentialState::Present {
+                deleted = ui.button("Delete").clicked();
+            }
+            match store {
+                CredentialStoreKind::Session => {
+                    stored = ui
+                        .add_enabled(has_text, egui::Button::new("Set for this session"))
+                        .clicked();
+                }
+                CredentialStoreKind::File => {
+                    stored = ui
+                        .add_enabled(
+                            has_text && file_available,
+                            egui::Button::new("Save to the secrets file"),
+                        )
+                        .clicked();
+                }
+                CredentialStoreKind::Environment => {}
+            }
+        },
+    );
+    if stored {
+        let value = inputs.take(key);
+        match store {
+            CredentialStoreKind::File => {
+                let _ = workbench.store_value(provider, profile, reference, &value);
+            }
+            _ => {
+                let _ = workbench.set_session_value(provider, profile, reference, &value);
+            }
+        }
+    }
+    if deleted {
+        let _ = workbench.delete(provider, profile, reference);
+    }
+}
+
+fn password_field(ui: &mut Ui, buffer: &mut String, provider: &str, reference: &CredentialReference, width: f32) {
     let mut output = egui::TextEdit::singleline(buffer)
         .password(true)
         .char_limit(16_384)
         .hint_text("value")
-        .desired_width(220.0)
+        .desired_width(width)
         .id_salt(("remote-browser-credential", provider, reference.as_str()))
         .show(ui);
     // Password masking disables clipboard copy, but egui still records plaintext undo.

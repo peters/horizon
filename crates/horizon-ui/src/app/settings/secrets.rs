@@ -19,6 +19,23 @@ use crate::theme;
 /// The length bound of one value field, in bytes as the rule counts it.
 const VALUE_CHAR_LIMIT: usize = MAX_VALUE_BYTES;
 
+/// The size of the name of one secret, and of its state line.
+const NAME_SIZE: f32 = 12.0;
+const STATE_SIZE: f32 = 11.0;
+
+/// The share of the name line that the name may take, so the state keeps a
+/// readable part of the line beside a long name.
+const NAME_SHARE: f32 = 0.55;
+
+/// The share of the fields that the name field of the add row takes, so the
+/// value field keeps the larger part of the row.
+const NAME_FIELD_SHARE: f32 = 0.45;
+
+/// The narrowest field of the row that adds one secret, in points. The two
+/// fields share what the button of that row leaves, and this keeps a field that
+/// a person can still type into at the narrowest panel.
+const MIN_FIELD_WIDTH: f32 = 80.0;
+
 /// The text buffers of the tab. Dropped with the settings editor, and every buffer
 /// is overwritten before it goes.
 #[derive(Default)]
@@ -166,20 +183,20 @@ fn render_names(
     let mut delete = None;
     let mut replace = None;
     for (_, name) in names {
-        // A name that the rule refuses has no row here. A long name is cut inside
-        // the row, so the row never widens the panel beside the canvas.
-        ui.horizontal_wrapped(|ui| {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(name.as_str())
-                        .color(theme::FG())
-                        .size(12.0)
-                        .strong(),
-                )
-                .truncate(),
-            );
+        // A name that the rule refuses has no row here. The name and its state
+        // share one line and are cut there, and the two actions take the line
+        // under them, so a long name, a long state or the narrowest panel never
+        // widens the row past the panel beside the canvas.
+        ui.horizontal(|ui| {
+            let name_width = (ui.available_width() * NAME_SHARE).max(0.0);
+            ui.scope(|ui| {
+                ui.set_max_width(name_width);
+                cut_label(ui, name.as_str(), NAME_SIZE, theme::FG(), true);
+            });
             let (text, color) = state_label(workbench.state_of(name.as_str()));
-            ui.add(egui::Label::new(egui::RichText::new(text).color(color).size(11.0)).truncate());
+            cut_label(ui, text, STATE_SIZE, color, false);
+        });
+        ui.horizontal_wrapped(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Delete").clicked() {
                     delete = Some(name.clone());
@@ -190,42 +207,13 @@ fn render_names(
             });
         });
         if inputs.replacing.as_ref() == Some(name) {
-            ui.horizontal(|ui| {
-                value_field(ui, &mut inputs.replacement, ("named-secret-replacement", name.as_str()));
-                if ui.button("Store").clicked() {
-                    let value = SecretInputs::take(&mut inputs.replacement);
-                    changed |= store_value(name.clone(), value, workbench, &mut inputs.refusal);
-                    inputs.replacing = None;
-                }
-                if ui.button("Cancel").clicked() {
-                    inputs.replacement.zeroize();
-                    inputs.replacing = None;
-                }
-            });
+            changed |= render_replacement(ui, name, workbench, inputs);
         }
-        if inputs.confirming.as_ref() == Some(name) {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Delete {}? The value on this computer goes, and an agent panel that starts after \
-                         this reads no {}. An agent panel that is already running keeps it.",
-                        name.as_str(),
-                        name.as_str()
-                    ))
-                    .color(theme::PALETTE_YELLOW())
-                    .size(11.0),
-                );
-                if ui.button("Delete").clicked() {
-                    workbench.delete(name.clone());
-                    config.secrets.names.retain(|text| text != name.as_str());
-                    changed = true;
-                    delete = Some(name.clone());
-                    inputs.confirming = None;
-                }
-                if ui.button("Cancel").clicked() {
-                    inputs.confirming = None;
-                }
-            });
+        if inputs.confirming.as_ref() == Some(name) && render_delete_question(ui, name, inputs) {
+            workbench.delete(name.clone());
+            config.secrets.names.retain(|text| text != name.as_str());
+            changed = true;
+            delete = Some(name.clone());
         }
         ui.add_space(4.0);
     }
@@ -242,6 +230,74 @@ fn render_names(
     changed
 }
 
+/// The row that takes a new value for `name`. Answers whether the list changed.
+fn render_replacement(
+    ui: &mut Ui,
+    name: &SecretName,
+    workbench: &mut NamedSecretWorkbench,
+    inputs: &mut SecretInputs,
+) -> bool {
+    let mut store = false;
+    let mut cancel = false;
+    super::action_row(
+        ui,
+        |ui| {
+            value_field(
+                ui,
+                &mut inputs.replacement,
+                ("named-secret-replacement", name.as_str()),
+                ui.available_width(),
+            );
+        },
+        |ui| {
+            store = ui.button("Store").clicked();
+            cancel = ui.button("Cancel").clicked();
+        },
+    );
+    if store {
+        let value = SecretInputs::take(&mut inputs.replacement);
+        let changed = store_value(name.clone(), value, workbench, &mut inputs.refusal);
+        inputs.replacing = None;
+        return changed;
+    }
+    if cancel {
+        inputs.replacement.zeroize();
+        inputs.replacing = None;
+    }
+    false
+}
+
+/// The question that confirms that the value of `name` goes. It names the secret
+/// twice, so it wraps inside the panel and its two actions take the line under
+/// it. Answers whether the person confirmed the delete.
+fn render_delete_question(ui: &mut Ui, name: &SecretName, inputs: &mut SecretInputs) -> bool {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!(
+                "Delete {}? The value on this computer goes, and an agent panel that starts after \
+                 this reads no {}. An agent panel that is already running keeps it.",
+                name.as_str(),
+                name.as_str()
+            ))
+            .color(theme::PALETTE_YELLOW())
+            .size(STATE_SIZE),
+        )
+        .wrap(),
+    );
+    let mut confirmed = false;
+    let mut cancelled = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            confirmed = ui.button("Delete").clicked();
+            cancelled = ui.button("Cancel").clicked();
+        });
+    });
+    if confirmed || cancelled {
+        inputs.confirming = None;
+    }
+    confirmed
+}
+
 /// The name field and the hidden value field that add one named secret.
 fn render_add(
     ui: &mut Ui,
@@ -249,55 +305,101 @@ fn render_add(
     workbench: &mut NamedSecretWorkbench,
     inputs: &mut SecretInputs,
 ) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut inputs.name)
-                .hint_text("NAME")
-                .desired_width(180.0)
-                .char_limit(horizon_core::named_secrets::MAX_NAME_CHARS)
-                .id_salt("named-secret-name"),
-        );
-        value_field(ui, &mut inputs.value, "named-secret-value");
-        let full = config.secrets.names.len() >= MAX_NAMED_SECRETS;
-        let ready = !inputs.name.trim().is_empty() && !inputs.value.is_empty() && !full;
-        if ui.add_enabled(ready, egui::Button::new("Add")).clicked() {
-            match SecretName::parse(inputs.name.trim()) {
-                Ok(name) if config.secrets.names.iter().any(|existing| existing == name.as_str()) => {
-                    inputs.refusal = Some(format!("{name} is already a named secret of this computer"));
-                }
-                Ok(_) if full => {
-                    inputs.refusal = Some(format!("This computer keeps at most {MAX_NAMED_SECRETS} named secrets"));
-                }
-                Ok(name) => {
-                    let value = SecretInputs::take(&mut inputs.value);
-                    if store_value(name.clone(), value, workbench, &mut inputs.refusal) {
-                        changed = true;
-                        config.secrets.names.push(name.as_str().to_owned());
-                        inputs.name.zeroize();
-                    }
-                }
-                Err(error) => {
-                    inputs.refusal = Some(error.to_string());
-                }
-            }
-        }
-    });
-    changed
+    let full = config.secrets.names.len() >= MAX_NAMED_SECRETS;
+    let ready = !inputs.name.trim().is_empty() && !inputs.value.is_empty() && !full;
+    // The button is taken from the right first, so the two fields share what it
+    // leaves: a field that kept its wanted width would push the button past the
+    // panel and widen the row.
+    let mut added = false;
+    super::action_row(
+        ui,
+        |ui| {
+            let gap = ui.spacing().item_spacing.x;
+            let fields = (ui.available_width() - gap).max(0.0);
+            let name_width = (fields * NAME_FIELD_SHARE).max(MIN_FIELD_WIDTH);
+            ui.add(
+                egui::TextEdit::singleline(&mut inputs.name)
+                    .hint_text("NAME")
+                    .desired_width(name_width)
+                    .char_limit(horizon_core::named_secrets::MAX_NAME_CHARS)
+                    .id_salt("named-secret-name"),
+            );
+            value_field(ui, &mut inputs.value, "named-secret-value", ui.available_width());
+        },
+        |ui| {
+            added = ui.add_enabled(ready, egui::Button::new("Add")).clicked();
+        },
+    );
+    if added {
+        add_secret(config, workbench, inputs)
+    } else {
+        false
+    }
 }
 
-/// The hidden field of one value. The text is never drawn, and the undo history of
-/// the field is cleared so a value is not kept in it.
-fn value_field(ui: &mut Ui, buffer: &mut Zeroizing<String>, salt: impl egui::AsIdSalt) {
+/// Adds the name and the value that the person typed, and answers whether the
+/// list changed.
+fn add_secret(config: &mut Config, workbench: &mut NamedSecretWorkbench, inputs: &mut SecretInputs) -> bool {
+    let full = config.secrets.names.len() >= MAX_NAMED_SECRETS;
+    match SecretName::parse(inputs.name.trim()) {
+        Ok(name) if config.secrets.names.iter().any(|existing| existing == name.as_str()) => {
+            inputs.refusal = Some(format!("{name} is already a named secret of this computer"));
+            false
+        }
+        Ok(_) if full => {
+            inputs.refusal = Some(format!("This computer keeps at most {MAX_NAMED_SECRETS} named secrets"));
+            false
+        }
+        Ok(name) => {
+            let value = SecretInputs::take(&mut inputs.value);
+            if store_value(name.clone(), value, workbench, &mut inputs.refusal) {
+                config.secrets.names.push(name.as_str().to_owned());
+                inputs.name.zeroize();
+                true
+            } else {
+                false
+            }
+        }
+        Err(error) => {
+            inputs.refusal = Some(error.to_string());
+            false
+        }
+    }
+}
+
+/// The hidden field of one value, as wide as `width`. The text is never drawn,
+/// and the undo history of the field is cleared so a value is not kept in it.
+fn value_field(ui: &mut Ui, buffer: &mut Zeroizing<String>, salt: impl egui::AsIdSalt, width: f32) {
     let mut output = egui::TextEdit::singleline(&mut **buffer)
         .password(true)
         .char_limit(VALUE_CHAR_LIMIT)
         .hint_text("value")
-        .desired_width(220.0)
+        .desired_width(width.max(MIN_FIELD_WIDTH))
         .id_salt(salt)
         .show(ui);
     output.state.clear_undoer();
     output.state.store(ui.ctx(), output.response.id);
+}
+
+/// One single-line text of a row, cut at the width that its place gives it. A
+/// text that this cut short shows itself whole in its hover text, so the person
+/// reads the whole name or the whole state.
+fn cut_label(ui: &mut Ui, text: &str, size: f32, color: egui::Color32, strong: bool) -> egui::Response {
+    let mut rich = egui::RichText::new(text).color(color).size(size);
+    if strong {
+        rich = rich.strong();
+    }
+    let whole = egui::WidgetText::from(rich.clone()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let response = ui.add(egui::Label::new(rich).truncate());
+    if response.rect.width() + 1.0 < whole.size().x {
+        return response.on_hover_text(text.to_owned());
+    }
+    response
 }
 
 /// Checks one typed value and hands it to the worker. Answers whether a check passed;

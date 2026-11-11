@@ -553,6 +553,19 @@ fn validation_notice(ui: &mut egui::Ui, result: Result<(), impl std::fmt::Displa
     }
 }
 
+/// One row whose actions sit at its right end. The actions are placed from the
+/// right first and the content takes the width that they leave, so a field of
+/// the row never pushes an action past the panel beside the canvas, whatever the
+/// text of a button is and whatever the width of the panel.
+fn action_row(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui), actions: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_wrapped(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            actions(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), content);
+        });
+    });
+}
+
 fn section_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(title).color(theme::FG_SOFT()).size(13.0).strong());
