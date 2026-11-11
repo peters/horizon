@@ -97,6 +97,13 @@ fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool) {
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _address)) => {
+                // A link reads and writes with blocking calls. macOS hands an
+                // accepted socket the non-blocking mode of its listener; Linux
+                // does not.
+                if let Err(error) = stream.set_nonblocking(false) {
+                    tracing::warn!(%error, "a link of the server socket could not be made blocking");
+                    continue;
+                }
                 let Ok(reading) = stream.try_clone() else {
                     tracing::warn!("a link of the server socket could not be read");
                     continue;

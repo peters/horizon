@@ -45,12 +45,17 @@ fn process_exists(pid: u32) -> bool {
 /// The pid that the stand-in wrote, once it wrote it: the forward is ready
 /// before the program behind it reached its first line.
 fn read_pid(path: &Path) -> u32 {
+    // The stand-in creates the file before it writes the pid, so an existing
+    // file can still be empty.
     let deadline = Instant::now() + DEADLINE;
-    while !path.exists() && Instant::now() < deadline {
+    loop {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        if let Ok(pid) = text.trim().parse() {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "the stand-in wrote no pid: {text:?}");
         std::thread::sleep(Duration::from_millis(10));
     }
-    let text = std::fs::read_to_string(path).expect("read the pid file");
-    text.trim().parse().expect("a pid")
 }
 
 fn scratch() -> tempfile::TempDir {
