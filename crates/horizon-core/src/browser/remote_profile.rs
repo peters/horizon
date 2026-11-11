@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// File name suggested next to the configuration file.
-pub const PORTABLE_PROFILE_FILE_NAME: &str = "remote-browser-profile.yaml";
+pub const PORTABLE_PROFILE_FILE_NAME: &str = "remote-browser-profile.json";
 /// Largest profile document that is read. A profile is a few kilobytes; the
 /// bound keeps a mistaken path from pulling an arbitrary file into memory.
 pub const MAX_PORTABLE_PROFILE_BYTES: u64 = 256 * 1024;
@@ -103,21 +103,21 @@ pub fn export_portable(remote: &RemoteBrowserConfig) -> Result<String, RemotePro
         horizon_remote_browser_profile: PORTABLE_PROFILE_FORMAT,
         remote: remote.export_portable(),
     };
-    serde_yaml::to_string(&document).map_err(|error| RemoteProfileError::Parse(error.to_string()))
+    serde_json::to_string_pretty(&document).map_err(|error| RemoteProfileError::Parse(error.to_string()))
 }
 
 /// The definition carried by a portable document.
 ///
 /// # Errors
 /// A document that is not a portable profile, or one in another format.
-pub fn parse_portable(yaml: &str) -> Result<RemoteBrowserConfig, RemoteProfileError> {
-    if yaml.len() as u64 > MAX_PORTABLE_PROFILE_BYTES {
+pub fn parse_portable(document: &str) -> Result<RemoteBrowserConfig, RemoteProfileError> {
+    if document.len() as u64 > MAX_PORTABLE_PROFILE_BYTES {
         return Err(RemoteProfileError::TooLarge {
-            bytes: yaml.len() as u64,
+            bytes: document.len() as u64,
         });
     }
     let document: PortableProfileDocument =
-        serde_yaml::from_str(yaml).map_err(|error| RemoteProfileError::Parse(error.to_string()))?;
+        serde_json::from_str(document).map_err(|error| RemoteProfileError::Parse(error.to_string()))?;
     if document.horizon_remote_browser_profile != PORTABLE_PROFILE_FORMAT {
         return Err(RemoteProfileError::UnsupportedFormat {
             found: document.horizon_remote_browser_profile,
@@ -132,8 +132,8 @@ pub fn parse_portable(yaml: &str) -> Result<RemoteBrowserConfig, RemoteProfileEr
 /// # Errors
 /// Parse failures, an unsupported format, a document that carries bindings,
 /// or an endpoint or authentication conflict with a local provider.
-pub fn import_portable(remote: &mut RemoteBrowserConfig, yaml: &str) -> Result<ImportSummary, RemoteProfileError> {
-    let incoming = parse_portable(yaml)?;
+pub fn import_portable(remote: &mut RemoteBrowserConfig, document: &str) -> Result<ImportSummary, RemoteProfileError> {
+    let incoming = parse_portable(document)?;
     Ok(remote.import_portable(&incoming)?)
 }
 
@@ -250,11 +250,11 @@ pub fn import_portable_file_into_config(
     profile_path: &Path,
 ) -> Result<ImportSummary, RemoteProfileError> {
     refuse_config_path(config_path, profile_path)?;
-    let yaml = read_portable_profile(profile_path)?;
+    let document = read_portable_profile(profile_path)?;
     let mut config = Config::read(config_path)
         .map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?
         .unwrap_or_default();
-    let summary = import_portable(&mut config.browser.remote, &yaml)?;
+    let summary = import_portable(&mut config.browser.remote, &document)?;
     Config::save(config_path, &config).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
     Ok(summary)
 }

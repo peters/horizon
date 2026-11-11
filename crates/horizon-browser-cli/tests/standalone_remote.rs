@@ -171,19 +171,42 @@ impl Host {
     fn start(root: &Path, endpoint: &str) -> Self {
         private(&root.join("user"), &format!("{USER}\n"), 0o600);
         private(&root.join("key"), KEY, 0o600);
-        let host_file = format!(
-            "browser:\n  remote:\n    providers:\n      grid:\n        adapter: webdriver\n        endpoint: {endpoint}\n        \
-             authentication: {{ kind: basic, username_ref: user, password_ref: key }}\n    targets:\n      desktop:\n        \
-             provider: grid\n        browser_name: chrome\n        platform_name: linux\n        \
-             device: {{ kind: any }}\ncredential_files:\n  grid:\n    \
-             user: {}\n    key: {}\n",
-            root.join("user").display(),
-            root.join("key").display()
-        );
-        private(&root.join("host.yaml"), &host_file, 0o600);
+        let host_file = json!({
+            "browser": {
+                "remote": {
+                    "providers": {
+                        "grid": {
+                            "adapter": "webdriver",
+                            "endpoint": endpoint,
+                            "authentication": {
+                                "kind": "basic",
+                                "username_ref": "user",
+                                "password_ref": "key"
+                            }
+                        }
+                    },
+                    "targets": {
+                        "desktop": {
+                            "provider": "grid",
+                            "browser_name": "chrome",
+                            "platform_name": "linux",
+                            "device": {"kind": "any"}
+                        }
+                    }
+                }
+            },
+            "credential_files": {
+                "grid": {
+                    "user": root.join("user").display().to_string(),
+                    "key": root.join("key").display().to_string()
+                }
+            }
+        })
+        .to_string();
+        private(&root.join("host.json"), &host_file, 0o600);
         let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
             .args(["mcp", "--standalone", "--config"])
-            .arg(root.join("host.yaml"))
+            .arg(root.join("host.json"))
             .env("HOME", root)
             .env("HORIZON_BROWSER_ROOT", root.join(".horizon"))
             .env_remove("HORIZON_BROWSER_ACTOR")

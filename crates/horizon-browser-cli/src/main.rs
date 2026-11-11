@@ -1089,19 +1089,19 @@ mod tests {
         assert_eq!(panel_id.as_deref(), Some("standalone-1-abc"));
         assert!(parse_args(["mcp", "--stop", "--standalone"].map(OsString::from)).is_err());
         let Command::Mcp { config, .. } =
-            parse_args(["mcp", "--standalone", "--config", "/etc/horizon/remote.yaml"].map(OsString::from))
+            parse_args(["mcp", "--standalone", "--config", "/etc/horizon/remote.json"].map(OsString::from))
                 .expect("remote host MCP")
         else {
             panic!("expected MCP command");
         };
-        assert_eq!(config.as_deref(), Some(Path::new("/etc/horizon/remote.yaml")));
+        assert_eq!(config.as_deref(), Some(Path::new("/etc/horizon/remote.json")));
         for refused in [
-            &["mcp", "--connect", "--config", "/h.yaml"][..],
-            &["mcp", "--standalone", "--config", "/h.yaml", "--visible"],
-            &["mcp", "--standalone", "--config", "/h.yaml", "--keep-alive"],
-            &["mcp", "--standalone", "--config", "/h.yaml", "--config", "/i.yaml"],
+            &["mcp", "--connect", "--config", "/h.json"][..],
+            &["mcp", "--standalone", "--config", "/h.json", "--visible"],
+            &["mcp", "--standalone", "--config", "/h.json", "--keep-alive"],
+            &["mcp", "--standalone", "--config", "/h.json", "--config", "/i.json"],
             &["mcp", "--standalone", "--config"],
-            &["mcp", "--stop", "--config", "/h.yaml"],
+            &["mcp", "--stop", "--config", "/h.json"],
         ] {
             assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
         }
@@ -1113,7 +1113,7 @@ mod tests {
             &["mcp", "--connect", "--remote", "browser-vm"][..],
             &["mcp", "--connect", "--profile", "mail"],
             &["mcp", "--connect", "--remote"],
-            &["host", "--config", "/profiles/host.yaml"],
+            &["host", "--config", "/profiles/host.json"],
         ] {
             assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
         }

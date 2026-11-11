@@ -63,7 +63,7 @@ fn redirected() -> RemoteBrowserConfig {
 fn export_strips_bindings_and_import_restores_the_definition_elsewhere() {
     let document = export_portable(&local()).expect("export");
     assert!(
-        document.starts_with("horizon_remote_browser_profile: 1\n"),
+        document.starts_with("{\n  \"horizon_remote_browser_profile\": 1"),
         "{document}"
     );
     assert!(!document.contains("credential_bindings"), "{document}");
@@ -102,10 +102,13 @@ fn documents_that_are_not_portable_profiles_are_refused_without_touching_the_tar
     let mut target = local();
     let before = target.clone();
     let refused = [
-        ("horizon_remote_browser_profile: 2\nremote: {}\n", "format"),
-        ("remote: {}\n", "parse"),
-        ("horizon_remote_browser_profile: 1\nremote: {}\nsecret: x\n", "parse"),
-        ("browser:\n  remote: {}\n", "parse"),
+        (r#"{"horizon_remote_browser_profile": 2, "remote": {}}"#, "format"),
+        (r#"{"remote": {}}"#, "parse"),
+        (
+            r#"{"horizon_remote_browser_profile": 1, "remote": {}, "secret": "x"}"#,
+            "parse",
+        ),
+        (r#"{"browser": {"remote": {}}}"#, "parse"),
     ];
     for (document, expected) in refused {
         let error = import_portable(&mut target, document).expect_err(document);
@@ -121,7 +124,19 @@ fn documents_that_are_not_portable_profiles_are_refused_without_touching_the_tar
 
 #[test]
 fn a_document_that_carries_bindings_or_redirects_an_endpoint_is_refused() {
-    let with_bindings = "horizon_remote_browser_profile: 1\nremote:\n  providers:\n    grid:\n      adapter: webdriver\n      endpoint: https://grid.example.net/wd/hub\n      authentication: { kind: bearer, token_ref: key }\n      credential_bindings:\n        key: { store: session }\n";
+    let with_bindings = r#"{
+  "horizon_remote_browser_profile": 1,
+  "remote": {
+    "providers": {
+      "grid": {
+        "adapter": "webdriver",
+        "endpoint": "https://grid.example.net/wd/hub",
+        "authentication": {"kind": "bearer", "token_ref": "key"},
+        "credential_bindings": {"key": {"store": "session"}}
+      }
+    }
+  }
+}"#;
     let mut target = RemoteBrowserConfig::default();
     let error = import_portable(&mut target, with_bindings).expect_err("bindings");
     assert!(
@@ -154,7 +169,7 @@ fn oversized_documents_are_refused_before_parsing() {
         Err(RemoteProfileError::TooLarge { .. })
     ));
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("big.yaml");
+    let path = dir.path().join("big.json");
     std::fs::write(&path, padding).expect("write");
     assert!(matches!(
         read_portable_profile(&path),
@@ -170,12 +185,12 @@ fn an_export_reads_the_store() {
     config.browser.remote = local();
     Config::save(&config_path, &config).expect("save");
 
-    let exported_path = dir.path().join("out.yaml");
+    let exported_path = dir.path().join("out.json");
     let exported = export_portable_file_from_config(&config_path, &exported_path).expect("export");
 
     assert!(
         exported.providers.contains_key("grid"),
-        "the store holds the profile with no YAML copy on disk"
+        "the store holds the profile with no settings file on disk"
     );
 }
 
@@ -192,7 +207,7 @@ fn an_import_keeps_the_settings_of_the_store() {
     };
     config.browser.remote = local();
     Config::save(&config_path, &config).expect("save");
-    let profile = dir.path().join("profile.yaml");
+    let profile = dir.path().join("profile.json");
     write_portable_profile(&profile, &local()).expect("profile");
 
     import_portable_file_into_config(&config_path, &profile).expect("import");
@@ -207,7 +222,7 @@ fn an_import_keeps_the_settings_of_the_store() {
 #[test]
 fn profile_files_round_trip_through_a_second_configuration_file() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let profile_path = dir.path().join("profiles").join("remote-browser-profile.yaml");
+    let profile_path = dir.path().join("profiles").join("remote-browser-profile.json");
     write_portable_profile(&profile_path, &local()).expect("write");
     let staged_left_behind = std::fs::read_dir(profile_path.parent().expect("parent"))
         .expect("dir")
@@ -230,7 +245,7 @@ fn profile_files_round_trip_through_a_second_configuration_file() {
     let reloaded = Config::load(Some(&config_path)).expect("reload");
     assert!((reloaded.window.width - Config::default().window.width).abs() < f32::EPSILON);
 
-    let exported_path = dir.path().join("second").join("out.yaml");
+    let exported_path = dir.path().join("second").join("out.json");
     let exported = export_portable_file_from_config(&config_path, &exported_path).expect("export");
     assert!(exported.providers["grid"].credential_bindings.is_empty());
     assert_eq!(
@@ -252,14 +267,14 @@ fn an_older_configuration_file_is_migrated_in_memory_and_only_rewritten_by_a_suc
     std::fs::write(&config_path, &old_text).expect("write");
 
     // A conflicting profile fails without the migration reaching the disk.
-    let conflict = dir.path().join("conflict.yaml");
+    let conflict = dir.path().join("conflict.json");
     write_portable_profile(&conflict, &redirected()).expect("profile");
     let error = import_portable_file_into_config(&config_path, &conflict).expect_err("conflict");
     assert!(matches!(error, RemoteProfileError::Config(_)), "{error}");
     assert_eq!(std::fs::read_to_string(&config_path).expect("read"), old_text);
 
     // A compatible one rewrites the file once, migrated and merged.
-    let profile = dir.path().join("profile.yaml");
+    let profile = dir.path().join("profile.json");
     write_portable_profile(&profile, &local()).expect("profile");
     import_portable_file_into_config(&config_path, &profile).expect("import");
     let loaded = Config::load(Some(&config_path)).expect("load");
@@ -307,20 +322,20 @@ fn the_configuration_file_is_never_a_profile_destination_or_source() {
             alias.display()
         );
     }
-    refuse_config_path(&absent, &dir.path().join("absent").join("profile.yaml")).expect("different files");
+    refuse_config_path(&absent, &dir.path().join("absent").join("profile.json")).expect("different files");
     refuse_config_path(&absent, &dir.path().join("absent2").join("config.json")).expect("different directories");
 }
 
 #[test]
 fn staging_never_follows_a_planted_name_and_leaves_nothing_behind() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let target = dir.path().join("profile.yaml");
+    let target = dir.path().join("profile.json");
     let victim = dir.path().join("victim.txt");
     std::fs::write(&victim, "keep").expect("victim");
     // Names of the shape an older staging scheme used, pointing at the victim.
     #[cfg(unix)]
     for planted in [
-        format!("profile.yaml.{}.tmp", std::process::id()),
+        format!("profile.json.{}.tmp", std::process::id()),
         ".remote-profile-x.tmp".to_string(),
     ] {
         std::os::unix::fs::symlink(&victim, dir.path().join(planted)).expect("symlink");
@@ -331,7 +346,7 @@ fn staging_never_follows_a_planted_name_and_leaves_nothing_behind() {
         .expect("dir")
         .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
         .filter(|name| name.to_ascii_lowercase().ends_with(".tmp") && !name.starts_with(".remote-profile-x"))
-        .filter(|name| !name.starts_with("profile.yaml."))
+        .filter(|name| !name.starts_with("profile.json."))
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
     assert_eq!(
@@ -349,13 +364,13 @@ fn a_failed_import_leaves_the_configuration_file_untouched() {
     std::fs::write(&config_path, config.to_json().expect("json")).expect("write");
     let before = std::fs::read_to_string(&config_path).expect("read");
 
-    let profile_path = dir.path().join("redirect.yaml");
+    let profile_path = dir.path().join("redirect.json");
     write_portable_profile(&profile_path, &redirected()).expect("write profile");
     let error = import_portable_file_into_config(&config_path, &profile_path).expect_err("conflict");
     assert!(matches!(error, RemoteProfileError::Config(_)), "{error}");
     assert_eq!(std::fs::read_to_string(&config_path).expect("read"), before);
 
-    let missing = import_portable_file_into_config(&config_path, &dir.path().join("absent.yaml")).expect_err("io");
+    let missing = import_portable_file_into_config(&config_path, &dir.path().join("absent.json")).expect_err("io");
     assert!(matches!(missing, RemoteProfileError::Io { .. }), "{missing}");
     assert_eq!(std::fs::read_to_string(&config_path).expect("read"), before);
 }

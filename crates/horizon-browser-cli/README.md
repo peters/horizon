@@ -326,10 +326,13 @@ over `ssh`, starts its Chromium when none answers, and forwards its loopback
 `DevTools` port to a loopback port of this computer. The settings entry
 `browser_host` names the SSH target and the profile:
 
-```yaml
-browser_host:
-  ssh_target: browser-vm
-  profile: mail
+```json
+{
+  "browser_host": {
+    "ssh_target": "browser-vm",
+    "profile": "mail"
+  }
+}
 ```
 
 - The SSH target is one name that `ssh` resolves. A target that starts with `-`,

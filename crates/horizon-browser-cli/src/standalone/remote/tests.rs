@@ -6,22 +6,26 @@ use horizon_browser::remote::{CredentialReference, RemoteBrowserConfig};
 use super::config;
 use super::holds::Holds;
 
-const PROVIDERS: &str = "
-providers:
-  grid:
-    adapter: webdriver
-    endpoint: https://grid.example.net/wd/hub
-    authentication: { kind: basic, username_ref: user, password_ref: key }
-targets:
-  desktop:
-    provider: grid
-    browser_name: chrome
-    platform_name: linux
-    device: { kind: any }
-";
+const PROVIDERS: &str = r#"{
+  "providers": {
+    "grid": {
+      "adapter": "webdriver",
+      "endpoint": "https://grid.example.net/wd/hub",
+      "authentication": {"kind": "basic", "username_ref": "user", "password_ref": "key"}
+    }
+  },
+  "targets": {
+    "desktop": {
+      "provider": "grid",
+      "browser_name": "chrome",
+      "platform_name": "linux",
+      "device": {"kind": "any"}
+    }
+  }
+}"#;
 
 fn remote() -> RemoteBrowserConfig {
-    serde_yaml::from_str(PROVIDERS).expect("remote configuration")
+    serde_json::from_str(PROVIDERS).expect("remote configuration")
 }
 
 fn private(dir: &Path, name: &str, value: &[u8]) -> PathBuf {
@@ -138,18 +142,9 @@ fn the_host_file_names_exactly_the_files_the_authentication_needs() {
 fn a_host_file_that_others_can_change_is_refused() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().join("host.yaml");
+    let path = dir.path().join("host.json");
     let text = format!(
-        "browser:\n  remote:\n{}credential_files:\n  grid:\n    user: /run/user\n    key: /run/key\n",
-        PROVIDERS
-            .lines()
-            .filter(|line| !line.is_empty())
-            .fold(String::new(), |mut text, line| {
-                text.push_str("    ");
-                text.push_str(line);
-                text.push('\n');
-                text
-            })
+        r#"{{"browser": {{"remote": {PROVIDERS}}}, "credential_files": {{"grid": {{"user": "/run/user", "key": "/run/key"}}}}}}"#
     );
     std::fs::write(&path, text).expect("host file");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("mode");

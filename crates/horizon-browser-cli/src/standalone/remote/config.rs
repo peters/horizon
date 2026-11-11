@@ -43,7 +43,7 @@ impl HostConfig {
     ///
     /// # Errors
     /// The file is missing, too large, writable by other users, not valid
-    /// YAML or JSON, or names an invalid provider, target or credential file.
+    /// JSON, or names an invalid provider, target or credential file.
     pub fn load(path: &Path) -> io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
         if !metadata.is_file() || metadata.len() > MAX_HOST_FILE_BYTES {
@@ -63,7 +63,7 @@ impl HostConfig {
                 )));
             }
         }
-        let file: HostFile = serde_yaml::from_slice(&std::fs::read(path)?)
+        let file: HostFile = serde_json::from_slice(&std::fs::read(path)?)
             .map_err(|error| io::Error::other(format!("host file {} is invalid: {error}", path.display())))?;
         Self::new(file.browser.remote, file.credential_files)
     }
