@@ -332,7 +332,7 @@ def extra_column(placed):
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
-                         server_command=None, secret_names=None):
+                         server_command=None, server_address=None, secret_names=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -379,13 +379,18 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         if browser_host_profile:
             entry['profile'] = browser_host_profile
         fixture['browser_host'] = entry
-    if server_target:
+    if server_target or server_address:
         # The server that the machine list of the fixture follows, so a procedure
         # proves two computers with one list without a hand edit of the private
-        # settings. The command is only there when the default does not fit.
-        entry = {'ssh_target': server_target}
+        # settings. The command is only there when the default does not fit, and the
+        # address is only there when the fixture reaches a listener instead of `ssh`.
+        entry = {}
+        if server_target:
+            entry['ssh_target'] = server_target
         if server_command:
             entry['command'] = server_command
+        if server_address:
+            entry['address'] = server_address
         fixture['server'] = entry
     if secret_names:
         # The named secrets that the candidate reads as the environment of an agent
@@ -470,8 +475,8 @@ def require_writable_tmp(directory=None):
         ) from None
 
 
-def main():
-    require_writable_tmp()
+def arguments():
+    """The options of one fixture run, at their default values until a test reads them."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--horizon', type=Path, required=True, help='Horizon debug binary for an isolated smoke')
     parser.add_argument('--tools', type=Path, help='Optional unpacked Debian tools root')
@@ -533,6 +538,10 @@ def main():
         help='Command of the link on that server, when the default `horizon --server-link` does not '
              'fit, such as a full path; needs --server-target')
     parser.add_argument(
+        '--server-address',
+        help='Address of the TCP listener of a Horizon server, such as 127.0.0.1:7000, so the '
+             'fixture follows that listener when its secrets file holds the token of its join')
+    parser.add_argument(
         '--theme', choices=('auto', 'dark', 'light'), default=None,
         help='Set appearance.theme in the fixture config, default dark. The first start at a '
              'state path imports the value; a run with --reuse-state keeps the theme that the '
@@ -552,6 +561,12 @@ def main():
         type=Path,
         help='Private key of the fixture, copied to ~/.ssh/<its own file name> in its private '
              'home at 0600. Needs --ssh-config, which names it as IdentityFile')
+    return parser
+
+
+def main():
+    require_writable_tmp()
+    parser = arguments()
     args = parser.parse_args()
     try:
         ssh_config, ssh_identity = sandbox.ssh_sources(args.ssh_config, args.ssh_identity)
@@ -685,7 +700,7 @@ def main():
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
-            args.server_command, named_secret_names(held))
+            args.server_command, args.server_address, named_secret_names(held))
         if not args.plain_start:
             # A plain start keeps the home as its own settings writer: the fixture
             # writes no settings file into that home.

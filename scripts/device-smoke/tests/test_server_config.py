@@ -27,9 +27,27 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(
             document['server'], {'ssh_target': 'server-vm', 'command': '/opt/horizon --server-link'})
 
+    def test_an_address_sets_the_entry_of_a_listener(self):
+        document = serve.application_document('/tmp/fixture-data', server_address='127.0.0.1:7000')
+        self.assertEqual(document['server'], {'address': '127.0.0.1:7000'})
+
+        document = serve.application_document(
+            '/tmp/fixture-data', server_target='server-vm', server_address='127.0.0.1:7000')
+        self.assertEqual(
+            document['server'], {'ssh_target': 'server-vm', 'address': '127.0.0.1:7000'},
+            "the ssh link stays a second transport beside the address")
+
     def test_a_command_without_a_target_names_no_server(self):
         document = serve.application_document('/tmp/fixture-data', server_command='/opt/horizon --server-link')
         self.assertNotIn('server', document)
+
+    def test_the_fixture_option_of_an_address_is_the_entry_that_it_writes(self):
+        parser = serve.arguments()
+        args = parser.parse_args([
+            '--horizon', '/bin/true', '--state', '/tmp/state', '--server-address', '127.0.0.1:7000'])
+        self.assertEqual(args.server_address, '127.0.0.1:7000')
+        args = parser.parse_args(['--horizon', '/bin/true', '--state', '/tmp/state'])
+        self.assertIsNone(args.server_address, "the listener of a server is off without the option")
 
     def test_a_server_does_not_replace_the_panels_or_the_browser_host(self):
         document = serve.application_document(
