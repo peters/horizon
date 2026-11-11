@@ -2,11 +2,11 @@ mod lifecycle;
 pub(crate) mod spawn;
 mod work_resume;
 
-pub(crate) use spawn::{shutdown_for_restart, spawn_waiting_panel};
 pub use spawn::{
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
     prepare_restart,
 };
+pub(crate) use spawn::{shutdown_for_restart, spawn_waiting_panel};
 
 use std::borrow::Cow;
 use std::path::PathBuf;

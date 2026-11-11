@@ -89,9 +89,8 @@ fn default_sink() -> Sink {
     // clipboard keeps the data that its owner published while the owner lives.
     let mut clipboard: Option<arboard::Clipboard> = None;
     Box::new(move |copy| {
-        let clipboard = match ensure_clipboard(&mut clipboard) {
-            Some(clipboard) => clipboard,
-            None => return,
+        let Some(clipboard) = ensure_clipboard(&mut clipboard) else {
+            return;
         };
         let written = match copy {
             Copy::Text(text) => clipboard.set_text(text.clone()),
@@ -134,7 +133,7 @@ pub(crate) fn wait_for(matches: impl Fn(&Copy) -> bool) -> bool {
 
 /// The clipboard of the desktop, opened on the first write of the process.
 #[cfg(not(test))]
-fn ensure_clipboard<'a>(clipboard: &'a mut Option<arboard::Clipboard>) -> Option<&'a mut arboard::Clipboard> {
+fn ensure_clipboard(clipboard: &mut Option<arboard::Clipboard>) -> Option<&mut arboard::Clipboard> {
     if clipboard.is_none() {
         match arboard::Clipboard::new() {
             Ok(opened) => *clipboard = Some(opened),

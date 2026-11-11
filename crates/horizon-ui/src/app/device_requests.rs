@@ -163,6 +163,10 @@ impl HorizonApp {
     /// the coordination worker, which encodes the PNG, copies the image when the
     /// request asks for it, and writes the answer. It answers `None` when the
     /// worker answers the request, and the outcome of a request it refuses.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a capture needs the request, its pixels, its owner and the queue it answers in"
+    )]
     fn capture_panel(
         &mut self,
         request: &Request,
@@ -614,7 +618,7 @@ mod tests {
         let (temp, ctx, mut app) = app();
         let image = egui::ColorImage::filled([3, 2], egui::Color32::BLUE);
         let mut seed = crate::screenshot::Screenshots::default();
-        let source = seed.export(&ctx, "seed".into(), image.clone(), false).unwrap();
+        let source = seed.export(&ctx, "seed".into(), &image, false).unwrap();
         let mut browser = BrowserPanelState::inert();
         browser
             .frame_slot

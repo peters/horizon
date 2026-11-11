@@ -117,7 +117,8 @@ fn viewport_stabilization_is_non_modal_when_organization_is_disabled() {
     assert!(!app.root_viewport_stabilization_blocks_interaction());
     app.open_command_palette();
     assert!(app.command_palette.is_some());
-    app.toggle_session_manager();
+    app.toggle_session_manager(&egui::Context::default());
+    app.settle_session_jobs();
     assert!(app.session_manager.is_some());
 }
 

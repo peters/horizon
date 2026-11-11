@@ -620,7 +620,7 @@ mod tests {
             .export(
                 &ctx,
                 "panel".into(),
-                egui::ColorImage::filled([2, 1], egui::Color32::RED),
+                &egui::ColorImage::filled([2, 1], egui::Color32::RED),
                 false,
             )
             .unwrap();

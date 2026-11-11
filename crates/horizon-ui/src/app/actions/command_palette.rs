@@ -121,7 +121,7 @@ impl HorizonApp {
                 }
             }
             CommandId::OpenRemoteHosts => self.toggle_remote_hosts_overlay(ctx),
-            CommandId::ToggleSessions => self.toggle_session_manager(),
+            CommandId::ToggleSessions => self.toggle_session_manager(ctx),
             CommandId::CreatePanelFromPreset(index) => {
                 if let Some(preset) = self.presets.get(index).cloned() {
                     let workspace_id = self

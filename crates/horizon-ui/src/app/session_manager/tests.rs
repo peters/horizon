@@ -262,7 +262,8 @@ fn the_session_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
     );
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
 
-    app.toggle_session_manager();
+    app.toggle_session_manager(&egui::Context::default());
+    app.settle_session_jobs();
     let opened_at = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(1))
         .expect("the process started more than a second ago");
@@ -280,7 +281,8 @@ fn the_session_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
     session_manager_frame(&ctx, &mut app, Vec::new(), None);
     session_manager_frame(&ctx, &mut app, Vec::new(), None);
 
-    app.toggle_session_manager();
+    app.toggle_session_manager(&egui::Context::default());
+    app.settle_session_jobs();
     session_manager_frame(&ctx, &mut app, Vec::new(), None);
     let centre = egui::Pos2::new(700.0, 450.0);
     let layer = session_manager_frame(&ctx, &mut app, Vec::new(), Some(centre));

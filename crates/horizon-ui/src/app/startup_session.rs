@@ -17,43 +17,39 @@ enum StartupChooserAction {
 impl HorizonApp {
     pub(super) fn render_startup_chooser(&mut self, ui: &mut egui::Ui) {
         let ctx = &ui.ctx().clone();
+        let busy = self.session_jobs.running();
         let action = {
             let Some(state) = self.startup_chooser.as_mut() else {
                 return;
             };
+            state.busy = busy;
             render_startup_chooser_panel(ui, state)
         };
 
         match action {
             StartupChooserAction::None => {}
             StartupChooserAction::OpenNewSession => {
-                match self.session_store.create_new_session(&self.template_config) {
-                    Ok(session) => self.activate_startup_session(ctx, &session),
-                    Err(error) => self.set_startup_error(format!("Failed to create session: {error}")),
-                }
+                self.run_session_job(super::session_jobs::SessionJob::Create, ctx);
             }
-            StartupChooserAction::OpenCopy(session_id) => match self.session_store.duplicate_session(&session_id) {
-                Ok(session) => self.activate_startup_session(ctx, &session),
-                Err(error) => self.set_startup_error(format!("Failed to copy session: {error}")),
-            },
-            StartupChooserAction::TakeOver(session_id) => match self.session_store.take_over_session(&session_id) {
-                Ok(session) => self.activate_startup_session(ctx, &session),
-                Err(error) => self.set_startup_error(format!("Failed to take over session: {error}")),
-            },
-            StartupChooserAction::Resume(session_id) => match self.session_store.resume_session(&session_id) {
-                Ok(session) => self.activate_startup_session(ctx, &session),
-                Err(error) => self.set_startup_error(format!("Failed to resume session: {error}")),
-            },
+            StartupChooserAction::OpenCopy(session_id) => {
+                self.run_session_job(super::session_jobs::SessionJob::Duplicate(session_id), ctx);
+            }
+            StartupChooserAction::TakeOver(session_id) => {
+                self.run_session_job(super::session_jobs::SessionJob::TakeOver(session_id), ctx);
+            }
+            StartupChooserAction::Resume(session_id) => {
+                self.run_session_job(super::session_jobs::SessionJob::Resume(session_id), ctx);
+            }
         }
     }
 
-    fn set_startup_error(&mut self, error: String) {
+    pub(super) fn set_startup_error(&mut self, error: String) {
         if let Some(state) = self.startup_chooser.as_mut() {
             state.error = Some(error);
         }
     }
 
-    fn activate_startup_session(&mut self, ctx: &Context, session: &horizon_core::ResolvedSession) {
+    pub(super) fn activate_startup_session(&mut self, ctx: &Context, session: &horizon_core::ResolvedSession) {
         self.activate_persistent_session(session);
         self.restore_window_viewport(ctx);
     }
@@ -96,6 +92,14 @@ fn render_startup_chooser_panel(ui: &mut egui::Ui, state: &mut StartupChooserSta
                             if let Some(error) = &state.error {
                                 ui.add_space(6.0);
                                 ui.label(RichText::new(error).size(12.0).color(Color32::from_rgb(255, 120, 120)));
+                            }
+                            if let Some(label) = state.busy {
+                                ui.add_space(6.0);
+                                ui.label(
+                                    RichText::new(format!("Working on the saved sessions: {label:?}\u{2026}"))
+                                        .size(12.0)
+                                        .color(theme::FG_SOFT()),
+                                );
                             }
 
                             ui.add_space(12.0);

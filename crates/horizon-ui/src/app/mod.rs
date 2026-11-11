@@ -59,6 +59,7 @@ mod root_chrome;
 mod root_viewport;
 mod server_sync;
 mod session;
+mod session_jobs;
 mod session_kill;
 mod session_manager;
 mod settings;
@@ -161,6 +162,20 @@ struct StartupChooserState {
     chooser: StartupChooser,
     selected_session_id: Option<String>,
     error: Option<String>,
+    /// The job of the session store that runs, so the window says that it works.
+    busy: Option<SessionJobLabel>,
+}
+
+/// What a job of the session store works on, so the window can say that it
+/// runs and refuse a second one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum SessionJobLabel {
+    List,
+    Create,
+    Duplicate,
+    TakeOver,
+    Resume,
+    Delete,
 }
 
 #[derive(Clone, Default)]
@@ -393,6 +408,10 @@ pub struct HorizonApp {
     panel_starts: panel_starts::PanelStarts,
     /// The panels whose restart runs, and why each one restarts.
     panel_restarts: panel_restarts::PanelRestarts,
+    /// The job of the session store that runs, and the selection and the
+    /// sentence that its next list of sessions shows.
+    session_jobs: session_jobs::SessionJobs,
+    session_manager_reload: Option<(Option<String>, Option<String>)>,
     ssh_upload_flow: Option<ssh_upload::SshUploadFlow>,
     ssh_upload_destinations: HashMap<String, String>,
     config_last_mtime: Option<std::time::SystemTime>,
@@ -605,6 +624,7 @@ impl StartupChooserState {
             chooser,
             selected_session_id,
             error: None,
+            busy: None,
         }
     }
 }

@@ -66,7 +66,7 @@ impl Panel {
             return Ok(());
         }
         if let Some(text) = start.editor_text {
-            let text = text.map_err(|error| Error::Editor(error.to_string()))?;
+            let text = text.map_err(Error::Editor)?;
             if let PanelContent::Editor(editor) = &mut self.content
                 && let Some(path) = editor.file_path.clone()
                 && path.exists()

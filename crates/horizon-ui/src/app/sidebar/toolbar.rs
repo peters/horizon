@@ -155,7 +155,7 @@ impl HorizonApp {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
-            ToolbarAction::Sessions => self.toggle_session_manager(),
+            ToolbarAction::Sessions => self.toggle_session_manager(ctx),
             ToolbarAction::Settings => self.toggle_settings(),
         }
     }

@@ -28,8 +28,8 @@ pub(in crate::panel) struct WorkPanel {
 
 impl Panel {
     /// The values that the pre-flight of a restart reads, copied for a worker.
-    pub(in crate::panel) fn work_panel(&self) -> Option<WorkPanel> {
-        Some(WorkPanel {
+    pub(in crate::panel) fn work_panel(&self) -> WorkPanel {
+        WorkPanel {
             kind: self.kind,
             local_id: self.local_id.clone(),
             resume: self.resume.clone(),
@@ -41,7 +41,7 @@ impl Panel {
             work_resume: self.work_resume.clone(),
             owned_process_id: self.terminal().and_then(crate::terminal::Terminal::owned_process_id),
             editor_file: self.content.editor().and_then(|editor| editor.file_path.clone()),
-        })
+        }
     }
 }
 
@@ -283,15 +283,11 @@ impl WorkPanel {
 #[cfg(test)]
 impl Panel {
     pub(super) fn check_saved_work_session(&self) -> Result<()> {
-        self.work_panel()
-            .ok_or_else(|| Error::State("No terminal to restart".into()))?
-            .check_saved_work_session()
+        self.work_panel().check_saved_work_session()
     }
 
     pub(super) fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
-        self.work_panel()
-            .ok_or_else(|| Error::State("No terminal to restart".into()))?
-            .check_work_session_exit(owned_pid)
+        self.work_panel().check_work_session_exit(owned_pid)
     }
 }
 

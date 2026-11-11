@@ -57,6 +57,7 @@ pub struct StartRequest {
 /// Reads everything that the start of a panel needs. This is the work of the
 /// coordination worker: the frame calls neither this function nor any read of
 /// it.
+#[must_use]
 pub fn prepare_panel_start(request: StartRequest) -> PanelStart {
     let StartRequest { id, opts, local_id } = request;
     let working_directory = working_directory_failure(&opts);
@@ -314,9 +315,7 @@ impl Panel {
             return Ok(None);
         }
         let work_brief = self.requested_work_brief()?;
-        let Some(work) = self.work_panel() else {
-            return Ok(None);
-        };
+        let work = self.work_panel();
         Ok(Some(RestartRequest {
             id: self.id,
             work,

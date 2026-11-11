@@ -35,15 +35,17 @@ const fn session_switch_shutdown_state(
 
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeSessionManagerState {
-    sessions: Vec<SessionSummary>,
+    pub(super) sessions: Vec<SessionSummary>,
     selected_session_id: Option<String>,
-    error: Option<String>,
+    pub(super) error: Option<String>,
     confirm_clear_others: bool,
     confirm_remove_session_id: Option<String>,
     /// Whether the board of `confirm_remove_session_id` is one this Horizon cannot read.
     /// The question names that, and the answer removes the board with the session.
     confirm_remove_unreadable_board: bool,
     opened_at: Instant,
+    /// The job of the session store that runs, so the window says that it works.
+    busy: Option<super::SessionJobLabel>,
 }
 
 impl RuntimeSessionManagerState {
@@ -70,6 +72,7 @@ impl RuntimeSessionManagerState {
             confirm_remove_session_id: None,
             confirm_remove_unreadable_board: false,
             opened_at: Instant::now(),
+            busy: None,
         }
     }
 
@@ -135,7 +138,7 @@ impl SessionManagerViewState {
 }
 
 impl HorizonApp {
-    pub(super) fn toggle_session_manager(&mut self) {
+    pub(super) fn toggle_session_manager(&mut self, ctx: &Context) {
         if self.root_viewport_stabilization_blocks_interaction() {
             return;
         }
@@ -146,15 +149,17 @@ impl HorizonApp {
 
         self.command_palette = None;
         self.remote_hosts_overlay = None;
-        self.reload_session_manager(None, None);
+        self.reload_session_manager_from_a_job(None, None, ctx);
     }
 
     pub(super) fn render_session_manager(&mut self, ctx: &Context) {
         let current_session_id = self.active_persistent_session_id().map(ToOwned::to_owned);
+        let busy = self.session_jobs.running();
         let action = {
             let Some(state) = self.session_manager.as_mut() else {
                 return;
             };
+            state.busy = busy;
             if render_backdrop(ctx, state.opened_at) {
                 SessionManagerAction::Close
             } else {
@@ -166,58 +171,58 @@ impl HorizonApp {
             SessionManagerAction::None => {}
             SessionManagerAction::Close => self.session_manager = None,
             SessionManagerAction::CreateNewSession => {
-                match self.session_store.create_new_session(&self.template_config) {
-                    Ok(session) => self.activate_runtime_session(ctx, &session),
-                    Err(error) => self.set_session_manager_error(format!("Failed to create session: {error}")),
-                }
+                self.run_session_job(super::session_jobs::SessionJob::Create, ctx);
             }
-            SessionManagerAction::SwitchTo(session_id) => match self.session_store.resume_session(&session_id) {
-                Ok(session) => self.activate_runtime_session(ctx, &session),
-                Err(error) => self.set_session_manager_error(format!("Failed to switch session: {error}")),
-            },
-            SessionManagerAction::Remove(session_id) => match self.session_store.delete_session(&session_id) {
-                Ok(()) => self.reload_session_manager(None, None),
-                // The removal read the board for its browser profiles and refused it. Ask
-                // the person again, with the reason, before the board goes with the session.
-                Err(horizon_core::Error::UnreadableBoard { reason, .. }) => {
-                    tracing::info!("session {session_id} keeps its board until a person answers: {reason}");
-                    self.ask_to_remove_an_unreadable_board(session_id);
-                }
-                Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
-            },
+            SessionManagerAction::SwitchTo(session_id) => {
+                self.run_session_job(super::session_jobs::SessionJob::Resume(session_id), ctx);
+            }
+            SessionManagerAction::Remove(session_id) => {
+                self.run_session_job(
+                    super::session_jobs::SessionJob::Delete {
+                        session_id,
+                        with_unreadable_board: false,
+                    },
+                    ctx,
+                );
+            }
             SessionManagerAction::RemoveWithUnreadableBoard(session_id) => {
-                match self.session_store.delete_session_with_unreadable_board(&session_id) {
-                    Ok(()) => self.reload_session_manager(None, None),
-                    Err(error) => self.set_session_manager_error(format!("Failed to remove session: {error}")),
-                }
+                self.run_session_job(
+                    super::session_jobs::SessionJob::Delete {
+                        session_id,
+                        with_unreadable_board: true,
+                    },
+                    ctx,
+                );
             }
             SessionManagerAction::RemoveAll(session_ids) => {
-                for session_id in session_ids {
-                    if let Err(error) = self.session_store.delete_session(&session_id) {
-                        self.reload_session_manager(None, Some(format!("Failed to remove sessions: {error}")));
-                        return;
-                    }
-                }
-                self.reload_session_manager(None, None);
+                self.run_session_job(super::session_jobs::SessionJob::DeleteAll(session_ids), ctx);
             }
         }
     }
 
-    fn reload_session_manager(&mut self, preferred_selection: Option<String>, error: Option<String>) {
+    /// Lists the sessions again on the coordination worker. The window applies
+    /// the answer with [`Self::show_session_manager_list`].
+    pub(in crate::app) fn reload_session_manager_from_a_job(
+        &mut self,
+        preferred_selection: Option<String>,
+        error: Option<String>,
+        ctx: &Context,
+    ) {
+        self.session_manager_reload = Some((preferred_selection, error));
+        self.run_session_job(super::session_jobs::SessionJob::List, ctx);
+    }
+
+    /// Shows the sessions that the coordination worker listed.
+    pub(in crate::app) fn show_session_manager_list(&mut self, sessions: Vec<SessionSummary>, error: Option<String>) {
+        let (preferred_selection, pending_error) = self.session_manager_reload.take().unwrap_or_default();
         let current_session_id = self.active_persistent_session_id().map(ToOwned::to_owned);
         let selected_session_id = preferred_selection.or_else(|| self.session_manager_selected_id());
-        let state = match self.session_store.list_profile_sessions() {
-            Ok(sessions) => {
-                RuntimeSessionManagerState::new(sessions, selected_session_id, current_session_id.as_deref(), error)
-            }
-            Err(load_error) => RuntimeSessionManagerState::new(
-                Vec::new(),
-                None,
-                current_session_id.as_deref(),
-                Some(format!("Failed to load sessions: {load_error}")),
-            ),
-        };
-        self.session_manager = Some(state);
+        self.session_manager = Some(RuntimeSessionManagerState::new(
+            sessions,
+            selected_session_id,
+            current_session_id.as_deref(),
+            error.or(pending_error),
+        ));
     }
 
     fn session_manager_selected_id(&self) -> Option<String> {
@@ -228,7 +233,7 @@ impl HorizonApp {
 
     /// Asks the second question of a card whose board this Horizon cannot read. The first
     /// answer removed the session; this one removes its board with it.
-    fn ask_to_remove_an_unreadable_board(&mut self, session_id: String) {
+    pub(in crate::app) fn ask_to_remove_an_unreadable_board(&mut self, session_id: String) {
         if let Some(state) = self.session_manager.as_mut() {
             state.selected_session_id = Some(session_id.clone());
             state.confirm_clear_others = false;
@@ -238,7 +243,7 @@ impl HorizonApp {
         }
     }
 
-    fn set_session_manager_error(&mut self, error: String) {
+    pub(in crate::app) fn set_session_manager_error(&mut self, error: String) {
         if let Some(state) = self.session_manager.as_mut() {
             state.error = Some(error);
             state.confirm_clear_others = false;
@@ -304,7 +309,7 @@ impl HorizonApp {
                 let preferred_selection = self.session_manager_selected_id();
                 let error = self.session_manager.as_ref().and_then(|state| state.error.clone());
                 self.finish_aborted_session_switch();
-                self.reload_session_manager(preferred_selection, error);
+                self.reload_session_manager_from_a_job(preferred_selection, error, ctx);
                 return false;
             }
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -337,12 +342,13 @@ impl HorizonApp {
                 // driver resolves. Its final committed URL is published just
                 // before that signal and must still be drained and persisted.
                 self.pending_session_switch = Some(pending);
-                self.reload_session_manager(
+                self.reload_session_manager_from_a_job(
                     target_session_id,
                     Some(
                         "Session switch stopped because a browser did not release its profile in time. Retry after cleanup completes."
                             .to_string(),
                     ),
+                    ctx,
                 );
                 return true;
             }
@@ -436,6 +442,8 @@ impl HorizonApp {
         self.panel_render_caches = PanelRenderCaches::default();
         self.panel_starts.clear();
         self.panel_restarts.clear();
+        self.session_jobs.clear();
+        self.session_manager_reload = None;
         self.clear_workspace_rename();
         self.clear_panel_rename();
         self.command_palette = None;
@@ -561,6 +569,7 @@ fn render_session_manager_content(
 
         render_session_list(ui, state, current_session_id, action);
         render_session_error(ui, state.error.as_deref());
+        render_session_busy(ui, state.busy);
         render_session_hint(ui, view_state.selected_session.as_ref(), current_session_id);
         render_session_actions(ui, state, view_state, action);
         ui.add_space(20.0);
@@ -622,6 +631,18 @@ fn render_session_list(
                 ui.add_space(10.0);
             }
         });
+}
+
+fn render_session_busy(ui: &mut egui::Ui, busy: Option<super::SessionJobLabel>) {
+    let Some(label) = busy else {
+        return;
+    };
+    ui.add_space(8.0);
+    ui.label(
+        RichText::new(format!("Working on the saved sessions: {label:?}\u{2026}"))
+            .size(11.5)
+            .color(theme::FG_SOFT()),
+    );
 }
 
 fn render_session_error(ui: &mut egui::Ui, error: Option<&str>) {

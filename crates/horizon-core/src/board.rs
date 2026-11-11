@@ -213,6 +213,10 @@ impl Board {
         )
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the restore answers a Result so that a caller cannot forget the failure of a workspace"
+    )]
     fn restore(state: &RuntimeState, transcript_root: Option<&Path>, maximum: usize, waiting: bool) -> Result<Self> {
         let _budget = crate::agent_work::RestoreBudget::new(maximum);
         let mut board = Self::new();

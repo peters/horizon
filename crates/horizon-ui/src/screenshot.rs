@@ -196,10 +196,10 @@ impl Screenshots {
         &mut self,
         ctx: &Context,
         panel_id: String,
-        image: ColorImage,
+        image: &ColorImage,
         copy_to_clipboard: bool,
     ) -> Result<Screenshot, String> {
-        let capture = self.store().capture(panel_id, &image, copy_to_clipboard)?;
+        let capture = self.store().capture(panel_id, image, copy_to_clipboard)?;
         if copy_to_clipboard {
             ctx.request_repaint();
         }
@@ -293,7 +293,7 @@ mod tests {
             .export(
                 &Context::default(),
                 "panel".into(),
-                ColorImage::filled([1, 1], Color32::RED),
+                &ColorImage::filled([1, 1], Color32::RED),
                 false,
             )
             .unwrap();
@@ -319,7 +319,7 @@ mod tests {
         let ctx = Context::default();
         let mut screenshots = Screenshots::default();
         let original = screenshots
-            .export(&ctx, "source".into(), ColorImage::filled([3, 2], Color32::BLUE), false)
+            .export(&ctx, "source".into(), &ColorImage::filled([3, 2], Color32::BLUE), false)
             .unwrap();
         let mut browser = BrowserPanelState::inert();
         browser
@@ -341,7 +341,7 @@ mod tests {
         let ctx = Context::default();
         let image = ColorImage::new([2, 1], vec![Color32::RED, Color32::BLUE]);
         let mut screenshots = Screenshots::default();
-        let capture = screenshots.export(&ctx, "panel".into(), image.clone(), true).unwrap();
+        let capture = screenshots.export(&ctx, "panel".into(), &image, true).unwrap();
         assert!(
             crate::clipboard::wait_for(
                 |copy| matches!(copy, crate::clipboard::Copy::Image(copied) if copied == &image)
@@ -356,9 +356,7 @@ mod tests {
         assert_eq!(pixels, [255, 0, 0, 255, 0, 0, 255, 255]);
         let not_copied = ColorImage::filled([1, 1], Color32::from_rgb(0x11, 0x22, 0x33));
         let before = crate::clipboard::recorded_len();
-        screenshots
-            .export(&ctx, "panel".into(), not_copied.clone(), false)
-            .unwrap();
+        screenshots.export(&ctx, "panel".into(), &not_copied, false).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(
             !crate::clipboard::recorded()[before..]
@@ -391,9 +389,9 @@ mod tests {
         let ctx = Context::default();
         let mut screenshots = Screenshots::default();
         let image = ColorImage::filled([1, 1], Color32::GREEN);
-        let first = screenshots.export(&ctx, "panel".into(), image.clone(), false).unwrap();
+        let first = screenshots.export(&ctx, "panel".into(), &image, false).unwrap();
         for _ in 0..MAX_EXPORTS {
-            screenshots.export(&ctx, "panel".into(), image.clone(), false).unwrap();
+            screenshots.export(&ctx, "panel".into(), &image, false).unwrap();
         }
         assert!(!first.path.exists());
         assert_eq!(
@@ -411,7 +409,7 @@ mod tests {
         let malformed = ColorImage::filled([1, 1], Color32::from_rgb(0x77, 0x88, 0x99));
         let mut broken = malformed.clone();
         broken.size = [usize::MAX, 2];
-        assert!(screenshots.export(&ctx, "panel".into(), broken, true).is_err());
+        assert!(screenshots.export(&ctx, "panel".into(), &broken, true).is_err());
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(
             !crate::clipboard::recorded()

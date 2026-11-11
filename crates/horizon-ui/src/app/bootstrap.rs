@@ -72,15 +72,15 @@ impl HorizonApp {
         pin_chrome_to_native_display_scale(egui_ctx);
         egui_ctx.set_fonts(configure_fonts());
         let board = Board::new();
+        // The probe of `script` starts a process and waits for it, so a worker
+        // resolves it once for the panels of this process.
+        horizon_core::warm_script_support();
         let resolved_theme = theme::resolve_theme(config.appearance.theme, egui_ctx.system_theme());
         theme::set_theme(resolved_theme);
 
         // The time of the store comes from the settings worker on the first
         // frame, so the window opens without reading it.
         let config_last_mtime = None;
-        // The probe of `script` starts a process and waits for it, so a worker
-        // resolves it once for the panels of this process.
-        horizon_core::warm_script_support();
 
         let bootstrap = AppBootstrap {
             config_path,
@@ -196,18 +196,16 @@ impl HorizonApp {
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, settings_io: super::settings_io::SettingsIo::new(), settings_reload_pending: false,
             named_secrets: named_secret_workbench(config), named_secret_vault: None,
-            session_manager: None,
+            session_manager: None, session_jobs: super::session_jobs::SessionJobs::default(),
+            session_manager_reload: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             press_frame: super::press_frame::PressFrame::default(),
             dir_picker: None, command_palette: None, search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
-            startup_workspace_organization_pending: false,
-            startup_selection_restored: false,
-            initial_pan_done: false,
-            root_viewport_stabilizer: None,
-            file_hover_positions: HashMap::new(),
-            file_drop_highlight: None,
+            startup_workspace_organization_pending: false, startup_selection_restored: false,
+            initial_pan_done: false, root_viewport_stabilizer: None,
+            file_hover_positions: HashMap::new(), file_drop_highlight: None,
             pending_editor_drops: PendingEditorDrops::default(),
             panel_starts: super::panel_starts::PanelStarts::default(),
             panel_restarts: super::panel_restarts::PanelRestarts::default(),
