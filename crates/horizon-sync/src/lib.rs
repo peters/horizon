@@ -32,6 +32,7 @@
 mod client;
 mod error;
 mod frame;
+mod host;
 mod intent;
 mod link;
 mod protocol;
@@ -42,6 +43,10 @@ mod tip;
 pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PullOutcome, PushOutcome};
 pub use error::{Refusal, StoreError, SyncError};
 pub use frame::{FrameError, MAX_FRAME_BYTES, read_frame, write_frame};
+pub use host::{
+    EXIT_NO_SERVER, HostError, ServerHome, ServerLock, link_stdio, link_streams, serve_until_stopped,
+    terminate_flag,
+};
 pub use intent::{
     Intent, IntentResult, KIND_MACHINE, KIND_PROBE, MAX_INTENTS_PER_PUSH, MAX_PROBES, Op, Outcome, PushReply,
 };

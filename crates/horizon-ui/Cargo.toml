@@ -26,6 +26,7 @@ bytemuck.workspace = true
 thiserror.workspace = true
 horizon-browser-mcp.workspace = true
 horizon-core.workspace = true
+horizon-sync.workspace = true
 zeroize.workspace = true
 horizon-cursor.workspace = true
 eframe.workspace = true

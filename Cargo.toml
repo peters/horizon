@@ -62,6 +62,9 @@ horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
 horizon-wayland = { path = "crates/horizon-wayland", version = "0.2.7" }
 thiserror = "2.0.20"
 tracing = "0.1.44"
+# A safe stop flag for `horizon --server` on SIGTERM and SIGINT. It reuses the
+# version that alacritty_terminal already asks for, so no new package arrives.
+signal-hook = "0.4.4"
 # Chrome DevTools Protocol transport for browser panels. Plain ws:// to
 # 127.0.0.1, so no TLS features are needed.
 tungstenite = "0.30.0"

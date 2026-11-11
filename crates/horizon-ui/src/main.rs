@@ -54,6 +54,15 @@ fn main() -> eframe::Result {
     }
     init_tracing();
 
+    // The server and its link are the same binary, and they touch one directory
+    // of their own. They come before the Horizon home, the settings and the
+    // agent integration of the desktop, because a server must never read or
+    // write the home of the person. The exit codes steer a service manager, so
+    // they leave here and not through the window.
+    if let Some(mode) = sync_mode() {
+        std::process::exit(run_sync_mode(mode));
+    }
+
     let horizon_home = match HorizonHome::prepare() {
         Ok(home) => home,
         Err(problem) => {
@@ -154,6 +163,78 @@ fn main() -> eframe::Result {
         observed_keyboard_inputs,
         device_requests,
     )
+}
+
+/// One of the two modes of the server, whose work needs no window and no home of
+/// the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncMode {
+    /// `horizon --server`: answers the links of the computers of one server home.
+    Server,
+    /// `horizon --server-link`: relays the standard input and output of one `ssh`
+    /// child to the socket of that server.
+    Link,
+}
+
+/// The mode of this start, when the argument names one. Both modes take that one
+/// argument alone, so an entry that names something else never falls through to
+/// the desktop of the person.
+fn sync_mode() -> Option<SyncMode> {
+    match parse_sync_mode(std::env::args_os().skip(1)) {
+        Ok(mode) => mode,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Whether these arguments ask for the server or for its link.
+///
+/// # Errors
+/// Returns why an argument that starts one of the two modes cannot continue.
+fn parse_sync_mode(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Option<SyncMode>, String> {
+    let mode = match args.next().as_deref() {
+        Some(argument) if argument == "--server" => SyncMode::Server,
+        Some(argument) if argument == "--server-link" => SyncMode::Link,
+        _ => return Ok(None),
+    };
+    if let Some(argument) = args.next() {
+        return Err(format!(
+            "`{}` is not part of the server mode",
+            argument.to_string_lossy()
+        ));
+    }
+    Ok(Some(mode))
+}
+
+/// Runs the mode and answers its exit code: zero when it ended cleanly, the fixed
+/// code of a link that found no server, and one for any other failure. Every
+/// reason is one line on the standard error, which is the log of a service.
+fn run_sync_mode(mode: SyncMode) -> i32 {
+    let home = match horizon_sync::ServerHome::resolve(None) {
+        Ok(home) => home,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            return problem.exit_code();
+        }
+    };
+    let result = match mode {
+        SyncMode::Server => horizon_sync::terminate_flag()
+            .map_err(|error| horizon_sync::HostError::Io {
+                path: home.root().to_path_buf(),
+                error,
+            })
+            .and_then(|stop| horizon_sync::serve_until_stopped(&home, &stop)),
+        SyncMode::Link => horizon_sync::link_stdio(&home),
+    };
+    match result {
+        Ok(()) => 0,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            problem.exit_code()
+        }
+    }
 }
 
 fn serves_browser_mcp() -> bool {
@@ -531,7 +612,9 @@ fn init_tracing() {
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
        horizon [--config <path>] --export-config [<path>]
        horizon [--config <path>] --export-remote-profile <path>
-       horizon [--config <path>] --import-remote-profile <path>";
+       horizon [--config <path>] --import-remote-profile <path>
+       horizon --server
+       horizon --server-link";
 
 #[derive(Debug, PartialEq, Eq)]
 enum RemoteProfileCommand {
@@ -658,7 +741,7 @@ mod log_filter_tests {
 
 #[cfg(test)]
 mod cli_args_tests {
-    use super::{Command, RemoteProfileCommand, parse_cli_args};
+    use super::{Command, RemoteProfileCommand, SyncMode, parse_cli_args, parse_sync_mode};
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
         parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
@@ -695,6 +778,26 @@ mod cli_args_tests {
                 .command
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_server_and_its_link_are_one_flag_alone() {
+        assert_eq!(parse_sync_mode(["--server"].map(Into::into).into_iter()).expect("server"), Some(SyncMode::Server));
+        assert_eq!(
+            parse_sync_mode(["--server-link"].map(Into::into).into_iter()).expect("link"),
+            Some(SyncMode::Link)
+        );
+        assert_eq!(
+            parse_sync_mode(["--blank"].map(Into::into).into_iter()).expect("the desktop"),
+            None
+        );
+        assert_eq!(parse_sync_mode(std::iter::empty()).expect("no argument"), None);
+        for bad in [["--server", "--config"], ["--server-link", "extra"]] {
+            assert!(
+                parse_sync_mode(bad.map(Into::into).into_iter()).is_err(),
+                "{bad:?} must not fall through to the desktop"
+            );
+        }
     }
 
     #[test]
