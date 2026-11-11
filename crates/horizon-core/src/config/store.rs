@@ -532,3 +532,43 @@ fn the_store_of_a_smoke_configuration_is_separate() {
     );
     assert!(!smoke.exists(), "the smoke copy stops being a settings file too");
 }
+
+#[test]
+fn a_server_section_of_a_copy_reaches_the_store_and_a_bad_one_is_refused() {
+    let home = Home::new();
+    home.write_copy(
+        "\
+version: 11
+server:
+  ssh_target: server-vm
+  command: /opt/horizon --server-link
+",
+    );
+
+    let loaded = home.load().expect("load");
+    assert_eq!(loaded.server.ssh_target(), Some("server-vm"));
+    assert_eq!(loaded.server.command(), "/opt/horizon --server-link");
+    assert!(loaded.server.names_server());
+    let stored = Config::read(&home.config_path())
+        .expect("read the store")
+        .expect("the imported settings");
+    assert_eq!(stored.server, loaded.server, "the section travels through the store");
+
+    let other = Home::new();
+    other.write_copy(
+        "\
+version: 11
+server:
+  ssh_target: -oProxyCommand=evil
+",
+    );
+    let error = other.load().expect_err("a target that ssh reads as an option");
+    assert!(
+        matches!(error, crate::error::Error::Config(ref message) if message.contains("server.ssh_target")),
+        "{error}"
+    );
+    assert!(
+        !other.store_path().exists(),
+        "a refused setting writes no store, so the next start reads the copy again"
+    );
+}

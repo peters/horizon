@@ -14,6 +14,7 @@ use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 mod browser_host;
 mod presets;
 mod remote_hosts;
+mod server;
 
 pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
 pub use presets::PresetConfig;
@@ -24,6 +25,7 @@ pub(crate) use presets::{
     insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
 pub use remote_hosts::RemoteHostsConfig;
+pub use server::{ServerConfig, configure_server, server};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -45,6 +47,8 @@ pub struct Config {
     pub remote_hosts: RemoteHostsConfig,
     #[serde(default)]
     pub browser_host: BrowserHostConfig,
+    #[serde(default)]
+    pub server: ServerConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -70,6 +74,7 @@ impl Default for Config {
             browser: crate::browser::BrowserConfig::default(),
             remote_hosts: RemoteHostsConfig::default(),
             browser_host: BrowserHostConfig::default(),
+            server: ServerConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -569,6 +574,7 @@ impl Config {
         self.shortcuts.resolve()?;
         self.remote_hosts.validate()?;
         self.browser_host.validate()?;
+        self.server.validate()?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }

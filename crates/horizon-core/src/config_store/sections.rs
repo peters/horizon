@@ -60,6 +60,10 @@ pub(super) fn encode(config: &Config) -> Result<Vec<Row>> {
             data: json(&config.browser_host)?,
         },
         Row {
+            section: "server",
+            data: json(&config.server)?,
+        },
+        Row {
             section: "presets",
             data: json(&config.presets)?,
         },
@@ -81,6 +85,7 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         browser,
         remote_hosts,
         browser_host,
+        server,
         presets,
         workspaces,
     } = Config::default();
@@ -94,6 +99,7 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         browser: section(rows, "browser")?.unwrap_or(browser),
         remote_hosts: section(rows, "remote_hosts")?.unwrap_or(remote_hosts),
         browser_host: section(rows, "browser_host")?.unwrap_or(browser_host),
+        server: section(rows, "server")?.unwrap_or(server),
         presets: section(rows, "presets")?.unwrap_or(presets),
         workspaces: section(rows, "workspaces")?.unwrap_or(workspaces),
     })

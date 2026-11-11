@@ -175,6 +175,33 @@ impl Machines {
         }
     }
 
+    /// The records of `store` and the key bindings of this computer beside
+    /// `registry`, read now.
+    ///
+    /// A list whose records come from a server keeps its key bindings in the
+    /// Horizon home of this computer: a key name resolves in one home only, so
+    /// no store of another computer can carry it.
+    ///
+    /// # Errors
+    /// Returns why the store or the binding file cannot be read or written.
+    pub fn from_store(registry: &MachineRegistry, store: Arc<dyn MachineStore>) -> Result<Self, MachineError> {
+        let loaded = store.load()?;
+        let mut bindings = registry.bindings().load()?;
+        if !loaded.keys.is_empty() {
+            let moved = loaded.keys.iter().fold(false, |moved, (machine, key)| {
+                bindings.bind_if_absent(machine, key) || moved
+            });
+            if moved {
+                bindings.save()?;
+            }
+        }
+        Ok(Self {
+            records: in_name_order(loaded.records),
+            bindings,
+            store,
+        })
+    }
+
     /// This list with the key `key` bound to `machine` on this computer.
     #[must_use]
     pub fn with_key(mut self, machine: &str, key: &str) -> Self {
