@@ -22,6 +22,7 @@ pub mod named_secrets;
 mod opencode_paths;
 mod panel;
 pub mod place;
+pub mod qr;
 pub mod remote_browser_credential;
 mod remote_hosts;
 mod retired_panel_kinds;
@@ -29,6 +30,7 @@ mod runtime_state;
 pub mod search;
 pub mod secret;
 pub mod secret_store;
+pub mod server_link;
 mod session_store;
 mod shortcuts;
 mod ssh;
@@ -80,6 +82,7 @@ pub use place::{
     SSH_CONNECTION_FAILURE, SessionKill, WorkspacePlace, after_connection_loss, attaches_a_tmux_session, kill_command,
     moves_to_the_machine, place_command, reconnect_delay, session_command, session_prefix,
 };
+pub use qr::{QUIET_ZONE, Qr, QrError};
 pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
@@ -94,6 +97,7 @@ pub use runtime_state::{
 };
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use secret::{MachineKeyFiles, SecretError, SecretId, SecretKind, SecretTarget, SecretVault};
+pub use server_link::{JoinLink, LinkError, ServerAddress, allows_address, check_address, check_code, normalize_code};
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,

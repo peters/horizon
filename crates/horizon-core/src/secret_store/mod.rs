@@ -54,8 +54,10 @@ use crate::remote_browser_credential::{
 mod schema;
 #[cfg(test)]
 mod tests;
+mod token;
 
 pub use schema::SECRETS_SCHEMA_VERSION;
+pub use token::{MAX_TOKEN_CHARS, SERVER_TOKEN_ID, check_token, read_token, remove_token, write_token};
 
 /// The name of the file of the secret values, in the Horizon home.
 pub const SECRETS_FILE_NAME: &str = "secrets.sqlite";
@@ -366,6 +368,19 @@ impl RemoteCredentialStore for UnreadableStore {
     fn with_secret(&self, _: &CredentialLocator, _: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
         Err(self.error.clone())
     }
+}
+
+/// The store of the secrets file of `home`, for a caller that reads one row of it
+/// itself, such as the token of the server link.
+///
+/// It opens a file, so it runs on a worker thread and never on the UI thread. One
+/// file has one connection in this process, so this answers the store that the
+/// window already holds.
+///
+/// # Errors
+/// Returns the path and the reason when the file cannot be opened.
+pub fn open_store(home: &HorizonHome) -> Result<Arc<SecretStore>, RemoteCredentialError> {
+    SecretStore::open(home.secrets_path())
 }
 
 /// The place of the secret values of `home`: its file, or a place that answers the

@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 tempfile.workspace = true
 base64.workspace = true
+qrcodegen.workspace = true
 horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-control.workspace = true
 horizon-browser-protocol.workspace = true

@@ -42,6 +42,11 @@ pub struct ServerConfig {
     /// [`DEFAULT_LINK_COMMAND`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Address of the listener of the server, `host:port`. With an address and
+    /// the token of a join, the link of this computer runs over TCP instead of
+    /// `ssh`. A successful join writes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// The server of this Horizon process, read once from the settings store at
@@ -70,7 +75,17 @@ impl ServerConfig {
     /// file of this computer, as before this entry existed.
     #[must_use]
     pub fn names_server(&self) -> bool {
-        self.ssh_target().is_some_and(|target| !target.is_empty())
+        self.address().is_some() || self.ssh_target().is_some_and(|target| !target.is_empty())
+    }
+
+    /// The address of the listener of the server, without the surrounding spaces
+    /// that a person can type.
+    #[must_use]
+    pub fn address(&self) -> Option<&str> {
+        self.address
+            .as_deref()
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
     }
 
     /// The SSH target, without the surrounding spaces that a person can type.
@@ -120,6 +135,10 @@ impl ServerConfig {
                 "server.command must be 1 to {MAX_COMMAND_LEN} characters of letters, digits and `._:/=@+-`, with single spaces between words"
             )));
         }
+        if let Some(address) = self.address() {
+            crate::server_link::ServerAddress::parse(address)
+                .map_err(|error| Error::Config(format!("server.address: {error}")))?;
+        }
         Ok(())
     }
 }
@@ -144,6 +163,14 @@ mod tests {
         ServerConfig {
             ssh_target: ssh_target.map(str::to_string),
             command: command.map(str::to_string),
+            address: None,
+        }
+    }
+
+    fn with_address(address: Option<&str>) -> ServerConfig {
+        ServerConfig {
+            address: address.map(str::to_string),
+            ..ServerConfig::default()
         }
     }
 
@@ -222,6 +249,48 @@ mod tests {
     }
 
     #[test]
+    fn an_address_names_the_listener_of_the_server() {
+        let config = with_address(Some("127.0.0.1:7000"));
+        assert!(config.names_server(), "an address alone names a server");
+        assert_eq!(config.address(), Some("127.0.0.1:7000"));
+        assert!(config.validate().is_ok());
+
+        let spaced = with_address(Some("  server-computer:7000  "));
+        assert_eq!(spaced.address(), Some("server-computer:7000"));
+        assert!(spaced.validate().is_ok());
+
+        let both = ServerConfig {
+            address: Some("server-computer:7000".to_owned()),
+            ..entry(Some("server-computer"), None)
+        };
+        assert!(both.names_server());
+        assert_eq!(
+            both.ssh_target(),
+            Some("server-computer"),
+            "ssh stays a second transport"
+        );
+
+        for bad in [
+            "",
+            "   ",
+            "server",
+            "server:0",
+            "[::1]",
+            "server:7000/path",
+            "person@server:7000",
+        ] {
+            let config = with_address(Some(bad));
+            if bad.trim().is_empty() {
+                assert_eq!(config.address(), None, "a blank address names no listener");
+                assert!(!config.names_server());
+                continue;
+            }
+            let error = config.validate().expect_err(bad);
+            assert!(error.to_string().contains("server.address"), "{error}");
+        }
+    }
+
+    #[test]
     fn the_section_round_trips_through_the_configuration() {
         let config = Config {
             server: entry(Some("server-vm"), Some("/opt/horizon --server-link")),
@@ -237,8 +306,16 @@ mod tests {
 
         let document = Config::default().to_json().expect("serialize");
         assert!(
-            !document.contains("ssh_target"),
+            !document.contains("ssh_target") && !document.contains("address"),
             "an entry that names no server writes no field: {document}"
         );
+
+        let config = Config {
+            server: with_address(Some("server-computer:7000")),
+            ..Config::default()
+        };
+        let document = config.to_json().expect("serialize");
+        assert!(document.contains("\"address\": \"server-computer:7000\""), "{document}");
+        assert_eq!(Config::from_json(&document).expect("parse").server, config.server);
     }
 }
