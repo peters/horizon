@@ -37,9 +37,26 @@ pub(super) struct SecretInputs {
     /// The number of names that the line under the list describes.
     count: usize,
     count_line: String,
+    /// The names of the list that the last frame parsed, with their parsed form, so a
+    /// frame that changes nothing parses nothing.
+    parsed: Vec<(String, SecretName)>,
 }
 
 impl SecretInputs {
+    /// The parsed names of `names`, from the last frame when the list did not change.
+    /// The list is moved out and put back, so a frame allocates nothing.
+    fn parsed_names(&mut self, names: &[String]) -> Vec<(String, SecretName)> {
+        let same =
+            self.parsed.len() == names.len() && self.parsed.iter().zip(names).all(|((drawn, _), name)| drawn == name);
+        if same {
+            return std::mem::take(&mut self.parsed);
+        }
+        names
+            .iter()
+            .filter_map(|text| SecretName::parse(text).ok().map(|name| (text.clone(), name)))
+            .collect()
+    }
+
     /// The line that counts the names of the list. It is written again only when the
     /// number of names changes, so a frame that changes nothing allocates nothing.
     fn count_text(&mut self, names: &[String]) -> &str {
@@ -106,7 +123,9 @@ pub(super) fn render(
         );
         ui.add_space(8.0);
 
-        changed |= render_names(ui, &config.secrets.names, workbench, inputs);
+        let names = inputs.parsed_names(&config.secrets.names);
+        changed |= render_names(ui, &names, workbench, inputs, config);
+        inputs.parsed = names;
         ui.add_space(8.0);
         let count = inputs.count_text(&config.secrets.names);
         ui.label(egui::RichText::new(count).color(theme::FG_DIM()).size(11.0));
@@ -133,9 +152,10 @@ pub(super) fn render(
 /// injected.
 fn render_names(
     ui: &mut Ui,
-    names: &[String],
+    names: &[(String, SecretName)],
     workbench: &mut NamedSecretWorkbench,
     inputs: &mut SecretInputs,
+    config: &mut Config,
 ) -> bool {
     let mut changed = false;
     if names.is_empty() {
@@ -144,13 +164,8 @@ fn render_names(
     }
     let mut delete = None;
     let mut replace = None;
-    for text_of_name in names {
-        // A row draws the text of its name, so a frame that changes nothing parses
-        // nothing. A name that the rule refuses has no row here.
-        let Ok(name) = SecretName::parse(text_of_name) else {
-            continue;
-        };
-        let name = &name;
+    for (_, name) in names {
+        // A name that the rule refuses has no row here.
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(name.as_str())
@@ -197,6 +212,7 @@ fn render_names(
                 );
                 if ui.button("Delete").clicked() {
                     workbench.delete(name.clone());
+                    config.secrets.names.retain(|text| text != name.as_str());
                     changed = true;
                     delete = Some(name.clone());
                     inputs.confirming = None;
@@ -230,19 +246,15 @@ fn render_add(
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let mut name = inputs.name.clone();
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut name)
+        ui.add(
+            egui::TextEdit::singleline(&mut inputs.name)
                 .hint_text("NAME")
                 .desired_width(180.0)
                 .char_limit(horizon_core::named_secrets::MAX_NAME_CHARS)
                 .id_salt("named-secret-name"),
         );
-        if response.changed() {
-            inputs.name = name;
-        }
-        value_field(ui, &mut inputs.value, ("named-secret-value", inputs.name.as_str()));
-        let full = config.secrets.secret_names().len() >= MAX_NAMED_SECRETS;
+        value_field(ui, &mut inputs.value, "named-secret-value");
+        let full = config.secrets.names.len() >= MAX_NAMED_SECRETS;
         let ready = !inputs.name.trim().is_empty() && !inputs.value.is_empty() && !full;
         if ui.add_enabled(ready, egui::Button::new("Add")).clicked() {
             match SecretName::parse(inputs.name.trim()) {
@@ -271,7 +283,7 @@ fn render_add(
 
 /// The hidden field of one value. The text is never drawn, and the undo history of
 /// the field is cleared so a value is not kept in it.
-fn value_field(ui: &mut Ui, buffer: &mut Zeroizing<String>, salt: (&str, &str)) {
+fn value_field(ui: &mut Ui, buffer: &mut Zeroizing<String>, salt: impl egui::AsIdSalt) {
     let mut output = egui::TextEdit::singleline(&mut **buffer)
         .password(true)
         .char_limit(VALUE_CHAR_LIMIT)

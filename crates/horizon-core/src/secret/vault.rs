@@ -266,10 +266,19 @@ fn named_secret_name(id: &SecretId) -> Result<SecretName, SecretError> {
     })
 }
 
-/// One refusal of the credential store of this computer, as the link reports it.
+/// One refusal of a named secret of this computer, as the link reports it. A value that
+/// the rule of the feature refuses is unreadable; everything else is the store.
 fn named_failure(error: &crate::named_secrets::NamedSecretError) -> SecretError {
-    SecretError::Unavailable {
-        reason: error.to_string(),
+    match error {
+        crate::named_secrets::NamedSecretError::InvalidValue { .. }
+        | crate::named_secrets::NamedSecretError::ValueNotText { .. }
+        | crate::named_secrets::NamedSecretError::InvalidName { .. }
+        | crate::named_secrets::NamedSecretError::ReservedName { .. } => SecretError::Unreadable {
+            message: error.to_string(),
+        },
+        _ => SecretError::Unavailable {
+            reason: error.to_string(),
+        },
     }
 }
 
