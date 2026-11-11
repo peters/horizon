@@ -171,6 +171,56 @@ fn a_machine_key_that_the_server_does_not_read_is_refused_and_keeps_the_local_va
 }
 
 #[test]
+fn one_key_that_differs_only_in_its_known_hosts_is_no_conflict() {
+    let (_home, vault, _, _) = vault();
+    let id = key("build-1");
+    let local = files("PRIVATE-SAME");
+    vault.write(&id, &body(&local)).expect("a local key");
+
+    // The same private key and public line, and a known-hosts file that this
+    // computer grew by meeting the host by itself.
+    let mut theirs = local.clone();
+    theirs
+        .known_hosts
+        .push_str("\n203.0.113.10 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNOYTItbmlzdHAyNTY");
+    assert!(
+        vault
+            .take_over(&id, &body(&theirs), true, 1_760_000_000_000)
+            .expect("a take over")
+            .is_none(),
+        "a key that both computers hold the same way keeps no copy and reads no notice"
+    );
+    assert_eq!(
+        vault.read(&id).expect("a read").expect("the value").to_vec(),
+        body(&theirs),
+        "the value of the server is written as it came"
+    );
+    assert_eq!(
+        vault.local_ids(SecretKind::MachineKey),
+        vec!["machine-key/build-1".to_string()],
+        "no conflict copy is one more key of this home"
+    );
+}
+
+#[test]
+fn a_credential_value_that_the_server_holds_the_same_way_is_no_notice() {
+    let (_home, vault, _, _) = vault();
+    let id = SecretId::credential("key").expect("a reference");
+    vault.write(&id, b"same-value").expect("the value of this computer");
+    assert!(
+        vault
+            .take_over(&id, b"same-value", true, 5)
+            .expect("a take over")
+            .is_none(),
+        "a value that both computers hold the same way reads no notice"
+    );
+    assert_eq!(
+        vault.read(&id).expect("a read").expect("the value").to_vec(),
+        b"same-value".to_vec()
+    );
+}
+
+#[test]
 fn a_credential_value_lives_under_its_reference_in_the_os_store() {
     let (_home, vault, credentials, fake) = vault();
     let id = SecretId::credential("key").expect("a reference");

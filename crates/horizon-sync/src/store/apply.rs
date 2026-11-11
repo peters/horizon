@@ -192,7 +192,7 @@ fn machine_put(
         Err(error) => return Ok(invalid_record(error.code(), &error.to_string())),
     };
     let stored = stored_machine(transaction, &record.name)?;
-    if !stored.is_some() && live_count(transaction, KIND_MACHINE)? >= count_of(MAX_MACHINES) {
+    if stored.is_none() && live_count(transaction, KIND_MACHINE)? >= count_of(MAX_MACHINES) {
         return Ok(refused(Refusal::TooMany {
             kind: KIND_MACHINE.to_owned(),
             limit: count_of(MAX_MACHINES),

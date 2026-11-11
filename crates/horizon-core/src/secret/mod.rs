@@ -239,6 +239,18 @@ pub trait SecretTarget: Send + Sync + fmt::Debug {
     /// Returns why the value cannot be kept.
     fn keep_local(&self, id: &SecretId, body: &[u8], at_millis: u64) -> Result<String, SecretError>;
 
+    /// Whether two values of `id` are the same secret, so that a local value is
+    /// kept beside the one of the server only when it differs.
+    ///
+    /// The value of a machine key travels as its private key, its public line and
+    /// the known-hosts lines of that key, and the last part grows on every
+    /// computer that meets the host by itself. Two computers that hold one key are
+    /// therefore not byte for byte the same, and a key is no conflict when its
+    /// private key and its public line agree.
+    fn same_value(&self, _id: &SecretId, left: &[u8], right: &[u8]) -> bool {
+        left == right
+    }
+
     /// Takes the value that the server decided, and keeps a local value that
     /// differs when `keep_local` says that this computer never published it.
     /// Answers the line for the person, when it kept one.
@@ -254,7 +266,7 @@ pub trait SecretTarget: Send + Sync + fmt::Debug {
     ) -> Result<Option<String>, SecretError> {
         let notice = if keep_local {
             match self.read(id)? {
-                Some(local) if local.as_slice() != body => Some(self.keep_local(id, &local, at_millis)?),
+                Some(local) if !self.same_value(id, &local, body) => Some(self.keep_local(id, &local, at_millis)?),
                 _ => None,
             }
         } else {

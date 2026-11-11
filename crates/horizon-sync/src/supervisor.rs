@@ -239,6 +239,10 @@ struct SyncState {
     /// The lines for the person about a secret of this computer that the server
     /// decided differently.
     notices: Vec<String>,
+    /// The secrets that the server refused and whose value no answer of changes
+    /// covered yet. The value of the server that follows decides whether the local
+    /// value differs at all.
+    refused_secrets: BTreeSet<String>,
 }
 
 impl SyncHandle {
@@ -290,6 +294,7 @@ impl SyncHandle {
                 view: BTreeMap::new(),
                 generation: 0,
                 notices: Vec::new(),
+                refused_secrets: BTreeSet::new(),
             })),
             kick,
             wake,
@@ -725,6 +730,9 @@ fn serve_link(
     kicked: &Receiver<()>,
 ) {
     let mut waiting: Option<Instant> = None;
+    // The index that the open request reads from, so the answer is known to be
+    // the one that a mark set back or not.
+    let mut asking_from: u64 = 0;
     let mut sending: Option<Instant> = None;
     // The first request of a link is a pull: the server answers it at once, while
     // a wait stays open at its bound when nothing changed yet.
@@ -753,6 +761,7 @@ fn serve_link(
         if waiting.is_none() {
             let frame = {
                 let state = handle.lock();
+                asking_from = state.client.read_from();
                 if first {
                     state.client.pull_frame()
                 } else {
@@ -773,7 +782,7 @@ fn serve_link(
             Ok(Frame::Changes(changes)) => {
                 waiting = None;
                 first = false;
-                if let Err(error) = apply_changes(handle, &changes) {
+                if let Err(error) = apply_changes(handle, &changes, asking_from) {
                     tracing::warn!(%error, "the changes of the server were not applied");
                     return;
                 }
@@ -976,6 +985,30 @@ mod tests {
             0o600,
             "the device name is private"
         );
+    }
+
+    #[test]
+    fn a_refusal_names_the_version_that_the_mark_reads_again() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let mut client = Client::open(directory.path().join("server-queue.json"), "mbp-7c1").expect("a queue");
+        client.accept_mark(9).expect("the mark");
+        assert_eq!(client.read_from(), 9, "a fresh link reads from its mark");
+
+        // A refusal at the index that this computer already holds, as a value of
+        // the server that this computer applied before a reseed.
+        client.replay_before(9);
+        assert_eq!(client.read_from(), 8, "the value of that version comes again");
+        client.accept_mark(10).expect("the mark");
+        assert_eq!(client.read_from(), 8, "an answer of the old request does not end it");
+        client.accept_replay(8);
+        assert_eq!(client.read_from(), 10, "its own answer ends it");
+
+        // A version that the next request covers anyway needs no second read, and
+        // a refusal without a version never moves the mark.
+        client.replay_before(12);
+        assert_eq!(client.read_from(), 10);
+        client.replay_before(0);
+        assert_eq!(client.read_from(), 10);
     }
 
     #[test]

@@ -45,6 +45,22 @@ impl Refusal {
             Self::InvalidIntent { .. } => "invalid_intent",
         }
     }
+
+    /// The version of the server that this refusal names, when the server holds a
+    /// row there. A version of zero says that the server holds no live row, so
+    /// there is no value of the server to read again.
+    #[must_use]
+    pub fn version(&self) -> Option<u64> {
+        match self {
+            Self::ChangedSinceSeen { version, .. } | Self::AlreadyAnswered { version } => {
+                Some(*version).filter(|version| *version > 0)
+            }
+            Self::TooMany { .. }
+            | Self::InvalidRecord { .. }
+            | Self::UnknownKind { .. }
+            | Self::InvalidIntent { .. } => None,
+        }
+    }
 }
 
 /// Why the store could not answer a caller.

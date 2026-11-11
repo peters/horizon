@@ -12,7 +12,7 @@ use horizon_core::secret::SecretId;
 
 use super::SyncHandle;
 use super::files::{MirrorFile, MirroredMachine, write_mirror};
-use super::secrets::{keep_refused_secret, local_machine_keys, reseed_secrets, secret_rows_of, write_secrets};
+use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState};
 use crate::client::PullOutcome;
@@ -23,21 +23,30 @@ use crate::store::Changes;
 
 pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     // The queue loses the refused intent here, so the ids of the secrets that the
-    // server refused are read before the queue is settled.
-    let refused_secrets: Vec<String> = {
+    // server refused and the version that a refusal names are read before the
+    // queue is settled.
+    let (refused_secrets, rewind): (Vec<String>, Option<u64>) = {
         let state = handle.lock();
-        state
-            .client
-            .pending()
-            .iter()
-            .filter(|intent| intent.op.is_secret())
-            .filter(|intent| {
-                reply.results.iter().any(|result| {
-                    result.id == intent.id && matches!(result.outcome, crate::intent::Outcome::Refused(_))
-                })
-            })
-            .map(|intent| intent.op.object_id().to_owned())
-            .collect()
+        let mut ids = Vec::new();
+        let mut oldest: Option<u64> = None;
+        for intent in state.client.pending() {
+            if !intent.op.is_secret() {
+                continue;
+            }
+            let Some(crate::intent::Outcome::Refused(refusal)) = reply
+                .results
+                .iter()
+                .find(|result| result.id == intent.id)
+                .map(|result| &result.outcome)
+            else {
+                continue;
+            };
+            ids.push(intent.op.object_id().to_owned());
+            if let Some(version) = refusal.version() {
+                oldest = Some(oldest.map_or(version, |old: u64| old.min(version)));
+            }
+        }
+        (ids, oldest)
     };
     let outcome = {
         let mut state = handle.lock();
@@ -59,7 +68,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
             return;
         }
     }
-    keep_refused_secret(handle, &refused_secrets);
+    refuse_secrets(handle, &refused_secrets, rewind);
     handle.refresh_machine_keys();
     let mut state = handle.lock();
     state.generation = state.generation.wrapping_add(1);
@@ -72,8 +81,8 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
 }
 
 /// Applies one answer of changes to the mirror and moves the mark of this
-/// computer.
-pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<PullOutcome, SyncError> {
+/// computer. `asked_from` is the index that the request of this answer read from.
+pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: u64) -> Result<PullOutcome, SyncError> {
     let (applied, secret_rows) = {
         let mut state = handle.lock();
         let applied = apply_rows(&mut state, changes)?;
@@ -87,6 +96,7 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes) -> Result<Pu
     write_secrets(handle, &secret_rows);
     let mut state = handle.lock();
     seed_local(&mut state)?;
+    state.client.accept_replay(asked_from);
     state.client.accept_mark(changes.index)?;
     state.machine_keys = local_machine_keys(&state.secrets);
     state.generation = state.generation.wrapping_add(1);

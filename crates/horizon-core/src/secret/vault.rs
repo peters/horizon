@@ -167,6 +167,20 @@ impl SecretTarget for SecretVault {
         }
     }
 
+    fn same_value(&self, id: &SecretId, left: &[u8], right: &[u8]) -> bool {
+        if id.kind() != SecretKind::MachineKey {
+            return left == right;
+        }
+        let Ok(parsed_left) = serde_json::from_slice::<MachineKeyFiles>(left) else {
+            return left == right;
+        };
+        let Ok(parsed_right) = serde_json::from_slice::<MachineKeyFiles>(right) else {
+            return left == right;
+        };
+        parsed_left.private_key.trim() == parsed_right.private_key.trim()
+            && parsed_left.public_key.trim() == parsed_right.public_key.trim()
+    }
+
     fn local_ids(&self, kind: SecretKind) -> Vec<String> {
         match kind {
             SecretKind::MachineKey => self

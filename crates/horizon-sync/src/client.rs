@@ -162,6 +162,11 @@ pub struct Client {
     file: PathBuf,
     state: ClientState,
     link: LinkState,
+    /// The mark that the next request must use instead of the index of this
+    /// computer, because a refusal of a secret named a version that the mirror
+    /// already passed. The answer to that request brings the row again, and then
+    /// the index of this computer is the mark once more.
+    replay: Option<u64>,
 }
 
 impl Client {
@@ -195,6 +200,7 @@ impl Client {
             file: path,
             state,
             link: LinkState::Off,
+            replay: None,
         })
     }
 
@@ -220,6 +226,39 @@ impl Client {
     #[must_use]
     pub fn mark(&self) -> &str {
         &self.state.tip
+    }
+
+    /// Makes the next request read from before `version`, so its answer brings
+    /// the row of that version again.
+    ///
+    /// A refusal of a secret names the version that the server decided, and the
+    /// value of that version is what the person must see beside the local one: an
+    /// index that is already past the version would hide it, and a later answer
+    /// that carries no such row would leave the question open. A version that the
+    /// index of this computer covers anyway changes nothing.
+    pub fn replay_before(&mut self, version: u64) {
+        let Some(target) = version.checked_sub(1) else {
+            return;
+        };
+        if target < self.state.index {
+            self.replay = Some(target);
+        }
+    }
+
+    /// The index that the next request reads from: the index of this computer, or
+    /// the mark that a refused secret set back.
+    #[must_use]
+    pub fn read_from(&self) -> u64 {
+        self.replay.unwrap_or(self.state.index)
+    }
+
+    /// Ends the mark that a refused secret set back, because the answer of a
+    /// request that read from `from` arrived: the row of that version came with
+    /// it, or the server holds no such row.
+    pub fn accept_replay(&mut self, from: u64) {
+        if self.replay == Some(from) {
+            self.replay = None;
+        }
     }
 
     /// The intents that are not settled yet, in the order of their counters.
@@ -493,7 +532,7 @@ impl Client {
     #[must_use]
     pub fn pull_frame(&self) -> Frame {
         Frame::Pull(Pull {
-            since: self.state.index,
+            since: self.read_from(),
             tip: self.state.tip.clone(),
         })
     }
@@ -503,7 +542,7 @@ impl Client {
     #[must_use]
     pub fn wait_frame(&self) -> Frame {
         Frame::Wait(Wait {
-            since: self.state.index,
+            since: self.read_from(),
         })
     }
 

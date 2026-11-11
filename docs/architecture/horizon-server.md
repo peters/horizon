@@ -119,7 +119,9 @@ which records, bindings and secrets the server has:
   pushed, so the server holds the union.
 - A name that both have keeps the value of the server. A local machine key that
   differs is kept as `<name>.conflict-<time>`, and a local credential value that
-  differs is replaced with one notice for the person.
+  differs is replaced with one notice for the person. A key whose private key and
+  public line are the same is not a difference, whatever its known-hosts lines
+  are.
 
 The mirror file records that this comparison happened, so a restart does not push
 the same values again. A server that returned after its `secret.key` was lost
@@ -280,6 +282,15 @@ that loses keeps its local value: a machine key as `<name>.conflict-<time>`,
 which is not a key name and is never used by an agent, and a credential value as
 one notice for the person, because the OS store holds one value per reference.
 The queue of a computer holds the id of a secret and never its body.
+
+A value that the server holds the same way is no conflict. The private key and the
+public line of a machine key decide that comparison, and the known-hosts lines of
+the key do not: each computer grows them by meeting the host by itself. A
+computer that pushes the same key again therefore reads no notice and writes no
+copy, and a credential value that both computers hold the same way reads none
+either. The value of the server that a refusal names comes into the next answer
+of changes, even when the mark of the computer already passed it, so the
+comparison is never against a value that the computer assumes.
 
 ### What never goes to the server
 

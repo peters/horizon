@@ -8,7 +8,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use horizon_core::SecretTarget;
-use horizon_core::secret::{SecretId, SecretKind};
+use horizon_core::secret::{SecretError, SecretId, SecretKind};
 
 use super::{SyncHandle, SyncState, now_millis};
 use crate::error::SyncError;
@@ -73,7 +73,6 @@ pub(super) struct SecretRow {
     body: Option<Vec<u8>>,
     keep_local: bool,
 }
-
 /// Reads the secret rows of one answer, remembers which versions this computer
 /// saw, and decides for each value whether a local value that differs is to be
 /// kept: a value that this computer never published, or one whose own intent
@@ -92,15 +91,22 @@ pub(super) fn secret_rows_of(state: &mut SyncState, changes: &Changes) -> Vec<Se
             if let Err(error) = state.client.forget_secret(id.as_str()) {
                 tracing::warn!(%error, "the version of a removed secret was not forgotten");
             }
+            // A value that the server refused keeps one copy before the removal
+            // takes the value of this computer away.
+            let refused = state.refused_secrets.remove(id.as_str());
             rows.push(SecretRow {
                 id,
                 body: None,
-                keep_local: false,
+                keep_local: refused,
             });
             continue;
         }
         let keep_local =
             state.client.secret_version(id.as_str()).is_none() || state.client.secret_is_pending(id.as_str());
+        // A value that the server refused is kept only when it differs from the
+        // value that this answer brings, so an identical key is no conflict.
+        let refused = state.refused_secrets.remove(id.as_str());
+        let keep_local = keep_local || refused;
         if let Err(error) = state.client.remember_secret(id.as_str(), row.version) {
             tracing::warn!(%error, "the version of a secret was not kept");
         }
@@ -131,14 +137,8 @@ pub(super) fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
     };
     let mut notices = Vec::new();
     for row in rows {
-        let result = match &row.body {
-            Some(body) => secrets
-                .take_over(&row.id, body, row.keep_local, at_millis)
-                .map(Option::into_iter),
-            None => secrets.remove(&row.id).map(|()| None.into_iter()),
-        };
-        match result {
-            Ok(lines) => notices.extend(lines),
+        match write_one(&secrets, row, at_millis) {
+            Ok(line) => notices.extend(line),
             Err(error) => {
                 tracing::warn!(
                     id = %row.id,
@@ -152,6 +152,31 @@ pub(super) fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
     if !notices.is_empty() {
         let mut state = handle.lock();
         state.notices.extend(notices);
+    }
+}
+
+/// Writes the value of one row, and answers the line for the person.
+fn write_one(secrets: &Arc<dyn SecretTarget>, row: &SecretRow, at_millis: u64) -> Result<Option<String>, SecretError> {
+    let Some(body) = &row.body else {
+        // A removal is last write wins, so the value of this computer goes. A
+        // value that the server refused keeps one copy first, so the person still
+        // has what this computer held.
+        let kept = if row.keep_local {
+            keep_beside(secrets, &row.id, at_millis)?
+        } else {
+            None
+        };
+        secrets.remove(&row.id)?;
+        return Ok(kept);
+    };
+    secrets.take_over(&row.id, body, row.keep_local, at_millis)
+}
+
+/// Keeps the local value of `id` as a copy beside the value of the server.
+fn keep_beside(secrets: &Arc<dyn SecretTarget>, id: &SecretId, at_millis: u64) -> Result<Option<String>, SecretError> {
+    match secrets.read(id)? {
+        Some(local) => secrets.keep_local(id, &local, at_millis).map(Some),
+        None => Ok(None),
     }
 }
 
@@ -187,37 +212,22 @@ pub(super) fn local_machine_keys(secrets: &Arc<dyn SecretTarget>) -> BTreeSet<St
         .collect()
 }
 
-/// Keeps the local value of every secret that the server refused, because that
-/// value lost the version rule. A machine key is kept as
-/// `<name>.conflict-<time>`, which is not a key name; a credential value is one
-/// line for the person, because the OS store holds one value per reference.
-pub(super) fn keep_refused_secret(handle: &SyncHandle, refused: &[String]) {
+/// Remembers the secrets that the server refused, and moves the mark of this
+/// computer back before the version that a refusal names, so the next answer of
+/// changes brings the value of the server again.
+///
+/// The refusal decides nothing by itself: the value of the server that follows
+/// says whether the local value differs at all. A computer that pushed the same
+/// key again, after the server lost its key file, therefore keeps no copy and
+/// reads no notice when the server answers the same value. A value that the server
+/// cannot read is no row of an answer, so the local value stays where it is.
+pub(super) fn refuse_secrets(handle: &SyncHandle, refused: &[String], version: Option<u64>) {
     if refused.is_empty() {
         return;
     }
-    let (secrets, at_millis) = {
-        let state = handle.lock();
-        (Arc::clone(&state.secrets), now_millis())
-    };
-    let mut notices = Vec::new();
-    for id in refused {
-        let Ok(id) = SecretId::parse(id) else {
-            continue;
-        };
-        let kept = secrets.read(&id).and_then(|local| match local {
-            Some(local) => secrets.keep_local(&id, &local, at_millis).map(Some),
-            None => Ok(None),
-        });
-        match kept {
-            Ok(Some(line)) => notices.push(line),
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%id, code = error.code(), reason = %error, "a local secret that lost was not kept");
-            }
-        }
-    }
-    if !notices.is_empty() {
-        let mut state = handle.lock();
-        state.notices.extend(notices);
+    let mut state = handle.lock();
+    state.refused_secrets.extend(refused.iter().cloned());
+    if let Some(version) = version {
+        state.client.replay_before(version);
     }
 }

@@ -685,6 +685,66 @@ fn the_loser_of_the_version_rule_keeps_its_key_as_a_conflict_copy() {
 }
 
 #[test]
+fn a_key_that_the_server_holds_the_same_way_is_no_conflict_copy_and_no_notice() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    let mut b = Computer::start(&home.path().join("b"), &server.socket);
+    in_step(&a);
+    in_step(&b);
+    a.make_key("build-1");
+    eventually("the key at both computers", || {
+        (b.keys.files("build-1").expect("the files").is_some()
+            && a.handle().secret_version("machine-key/build-1").is_some())
+        .then_some(())
+    });
+    let theirs = a.files("build-1").expect("the key of the server");
+    assert_eq!(
+        b.files("build-1").map(|files| files.private_key),
+        Some(theirs.private_key.clone()),
+        "both computers hold one key"
+    );
+
+    // The second computer pushes its own key again without the version that the
+    // server holds, as a computer does after the server lost its key file: the
+    // server answers `already_answered`, and its value is the value of this
+    // computer.
+    b.stop();
+    let device = fs::read_to_string(b.machines_dir.join("server-device")).expect("the device name");
+    let mut queue = horizon_sync::Client::open(b.machines_dir.join("server-queue.json"), device.trim())
+        .expect("the queue of the second computer");
+    let id = SecretId::machine_key("build-1").expect("an id");
+    queue.forget_secrets().expect("the versions are forgotten");
+    queue.enqueue_secret(id.as_str()).expect("the key is queued again");
+    drop(queue);
+    b.start_again();
+    settled(&b);
+    eventually("the version of the value of the server", || {
+        b.handle().secret_version(id.as_str())
+    });
+    // The frame that decides about a refused value follows the frame that brings
+    // it, so the test gives the link that one turn.
+    thread::sleep(Duration::from_millis(300));
+
+    assert_eq!(
+        conflict_copy(&b.machines_dir.join("machine-keys"), "build-1"),
+        None,
+        "a key that the server holds the same way keeps no copy"
+    );
+    assert!(
+        b.handle().take_secret_notices().is_empty(),
+        "the person reads no notice about a key that did not change"
+    );
+    assert_eq!(
+        b.files("build-1").map(|files| files.private_key),
+        Some(theirs.private_key.clone()),
+        "the key of this computer still opens the machine"
+    );
+    a.stop();
+    server.stop();
+}
+
+#[test]
 fn a_server_that_lost_its_key_keeps_running_and_a_computer_sends_its_secrets_again() {
     let home = tempfile::tempdir().expect("a directory");
     let server_home = home.path().join("server");
