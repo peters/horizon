@@ -5,6 +5,7 @@ mod agents;
 mod atomic_file;
 mod block_panel;
 mod board;
+mod bounded_program;
 pub mod browser;
 mod config;
 mod config_migration;

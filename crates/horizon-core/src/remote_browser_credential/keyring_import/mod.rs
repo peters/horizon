@@ -31,15 +31,14 @@ mod click;
 mod import;
 mod outcome;
 mod plan;
-mod program;
 mod readers;
 mod run;
 
+pub use crate::bounded_program::ProgramEnvironment;
 pub use click::{ImportLine, KeyringImport};
 pub use import::import_from_keyring;
 pub use outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 pub use plan::KeyringImportPlan;
-pub use program::ProgramEnvironment;
 pub use readers::{Bound, Platform};
 
 #[cfg(test)]

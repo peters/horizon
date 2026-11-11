@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use super::super::KeyringImportError;
 use super::super::plan::KeyringImportPlan;
-use super::super::program::ProgramEnvironment;
 use super::{Bound, KeyringEntry, libsecret, secret_tool, security};
+use crate::bounded_program::ProgramEnvironment;
 
 /// The keyring of one system, as the programs that read it and the words of its
 /// refusal.

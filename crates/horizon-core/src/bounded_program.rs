@@ -1,11 +1,12 @@
-//! One program of the import, run as the exact child of this process.
+//! One program of this process, run as the exact child of this process.
 //!
-//! A value travels through the stdout pipe of this child and nowhere else: no
-//! argument, no environment variable, no log line and no temporary file. The
-//! environment of the child is cleared and rebuilt from four names, so a value
-//! never arrives in a variable that a person or a shell exported. The child is
-//! ended by its own process id when the bound passes, so no other program of this
-//! computer can be touched.
+//! The keyring import and the working directory of a panel ask the programs of the
+//! system a question off the UI thread. An answer travels through the stdout pipe of
+//! the child and nowhere else: no argument, no environment variable, no log line and
+//! no temporary file. The environment of the child is cleared and rebuilt from four
+//! names, so an answer never arrives in a variable that a person or a shell exported.
+//! The child is ended by its own process id when the bound passes, so no other program
+//! of this computer can be touched.
 
 use std::ffi::OsString;
 use std::fs;
@@ -18,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use zeroize::Zeroizing;
 
-/// The most bytes that one program may print. One value is at most 16 KiB and one
-/// import reads a handful of entries, so this bound is far above the largest
-/// answer and far below a memory problem.
+/// The most bytes that one program may print. One answer of a keyring entry is at
+/// most 16 KiB and a directory or a process id is shorter, so this bound is far
+/// above the largest answer and far below a memory problem.
 const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 
 /// How often the parent looks whether its child ended.
@@ -32,11 +33,12 @@ const POLL: Duration = Duration::from_millis(10);
 /// neither is a reason to refuse the values of the person.
 const SPAWN_RETRY: Duration = Duration::from_secs(2);
 
-/// What one program of the import needs from the environment.
+/// What one program that this process runs needs from the environment.
 ///
-/// The three programs read a session bus, a home and a runtime folder of the
-/// person, and nothing else: a cleared environment keeps a value of the shell of
-/// the person and every other variable out of a program that prints a keyring.
+/// The programs of the keyring read a session bus, a home and a runtime folder of
+/// the person, and a program that names a child or a directory reads neither: a
+/// cleared environment keeps every variable of the shell of the person out of
+/// them.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramEnvironment {
     /// The folders that hold the programs, as `PATH` writes them.
@@ -49,7 +51,8 @@ pub struct ProgramEnvironment {
 }
 
 impl ProgramEnvironment {
-    /// The environment of this process, for the import of a click.
+    /// The environment of this process, for the work that a click or a panel asks
+    /// for.
     #[must_use]
     pub fn of_this_process() -> Self {
         Self {
@@ -61,8 +64,8 @@ impl ProgramEnvironment {
     }
 
     /// An environment whose `PATH` is `path` and nothing else that a test needs.
-    /// A test points it at its own folder of stand-in programs, so the import
-    /// never reads the keyring of the person.
+    /// A test points it at its own folder of stand-in programs, so the work never
+    /// reads the keyring of the person.
     #[must_use]
     pub fn with_path(path: impl Into<OsString>) -> Self {
         Self {
@@ -112,7 +115,8 @@ fn is_program(path: &Path) -> bool {
 /// What one program printed.
 pub struct ProgramOutput {
     pub status: ExitStatus,
-    /// Wiped when it goes: a program of the import answers the values of a person.
+    /// Wiped when it goes: a program of the keyring import answers the values of a
+    /// person, and no caller keeps an answer of this process longer than it needs.
     pub stdout: Zeroizing<Vec<u8>>,
     /// Wiped when it goes, because a value never reaches this stream but a program
     /// of the person must not keep anything either.
@@ -127,7 +131,7 @@ impl ProgramOutput {
     }
 }
 
-/// Why a program of the import did not answer.
+/// Why a program did not answer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProgramFailure {
     /// The bound passed, so the child was ended by its own process id.
@@ -148,7 +152,7 @@ pub fn run(
     environment: &ProgramEnvironment,
     bound: Duration,
 ) -> Result<ProgramOutput, ProgramFailure> {
-    crate::ui_thread::blocking("a program of the keyring runs and is awaited");
+    crate::ui_thread::blocking("a program of this process runs and is awaited");
     let mut command = Command::new(program);
     command
         .args(args)
@@ -167,7 +171,7 @@ pub fn run(
             }
             Ok(None) => {}
             Err(error) => {
-                tracing::warn!(%error, "a program of the import of the keyring could not be awaited");
+                tracing::warn!(%error, "a program of this process could not be awaited");
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(ProgramFailure::Failed);
@@ -187,9 +191,9 @@ pub fn run(
 /// Start the child, and try again while this computer cannot start it now.
 ///
 /// The two answers that are tried again are `EAGAIN`, which a full process table
-/// gives, and `ETXTBSY`, which a file that another thread still has open gives. The
-/// import of a person is one click, and neither answer means that the value is
-/// unreadable.
+/// gives, and `ETXTBSY`, which a file that another thread still has open gives. A
+/// person waits for one answer, and neither answer means that the question has no
+/// answer.
 fn spawn(command: &mut Command) -> Result<Child, ProgramFailure> {
     let deadline = Instant::now() + SPAWN_RETRY;
     loop {
@@ -204,7 +208,7 @@ fn spawn(command: &mut Command) -> Result<Child, ProgramFailure> {
                 thread::sleep(POLL);
             }
             Err(error) => {
-                tracing::warn!(%error, "a program of the import of the keyring did not start");
+                tracing::warn!(%error, "a program of this process did not start");
                 return Err(ProgramFailure::Failed);
             }
         }

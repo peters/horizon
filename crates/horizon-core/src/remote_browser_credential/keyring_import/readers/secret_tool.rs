@@ -22,8 +22,8 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::super::program::{ProgramEnvironment, ProgramOutput, run};
 use super::{Bound, KeyringEntry, SERVICE, ended, failure, field, lines, mentions, text};
+use crate::bounded_program::{ProgramEnvironment, ProgramOutput, run};
 
 /// The program that reads the Secret Service.
 pub(crate) const PROGRAM: &str = "secret-tool";

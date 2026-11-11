@@ -5,9 +5,9 @@
 
 use super::outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 use super::plan::KeyringImportPlan;
-use super::program::ProgramEnvironment;
 use super::readers::{Bound, Platform};
 use super::run;
+use crate::bounded_program::ProgramEnvironment;
 use crate::remote_browser_credential::SharedStore;
 
 /// The work of one click: read every entry that the keyring of `platform` can name,

@@ -21,7 +21,7 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 use super::KeyringImportError;
-use super::program::{ProgramFailure, ProgramOutput};
+use crate::bounded_program::{ProgramFailure, ProgramOutput};
 
 pub use platform::Platform;
 

@@ -19,8 +19,8 @@ use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::super::program::{ProgramEnvironment, run};
 use super::{Bound, KeyringEntry, Platform, SERVICE, ended, failure, mentions};
+use crate::bounded_program::{ProgramEnvironment, run};
 
 /// The interpreter that the binding of libsecret runs in.
 pub(crate) const PROGRAM: &str = "python3";

@@ -7,8 +7,8 @@ use std::thread;
 use super::import::import_from_keyring;
 use super::outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
 use super::plan::KeyringImportPlan;
-use super::program::ProgramEnvironment;
 use super::readers::{Bound, Platform};
+use crate::bounded_program::ProgramEnvironment;
 use crate::remote_browser_credential::{CredentialValueChange, SharedStore};
 
 /// The line under the button of the import: the answer of the last click, and

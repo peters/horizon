@@ -22,8 +22,8 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::super::program::{ProgramEnvironment, run};
 use super::{Bound, Platform, SERVICE, ended, failure};
+use crate::bounded_program::{ProgramEnvironment, run};
 
 /// The program that reads the Keychain.
 pub(crate) const PROGRAM: &str = "security";
