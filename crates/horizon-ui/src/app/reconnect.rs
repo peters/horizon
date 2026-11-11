@@ -165,7 +165,7 @@ impl HorizonApp {
         match plan {
             AfterConnectionLoss::Reconnect { attempt, after } => {
                 if let Some(panel) = self.board.panel_mut(panel_id) {
-                    panel.show_reconnecting();
+                    panel.show_reconnecting(attempt);
                 }
                 self.reconnects.arm(panel_id, attempt, now + after);
                 tracing::info!(

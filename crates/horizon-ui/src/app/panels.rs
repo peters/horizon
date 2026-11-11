@@ -55,6 +55,9 @@ struct PanelSnapshot {
     is_focused: bool,
     is_renaming: bool,
     ssh_status: Option<SshConnectionStatus>,
+    /// The attempt that a reconnect of this panel reached, while its mark
+    /// waits for the next one.
+    ssh_status_attempt: Option<u32>,
 }
 
 #[derive(Default)]
@@ -566,6 +569,7 @@ impl HorizonApp {
                     is_focused: self.board.focused == Some(panel_id),
                     is_renaming: self.renaming_panel == Some(panel_id),
                     ssh_status: panel.ssh_status(),
+                    ssh_status_attempt: panel.ssh_status_attempt(),
                 })
             })
     }
@@ -684,6 +688,7 @@ impl HorizonApp {
                     close_hovered: close_response.hovered(),
                     workspace_accent: snapshot.workspace_accent,
                     ssh_status: snapshot.ssh_status,
+                    ssh_status_attempt: snapshot.ssh_status_attempt,
                     session_id,
                     card: self
                         .card_titlebar_chip(panel_id)

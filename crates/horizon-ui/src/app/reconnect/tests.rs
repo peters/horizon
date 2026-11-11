@@ -266,3 +266,32 @@ fn the_mark_of_a_waiting_terminal_reads_reconnecting() {
     assert_eq!(SshConnectionStatus::Reconnecting.label(), "Reconnecting");
     assert_eq!(SshConnectionStatus::Connecting.label(), "Connecting...");
 }
+
+#[test]
+fn a_panel_that_waits_names_the_attempt_that_it_reached() {
+    let (_temp, ctx, mut app, workspace) = app_on_a_machine();
+    let panel_id = terminal_of_the_machine(&mut app, workspace, 255);
+    wait_for_the_end(&mut app, panel_id);
+
+    app.poll_reconnects_with(&ctx, Instant::now(), |_, _| {});
+    let attempt = app
+        .board
+        .panel(panel_id)
+        .and_then(horizon_core::Panel::ssh_status_attempt);
+    assert_eq!(attempt, Some(1), "the first attempt of a lost link");
+
+    // A person's key press connects at once, and the attempts start again, so
+    // a third attempt is reached only by a link that keeps failing.
+    app.poll_reconnects_with(&ctx, Instant::now() + Duration::from_secs(60), |app, panel_id| {
+        if let Some(panel) = app.board.panel_mut(panel_id) {
+            panel.show_reconnecting(3);
+        }
+    });
+    assert_eq!(
+        app.board
+            .panel(panel_id)
+            .and_then(horizon_core::Panel::ssh_status_attempt),
+        Some(3),
+        "the mark of a panel that keeps trying says which attempt it reached"
+    );
+}

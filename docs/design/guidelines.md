@@ -603,8 +603,11 @@ outline).
   The word carries the state, so the color is never the only signal:
   `Connecting...` in `PALETTE_YELLOW`, `Connected` in `PALETTE_GREEN`,
   `Reconnecting` in `PALETTE_YELLOW` while the panel waits to run its command
-  again after a lost link, and `Disconnected` in `PALETTE_RED`. A panel that
-  waits keeps the last screen in its body until the command starts again. The
+  again after a lost link, and `Disconnected` in `PALETTE_RED`. A reconnect names
+  its attempt from the third one on, `Reconnecting (3)`, and the mark keeps the
+  color of the plain word. A panel that waits keeps the last screen in its body
+  until the command starts again, and the same screen stays while the new
+  connection runs and until the first byte of it draws over the screen. The
   Machines row of that machine shows the same state.
 - **Selectable card**: radius 10, margin 12, `PANEL_BG_ALT` fill with 1 px
   `BORDER_SUBTLE`. Hover: outline `FG_DIM`. Selected: fill

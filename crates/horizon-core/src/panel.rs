@@ -304,6 +304,9 @@ pub struct Panel {
     pub(crate) machine_session: Option<String>,
     /// UI-facing SSH connection status for panels that remain visible after exit.
     pub ssh_status: Option<SshConnectionStatus>,
+    /// The attempt that a reconnect of this panel reached since its last
+    /// connection that lasted, so the mark of a lost link can name it.
+    ssh_reconnect_attempt: u32,
     /// When the ssh connection of this panel came up, in milliseconds since the
     /// epoch, so a lost link reports how long it lasted.
     ssh_connected_at_millis: Option<i64>,
@@ -388,6 +391,7 @@ impl Panel {
         } else if had_output && matches!(self.ssh_status, Some(SshConnectionStatus::Connecting)) {
             self.ssh_status = Some(SshConnectionStatus::Connected);
             self.ssh_connected_at_millis = Some(current_unix_millis());
+            self.ssh_reconnect_attempt = 0;
         }
     }
 
@@ -410,12 +414,24 @@ impl Panel {
             )
     }
 
-    /// Marks this panel as waiting for its next attempt after a lost link. The
-    /// body keeps the last screen until the command starts again.
-    pub fn show_reconnecting(&mut self) {
-        if self.kind == PanelKind::Ssh {
-            self.ssh_status = Some(SshConnectionStatus::Reconnecting);
+    /// Marks this panel as waiting for its next attempt `attempt` after a lost
+    /// link, and says how many attempts Horizon already made. The body keeps the
+    /// last screen until the command starts again.
+    pub fn show_reconnecting(&mut self, attempt: u32) {
+        if self.kind != PanelKind::Ssh {
+            return;
         }
+        self.ssh_status = Some(SshConnectionStatus::Reconnecting);
+        self.ssh_reconnect_attempt = attempt;
+    }
+
+    /// The attempt that the reconnect of this panel reached, while its mark is
+    /// the one of a lost link that waits for the next one.
+    #[must_use]
+    pub fn ssh_status_attempt(&self) -> Option<u32> {
+        matches!(self.ssh_status, Some(SshConnectionStatus::Reconnecting))
+            .then_some(self.ssh_reconnect_attempt)
+            .filter(|attempt| *attempt > 0)
     }
 
     /// Marks this panel as disconnected, after Horizon did not start its command
@@ -423,6 +439,7 @@ impl Panel {
     pub fn show_disconnected(&mut self) {
         if self.kind == PanelKind::Ssh {
             self.ssh_status = Some(SshConnectionStatus::Disconnected);
+            self.ssh_reconnect_attempt = 0;
         }
     }
 
@@ -594,6 +611,7 @@ impl Panel {
             machine: None,
             machine_session: None,
             ssh_status: None,
+            ssh_reconnect_attempt: 0,
             ssh_connected_at_millis: None,
             ssh_exit_recorded: false,
             ssh_end: None,
@@ -993,6 +1011,7 @@ mod tests {
             machine: None,
             machine_session: None,
             ssh_status: None,
+            ssh_reconnect_attempt: 0,
             ssh_connected_at_millis: None,
             ssh_exit_recorded: false,
             ssh_end: None,
@@ -1029,16 +1048,101 @@ mod tests {
     }
 
     #[test]
+    fn a_restart_keeps_the_screen_only_of_a_terminal_that_attaches_a_session() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+
+        use crate::terminal::{Terminal, TerminalSpawnOptions};
+
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "printf 'kept-line\\n'".to_string()],
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 43,
+            replay_bytes: Vec::new(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && terminal.viewport_text().first().is_none_or(|line| line != "kept-line") {
+            let _ = terminal.process_events();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            terminal.viewport_text().first().map(String::as_str),
+            Some("kept-line"),
+            "the screen of the test shows the output"
+        );
+        let mut panel = Panel::from_content(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelKind::Command,
+            PanelContent::Terminal(terminal),
+        );
+
+        assert!(
+            panel.restart_replay_bytes().is_empty(),
+            "a panel of this computer starts with an empty screen"
+        );
+
+        panel.kind = PanelKind::Ssh;
+        panel.ssh_connection = Some(SshConnection {
+            host: "203.0.113.10".to_string(),
+            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1")),
+            ..SshConnection::default()
+        });
+        let kept = panel.restart_replay_bytes();
+        assert!(
+            String::from_utf8_lossy(&kept).contains("kept-line"),
+            "a machine terminal that attaches a session keeps its screen: {kept:?}"
+        );
+
+        panel.ssh_connection = Some(SshConnection {
+            host: "203.0.113.10".to_string(),
+            remote_command: Some("bash -l".to_string()),
+            ..SshConnection::default()
+        });
+        assert!(
+            panel.restart_replay_bytes().is_empty(),
+            "a remote shell without a session starts with an empty screen"
+        );
+    }
+
+    #[test]
     fn a_waiting_terminal_says_that_it_reconnects_and_a_closed_one_does_not() {
         let mut panel = test_panel("Pi", "", false);
-        panel.show_reconnecting();
+        panel.show_reconnecting(1);
         assert_eq!(panel.ssh_status(), None, "a panel of this computer shows no link");
 
         panel.kind = PanelKind::Ssh;
-        panel.show_reconnecting();
+        panel.show_reconnecting(1);
         assert_eq!(panel.ssh_status(), Some(SshConnectionStatus::Reconnecting));
         panel.show_disconnected();
         assert_eq!(panel.ssh_status(), Some(SshConnectionStatus::Disconnected));
+    }
+
+    #[test]
+    fn the_mark_of_a_reconnect_carries_the_attempt_that_it_reached() {
+        let mut panel = test_panel("Pi", "", true);
+        panel.kind = PanelKind::Ssh;
+
+        for attempt in 1..=3 {
+            panel.show_reconnecting(attempt);
+            assert_eq!(panel.ssh_status_attempt(), Some(attempt), "attempt {attempt}");
+        }
+
+        panel.show_disconnected();
+        assert_eq!(
+            panel.ssh_status_attempt(),
+            None,
+            "a panel that stopped trying drops the attempt"
+        );
     }
 
     #[test]

@@ -25,6 +25,8 @@ pub(super) struct PanelChrome<'a> {
     pub close_hovered: bool,
     pub workspace_accent: Option<Color32>,
     pub ssh_status: Option<SshConnectionStatus>,
+    /// The attempt that a reconnect of this panel reached, so its mark names it.
+    pub ssh_status_attempt: Option<u32>,
     /// Current agent session id; when `Some` a short-id badge is painted in
     /// the titlebar so the panel can be matched against rebind/resume lists.
     pub session_id: Option<&'a str>,
@@ -236,6 +238,7 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
             chrome.controls_anchor(),
             chrome.scrollback_limit > 0,
             status,
+            chrome.ssh_status_attempt,
         );
     }
 
@@ -355,12 +358,32 @@ fn badges_left_boundary(chrome: &PanelChrome<'_>) -> f32 {
     if chrome.scrollback_limit > 0 {
         right = panel_history_badge_rect(chrome.titlebar_rect, anchor).min.x - 8.0;
     }
-    if chrome.ssh_status.is_some() {
-        // SSH badge sits left of the history meter; reserve ~90px.
-        right -= 90.0;
+    if let Some(status) = chrome.ssh_status {
+        // SSH badge sits left of the history meter. A reconnect that names its
+        // attempt is wider than the plain words of a link state.
+        right -= if ssh_mark(status, chrome.ssh_status_attempt).len() > SSH_BADGE_WORDS.len() {
+            SSH_BADGE_RESERVE_WITH_ATTEMPT
+        } else {
+            SSH_BADGE_RESERVE
+        };
     }
     right
 }
+
+/// The mark of a link state, which names the attempt of a reconnect from the
+/// third one on.
+fn ssh_mark(status: SshConnectionStatus, attempt: Option<u32>) -> String {
+    attempt
+        .and_then(SshConnectionStatus::reconnecting_label)
+        .unwrap_or_else(|| status.label().to_owned())
+}
+
+/// The room a titlebar keeps for the plain mark of a link state.
+const SSH_BADGE_RESERVE: f32 = 90.0;
+/// The room a titlebar keeps for a reconnect mark that names its attempt.
+const SSH_BADGE_RESERVE_WITH_ATTEMPT: f32 = 112.0;
+/// The plain words of a reconnect mark, which a mark with an attempt adds to.
+const SSH_BADGE_WORDS: &str = "Reconnecting";
 
 /// Three-dot "working" indicator mirroring the agent TUI's own busy
 /// spinner, pulsing left-to-right while the agent executes.
@@ -543,19 +566,17 @@ fn paint_ssh_status_badge(
     close_rect: Rect,
     has_history_meter: bool,
     status: SshConnectionStatus,
+    attempt: Option<u32>,
 ) {
     let color = ssh_status_color(status);
-    let badge_text = status.label();
+    let badge_text = ssh_mark(status, attempt);
     let font = egui::FontId::proportional(10.0);
     let badge_right = if has_history_meter {
         panel_history_badge_rect(titlebar_rect, close_rect).min.x - 6.0
     } else {
         close_rect.min.x - 8.0
     };
-    let text_width = painter
-        .layout_no_wrap(badge_text.to_string(), font.clone(), color)
-        .size()
-        .x;
+    let text_width = painter.layout_no_wrap(badge_text.clone(), font.clone(), color).size().x;
     let badge_width = text_width + 16.0;
     let badge_height = 18.0;
     let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
@@ -665,7 +686,7 @@ mod tests {
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
         WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_status_color,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_mark, ssh_status_color,
         title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
@@ -693,6 +714,7 @@ mod tests {
             close_hovered: false,
             workspace_accent: Some(Color32::from_rgb(137, 180, 250)),
             ssh_status: None,
+            ssh_status_attempt: None,
             session_id: None,
             card: None,
         }
@@ -713,6 +735,25 @@ mod tests {
         chrome.titlebar_rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(right, 54.0));
         chrome.close_rect = Rect::from_center_size(Pos2::new(right - 18.0, 37.0), egui::Vec2::splat(16.0));
         chrome
+    }
+
+    #[test]
+    fn the_mark_of_a_reconnect_names_its_attempt_from_the_third_one() {
+        use horizon_core::SshConnectionStatus;
+
+        assert_eq!(ssh_mark(SshConnectionStatus::Reconnecting, Some(1)), "Reconnecting");
+        assert_eq!(ssh_mark(SshConnectionStatus::Reconnecting, Some(2)), "Reconnecting");
+        assert_eq!(ssh_mark(SshConnectionStatus::Reconnecting, Some(3)), "Reconnecting (3)");
+        assert_eq!(
+            ssh_mark(SshConnectionStatus::Reconnecting, None),
+            "Reconnecting",
+            "a wait without an attempt keeps the plain word"
+        );
+        assert_eq!(
+            ssh_mark(SshConnectionStatus::Connecting, None),
+            "Connecting...",
+            "the other marks keep their words"
+        );
     }
 
     #[test]

@@ -12,6 +12,20 @@ use super::spawn::{
 use super::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, Panel, PanelKind};
 
 impl Panel {
+    /// The screen that a restart of this panel keeps, as the output that draws
+    /// it again in the new terminal.
+    ///
+    /// Only a terminal that attaches a tmux session on a machine keeps its
+    /// screen: the session still holds the work, so the person reads the last
+    /// screen of it until the new connection draws. Every other panel starts
+    /// with the empty screen that its own new output fills.
+    pub(super) fn restart_replay_bytes(&self) -> Vec<u8> {
+        if !self.attaches_a_tmux_session() {
+            return Vec::new();
+        }
+        self.terminal().map(Terminal::screen_replay_bytes).unwrap_or_default()
+    }
+
     /// The content a board panel restarts with: the usage dashboard starts empty.
     /// `None` for any other panel.
     fn fresh_board_content(&self) -> Option<PanelContent> {
@@ -62,6 +76,7 @@ impl Panel {
 
         let rows = terminal.rows();
         let cols = terminal.cols();
+        let replay_bytes = self.restart_replay_bytes();
 
         if let Some(failure) = self.working_directory_failure() {
             self.show_working_directory_failure(&failure)?;
@@ -124,7 +139,7 @@ impl Panel {
             cell_height: DEFAULT_CELL_HEIGHT,
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
-            replay_bytes: Vec::new(),
+            replay_bytes,
             env,
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);
@@ -137,6 +152,7 @@ impl Panel {
         self.ssh_connected_at_millis = None;
         self.ssh_exit_recorded = false;
         self.ssh_end = None;
+        self.ssh_reconnect_attempt = 0;
         self.ssh_status = if self.kind == PanelKind::Ssh {
             Some(SshConnectionStatus::Connecting)
         } else {

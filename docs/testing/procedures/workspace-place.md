@@ -316,48 +316,58 @@ reported.
    Result: The mark of the panel reads `Reconnecting` in the warning colour, the
    body keeps the last screen, and the dot of the machine row is filled in the
    same colour. The mark changes to `Connecting...` while an attempt runs, and
-   back to `Reconnecting` when that attempt fails.
+   back to `Reconnecting` when that attempt fails. The body holds `lost-link`
+   while each of those attempts runs, until the bytes of a connection draw over
+   it. From the third attempt on, the mark names the attempt, for example
+   `Reconnecting (3)`, in the same colour.
 
-4. Wait 30 seconds without a key press.
+4. Keep the link cut for four attempts, and read the mark between them.
+
+   Result: The mark counts the attempts from the third one on, as in
+   `Reconnecting (3)`, in the same warning colour. The body still holds
+   `lost-link` after each failed attempt.
+
+5. Wait 30 seconds without a key press.
 
    Result: The panel tries again by itself, and Horizon shows no dialog and no
    error line.
 
-5. Press one key in the panel while the mark reads `Reconnecting`.
+6. Press one key in the panel while the mark reads `Reconnecting`.
 
    Result: The panel shows `Connecting...` at once, before the delay that was
    due, and the next loss of the link waits 3 seconds again.
 
-6. Restore the link: start the loopback SSH server again, or remove the firewall
+7. Restore the link: start the loopback SSH server again, or remove the firewall
    rule of step 2.
 
    Result: Within 30 seconds the mark reads `Connected` in green, and the last
-   output is still `lost-link`. No output of the session was lost.
+   output is still `lost-link`. No output of the session was lost, and the body
+   never went blank while the attempts ran.
 
-7. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
+8. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
    ls` in the second terminal.
 
    Result: The command runs on the machine, and the session of the panel is the
    one before the cut. No second session exists.
 
-8. Type `exit` in the shell of the panel.
+9. Type `exit` in the shell of the panel.
 
    Result: The tmux session ends, the mark reads `Disconnected` in red, and it
    stays `Disconnected` for at least 30 seconds. Horizon does not start the
    command again, because a new `tmux new-session -A` would make an empty
    session without the person.
 
-9. Press the shortcut for a new terminal in the workspace, run one command in
-   it, and cut the link again as in step 2. When the mark reads `Reconnecting`,
-   close the panel with its titlebar close button.
+10. Press the shortcut for a new terminal in the workspace, run one command in
+    it, and cut the link again as in step 2. When the mark reads
+    `Reconnecting`, close the panel with its titlebar close button.
 
-   Result: The panel goes away, Horizon shows no error dialog, and Horizon
-   starts no further attempt.
+    Result: The panel goes away, Horizon shows no error dialog, and Horizon
+    starts no further attempt.
 
-10. Restore the link as in step 6.
+11. Restore the link as in step 7.
 
-   Result: The machine answers again, and the `tmux ls` command of step 7 lists
-   no session of the two panels that ended.
+    Result: The machine answers again, and the `tmux ls` command of step 8 lists
+    no session of the two panels that ended.
 
 ## 7. Known behaviour
 
@@ -393,7 +403,9 @@ gone.
 
 A panel whose saved command attaches a tmux session runs its command again when
 ssh ends with its own connection-failure status 255: after 3, 6, 12 and 24
-seconds, and then every 30 seconds, with no limit. The delays start again after
+seconds, and then every 30 seconds, with no limit. The body keeps the screen of
+the session while the attempts run, because the session still holds that work,
+and the mark names the attempt from the third one on. The delays start again after
 a connection that lasted 10 seconds, and a key press in the panel or the
 `Reconnect` action connects at once and starts the delays again. Any other exit
 status, a plain SSH panel of the remote hosts chooser, an agent panel and a

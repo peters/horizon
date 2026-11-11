@@ -460,6 +460,7 @@ fn build_terminal_panel(
         machine,
         machine_session,
         ssh_status,
+        ssh_reconnect_attempt: 0,
         ssh_connected_at_millis: None,
         ssh_exit_recorded: false,
         ssh_end: None,

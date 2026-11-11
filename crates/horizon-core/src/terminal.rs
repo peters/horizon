@@ -3,6 +3,7 @@ mod events;
 mod lifecycle;
 mod replay;
 mod resize;
+mod screen_replay;
 mod selection;
 mod support;
 
