@@ -657,6 +657,57 @@ fn three_cards_created_in_a_row_cover_no_panel() {
     );
 }
 
+#[test]
+fn a_click_on_empty_canvas_keeps_its_exact_point() {
+    let mut board = Board::new();
+    let (workspace, _) = off_grid_workspace(&mut board);
+    let point = [1660.0, 620.0];
+
+    assert_eq!(
+        board.panel_place_at(workspace, point, DEFAULT_PANEL_SIZE),
+        point,
+        "a place that covers no panel is the place the person clicked"
+    );
+}
+
+#[test]
+fn a_click_that_would_cover_a_panel_takes_the_nearest_free_place() {
+    let mut board = Board::new();
+    let (workspace, _) = off_grid_workspace(&mut board);
+    let covered = board
+        .workspace(workspace)
+        .expect("workspace")
+        .panels
+        .first()
+        .copied()
+        .expect("a panel of the workspace");
+    let corner = board.panel(covered).expect("the panel").layout.position;
+
+    let place = board.panel_place_at(workspace, corner, DEFAULT_PANEL_SIZE);
+
+    assert_ne!(place, corner, "a place on top of a panel is not a place");
+    let candidate = [
+        place[0],
+        place[1],
+        place[0] + DEFAULT_PANEL_SIZE[0],
+        place[1] + DEFAULT_PANEL_SIZE[1],
+    ];
+    let overlaps = board
+        .workspace(workspace)
+        .expect("workspace")
+        .panels
+        .iter()
+        .filter_map(|id| board.panel(*id))
+        .any(|panel| {
+            let (position, size) = (panel.layout.position, panel.layout.size);
+            rects_overlap(
+                candidate,
+                [position[0], position[1], position[0] + size[0], position[1] + size[1]],
+            )
+        });
+    assert!(!overlaps, "the place covers no panel of the workspace: {place:?}");
+}
+
 /// The rectangle `[min_x, min_y, max_x, max_y]` of a panel.
 fn panel_bounds(board: &Board, id: PanelId) -> [f32; 4] {
     let panel = board.panel(id).expect("panel");

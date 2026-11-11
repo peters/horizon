@@ -30,11 +30,20 @@ pub(super) fn preset_picker_heading(target_workspace: Option<WorkspaceId>) -> &'
     }
 }
 
+/// The one line that a picker says above its agents while the workspace is on a
+/// machine: an agent of such a workspace still starts on this computer, and only
+/// its terminals run on the machine. Built when the menu opens, never per frame.
+pub(in crate::app) fn placed_agent_hint(machine: Option<&str>) -> Option<String> {
+    let machine = machine?;
+    Some(format!("Agents start on this computer. Terminals start on {machine}."))
+}
+
 pub(super) fn render_grouped_preset_rows(
     ui: &mut Ui,
     target_workspace: Option<WorkspaceId>,
     canvas_pos: [f32; 2],
     presets: &[PresetConfig],
+    agent_hint: Option<&str>,
     unavailable_reason: impl Fn(PanelKind) -> Option<&'static str>,
 ) -> Option<PresetPickerAction> {
     let mut selected_action = None;
@@ -52,6 +61,12 @@ pub(super) fn render_grouped_preset_rows(
                 if any_group_rendered {
                     ui.add_space(2.0);
                     ui.separator();
+                    ui.add_space(2.0);
+                }
+                if category == PresetCategory::Agent
+                    && let Some(hint) = agent_hint
+                {
+                    ui.add(egui::Label::new(egui::RichText::new(hint).size(11.0).color(theme::FG_DIM())).wrap());
                     ui.add_space(2.0);
                 }
                 if category != PresetCategory::Shell {
@@ -370,6 +385,81 @@ mod tests {
         }
     }
 
+    /// A card of presets of every kind, as the picker groups them.
+    fn presets_of_every_kind() -> Vec<PresetConfig> {
+        let mut shell = shell_preset_with_stale_ssh_metadata();
+        shell.ssh_connection = None;
+        let mut agent = shell.clone();
+        agent.name = "Codex".into();
+        agent.kind = PanelKind::Codex;
+        vec![shell, agent]
+    }
+
+    fn painted_lines(agent_hint: Option<&str>) -> Vec<String> {
+        use crate::test_egui::DiscardTextures;
+        use egui::{Rect, Vec2};
+        let ctx = egui::Context::default();
+        let presets = presets_of_every_kind();
+        let workspace = horizon_core::Board::new().create_workspace("Fixture");
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(640.0, 480.0))),
+                ..Default::default()
+            },
+            |ui| {
+                super::render_grouped_preset_rows(ui, Some(workspace), [0.0, 0.0], &presets, agent_hint, |_| None);
+            },
+        )
+        .discard_textures()
+        .shapes
+        .into_iter()
+        .filter_map(|shape| match shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+            _ => None,
+        })
+        .collect()
+    }
+
+    #[test]
+    fn the_line_above_the_agents_names_the_machine_of_their_workspace() {
+        assert_eq!(super::placed_agent_hint(None), None, "this computer adds no line");
+        assert_eq!(
+            super::placed_agent_hint(Some("build-1")).as_deref(),
+            Some("Agents start on this computer. Terminals start on build-1.")
+        );
+    }
+
+    #[test]
+    fn the_picker_draws_the_line_above_the_agent_entries_only() {
+        let hint = "Agents start on this computer. Terminals start on build-1.";
+        let with_hint = painted_lines(Some(hint));
+        assert!(with_hint.iter().any(|text| text == hint), "{with_hint:?}");
+        let agents = with_hint
+            .iter()
+            .position(|text| text == "Agents")
+            .expect("the agent group has its caption");
+        let line = with_hint
+            .iter()
+            .position(|text| text == hint)
+            .expect("the line is drawn");
+        assert!(line < agents, "the line stands above the agent entries: {with_hint:?}");
+        let shell = with_hint
+            .iter()
+            .position(|text| text == "Shell")
+            .expect("the shell row is drawn");
+        assert!(
+            shell < line,
+            "the line belongs to the agents, not the shell: {with_hint:?}"
+        );
+
+        let without = painted_lines(None);
+        assert!(
+            !without
+                .iter()
+                .any(|text| text.contains("Agents start on this computer"))
+        );
+    }
+
     #[test]
     fn preset_category_ignores_stale_ssh_metadata_for_non_ssh_presets() {
         assert!(matches!(
@@ -411,6 +501,7 @@ mod tests {
                             Some(workspace),
                             [0.0, 0.0],
                             std::slice::from_ref(&preset),
+                            None,
                             |_| Some("Agent is disabled by this workspace preset"),
                         );
                     },

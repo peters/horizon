@@ -412,6 +412,37 @@ impl Board {
         Some(panel_rect(panel.layout.position, panel.layout.size))
     }
 
+    /// The place a new panel of `size` takes when a person points at
+    /// `position` on the canvas, such as a double-click beside a card.
+    ///
+    /// The point wins while the panel fits there: a panel that a person places
+    /// with a click stands exactly where they clicked. A point that would cover
+    /// a panel of the workspace takes the nearest free place instead, by the
+    /// same rule that a panel of an agent takes, so a new terminal never lands on
+    /// top of a panel that is already there.
+    #[must_use]
+    pub fn panel_place_at(&self, workspace: WorkspaceId, position: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+        let Some(workspace) = self.workspace(workspace) else {
+            return position;
+        };
+        let occupied: Vec<[f32; 4]> = workspace
+            .panels
+            .iter()
+            .filter_map(|id| self.panel(*id))
+            .map(|panel| panel_rect(panel.layout.position, panel.layout.size))
+            .collect();
+        if covers_no_panel(position, size, &occupied) {
+            return position;
+        }
+        let aim = panel_rect(position, size);
+        free_tiles(workspace.position, size, &occupied)
+            .into_iter()
+            .min_by(|left, right| {
+                center_distance(aim, panel_rect(*left, size)).total_cmp(&center_distance(aim, panel_rect(*right, size)))
+            })
+            .unwrap_or(position)
+    }
+
     /// The tile a new panel of `size` fits in without covering another panel
     /// of the workspace.
     ///

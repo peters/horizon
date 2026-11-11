@@ -13,10 +13,12 @@ owner: peters
 ## 1. Purpose
 
 This procedure tests the place of a workspace. It proves that the person puts a
-workspace on a machine, that each new terminal of that workspace runs on the
-machine in its own tmux session, that the work in it survives a restart of
-Horizon, that a close ends the session, that two workspaces on one machine do
-not collide, and that a forgotten machine is reported.
+workspace on a machine, that the row of that workspace says where it lives, that
+the canvas picker says where its agents and its terminals start, that each new
+terminal of that workspace runs on the machine in its own tmux session, that the
+work in it survives a restart of Horizon, that a close ends the session, that two
+workspaces on one machine do not collide, and that a forgotten machine is
+reported.
 
 ## 2. Applicability
 
@@ -90,20 +92,49 @@ not collide, and that a forgotten machine is reported.
 1. Right-click the row of the workspace and click `build-1` in the `Place`
    section.
 
-   Result: The row shows `build-1` after the workspace name, in a dim style. The
-   `Place` section now shows the check mark in front of `build-1` and no check
-   mark in front of `This computer`.
+   Result: The second line of the row starts with `on build-1`, in the dim style
+   of the status text, and a middle dot and the status text follow it when the
+   workspace has a status text. The name line is unchanged. The `Place` section
+   now shows the check mark in front of `build-1` and no check mark in front of
+   `This computer`.
 
-2. Move the pointer over the name in the row.
+2. Rename the workspace to a long name, then look at its row.
 
-   Result: A hover text shows `build-1`.
+   Result: The name is cut with an ellipsis at the end of the name line, and the
+   second line still starts with `on build-1`: the machine is never cut away.
 
 3. Press the shortcut for a new terminal.
 
    Result: A terminal panel appears, and it connects to `127.0.0.1`. Its titlebar
    shows the chip `on build-1`. The panel is not a local shell prompt.
 
-### 6.3 P2 — Type in the terminal of the machine, and resize it
+### 6.3 P2 — The canvas picker says where the agents of a placed workspace start
+
+1. Double-click the empty canvas inside the workspace on the machine.
+
+   Result: The preset picker opens with the heading `New Terminal`. Above the
+   `Agents` header one dim line says `Agents start on this computer. Terminals
+   start on build-1.`
+
+2. Close the picker. Double-click empty canvas that fits a new panel, and choose
+   a shell.
+
+   Result: The new panel stands exactly at the point that was clicked.
+
+3. Close that panel. Place the pointer on the lower-left corner of an existing
+   panel of the workspace, so that a new panel at that point would cover it, and
+   double-click there. Choose a shell.
+
+   Result: The new panel covers no panel: Horizon gives it the nearest free place
+   instead of the point of the click.
+
+4. Double-click the canvas inside the workspace on this computer, whose place is
+   `This computer`.
+
+   Result: No line about a machine stands above the `Agents` header of that
+   picker.
+
+### 6.4 P3 — Type in the terminal of the machine, and resize it
 
 1. In the new terminal, run `echo $SSH_CONNECTION`.
 
@@ -129,7 +160,7 @@ not collide, and that a forgotten machine is reported.
    at most one. A second client on the same session could shrink the view; this
    procedure uses one client, so the numbers follow the panel.
 
-### 6.4 P3 — Quit Horizon and start it again
+### 6.5 P4 — Quit Horizon and start it again
 
 1. Run `printf 'place-%s\n' proof` in the terminal of the machine, so the last
    line of the screen is known.
@@ -152,12 +183,12 @@ not collide, and that a forgotten machine is reported.
 
    Result: Exactly one session that starts with `hz-` is in the list.
 
-### 6.5 P4 — Two workspaces on one machine do not collide
+### 6.6 P5 — Two workspaces on one machine do not collide
 
 1. Make a second workspace with the sidebar `New` button, then right-click its
    row and click `build-1` in the `Place` section.
 
-   Result: The second row shows `build-1` after its name.
+   Result: The second line of the second row starts with `on build-1`.
 
 2. Press the shortcut for a new terminal, in the second workspace.
 
@@ -174,7 +205,7 @@ not collide, and that a forgotten machine is reported.
    Result: Two sessions that start with `hz-` are in the list, and the part
    after `hz-` differs.
 
-### 6.6 P5 — A close ends the session
+### 6.7 P6 — A close ends the session
 
 1. In the second terminal, note the name of the session of the second panel from
    `tmux ls`.
@@ -212,7 +243,7 @@ not collide, and that a forgotten machine is reported.
 
    Result: The panel goes away, and its session is not in `tmux ls`.
 
-### 6.7 P6 — A forgotten machine
+### 6.8 P7 — A forgotten machine
 
 1. Right-click the row of the machine `build-1` in the `Machines` section, click
    `Forget this machine`, and confirm.
@@ -232,26 +263,26 @@ not collide, and that a forgotten machine is reported.
 
 4. Click `This computer` in the `Place` section of the workspace.
 
-   Result: The row shows no machine after the name.
+   Result: The second line of the row no longer starts with `on build-1`.
 
 5. Press the shortcut for a new terminal.
 
    Result: A terminal panel with a local shell prompt appears, and it shows no
    chip.
 
-### 6.8 P7 — The panels that are open stay where they are
+### 6.9 P8 — The panels that are open stay where they are
 
-1. Put the first workspace on the machine again, with the record that task P6
+1. Put the first workspace on the machine again, with the record that task P7
    needs. Register the machine again with `machine_set` as in setup step 2, then
    click `build-1` in the `Place` section.
 
-   Result: The row shows `build-1` again.
+   Result: The second line of the row starts with `on build-1` again.
 
 2. Make one terminal in the workspace, then click `This computer` in the `Place`
    section.
 
-   Result: The panel with the chip `on build-1` stays open. The row shows no
-   machine.
+   Result: The panel with the chip `on build-1` stays open. The second line of the
+   row holds the status text alone, with no `on` prefix.
 
 3. Press the shortcut for a new terminal.
 
@@ -301,7 +332,12 @@ before the workspace had a place.
 
 ## 8. Pass criteria
 
-- A placed workspace shows the machine in its row, and its menu marks the place.
+- A placed workspace starts the second line of its row with `on <machine>`, and a
+  long name cannot cut the machine away. Its menu marks the place.
+- The canvas picker says, above its agent entries, where the agents and the
+  terminals of a placed workspace start.
+- A panel that a person creates at a click on empty canvas keeps that point, and
+  a click that would cover a panel gives the new panel the nearest free place.
 - Each new terminal of a placed workspace runs on the machine, in its own
   session, with the chip `on <machine>`.
 - A restart of Horizon attaches the panel to the same session, and the output of
@@ -318,7 +354,7 @@ before the workspace had a place.
 
    Result: The fixture processes stop.
 
-2. In the second terminal, remove the file of task P2 if the loopback server
+2. In the second terminal, remove the file of task P3 if the loopback server
    shares the file system of this computer: `rm -f /var/tmp/hz-place-proof`.
 
    Result: The file is gone.

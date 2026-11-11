@@ -1,5 +1,8 @@
 //! The workspace rows of the sidebar's workspace list: a tile in the workspace
 //! color with its initials and a status badge, the name and one status line.
+//!
+//! The status line names the place of the workspace first, `on <machine>`, so a
+//! long name cannot cut the machine off the row.
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use horizon_core::workspace_list::Dot;
 
@@ -142,7 +145,6 @@ pub(super) fn paint_workspace_row_contents(
     if name_elided {
         hover_text(ui, name_rect, ("sidebar_ws_name", workspace.id.0), &workspace.name);
     }
-    paint_place_label(ui, workspace, name_rect, name_right);
     if let Some(line) = line {
         let galley = text::line(
             ui,
@@ -157,31 +159,6 @@ pub(super) fn paint_workspace_row_contents(
         hover_text(ui, line_rect, ("sidebar_ws_line", workspace.id.0), &line);
     }
     tile_response
-}
-
-/// The gap between a workspace name and the machine that it lives on.
-const PLACE_GAP: f32 = 6.0;
-/// The least room that the machine label keeps before it is left out.
-const MIN_PLACE_WIDTH: f32 = 28.0;
-
-/// Paints the machine of a workspace's place after its name, in a low-emphasis
-/// style. A workspace on this computer paints nothing. The label borrows the
-/// name of the record, so a frame that does not change builds no string.
-fn paint_place_label(ui: &egui::Ui, workspace: &WorkspaceSidebarEntry, name: Rect, name_right: f32) {
-    let Some(machine) = workspace.place.machine() else {
-        return;
-    };
-    let left = name.max.x + PLACE_GAP;
-    let available = name_right - PLACE_GAP - left;
-    if available < MIN_PLACE_WIDTH {
-        return;
-    }
-    let galley = text::line(ui, machine, 11.0, text::REGULAR, text::secondary(), available);
-    let rect = Rect::from_min_size(pos2(left, name.center().y - galley.size().y / 2.0), galley.size());
-    ui.painter().galley(rect.min, galley, text::secondary());
-    // The label is the name of the record, so a frame that changes nothing here
-    // borrows it instead of building a line of text.
-    hover_text(ui, rect, ("sidebar_ws_place", workspace.id.0), machine);
 }
 
 /// Shows `text` while the pointer is on `rect`, and tells it to a screen reader.

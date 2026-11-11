@@ -314,7 +314,7 @@ fn the_snapshot_labels_only_the_panel_rows_that_show() {
 }
 
 #[test]
-fn a_workspace_that_lives_on_a_machine_says_so_after_its_name() {
+fn a_workspace_that_lives_on_a_machine_says_so_on_its_status_line() {
     use crate::test_egui::DiscardTextures;
     use egui::epaint::Shape;
 
@@ -349,14 +349,13 @@ fn a_workspace_that_lives_on_a_machine_says_so_after_its_name() {
         .iter()
         .find(|(text, _)| text == "Build")
         .expect("the name of the workspace");
-    let machine = painted
+    let line = painted
         .iter()
-        .find(|(text, _)| text == "build-1")
-        .expect("the machine of the place");
-    assert!(machine.1.min.x > name.1.max.x, "the machine follows the name");
+        .find(|(text, _)| text == "on build-1")
+        .expect("the status line of the placed workspace names its machine");
     assert!(
-        (machine.1.center().y - name.1.center().y).abs() < 2.0,
-        "the machine stands on the line of the name"
+        line.1.min.y >= name.1.max.y,
+        "the machine stands on the status line under the name, not after the name"
     );
     let entry = |app: &crate::app::HorizonApp, id| {
         app.sidebar_workspace_data()

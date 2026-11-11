@@ -8,7 +8,7 @@ use crate::dir_picker::{DirPicker, DirPickerAction, DirPickerPurpose};
 use crate::theme;
 
 use super::PresetPickerAction;
-use super::support::{preset_panel_options, preset_picker_heading, render_grouped_preset_rows};
+use super::support::{placed_agent_hint, preset_panel_options, preset_picker_heading, render_grouped_preset_rows};
 
 impl HorizonApp {
     pub(in crate::app) fn preset_picker_rect(&self, ctx: &Context) -> Option<Rect> {
@@ -127,6 +127,11 @@ impl HorizonApp {
         canvas_pos: [f32; 2],
     ) -> (Rect, Option<PresetPickerAction>) {
         let heading = preset_picker_heading(target_workspace);
+        // The hint is built here, when the menu opens, and not on a frame that
+        // draws it: a workspace on this computer adds no line at all.
+        let agent_hint = target_workspace
+            .and_then(|workspace| self.board.workspace(workspace))
+            .and_then(|workspace| placed_agent_hint(workspace.place.machine()));
         let unavailable_reason = |kind| {
             let _ = kind;
             None
@@ -155,6 +160,7 @@ impl HorizonApp {
                                     target_workspace,
                                     canvas_pos,
                                     &self.presets,
+                                    agent_hint.as_deref(),
                                     unavailable_reason,
                                 )
                             })

@@ -9,7 +9,7 @@ pub(in crate::app) mod support;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use horizon_core::{PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
+use horizon_core::{DEFAULT_PANEL_SIZE, PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
 
 use self::support::detached_workspace_ids;
 use super::{DetachedWorkspaceViewportState, HorizonApp};
@@ -20,6 +20,13 @@ fn workspace_cwd(board: &horizon_core::Board, workspace_id: WorkspaceId) -> Opti
         .and_then(|workspace| workspace.cwd.clone())
 }
 
+/// The place a panel takes when a person picks it on the canvas at
+/// `canvas_pos`, such as a double-click beside a card.
+///
+/// A workspace that a preset arranges owns the place of every panel in it, so
+/// the point only decides a free workspace. A point that would cover a panel
+/// of the workspace takes the nearest free place instead, by the rule that a
+/// panel of an agent takes: a click on empty space keeps its exact point.
 fn add_panel_position(
     board: &horizon_core::Board,
     workspace_id: WorkspaceId,
@@ -32,7 +39,7 @@ fn add_panel_position(
     {
         None
     } else {
-        canvas_pos
+        canvas_pos.map(|position| board.panel_place_at(workspace_id, position, DEFAULT_PANEL_SIZE))
     }
 }
 
@@ -121,7 +128,7 @@ mod tests {
     use std::path::PathBuf;
 
     use egui::{Color32, Pos2, Rect};
-    use horizon_core::{Board, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig};
+    use horizon_core::{Board, DEFAULT_PANEL_SIZE, PanelId, PanelKind, PanelOptions, PresetConfig, WindowConfig};
 
     use super::layout::{
         canvas_rect_for_layout, estimated_settings_bar_rect, estimated_settings_panel_rect,
@@ -179,6 +186,32 @@ mod tests {
         let workspace_id = board.create_workspace("alpha");
 
         assert_eq!(add_panel_position(&board, workspace_id, Some([320.0, 180.0])), None);
+    }
+
+    #[test]
+    fn add_panel_position_moves_a_click_that_would_cover_a_panel() {
+        let mut board = Board::new();
+        let workspace_id = board.create_workspace("alpha");
+        assert!(board.clear_workspace_layout(workspace_id));
+        let panel = board
+            .create_panel(
+                PanelOptions {
+                    position: Some([320.0, 180.0]),
+                    ..PanelOptions::default()
+                },
+                workspace_id,
+            )
+            .expect("the panel spawns");
+        let covered = board.panel(panel).expect("the panel").layout.position;
+
+        let place = add_panel_position(&board, workspace_id, Some(covered)).expect("a place on the canvas");
+
+        assert_ne!(place, covered, "a new panel never lands on top of a panel");
+        let position = board.panel(panel).expect("the panel").layout.position;
+        assert!(
+            place[0] >= position[0] + DEFAULT_PANEL_SIZE[0] || place[1] >= position[1] + DEFAULT_PANEL_SIZE[1],
+            "the place stands beside the panel: {place:?} against {position:?}"
+        );
     }
 
     #[test]

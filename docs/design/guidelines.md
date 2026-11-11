@@ -515,6 +515,11 @@ There are four levels, from back to front:
 - Section headers 10.5 `FG_DIM`. Key hints at the bottom are 10 monospace in
   `BG_ELEVATED` chips (radius 4, margin 5 x 2, 1 px `BORDER_SUBTLE` alpha 160)
   followed by a 10.5 `FG_DIM` description.
+- Canvas preset picker, above its agent entries: when the workspace that the
+  picker makes a terminal in is on a machine, one line in 11 `FG_DIM`, 2 above
+  the `Agents` header: `Agents start on this computer. Terminals start on
+  <machine>.` A workspace on this computer adds no line. The line is built when
+  the menu opens, not on a frame that draws it.
 
 ### Search overlay
 
@@ -740,14 +745,13 @@ the rules from the modules beside it.
   rows for ten seconds. The row menu holds `Focus` (or `Connect` when no
   terminal is open) and `Forget this machine`, whose confirm line is the
   menu's own text.
-- A workspace that lives on a machine shows the machine name in the workspace
-  row. The label is Inter 11 weight 400 in `FG_SOFT` blended 0.14 toward
-  `BG_ELEVATED` (the same low-emphasis color as the status line), 6 px right of
-  the name on the name's line, cut with an ellipsis when the badge or the count
-  needs the room, and left out when less than 28 px remain. A workspace on this
-  computer shows no label. The label is the name of the machine record, so an
-  idle frame builds no string for it; moving the pointer over it shows the name
-  in the hover text.
+- A workspace that lives on a machine says so on the second line of its row,
+  before the status text: `on <machine> · <status text>`, or `on <machine>`
+  when the workspace has no status text yet. The name line is unchanged, so a
+  long name cannot cut the machine off the row. The line is the same low-emphasis
+  color and Inter 12 weight 400 as the status line, is cached with the other row
+  texts, and is read again at once when the place of the workspace changes. A
+  workspace on this computer shows the status text alone, with no prefix.
 - The workspace menu holds a `Place` section, between `Arrange Panels` and
   `Move to Main Window`/`Open in New Window`: the group label `Place` in 11
   `FG_DIM` with the hint "A new terminal of this workspace opens there. The

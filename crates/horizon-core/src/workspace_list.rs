@@ -33,10 +33,33 @@ impl Row {
     /// The row of a workspace that runs on this computer.
     #[must_use]
     pub fn local(working: bool, line: Option<&str>) -> Self {
+        Self::placed(working, line, None)
+    }
+
+    /// The row of a workspace that runs on this computer or on a machine.
+    ///
+    /// Its second line starts with the place, because a terminal of a workspace
+    /// on a machine runs there and not here. The line is the one that the status
+    /// text underscores; an empty status text leaves the place alone on it.
+    #[must_use]
+    pub fn placed(working: bool, line: Option<&str>, machine: Option<&str>) -> Self {
         Self {
             dot: if working { Dot::Working } else { Dot::Idle },
-            line: line.unwrap_or_default().to_owned(),
+            line: second_line(line.unwrap_or_default(), machine),
         }
+    }
+}
+
+/// What the second line of a row says: `on <machine>` and the status text of a
+/// workspace on a machine, or the status text alone on this computer.
+///
+/// The place comes first, so a long name cannot cut it off the row.
+#[must_use]
+fn second_line(line: &str, machine: Option<&str>) -> String {
+    match machine {
+        Some(machine) if line.is_empty() => format!("on {machine}"),
+        Some(machine) => format!("on {machine} \u{00B7} {line}"),
+        None => line.to_owned(),
     }
 }
 
@@ -178,6 +201,25 @@ pub fn panel_line(panel: &Panel) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_of_a_workspace_on_a_machine_starts_with_the_place() {
+        assert_eq!(
+            Row::placed(true, Some("Edit 2 files (+41 -7)"), None).line,
+            "Edit 2 files (+41 -7)"
+        );
+        assert_eq!(
+            Row::placed(true, Some("Edit 2 files (+41 -7)"), Some("build-1")).line,
+            "on build-1 \u{00B7} Edit 2 files (+41 -7)"
+        );
+        assert_eq!(
+            Row::placed(false, None, Some("build-1")).line,
+            "on build-1",
+            "a row without a status text still says where the workspace lives"
+        );
+        assert_eq!(Row::placed(false, None, None).line, "");
+        assert_eq!(Row::local(true, Some("a line")).line, "a line");
+    }
 
     #[test]
     fn the_status_line_skips_frames_prompts_and_footer_hints() {

@@ -16,9 +16,10 @@ const REFRESH: Duration = Duration::from_secs(1);
 #[derive(Default)]
 pub(in crate::app) struct ListCache {
     refreshed: Option<Instant>,
-    /// The id and persistent local id of each workspace: ids restart at 1 in a
-    /// replaced session, so the id alone does not tell the workspaces apart.
-    workspaces: Vec<(WorkspaceId, String)>,
+    /// The id, persistent local id and machine of each workspace: ids restart at
+    /// 1 in a replaced session, so the id alone does not tell the workspaces
+    /// apart, and a workspace that moves to a machine says so on the next frame.
+    workspaces: Vec<(WorkspaceId, String, Option<String>)>,
     rows: HashMap<WorkspaceId, Row>,
 }
 
@@ -26,11 +27,15 @@ impl HorizonApp {
     /// Reads the rows again when they are a second old or the workspaces changed.
     pub(in crate::app) fn refresh_sidebar_rows(&mut self, now: Instant) {
         let cache = &self.sidebar_list;
-        let unchanged = cache.workspaces.iter().map(|(id, local)| (*id, local.as_str())).eq(self
-            .board
+        let unchanged = cache
             .workspaces
             .iter()
-            .map(|workspace| (workspace.id, workspace.local_id.as_str())));
+            .map(|(id, local, machine)| (*id, local.as_str(), machine.as_deref()))
+            .eq(self
+                .board
+                .workspaces
+                .iter()
+                .map(|workspace| (workspace.id, workspace.local_id.as_str(), workspace.place.machine())));
         if unchanged && cache.refreshed.is_some_and(|at| now.duration_since(at) < REFRESH) {
             return;
         }
@@ -40,7 +45,13 @@ impl HorizonApp {
                 .board
                 .workspaces
                 .iter()
-                .map(|workspace| (workspace.id, workspace.local_id.clone()))
+                .map(|workspace| {
+                    (
+                        workspace.id,
+                        workspace.local_id.clone(),
+                        workspace.place.machine().map(str::to_owned),
+                    )
+                })
                 .collect(),
             rows: self.read_sidebar_rows(),
         };
@@ -56,7 +67,10 @@ impl HorizonApp {
                 let working = panels.clone().any(|panel| panel.agent_status() == AgentStatus::Working);
                 let line =
                     workspace_list::primary_panel(panels, self.board.focused).and_then(workspace_list::panel_line);
-                (workspace.id, Row::local(working, line.as_deref()))
+                (
+                    workspace.id,
+                    Row::placed(working, line.as_deref(), workspace.place.machine()),
+                )
             })
             .collect()
     }
@@ -93,6 +107,8 @@ pub(super) fn accepts_drop(target: &WorkspaceSidebarEntry) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use horizon_core::WorkspacePlace;
+
     #[test]
     fn a_replaced_session_with_the_same_workspace_ids_reads_the_rows_again() {
         let (_temp, mut app) = crate::app::test_support::test_app();
@@ -113,5 +129,36 @@ mod tests {
         }
         app.refresh_sidebar_rows(soon);
         assert_eq!(app.sidebar_list.refreshed, Some(soon));
+    }
+
+    #[test]
+    fn the_place_of_a_workspace_is_kept_in_its_cached_row() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("Build");
+        let here = app.board.create_workspace("Here");
+        let start = std::time::Instant::now();
+        app.refresh_sidebar_rows(start);
+
+        assert_eq!(app.sidebar_row(workspace).line, "", "a new row has no status text yet");
+        assert_eq!(app.sidebar_row(here).line, "");
+
+        // A workspace that moves to a machine reads its rows again at once,
+        // because the machine is part of what the cache holds.
+        app.board
+            .set_workspace_place(workspace, WorkspacePlace::Machine("build-1".to_owned()));
+        let soon = start + std::time::Duration::from_millis(100);
+        app.refresh_sidebar_rows(soon);
+        assert_eq!(app.sidebar_list.refreshed, Some(soon));
+        assert_eq!(app.sidebar_row(workspace).line, "on build-1");
+        assert_eq!(
+            app.sidebar_row(here).line,
+            "",
+            "this computer says nothing about a place"
+        );
+
+        // The composed line is a row text like the others: no frame builds it
+        // again while the row is a second old.
+        app.refresh_sidebar_rows(soon + std::time::Duration::from_millis(100));
+        assert_eq!(app.sidebar_list.refreshed, Some(soon), "the cache stays");
     }
 }
