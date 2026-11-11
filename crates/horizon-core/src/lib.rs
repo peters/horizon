@@ -80,6 +80,7 @@ pub use remote_hosts::{
     RemoteHost, RemoteHostCatalog, RemoteHostConnectionHistoryEntry, RemoteHostConnectionSummary, RemoteHostSources,
     RemoteHostStatus, discover_remote_hosts, summarize_remote_host_connections,
 };
+pub use retired_panel_kinds::RetiredPanels;
 pub use runtime_state::{
     AgentSessionBinding, AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning,
     AgentSessionDeletionFailure, AgentSessionDeletionRecovery, AgentSessionDeletionReport,

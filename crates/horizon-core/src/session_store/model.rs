@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::retired_panel_kinds::RetiredPanels;
 use crate::runtime_state::RuntimeState;
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,10 @@ pub struct ResolvedSession {
     pub runtime_state_path: PathBuf,
     pub transcript_root: PathBuf,
     pub meta: SessionMeta,
+    /// The panels that the saved board named by a panel kind that this release
+    /// removed. They are not in `runtime_state`, and a notice to the person is
+    /// made of this count.
+    pub retired_panels: RetiredPanels,
 }
 
 #[derive(Clone, Debug)]

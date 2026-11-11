@@ -1,0 +1,107 @@
+version: 2
+window:
+  width: 1600.0
+  height: 1000.0
+  x: 100.0
+  y: 50.0
+canvas_view:
+  pan_offset:
+  - 40.0
+  - 360.0
+  zoom: 1.0
+active_workspace_local_id: abc1b829-bb30-4569-8c29-547ef7f6f040
+focused_panel_local_id: e089c709-5125-41c1-826a-567d6c06aa02
+workspaces:
+- local_id: 3c22c889-5d14-4fcb-982f-6ef6a624db84
+  name: Workspace 1
+  cwd: null
+  position:
+  - -469.0
+  - 40.0
+  template: null
+  layout: Grid
+  panels:
+  - local_id: 1a874e78-18fc-45bd-a6e0-629569432f4f
+    name: Shell
+    kind: shell
+    command: null
+    args: []
+    cwd: /home/user/project
+    rows: 17
+    cols: 62
+    resume: fresh
+    position:
+    - -449.0
+    - 60.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: 95eea807-c489-4b0d-a6ee-bcf84d2c211d
+  name: Workspace 2
+  cwd: null
+  position:
+  - 1027.0
+  - -338.0
+  template: null
+  panels:
+  - local_id: 43995bcb-ba95-4e6b-b282-da195c1e737d
+    name: Markdown
+    kind: editor
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    position:
+    - 1027.0
+    - -338.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+- local_id: abc1b829-bb30-4569-8c29-547ef7f6f040
+  name: Workspace 3
+  cwd: null
+  position:
+  - 129.0
+  - -318.0
+  template: null
+  panels:
+  - local_id: 226d56eb-279d-4102-a45d-3d36a6c0a826
+    name: Usage
+    kind: usage
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    position:
+    - 129.0
+    - -318.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null
+  - local_id: e089c709-5125-41c1-826a-567d6c06aa02
+    name: Git Changes
+    kind: git_changes
+    command: null
+    args: []
+    cwd: null
+    rows: 24
+    cols: 80
+    resume: fresh
+    position:
+    - 449.0
+    - -228.0
+    size:
+    - 520.0
+    - 340.0
+    session_binding: null
+    template: null

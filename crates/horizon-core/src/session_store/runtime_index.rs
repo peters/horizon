@@ -28,6 +28,7 @@ use serde::de::DeserializeOwned;
 
 use super::{SessionStore, current_unix_millis, stable_state_key};
 use crate::error::{Error, Result};
+use crate::retired_panel_kinds::{RetiredPanels, retired_kind_named};
 use crate::runtime_state::{PanelState, RuntimeState, WorkspaceState};
 use rows::{BoardRows, Encoded, Format};
 use schema::{check_header, header};
@@ -209,6 +210,7 @@ impl Slot {
 struct StoredBoard {
     state: RuntimeState,
     yaml_digest: Option<String>,
+    left_out: RetiredPanels,
 }
 
 impl SessionStore {
@@ -234,9 +236,38 @@ impl SessionStore {
     /// Returns an error if neither store has a readable board, or if the index is newer
     /// than this Horizon supports.
     pub(super) fn load_runtime(&self, session_id: &str) -> Result<Option<RuntimeState>> {
+        Ok(self
+            .load_runtime_reporting(session_id)?
+            .map(|(runtime_state, _)| runtime_state))
+    }
+
+    /// [`Self::load_runtime`], and the panels that a removed panel kind left out.
+    ///
+    /// One `warn` line names the counts, and the caller carries them to the
+    /// person who loads the session.
+    ///
+    /// # Errors
+    /// Returns an error if neither store has a readable board, or if the index is newer
+    /// than this Horizon supports.
+    pub(super) fn load_runtime_reporting(&self, session_id: &str) -> Result<Option<(RuntimeState, RetiredPanels)>> {
+        let loaded = self.read_board_of(session_id)?;
+        if let Some((_, left_out)) = loaded.as_ref()
+            && !left_out.is_empty()
+        {
+            tracing::warn!(
+                session = session_id,
+                left_out = %left_out,
+                "the saved board names panel kinds that this release removed"
+            );
+        }
+        Ok(loaded)
+    }
+
+    /// The board of `session_id`, from the index or from `runtime.yaml`.
+    fn read_board_of(&self, session_id: &str) -> Result<Option<(RuntimeState, RetiredPanels)>> {
         // A board the session writer has not written yet is newer than the one on disk.
         if let Some(board) = self.writer.unwritten(session_id) {
-            return Ok(Some(board));
+            return Ok(Some((board, RetiredPanels::default())));
         }
         let yaml = match fs::read_to_string(self.home.session_runtime_path(session_id)) {
             Ok(text) => Some(text),
@@ -249,7 +280,7 @@ impl SessionStore {
                     .as_deref()
                     .is_none_or(|text| stored.yaml_digest.as_deref() == Some(yaml_digest(text).as_str())) =>
             {
-                return Ok(Some(stored.state));
+                return Ok(Some((stored.state, stored.left_out)));
             }
             Ok(Some(_)) => {
                 tracing::info!("loading runtime.yaml of session {session_id}: it changed after the runtime index");
@@ -259,7 +290,7 @@ impl SessionStore {
             Err(error) if yaml.is_none() => return Err(error.into()),
             Err(error) => tracing::warn!("loading runtime.yaml of session {session_id}: {error}"),
         }
-        yaml.as_deref().map(RuntimeState::from_yaml).transpose()
+        yaml.as_deref().map(RuntimeState::from_yaml_reporting).transpose()
     }
 }
 
@@ -502,6 +533,7 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
     }
 
     let mut panels: Vec<(usize, PanelState)> = Vec::new();
+    let mut left_out = RetiredPanels::default();
     let mut counts = vec![0_usize; workspaces.len()];
     let mut select =
         transaction.prepare("SELECT workspace_seq, seq, format, data FROM panels ORDER BY workspace_seq, seq")?;
@@ -519,12 +551,21 @@ fn read_board(path: &Path) -> std::result::Result<Option<StoredBoard>, IndexErro
             return Err(IndexError::Damaged("the panels of a workspace have a gap".into()));
         }
         counts[workspace] += 1;
-        panels.push((workspace, decoded(&row.get::<_, String>(2)?, row.get(3)?)?));
+        let data = row.get::<_, String>(3)?;
+        if let Some(kind) = retired_kind_named(&data) {
+            left_out.count(kind);
+            continue;
+        }
+        panels.push((workspace, decoded(&row.get::<_, String>(2)?, data)?));
     }
 
     // Rows that do not make a valid board are damage too.
     let state = rows::assemble(board, workspaces, panels)
         .map(RuntimeState::into_current)
         .map_err(|error| IndexError::Damaged(error.to_string()))?;
-    Ok(Some(StoredBoard { state, yaml_digest }))
+    Ok(Some(StoredBoard {
+        state,
+        yaml_digest,
+        left_out,
+    }))
 }

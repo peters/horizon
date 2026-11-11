@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
+use crate::retired_panel_kinds::RetiredPanels;
 use crate::runtime_state::RuntimeState;
 use index_file::{IndexChange, IndexFile};
 use model::{ProfileSnapshot, SessionIndex, SessionMeta, StoredSession};
@@ -154,11 +155,12 @@ impl SessionStore {
     /// Returns an error if the source session cannot be loaded or if the new
     /// session data cannot be persisted.
     pub fn duplicate_session(&self, source_session_id: &str) -> Result<ResolvedSession> {
-        let mut runtime_state = self
-            .load_runtime(source_session_id)?
+        let (mut runtime_state, left_out) = self
+            .load_runtime_reporting(source_session_id)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {source_session_id}")))?;
         runtime_state.regenerate_browser_local_ids();
-        let session = self.create_session_from_runtime(runtime_state)?;
+        let mut session = self.create_session_from_runtime(runtime_state)?;
+        session.retired_panels = left_out;
         copy_directory_recursive(
             &self.home.session_transcripts_dir(source_session_id),
             &self.home.session_transcripts_dir(&session.session_id),
@@ -455,12 +457,13 @@ impl SessionStore {
             runtime_state_path: runtime_path,
             transcript_root,
             meta,
+            retired_panels: RetiredPanels::default(),
         })
     }
 
     fn load_existing_session(&self, session_id: &str) -> Result<ResolvedSession> {
-        let runtime_state = self
-            .load_runtime(session_id)?
+        let (runtime_state, retired_panels) = self
+            .load_runtime_reporting(session_id)?
             .ok_or_else(|| Error::State(format!("missing runtime state for session {session_id}")))?;
         let meta = self.load_session_meta(session_id)?;
 
@@ -470,6 +473,7 @@ impl SessionStore {
             runtime_state_path: self.home.session_runtime_path(session_id),
             transcript_root: self.home.session_transcripts_dir(session_id),
             meta,
+            retired_panels,
         })
     }
 

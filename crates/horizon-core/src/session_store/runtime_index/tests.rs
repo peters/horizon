@@ -459,3 +459,34 @@ fn deleting_a_session_closes_and_removes_its_index() {
 
     assert!(!fixture.home.session_dir(&session).exists());
 }
+
+/// A row of a panel kind that a later release removed is not damage: the board
+/// keeps every other panel, and the load reports the one that it left out.
+#[test]
+fn a_panel_row_of_a_removed_kind_is_left_out_and_counted() {
+    let fixture = Fixture::new();
+    let state = board();
+    let session = fixture.create(state.clone());
+    std::fs::remove_file(fixture.yaml(&session)).expect("remove runtime.yaml");
+    Connection::open(fixture.index(&session))
+        .expect("open index")
+        .execute(
+            "INSERT INTO panels (workspace_seq, seq, local_id, kind, name, format, data) VALUES (0, 2, 'usage', 'usage', 'Usage', 'json', ?1)",
+            [r#"{"local_id":"usage","name":"Usage","kind":"usage"}"#],
+        )
+        .expect("a saved row of a removed panel kind");
+
+    let (loaded, left_out) = fixture
+        .store
+        .load_runtime_reporting(&session)
+        .expect("load the index")
+        .expect("the index has a board");
+
+    assert_eq!(
+        value(&loaded),
+        value(&state),
+        "the row of the removed kind is not in the board"
+    );
+    assert_eq!(left_out.total(), 1);
+    assert_eq!(left_out.count_of("usage"), 1);
+}

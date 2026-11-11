@@ -16,6 +16,7 @@ use crate::config::{Config, WindowConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::PanelKind;
+use crate::retired_panel_kinds::RetiredPanels;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
@@ -135,9 +136,19 @@ impl RuntimeState {
     /// Returns an error if the snapshot cannot be parsed or validated, or its
     /// version is newer than this binary supports.
     pub fn from_yaml(content: &str) -> Result<Self> {
-        let content = crate::retired_panel_kinds::without_retired(content);
+        Self::from_yaml_reporting(content).map(|(state, _)| state)
+    }
+
+    /// [`Self::from_yaml`], and the panels that a removed panel kind left out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot cannot be parsed or validated, or its
+    /// version is newer than this binary supports.
+    pub fn from_yaml_reporting(content: &str) -> Result<(Self, RetiredPanels)> {
+        let (content, left_out) = crate::retired_panel_kinds::without_retired_reporting(content);
         let state = serde_yaml::from_str::<Self>(content.as_ref()).map_err(|error| Error::State(error.to_string()))?;
-        Ok(state.into_current())
+        Ok((state.into_current(), left_out))
     }
 
     /// Bring a decoded snapshot to the current version, the same way for every
