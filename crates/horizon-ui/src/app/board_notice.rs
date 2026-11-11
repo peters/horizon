@@ -41,6 +41,8 @@ fn kind_name(kind: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::left_out_panels_notice;
 
     fn counts(entries: &[(&str, usize)]) -> horizon_core::RetiredPanels {
@@ -53,7 +55,7 @@ mod tests {
             panels.push('\n');
             for (kind, count) in entries {
                 for index in 0..*count {
-                    panels.push_str(&format!("  - name: Panel {index}\n    kind: {kind}\n"));
+                    let _ = writeln!(panels, "  - name: Panel {index}\n    kind: {kind}");
                 }
             }
         }

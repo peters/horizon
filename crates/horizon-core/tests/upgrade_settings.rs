@@ -74,18 +74,14 @@ fn the_default_file_of_v027_imports_with_every_value() {
     assert_eq!(config.appearance.theme, AppearanceTheme::Auto);
 }
 
-#[test]
-fn every_value_of_the_v027_file_with_non_default_sections_arrives() {
-    let (_root, yaml, settings) = home_with("v0.2.7", "config-all-values.yaml");
-    let before = fs::read(&yaml).expect("the file before the start");
-
-    let config = Config::load_from_home(&settings).expect("the settings of v0.2.7");
-
+/// The window, the appearance and the shortcuts of both files with non-default
+/// sections. Both builds wrote the same values, so one helper reads them.
+fn assert_window_look_and_shortcuts(config: &Config, width: f32, height: f32, x: f32, y: f32) {
     assert_eq!(config.version, 12);
-    assert_eq!(config.window.width, 1234.0);
-    assert_eq!(config.window.height, 777.0);
-    assert_eq!(config.window.x, Some(42.0));
-    assert_eq!(config.window.y, Some(24.0));
+    assert_eq!(config.window.width, width);
+    assert_eq!(config.window.height, height);
+    assert_eq!(config.window.x, Some(x));
+    assert_eq!(config.window.y, Some(y));
     assert_eq!(config.appearance.theme, AppearanceTheme::Light);
 
     assert_eq!(config.shortcuts.command_palette, "Ctrl+Alt+K");
@@ -107,7 +103,16 @@ fn every_value_of_the_v027_file_with_non_default_sections_arrives() {
     assert_eq!(config.shortcuts.fullscreen_window, "Ctrl+Alt+F11");
     assert_eq!(config.shortcuts.save_editor, "Ctrl+Alt+V");
     assert_eq!(config.shortcuts.search, "Ctrl+Alt+R");
+}
 
+#[test]
+fn every_value_of_the_v027_file_with_non_default_sections_arrives() {
+    let (_root, yaml, settings) = home_with("v0.2.7", "config-all-values.yaml");
+    let before = fs::read(&yaml).expect("the file before the start");
+
+    let config = Config::load_from_home(&settings).expect("the settings of v0.2.7");
+
+    assert_window_look_and_shortcuts(&config, 1234.0, 777.0, 42.0, 24.0);
     assert_eq!(config.overlays.minimap_height, 200.0);
     assert_eq!(config.overlays.minimap_width, 400.0);
 
@@ -196,14 +201,7 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
 
     let config = Config::load_from_home(&settings).expect("the settings of main");
 
-    assert_eq!(config.version, 12);
-    assert_eq!(config.window.width, 1440.0);
-    assert_eq!(config.window.height, 900.0);
-    assert_eq!(config.window.x, Some(12.0));
-    assert_eq!(config.window.y, Some(34.0));
-    assert_eq!(config.appearance.theme, AppearanceTheme::Light);
-    assert_eq!(config.shortcuts.command_palette, "Ctrl+Alt+K");
-    assert_eq!(config.shortcuts.search, "Ctrl+Alt+R");
+    assert_window_look_and_shortcuts(&config, 1440.0, 900.0, 12.0, 34.0);
     assert_eq!(config.overlays.minimap_height, 260.0);
     assert_eq!(config.overlays.minimap_width, 380.0);
 
@@ -226,6 +224,50 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
         Some("browser-vm.example.net")
     );
     assert_eq!(config.browser_host.profile.as_deref(), Some("mail"));
+
+    let names: Vec<&str> = config.presets.iter().map(|preset| preset.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["Shell", "Build host", "Markdown", "Browser"],
+        "the presets of the removed panels are gone and the others stay"
+    );
+    assert_eq!(config.presets[0].command.as_deref(), Some("/bin/zsh"));
+    assert_eq!(
+        config.presets[1].ssh_connection.as_ref().map(|ssh| ssh.host.as_str()),
+        Some("build.example.net")
+    );
+
+    assert_eq!(config.workspaces.len(), 1);
+    let workspace = &config.workspaces[0];
+    assert_eq!(workspace.name, "Release checks");
+    assert_eq!(workspace.cwd.as_deref(), Some("/home/user/project"));
+    assert_eq!(workspace.position, Some([120.0, 60.0]));
+    let kinds: Vec<&str> = workspace
+        .terminals
+        .iter()
+        .map(|terminal| match terminal.kind {
+            horizon_core::PanelKind::Shell => "shell",
+            horizon_core::PanelKind::Editor => "editor",
+            other => panic!("a panel of {other:?} must not reach this build"),
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["shell", "editor"],
+        "the Usage, Git Changes and setup board panels leave the settings"
+    );
+    assert_eq!(workspace.terminals[0].rows, 30);
+    assert_eq!(workspace.terminals[0].cols, 100);
+
+    assert_eq!(fs::read(&yaml).expect("the file after the start"), before);
+}
+
+#[test]
+fn every_browser_setting_of_the_main_file_arrives() {
+    let (_root, _yaml, settings) = home_with("main", "config-all-values.yaml");
+
+    let config = Config::load_from_home(&settings).expect("the settings of main");
+    let written = config.to_json().expect("the settings as JSON");
 
     let browser = &config.browser;
     assert_eq!(browser.backend, horizon_core::browser::BackendKind::FirefoxBidi);
@@ -266,42 +308,6 @@ fn every_value_of_the_main_file_with_non_default_sections_arrives() {
         "the store holds the token of this build, not the one of the removed OS store: {written}"
     );
     assert!(!written.contains("os_keychain"), "{written}");
-
-    let names: Vec<&str> = config.presets.iter().map(|preset| preset.name.as_str()).collect();
-    assert_eq!(
-        names,
-        vec!["Shell", "Build host", "Markdown", "Browser"],
-        "the presets of the removed panels are gone and the others stay"
-    );
-    assert_eq!(config.presets[0].command.as_deref(), Some("/bin/zsh"));
-    assert_eq!(
-        config.presets[1].ssh_connection.as_ref().map(|ssh| ssh.host.as_str()),
-        Some("build.example.net")
-    );
-
-    assert_eq!(config.workspaces.len(), 1);
-    let workspace = &config.workspaces[0];
-    assert_eq!(workspace.name, "Release checks");
-    assert_eq!(workspace.cwd.as_deref(), Some("/home/user/project"));
-    assert_eq!(workspace.position, Some([120.0, 60.0]));
-    let kinds: Vec<&str> = workspace
-        .terminals
-        .iter()
-        .map(|terminal| match terminal.kind {
-            horizon_core::PanelKind::Shell => "shell",
-            horizon_core::PanelKind::Editor => "editor",
-            other => panic!("a panel of {other:?} must not reach this build"),
-        })
-        .collect();
-    assert_eq!(
-        kinds,
-        vec!["shell", "editor"],
-        "the Usage, Git Changes and setup board panels leave the settings"
-    );
-    assert_eq!(workspace.terminals[0].rows, 30);
-    assert_eq!(workspace.terminals[0].cols, 100);
-
-    assert_eq!(fs::read(&yaml).expect("the file after the start"), before);
 }
 
 #[test]

@@ -672,22 +672,14 @@ fn start_settings(
             },
             // No settings file at the default path: an older Horizon may have
             // left its YAML settings file in the same folder.
-            None if import_legacy => match legacy_settings_file(resolved) {
-                Some(path) => {
-                    let text = std::fs::read_to_string(&path)?;
-                    tracing::info!(
-                        "importing the settings of {} into {}; the file stays exactly as it is",
-                        path.display(),
-                        store.path().display()
-                    );
-                    let (config, migrated) = import_old_settings(&text, &path)?;
-                    Ok((config, migrated, Origin::Imported))
-                }
-                None => {
+            None if import_legacy => {
+                if let Some(path) = legacy_settings_file(resolved) {
+                    import_settings_file_of_an_older_build(&path, store)
+                } else {
                     tracing::info!("no settings found, using defaults");
                     Ok((Config::default(), false, Origin::Default))
                 }
-            },
+            }
             None if require_settings => Err(Error::Config(format!(
                 "no settings store or configuration file at {}",
                 resolved.display()
@@ -698,6 +690,19 @@ fn start_settings(
             }
         },
     }
+}
+
+/// Read the YAML settings file of an older build into this start, with one line
+/// that names the file and the store.
+fn import_settings_file_of_an_older_build(path: &Path, store: &ConfigStore) -> Result<(Config, bool, Origin)> {
+    let text = std::fs::read_to_string(path)?;
+    tracing::info!(
+        "importing the settings of {} into {}; the file stays exactly as it is",
+        path.display(),
+        store.path().display()
+    );
+    let (config, migrated) = import_old_settings(&text, path)?;
+    Ok((config, migrated, Origin::Imported))
 }
 
 /// Write what the start owes.
