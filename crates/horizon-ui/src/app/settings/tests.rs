@@ -825,8 +825,8 @@ fn the_secrets_tab_draws_the_names_the_hidden_field_and_the_missing_value() {
         "a name whose value this computer does not hold says so: {texts:?}"
     );
     assert!(
-        texts.iter().any(|text| text.contains("is not here: type it once more")),
-        "the tab says that a value of an older Horizon must be typed once more: {texts:?}"
+        !texts.iter().any(|text| text.contains("credential store")),
+        "a named secret was never in the keyring of the system, so the tab says nothing about it: {texts:?}"
     );
     assert!(
         !texts.iter().any(|text| text.contains("TYPED-VALUE-6f1c")),

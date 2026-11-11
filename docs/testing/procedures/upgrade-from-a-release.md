@@ -211,8 +211,9 @@ that this build removed leave a notice and no error.
    HETZNER_TOKEN
    ```
 
-   Result: the row says `no value on this computer`, and the tab says that a
-   value of an older Horizon must be typed once more.
+   Result: the row says `no value on this computer`. The tab names no
+   credential store of the system: a named secret is new, and it was never
+   there.
 
 2. Add the value of the name and save.
 
@@ -333,8 +334,8 @@ that this build removed leave a notice and no error.
   of the board of the release.
 - The log names the imported YAML file, and it names no error.
 - The second start reads the store, and it reads no YAML file.
-- The Settings panel keeps one width on every tab, and the Secrets tab says that
-  an old value is typed once more.
+- The Settings panel keeps one width on every tab, and the Secrets tab names no
+  credential store of the system.
 - The line about the panels that were left out stays after ten seconds, and it
   goes on its close control.
 - The import of the keyring writes one row from a stand-in program, writes no row

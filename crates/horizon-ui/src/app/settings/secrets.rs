@@ -146,8 +146,7 @@ pub(super) fn render(
             "Each secret is one environment variable of every agent panel that Horizon starts from now on, on this \
              computer. A panel that is already running keeps the environment of its start. A terminal panel, and a \
              terminal on a machine over SSH, gets none. An agent, and every tool that it starts, can read the value \
-             and send it, so give a tool a key of the smallest scope. A value that an older Horizon \
-             kept in the credential store of this operating system is not here: type it once more.",
+             and send it, so give a tool a key of the smallest scope.",
         );
         ui.add_space(8.0);
 
