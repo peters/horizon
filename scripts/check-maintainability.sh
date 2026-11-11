@@ -130,4 +130,10 @@ elif grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
   status=1
 fi
 
+# The exceptions of the UI-thread guard and the list of known UI-thread work in
+# docs/architecture/ui-thread.md must name the same reasons.
+if ! python3 "$ROOT_DIR/scripts/check-ui-thread-exceptions.py"; then
+  status=1
+fi
+
 exit "$status"

@@ -298,6 +298,9 @@ that `horizon-ui` calls during a frame.
   I/O, a network call or a credential store call.
 - [ ] No new `recv`, `recv_timeout`, `join` or `sleep` runs on the UI thread,
   except a bounded wait at exit.
+- [ ] A new function that can wait calls `ui_thread::blocking`. A new call that
+  the repository accepts on the UI thread has one `ui_thread::exception` with
+  its reason, and the list of known work above names that reason.
 - [ ] Each worker thread sends its result and then calls `request_repaint()`.
 - [ ] The UI drops a result from an earlier generation, session or board.
 - [ ] The UI shows a busy state, and a second request of the same work is
@@ -356,38 +359,100 @@ after the call, so a new test must also start the release thread of step 2.
   checks that the frame that takes the drop returns, that the panel opens after
   the read, and that the panel has the size of the file.
 
+## The guard
+
+The rule of this guide is in the code. The module `ui_thread`
+([`ui_thread.rs`](../../crates/horizon-core/src/ui_thread.rs)) reports a call
+that can wait when it runs on the UI thread, and the tests of the window run it
+in strict mode.
+
+- `ui_thread::FrameScope::enter()` marks the current thread as inside a frame
+  while the returned value lives. The entry points of the window hold one:
+  `BridgeApp::ui`, `BridgeApp::raw_input_hook`, `BridgeApp::on_exit`,
+  `poll_on_ui_thread` of the device request pump, and `HorizonApp::new`, which
+  runs after the window exists. The headless frame helper of the UI tests holds
+  one too. Scopes nest.
+- `ui_thread::blocking(what)` goes first in a function that can wait. It does
+  nothing outside a frame scope. Inside one it reports the wait and the caller
+  location: it panics in strict mode, and it writes one `tracing::error!` for
+  each call site for the life of the process otherwise.
+- Strict mode is a process switch. The UI tests turn it on, and so does the
+  start of Horizon when `HORIZON_UI_THREAD_GUARD=panic` is in the environment.
+  Without that variable the guard writes the log line, which is the default.
+- `ui_thread::exception(reason)` accepts the calls that can wait on this thread
+  while the returned value lives. Each use is one line that
+  `rg "ui_thread::exception\("` finds, and the reason is one entry of the list
+  below. `scripts/check-ui-thread-exceptions.py` fails when the two lists do not
+  name the same reasons, so the list cannot drift.
+
+Rule for a new exception: take one only for work that the repository accepts on
+the UI thread, with a reason that says why. Work that a later change moves to a
+worker takes a reason that starts with `part 2:` and names its finding, so that
+change finds the scope again. Do not accept work that this guide forbids without
+that plan.
+
+A crate that cannot reach `horizon-core` guards the call site instead:
+`horizon-browser`, `horizon-browser-control` and `horizon-vnc` are below it, so
+the guard sits in the `horizon-core` or `horizon-ui` function that calls them.
+The `ManifestLock` of a video and the join of a VNC session are examples.
+
 ## Known UI-thread work
 
-This work still runs on the UI thread. Do not copy it into new code.
+The guard accepts this work today, with the reason that the code writes. Each
+line is one `ui_thread::exception` in the code. Do not copy it into new code.
+
+- `terminal spawn: a terminal panel is a process`: `Terminal::spawn`
+  ([`terminal/lifecycle.rs`](../../crates/horizon-core/src/terminal/lifecycle.rs))
+  forks and starts the shell of a new panel. A panel is one process, so a frame
+  that creates a panel owns this start.
+- `exit cleanup: the window closes`: `run_exit_cleanup`
+  ([`lifecycle/shutdown.rs`](../../crates/horizon-ui/src/app/lifecycle/shutdown.rs))
+  waits for panels, for browsers and for the session writer. The window closes,
+  and each wait has its own bound. One synchronous wait at exit has no time
+  limit: `run_exit_cleanup` joins the worker thread of a saved session deletion.
+  Each wait has its own limit, so together they can take longer.
+- `board drop: a replaced board waits for its jobs`: the drop of `HostIo`
+  ([`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs))
+  waits for the coordination jobs of a board that goes, for at most the bound of
+  an exit.
+- `session switch: the old board is flushed for up to 2 s`: a session switch and
+  a replacement of the board wait on the UI thread until the jobs of the browser
+  coordination worker thread end
+  (`finish_browser_host_io_before_replacement`). The window does not paint
+  during this wait.
+- `startup recovery: the repaired board is written before it opens`:
+  `save_recovered_startup_runtime_state`
+  ([`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes and
+  renames the session file, without a sync. While the session writer thread
+  writes that session, the save is refused, and the startup prompt offers to try
+  again. The session auto-save queues the board for the session writer thread
+  ([`writer.rs`](../../crates/horizon-core/src/session_store/writer.rs)) and does
+  not write.
+- `part 2: F4 a panel reads its transcript and its directory on the frame`:
+  `spawn_terminal`
+  ([`panel/spawn/terminal.rs`](../../crates/horizon-core/src/panel/spawn/terminal.rs))
+  prepares the replay of the transcript, resolves the working directory and
+  probes `script` on the frame. The next change moves them to a worker.
+- `part 2: F5 a restart reads the saved work of its panel`: `Panel::restart`
+  ([`panel/lifecycle.rs`](../../crates/horizon-core/src/panel/lifecycle.rs))
+  resolves the working directory, the saved work of an agent and the key of its
+  machine on the frame. The next change moves that pre-flight to a worker.
+- `part 2: F8 the notice of a saved conversation is read on the frame`:
+  `restore_saved_session_deletion_notice`
+  ([`panels/session_deletion/worker.rs`](../../crates/horizon-ui/src/app/panels/session_deletion/worker.rs))
+  reads the recovery notices of this profile. They move to the session writer
+  with the lease.
+
+This known work is not guarded yet, so no scope holds it:
 
 - The read of the content of an editor panel when the panel opens: `spawn_editor`
   ([`panel/spawn.rs`](../../crates/horizon-core/src/panel/spawn.rs)) calls
   `MarkdownEditor::open`, which reads the file. A dropped file is sized on the
   coordination worker, but this read of its content still runs on the frame
   that opens its panel.
-- The save of a recovered startup board (`save_recovered_startup_runtime_state`
-  in [`persistence.rs`](../../crates/horizon-ui/src/app/persistence.rs)) writes
-  and renames the session file on the UI thread, without a sync. While the
-  session writer thread writes that session, the save is refused, and the
-  startup prompt offers to try again. The session
-  auto-save queues the board for the session writer thread
-  ([`writer.rs`](../../crates/horizon-core/src/session_store/writer.rs)) and
-  does not write.
-- `poll_config_reload`, which `prepare_frame` in
-  [`app/lifecycle.rs`](../../crates/horizon-ui/src/app/lifecycle.rs) calls,
-  reads the metadata of the config file at most every 2 s. When the file
-  changed, it also reads and parses the config on the UI thread.
-- `refresh_active_session_lease`, which `finalize_frame` calls, writes and
-  renames the lease file of a saved session at most every 2 s
-  (`refresh_lease` in
-  [`lease.rs`](../../crates/horizon-core/src/session_store/lease.rs)).
-- A session switch and a replacement of the board wait on the
-  UI thread for up to 2 s (`EXIT_FLUSH`) until the jobs of the browser
-  coordination worker thread end (`finish_browser_host_io_before_replacement` in
-  [`browser_host_io.rs`](../../crates/horizon-ui/src/app/browser_host_io.rs)).
-  The window does not paint during this wait.
-- One synchronous wait at exit has no time limit. `run_exit_cleanup` joins the
-  worker thread of a saved session deletion. The other synchronous waits in
-  `run_exit_cleanup` have a time limit, for example 2 s for the browser
-  coordination worker thread and 10 s for the session writer thread. Each
-  wait has its own limit, so together they can take longer.
+- A read of the machine list, of a session or of a directory entry that a
+  `horizon-ui` function calls outside the guarded functions of `horizon-core`.
+
+Two frame paths that this guide listed before do not read a file any more: the
+watch of the settings store and the refresh of the lease of a session. Both run
+on a worker and report their outcome to a later frame.
