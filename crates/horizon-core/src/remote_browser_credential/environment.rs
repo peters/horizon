@@ -400,7 +400,7 @@ mod tests {
                 .expect("ready")
                 .expect("basic")
                 .header_value(),
-            "Basic YWxpY2U6a2V5Y2hhaW4ta2V5"
+            "Basic YWxpY2U6ZmlsZS1rZXk="
         );
         // Sharing a reference name never selects another provider's variable.
         environment.values.remove("SECOND_REMOTE_BROWSER_ACCESS_KEY");
