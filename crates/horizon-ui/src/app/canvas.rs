@@ -411,6 +411,19 @@ mod tests {
         }
         assert_eq!(canvas_paint_rect(available, None), available);
 
+        // The Server tab draws the QR plate of an invitation, and a plate is never
+        // wider than the panel: the canvas ends at the same edge as on every tab.
+        let server_tab_width = crate::app::settings::settings_panel_default_width(1480.0);
+        let server_tab = Rect::from_min_max(
+            Pos2::new(available.max.x - server_tab_width, 0.0),
+            Pos2::new(available.max.x, available.max.y),
+        );
+        let painted = canvas_paint_rect(available, Some(server_tab));
+        assert!(
+            painted.max.x <= server_tab.min.x + f32::EPSILON,
+            "the canvas {painted:?} ends at the Server tab at {server_tab:?}"
+        );
+
         // A panel that is wider than the window leaves an empty canvas, and never
         // a rectangle that runs backwards.
         let wider_than_the_window = Rect::from_min_max(Pos2::new(-40.0, 0.0), Pos2::new(1600.0, 900.0));

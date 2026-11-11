@@ -30,6 +30,8 @@ use std::{
 
 use crate::error::StoreError;
 use crate::link::{SocketError, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
+use crate::listener::{ListenError, ListenerInfo, TcpServer, run_server_on_tcp};
+use crate::server::ServerInfo;
 use crate::store::Store;
 
 /// The mode of the server home and of its socket: the server user alone reaches
@@ -74,6 +76,9 @@ pub enum HostError {
     /// The link of the socket failed.
     #[error(transparent)]
     Socket(#[from] SocketError),
+    /// The listener of `--listen` could not be opened.
+    #[error(transparent)]
+    Listener(#[from] ListenError),
     /// The store of the server could not be opened.
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -86,7 +91,12 @@ impl HostError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NoServer { .. } => EXIT_NO_SERVER,
-            Self::NoHome | Self::Io { .. } | Self::AlreadyRunning { .. } | Self::Socket(_) | Self::Store(_) => 1,
+            Self::NoHome
+            | Self::Io { .. }
+            | Self::AlreadyRunning { .. }
+            | Self::Socket(_)
+            | Self::Listener(_)
+            | Self::Store(_) => 1,
         }
     }
 }
@@ -207,6 +217,34 @@ impl Drop for ServerLock {
     }
 }
 
+/// The listener that a server opens for the computers that join it with a code,
+/// and the name that its links hold.
+///
+/// Both are absent without `--listen`, and then the only transport is the socket
+/// of the server home, which `ssh` reaches.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerOptions {
+    /// `--listen <ip>:<port>`: the address of the TCP listener.
+    pub listen: Option<String>,
+    /// `--name <dns-name>`: the name that a link of this server holds instead of
+    /// the address of the listener.
+    pub name: Option<String>,
+}
+
+impl ServerOptions {
+    /// The listener of these options, or `None` when they name none.
+    ///
+    /// # Errors
+    /// Refuses an address outside the three ranges of a link, an address that is
+    /// not one IP address and one port, and a name that is not one DNS name.
+    pub fn listener(&self) -> Result<Option<ListenerInfo>, ListenError> {
+        let Some(listen) = self.listen.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(None);
+        };
+        ListenerInfo::new(listen, self.name.as_deref()).map(Some)
+    }
+}
+
 /// Answers the links of `home` until `stop` is set, and then ends cleanly.
 ///
 /// The store is opened by this call and closed before it returns, so a stop
@@ -216,18 +254,44 @@ impl Drop for ServerLock {
 /// # Errors
 /// Returns why the home, its lock, the store or the socket failed.
 pub fn serve_until_stopped(home: &ServerHome, stop: &AtomicBool) -> Result<(), HostError> {
+    serve_with_options(home, stop, &ServerOptions::default())
+}
+
+/// Answers the links of `home` until `stop` is set, with the listener of
+/// `options` when it names one.
+///
+/// # Errors
+/// Returns why the home, its lock, the store, the socket or the listener failed.
+pub fn serve_with_options(home: &ServerHome, stop: &AtomicBool, options: &ServerOptions) -> Result<(), HostError> {
     home.prepare()?;
     let _lock = home.lock()?;
+    let listener = options.listener()?;
     let store = Store::open(&home.store_path())?;
     let socket = home.socket_path();
     tracing::info!(
         home = %home.root().display(),
         socket = %socket.display(),
+        listener = ?listener.as_ref().map(ListenerInfo::address),
         "the Horizon server answers"
     );
-    let server = run_server_on_unix_socket(&socket, store.clone())?;
+    let info = ServerInfo::with_listener(listener.clone());
+    let server = run_server_on_unix_socket(&socket, store.clone(), &info)?;
+    let tcp: Option<TcpServer> = match listener {
+        Some(listener) => match run_server_on_tcp(&listener, store.clone(), &info) {
+            Ok(tcp) => Some(tcp),
+            Err(error) => {
+                server.stop();
+                store.close();
+                return Err(HostError::Listener(error));
+            }
+        },
+        None => None,
+    };
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(STOP_PAUSE);
+    }
+    if let Some(tcp) = tcp {
+        tcp.stop();
     }
     server.stop();
     store.close();
@@ -410,6 +474,7 @@ mod tests {
             protocol: crate::PROTOCOL_VERSION,
             device: "test-device".to_owned(),
             store: None,
+            token: None,
         });
         crate::write_frame(&mut request, &hello).expect("the hello");
         let answered = crate::read_frame(&mut answer).expect("the answer").expect("one frame");
@@ -556,6 +621,7 @@ mod tests {
             protocol: crate::PROTOCOL_VERSION,
             device: "test-device".to_owned(),
             store: None,
+            token: None,
         });
         let _ = crate::write_frame(&mut request, &hello);
         let answered = crate::read_frame(&mut answer).ok().flatten();

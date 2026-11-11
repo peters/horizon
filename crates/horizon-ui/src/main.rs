@@ -65,7 +65,7 @@ fn main() -> eframe::Result {
     // wait for that thread, so a stopped server would leave one child of every
     // idle computer alive for ever.
     if let Some(mode) = sync_mode() {
-        std::process::exit(run_sync_mode(mode));
+        std::process::exit(run_sync_mode(&mode));
     }
 
     let horizon_home = match HorizonHome::prepare() {
@@ -173,19 +173,23 @@ fn main() -> eframe::Result {
     )
 }
 
-/// One of the two modes of the server, whose work needs no window and no home of
+/// One of the three modes of the server, whose work needs no window and no home of
 /// the person.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SyncMode {
-    /// `horizon --server`: answers the links of the computers of one server home.
-    Server,
+    /// `horizon --server`: answers the links of the computers of one server home,
+    /// and opens the TCP listener when `--listen` names one.
+    Server(horizon_sync::ServerOptions),
     /// `horizon --server-link`: relays the standard input and output of one `ssh`
     /// child to the socket of that server.
     Link,
+    /// `horizon --server-invite`: asks the server of this home for the first
+    /// invitation, and prints the link, the code and its QR code.
+    Invite,
 }
 
-/// The mode of this start, when the argument names one. Both modes take that one
-/// argument alone, so an entry that names something else never falls through to
+/// The mode of this start, when the argument names one. Each mode takes its own
+/// arguments alone, so an entry that names something else never falls through to
 /// the desktop of the person.
 fn sync_mode() -> Option<SyncMode> {
     match parse_sync_mode(std::env::args_os().skip(1)) {
@@ -197,14 +201,32 @@ fn sync_mode() -> Option<SyncMode> {
     }
 }
 
-/// Whether these arguments ask for the server or for its link.
+/// Whether these arguments ask for the server, for its link or for its first
+/// invitation.
 ///
 /// # Errors
-/// Returns why an argument that starts one of the two modes cannot continue.
+/// Returns why an argument that starts one of the three modes cannot continue.
 fn parse_sync_mode(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Option<SyncMode>, String> {
+    let mut options = horizon_sync::ServerOptions::default();
     let mode = match args.next().as_deref() {
-        Some(argument) if argument == "--server" => SyncMode::Server,
+        Some(argument) if argument == "--server" => {
+            loop {
+                match args.next() {
+                    None => break,
+                    Some(flag) if flag == "--listen" => options.listen = Some(argument_of(&mut args, "--listen")?),
+                    Some(flag) if flag == "--name" => options.name = Some(argument_of(&mut args, "--name")?),
+                    Some(argument) => {
+                        return Err(format!(
+                            "`{}` is not part of the server mode",
+                            argument.to_string_lossy()
+                        ));
+                    }
+                }
+            }
+            return Ok(Some(SyncMode::Server(options)));
+        }
         Some(argument) if argument == "--server-link" => SyncMode::Link,
+        Some(argument) if argument == "--server-invite" => SyncMode::Invite,
         _ => return Ok(None),
     };
     if let Some(argument) = args.next() {
@@ -216,10 +238,19 @@ fn parse_sync_mode(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result
     Ok(Some(mode))
 }
 
+/// The value of one flag of the server mode.
+fn argument_of(args: &mut impl Iterator<Item = std::ffi::OsString>, flag: &str) -> Result<String, String> {
+    let value = args.next().ok_or_else(|| format!("`{flag}` needs one value"))?;
+    value
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("the value of `{flag}` is not text"))
+}
+
 /// Runs the mode and answers its exit code: zero when it ended cleanly, the fixed
 /// code of a link that found no server, and one for any other failure. Every
 /// reason is one line on the standard error, which is the log of a service.
-fn run_sync_mode(mode: SyncMode) -> i32 {
+fn run_sync_mode(mode: &SyncMode) -> i32 {
     let home = match horizon_sync::ServerHome::resolve(None) {
         Ok(home) => home,
         Err(problem) => {
@@ -228,19 +259,44 @@ fn run_sync_mode(mode: SyncMode) -> i32 {
         }
     };
     let result = match mode {
-        SyncMode::Server => horizon_sync::terminate_flag()
+        SyncMode::Server(options) => horizon_sync::terminate_flag()
             .map_err(|error| horizon_sync::HostError::Io {
                 path: home.root().to_path_buf(),
                 error,
             })
-            .and_then(|stop| horizon_sync::serve_until_stopped(&home, &stop)),
+            .and_then(|stop| horizon_sync::serve_with_options(&home, &stop, options)),
         SyncMode::Link => horizon_sync::link_stdio(&home),
+        SyncMode::Invite => return print_first_invitation(&home),
     };
     match result {
         Ok(()) => 0,
         Err(problem) => {
             eprintln!("error: {problem}");
             problem.exit_code()
+        }
+    }
+}
+
+/// Asks the server of this home for the first invitation, and prints the link, its
+/// code and the QR code of the link.
+///
+/// The mode starts no server and writes no file: the server of the home answers,
+/// or one typed line says that no server answers.
+fn print_first_invitation(home: &horizon_sync::ServerHome) -> i32 {
+    match horizon_sync::first_invitation(home, horizon_sync::SERVER_DEVICE) {
+        Ok(invited) => match horizon_sync::invitation_text(&invited) {
+            Ok(text) => {
+                print!("{text}");
+                0
+            }
+            Err(problem) => {
+                eprintln!("error: {problem}");
+                1
+            }
+        },
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            1
         }
     }
 }
@@ -615,8 +671,9 @@ fn init_tracing() {
 const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>
-       horizon --server
-       horizon --server-link";
+       horizon --server [--listen <ip>:<port>] [--name <dns-name>]
+       horizon --server-link
+       horizon --server-invite";
 
 #[derive(Debug, PartialEq, Eq)]
 enum RemoteProfileCommand {
@@ -778,23 +835,77 @@ mod cli_args_tests {
     fn the_server_and_its_link_are_one_flag_alone() {
         assert_eq!(
             parse_sync_mode(["--server"].map(Into::into).into_iter()).expect("server"),
-            Some(SyncMode::Server)
+            Some(SyncMode::Server(horizon_sync::ServerOptions::default()))
         );
         assert_eq!(
             parse_sync_mode(["--server-link"].map(Into::into).into_iter()).expect("link"),
             Some(SyncMode::Link)
         );
         assert_eq!(
+            parse_sync_mode(["--server-invite"].map(Into::into).into_iter()).expect("invite"),
+            Some(SyncMode::Invite)
+        );
+        assert_eq!(
             parse_sync_mode(["--blank"].map(Into::into).into_iter()).expect("the desktop"),
             None
         );
         assert_eq!(parse_sync_mode(std::iter::empty()).expect("no argument"), None);
-        for bad in [["--server", "--config"], ["--server-link", "extra"]] {
+        for bad in [
+            &["--server", "--config"][..],
+            &["--server-link", "extra"],
+            &["--server-invite", "extra"],
+            &["--server", "--listen"],
+            &["--server", "--port", "7000"],
+            &["--server", "--listen", "127.0.0.1:7000", "extra"],
+        ] {
             assert!(
-                parse_sync_mode(bad.map(Into::into).into_iter()).is_err(),
+                parse_sync_mode(bad.iter().map(Into::into)).is_err(),
                 "{bad:?} must not fall through to the desktop"
             );
         }
+    }
+
+    #[test]
+    fn the_server_takes_the_address_of_its_listener_and_the_name_of_its_links() {
+        let mode = parse_sync_mode(
+            ["--server", "--listen", "127.0.0.1:7000", "--name", "server-computer"]
+                .map(Into::into)
+                .into_iter(),
+        )
+        .expect("a server with a listener")
+        .expect("the server mode");
+        let SyncMode::Server(options) = mode else {
+            panic!("the server mode");
+        };
+        assert_eq!(options.listen.as_deref(), Some("127.0.0.1:7000"));
+        assert_eq!(options.name.as_deref(), Some("server-computer"));
+        let info = options
+            .listener()
+            .expect("the listener of the mode")
+            .expect("one listener");
+        assert_eq!(info.address().to_string(), "127.0.0.1:7000");
+        assert_eq!(
+            info.join_link("ABCD-EFGH-JKMN").expect("a link"),
+            "horizon://server-computer:7000/join#ABCD-EFGH-JKMN",
+            "the name of the server is the host of a link"
+        );
+
+        // A person never writes a wildcard address, and the rule says so.
+        let wildcard = parse_sync_mode(["--server", "--listen", "0.0.0.0:7000"].map(Into::into).into_iter())
+            .expect("the mode parses")
+            .expect("the server mode");
+        let SyncMode::Server(options) = wildcard else {
+            panic!("the server mode");
+        };
+        let error = options.listener().expect_err("a wildcard address is refused");
+        assert!(error.to_string().contains("100.64.0.0/10"), "{error}");
+        assert!(
+            horizon_sync::ServerOptions::default()
+                .listener()
+                .expect("no listener")
+                .is_none(),
+            "the listener is off without --listen"
+        );
     }
 
     #[test]

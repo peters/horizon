@@ -37,11 +37,16 @@
 #![forbid(unsafe_code)]
 
 mod client;
+mod clock;
 mod error;
 mod frame;
 mod host;
 mod intent;
+mod invite;
+mod join;
 mod link;
+mod listener;
+mod login;
 mod protocol;
 mod server;
 mod store;
@@ -49,24 +54,35 @@ mod supervisor;
 mod tip;
 
 pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PullOutcome, PushOutcome};
+pub use clock::{Clock, SystemClock};
 pub use error::{Refusal, StoreError, SyncError};
 pub use frame::{FrameError, MAX_FRAME_BYTES, read_frame, write_frame};
 pub use host::{
-    EXIT_NO_SERVER, HostError, ServerHome, ServerLock, link_stdio, link_streams, serve_until_stopped, terminate_flag,
+    EXIT_NO_SERVER, HostError, ServerHome, ServerLock, ServerOptions, link_stdio, link_streams, serve_until_stopped,
+    serve_with_options, terminate_flag,
 };
 pub use intent::{
     Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, MAX_INTENTS_PER_PUSH, MAX_PROBES,
     MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, Op, Outcome, PushReply, SecretBody,
 };
+pub use invite::{InviteError, SERVER_DEVICE, ask, first_invitation, greet, invitation_text};
+pub use join::{JoinError, join};
 pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
+pub use listener::{ListenError, ListenerInfo, TcpServer, run_server_on_tcp};
+pub use login::{hash_code, hash_token, new_code, new_token};
 pub use protocol::{
-    Changes, Frame, Hello, HelloOk, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait,
-    check_device_name,
+    Changes, DeviceList, DeviceLogin, DeviceRemove, DeviceRemoved, DeviceRow, Devices, Frame, Hello, HelloOk, Invite,
+    Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait, check_device_name,
 };
-pub use server::{MAX_OPEN_WAITS, WAIT_BOUND, serve};
-pub use store::Store;
+pub use server::{
+    LinkRegistry, LinkTicket, LinkTransport, MAX_OPEN_WAITS, NoTransport, ServerInfo, WAIT_BOUND, WRONG_CODE_DELAY,
+    serve, serve_ssh, serve_tcp,
+};
+pub use store::{
+    INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, Store, WRONG_CODE_WINDOW_MILLIS,
+};
 pub use supervisor::{
-    LinkBounds, LinkSnapshot, REQUEST_BOUND, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
-    WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
+    LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, Supervisor, SupervisorConfig, SyncHandle,
+    SyncedMachineStore, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
 };
 pub use tip::tip;

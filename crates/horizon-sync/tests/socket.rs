@@ -30,7 +30,8 @@ fn a_server_on_a_socket_answers_one_computer_and_removes_its_socket_when_it_stop
     let temp = tempfile::tempdir().expect("a directory");
     let path = temp.path().join("server.sock");
     let store = Store::open(&temp.path().join("server.sqlite")).expect("the store");
-    let server = run_server_on_unix_socket(&path, store.clone()).expect("the socket");
+    let server =
+        run_server_on_unix_socket(&path, store.clone(), &horizon_sync::ServerInfo::default()).expect("the socket");
     assert_eq!(server.path(), path.as_path());
     assert!(
         fs::symlink_metadata(&path)
@@ -75,7 +76,8 @@ fn the_relay_carries_the_frames_of_a_link_and_ends_when_its_stream_ends() {
     let temp = tempfile::tempdir().expect("a directory");
     let path = temp.path().join("relay.sock");
     let store = Store::open(&temp.path().join("server.sqlite")).expect("the store");
-    let server = run_server_on_unix_socket(&path, store.clone()).expect("the socket");
+    let server =
+        run_server_on_unix_socket(&path, store.clone(), &horizon_sync::ServerInfo::default()).expect("the socket");
 
     // The pair is the stdio of the child of a later slice: one end is the child,
     // and the relay copies its bytes to the socket of the server.
@@ -120,7 +122,7 @@ fn a_path_of_the_person_that_is_not_a_socket_is_left_alone() {
     let path = temp.path().join("occupied.sock");
     fs::write(&path, b"I am a note of the person").expect("a file");
     let store = Store::open(&temp.path().join("server.sqlite")).expect("the store");
-    let refused = run_server_on_unix_socket(&path, store.clone());
+    let refused = run_server_on_unix_socket(&path, store.clone(), &horizon_sync::ServerInfo::default());
     assert!(refused.is_err(), "a file of the person is not replaced by a socket");
     assert_eq!(
         fs::read(&path).expect("the file"),
@@ -138,7 +140,8 @@ fn a_path_of_the_person_that_is_not_a_socket_is_left_alone() {
             .file_type()
             .is_socket()
     );
-    let server = run_server_on_unix_socket(&path, store.clone()).expect("the socket is bound again");
+    let server = run_server_on_unix_socket(&path, store.clone(), &horizon_sync::ServerInfo::default())
+        .expect("the socket is bound again");
     server.stop();
     store.close();
 }

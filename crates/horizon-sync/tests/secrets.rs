@@ -216,7 +216,10 @@ impl Server {
         fs::create_dir_all(home).expect("the server home");
         let socket = home.join("server.sock");
         let store = Store::open(&home.join("server.sqlite")).expect("the store");
-        let running = Some(run_server_on_unix_socket(&socket, store.clone()).expect("the socket"));
+        let running = Some(
+            run_server_on_unix_socket(&socket, store.clone(), &horizon_sync::ServerInfo::default())
+                .expect("the socket"),
+        );
         Self {
             home: home.to_path_buf(),
             socket,
@@ -232,7 +235,10 @@ impl Server {
     }
 
     fn restart(&mut self) {
-        self.running = Some(run_server_on_unix_socket(&self.socket, self.store.clone()).expect("the socket"));
+        self.running = Some(
+            run_server_on_unix_socket(&self.socket, self.store.clone(), &horizon_sync::ServerInfo::default())
+                .expect("the socket"),
+        );
     }
 
     /// The secret rows of the store, by id, as a pull reports them.

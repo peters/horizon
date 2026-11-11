@@ -14,9 +14,12 @@ pub use crate::store::{Changes, Row};
 ///
 /// Version 1 is the machine list of a server. Version 2 adds the secrets, which
 /// are one kind of row, and the flag of the hello that says that a server cannot
-/// read the secrets that it holds. A version 1 computer does not read either, so
-/// the two sides of one link speak the same version.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// read the secrets that it holds. Version 3 adds the login over the TCP listener
+/// of a server: the `join` of a computer with the code of an invitation, the
+/// token that a later `hello` carries, and the request that makes an invitation
+/// and lists the computers. A computer of an earlier version reads none of them,
+/// so the two sides of one link speak the same version.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;
@@ -32,6 +35,126 @@ pub struct Hello {
     /// The store id that the computer saw last, when it saw one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<String>,
+    /// The token that a `join` gave this computer. It is present on a link of the
+    /// TCP listener and absent on a link of the Unix socket, where `ssh` is the
+    /// login. The server keeps the hash of a token and never the token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+/// The first frame of a computer that joins the server with the code of an
+/// invitation, on the TCP listener of a server.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Join {
+    /// The code of one invitation, in three groups of four or without dashes.
+    pub code: String,
+    /// The name that this computer takes on the server.
+    pub device: String,
+}
+
+/// The answer to a [`Join`]: the token of this computer, which every later
+/// `hello` of it carries.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Joined {
+    /// The name that the server gave this computer.
+    pub device: String,
+    /// The token of this computer on the server.
+    pub token: String,
+}
+
+/// The request of a logged-in computer for one invitation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Invite {}
+
+/// The answer to an [`Invite`]: one code, the link that holds it, and the time
+/// that the invitation still lives.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Invited {
+    /// The code of the invitation, in three groups of four.
+    pub code: String,
+    /// The link that a person pastes into another computer,
+    /// `horizon://<host>:<port>/join#<CODE>`.
+    pub link: String,
+    /// The milliseconds that the invitation still lives when the server answered.
+    pub expires_millis: u64,
+    /// The time of the server when it answered. A window compares it with the time
+    /// that a computer joined, so it learns that the invitation was used.
+    pub now_millis: u64,
+}
+
+/// The request for the list of the computers of this server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Devices {}
+
+/// How one computer logs in on this server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceLogin {
+    /// A link of the Unix socket of the server, whose login is `ssh`.
+    Ssh,
+    /// A link of the TCP listener, whose login is the token of a join.
+    Token,
+}
+
+impl DeviceLogin {
+    /// The stable code of this login, for a row of the window and a tool answer.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Token => "token",
+        }
+    }
+}
+
+/// One computer of this server, as the list of the computers reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceRow {
+    /// The device name that the computer claimed, or that its token names.
+    pub name: String,
+    /// The time of the server when this computer first reached it.
+    pub created_millis: u64,
+    /// The time of the server when this computer last reached it.
+    pub last_seen_millis: u64,
+    /// How this computer logs in.
+    pub login: DeviceLogin,
+    /// Whether this row is the computer that asked for the list.
+    pub caller: bool,
+}
+
+/// The list of the computers of this server.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceList {
+    /// The rows, in name order.
+    pub rows: Vec<DeviceRow>,
+    /// The time of the server when it answered, so a window can say how long ago
+    /// it saw a computer without trusting its own clock against the server.
+    pub now_millis: u64,
+}
+
+/// The request to remove one computer from this server.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceRemove {
+    /// The name of the computer to remove.
+    pub device: String,
+}
+
+/// The answer to a [`DeviceRemove`].
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceRemoved {
+    /// The name that the request named.
+    pub device: String,
+    /// Whether this server held that computer.
+    pub removed: bool,
 }
 
 /// The answer of the server to a [`Hello`].
@@ -82,6 +205,14 @@ pub struct Wait {
 pub enum Frame {
     Hello(Hello),
     HelloOk(HelloOk),
+    Join(Join),
+    Joined(Joined),
+    Invite(Invite),
+    Invited(Invited),
+    Devices(Devices),
+    DeviceList(DeviceList),
+    DeviceRemove(DeviceRemove),
+    DeviceRemoved(DeviceRemoved),
     Push(Push),
     Pushed(PushReply),
     Pull(Pull),
@@ -129,6 +260,20 @@ pub enum LinkErrorCode {
     TooManyWaits,
     /// The server store could not answer now; the same frame can be sent again.
     StoreFailed,
+    /// A computer asked for an invitation, and the server has no listener.
+    NoListener,
+    /// The code of a join is not one open invitation of this server.
+    WrongCode,
+    /// Too many wrong codes were tried, so every invitation is gone until a
+    /// person makes a new one.
+    JoinLocked,
+    /// The device name of a join already holds a token on this server.
+    NameTaken,
+    /// The token of a link is not one of this server, or it belongs to another
+    /// device.
+    NotLoggedIn,
+    /// This computer was removed from the server, and its link ends.
+    Removed,
 }
 
 impl LinkErrorCode {
@@ -144,6 +289,12 @@ impl LinkErrorCode {
             Self::TooManyIntents => "too_many_intents",
             Self::TooManyWaits => "too_many_waits",
             Self::StoreFailed => "store_failed",
+            Self::NoListener => "no_listener",
+            Self::WrongCode => "wrong_code",
+            Self::JoinLocked => "join_locked",
+            Self::NameTaken => "name_taken",
+            Self::NotLoggedIn => "not_logged_in",
+            Self::Removed => "removed",
         }
     }
 }
@@ -193,6 +344,46 @@ mod tests {
                 protocol: PROTOCOL_VERSION,
                 device: "mbp-7c1".to_owned(),
                 store: None,
+                token: None,
+            }),
+            Frame::Hello(Hello {
+                protocol: PROTOCOL_VERSION,
+                device: "mbp-7c1".to_owned(),
+                store: Some("store-a".to_owned()),
+                token: Some("a-token-of-one-computer".to_owned()),
+            }),
+            Frame::Join(Join {
+                code: "ABCD-EFGH-JKMN".to_owned(),
+                device: "mbp-7c1".to_owned(),
+            }),
+            Frame::Joined(Joined {
+                device: "mbp-7c1".to_owned(),
+                token: "a-token-of-one-computer".to_owned(),
+            }),
+            Frame::Invite(Invite {}),
+            Frame::Invited(Invited {
+                code: "ABCD-EFGH-JKMN".to_owned(),
+                link: "horizon://server-computer:7000/join#ABCD-EFGH-JKMN".to_owned(),
+                expires_millis: 600_000,
+                now_millis: 1_760_000_000_000,
+            }),
+            Frame::Devices(Devices {}),
+            Frame::DeviceList(DeviceList {
+                now_millis: 1_760_000_000_000,
+                rows: vec![DeviceRow {
+                    name: "mbp-7c1".to_owned(),
+                    created_millis: 1_760_000_000_000,
+                    last_seen_millis: 1_760_000_000_000,
+                    login: DeviceLogin::Token,
+                    caller: true,
+                }],
+            }),
+            Frame::DeviceRemove(DeviceRemove {
+                device: "mbp-7c1".to_owned(),
+            }),
+            Frame::DeviceRemoved(DeviceRemoved {
+                device: "mbp-7c1".to_owned(),
+                removed: true,
             }),
             Frame::HelloOk(HelloOk {
                 protocol: PROTOCOL_VERSION,
@@ -233,6 +424,35 @@ mod tests {
     }
 
     #[test]
+    fn every_code_of_a_link_that_ends_has_a_stable_name() {
+        for (code, name) in [
+            (LinkErrorCode::FrameTooLarge, "frame_too_large"),
+            (LinkErrorCode::BadFrame, "bad_frame"),
+            (LinkErrorCode::ProtocolVersion, "protocol_version"),
+            (LinkErrorCode::BadDevice, "bad_device"),
+            (LinkErrorCode::NotHello, "not_hello"),
+            (LinkErrorCode::TooManyIntents, "too_many_intents"),
+            (LinkErrorCode::TooManyWaits, "too_many_waits"),
+            (LinkErrorCode::StoreFailed, "store_failed"),
+            (LinkErrorCode::NoListener, "no_listener"),
+            (LinkErrorCode::WrongCode, "wrong_code"),
+            (LinkErrorCode::JoinLocked, "join_locked"),
+            (LinkErrorCode::NameTaken, "name_taken"),
+            (LinkErrorCode::NotLoggedIn, "not_logged_in"),
+            (LinkErrorCode::Removed, "removed"),
+        ] {
+            assert_eq!(code.as_str(), name);
+            assert_eq!(
+                serde_json::to_string(&code).expect("a code is JSON"),
+                format!("\"{name}\""),
+                "the wire uses the same name as the log"
+            );
+        }
+        assert_eq!(DeviceLogin::Ssh.code(), "ssh");
+        assert_eq!(DeviceLogin::Token.code(), "token");
+    }
+
+    #[test]
     fn a_frame_is_one_named_field_so_a_reader_knows_what_it_holds() {
         let frame = Frame::Wait(Wait { since: 4 });
         assert_eq!(
@@ -243,6 +463,15 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&error).expect("a frame is JSON"),
             r#"{"error":{"code":"too_many_waits","message":"at most 32"}}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Frame::Invite(Invite {})).expect("a frame is JSON"),
+            r#"{"invite":{}}"#,
+            "a request without fields is one empty document"
+        );
+        assert_eq!(
+            serde_json::to_string(&Frame::Devices(Devices {})).expect("a frame is JSON"),
+            r#"{"devices":{}}"#
         );
         assert!(
             serde_json::from_str::<Frame>(r#"{"wait":{"since":1},"pull":{"since":1}}"#).is_err(),

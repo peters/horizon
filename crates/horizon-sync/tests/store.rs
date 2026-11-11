@@ -601,7 +601,7 @@ fn a_file_of_a_newer_horizon_is_refused_and_a_damaged_one_is_reported() {
             panic!("a file of a newer Horizon must be refused");
         }
         Err(refused) => assert!(
-            matches!(refused, StoreError::Newer { found: 99, expected: 2 }),
+            matches!(refused, StoreError::Newer { found: 99, expected: 3 }),
             "{refused}"
         ),
     }

@@ -6,6 +6,7 @@ mod remote_browsers;
 mod remote_recovery;
 mod remote_usage;
 mod secrets;
+pub(in crate::app) mod server;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,7 @@ enum SettingsTab {
     Browser,
     RemoteBrowsers,
     Secrets,
+    Server,
 }
 
 impl SettingsTab {
@@ -56,6 +58,7 @@ impl SettingsTab {
             Self::Browser => "Browser",
             Self::RemoteBrowsers => "Remote",
             Self::Secrets => "Secrets",
+            Self::Server => "Server",
         }
     }
 
@@ -66,6 +69,7 @@ impl SettingsTab {
         Self::Browser,
         Self::RemoteBrowsers,
         Self::Secrets,
+        Self::Server,
     ];
 }
 
@@ -94,6 +98,7 @@ pub(super) struct SettingsEditor {
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
     secret_inputs: secrets::SecretInputs,
+    pub(in crate::app) server: server::ServerTabState,
 }
 
 impl SettingsEditor {
@@ -142,11 +147,18 @@ impl HorizonApp {
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
                 secret_inputs: secrets::SecretInputs::default(),
+                server: server::ServerTabState::default(),
             });
         }
     }
 
     pub(super) fn render_settings(&mut self, ui: &mut egui::Ui) {
+        // The answers of the server that arrived since the last frame land in the
+        // tab before it draws, so a frame with nothing to read allocates nothing.
+        if let Some(editor) = self.settings.as_mut() {
+            editor.server.poll();
+        }
+        let view = self.server_view();
         let Some(editor) = self.settings.as_mut() else {
             return;
         };
@@ -163,10 +175,13 @@ impl HorizonApp {
             ui,
             panel_state,
             editor,
-            &mut self.remote_browser_credentials,
-            &mut self.browser_create_host.remote_allocations,
-            &mut self.named_secrets,
-            &mut self.keyring_import,
+            &mut TabWorkbenches {
+                credentials: &mut self.remote_browser_credentials,
+                allocations: &mut self.browser_create_host.remote_allocations,
+                named_secrets: &mut self.named_secrets,
+                keyring: &mut self.keyring_import,
+            },
+            &view,
         );
         if changed {
             if let Some(editor) = self.settings.as_mut() {
@@ -181,8 +196,17 @@ impl HorizonApp {
                 self.apply_live_preview(&config);
             }
         }
-        // A press in the bar is applied after the panel drew it.
+        // A press in the bar is applied after the panel drew it, and so is a press
+        // of the Server tab, which asks the server one question.
         self.apply_settings_action(action);
+        if let Some(asked) = self.settings.as_mut().and_then(|editor| editor.server.action.take()) {
+            self.apply_server_action(asked, ui.ctx().clone());
+        }
+        // A tab that waits for an answer keeps the frames coming, so the answer
+        // reaches the window as soon as the worker has it.
+        if self.settings.as_ref().is_some_and(|editor| editor.server.is_busy()) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
     }
 
     fn apply_live_preview(&mut self, config: &Config) {
@@ -390,10 +414,8 @@ fn render_settings_panel(
     ui: &mut egui::Ui,
     panel_state: PanelState<'_>,
     editor: &mut SettingsEditor,
-    credentials: &mut CredentialWorkbench,
-    allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
-    named_secrets: &mut NamedSecretWorkbench,
-    keyring: &mut KeyringImport,
+    workbenches: &mut TabWorkbenches<'_>,
+    view: &server::ServerView,
 ) -> (SettingsAction, bool) {
     let rect = panel_rect(ui);
     egui::Panel::right(SETTINGS_PANEL_ID)
@@ -429,28 +451,41 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let changed = render_tab(ui, editor, credentials, allocations, named_secrets, keyring, available);
+            let changed = render_tab(ui, editor, workbenches, available, view);
             (action, changed)
         })
         .inner
 }
 
 /// Draw the active tab. Returns whether it changed the draft.
+/// The workers of the tabs, which the app holds beside the editor.
+struct TabWorkbenches<'a> {
+    credentials: &'a mut CredentialWorkbench,
+    allocations: &'a mut horizon_core::browser::remote_recovery::RemoteAllocations,
+    named_secrets: &'a mut NamedSecretWorkbench,
+    keyring: &'a mut KeyringImport,
+}
+
 fn render_tab(
     ui: &mut egui::Ui,
     editor: &mut SettingsEditor,
-    credentials: &mut CredentialWorkbench,
-    allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
-    named_secrets: &mut NamedSecretWorkbench,
-    keyring: &mut KeyringImport,
+    workbenches: &mut TabWorkbenches<'_>,
     available: Vec2,
+    view: &server::ServerView,
 ) -> bool {
+    let TabWorkbenches {
+        credentials,
+        allocations,
+        named_secrets,
+        keyring,
+    } = workbenches;
     let SettingsEditor {
         config,
         credential_inputs,
         portable_profile,
         provider_usage,
         secret_inputs,
+        server,
         active_tab,
         ..
     } = editor;
@@ -482,6 +517,7 @@ fn render_tab(
                     )
                 }
                 SettingsTab::Secrets => secrets::render(ui, config, named_secrets, secret_inputs),
+                SettingsTab::Server => server::render(ui, config, server, view),
             }
         })
         .inner

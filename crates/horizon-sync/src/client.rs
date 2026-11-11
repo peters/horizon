@@ -40,6 +40,12 @@ pub enum LinkState {
     Behind,
     /// The server is away, and this many intents wait in the queue.
     Away { pending: usize },
+    /// The server removed this computer. Its token is gone, and no attempt runs
+    /// until a person joins it again.
+    Removed,
+    /// The server does not know the token of this computer. Its token is gone, and
+    /// no attempt runs until a person joins it again.
+    NotLoggedIn,
 }
 
 impl LinkState {
@@ -53,6 +59,8 @@ impl LinkState {
             Self::InStep { .. } => "in_step",
             Self::Behind => "behind",
             Self::Away { .. } => "away",
+            Self::Removed => "removed",
+            Self::NotLoggedIn => "not_logged_in",
         }
     }
 
@@ -60,9 +68,16 @@ impl LinkState {
     /// link says `connecting`: an attempt after a link that failed keeps the state
     /// that the failure left, so a server that does not answer does not read
     /// `connecting` for as long as it stays silent.
+    ///
+    /// A computer that the server removed keeps that state: no attempt starts for
+    /// it, so it never reads `connecting` again.
     #[must_use]
     pub fn started(self, first_attempt: bool) -> Self {
-        if first_attempt { Self::Connecting } else { self }
+        match self {
+            Self::Removed | Self::NotLoggedIn => self,
+            _ if first_attempt => Self::Connecting,
+            _ => self,
+        }
     }
 
     /// The intents that wait for the server, which is none for a link that
@@ -71,7 +86,7 @@ impl LinkState {
     pub fn pending(&self) -> usize {
         match self {
             Self::Away { pending } => *pending,
-            Self::Off | Self::Connecting | Self::InStep { .. } | Self::Behind => 0,
+            Self::Off | Self::Connecting | Self::InStep { .. } | Self::Behind | Self::Removed | Self::NotLoggedIn => 0,
         }
     }
 }
@@ -420,7 +435,20 @@ impl Client {
     /// # Errors
     /// Returns why the link failed or the server refused the hello.
     pub fn hello<R: Read, W: Write>(&mut self, link: &mut Link<R, W>) -> Result<HelloOk, SyncError> {
-        let frame = self.hello_frame();
+        self.hello_with_token(link, None)
+    }
+
+    /// Sends the hello of this computer with the token of a join, and remembers
+    /// the store of the server.
+    ///
+    /// # Errors
+    /// Returns why the link failed or the server refused the hello.
+    pub fn hello_with_token<R: Read, W: Write>(
+        &mut self,
+        link: &mut Link<R, W>,
+        token: Option<&str>,
+    ) -> Result<HelloOk, SyncError> {
+        let frame = self.hello_frame(token);
         link.send(&frame)?;
         let answer = match link.receive("hello_ok") {
             Ok(Frame::HelloOk(answer)) => answer,
@@ -443,14 +471,29 @@ impl Client {
 
     /// The hello of this computer, for a caller that owns the two halves of the
     /// link itself, such as the supervisor of a child process.
-    pub fn hello_frame(&mut self) -> Frame {
+    ///
+    /// A link of the TCP listener carries the token of this computer; a link of
+    /// the socket of the server carries none, because `ssh` is its login.
+    pub fn hello_frame(&mut self, token: Option<&str>) -> Frame {
         self.link = std::mem::replace(&mut self.link, LinkState::Off).started(!self.attempted);
         self.attempted = true;
         Frame::Hello(Hello {
             protocol: PROTOCOL_VERSION,
             device: self.state.device.clone(),
             store: self.state.store.clone(),
+            token: token.map(str::to_owned),
         })
+    }
+
+    /// Reports that the server does not accept the token of this computer any
+    /// more, because it removed the computer or because it does not know the
+    /// token. Nothing retries from this state.
+    pub fn logged_out(&mut self, not_logged_in: bool) {
+        self.link = if not_logged_in {
+            LinkState::NotLoggedIn
+        } else {
+            LinkState::Removed
+        };
     }
 
     /// Remembers the store that the server answered. A store that this computer
@@ -714,10 +757,24 @@ impl<R: Read, W: Write> Link<R, W> {
     /// # Errors
     /// Returns why the link failed or the server refused the hello.
     pub fn hello(&mut self, device: &str, store: Option<&str>) -> Result<HelloOk, SyncError> {
+        self.hello_with_token(device, store, None)
+    }
+
+    /// Sends the hello of `device` with the token of a join, and reads the answer.
+    ///
+    /// # Errors
+    /// Returns why the link failed or the server refused the hello.
+    pub fn hello_with_token(
+        &mut self,
+        device: &str,
+        store: Option<&str>,
+        token: Option<&str>,
+    ) -> Result<HelloOk, SyncError> {
         self.send(&Frame::Hello(Hello {
             protocol: PROTOCOL_VERSION,
             device: device.to_owned(),
             store: store.map(str::to_owned),
+            token: token.map(str::to_owned),
         }))?;
         match self.receive("hello_ok")? {
             Frame::HelloOk(answer) => Ok(answer),
@@ -866,6 +923,14 @@ fn frame_name(frame: &Frame) -> &'static str {
     match frame {
         Frame::Hello(_) => "hello",
         Frame::HelloOk(_) => "hello_ok",
+        Frame::Join(_) => "join",
+        Frame::Joined(_) => "joined",
+        Frame::Invite(_) => "invite",
+        Frame::Invited(_) => "invited",
+        Frame::Devices(_) => "devices",
+        Frame::DeviceList(_) => "device_list",
+        Frame::DeviceRemove(_) => "device_remove",
+        Frame::DeviceRemoved(_) => "device_removed",
         Frame::Push(_) => "push",
         Frame::Pushed(_) => "pushed",
         Frame::Pull(_) => "pull",
@@ -890,14 +955,14 @@ mod tests {
         let (_directory, mut client) = client();
         // A start leaves the queue of an away server, as the supervisor does.
         client.away();
-        assert!(matches!(client.hello_frame(), Frame::Hello(_)));
+        assert!(matches!(client.hello_frame(None), Frame::Hello(_)));
         assert_eq!(client.state(), &LinkState::Connecting, "the first attempt connects");
 
         // The attempt that failed leaves `away`, and the next attempt keeps it
         // until a hello answers: a server that does not answer does not read
         // `connecting` for as long as it stays silent.
         client.away();
-        let _ = client.hello_frame();
+        let _ = client.hello_frame(None);
         assert_eq!(client.state(), &LinkState::Away { pending: 0 });
 
         client
@@ -909,5 +974,41 @@ mod tests {
             })
             .expect("the hello");
         assert_eq!(client.state(), &LinkState::Behind, "a hello that answers moves on");
+    }
+
+    #[test]
+    fn a_hello_carries_the_token_of_a_listener_and_no_token_of_a_socket() {
+        let (_directory, mut client) = client();
+        let socket = client.hello_frame(None);
+        let Frame::Hello(socket) = socket else {
+            panic!("a hello");
+        };
+        assert_eq!(socket.token, None);
+        assert_eq!(socket.protocol, PROTOCOL_VERSION);
+
+        let listener = client.hello_frame(Some("a-token-of-one-computer"));
+        let Frame::Hello(listener) = listener else {
+            panic!("a hello");
+        };
+        assert_eq!(listener.token.as_deref(), Some("a-token-of-one-computer"));
+        assert_eq!(listener.device, "mbp-7c1");
+    }
+
+    #[test]
+    fn a_removed_computer_keeps_its_state_and_retries_nothing() {
+        let (_directory, mut client) = client();
+        client.accept_mark(4).expect("a mark");
+        client.logged_out(false);
+        assert_eq!(client.state(), &LinkState::Removed);
+        assert_eq!(client.state().code(), "removed");
+        assert_eq!(client.state().pending(), 0);
+        assert_eq!(
+            client.state().clone().started(true),
+            LinkState::Removed,
+            "an attempt of a removed computer does not read connecting"
+        );
+        client.logged_out(true);
+        assert_eq!(client.state(), &LinkState::NotLoggedIn);
+        assert_eq!(client.state().code(), "not_logged_in");
     }
 }

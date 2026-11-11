@@ -26,6 +26,46 @@ use super::view::records_of;
 use super::{SyncError, queue_error};
 use crate::client::{Client, LinkState};
 use crate::intent::Op;
+use crate::protocol::{DeviceRow, Invited};
+
+/// One question that the window or a worker asks the server.
+///
+/// The supervisor sends it on the open link, so a computer that reaches its
+/// server over `ssh` can ask the same questions as one that joined it with a
+/// code. The answer comes back on a channel that the caller polls, so no frame
+/// waits for the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServerRequest {
+    /// One invitation for another computer.
+    Invite,
+    /// The list of the computers of this server.
+    Devices,
+    /// The removal of one computer.
+    Remove(String),
+}
+
+/// The answer to one [`ServerRequest`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServerReply {
+    /// One invitation, with its code, its link and the time that it still lives.
+    Invited(Invited),
+    /// The computers of this server, and the time of the server that answered.
+    Devices {
+        /// The rows, in name order.
+        rows: Vec<DeviceRow>,
+        /// The time of the server when it answered.
+        now_millis: u64,
+    },
+    /// The removal of one computer: whether the server held it.
+    Removed {
+        /// The name of the computer.
+        device: String,
+        /// Whether the server held that computer.
+        removed: bool,
+    },
+    /// The question did not reach its answer, with one sentence for the person.
+    Failed(String),
+}
 
 /// What a frame of the window reads about the link: the state, the names that
 /// wait for the server, the records that only the server gave, the key names of
@@ -37,6 +77,7 @@ use crate::intent::Op;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinkSnapshot {
     state: LinkState,
+    device: String,
     pending: BTreeSet<String>,
     foreign: BTreeSet<String>,
     machine_keys: BTreeSet<String>,
@@ -48,6 +89,13 @@ impl LinkSnapshot {
     #[must_use]
     pub fn state(&self) -> &LinkState {
         &self.state
+    }
+
+    /// The name that this computer has on the server, which the join of another
+    /// server defaults to.
+    #[must_use]
+    pub fn device(&self) -> &str {
+        &self.device
     }
 
     /// The names of the machines that have an intent the server did not decide.
@@ -167,6 +215,7 @@ impl SyncState {
             .collect();
         LinkSnapshot {
             state: self.client.state().clone(),
+            device: self.client.device().to_owned(),
             pending,
             foreign,
             machine_keys: self.machine_keys.clone(),
@@ -208,6 +257,7 @@ pub struct SyncHandle {
     /// The order of the writes of the queue and the mirror.
     pub(crate) writes: Arc<Mutex<WriteOrder>>,
     pub(crate) kick: Sender<()>,
+    pub(crate) requests: Sender<(ServerRequest, Sender<ServerReply>)>,
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -253,6 +303,7 @@ impl SyncHandle {
             .map(|id| id.name().to_owned())
             .collect();
         let (kick, _) = mpsc::channel();
+        let (requests, _) = mpsc::channel();
         let handle = Self {
             inner: Arc::new(Mutex::new(SyncState {
                 client,
@@ -282,6 +333,7 @@ impl SyncHandle {
             notices: Arc::new(Mutex::new(Vec::new())),
             writes: Arc::new(Mutex::new(WriteOrder::default())),
             kick,
+            requests,
             wake,
         };
         {
@@ -498,6 +550,25 @@ impl SyncHandle {
         drop(state);
         self.notify();
         Ok(())
+    }
+
+    /// Asks the server one question, and answers the channel of its answer.
+    ///
+    /// The question travels on the link that the supervisor already holds, so it
+    /// reaches a server that this computer follows over `ssh` as well as one that
+    /// it joined with a code. Nothing waits for the answer here: the caller polls
+    /// the channel of the answer when its worker or its frame reads it.
+    ///
+    /// A supervisor that ended answers a channel that is closed, which a caller
+    /// reads as "no answer".
+    #[must_use]
+    pub fn ask(&self, request: ServerRequest) -> mpsc::Receiver<ServerReply> {
+        let (reply, answers) = mpsc::channel();
+        if self.requests.send((request, reply)).is_err() {
+            tracing::debug!("the link ended before a question reached it");
+        }
+        self.notify();
+        answers
     }
 
     /// Asks the supervisor for a turn that sends what the queue holds, instead of

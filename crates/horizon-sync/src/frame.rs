@@ -8,7 +8,7 @@
 
 use std::{
     io::{self, Read, Write},
-    net::Shutdown,
+    net::{Shutdown, TcpStream},
     os::unix::net::UnixStream,
 };
 
@@ -29,6 +29,12 @@ pub trait FrameWriter: Write {
 }
 
 impl FrameWriter for UnixStream {
+    fn finish(&mut self) -> io::Result<()> {
+        self.shutdown(Shutdown::Write)
+    }
+}
+
+impl FrameWriter for TcpStream {
     fn finish(&mut self) -> io::Result<()> {
         self.shutdown(Shutdown::Write)
     }
@@ -106,7 +112,7 @@ pub fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Frame>, FrameError> 
 ///
 /// # Errors
 /// Refuses a frame above the maximum, and returns why the link failed.
-pub fn write_frame<W: Write>(writer: &mut W, frame: &Frame) -> Result<(), FrameError> {
+pub fn write_frame<W: Write + ?Sized>(writer: &mut W, frame: &Frame) -> Result<(), FrameError> {
     let body = serde_json::to_vec(frame).map_err(|error| FrameError::Json(error.to_string()))?;
     if body.len() > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge { size: body.len() });

@@ -1,13 +1,18 @@
-//! The supervisor of the link of one computer: one `ssh` child, the protocol of
-//! the store over its standard input and output, and the state that the sidebar
-//! reads.
+//! The supervisor of the link of one computer: one transport, the protocol of the
+//! store over it, and the state that the sidebar reads.
 //!
 //! The supervisor runs on a worker thread and never on the UI thread. It starts
-//! `ssh <target> <command>` with the bounded flags of the browser forward, speaks
-//! the frames of [`crate::client`] over that child, pushes the queue of the
-//! computer, pulls the changes into its mirror, and then waits for the next
-//! change. When the child ends it starts it again on the delays of
+//! `ssh <target> <command>` with the bounded flags of the browser forward, or it
+//! opens one socket to the TCP listener of the server when the settings name an
+//! address and this computer holds the token of a join. It speaks the frames of
+//! [`crate::client`] over that transport, pushes the queue of the computer, pulls
+//! the changes into its mirror, and then waits for the next change. When the link
+//! ends it starts it again on the delays of
 //! [`horizon_core::place::reconnect_delay`].
+//!
+//! A link that the server ends with `removed` or `not_logged_in` is the one end
+//! that does not retry: this computer forgets its token and stops until a person
+//! joins it again.
 //!
 //! The mirror is the machine list that the server last gave, kept in one private
 //! file so a restart while the server is away shows the same list. The records
@@ -26,9 +31,9 @@
 //! entry, and the only value that reaches it is its validated target and command.
 
 use std::{
-    io::{BufRead, BufReader},
+    io::Write,
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::Command,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -41,16 +46,19 @@ use std::{
 use horizon_browser_control::ssh_forward::ssh_command;
 use horizon_core::SecretTarget;
 use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
+use horizon_core::secret_store::{self, SecretStore};
 use horizon_core::{Machine, MachineError};
 
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
 use crate::protocol::Frame;
+use connect::{Halt, Opened};
 use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, device_name};
 use pull::{accept_hello, accept_pushed, apply_changes, merged_bindings, now_millis};
 use secrets::fill_secrets;
 use view::records_of;
 
+mod connect;
 mod files;
 mod pull;
 mod secrets;
@@ -58,7 +66,7 @@ mod state;
 mod view;
 
 pub(crate) use state::SyncState;
-pub use state::{LinkSnapshot, SyncHandle};
+pub use state::{LinkSnapshot, ServerReply, ServerRequest, SyncHandle};
 
 /// How long one turn of the supervisor waits for a frame or for local work.
 const LINK_SLICE: Duration = Duration::from_millis(100);
@@ -81,7 +89,7 @@ pub const WAIT_ANSWER_MARGIN: Duration = Duration::from_secs(15);
 /// in step.
 pub const WAIT_ANSWER_BOUND: Duration = Duration::from_secs(65);
 /// The longest line of the standard error of `ssh` that is logged.
-const MAX_STDERR_LINE: usize = 400;
+pub(super) const MAX_STDERR_LINE: usize = 400;
 
 /// The bounds of one link of one computer: the longest time that its requests may
 /// wait for an answer before the supervisor treats the link as lost.
@@ -123,6 +131,14 @@ pub struct SupervisorConfig {
     pub command: String,
     /// The program of the child: `ssh`, or a stand-in of a test.
     pub program: String,
+    /// The address of the TCP listener of the server, `host:port`, when the
+    /// settings name one. A link uses it with the token of a join, and falls back
+    /// to the `ssh` child without one.
+    pub address: Option<String>,
+    /// The secrets file of this computer, which holds the token of a join. The
+    /// supervisor reads it on its worker thread before a TCP link, and writes it
+    /// when the server removes this computer.
+    pub token_store: Option<Arc<SecretStore>>,
     /// The name of this computer on the server.
     pub device: String,
     /// The queue file of this computer.
@@ -159,6 +175,8 @@ impl SupervisorConfig {
             target: target.to_owned(),
             command: command.to_owned(),
             program: horizon_browser_control::ssh_forward::ssh_program(),
+            address: None,
+            token_store: None,
             device: device_name(directory)?,
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
@@ -175,25 +193,49 @@ impl SupervisorConfig {
     pub fn command_line(&self) -> Command {
         ssh_command(&self.program, &self.target, &self.command)
     }
+
+    /// The token of this computer on its server, or `None` when it is not logged
+    /// in with a TCP link.
+    ///
+    /// This reads the secrets file, so it runs on the worker thread of the link.
+    fn token(&self) -> Option<String> {
+        let store = self.token_store.as_deref()?;
+        match secret_store::read_token(store) {
+            Ok(token) => token.map(|token| token.to_string()),
+            Err(error) => {
+                tracing::warn!(%error, "the token of this computer could not be read");
+                None
+            }
+        }
+    }
+
+    /// The address of a TCP link: one address of the settings and one token.
+    fn tcp_address(&self) -> Option<&str> {
+        self.address
+            .as_deref()
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+            .filter(|_| self.token_store.is_some())
+    }
 }
 
 /// The records of the state with its waiting intents applied, and remembered as
 /// the answer of this load, so a save turns only what its caller changed into an
 /// intent.
-/// The supervisor of the link: its thread, the child that it owns, and the stop
-/// flag that ends both.
+/// The supervisor of the link: its thread, the transport that it owns, and the
+/// stop flag that ends both.
 #[derive(Debug)]
 pub struct Supervisor {
     handle: SyncHandle,
     stop: Arc<AtomicBool>,
-    child: Arc<Mutex<Option<Child>>>,
+    halt: Arc<Mutex<Option<Halt>>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Supervisor {
     /// Starts the supervisor of one computer. Nothing runs before this call: the
-    /// thread opens its child, and a server that is away costs one failure and
-    /// one delay.
+    /// thread opens its transport, and a server that is away costs one failure
+    /// and one delay.
     ///
     /// # Errors
     /// Returns why the queue, the mirror or the device name cannot be read or
@@ -202,25 +244,27 @@ impl Supervisor {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let mut handle = SyncHandle::open(&config, Arc::clone(&wake))?;
         let (kick, kicked) = mpsc::channel();
+        let (ask, asked) = mpsc::channel();
         {
             let mut state = handle.lock();
             state.client.away();
             state.generation = state.generation.wrapping_add(1);
         }
         handle.kick = kick;
+        handle.requests = ask;
         let stop = Arc::new(AtomicBool::new(false));
-        let child = Arc::new(Mutex::new(None));
+        let halt = Arc::new(Mutex::new(None));
         let thread = {
-            let (handle, stop, child) = (handle.clone(), Arc::clone(&stop), Arc::clone(&child));
+            let (handle, stop, halt) = (handle.clone(), Arc::clone(&stop), Arc::clone(&halt));
             thread::Builder::new()
                 .name("horizon-sync-supervisor".to_owned())
-                .spawn(move || run(&config, &handle, &stop, &child, &kicked))
+                .spawn(move || run(&config, &handle, &stop, &halt, &kicked, &asked))
                 .map_err(|error| SyncError::Queue(format!("the supervisor thread: {error}")))?
         };
         Ok(Self {
             handle,
             stop,
-            child,
+            halt,
             thread: Some(thread),
         })
     }
@@ -231,56 +275,70 @@ impl Supervisor {
         &self.handle
     }
 
-    /// Ends the link and the thread. A child that is running is killed, so a
+    /// Ends the link and the thread. A transport that is running is ended, so a
     /// blocked read returns at once and the thread ends within one slice.
     pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        kill(&self.child);
+        halt(&self.halt);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        reap(&self.halt);
     }
 }
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        kill(&self.child);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.shutdown();
     }
 }
 
 /// The life of one supervisor: a link, then the delays of a lost one, until the
-/// stop flag is set.
+/// stop flag is set or the server removes this computer.
 fn run(
     config: &SupervisorConfig,
     handle: &SyncHandle,
     stop: &AtomicBool,
-    child_slot: &Arc<Mutex<Option<Child>>>,
+    halt_slot: &Arc<Mutex<Option<Halt>>>,
     kicked: &Receiver<()>,
+    asked: &Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
 ) {
     let mut attempt: u32 = 1;
     while !stop.load(Ordering::SeqCst) {
         let started = Instant::now();
-        match connect(config, handle, stop, child_slot, kicked) {
-            Ok((mut input, answers)) => {
-                serve_link(handle, stop, &config.bounds, &mut input, &answers, kicked);
-                kill(child_slot);
-                reap(child_slot);
-                if started.elapsed() >= horizon_core::RECONNECT_RESET_AFTER {
-                    attempt = 1;
-                } else {
-                    attempt = attempt.saturating_add(1);
-                }
-            }
+        let end = match connect(config, handle, stop, halt_slot) {
+            Ok((mut input, answers)) => serve_link(LinkParts {
+                config,
+                handle,
+                stop,
+                bounds: &config.bounds,
+                input: &mut input,
+                answers: &answers,
+                kicked,
+                asked,
+            }),
             Err(reason) => {
                 tracing::warn!(%reason, "the link to the Horizon server did not open");
-                kill(child_slot);
-                reap(child_slot);
-                attempt = attempt.saturating_add(1);
+                End::Link
             }
+        };
+        halt(halt_slot);
+        reap(halt_slot);
+        if end == End::LoggedOut {
+            // The server removed this computer, or does not know its token. The
+            // token is gone and no retry can bring it back, so the link waits for
+            // a person to join this computer again.
+            (handle.wake)();
+            break;
+        }
+        if started.elapsed() >= horizon_core::RECONNECT_RESET_AFTER {
+            attempt = 1;
+        } else {
+            attempt = attempt.saturating_add(1);
         }
         {
             let mut state = handle.lock();
@@ -295,47 +353,56 @@ fn run(
     }
 }
 
-/// Starts one child and its reader, sends the hello, and answers the two halves
-/// of the link once the server greeted this computer.
+/// How one link ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum End {
+    /// The link failed, reached its bound or ended, so the next attempt starts on
+    /// the delays of a lost link.
+    Link,
+    /// The server does not know the token of this computer, so no attempt can
+    /// succeed until a person joins it again.
+    LoggedOut,
+}
+
+/// Starts one transport and its reader, sends the hello, and answers the two
+/// halves of the link once the server greeted this computer.
 fn connect(
     config: &SupervisorConfig,
     handle: &SyncHandle,
     stop: &AtomicBool,
-    child_slot: &Arc<Mutex<Option<Child>>>,
-    _kicked: &Receiver<()>,
-) -> Result<(ChildStdin, Receiver<Frame>), String> {
-    let mut command = config.command_line();
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not start `{}`: {error}", config.program))?;
-    let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("the child of the link has no standard input or output".to_owned());
-    };
-    if let Some(stderr) = child.stderr.take() {
-        thread::Builder::new()
-            .name("horizon-sync-stderr".to_owned())
-            .spawn(move || log_stderr(stderr))
-            .ok();
+    halt_slot: &Arc<Mutex<Option<Halt>>>,
+) -> Result<(Box<dyn Write + Send>, Receiver<Frame>), String> {
+    // A TCP link reads the token row of this computer, and an `ssh` link leaves
+    // the program to the machine terminal of the person. Both run here, on the
+    // worker thread of the link.
+    let token = config.tcp_address().and_then(|_| config.token());
+    if config.tcp_address().is_some() && token.is_none() {
+        return Err("this computer has no token of the server; join it again".to_owned());
     }
-    *child_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);
+    let opened = if let Some(address) = config.tcp_address() {
+        connect::tcp(address)?
+    } else {
+        let mut command = config.command_line();
+        connect::ssh(&mut command, &config.program)?
+    };
+    let Opened {
+        writer,
+        answers,
+        halt: handle_halt,
+    } = opened;
+    *halt_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle_halt);
 
-    let (answers, incoming) = mpsc::channel();
+    let (frames, incoming) = mpsc::channel();
     thread::Builder::new()
         .name("horizon-sync-reader".to_owned())
-        .spawn(move || read_answers(output, &answers))
+        .spawn(move || read_answers(answers, &frames))
         .map_err(|error| format!("the reader thread: {error}"))?;
 
     let hello = {
         let mut state = handle.lock();
-        state.client.hello_frame()
+        state.client.hello_frame(token.as_deref())
     };
-    let mut input = input;
+    let mut input = writer;
     write_frame(&mut input, &hello).map_err(|error| format!("the hello was not sent: {error}"))?;
     let deadline = Instant::now() + HELLO_BOUND;
     loop {
@@ -348,9 +415,16 @@ fn connect(
                 return Ok((input, incoming));
             }
             Ok(Frame::Error(error)) => {
+                let code = error.code;
+                if matches!(
+                    code,
+                    crate::protocol::LinkErrorCode::Removed | crate::protocol::LinkErrorCode::NotLoggedIn
+                ) {
+                    logged_out(config, handle, code);
+                }
                 return Err(format!(
                     "the server refused the link: {}: {}",
-                    error.code.as_str(),
+                    code.as_str(),
                     error.message
                 ));
             }
@@ -366,111 +440,345 @@ fn connect(
     }
 }
 
-/// Answers the frames of one open link until it ends, the stop flag is set, or a
-/// request stays without an answer for its bound.
-///
-/// A bound is what an idle computer needs most: a server that dies leaves the
-/// socket of the child open for as long as the `ssh` of the link lives, so a wait
-/// that never answers is the only sign of a link that is over. The answer of a
-/// push and of a pull is due at once, and the answer of a wait is due at the
-/// bound of the server that holds it open.
-fn serve_link(
-    handle: &SyncHandle,
-    stop: &AtomicBool,
-    bounds: &LinkBounds,
-    input: &mut ChildStdin,
-    answers: &Receiver<Frame>,
-    kicked: &Receiver<()>,
-) {
-    let mut waiting: Option<Instant> = None;
-    // The index that the open request reads from, so the answer is known to be
-    // the one that a mark set back or not.
-    let mut asking_from: u64 = 0;
-    let mut sending: Option<Instant> = None;
-    // The first request of a link is a pull: the server answers it at once, while
-    // a wait stays open at its bound when nothing changed yet.
-    let mut first = true;
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            return;
-        }
-        // One push at a time, and no push while another one waits for its answer.
-        if sending.is_none()
-            && let Some(chunk) = {
-                let state = handle.lock();
-                state.client.next_push()
+/// The two halves of one open link, and the answers of the server.
+struct Link<'a> {
+    config: &'a SupervisorConfig,
+    handle: &'a SyncHandle,
+    stop: &'a AtomicBool,
+    bounds: &'a LinkBounds,
+    /// The frames of this computer leave here.
+    input: &'a mut (dyn Write + Send),
+    /// The frames of the server arrive here.
+    answers: &'a Receiver<Frame>,
+    /// A local change, so this turn sends what the queue holds.
+    kicked: &'a Receiver<()>,
+    /// One question of the window or of a worker.
+    asked: &'a Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
+    /// When the open wait left, so its answer is due at its bound.
+    waiting: Option<Instant>,
+    /// The index that the open request reads from, so the answer is known to be the
+    /// one that a mark set back or not.
+    asking_from: u64,
+    /// When the open push left, so its answer is due at once.
+    sending: Option<Instant>,
+    /// The first request of a link is a pull: the server answers it at once, while a
+    /// wait stays open at its bound when nothing changed yet.
+    first: bool,
+    /// The one question that waits for its answer.
+    question: Asked,
+}
+
+impl Link<'_> {
+    /// Answers the frames of one open link until it ends, the stop flag is set, or a
+    /// request stays without an answer for its bound.
+    ///
+    /// A bound is what an idle computer needs most: a server that dies leaves the
+    /// socket of the link open for as long as the transport lives, so a wait that
+    /// never answers is the only sign of a link that is over. The answer of a push, a
+    /// pull and a question is due at once, and the answer of a wait is due at the
+    /// bound of the server that holds it open.
+    fn serve(&mut self) -> End {
+        loop {
+            if self.stop.load(Ordering::SeqCst) {
+                return End::Link;
             }
-        {
-            let intents = fill_secrets(handle, chunk);
-            if !intents.is_empty() {
-                let frame = Frame::Push(crate::protocol::Push { intents });
-                if let Err(error) = write_frame(input, &frame) {
-                    tracing::warn!(%error, "the link could not send a push");
-                    return;
+            if !self.push() || !self.ask() || !self.pull() {
+                return End::Link;
+            }
+            match self.answers.recv_timeout(LINK_SLICE) {
+                Ok(frame) => {
+                    if let Some(end) = self.answered(frame) {
+                        return end;
+                    }
                 }
-                sending = Some(Instant::now());
-            }
-        }
-        if waiting.is_none() {
-            let frame = {
-                let state = handle.lock();
-                asking_from = state.client.read_from();
-                if first {
-                    state.client.pull_frame()
-                } else {
-                    state.client.wait_frame()
+                Err(RecvTimeoutError::Timeout) => {
+                    if let Some(end) = self.timed_out() {
+                        return end;
+                    }
                 }
-            };
-            if let Err(error) = write_frame(input, &frame) {
-                tracing::warn!(%error, "the link could not ask for changes");
-                return;
+                Err(RecvTimeoutError::Disconnected) => return End::Link,
             }
-            waiting = Some(Instant::now());
+            // A local change is the only work of a turn that the server did not
+            // answer; the links of both are read on the next pass of the loop.
+            while self.kicked.try_recv().is_ok() {}
         }
-        match answers.recv_timeout(LINK_SLICE) {
-            Ok(Frame::Pushed(reply)) => {
-                sending = None;
-                accept_pushed(handle, &reply);
+    }
+
+    /// Sends what the queue holds, unless a push already waits for its answer.
+    fn push(&mut self) -> bool {
+        if self.sending.is_some() {
+            return true;
+        }
+        let chunk = {
+            let state = self.handle.lock();
+            state.client.next_push()
+        };
+        let Some(chunk) = chunk else {
+            return true;
+        };
+        let intents = fill_secrets(self.handle, chunk);
+        if intents.is_empty() {
+            return true;
+        }
+        let frame = Frame::Push(crate::protocol::Push { intents });
+        if let Err(error) = write_frame(self.input, &frame) {
+            tracing::warn!(%error, "the link could not send a push");
+            return false;
+        }
+        self.sending = Some(Instant::now());
+        true
+    }
+
+    /// Sends one question of the window, unless a question waits for its answer.
+    fn ask(&mut self) -> bool {
+        if !self.question.waits() {
+            return true;
+        }
+        let Ok((request, reply)) = self.asked.try_recv() else {
+            return true;
+        };
+        match self.question.ask(request, reply) {
+            Ok(frame) => {
+                if let Err(error) = write_frame(self.input, &frame) {
+                    tracing::warn!(%error, "the link could not send a question");
+                    return false;
+                }
+                true
             }
-            Ok(Frame::Changes(changes)) => {
-                waiting = None;
-                first = false;
-                if let Err(error) = apply_changes(handle, &changes, asking_from) {
+            Err(reply) => {
+                let _ = reply.send(ServerReply::Failed(
+                    "This computer has no link to the server now.".to_owned(),
+                ));
+                true
+            }
+        }
+    }
+
+    /// Asks for the changes of the server, unless one request waits for its answer.
+    fn pull(&mut self) -> bool {
+        if self.waiting.is_some() {
+            return true;
+        }
+        let frame = {
+            let state = self.handle.lock();
+            self.asking_from = state.client.read_from();
+            if self.first {
+                state.client.pull_frame()
+            } else {
+                state.client.wait_frame()
+            }
+        };
+        if let Err(error) = write_frame(self.input, &frame) {
+            tracing::warn!(%error, "the link could not ask for changes");
+            return false;
+        }
+        self.waiting = Some(Instant::now());
+        true
+    }
+
+    /// Applies one answer of the server. Answers `None` to continue the link, and the
+    /// end of it when the answer ends it.
+    fn answered(&mut self, frame: Frame) -> Option<End> {
+        match frame {
+            Frame::Pushed(reply) => {
+                self.sending = None;
+                accept_pushed(self.handle, &reply);
+                None
+            }
+            Frame::Changes(changes) => {
+                self.waiting = None;
+                self.first = false;
+                if let Err(error) = apply_changes(self.handle, &changes, self.asking_from) {
                     tracing::warn!(%error, "the changes of the server were not applied");
-                    return;
+                    return Some(End::Link);
                 }
-                (handle.wake)();
+                (self.handle.wake)();
+                None
             }
-            Ok(Frame::Error(error)) => {
+            Frame::Invited(_) | Frame::DeviceList(_) | Frame::DeviceRemoved(_) => {
+                if self.question.answer(&frame).is_none() {
+                    tracing::warn!("the server answered a question that this computer did not ask");
+                    return Some(End::Link);
+                }
+                None
+            }
+            Frame::Error(error) => {
                 tracing::warn!(code = error.code.as_str(), reason = %error.message, "the server ended the link");
-                return;
+                if matches!(
+                    error.code,
+                    crate::protocol::LinkErrorCode::Removed | crate::protocol::LinkErrorCode::NotLoggedIn
+                ) {
+                    logged_out(self.config, self.handle, error.code);
+                    return Some(End::LoggedOut);
+                }
+                Some(End::Link)
             }
-            Ok(_) => {
+            _other => {
                 tracing::warn!("the server answered a frame that this computer did not ask for");
-                return;
+                Some(End::Link)
             }
-            Err(RecvTimeoutError::Timeout) => {
-                let answer_due = if first { bounds.request } else { bounds.wait };
-                if past_bound(sending, bounds.request) {
-                    tracing::warn!(
-                        bound_secs = bounds.request.as_secs(),
-                        "the link did not answer a push in time, so it is lost"
-                    );
-                    return;
-                }
-                if past_bound(waiting, answer_due) {
-                    tracing::warn!(
-                        bound_secs = answer_due.as_secs(),
-                        "the link did not answer a wait in time, so it is lost"
-                    );
-                    return;
-                }
-            }
-            Err(RecvTimeoutError::Disconnected) => return,
         }
-        // A local change is the only work of a turn that the server did not
-        // answer; the links of both are read on the next pass of the loop.
-        while kicked.try_recv().is_ok() {}
+    }
+
+    /// Answers the end of a link whose request stayed without an answer for its
+    /// bound, or `None` while every request is inside its bound.
+    fn timed_out(&mut self) -> Option<End> {
+        let answer_due = if self.first {
+            self.bounds.request
+        } else {
+            self.bounds.wait
+        };
+        if self.question.past_bound(self.bounds.request) {
+            tracing::warn!(
+                bound_secs = self.bounds.request.as_secs(),
+                "the server did not answer a question in time, so the link is lost"
+            );
+            return Some(End::Link);
+        }
+        if past_bound(self.sending, self.bounds.request) {
+            tracing::warn!(
+                bound_secs = self.bounds.request.as_secs(),
+                "the link did not answer a push in time, so it is lost"
+            );
+            return Some(End::Link);
+        }
+        if past_bound(self.waiting, answer_due) {
+            tracing::warn!(
+                bound_secs = answer_due.as_secs(),
+                "the link did not answer a wait in time, so it is lost"
+            );
+            return Some(End::Link);
+        }
+        None
+    }
+}
+
+/// The settings, the state and the channels of one open link.
+struct LinkParts<'a> {
+    config: &'a SupervisorConfig,
+    handle: &'a SyncHandle,
+    stop: &'a AtomicBool,
+    bounds: &'a LinkBounds,
+    input: &'a mut (dyn Write + Send),
+    answers: &'a Receiver<Frame>,
+    kicked: &'a Receiver<()>,
+    asked: &'a Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
+}
+
+/// Serves one open link with the transport and the channels of `parts`.
+fn serve_link(parts: LinkParts<'_>) -> End {
+    let LinkParts {
+        config,
+        handle,
+        stop,
+        bounds,
+        input,
+        answers,
+        kicked,
+        asked,
+    } = parts;
+    Link {
+        config,
+        handle,
+        stop,
+        bounds,
+        input,
+        answers,
+        kicked,
+        asked,
+        waiting: None,
+        asking_from: 0,
+        sending: None,
+        first: true,
+        question: Asked::default(),
+    }
+    .serve()
+}
+
+/// Forgets the token of this computer and publishes the state that the person
+/// reads, because the server does not accept it any more.
+fn logged_out(config: &SupervisorConfig, handle: &SyncHandle, code: crate::protocol::LinkErrorCode) {
+    let not_logged_in = code == crate::protocol::LinkErrorCode::NotLoggedIn;
+    if let Some(store) = config.token_store.as_deref()
+        && let Err(error) = secret_store::remove_token(store)
+    {
+        tracing::warn!(%error, "the token of this computer could not be removed");
+    }
+    let mut state = handle.lock();
+    state.client.logged_out(not_logged_in);
+}
+
+/// The one question that a link has asked and not yet had answered.
+///
+/// The server answers each question with one frame of its own, so a link that
+/// keeps one question in flight cannot confuse an answer with the changes of a
+/// wait or with the result of a push.
+#[derive(Default)]
+struct Asked {
+    waiting: Option<(Instant, ServerRequest, mpsc::Sender<ServerReply>)>,
+}
+
+impl Asked {
+    /// Whether no question waits for its answer.
+    fn waits(&self) -> bool {
+        self.waiting.is_none()
+    }
+
+    /// Sends one question, or answers the one that waits with the reason that
+    /// this computer has no link now.
+    fn ask(
+        &mut self,
+        request: ServerRequest,
+        reply: mpsc::Sender<ServerReply>,
+    ) -> Result<Frame, mpsc::Sender<ServerReply>> {
+        if self.waiting.is_some() {
+            return Err(reply);
+        }
+        let frame = match &request {
+            ServerRequest::Invite => Frame::Invite(crate::protocol::Invite {}),
+            ServerRequest::Devices => Frame::Devices(crate::protocol::Devices {}),
+            ServerRequest::Remove(device) => {
+                Frame::DeviceRemove(crate::protocol::DeviceRemove { device: device.clone() })
+            }
+        };
+        self.waiting = Some((Instant::now(), request, reply));
+        Ok(frame)
+    }
+
+    /// Answers the question that waits, when the frame is its answer.
+    fn answer(&mut self, frame: &Frame) -> Option<mpsc::Sender<ServerReply>> {
+        let (_, request, reply) = self.waiting.take()?;
+        let answer = match (frame, &request) {
+            (Frame::Invited(invited), ServerRequest::Invite) => ServerReply::Invited(invited.clone()),
+            (Frame::DeviceList(list), ServerRequest::Devices) => ServerReply::Devices {
+                rows: list.rows.clone(),
+                now_millis: list.now_millis,
+            },
+            (Frame::DeviceRemoved(removed), ServerRequest::Remove(_)) => ServerReply::Removed {
+                device: removed.device.clone(),
+                removed: removed.removed,
+            },
+            _ => ServerReply::Failed("The server answered another question than the one asked.".to_owned()),
+        };
+        let _ = reply.send(answer);
+        Some(reply)
+    }
+
+    /// Whether the question that waits has waited longer than `bound`, and answers
+    /// it with the reason that the server did not answer.
+    fn past_bound(&mut self, bound: Duration) -> bool {
+        let Some((at, _, _)) = self.waiting.as_ref() else {
+            return false;
+        };
+        if at.elapsed() < bound {
+            return false;
+        }
+        if let Some((_, _, reply)) = self.waiting.take() {
+            let _ = reply.send(ServerReply::Failed(
+                "The server did not answer this computer in time.".to_owned(),
+            ));
+        }
+        true
     }
 }
 
@@ -487,7 +795,7 @@ fn past_bound(since: Option<Instant>, bound: Duration) -> bool {
 /// body comes into the frame here and nowhere else. A value that this computer no
 /// longer holds is dropped with one line, because the intent names a value that
 /// the server cannot be given; the local value itself is untouched.
-/// Reads the frames of the child into `answers` until the link ends.
+/// Reads the frames of the transport into `answers` until the link ends.
 fn read_answers(mut output: impl std::io::Read, answers: &Sender<Frame>) {
     loop {
         match read_frame(&mut output) {
@@ -501,18 +809,6 @@ fn read_answers(mut output: impl std::io::Read, answers: &Sender<Frame>) {
                 tracing::debug!(%error, "the link of the server ended");
                 return;
             }
-        }
-    }
-}
-
-/// Logs the standard error of the child, a line at a time. A pipe that nobody
-/// reads stops the child, so this thread runs for every link.
-fn log_stderr(stderr: impl std::io::Read) {
-    for line in BufReader::new(stderr).lines() {
-        let Ok(line) = line else { return };
-        let line = line.chars().take(MAX_STDERR_LINE).collect::<String>();
-        if !line.trim().is_empty() {
-            tracing::warn!(target: "horizon_sync::ssh", "{line}");
         }
     }
 }
@@ -533,19 +829,19 @@ fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) {
     }
 }
 
-/// Ends the child of the link, so a read that waits for it returns.
-fn kill(child_slot: &Arc<Mutex<Option<Child>>>) {
-    let mut slot = child_slot.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(child) = slot.as_mut() {
-        let _ = child.kill();
+/// Ends the transport of the link, so a read that waits returns.
+fn halt(halt_slot: &Arc<Mutex<Option<Halt>>>) {
+    let mut slot = halt_slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(halt) = slot.as_mut() {
+        halt.end();
     }
 }
 
 /// Waits for the child of the link that ended, so no zombie stays behind.
-fn reap(child_slot: &Arc<Mutex<Option<Child>>>) {
-    let child = child_slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-    if let Some(mut child) = child {
-        let _ = child.wait();
+fn reap(halt_slot: &Arc<Mutex<Option<Halt>>>) {
+    let halt = halt_slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(halt) = halt {
+        halt.reap();
     }
 }
 

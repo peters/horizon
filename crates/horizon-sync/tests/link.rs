@@ -363,6 +363,7 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
             protocol: PROTOCOL_VERSION + 1,
             device: "mbp-7c1".to_owned(),
             store: None,
+            token: None,
         }),
     )
     .expect("a hello of a newer protocol");
@@ -388,6 +389,7 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
                 protocol: PROTOCOL_VERSION,
                 device: "MBP-7c1".to_owned(),
                 store: None,
+                token: None,
             }),
             LinkErrorCode::BadDevice,
         ),
@@ -445,6 +447,7 @@ fn a_push_of_too_many_intents_and_a_link_of_too_many_waits_are_refused() {
             protocol: PROTOCOL_VERSION,
             device: "mbp-7c2".to_owned(),
             store: None,
+            token: None,
         }),
     )
     .expect("the hello");

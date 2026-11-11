@@ -9,10 +9,11 @@
 
 use std::{path::Path, sync::mpsc};
 
-use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::error::StoreError;
 use crate::intent::{Intent, PushReply};
+use crate::store::link::{self, JoinAnswer};
 use crate::store::secrets::SecretKey;
 use crate::store::{Signal, apply, now_millis, schema};
 
@@ -23,6 +24,43 @@ pub(super) enum Job {
         device: String,
         intents: Vec<Intent>,
         reply: mpsc::SyncSender<Result<PushReply, StoreError>>,
+    },
+    /// Writes one invitation of the hash of one code.
+    Invite {
+        code_hash: String,
+        now_millis: i64,
+        reply: mpsc::SyncSender<Result<i64, StoreError>>,
+    },
+    /// Uses one invitation for one device, with the hash of its token.
+    Join {
+        code_hash: String,
+        device: String,
+        token_hash: String,
+        now_millis: i64,
+        reply: mpsc::SyncSender<Result<JoinAnswer, StoreError>>,
+    },
+    /// Writes the row of one device at its greeting.
+    TouchDevice {
+        device: String,
+        login: String,
+        now_millis: i64,
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
+    },
+    /// Checks the token of a device, and stamps the time that the server saw it.
+    PresentToken {
+        token_hash: String,
+        device: String,
+        now_millis: i64,
+        reply: mpsc::SyncSender<Result<bool, StoreError>>,
+    },
+    /// Forgets the token and the row of one device.
+    RemoveDevice {
+        device: String,
+        reply: mpsc::SyncSender<Result<bool, StoreError>>,
+    },
+    /// Deletes every open invitation.
+    ClearInvites {
+        reply: mpsc::SyncSender<Result<(), StoreError>>,
     },
     /// Ends the writer, so the store file is whole when this call returns.
     Stop(mpsc::SyncSender<()>),
@@ -45,6 +83,58 @@ pub(super) fn run(path: &Path, signal: &Signal, key: &SecretKey, jobs: &mpsc::Re
                     tracing::debug!("the caller of a push stopped before the answer");
                 }
             }
+            Job::Invite {
+                code_hash,
+                now_millis,
+                reply,
+            } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::invite(transaction, &code_hash, now_millis)
+                });
+                let _ = reply.send(result);
+            }
+            Job::Join {
+                code_hash,
+                device,
+                token_hash,
+                now_millis,
+                reply,
+            } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::join(transaction, &code_hash, &device, &token_hash, now_millis)
+                });
+                let _ = reply.send(result);
+            }
+            Job::TouchDevice {
+                device,
+                login,
+                now_millis,
+                reply,
+            } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::touch(transaction, &device, &login, now_millis)
+                });
+                let _ = reply.send(result);
+            }
+            Job::PresentToken {
+                token_hash,
+                device,
+                now_millis,
+                reply,
+            } => {
+                let result = in_transaction(&mut connection, |transaction| {
+                    link::present(transaction, &token_hash, &device, now_millis)
+                });
+                let _ = reply.send(result);
+            }
+            Job::RemoveDevice { device, reply } => {
+                let result = in_transaction(&mut connection, |transaction| link::remove(transaction, &device));
+                let _ = reply.send(result);
+            }
+            Job::ClearInvites { reply } => {
+                let result = in_transaction(&mut connection, link::clear_invites);
+                let _ = reply.send(result);
+            }
             Job::Stop(reply) => {
                 schema::checkpoint(&connection);
                 drop(connection);
@@ -56,6 +146,17 @@ pub(super) fn run(path: &Path, signal: &Signal, key: &SecretKey, jobs: &mpsc::Re
         }
     }
     schema::checkpoint(&connection);
+}
+
+/// Runs `write` as one immediate transaction, and commits it when it answered.
+fn in_transaction<T>(
+    connection: &mut Connection,
+    write: impl FnOnce(&Transaction<'_>) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let answer = write(&transaction)?;
+    transaction.commit()?;
+    Ok(answer)
 }
 
 /// Applies one push in one transaction, commits it, and then tells the readers.

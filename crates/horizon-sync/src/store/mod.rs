@@ -7,6 +7,7 @@
 //! is cheap to clone: every link of every computer of one server holds one.
 
 mod apply;
+mod link;
 mod rows;
 mod schema;
 mod secrets;
@@ -27,8 +28,10 @@ use crate::error::StoreError;
 use crate::intent::{Intent, PushReply};
 use writer::Job;
 
+pub use link::{INVITE_LIFETIME_MILLIS, JoinAnswer, MAX_OPEN_INVITES, MAX_WRONG_CODES, WRONG_CODE_WINDOW_MILLIS};
 pub use rows::{Changes, Row};
 
+use link::WrongCodes;
 use secrets::SecretKey;
 
 /// The most read connections that a store keeps for its next read.
@@ -54,6 +57,9 @@ struct Inner {
     writer_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
     readers: Readers,
     signal: Arc<Signal>,
+    /// The wrong codes of the running server, which close the door of the
+    /// invitations after [`MAX_WRONG_CODES`] of them.
+    wrong_codes: Mutex<WrongCodes>,
 }
 
 impl Store {
@@ -97,6 +103,7 @@ impl Store {
                 writer_thread: Mutex::new(Some(writer_thread)),
                 readers: Readers::new(path.to_path_buf()),
                 signal,
+                wrong_codes: Mutex::new(WrongCodes::default()),
             }),
         })
     }
@@ -199,6 +206,124 @@ impl Store {
         answer.recv().map_err(|_| StoreError::Stopped)?
     }
 
+    /// Writes one invitation of `code_hash` and answers the time of the server when
+    /// it ends. It opens the door again for a join, which the wrong codes of the
+    /// last ten minutes closed.
+    ///
+    /// # Errors
+    /// Returns why the invitation cannot be written.
+    pub fn invite(&self, code_hash: &str, now_millis: i64) -> Result<i64, StoreError> {
+        self.inner
+            .wrong_codes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.inner.link_invite(code_hash, now_millis)
+    }
+
+    /// Uses the invitation of `code_hash` for `device`, with `token_hash` as the
+    /// login of that device from now on.
+    ///
+    /// A wrong code counts against the guard of this server, and the twentieth one
+    /// inside ten minutes deletes every open invitation and answers
+    /// [`JoinAnswer::Locked`].
+    ///
+    /// # Errors
+    /// Returns why the invitation cannot be used.
+    pub fn join(
+        &self,
+        code_hash: &str,
+        device: &str,
+        token_hash: &str,
+        now_millis: i64,
+    ) -> Result<JoinAnswer, StoreError> {
+        if self
+            .inner
+            .wrong_codes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_locked()
+        {
+            return Ok(JoinAnswer::Locked);
+        }
+        let answer = self.inner.link_join(code_hash, device, token_hash, now_millis)?;
+        if answer != JoinAnswer::WrongCode {
+            return Ok(answer);
+        }
+        if self.record_wrong_code(now_millis)? {
+            return Ok(JoinAnswer::Locked);
+        }
+        Ok(JoinAnswer::WrongCode)
+    }
+
+    /// Counts one wrong code, and answers whether the door is closed now. A closed
+    /// door also deletes every open invitation.
+    ///
+    /// # Errors
+    /// Returns why the invitations cannot be removed.
+    pub fn record_wrong_code(&self, now_millis: i64) -> Result<bool, StoreError> {
+        let locked = self
+            .inner
+            .wrong_codes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .record(now_millis);
+        if locked {
+            self.inner.link_clear_invites()?;
+        }
+        Ok(locked)
+    }
+
+    /// Writes the row of `device` at its greeting, with the way that it logs in.
+    ///
+    /// # Errors
+    /// Returns why the row cannot be written.
+    pub fn touch_device(&self, device: &str, login: &str, now_millis: i64) -> Result<(), StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.inner.send(Job::TouchDevice {
+            device: device.to_owned(),
+            login: login.to_owned(),
+            now_millis,
+            reply,
+        })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
+    /// Whether `token_hash` is the login of `device`, and when the server saw that
+    /// device last.
+    ///
+    /// # Errors
+    /// Returns why the row cannot be read or written.
+    pub fn present_token(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+        self.inner.link_present(token_hash, device, now_millis)
+    }
+
+    /// The computers of this server, in name order, with the row of `caller`
+    /// marked.
+    ///
+    /// # Errors
+    /// Returns why the rows cannot be read.
+    pub fn devices(&self, caller: &str) -> Result<Vec<crate::protocol::DeviceRow>, StoreError> {
+        self.inner.read(|connection| link::devices(connection, caller))
+    }
+
+    /// Forgets the token and the row of `device`, and answers whether the server
+    /// held it. The links of that device end with the answer.
+    ///
+    /// # Errors
+    /// Returns why the row cannot be removed.
+    pub fn remove_device(&self, device: &str) -> Result<bool, StoreError> {
+        self.inner.link_remove(device)
+    }
+
+    /// The number of open invitations at `now_millis`.
+    ///
+    /// # Errors
+    /// Returns why the rows cannot be read.
+    pub fn open_invitations(&self, now_millis: i64) -> Result<usize, StoreError> {
+        self.inner.read(|connection| link::open_invites(connection, now_millis))
+    }
+
     /// Stops the writer after the changes that are queued, and closes the file so
     /// that a copy of it is whole. Every later call answers [`StoreError::Stopped`];
     /// a caller uses this to end a server, or a test to restart one.
@@ -223,11 +348,7 @@ impl Store {
 
     /// Sends one job to the writer.
     fn send(&self, job: Job) -> Result<(), StoreError> {
-        let sender = self.inner.writer.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        sender
-            .ok_or(StoreError::Stopped)?
-            .send(job)
-            .map_err(|_| StoreError::Stopped)
+        self.inner.send(job)
     }
 }
 
@@ -243,6 +364,75 @@ impl std::fmt::Debug for Store {
 }
 
 impl Inner {
+    /// Sends one job to the writer, and answers why it cannot when the store is
+    /// closed.
+    fn send(&self, job: Job) -> Result<(), StoreError> {
+        let sender = self.writer.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        sender
+            .ok_or(StoreError::Stopped)?
+            .send(job)
+            .map_err(|_| StoreError::Stopped)
+    }
+
+    /// Writes one invitation and answers the time that it ends.
+    fn link_invite(&self, code_hash: &str, now_millis: i64) -> Result<i64, StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::Invite {
+            code_hash: code_hash.to_owned(),
+            now_millis,
+            reply,
+        })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
+    /// Uses one invitation for one device.
+    fn link_join(
+        &self,
+        code_hash: &str,
+        device: &str,
+        token_hash: &str,
+        now_millis: i64,
+    ) -> Result<link::JoinAnswer, StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::Join {
+            code_hash: code_hash.to_owned(),
+            device: device.to_owned(),
+            token_hash: token_hash.to_owned(),
+            now_millis,
+            reply,
+        })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
+    /// Whether a token is the login of a device.
+    fn link_present(&self, token_hash: &str, device: &str, now_millis: i64) -> Result<bool, StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::PresentToken {
+            token_hash: token_hash.to_owned(),
+            device: device.to_owned(),
+            now_millis,
+            reply,
+        })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
+    /// Forgets the login of one device.
+    fn link_remove(&self, device: &str) -> Result<bool, StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::RemoveDevice {
+            device: device.to_owned(),
+            reply,
+        })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
+    /// Deletes every open invitation.
+    fn link_clear_invites(&self) -> Result<(), StoreError> {
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.send(Job::ClearInvites { reply })?;
+        answer.recv().map_err(|_| StoreError::Stopped)?
+    }
+
     /// Runs `read` on an idle read connection, or on a new one.
     fn read<T>(&self, read: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError> {
         let connection = self.readers.take()?;

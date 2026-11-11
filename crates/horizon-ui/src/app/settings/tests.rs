@@ -163,6 +163,7 @@ fn every_tab_draws_on_one_line_at_the_default_panel_width() {
         portable_profile: super::remote_browsers::PortableProfilePanel::new(std::path::Path::new("/s.json")),
         provider_usage: super::remote_usage::UsagePanels::default(),
         secret_inputs: super::secrets::SecretInputs::default(),
+        server: super::server::ServerTabState::default(),
     };
     let ctx = egui::Context::default();
     let mut measured = (0.0_f32, 0.0_f32);
@@ -194,7 +195,15 @@ fn every_tab_draws_on_one_line_at_the_default_panel_width() {
         "the tabs stay on one line in {} points: {texts:?}",
         measured.1
     );
-    for tab in ["General", "Shortcuts", "Presets", "Browser", "Remote", "Secrets"] {
+    for tab in [
+        "General",
+        "Shortcuts",
+        "Presets",
+        "Browser",
+        "Remote",
+        "Secrets",
+        "Server",
+    ] {
         assert!(texts_hold(&texts, tab), "the row draws {tab}: {texts:?}");
     }
 }
@@ -315,6 +324,115 @@ fn a_long_text_field_does_not_widen_the_settings_panel() {
     );
 }
 
+/// The Server tab draws the state of the link, the code and the link of an open
+/// invitation, the plate of its QR code, and the three computers of the server with
+/// their removal.
+#[test]
+fn the_server_tab_draws_the_invitation_the_plate_and_the_computers() {
+    let (temp, ctx, mut app, _names) = app_with_stored_secrets();
+    seed_server_tab(&mut app, temp.path());
+    assert!(
+        app.settings
+            .as_ref()
+            .is_some_and(|editor| editor.server.invitation.is_some()),
+        "the test seeded an invitation"
+    );
+    let shapes = settings_frame(&ctx, &mut app, [1480.0, 900.0], super::SettingsTab::Server);
+    assert!(
+        app.settings
+            .as_ref()
+            .is_some_and(|editor| editor.server.invitation.is_some()),
+        "the invitation is still open after the frames"
+    );
+    let mut texts = Vec::new();
+    for clipped in &shapes {
+        collect_texts(&clipped.shape, &mut texts);
+    }
+    for expected in [
+        "ABCD-EFGH-JKMN",
+        "Copy link",
+        "Computers",
+        "laptop-b",
+        "laptop-c",
+        "Remove",
+    ] {
+        assert!(
+            texts_hold(&texts, expected),
+            "the Server tab draws {expected}: {texts:?}"
+        );
+    }
+    // The plate is a run of dark rectangles on a white one, and the code of the
+    // invitation has some of them.
+    let mut dark = 0;
+    let mut white = 0;
+    for_each_painted(&shapes, &mut |shape, _painted, _clip| {
+        if let egui::Shape::Rect(rect) = shape {
+            if rect.fill == egui::Color32::BLACK {
+                dark += 1;
+            } else if rect.fill == egui::Color32::WHITE {
+                white += 1;
+            }
+        }
+    });
+    assert!(white >= 1, "the plate is light in both themes");
+    assert!(dark > 20, "the plate paints the modules of the code: {dark}");
+    assert!(
+        texts.iter().any(|text| text.ends_with("minutes left")),
+        "the invitation says how long it lives: {texts:?}"
+    );
+}
+
+/// One link whose child ends at once, one open invitation and three computers of
+/// the server, so the Server tab draws its plate, its link and its list.
+fn seed_server_tab(app: &mut crate::app::HorizonApp, directory: &std::path::Path) {
+    use std::sync::Arc;
+
+    use horizon_core::secret::SecretVault;
+    use horizon_core::secret_store::SecretStore;
+    use horizon_sync::{DeviceLogin, DeviceRow, Invited, Supervisor, SupervisorConfig};
+
+    let credentials = Arc::new(horizon_core::secret::CredentialVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    credentials.register(&horizon_core::browser::remote::RemoteBrowserConfig::default());
+    let named = Arc::new(horizon_core::named_secrets::NamedSecretVault::new(Box::new(
+        SecretStore::in_memory().expect("a store in memory"),
+    )));
+    let keys = horizon_core::MachineKeys::new(directory.join("server-tab-keys"));
+    let vault = SecretVault::new(keys, Arc::clone(&credentials), named);
+    let mut config = SupervisorConfig::for_server(
+        "server-vm",
+        "horizon --server-link",
+        &directory.join("server-tab-link"),
+        Arc::new(vault),
+    )
+    .expect("the settings of the link");
+    config.program = "/bin/true".to_owned();
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+    app.server_sync = Some(crate::app::server_sync::ServerSync::for_test(supervisor, credentials));
+
+    let row = |name: &str, login: DeviceLogin, caller: bool| DeviceRow {
+        name: name.to_owned(),
+        created_millis: 1_760_000_000_000,
+        last_seen_millis: 1_760_000_000_000,
+        login,
+        caller,
+    };
+    let editor = app.settings.as_mut().expect("the settings window");
+    editor.server.invitation = Some(super::server::OpenInvitation::for_test(Invited {
+        code: "ABCD-EFGH-JKMN".to_owned(),
+        link: "horizon://server-computer:7000/join#ABCD-EFGH-JKMN".to_owned(),
+        expires_millis: 600_000,
+        now_millis: 1_759_999_999_000,
+    }));
+    editor.server.devices = vec![
+        row("laptop-a", DeviceLogin::Ssh, true),
+        row("laptop-b", DeviceLogin::Token, false),
+        row("laptop-c", DeviceLogin::Token, false),
+    ];
+    editor.server.devices_now_millis = 1_760_000_000_000;
+}
+
 /// The rectangle of the Settings panel, on every tab, with one stored secret and
 /// a name of 64 characters: the panel keeps one rectangle, every widget that the
 /// panel paints stays inside it, and the canvas ends where the panel begins.
@@ -326,7 +444,10 @@ fn a_long_text_field_does_not_widen_the_settings_panel() {
 #[test]
 fn the_secrets_tab_fits_the_panel_that_ends_the_canvas() {
     let viewport = [1480.0, 900.0];
-    let (_temp, ctx, mut app, _names) = app_with_stored_secrets();
+    let (temp, ctx, mut app, _names) = app_with_stored_secrets();
+    // The Server tab is one more case, with the QR plate of an open invitation and
+    // three computers of the server.
+    seed_server_tab(&mut app, temp.path());
 
     let mut panels = Vec::new();
     for tab in super::SettingsTab::ALL {

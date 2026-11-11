@@ -157,8 +157,9 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-/// The two entries that say which machine serves the browser panels and which
-/// computer holds the machine list. Both apply at the next start.
+/// The entry that says which machine serves the browser panels, and the pointer to
+/// the tab that holds the server of the machine list. Both apply at the next
+/// start.
 fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Browser host");
@@ -199,35 +200,9 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     super::section_card(ui, |ui| {
         super::dim_label(
             ui,
-            "Other computers of yours that name the same server show the same machines, keys and \
-             settings. A blank SSH target keeps the machine list on this computer. A change applies \
-             at the next start.",
+            "The machine list, the keys and the values of this computer follow a server. The tab \
+             Server holds that entry, the join of this computer and the computers of the server.",
         );
-        ui.add_space(8.0);
-
-        egui::Grid::new("settings_server_grid")
-            .num_columns(2)
-            .spacing([12.0, 8.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
-                changed |= super::optional_text_field(
-                    ui,
-                    &mut config.server.ssh_target,
-                    "user@host or an SSH alias",
-                    "settings_server_target",
-                );
-                ui.end_row();
-
-                ui.label(egui::RichText::new("Command").color(theme::FG_SOFT()).size(12.0));
-                changed |= super::optional_text_field(
-                    ui,
-                    &mut config.server.command,
-                    horizon_core::DEFAULT_LINK_COMMAND,
-                    "settings_server_command",
-                );
-                ui.end_row();
-            });
-        super::validation_notice(ui, config.server.validate());
     });
     changed
 }

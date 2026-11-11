@@ -19,9 +19,12 @@ use horizon_core::named_secrets::{self, NamedSecretVault};
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
 use horizon_core::secret_store;
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
-use horizon_sync::{LinkSnapshot, LinkState, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore};
+use horizon_sync::{
+    LinkSnapshot, LinkState, ServerRequest, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
+};
 
 use super::HorizonApp;
+use super::settings::server::{ServerAction, ServerView};
 
 /// The state line of the machine section, cached by its state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -139,6 +142,8 @@ pub(in crate::app) struct SecretHandles {
     pub(in crate::app) target: Arc<dyn SecretTarget>,
     pub(in crate::app) credentials: Arc<CredentialVault>,
     pub(in crate::app) named: Arc<NamedSecretVault>,
+    /// The secrets file of this computer, which also holds the token of a join.
+    pub(in crate::app) store: Option<Arc<horizon_core::secret_store::SecretStore>>,
 }
 
 /// The secrets of this Horizon home that follow a server: its machine keys, the
@@ -156,7 +161,23 @@ pub(in crate::app) fn secret_vault(
     remote: &RemoteBrowserConfig,
     names: &[String],
 ) -> SecretHandles {
-    let credentials = Arc::new(CredentialVault::new(secret_store::open(home)));
+    // One file has one connection in this process, so the token row and the values
+    // of this computer share the store that the window already holds.
+    let (store, credentials) = match secret_store::open_store(home) {
+        Ok(store) => (
+            Some(Arc::clone(&store)),
+            Arc::new(CredentialVault::new(Box::new(store))),
+        ),
+        Err(error) => {
+            tracing::error!(%error, "the secrets file of this computer cannot be opened, so it holds no value");
+            (
+                None,
+                Arc::new(CredentialVault::new(Box::new(
+                    horizon_core::secret_store::UnreadableStore::new(error),
+                ))),
+            )
+        }
+    };
     credentials.register(remote);
     let secrets = named_secret_vault(home, names);
     let vault = SecretVault::new(keys, Arc::clone(&credentials), Arc::clone(&secrets));
@@ -164,6 +185,7 @@ pub(in crate::app) fn secret_vault(
         target: Arc::new(vault),
         credentials,
         named: secrets,
+        store,
     }
 }
 
@@ -208,7 +230,7 @@ pub(in crate::app) fn load(
             named_secrets: secrets.named.clone(),
         });
     };
-    let config = match SupervisorConfig::for_server(
+    let mut config = match SupervisorConfig::for_server(
         server.ssh_target().unwrap_or_default(),
         server.command(),
         registry.root(),
@@ -217,6 +239,24 @@ pub(in crate::app) fn load(
         Ok(config) => config,
         Err(error) => return file_list(registry, error.to_string(), secrets.named),
     };
+    // A link of the TCP listener needs an address and the token of a join. An
+    // address without a token falls back to the `ssh` child, as the entry did
+    // before a join existed.
+    config.token_store.clone_from(&secrets.store);
+    let token = secrets
+        .store
+        .as_deref()
+        .and_then(|store| horizon_core::secret_store::read_token(store).ok().flatten());
+    config.address = server.address().map(str::to_owned).filter(|_| token.is_some());
+    if server.address().is_some() && config.address.is_none() && server.ssh_target().is_none() {
+        return file_list(
+            registry,
+            "This computer is not logged in to the server. Join it with a link from a computer that is logged in."
+                .to_owned(),
+            secrets.named,
+        );
+    }
+    drop(token);
     match Supervisor::start(config, wake) {
         Ok(supervisor) => {
             let sync = ServerSync::new(supervisor, secrets.credentials);
@@ -253,6 +293,128 @@ fn file_list(
 }
 
 impl HorizonApp {
+    /// The state of the link that the Server tab draws, from the snapshot of its
+    /// worker: a frame never takes the lock of the link state.
+    pub(in crate::app) fn server_view(&self) -> ServerView {
+        let Some(sync) = self.server_sync.as_ref() else {
+            return ServerView {
+                line: "This computer has no server.".to_owned(),
+                ..ServerView::default()
+            };
+        };
+        let snapshot = sync.snapshot();
+        let state = snapshot.state();
+        ServerView {
+            line: ServerLine::of(state).text(),
+            device: snapshot.device().to_owned(),
+            linked: true,
+            logged_out: matches!(state, LinkState::Removed | LinkState::NotLoggedIn),
+        }
+    }
+
+    /// Applies one press of the Server tab, after the panel drew it.
+    ///
+    /// A question travels on the link that the supervisor already holds, so the
+    /// invitation, the list and the removal work over `ssh` as well as over the
+    /// listener. The answer comes back on a channel that the tab polls.
+    pub(in crate::app) fn apply_server_action(&mut self, action: ServerAction, ctx: egui::Context) {
+        let Some(sync) = self.server_sync.as_ref() else {
+            self.server_notice("This computer has no link to the server now.".to_owned());
+            return;
+        };
+        let handle = sync.handle().clone();
+        let asked = match &action {
+            ServerAction::Join { link, device } => {
+                self.start_server_join(link.clone(), device.clone(), ctx);
+                return;
+            }
+            ServerAction::Invite => handle.ask(ServerRequest::Invite),
+            ServerAction::RefreshDevices => handle.ask(ServerRequest::Devices),
+            ServerAction::Remove(device) => handle.ask(ServerRequest::Remove(device.clone())),
+        };
+        let Some(editor) = self.settings.as_mut() else {
+            return;
+        };
+        match action {
+            ServerAction::Invite => editor.server.hold_invitation(asked),
+            ServerAction::RefreshDevices => editor.server.hold_devices(asked),
+            ServerAction::Remove(device) => editor.server.hold_removal(&device, asked),
+            ServerAction::Join { .. } => {}
+        }
+    }
+
+    /// Writes one line into the Server tab, or into the sidebar when the window is
+    /// closed.
+    fn server_notice(&mut self, line: String) {
+        match self.settings.as_mut() {
+            Some(editor) => editor.server.notice = Some(line),
+            None => self.set_sidebar_notice(line),
+        }
+    }
+
+    /// Joins the server of one link as one name. The join opens a socket, so it
+    /// runs on the coordination worker and never on the UI thread; its answer
+    /// writes the address of the server and starts the link of it.
+    fn start_server_join(&mut self, link: String, device: String, ctx: egui::Context) {
+        let home = self.session_store.home().clone();
+        self.browser_create_host.io.then(
+            move || -> Result<String, String> {
+                let store = horizon_core::secret_store::SecretStore::open(home.secrets_path())
+                    .map_err(|error| error.to_string())?;
+                horizon_sync::join(&link, &device, &store).map_err(|error| error.sentence())?;
+                horizon_core::JoinLink::parse(&link)
+                    .map(|link| link.authority())
+                    .map_err(|error| error.to_string())
+            },
+            move |app, answered| match answered {
+                Some(Ok(address)) => app.accepted_server_join(&address, &ctx),
+                Some(Err(sentence)) => app.failed_server_join(sentence),
+                None => app.failed_server_join("This computer did not finish the join.".to_owned()),
+            },
+        );
+    }
+
+    /// Writes the address of a successful join and starts the link of it.
+    ///
+    /// The address goes into the settings of the store, and not into a draft that
+    /// the person did not save: the entry of the editor keeps every other field of
+    /// the store, so a join never writes an unsaved edit of another tab.
+    fn accepted_server_join(&mut self, address: &str, ctx: &egui::Context) {
+        let mut stored = match self.settings.as_ref() {
+            Some(editor) => editor.original.clone(),
+            None => self.template_config.clone(),
+        };
+        stored.server.address = Some(address.to_owned());
+        if let Err(error) = stored.server.validate() {
+            self.failed_server_join(error.to_string());
+            return;
+        }
+        self.template_config.server = stored.server.clone();
+        self.settings_io.save_config(self.config_path.clone(), stored.clone());
+        if let Some(editor) = self.settings.as_mut() {
+            editor.config.server = stored.server.clone();
+            editor.original.server = stored.server.clone();
+            editor.server.joining = false;
+            editor.server.join_error = None;
+            editor.server.link.clear();
+            editor.server.notice = Some("This computer joined the server.".to_owned());
+        }
+        // The old link ends before the new one starts, so one computer never holds
+        // two writers of one queue.
+        self.server_sync = None;
+        self.load_machines(ctx);
+    }
+
+    /// Shows why a join did not work, in the tab of the window.
+    fn failed_server_join(&mut self, sentence: String) {
+        let Some(editor) = self.settings.as_mut() else {
+            self.set_sidebar_notice(sentence);
+            return;
+        };
+        editor.server.joining = false;
+        editor.server.join_error = Some(sentence);
+    }
+
     /// The store that the machine list of this Horizon lives in: the mirror of
     /// the server, or the file of this computer.
     pub(in crate::app) fn machine_store(&self, registry: &MachineRegistry) -> Arc<dyn MachineStore> {

@@ -31,7 +31,10 @@ impl HorizonApp {
     /// milliseconds later.
     pub(super) fn load_machines(&mut self, ctx: &Context) {
         let registry = self.machine_registry();
-        let server = horizon_core::server().cloned();
+        // The settings of this run, and not the entry of the start, so a join that
+        // wrote an address starts the link of that address at once.
+        let server = self.template_config.server.clone();
+        let server = server.names_server().then_some(server);
         // The keys are a path of this home, so a name is cheap here; the secrets
         // file opens on the worker, never on this thread.
         let home = self.session_store.home().clone();

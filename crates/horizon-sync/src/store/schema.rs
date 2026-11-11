@@ -8,6 +8,7 @@
 
 use std::{
     fs::{self, OpenOptions},
+    io::ErrorKind,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     time::Duration,
@@ -18,7 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
-pub(super) const SCHEMA_VERSION: i64 = 2;
+pub(super) const SCHEMA_VERSION: i64 = 3;
 
 /// The mode of the file of the store, which SQLite copies to its `-wal` and
 /// `-shm` files: the server user alone reads or writes the store.
@@ -91,7 +92,23 @@ CREATE TABLE secrets (
 CREATE INDEX secrets_by_version ON secrets (version);
 ";
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS];
+/// Version 3 adds the login of a computer: the hash of the token of a device, the
+/// time that the device joined, the way that it logs in, and the invitations that
+/// a logged-in computer makes for another one. The server keeps the hash of a code
+/// and the hash of a token, never a code and never a token.
+const SCHEMA_V3_LINKS: &str = "
+ALTER TABLE devices ADD COLUMN token_hash TEXT;
+ALTER TABLE devices ADD COLUMN created_millis INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE devices ADD COLUMN login TEXT NOT NULL DEFAULT 'ssh';
+CREATE UNIQUE INDEX devices_by_token ON devices (token_hash) WHERE token_hash IS NOT NULL;
+CREATE TABLE invitations (
+    code_hash TEXT PRIMARY KEY,
+    created_millis INTEGER NOT NULL,
+    expires_millis INTEGER NOT NULL
+) STRICT;
+";
+
+const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS];
 
 /// The key of the store id in the meta table.
 const META_STORE_ID: &str = "store_id";
@@ -120,27 +137,40 @@ pub(super) fn open(path: &Path) -> Result<Connection, StoreError> {
 /// Makes the file of the store, or a file that an older Horizon made before this
 /// rule, reachable by the server user alone.
 ///
+/// A file that is not there is made with `create_new` at [`STORE_MODE`], so it has
+/// that mode from its first byte and its descriptor goes away before SQLite opens
+/// the same file. A file that is there is corrected by its path and never through
+/// a plain descriptor: closing a descriptor of a database releases every POSIX
+/// lock that this process holds on it, and SQLite names that as a way to corrupt a
+/// database. The secrets file of a computer follows the same rule.
+///
 /// # Errors
 /// Returns why the file cannot be created or made private.
 fn make_private(path: &Path) -> Result<(), StoreError> {
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
         .mode(STORE_MODE)
         .open(path)
-        .map_err(|error| file_error(path, &error))?;
-    let mode = file
-        .metadata()
-        .map_err(|error| file_error(path, &error))?
-        .permissions()
-        .mode()
-        & 0o777;
-    if mode != STORE_MODE {
-        file.set_permissions(fs::Permissions::from_mode(STORE_MODE))
-            .map_err(|error| file_error(path, &error))?;
+    {
+        Ok(file) => {
+            drop(file);
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let mode = fs::metadata(path)
+                .map_err(|error| file_error(path, &error))?
+                .permissions()
+                .mode()
+                & 0o777;
+            if mode != STORE_MODE {
+                fs::set_permissions(path, fs::Permissions::from_mode(STORE_MODE))
+                    .map_err(|error| file_error(path, &error))?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(file_error(path, &error)),
     }
-    Ok(())
 }
 
 fn file_error(path: &Path, error: &std::io::Error) -> StoreError {

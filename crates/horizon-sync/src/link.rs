@@ -24,7 +24,7 @@ use std::{
     time::Duration,
 };
 
-use crate::server::serve;
+use crate::server::{LinkTransport, ServerInfo, serve_ssh};
 use crate::store::Store;
 
 /// The mode of the socket file: the server user alone reaches it.
@@ -109,9 +109,12 @@ impl Links {
 
 /// Binds `path` and answers every link of it with `store`.
 ///
+/// `info` says whether the server also has a TCP listener, so a link of this
+/// socket can make an invitation with the address of that listener.
+///
 /// # Errors
 /// Returns why the socket cannot be bound or made private.
-pub fn run_server_on_unix_socket(path: &Path, store: Store) -> Result<SocketServer, SocketError> {
+pub fn run_server_on_unix_socket(path: &Path, store: Store, info: &ServerInfo) -> Result<SocketServer, SocketError> {
     remove_socket(path)?;
     let listener = UnixListener::bind(path).map_err(|error| io_error(path, error))?;
     fs::set_permissions(path, fs::Permissions::from_mode(SOCKET_MODE)).map_err(|error| io_error(path, error))?;
@@ -120,9 +123,14 @@ pub fn run_server_on_unix_socket(path: &Path, store: Store) -> Result<SocketServ
     let accepting_stop = Arc::clone(&stop);
     let links = Arc::new(Links::default());
     let accepting_links = Arc::clone(&links);
+    let accepting_info = ServerInfo {
+        listener: info.listener.clone(),
+        registry: Arc::clone(&info.registry),
+        clock: Arc::clone(&info.clock),
+    };
     let accepting = thread::Builder::new()
         .name("horizon-sync-socket".to_owned())
-        .spawn(move || accept_links(&listener, &store, &accepting_stop, &accepting_links))
+        .spawn(move || accept_links(&listener, &store, &accepting_info, &accepting_stop, &accepting_links))
         .map_err(|error| io_error(path, error))?;
     Ok(SocketServer {
         path: path.to_path_buf(),
@@ -133,7 +141,7 @@ pub fn run_server_on_unix_socket(path: &Path, store: Store) -> Result<SocketServ
 }
 
 /// Answers one link of `listener` per connection, one thread each.
-fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool, links: &Arc<Links>) {
+fn accept_links(listener: &UnixListener, store: &Store, info: &ServerInfo, stop: &AtomicBool, links: &Arc<Links>) {
     while !stop.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _address)) => {
@@ -149,14 +157,27 @@ fn accept_links(listener: &UnixListener, store: &Store, stop: &AtomicBool, links
                     continue;
                 };
                 let store = store.clone();
+                let info = ServerInfo {
+                    listener: info.listener.clone(),
+                    registry: Arc::clone(&info.registry),
+                    clock: Arc::clone(&info.clock),
+                };
                 // A clone of the socket stays with the server, so a stop closes
-                // the link of a computer that is still connected.
-                let id = stream.try_clone().ok().map(|closing| links.add(closing));
+                // the link of a computer that is still connected, and a removal
+                // ends the link of that computer alone.
+                let closing = stream.try_clone().ok();
+                let id = closing
+                    .as_ref()
+                    .and_then(|closing| closing.try_clone().ok().map(|kept| links.add(kept)));
+                let transport: Arc<dyn LinkTransport> = match closing {
+                    Some(closing) => Arc::new(closing),
+                    None => Arc::new(crate::server::NoTransport),
+                };
                 let links = Arc::clone(links);
                 let spawned = thread::Builder::new()
                     .name("horizon-sync-connection".to_owned())
                     .spawn(move || {
-                        if let Err(error) = serve(reading, stream, &store) {
+                        if let Err(error) = serve_ssh(reading, stream, &store, &info, transport) {
                             tracing::debug!(%error, "a link ended");
                         }
                         if let Some(id) = id {
