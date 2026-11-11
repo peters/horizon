@@ -16,6 +16,7 @@ mod presets;
 mod remote_hosts;
 mod secrets;
 mod server;
+mod speech;
 
 pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
 pub use presets::PresetConfig;
@@ -28,6 +29,10 @@ pub(crate) use presets::{
 pub use remote_hosts::RemoteHostsConfig;
 pub use secrets::SecretsConfig;
 pub use server::{DEFAULT_LINK_COMMAND, ServerConfig, configure_server, server};
+pub use speech::{
+    DEFAULT_SPEECH_ENDPOINT, DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL,
+    MAX_LANGUAGE_CHARS, SpeechConfig, TranscriberConfig, TranscriberKind, language_hint,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -53,6 +58,8 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub secrets: SecretsConfig,
+    #[serde(default)]
+    pub speech: SpeechConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -80,6 +87,7 @@ impl Default for Config {
             browser_host: BrowserHostConfig::default(),
             server: ServerConfig::default(),
             secrets: SecretsConfig::default(),
+            speech: SpeechConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -213,27 +221,7 @@ impl ShortcutsConfig {
             search: parse_shortcut("search", &self.search)?,
         };
 
-        validate_distinct_shortcuts([
-            ("command_palette", shortcuts.command_palette),
-            ("new_terminal", shortcuts.new_terminal),
-            ("focus_active_workspace", shortcuts.focus_active_workspace),
-            ("fit_active_workspace", shortcuts.fit_active_workspace),
-            ("open_remote_hosts", shortcuts.open_remote_hosts),
-            ("toggle_sessions", shortcuts.toggle_sessions),
-            ("toggle_sidebar", shortcuts.toggle_sidebar),
-            ("toggle_hud", shortcuts.toggle_hud),
-            ("toggle_minimap", shortcuts.toggle_minimap),
-            ("align_workspaces_horizontally", shortcuts.align_workspaces_horizontally),
-            ("toggle_settings", shortcuts.toggle_settings),
-            ("zoom_reset", shortcuts.zoom_reset),
-            ("zoom_in", shortcuts.zoom_in),
-            ("zoom_out", shortcuts.zoom_out),
-            ("fullscreen_panel", shortcuts.fullscreen_panel),
-            ("exit_fullscreen_panel", shortcuts.exit_fullscreen_panel),
-            ("fullscreen_window", shortcuts.fullscreen_window),
-            ("save_editor", shortcuts.save_editor),
-            ("search", shortcuts.search),
-        ])?;
+        validate_distinct_shortcuts(shortcuts.named_bindings())?;
 
         Ok(shortcuts)
     }
@@ -557,7 +545,8 @@ impl Config {
             .remote
             .validate_definition()
             .map_err(|error| Error::Config(format!("browser.remote: {error}")))?;
-        self.shortcuts.resolve()?;
+        let shortcuts = self.shortcuts.resolve()?;
+        self.speech.validate(&shortcuts).map_err(Error::Config)?;
         self.remote_hosts.validate()?;
         self.browser_host.validate()?;
         self.server.validate()?;

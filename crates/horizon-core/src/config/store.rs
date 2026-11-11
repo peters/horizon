@@ -894,9 +894,17 @@ fn the_store_that_main_wrote_opens_with_its_values() {
         vec!["Markdown"],
         "the presets of the removed panels are gone and the others stay"
     );
+    // The speech input of this build has its own section, and the `speech` block
+    // of the removed `features` section of main is not it.
+    let json = loaded.to_json().expect("the settings as JSON");
     assert!(
-        !loaded.to_json().expect("the settings as JSON").contains("speech"),
-        "the speech section of a removed feature is ignored"
+        !json.contains("whisper-small.bin") && !json.contains("desktop_injection"),
+        "the speech section of the removed feature is ignored: {json}"
+    );
+    assert_eq!(
+        loaded.speech,
+        crate::SpeechConfig::default(),
+        "the speech input of this build starts from its defaults"
     );
 }
 

@@ -236,6 +236,36 @@ pub struct AppShortcuts {
     pub search: ShortcutBinding,
 }
 
+impl AppShortcuts {
+    /// Every global shortcut with the name of its setting, so a rule that reports
+    /// an overlap names the shortcut and a second list cannot drift from the
+    /// fields.
+    #[must_use]
+    pub fn named_bindings(&self) -> [(&'static str, ShortcutBinding); 19] {
+        [
+            ("command_palette", self.command_palette),
+            ("new_terminal", self.new_terminal),
+            ("focus_active_workspace", self.focus_active_workspace),
+            ("fit_active_workspace", self.fit_active_workspace),
+            ("open_remote_hosts", self.open_remote_hosts),
+            ("toggle_sessions", self.toggle_sessions),
+            ("toggle_sidebar", self.toggle_sidebar),
+            ("toggle_hud", self.toggle_hud),
+            ("toggle_minimap", self.toggle_minimap),
+            ("align_workspaces_horizontally", self.align_workspaces_horizontally),
+            ("toggle_settings", self.toggle_settings),
+            ("zoom_reset", self.zoom_reset),
+            ("zoom_in", self.zoom_in),
+            ("zoom_out", self.zoom_out),
+            ("fullscreen_panel", self.fullscreen_panel),
+            ("exit_fullscreen_panel", self.exit_fullscreen_panel),
+            ("fullscreen_window", self.fullscreen_window),
+            ("save_editor", self.save_editor),
+            ("search", self.search),
+        ]
+    }
+}
+
 impl Default for AppShortcuts {
     fn default() -> Self {
         let ps = ShortcutModifiers::PRIMARY_SHIFT;

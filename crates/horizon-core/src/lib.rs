@@ -33,6 +33,7 @@ pub mod secret_store;
 pub mod server_link;
 mod session_store;
 mod shortcuts;
+pub mod speech;
 mod ssh;
 mod terminal;
 mod transcript;
@@ -59,9 +60,11 @@ pub use board::{
 };
 pub use bounded_program::ProgramEnvironment;
 pub use config::{
-    AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, FeaturesConfig, OverlaysConfig,
-    PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig,
-    browser_host, browser_mcp_args, configure_browser_host, configure_server, server,
+    AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, DEFAULT_SPEECH_ENDPOINT,
+    DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig, MAX_LANGUAGE_CHARS,
+    OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig, TerminalConfig,
+    TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args,
+    configure_browser_host, configure_server, language_hint, server,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
