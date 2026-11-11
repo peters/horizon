@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py"
+applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/src/remote_browser_credential/keyring_import/**,crates/horizon-core/src/remote_browser_credential/workbench.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py"
 ---
 
 # Trust boundary of the named secrets
@@ -76,6 +76,62 @@ value are, where a value is allowed to go, and what it never reaches.
 - **The queue of the link holds the id and never the body**, as it does for every
   secret.
 
+## Untrusted: the output of a program that reads the keyring
+
+An older version of Horizon kept a value of a remote browser provider in the
+Secret Service of Linux or in the Keychain of macOS. This version reads such a
+value once, when a person presses **Import from the keyring** in the Settings tab
+"Remote". No start reads a keyring, and no crate of this workspace opens one:
+three programs of the system answer instead.
+
+- **The output of each program is untrusted.** `secret-tool search --all
+  --unlock service horizon-remote-browser`, the `gi` binding of libsecret through
+  `python3 -I -c`, and `security find-generic-password -s horizon-remote-browser
+  -a <account> -w` each print an account name and a value. A reading is accepted
+  only in the exact format of its program: an item without a value, a value with a
+  line break, an attribute group that does not belong to one item, or any other
+  line is one typed refusal and no value is written. The text of a program never
+  reaches a log line, a notice or an error text.
+- **A reference comes from the settings, never from the keyring.** The account of
+  an item is `<origin>|<slot>` of the provider and the binding of a reference of
+  these settings, so an item of the keyring names a row `credential/<reference>`
+  only through a reference that the settings name. That reference passes the
+  reference rule of a secret id again before any row is written, and a settings
+  file that breaks it writes no row at all.
+- **A value passes the value rule of the store.** The row is written through the
+  same store path as a value that a person types, so an empty value and a value of
+  more than 16 KiB are refused, and the link to a server sends the value like any
+  other.
+- **A value that this computer holds is never written over.** A reference that has
+  a row in `secrets.sqlite` keeps that row, so a value that a person typed after the
+  upgrade survives an import.
+- **A value reaches no argument, no environment variable and no file of its own.**
+  Each program runs as a child of Horizon with a cleared environment that holds
+  `PATH`, `HOME`, `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`, with the value on
+  its stdout pipe only, and with a bound: 20 seconds for the whole import on Linux,
+  and 60 seconds for each entry on macOS, where the system can ask the person for
+  permission once. A child that passes the bound ends by its own process id. Every
+  buffer of a value is wiped when it goes.
+- **The keyring item stays as it is.** An import copies a value and deletes
+  nothing, so a person who goes back to the older version finds the item.
+
+What the import does not guarantee:
+
+- **It cannot tell who wrote an item.** Any program of the person, and any
+  process of the same user, can write an item under the service name
+  `horizon-remote-browser` and the account of a reference. An import cannot tell
+  such a value from the value of the older Horizon, so a value that another
+  program wrote is imported when its account names a reference of these settings.
+  Review a provider whose value matters with that in mind.
+- **It cannot tell a locked keyring from an unlocked one without the person.** An
+  import unlocks an item, so the system can ask the person to unlock the keyring,
+  and the question belongs to the bound of the import.
+- **The value passes through another program.** The program of the system reads
+  the value from the keyring, so that program holds it in its own memory. Horizon
+  adds no protection to the programs of the system.
+- **An import writes every row at once.** A refusal of the store in the middle of
+  an import keeps the rows that were written before it; it never removes a row.
+
 ## The secrets file of this computer
 
 - **Every value is a row of one file.** The file is
@@ -115,11 +171,12 @@ value are, where a value is allowed to go, and what it never reaches.
   the machine keys still follow the server. There is no state that says that this
   computer has no credential store: a SQLite file can always be opened, and a file
   that cannot be opened is a fault with a reason.
-- **This build does not read the OS credential store.** A value that a person
-  stored in the keyring or the Keychain with an older build stays there and is not
-  read. A reference or a name with no row of the file behaves as a value that this
-  computer does not hold: the Settings window shows `no value on this computer`, and
-  the person types the value once more.
+- **This build reads the OS credential store only when a person asks.** A value
+  that an older build stored in the keyring or the Keychain is not read at a start.
+  A reference with no row of the file behaves as a value that this computer does
+  not hold: the Settings window shows that it holds no value, and the tab "Remote"
+  offers the one-time import above. A person who installs none of the three
+  programs types the value once more.
 
 ## The secrets file of an isolated fixture
 
