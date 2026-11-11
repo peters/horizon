@@ -335,9 +335,10 @@ impl Config {
     /// `settings.sqlite` beside `config.json`, or `<name>.settings.sqlite`
     /// beside another name.
     ///
-    /// A JSON file that is found with no store is imported one time, and it
+    /// A settings file that is found with no store is imported one time, and it
     /// stays exactly as it is; a start that finds a store does not read it. The
-    /// YAML file of an older Horizon is not read at all.
+    /// document is JSON, or the YAML document of an older Horizon: YAML is read
+    /// for that one import and never written back.
     ///
     /// # Errors
     ///
@@ -346,7 +347,31 @@ impl Config {
     /// validate. A named configuration with neither a store nor a copy is an
     /// error: an isolated instance must not start with the settings of the user.
     pub fn load(path: Option<&Path>) -> Result<Self> {
-        let named = path.is_some();
+        let require_settings = path.is_some();
+        Self::load_start(path, !require_settings, require_settings)
+    }
+
+    /// The settings of a start that owns the home of `settings_path` and names
+    /// no settings file: the store, the settings file, the YAML settings file
+    /// that an older Horizon left in the same folder, or the defaults.
+    ///
+    /// This is the read of the usual start. [`Self::load`] with an explicit path
+    /// is the read of a run that names its settings file, such as a smoke run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a store, a settings file or a YAML settings file
+    /// exists and cannot be read, and when migrated settings do not validate. A
+    /// file that exists is never replaced by the defaults.
+    pub fn load_from_home(settings_path: &Path) -> Result<Self> {
+        Self::load_start(Some(settings_path), true, false)
+    }
+
+    /// `import_legacy` says that a start with no settings file and no store may
+    /// read the YAML file of an older Horizon in the folder of the resolved
+    /// path. `require_settings` says that a run that names its settings file
+    /// stops when neither a store nor a settings file exists.
+    fn load_start(path: Option<&Path>, import_legacy: bool, require_settings: bool) -> Result<Self> {
         let Some(resolved) = path.map(Path::to_path_buf).or_else(|| {
             config_candidates()
                 .into_iter()
@@ -382,7 +407,8 @@ impl Config {
             }
         };
 
-        let (mut config, migrated, origin) = start_settings(stored, copy.as_deref(), named, &store, &resolved)?;
+        let (mut config, migrated, origin) =
+            start_settings(stored, copy.as_deref(), require_settings, import_legacy, &store, &resolved)?;
         let migrated = config_migration::migrate_in_memory(&mut config)? || migrated;
         config.validate()?;
         finish_start(&resolved, &config, migrated, origin);
@@ -467,6 +493,14 @@ impl Config {
                 "the settings file format is JSON now, and this document does not parse as JSON: {error}"
             ))
         })
+    }
+
+    /// Parse a YAML settings document of an older Horizon. A key that this build
+    /// does not have is ignored, and so is a whole section of a feature that it
+    /// removed, so the settings that it still has arrive unchanged.
+    fn deserialize_yaml(contents: &str) -> Result<Self> {
+        let contents = crate::retired_panel_kinds::without_retired(contents);
+        serde_yaml::from_str(contents.as_ref()).map_err(|error| Error::Config(error.to_string()))
     }
 
     /// Serialize these settings as a JSON document.
@@ -590,14 +624,15 @@ fn repair_damaged_store(store: &ConfigStore, resolved: &Path, fault: &StoreFault
 fn start_settings(
     stored: Option<StoredSettings>,
     copy: Option<&str>,
-    named: bool,
+    require_settings: bool,
+    import_legacy: bool,
     store: &ConfigStore,
     resolved: &Path,
 ) -> Result<(Config, bool, Origin)> {
     match stored {
-        // A store is the settings of this computer. A YAML copy next to it is
-        // not read, not imported and not rewritten: it stays exactly as the
-        // person left it, and the log says which file holds the settings.
+        // A store is the settings of this computer. A copy next to it is not
+        // read, not imported and not rewritten: it stays exactly as the person
+        // left it, and the log says which file holds the settings.
         Some(stored) => {
             if copy.is_some() {
                 tracing::info!(
@@ -609,12 +644,45 @@ fn start_settings(
             Ok((stored.config, false, Origin::Stored))
         }
         None => match copy {
-            Some(text) => {
-                tracing::info!("importing {} into {}", resolved.display(), store.path().display());
-                let (config, migrated) = import_config_copy(text)?;
-                Ok((config, migrated, Origin::Imported))
-            }
-            None if named => Err(Error::Config(format!(
+            // The settings file of this run. Its content decides the format: JSON
+            // is the format of this build, and a YAML mapping is the document of
+            // an older Horizon.
+            Some(text) => match settings_format(text) {
+                SettingsFormat::Json => {
+                    tracing::info!("importing {} into {}", resolved.display(), store.path().display());
+                    let (config, migrated) = import_config_copy(text)?;
+                    Ok((config, migrated, Origin::Imported))
+                }
+                SettingsFormat::Yaml => {
+                    tracing::info!(
+                        "importing {} into {}; a YAML settings file is read for this import only and is never \
+                         written",
+                        resolved.display(),
+                        store.path().display()
+                    );
+                    let (config, migrated) = import_old_settings(text, resolved)?;
+                    Ok((config, migrated, Origin::Imported))
+                }
+            },
+            // No settings file at the default path: an older Horizon may have
+            // left its YAML settings file in the same folder.
+            None if import_legacy => match legacy_settings_file(resolved) {
+                Some(path) => {
+                    let text = std::fs::read_to_string(&path)?;
+                    tracing::info!(
+                        "importing the settings of {} into {}; the file stays exactly as it is",
+                        path.display(),
+                        store.path().display()
+                    );
+                    let (config, migrated) = import_old_settings(&text, &path)?;
+                    Ok((config, migrated, Origin::Imported))
+                }
+                None => {
+                    tracing::info!("no settings found, using defaults");
+                    Ok((Config::default(), false, Origin::Default))
+                }
+            },
+            None if require_settings => Err(Error::Config(format!(
                 "no settings store or configuration file at {}",
                 resolved.display()
             ))),
@@ -636,16 +704,74 @@ fn finish_start(resolved: &Path, config: &Config, migrated: bool, origin: Origin
 
 /// The settings file of a run, which a start reads only while it has no store,
 /// or `None` when it is absent.
-///
-/// It is JSON. A file of an older Horizon was YAML, and this build does not
-/// read it: a start with only that file begins with the default settings and
-/// leaves it exactly as the person left it.
 fn read_config_copy(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::Io(error)),
     }
+}
+
+/// The format of a settings document, as its content says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsFormat {
+    /// A JSON object, the format that this build writes.
+    Json,
+    /// A YAML mapping, the document of an older Horizon.
+    Yaml,
+}
+
+/// The format of `text`. It is JSON unless the text is not a JSON object and is
+/// a YAML mapping, so a document that reads as neither keeps the JSON error
+/// that names the format of this build.
+fn settings_format(text: &str) -> SettingsFormat {
+    if matches!(serde_json::from_str::<serde_json::Value>(text), Ok(serde_json::Value::Object(_))) {
+        return SettingsFormat::Json;
+    }
+    match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(serde_yaml::Value::Mapping(_)) => SettingsFormat::Yaml,
+        _ => SettingsFormat::Json,
+    }
+}
+
+/// The YAML settings file that an older Horizon left in the folder of
+/// `resolved`, or `None` when there is none.
+///
+/// A release of Horizon up to v0.2.7 read `config.yaml` and then `config.yml` in
+/// the Horizon home, which is the folder of the settings file of this build. The
+/// search stops at that folder: a file of another folder is not the settings of
+/// this home, and a file that a newer build moved aside
+/// (`config.yaml.imported-<time>`) has another name, so it is never read.
+fn legacy_settings_file(resolved: &Path) -> Option<PathBuf> {
+    let settings_dir = resolved.parent()?;
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    push_config_dir_candidates_with_names(&mut candidates, settings_dir, OLD_SETTINGS_NAMES);
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+/// Read a YAML settings document into memory, with the migrations and the
+/// checks that the store would get. The flag says whether a migration ran.
+///
+/// A document that cannot be read, that names a configuration version above
+/// this build, or whose values do not validate stops the start and names the
+/// file: the defaults never replace the settings of a person.
+fn import_old_settings(text: &str, path: &Path) -> Result<(Config, bool)> {
+    let named = |reason: String| Error::OldSettingsFile {
+        path: path.to_path_buf(),
+        reason,
+    };
+    let mut config = Config::deserialize_yaml(text).map_err(|error| named(error.to_string()))?;
+    if config.version > config_migration::CURRENT_CONFIG_VERSION {
+        return Err(named(format!(
+            "it is a settings file of a newer Horizon, with version {}; this Horizon reads up to \
+             version {}",
+            config.version,
+            config_migration::CURRENT_CONFIG_VERSION
+        )));
+    }
+    let migrated = config_migration::migrate_in_memory(&mut config).map_err(|error| named(error.to_string()))?;
+    config.validate().map_err(|error| named(error.to_string()))?;
+    Ok((config, migrated))
 }
 
 /// Read a settings document into memory, with the migrations and the checks
@@ -738,6 +864,10 @@ fn config_candidates() -> Vec<PathBuf> {
     )
 }
 
+/// The names of the settings file of a release up to v0.2.7, in the order that
+/// such a release read them in one folder.
+const OLD_SETTINGS_NAMES: &[&str] = &["config.yaml", "config.yml"];
+
 /// A `HORIZON_HOME` override is the only place a config is looked for, so an isolated
 /// instance never loads or saves the user's own config.
 fn config_candidates_with_env(
@@ -765,8 +895,14 @@ fn config_candidates_with_env(
     paths
 }
 
+fn push_config_dir_candidates_with_names(paths: &mut Vec<PathBuf>, base: &Path, names: &[&str]) {
+    for name in names {
+        paths.push(base.join(name));
+    }
+}
+
 fn push_config_dir_candidates(paths: &mut Vec<PathBuf>, base: &Path) {
-    paths.push(base.join("config.json"));
+    push_config_dir_candidates_with_names(paths, base, &["config.json"]);
 }
 
 fn parse_shortcut(name: &str, value: &str) -> Result<ShortcutBinding> {

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,6 +18,12 @@ pub enum Error {
     /// whole until a person asks for it to go with its board.
     #[error("the board of session {session_id} is not one this Horizon can read: {reason}")]
     UnreadableBoard { session_id: String, reason: String },
+
+    /// The YAML settings file of an older Horizon cannot be read. The start stops
+    /// and names the file, because the defaults must not replace the settings of
+    /// a person.
+    #[error("cannot read the settings of {}: {reason}", path.display())]
+    OldSettingsFile { path: PathBuf, reason: String },
 
     #[error("Editor error: {0}")]
     Editor(String),

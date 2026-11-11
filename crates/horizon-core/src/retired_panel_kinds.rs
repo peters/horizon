@@ -11,7 +11,11 @@ use std::fmt;
 use serde_yaml::Value;
 
 /// Panel kinds that a later release removed, as they appear in a document.
-const RETIRED: [&str; 3] = ["upkeep", "git_changes", "usage"];
+///
+/// `setup_board` is the board that guided a person through the settings of
+/// Horizon; the settings window holds those settings now, so a saved board of an
+/// earlier Horizon names a panel that this release does not draw.
+const RETIRED: [&str; 4] = ["upkeep", "git_changes", "usage", "setup_board"];
 
 const KIND: &str = "kind";
 

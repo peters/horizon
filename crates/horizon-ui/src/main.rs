@@ -102,7 +102,7 @@ fn main() -> eframe::Result {
     }
     #[cfg(target_os = "linux")]
     agent_integrations.install_desktop_entry();
-    let config = load_config_or_exit(&resolved_config_path);
+    let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);
 
@@ -473,8 +473,8 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
 
 /// Read the settings of this start, or stop with the reason when they cannot be
 /// read.
-fn load_config_or_exit(config_path: &std::path::Path) -> Config {
-    match load_config(config_path) {
+fn load_config_or_exit(config_path: &std::path::Path, named: bool) -> Config {
+    match load_config(config_path, named) {
         Ok(config) => config,
         Err(problem) => {
             eprintln!("error: {problem}");
@@ -486,25 +486,43 @@ fn load_config_or_exit(config_path: &std::path::Path) -> Config {
 /// Read the settings of this start, or the defaults when the run has no
 /// settings yet.
 ///
+/// `named` says that the run names its settings file, so the file must exist and
+/// a YAML file is imported only from that exact name. A run with no settings
+/// argument reads the store, the settings file, or the YAML settings file that
+/// an older Horizon left in the same folder.
+///
 /// # Errors
 ///
 /// Returns an error when a setting exists and cannot be read. The defaults never
 /// replace the settings of a person, so the start stops and names the file
 /// instead.
-fn load_config(config_path: &std::path::Path) -> Result<Config, String> {
-    let store = horizon_core::config_store::ConfigStore::resolve(config_path);
-    if !config_path.exists() && !store.path().exists() {
-        tracing::info!("no config found at {}, using defaults", config_path.display());
-        return Ok(Config::default());
-    }
+fn load_config(config_path: &std::path::Path, named: bool) -> Result<Config, String> {
+    let loaded = if named {
+        let store = horizon_core::config_store::ConfigStore::resolve(config_path);
+        if !config_path.exists() && !store.path().exists() {
+            tracing::info!("no config found at {}, using defaults", config_path.display());
+            return Ok(Config::default());
+        }
+        Config::load(Some(config_path))
+    } else {
+        Config::load_from_home(config_path)
+    };
 
-    Config::load(Some(config_path)).map_err(|error| {
+    loaded.map_err(|error| {
         tracing::error!("failed to load config: {error}");
-        format!(
-            "cannot read the settings of {}: {error}\n\
-             Move the file aside to start with the default settings.",
-            config_path.display()
-        )
+        match error {
+            // The message of an old settings file already names the file and the
+            // line of its fault, so it is not wrapped in the settings path of this
+            // build.
+            horizon_core::Error::OldSettingsFile { .. } => format!(
+                "{error}\nMove the file aside to start with the default settings."
+            ),
+            error => format!(
+                "cannot read the settings of {}: {error}\n\
+                 Move the file aside to start with the default settings.",
+                config_path.display()
+            ),
+        }
     })
 }
 
@@ -910,7 +928,7 @@ mod config_start_tests {
         let path = dir.path().join("config.json");
         std::fs::write(dir.path().join("settings.sqlite"), b"not a database").expect("write");
 
-        let error = load_config(&path).expect_err("a damaged store with no copy is an error");
+        let error = load_config(&path, true).expect_err("a damaged store with no copy is an error");
         assert!(error.contains("cannot read the settings of"), "{error}");
         assert!(error.contains("config.json"), "{error}");
     }
@@ -922,7 +940,7 @@ mod config_start_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config.json");
 
-        let config = load_config(&path).expect("defaults");
+        let config = load_config(&path, true).expect("defaults");
         assert_eq!(config.version, horizon_core::Config::default().version);
         assert!(!path.exists(), "the start writes no copy");
         assert!(
