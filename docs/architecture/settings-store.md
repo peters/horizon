@@ -27,7 +27,7 @@ The store has schema version 1.
 
 | Table | Rows |
 |---|---|
-| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `presets`, `workspaces`. |
+| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `secrets`, `presets`, `workspaces`. |
 | `meta` | `schema_version` and `saved_at`. |
 
 Each `settings` row has a `format` column. This build writes `json`. A build that
@@ -103,12 +103,22 @@ typed value of its section:
 | Presets | `presets` |
 | Browser | `browser`: the engine programs, the live view, the recording defaults and the passkey command |
 | Remote browsers | `browser.remote`: the providers, the targets and their credential bindings |
+| Secrets | `secrets`: the names of the named secrets, and no value |
 
 A numeric field does not clamp a value that the store already holds, so a value
 that a settings file or an older Horizon wrote stays exactly as it is until a
 person edits that field. A value that breaks a rule shows the rule under its
 field, and Save reports the same text. The rules are the validation of the
 sections, so the window and a start read one sentence per refusal.
+
+### The values that no settings row holds
+
+The `secrets` section holds the names of the named secrets of this computer and
+nothing else. A value lives in the OS credential store under the reference
+`named/<NAME>`, and the server link carries it as one sealed secret. The `secrets`
+row of the store therefore holds no value, and a copy of the settings of a person
+holds no value. See
+[the boundary of the named secrets](../review/trust-boundaries/named-secrets.md).
 
 ### The values that have no field
 

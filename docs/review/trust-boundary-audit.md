@@ -182,6 +182,24 @@ boundary pages went away with their features.
     panel is an ordinary SSH terminal afterwards that no operation of
     `block_panel` reads or changes.
 
+- [`named-secrets`](trust-boundaries/named-secrets.md)
+  (added after this audit, with the named secrets of the Settings window)
+  - Untrusted: the name and the value that a person types into the Settings
+    window, and a secret row of `named/<NAME>` that a server sends to a computer.
+  - Guarantees: a name is 1 to 64 characters of `A-Z`, `0-9` and `_` that starts
+    with `A-Z`; the names that Horizon, the agents and the system own (`PATH`,
+    `HOME`, `LD_*`, `SSH_*`, `HORIZON*`, `CLAUDE*`, `XDG_*` and the rest of the
+    list) are refused; a value is 1 to 16 KiB of UTF-8 text with no NUL byte and
+    no line break; at most 64 names; a value becomes one environment variable of
+    an agent panel only, so a shell, an ssh, an editor, a browser and a device
+    panel get none; the argv of every ssh is Horizon's own text; a saved session
+    holds the kind, command and arguments of a panel and no value; a refusal
+    names the secret and never quotes it; a computer reads and writes the store
+    on a worker thread and publishes the values of one read.
+  - Does not guarantee: that an agent cannot read and send the value, which is
+    the purpose of the feature; that a second process of the same user cannot
+    read the environment of a panel; that a running panel takes a new value; that
+    a computer without a credential store holds any value.
 - [`server-link`](trust-boundaries/server-link.md)
   - Untrusted: every byte of one link, the device name of its hello, the intents
     and the records that a computer sends, the id and the body of a secret, the

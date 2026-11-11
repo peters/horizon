@@ -278,11 +278,21 @@ person. The server therefore holds, beside the machine list:
   server decides.
 - **Every credential value that Horizon keeps in the OS credential store**, as one
   secret of the id `credential/<reference>` of the remote browser configuration.
+- **Every named secret of the person**, as one secret of the id `named/<NAME>`. The
+  body is the value that the agent panels of a computer read as the environment
+  variable `NAME`, so a second computer gives its agent panels the same variable
+  without a step. The name is 1 to 64 characters of `A-Z`, `0-9` and `_` that
+  starts with `A-Z`, it is not a name that Horizon or the system own, and the value
+  is 1 to 16 KiB of text with no line break. See
+  [the boundary of the named secrets](../review/trust-boundaries/named-secrets.md).
 
 A computer writes such a value where its own code already reads it: a machine key
 into `machine-keys/<name>` with the modes of a private key, a credential value
 into the OS credential store at the address that its own settings bind to the
-reference. Both then work without the server afterwards.
+reference, and a named secret into the same store under the reference
+`named/<NAME>`. All then work without the server afterwards, and a named secret is
+in the environment of the next agent panel that the computer starts. The settings
+of that computer list the name and never the value.
 
 **One secret is one value, and the first write on a version wins.** A computer
 that loses keeps its local value: a machine key as `<name>.conflict-<time>`,
@@ -304,9 +314,10 @@ comparison is never against a value that the computer assumes.
 The server holds no ssh login key of the person, no provider CLI login (az, gcloud,
 hcloud, aws), no browser profile, no session cookie, no agent token, no terminal
 content, no transcript and no setting of the person. `secret.key` itself never
-leaves the server home. The push path accepts two ids and no other: a path, a
-command, a name that is not one key name and a reference that is not one
-reference are typed refusals, so no other value can arrive.
+leaves the server home. The push path accepts three ids and no other: a path, a
+command, a name that is not one key name, a reference that is not one reference and
+a name that is not one name of a named secret are typed refusals, so no other value
+can arrive.
 
 ## When the server is away
 
