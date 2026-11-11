@@ -610,6 +610,89 @@ fn a_machine_list_without_a_server_starts_no_child() {
     );
 }
 
+/// The relay of an `ssh` whose server refuses the greeting: it reads the hello,
+/// answers the error of `sys.argv[1]`, and ends the link. It adds one line to its
+/// starts file for every start, so a test sees that no other attempt ran.
+const REFUSING_RELAY: &str = "\
+import json
+import struct
+import sys
+
+with open(sys.argv[2], 'a') as starts:
+    starts.write('start\\n')
+
+head = sys.stdin.buffer.read(4)
+if len(head) < 4:
+    sys.exit(0)
+size = struct.unpack('>I', head)[0]
+hello = sys.stdin.buffer.read(size)
+if len(hello) < size:
+    sys.exit(0)
+body = json.dumps({'error': {'code': sys.argv[1], 'message': 'This computer was removed from the server.'}})
+body = body.encode()
+sys.stdout.buffer.write(struct.pack('>I', len(body)) + body)
+sys.stdout.buffer.flush()
+";
+
+/// A stand-in `ssh` whose server refuses the greeting with one code of the link.
+fn refusing_stand_in(directory: &Path, code: &str, starts: &Path) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let relay = directory.join("refusing.py");
+    fs::write(&relay, REFUSING_RELAY).expect("the refusing relay of the stand-in");
+    let program = directory.join("ssh");
+    let script = format!(
+        "#!/bin/sh\nexec /usr/bin/env python3 '{}' '{}' '{}'\n",
+        relay.display(),
+        code,
+        starts.display()
+    );
+    fs::write(&program, script).expect("the refusing stand-in ssh");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    program.to_string_lossy().into_owned()
+}
+
+/// A greeting that the server refuses is the end of the link and not a lost one: no
+/// attempt can bring a token back, so the computer reads the reason and starts no
+/// other child. A removal that a person made while this computer was away reaches
+/// it here, with the record that the server kept of the removal.
+#[test]
+fn a_refused_greeting_ends_the_link_and_starts_no_other_attempt() {
+    for (code, refused) in [
+        ("removed", LinkState::Removed),
+        ("not_logged_in", LinkState::NotLoggedIn),
+    ] {
+        let home = tempfile::tempdir().expect("a directory");
+        let machines_dir = home.path().join("machines");
+        fs::create_dir_all(&machines_dir).expect("the machine directory");
+        let starts_file = home.path().join("starts.txt");
+        let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+        let mut config = SupervisorConfig::for_server(
+            "server-vm",
+            "/opt/horizon --server-link",
+            &machines_dir,
+            keys_only(keys),
+        )
+        .expect("the settings of the link");
+        config.program = refusing_stand_in(&home.path().join("stand-in"), code, &starts_file);
+        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+
+        eventually("the state of a refused greeting", || {
+            (supervisor.handle().state() == refused).then_some(())
+        });
+        // A lost link reports `away` at once and starts another child at its delay,
+        // so a state that stays is the answer of the server and not the delay of a
+        // retry.
+        thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            supervisor.handle().state(),
+            refused,
+            "the refusal of the server is the state of the link, and not a lost link"
+        );
+        assert_eq!(start_count(&starts_file), 1, "a refusal starts no other child");
+        supervisor.stop();
+    }
+}
+
 /// A link that answers the hello and then nothing is lost at its bound: the
 /// supervisor ends and reaps the child, reports `away`, and starts the next
 /// attempt. The bounds of the test are short, so a link that no answer reached
@@ -647,13 +730,13 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         .then_some(())
     });
     // The bound of the request runs from the instant that the request left, and
-    // not from the instant that this test read the state: the state was already
-    // greeted, so its first request was on its way before this line ran. A test
-    // clock that started here reported a loss 9 ms early under load.
-    let sent = supervisor
-        .handle()
-        .open_request_since()
-        .expect("the request that the silent stand-in did not answer");
+    // not from the instant that this test read the state: the state turns `behind`
+    // at the greeting, and the first request leaves one turn later, so a test clock
+    // that started at the greeting reported a loss early and a test that read the
+    // start once missed it under load.
+    let sent = eventually("the request of the first turn of the link", || {
+        supervisor.handle().open_request_since()
+    });
     eventually("the link that is reported away", || {
         matches!(supervisor.handle().state(), LinkState::Away { .. }).then_some(())
     });

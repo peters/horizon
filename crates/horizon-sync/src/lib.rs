@@ -51,6 +51,8 @@ mod protocol;
 mod server;
 mod store;
 mod supervisor;
+#[cfg(test)]
+mod test_support;
 mod tip;
 
 pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PullOutcome, PushOutcome};

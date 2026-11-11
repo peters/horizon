@@ -54,12 +54,13 @@ use crate::frame::{read_frame, write_frame};
 use crate::protocol::Frame;
 use connect::{Halt, Opened};
 use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, device_name};
-use pull::{accept_hello, accept_pushed, apply_changes, merged_bindings, now_millis};
-use secrets::fill_secrets;
+use link::{End, LinkParts, serve_link};
+use pull::{accept_hello, merged_bindings, now_millis};
 use view::records_of;
 
 mod connect;
 mod files;
+mod link;
 mod pull;
 mod secrets;
 mod state;
@@ -377,9 +378,10 @@ fn run(
                 kicked,
                 asked,
             }),
-            Err(reason) => {
+            Err(failed) => {
+                let reason = &failed.reason;
                 tracing::warn!(%reason, "the link to the Horizon server did not open");
-                End::Link
+                failed.end
             }
         };
         halt(halt_slot);
@@ -409,15 +411,36 @@ fn run(
     }
 }
 
-/// How one link ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum End {
-    /// The link failed, reached its bound or ended, so the next attempt starts on
-    /// the delays of a lost link.
-    Link,
-    /// The server does not know the token of this computer, so no attempt can
-    /// succeed until a person joins it again.
-    LoggedOut,
+/// Why one attempt at a link did not open it.
+///
+/// A transport that failed and a server that stopped answering are both a lost
+/// link, and the delays of [`horizon_core::place::reconnect_delay`] start another
+/// attempt. A greeting that the server refused because it does not accept the
+/// login of this computer is not one of them: no attempt can succeed until a
+/// person joins this computer again.
+struct FailedLink {
+    /// One sentence for the log.
+    reason: String,
+    /// How this attempt ended, which decides whether another one starts.
+    end: End,
+}
+
+impl From<String> for FailedLink {
+    fn from(reason: String) -> Self {
+        Self { reason, end: End::Link }
+    }
+}
+
+impl FailedLink {
+    /// The refusal of the server that no later attempt can repeat, because the
+    /// token of this computer is gone.
+    fn logged_out(reason: &str, code: crate::protocol::LinkErrorCode) -> Self {
+        let reason = format!("the server refused the link: {}: {reason}", code.as_str());
+        Self {
+            reason,
+            end: End::LoggedOut,
+        }
+    }
 }
 
 /// Starts one transport and its reader, sends the hello, and answers the two
@@ -427,13 +450,15 @@ fn connect(
     handle: &SyncHandle,
     stop: &AtomicBool,
     halt_slot: &Arc<Mutex<Option<Halt>>>,
-) -> Result<(Box<dyn Write + Send>, Receiver<Frame>), String> {
+) -> Result<(Box<dyn Write + Send>, Receiver<Frame>), FailedLink> {
     // A TCP link reads the token row of this computer, and an `ssh` link leaves
     // the program to the machine terminal of the person. Both run here, on the
     // worker thread of the link.
     let token = config.tcp_address().and_then(|_| config.token());
     if config.tcp_address().is_some() && token.is_none() {
-        return Err("this computer has no token of the server; join it again".to_owned());
+        return Err("this computer has no token of the server; join it again"
+            .to_owned()
+            .into());
     }
     let opened = if let Some(address) = config.tcp_address() {
         connect::tcp(address)?
@@ -463,7 +488,7 @@ fn connect(
     let deadline = Instant::now() + HELLO_BOUND;
     loop {
         if stop.load(Ordering::SeqCst) {
-            return Err("the link was stopped before the server answered".to_owned());
+            return Err("the link was stopped before the server answered".to_owned().into());
         }
         match incoming.recv_timeout(LINK_SLICE) {
             Ok(Frame::HelloOk(answer)) => {
@@ -472,292 +497,34 @@ fn connect(
             }
             Ok(Frame::Error(error)) => {
                 let code = error.code;
+                let reason = error.message;
                 if matches!(
                     code,
                     crate::protocol::LinkErrorCode::Removed | crate::protocol::LinkErrorCode::NotLoggedIn
                 ) {
                     logged_out(config, handle, code);
+                    return Err(FailedLink::logged_out(&reason, code));
                 }
-                return Err(format!(
-                    "the server refused the link: {}: {}",
-                    code.as_str(),
-                    error.message
-                ));
+                return Err(FailedLink {
+                    reason: format!("the server refused the link: {}: {reason}", code.as_str()),
+                    end: End::Link,
+                });
             }
-            Ok(_) => return Err("the server answered the hello with another frame".to_owned()),
+            Ok(_) => return Err("the server answered the hello with another frame".to_owned().into()),
             Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
-                return Err("the server did not answer the hello in time".to_owned());
+                return Err("the server did not answer the hello in time".to_owned().into());
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                return Err("the link ended before the server answered the hello".to_owned());
+                return Err("the link ended before the server answered the hello".to_owned().into());
             }
         }
     }
-}
-
-/// The two halves of one open link, and the answers of the server.
-struct Link<'a> {
-    config: &'a SupervisorConfig,
-    handle: &'a SyncHandle,
-    stop: &'a AtomicBool,
-    bounds: &'a LinkBounds,
-    /// The frames of this computer leave here.
-    input: &'a mut (dyn Write + Send),
-    /// The frames of the server arrive here.
-    answers: &'a Receiver<Frame>,
-    /// A local change, so this turn sends what the queue holds.
-    kicked: &'a Receiver<()>,
-    /// One question of the window or of a worker.
-    asked: &'a Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
-    /// When the open wait left, so its answer is due at its bound.
-    waiting: Option<Instant>,
-    /// The index that the open request reads from, so the answer is known to be the
-    /// one that a mark set back or not.
-    asking_from: u64,
-    /// When the open push left, so its answer is due at once.
-    sending: Option<Instant>,
-    /// The first request of a link is a pull: the server answers it at once, while a
-    /// wait stays open at its bound when nothing changed yet.
-    first: bool,
-    /// The one question that waits for its answer.
-    question: Asked,
-}
-
-impl Link<'_> {
-    /// Answers the frames of one open link until it ends, the stop flag is set, or a
-    /// request stays without an answer for its bound.
-    ///
-    /// A bound is what an idle computer needs most: a server that dies leaves the
-    /// socket of the link open for as long as the transport lives, so a wait that
-    /// never answers is the only sign of a link that is over. The answer of a push, a
-    /// pull and a question is due at once, and the answer of a wait is due at the
-    /// bound of the server that holds it open.
-    fn serve(&mut self) -> End {
-        loop {
-            if self.stop.load(Ordering::SeqCst) {
-                return End::Link;
-            }
-            if !self.push() || !self.ask() || !self.pull() {
-                return End::Link;
-            }
-            match self.answers.recv_timeout(LINK_SLICE) {
-                Ok(frame) => {
-                    if let Some(end) = self.answered(frame) {
-                        return end;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    if let Some(end) = self.timed_out() {
-                        return end;
-                    }
-                }
-                Err(RecvTimeoutError::Disconnected) => return End::Link,
-            }
-            // A local change is the only work of a turn that the server did not
-            // answer; the links of both are read on the next pass of the loop.
-            while self.kicked.try_recv().is_ok() {}
-        }
-    }
-
-    /// Sends what the queue holds, unless a push already waits for its answer.
-    fn push(&mut self) -> bool {
-        if self.sending.is_some() {
-            return true;
-        }
-        let chunk = {
-            let state = self.handle.lock();
-            state.client.next_push()
-        };
-        let Some(chunk) = chunk else {
-            return true;
-        };
-        let intents = fill_secrets(self.handle, chunk);
-        if intents.is_empty() {
-            return true;
-        }
-        let frame = Frame::Push(crate::protocol::Push { intents });
-        if let Err(error) = write_frame(self.input, &frame) {
-            tracing::warn!(%error, "the link could not send a push");
-            return false;
-        }
-        self.sending = Some(Instant::now());
-        true
-    }
-
-    /// Sends one question of the window, unless a question waits for its answer.
-    fn ask(&mut self) -> bool {
-        if !self.question.waits() {
-            return true;
-        }
-        let Ok((request, reply)) = self.asked.try_recv() else {
-            return true;
-        };
-        match self.question.ask(request, reply) {
-            Ok(frame) => {
-                if let Err(error) = write_frame(self.input, &frame) {
-                    tracing::warn!(%error, "the link could not send a question");
-                    return false;
-                }
-                true
-            }
-            Err(reply) => {
-                let _ = reply.send(ServerReply::Failed(
-                    "This computer has no link to the server now.".to_owned(),
-                ));
-                true
-            }
-        }
-    }
-
-    /// Asks for the changes of the server, unless one request waits for its answer.
-    fn pull(&mut self) -> bool {
-        if self.waiting.is_some() {
-            return true;
-        }
-        let frame = {
-            let state = self.handle.lock();
-            self.asking_from = state.client.read_from();
-            if self.first {
-                state.client.pull_frame()
-            } else {
-                state.client.wait_frame()
-            }
-        };
-        if let Err(error) = write_frame(self.input, &frame) {
-            tracing::warn!(%error, "the link could not ask for changes");
-            return false;
-        }
-        self.waiting = Some(Instant::now());
-        // The state publishes the instant that the bound of this request runs
-        // from, so a reader measures the same bound from the same start.
-        self.handle.lock().request_since = self.waiting;
-        true
-    }
-
-    /// Applies one answer of the server. Answers `None` to continue the link, and the
-    /// end of it when the answer ends it.
-    fn answered(&mut self, frame: Frame) -> Option<End> {
-        match frame {
-            Frame::Pushed(reply) => {
-                self.sending = None;
-                accept_pushed(self.handle, &reply);
-                None
-            }
-            Frame::Changes(changes) => {
-                self.waiting = None;
-                self.handle.lock().request_since = None;
-                self.first = false;
-                if let Err(error) = apply_changes(self.handle, &changes, self.asking_from) {
-                    tracing::warn!(%error, "the changes of the server were not applied");
-                    return Some(End::Link);
-                }
-                (self.handle.wake)();
-                None
-            }
-            Frame::Invited(_) | Frame::DeviceList(_) | Frame::DeviceRemoved(_) => {
-                if self.question.answer(&frame).is_none() {
-                    tracing::warn!("the server answered a question that this computer did not ask");
-                    return Some(End::Link);
-                }
-                None
-            }
-            Frame::Error(error) => {
-                tracing::warn!(code = error.code.as_str(), reason = %error.message, "the server ended the link");
-                if matches!(
-                    error.code,
-                    crate::protocol::LinkErrorCode::Removed | crate::protocol::LinkErrorCode::NotLoggedIn
-                ) {
-                    logged_out(self.config, self.handle, error.code);
-                    return Some(End::LoggedOut);
-                }
-                Some(End::Link)
-            }
-            _other => {
-                tracing::warn!("the server answered a frame that this computer did not ask for");
-                Some(End::Link)
-            }
-        }
-    }
-
-    /// Answers the end of a link whose request stayed without an answer for its
-    /// bound, or `None` while every request is inside its bound.
-    fn timed_out(&mut self) -> Option<End> {
-        let answer_due = if self.first {
-            self.bounds.request
-        } else {
-            self.bounds.wait
-        };
-        if self.question.past_bound(self.bounds.request) {
-            tracing::warn!(
-                bound_secs = self.bounds.request.as_secs(),
-                "the server did not answer a question in time, so the link is lost"
-            );
-            return Some(End::Link);
-        }
-        if past_bound(self.sending, self.bounds.request) {
-            tracing::warn!(
-                bound_secs = self.bounds.request.as_secs(),
-                "the link did not answer a push in time, so it is lost"
-            );
-            return Some(End::Link);
-        }
-        if past_bound(self.waiting, answer_due) {
-            tracing::warn!(
-                bound_secs = answer_due.as_secs(),
-                "the link did not answer a wait in time, so it is lost"
-            );
-            return Some(End::Link);
-        }
-        None
-    }
-}
-
-/// The settings, the state and the channels of one open link.
-struct LinkParts<'a> {
-    config: &'a SupervisorConfig,
-    handle: &'a SyncHandle,
-    stop: &'a AtomicBool,
-    bounds: &'a LinkBounds,
-    input: &'a mut (dyn Write + Send),
-    answers: &'a Receiver<Frame>,
-    kicked: &'a Receiver<()>,
-    asked: &'a Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
-}
-
-/// Serves one open link with the transport and the channels of `parts`.
-fn serve_link(parts: LinkParts<'_>) -> End {
-    let LinkParts {
-        config,
-        handle,
-        stop,
-        bounds,
-        input,
-        answers,
-        kicked,
-        asked,
-    } = parts;
-    Link {
-        config,
-        handle,
-        stop,
-        bounds,
-        input,
-        answers,
-        kicked,
-        asked,
-        waiting: None,
-        asking_from: 0,
-        sending: None,
-        first: true,
-        question: Asked::default(),
-    }
-    .serve()
 }
 
 /// Forgets the token of this computer and publishes the state that the person
 /// reads, because the server does not accept it any more.
-fn logged_out(config: &SupervisorConfig, handle: &SyncHandle, code: crate::protocol::LinkErrorCode) {
+pub(super) fn logged_out(config: &SupervisorConfig, handle: &SyncHandle, code: crate::protocol::LinkErrorCode) {
     let not_logged_in = code == crate::protocol::LinkErrorCode::NotLoggedIn;
     if let Some(store) = config.token_store.as_deref()
         && let Err(error) = secret_store::remove_token(store)
@@ -766,86 +533,6 @@ fn logged_out(config: &SupervisorConfig, handle: &SyncHandle, code: crate::proto
     }
     let mut state = handle.lock();
     state.client.logged_out(not_logged_in);
-}
-
-/// The one question that a link has asked and not yet had answered.
-///
-/// The server answers each question with one frame of its own, so a link that
-/// keeps one question in flight cannot confuse an answer with the changes of a
-/// wait or with the result of a push.
-#[derive(Default)]
-struct Asked {
-    waiting: Option<(Instant, ServerRequest, mpsc::Sender<ServerReply>)>,
-}
-
-impl Asked {
-    /// Whether no question waits for its answer.
-    fn waits(&self) -> bool {
-        self.waiting.is_none()
-    }
-
-    /// Sends one question, or answers the one that waits with the reason that
-    /// this computer has no link now.
-    fn ask(
-        &mut self,
-        request: ServerRequest,
-        reply: mpsc::Sender<ServerReply>,
-    ) -> Result<Frame, mpsc::Sender<ServerReply>> {
-        if self.waiting.is_some() {
-            return Err(reply);
-        }
-        let frame = match &request {
-            ServerRequest::Invite => Frame::Invite(crate::protocol::Invite {}),
-            ServerRequest::Devices => Frame::Devices(crate::protocol::Devices {}),
-            ServerRequest::Remove(device) => {
-                Frame::DeviceRemove(crate::protocol::DeviceRemove { device: device.clone() })
-            }
-        };
-        self.waiting = Some((Instant::now(), request, reply));
-        Ok(frame)
-    }
-
-    /// Answers the question that waits, when the frame is its answer.
-    fn answer(&mut self, frame: &Frame) -> Option<mpsc::Sender<ServerReply>> {
-        let (_, request, reply) = self.waiting.take()?;
-        let answer = match (frame, &request) {
-            (Frame::Invited(invited), ServerRequest::Invite) => ServerReply::Invited(invited.clone()),
-            (Frame::DeviceList(list), ServerRequest::Devices) => ServerReply::Devices {
-                rows: list.rows.clone(),
-                now_millis: list.now_millis,
-            },
-            (Frame::DeviceRemoved(removed), ServerRequest::Remove(_)) => ServerReply::Removed {
-                device: removed.device.clone(),
-                removed: removed.removed,
-            },
-            _ => ServerReply::Failed("The server answered another question than the one asked.".to_owned()),
-        };
-        let _ = reply.send(answer);
-        Some(reply)
-    }
-
-    /// Whether the question that waits has waited longer than `bound`, and answers
-    /// it with the reason that the server did not answer.
-    fn past_bound(&mut self, bound: Duration) -> bool {
-        let Some((at, _, _)) = self.waiting.as_ref() else {
-            return false;
-        };
-        if at.elapsed() < bound {
-            return false;
-        }
-        if let Some((_, _, reply)) = self.waiting.take() {
-            let _ = reply.send(ServerReply::Failed(
-                "The server did not answer this computer in time.".to_owned(),
-            ));
-        }
-        true
-    }
-}
-
-/// Whether a request that was sent at `since` has waited for its answer longer
-/// than `bound`.
-fn past_bound(since: Option<Instant>, bound: Duration) -> bool {
-    since.is_some_and(|since| since.elapsed() >= bound)
 }
 
 /// Fills the bodies of the secret intents of one push from where this computer
@@ -960,6 +647,7 @@ mod tests {
 
     use crate::client::Client;
     use crate::protocol::check_device_name;
+    use crate::test_support::keys_of_a_test;
 
     use super::files::DEVICE_FILE;
     use super::*;
@@ -1000,23 +688,6 @@ mod tests {
             handle.take_secret_notices().is_empty(),
             "a taken line is not shown twice"
         );
-    }
-
-    /// The secrets of a computer whose key folder holds no value, for a handle
-    /// that a test reads without a link.
-    fn keys_of_a_test(keys: horizon_core::MachineKeys) -> Arc<dyn SecretTarget> {
-        use horizon_core::named_secrets::NamedSecretVault;
-        use horizon_core::secret::{CredentialVault, SecretVault};
-        use horizon_core::secret_store::SecretStore;
-
-        let credentials = Arc::new(CredentialVault::new(Box::new(
-            SecretStore::in_memory().expect("a store in memory"),
-        )));
-        credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
-        let named = Arc::new(NamedSecretVault::new(Box::new(
-            SecretStore::in_memory().expect("a store in memory"),
-        )));
-        Arc::new(SecretVault::new(keys, credentials, named))
     }
 
     #[test]
