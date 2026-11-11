@@ -189,7 +189,8 @@ fn copying_a_session_id_does_not_resume_the_session() {
         &options,
     );
     assert!(pressed.binding.is_none());
-    let (released, commands) = rebind_options_frame_output(
+    let before = crate::clipboard::recorded_len();
+    let (released, _commands) = rebind_options_frame_output(
         &ctx,
         vec![Event::PointerButton {
             pos: at,
@@ -201,10 +202,12 @@ fn copying_a_session_id_does_not_resume_the_session() {
     );
     assert!(released.binding.is_none());
     assert!(
-        commands
-            .iter()
-            .any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == &options[0].session_id))
+        crate::clipboard::wait_for(
+            |copy| matches!(copy, crate::clipboard::Copy::Text(text) if text == &options[0].session_id)
+        ),
+        "the click hands the session id to the thread that owns the clipboard"
     );
+    assert!(crate::clipboard::recorded_len() > before);
 }
 
 #[test]

@@ -320,7 +320,7 @@ fn prepare_panel(ui: &Ui, panel: &mut Panel, state: &mut BrowserUiState) {
     if let Some(browser) = panel.browser_mut()
         && let Some(text) = browser.take_clipboard_text()
     {
-        ui.ctx().copy_text(text);
+        crate::clipboard::copy_text(text);
     }
     if let Some(browser) = panel.browser_mut() {
         if browser.needs_event_waker() {

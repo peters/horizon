@@ -37,7 +37,39 @@ pub(in crate::app) struct ClaimedRequest {
 pub(in crate::app) struct DeviceAnswer {
     root: Option<PathBuf>,
     request: Request,
-    outcome: Outcome,
+    work: AnswerWork,
+}
+
+/// The work that produces an answer. A screenshot of a panel encodes a PNG of
+/// its pixels and copies them to the clipboard when the request asks for it, so
+/// it runs on the coordination worker and not on the frame that took the
+/// pixels.
+pub(in crate::app) enum AnswerWork {
+    Ready(Outcome),
+    Screenshot {
+        store: crate::screenshot::PrivatePngStore,
+        image: egui::ColorImage,
+        panel_id: String,
+        copy_to_clipboard: bool,
+    },
+}
+
+impl AnswerWork {
+    /// The outcome the agent reads, produced on the worker.
+    fn resolve(self) -> Outcome {
+        match self {
+            Self::Ready(outcome) => outcome,
+            Self::Screenshot {
+                store,
+                image,
+                panel_id,
+                copy_to_clipboard,
+            } => match store.capture(panel_id, &image, copy_to_clipboard) {
+                Ok(capture) => Outcome::Screenshot { capture },
+                Err(message) => Outcome::failed("screenshot_unavailable", &message),
+            },
+        }
+    }
 }
 
 impl ClaimedRequest {
@@ -46,7 +78,7 @@ impl ClaimedRequest {
         DeviceAnswer {
             root: self.root.clone(),
             request: self.request.clone(),
-            outcome,
+            work: AnswerWork::Ready(outcome),
         }
     }
 }
@@ -56,7 +88,28 @@ impl DeviceAnswer {
         Self {
             root: root.map(Path::to_path_buf),
             request,
-            outcome,
+            work: AnswerWork::Ready(outcome),
+        }
+    }
+
+    /// An answer whose screenshot the coordination worker encodes and writes.
+    pub(in crate::app) fn screenshot(
+        root: Option<&Path>,
+        request: Request,
+        store: crate::screenshot::PrivatePngStore,
+        image: egui::ColorImage,
+        panel_id: String,
+        copy_to_clipboard: bool,
+    ) -> Self {
+        Self {
+            root: root.map(Path::to_path_buf),
+            request,
+            work: AnswerWork::Screenshot {
+                store,
+                image,
+                panel_id,
+                copy_to_clipboard,
+            },
         }
     }
 }
@@ -73,6 +126,10 @@ pub(in crate::app) struct DeviceClaimState {
     /// Answers the worker could not write, for a later frame or pump wake and
     /// until each request's deadline.
     refused: RefusedAnswers<DeviceAnswer>,
+    /// The outcomes the worker produced, so a test judges the answer of a
+    /// request that the worker answers rather than the frame.
+    #[cfg(test)]
+    pub(in crate::app) answered: Vec<Outcome>,
 }
 
 impl DeviceClaimState {
@@ -134,19 +191,30 @@ impl HorizonApp {
         let request_id = answer.request.request_id.clone();
         let deadline_at_millis = answer.request.deadline_at_millis;
         let writing = answer.request.clone();
-        let (root, outcome) = (answer.root.clone(), answer.outcome.clone());
+        let (root, request) = (answer.root.clone(), answer.request.clone());
         self.device_claim.writing += 1;
         self.browser_create_host.io.then(
-            move || complete_device_request(root.as_deref(), &writing, outcome),
-            move |app, written| {
+            move || {
+                let outcome = answer.work.resolve();
+                let written = complete_device_request(answer.root.as_deref(), &writing, &outcome);
+                (outcome, written)
+            },
+            move |app, result| {
                 app.device_claim.writing -= 1;
-                if matches!(written, Some(Ok(()))) {
+                let Some((outcome, written)) = result else {
+                    return;
+                };
+                #[cfg(test)]
+                app.device_claim.answered.push(outcome.clone());
+                if written.is_ok() {
                     return;
                 }
                 tracing::debug!(%request_id, "the coordination worker could not answer a Device panel request yet");
-                app.device_claim
-                    .refused
-                    .keep(RefusedAnswer::new(answer, request_id, deadline_at_millis));
+                app.device_claim.refused.keep(RefusedAnswer::new(
+                    DeviceAnswer::new(root.as_deref(), request, outcome),
+                    request_id,
+                    deadline_at_millis,
+                ));
             },
         );
     }
@@ -231,9 +299,9 @@ pub(in crate::app) fn claimed_browser_manifest(
 }
 
 /// Writes the result envelope of one request.
-fn complete_device_request(root: Option<&Path>, request: &Request, outcome: Outcome) -> std::io::Result<()> {
+fn complete_device_request(root: Option<&Path>, request: &Request, outcome: &Outcome) -> std::io::Result<()> {
     match root {
-        Some(root) => device::complete_at(root, request, outcome),
-        None => device::complete(request, outcome),
+        Some(root) => device::complete_at(root, request, outcome.clone()),
+        None => device::complete(request, outcome.clone()),
     }
 }

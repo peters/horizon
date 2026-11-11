@@ -7,6 +7,7 @@ mod badge;
 mod block_widget;
 mod branding;
 mod browser_widget;
+mod clipboard;
 mod clipboard_image;
 mod command_palette;
 mod command_registry;

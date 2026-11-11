@@ -263,7 +263,7 @@ impl DeviceUiState {
                     )
                     .clicked()
                 {
-                    ui.ctx().copy_text(status.capture.path.clone());
+                    crate::clipboard::copy_text(status.capture.path.clone());
                 }
             }
         }

@@ -273,13 +273,12 @@ fn keyboard_copy_keeps_the_picker_open() {
         modifiers: Modifiers::NONE,
     };
     frame(&ctx, vec![key(Key::Tab)], false);
-    let copied = frame(&ctx, vec![key(Key::Enter)], false);
+    let _copied = frame(&ctx, vec![key(Key::Enter)], false);
     assert!(
-        copied
-            .platform_output
-            .commands
-            .iter()
-            .any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == "exact-session-id"))
+        crate::clipboard::wait_for(
+            |copy| matches!(copy, crate::clipboard::Copy::Text(text) if text == "exact-session-id")
+        ),
+        "the copied session id reaches the thread that owns the clipboard"
     );
     assert_eq!(session_picker_panel(&ctx), Some(PanelId(1)));
 }
@@ -371,7 +370,7 @@ fn recovery_picker_outlives_parent_menu_and_copy_keeps_it_open() {
         ],
         false,
     );
-    let copied = frame(
+    let _copied = frame(
         &ctx,
         vec![Event::PointerButton {
             pos: at,
@@ -382,11 +381,10 @@ fn recovery_picker_outlives_parent_menu_and_copy_keeps_it_open() {
         false,
     );
     assert!(
-        copied
-            .platform_output
-            .commands
-            .iter()
-            .any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == "exact-session-id"))
+        crate::clipboard::wait_for(
+            |copy| matches!(copy, crate::clipboard::Copy::Text(text) if text == "exact-session-id")
+        ),
+        "the copied session id reaches the thread that owns the clipboard"
     );
     assert!(text_center(&frame(&ctx, Vec::new(), false), "Resume a session").is_some());
     frame(

@@ -71,7 +71,7 @@ impl HorizonApp {
         }
         let had_panel_output = self.drain_panel_output();
         self.poll_reconnects(ctx, Instant::now());
-        self.forward_terminal_clipboard_writes(ctx);
+        self.forward_terminal_clipboard_writes();
         let browser_create_activity = self.poll_browser_create_requests(ctx);
         let device_activity = self.poll_device_panel_requests(ctx);
         let block_activity = self.poll_block_panel_requests(ctx);
@@ -128,10 +128,10 @@ impl HorizonApp {
 
     /// Hand OSC 52 copy requests from terminal panels to the system, so TUIs
     /// that have no `wl-copy`/`xclip`/`pbcopy` to call still reach it.
-    fn forward_terminal_clipboard_writes(&mut self, ctx: &Context) {
+    fn forward_terminal_clipboard_writes(&mut self) {
         for write in self.board.take_terminal_clipboard_writes() {
             match write.target {
-                ClipboardTarget::Clipboard => ctx.copy_text(write.text),
+                ClipboardTarget::Clipboard => crate::clipboard::copy_text(write.text),
                 ClipboardTarget::Selection => self.primary_selection.copy(&write.text),
             }
         }

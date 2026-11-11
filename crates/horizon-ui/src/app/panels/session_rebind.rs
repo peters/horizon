@@ -384,7 +384,7 @@ fn render_session_row(
                         #[cfg(test)]
                         outcome.copy_rects.push(copy.rect);
                         if copy.clicked() {
-                            ui.ctx().copy_text(binding.session_id.clone());
+                            crate::clipboard::copy_text(binding.session_id.clone());
                         }
                         copy.on_hover_text("Copy the full session ID");
                         deletion.render_row_controls(ui, binding);

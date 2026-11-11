@@ -71,9 +71,13 @@ impl HorizonApp {
         let changed = !claimed.is_empty();
         for request in claimed {
             let root = request.root.as_deref();
-            let outcome = self.apply_device_request_at(&request.request, ctx, request.browser_manifest.as_ref());
-            // A reveal waits for the pass that draws the viewer, and the
-            // request pump answers it, also when the host runs no frame.
+            let outcome = self.apply_device_request_at(&request.request, ctx, request.browser_manifest.as_ref(), root);
+            // The worker answers a request whose pixels it exports; a reveal
+            // waits for the pass that draws the viewer, and the request pump
+            // answers it, also when the host runs no frame.
+            let Some(outcome) = outcome else {
+                continue;
+            };
             let Some(outcome) = self.defer_device_reveal(&request.request, outcome, root) else {
                 continue;
             };
@@ -83,38 +87,53 @@ impl HorizonApp {
     }
 
     /// Applies a request against the process runtime root, as a claim's apply
-    /// does. Tests use it to judge one operation without a queue.
+    /// does, and returns the answer of a request that the coordination worker
+    /// answers. Tests use it to judge one operation without a queue.
     #[cfg(test)]
     fn apply_device_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
-        self.apply_device_request_at(request, ctx, None)
+        let root = tempfile::tempdir().expect("temp dir for the answer of a request");
+        let applied = self.apply_device_request_at(request, ctx, None, Some(root.path()));
+        self.settle_browser_host_io();
+        match applied {
+            Some(outcome) => outcome,
+            None => self
+                .device_claim
+                .answered
+                .last()
+                .cloned()
+                .expect("the coordination worker answered the request"),
+        }
     }
 
     /// Applies one request. A browser capture judges the manifest that the
-    /// claim read on the coordination worker.
+    /// claim read on the coordination worker. An answer of `None` means that
+    /// the coordination worker answers the request: the frame took the pixels
+    /// and the worker encodes and writes them.
     fn apply_device_request_at(
         &mut self,
         request: &Request,
         ctx: &Context,
         browser_manifest: Option<&manifest::BrowserManifest>,
-    ) -> Outcome {
+        root: Option<&Path>,
+    ) -> Option<Outcome> {
         if request.host_instance != manifest::host_instance() {
-            return Outcome::failed("wrong_host", "Request belongs to another Horizon host");
+            return Some(Outcome::failed("wrong_host", "Request belongs to another Horizon host"));
         }
         if request.deadline_at_millis <= manifest::now_millis() {
-            return claim::request_expired();
+            return Some(claim::request_expired());
         }
         let Some(actor) = actor_panel(&self.board, &request.actor) else {
-            return Outcome::failed(
+            return Some(Outcome::failed(
                 "caller_unavailable",
                 "The calling agent panel is no longer in this host",
-            );
+            ));
         };
         match &request.operation {
             Operation::Create {
                 endpoint,
                 identity,
                 ssh,
-            } => self.create_device_viewer(endpoint, identity.clone(), ssh.clone(), actor, &request.actor, ctx),
+            } => Some(self.create_device_viewer(endpoint, identity.clone(), ssh.clone(), actor, &request.actor, ctx)),
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -123,89 +142,124 @@ impl HorizonApp {
                     .filter(|panel| panel.workspace_id == actor.workspace_id && panel.device().is_some())
                     .map(|panel| panel.id)
                     .collect();
-                Outcome::Panels {
+                Some(Outcome::Panels {
                     panels: ids
                         .into_iter()
                         .filter_map(|id| self.device_observation(id, &request.actor))
                         .collect(),
-                }
+                })
             }
-            Operation::Screenshot { input } => self.capture_panel(input, actor, &request.actor, ctx, false, None),
+            Operation::Screenshot { input } => {
+                self.capture_panel(request, input, actor, &request.actor, false, None, root)
+            }
             Operation::BrowserScreenshot { input } => {
-                self.capture_panel(input, actor, &request.actor, ctx, true, browser_manifest)
+                self.capture_panel(request, input, actor, &request.actor, true, browser_manifest, root)
             }
-            operation => self.change_device_viewer(operation, actor, &request.actor, ctx),
+            operation => Some(self.change_device_viewer(operation, actor, &request.actor, ctx)),
         }
     }
 
+    /// Takes the pixels of the panel on this frame and hands their export to
+    /// the coordination worker, which encodes the PNG, copies the image when the
+    /// request asks for it, and writes the answer. It answers `None` when the
+    /// worker answers the request, and the outcome of a request it refuses.
     fn capture_panel(
         &mut self,
+        request: &Request,
         input: &device::ScreenshotInput,
         actor: ActorPanel,
         owner: &str,
-        ctx: &Context,
         browser: bool,
         live: Option<&manifest::BrowserManifest>,
-    ) -> Outcome {
+        root: Option<&Path>,
+    ) -> Option<Outcome> {
         let Some(panel) = self
             .board
             .panels
             .iter()
             .find(|panel| panel.local_id == input.panel_id && panel.workspace_id == actor.workspace_id)
         else {
-            return Outcome::failed("panel_unavailable", "Panel is unavailable in this workspace");
+            return Some(Outcome::failed(
+                "panel_unavailable",
+                "Panel is unavailable in this workspace",
+            ));
         };
         let id = panel.id;
-        let capture = if browser {
+        let (image, store) = if browser {
             let Some(browser) = panel.browser() else {
-                return Outcome::failed("not_browser_panel", "Target is not a browser panel");
+                return Some(Outcome::failed("not_browser_panel", "Target is not a browser panel"));
             };
             let Some(live) = live else {
-                return Outcome::failed("browser_unavailable", "Browser manifest is unavailable");
+                return Some(Outcome::failed(
+                    "browser_unavailable",
+                    "Browser manifest is unavailable",
+                ));
             };
             if live.panel_local_id != input.panel_id
                 || !live.authorizes(manifest::AgentIdentity::new(owner, Some(manifest::host_instance())))
             {
-                return Outcome::failed("panel_unavailable", "Browser authorization changed before capture");
+                return Some(Outcome::failed(
+                    "panel_unavailable",
+                    "Browser authorization changed before capture",
+                ));
             }
             if live
                 .live_owner(manifest::now_millis())
                 .is_none_or(|claim| claim.name != owner)
             {
-                return Outcome::failed("not_owner", "The caller does not hold this browser panel's live claim");
+                return Some(Outcome::failed(
+                    "not_owner",
+                    "The caller does not hold this browser panel's live claim",
+                ));
             }
             if live.user_is_active(manifest::now_millis())
                 || live.handoff_pending().is_some()
                 || browser.handoff_reason.is_some()
             {
-                return Outcome::failed("handoff_pending", "A person is steering this browser panel");
+                return Some(Outcome::failed(
+                    "handoff_pending",
+                    "A person is steering this browser panel",
+                ));
             }
-            crate::screenshot::browser_image(browser).and_then(|image| {
-                self.panel_render_caches
-                    .browser_ui_state
-                    .entry(id)
-                    .or_default()
-                    .screenshots
-                    .export(ctx, input.panel_id.clone(), image, input.copy_to_clipboard)
-            })
+            let image = match crate::screenshot::browser_image(browser) {
+                Ok(image) => image,
+                Err(message) => return Some(Outcome::failed("screenshot_unavailable", &message)),
+            };
+            let store = self
+                .panel_render_caches
+                .browser_ui_state
+                .entry(id)
+                .or_default()
+                .screenshots
+                .store();
+            (image, store)
         } else {
             if panel.device().is_none() {
-                return Outcome::failed("not_device_panel", "Target is not a native Device viewer");
+                return Some(Outcome::failed(
+                    "not_device_panel",
+                    "Target is not a native Device viewer",
+                ));
             }
             let state = self.panel_render_caches.device_ui_state.entry(id).or_default();
             if state.owner.as_deref().is_some_and(|claim| claim != owner) {
-                return Outcome::failed("not_owner", "Another agent owns this Device viewer");
+                return Some(Outcome::failed("not_owner", "Another agent owns this Device viewer"));
             }
-            state.screenshot_image().and_then(|image| {
-                state
-                    .screenshots
-                    .export(ctx, input.panel_id.clone(), image, input.copy_to_clipboard)
-            })
+            let image = match state.screenshot_image() {
+                Ok(image) => image,
+                Err(message) => return Some(Outcome::failed("screenshot_unavailable", &message)),
+            };
+            let store = state.screenshots.store();
+            (image, store)
         };
-        match capture {
-            Ok(capture) => Outcome::Screenshot { capture },
-            Err(message) => Outcome::failed("screenshot_unavailable", &message),
-        }
+        self.write_device_answer(claim::DeviceAnswer::screenshot(
+            root,
+            request.clone(),
+            store,
+            image,
+            input.panel_id.clone(),
+            input.copy_to_clipboard,
+        ));
+        None
     }
 
     fn create_device_viewer(
@@ -606,7 +660,7 @@ mod tests {
         let view = app.canvas_view;
         let focused = app.board.focused;
         let mut outcome = None;
-        let output = ctx
+        let _ = ctx
             .run_ui(egui::RawInput::default(), |ui| {
                 outcome = Some(capture_after_claim_read(
                     &mut app,
@@ -622,7 +676,10 @@ mod tests {
         assert_eq!((capture.width, capture.height), (3, 2));
         assert!(capture.path.exists() && capture.clipboard_requested);
         assert!(
-            matches!(&output.platform_output.commands[..], [egui::OutputCommand::CopyImage(copied)] if copied == &image)
+            crate::clipboard::wait_for(
+                |copy| matches!(copy, crate::clipboard::Copy::Image(copied) if copied == &image)
+            ),
+            "the image of a capture that asks for it reaches the clipboard owner"
         );
         assert_eq!(app.canvas_view, view);
         assert_eq!(app.board.focused, focused);
@@ -740,6 +797,67 @@ mod tests {
     }
 
     #[test]
+    fn a_screenshot_request_exports_on_the_coordination_worker_and_answers_its_file() {
+        let (temp, ctx, mut app) = app();
+        let create = request(
+            &app,
+            Operation::Create {
+                endpoint: "127.0.0.1:5900".into(),
+                identity: None,
+                ssh: None,
+            },
+        );
+        let created = one(app.apply_device_request(&create, &ctx));
+        let id = app.board.panel_id_by_local_id(&created.panel_id).unwrap();
+        app.panel_render_caches.device_ui_state.insert(
+            id,
+            crate::device_widget::DeviceUiState::connected_fixture(&create.actor),
+        );
+        let capture_request = request(
+            &app,
+            Operation::Screenshot {
+                input: device::ScreenshotInput {
+                    panel_id: created.panel_id.clone(),
+                    copy_to_clipboard: false,
+                },
+            },
+        );
+        let root = temp.path().join("device-queue");
+        {
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            let applied = app.apply_device_request_at(&capture_request, &ctx, None, Some(&root));
+            assert!(
+                applied.is_none(),
+                "the frame hands the export of the pixels to the coordination worker"
+            );
+            assert!(
+                app.device_claim.answered.is_empty(),
+                "the frame that takes the pixels answers no screenshot"
+            );
+        }
+        app.settle_browser_host_io();
+        let answer = app
+            .device_claim
+            .answered
+            .last()
+            .cloned()
+            .expect("the coordination worker answered the request");
+        let Outcome::Screenshot { capture } = answer else {
+            panic!("expected a capture: {answer:?}")
+        };
+        assert_eq!((capture.width, capture.height), (4, 4));
+        let bytes = std::fs::metadata(&capture.path).expect("the file of the capture").len();
+        assert!(bytes > 0);
+        assert_eq!(
+            device::take_result_at(&root, &capture_request)
+                .expect("the queue of the request")
+                .map(|outcome| matches!(outcome, Outcome::Screenshot { .. })),
+            Some(true),
+            "the worker writes the answer of the request it took"
+        );
+    }
+
+    #[test]
     fn screenshot_exports_hidden_connected_viewers_without_navigation_or_input_and_checks_scope() {
         let (_temp, ctx, mut app) = app();
         let create = request(
@@ -827,7 +945,15 @@ mod tests {
     /// read the manifest on the coordination worker.
     fn capture_after_claim_read(app: &mut HorizonApp, ctx: &Context, root: &Path, request: &Request) -> Outcome {
         let live = claim::claimed_browser_manifest(Some(root), request);
-        app.apply_device_request_at(request, ctx, live.as_ref())
+        let applied = app.apply_device_request_at(request, ctx, live.as_ref(), Some(root));
+        app.settle_browser_host_io();
+        applied.unwrap_or_else(|| {
+            app.device_claim
+                .answered
+                .last()
+                .cloned()
+                .expect("the coordination worker answered the capture")
+        })
     }
 
     fn one(outcome: Outcome) -> PanelState {

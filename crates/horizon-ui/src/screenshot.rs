@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use egui::{ColorImage, Context, Ui};
+#[cfg(test)]
+use egui::Context;
+use egui::{ColorImage, Ui};
 use horizon_core::browser::{BrowserPanelState, BrowserStatus, manifest::device::Screenshot};
 
 const MAX_PIXELS: usize = 8_294_400;
@@ -64,6 +66,31 @@ impl PrivatePngStore {
     #[cfg(test)]
     fn handle(&self) -> Arc<Mutex<ExportFiles>> {
         Arc::clone(&self.files)
+    }
+
+    /// Encode `image` into a new PNG, keep the file, and copy the image to the
+    /// desktop clipboard when the request asks for it. This is the work of the
+    /// coordination worker: the encode and the write of a full frame take long
+    /// enough to stall a frame, and the clipboard write goes to the thread that
+    /// owns the clipboard.
+    pub(crate) fn capture(
+        &self,
+        panel_id: String,
+        image: &ColorImage,
+        copy_to_clipboard: bool,
+    ) -> Result<Screenshot, String> {
+        let (width, height) = validate(image)?;
+        let path = self.write(image, "capture-")?;
+        if copy_to_clipboard {
+            crate::clipboard::copy_image(image.clone());
+        }
+        Ok(Screenshot {
+            panel_id,
+            path,
+            width,
+            height,
+            clipboard_requested: copy_to_clipboard,
+        })
     }
 
     /// Encode `image` into a new PNG and keep the file until the process exits
@@ -136,7 +163,7 @@ impl Screenshots {
         if clicked {
             let result = image().and_then(|image| {
                 validate(&image)?;
-                ui.ctx().copy_image(image);
+                crate::clipboard::copy_image(image);
                 Ok(())
             });
             self.feedback = Some((
@@ -154,6 +181,17 @@ impl Screenshots {
         clicked
     }
 
+    /// The store that a worker job of this panel encodes into.
+    pub(crate) fn store(&mut self) -> PrivatePngStore {
+        self.files
+            .get_or_insert_with(|| PrivatePngStore::new(EXPORT_DIRECTORY, MAX_EXPORTS))
+            .clone()
+    }
+
+    /// Exports a screenshot on the calling thread, which must not be the UI
+    /// thread. The frame of a screenshot request takes the pixels and hands the
+    /// export to the coordination worker instead.
+    #[cfg(test)]
     pub(crate) fn export(
         &mut self,
         ctx: &Context,
@@ -161,21 +199,8 @@ impl Screenshots {
         image: ColorImage,
         copy_to_clipboard: bool,
     ) -> Result<Screenshot, String> {
-        horizon_core::ui_thread::blocking("a screenshot of a panel is exported");
-        let (width, height) = validate(&image)?;
-        let files = self
-            .files
-            .get_or_insert_with(|| PrivatePngStore::new(EXPORT_DIRECTORY, MAX_EXPORTS));
-        let path = files.write(&image, "capture-")?;
-        let capture = Screenshot {
-            panel_id,
-            path,
-            width,
-            height,
-            clipboard_requested: copy_to_clipboard,
-        };
+        let capture = self.store().capture(panel_id, &image, copy_to_clipboard)?;
         if copy_to_clipboard {
-            ctx.copy_image(image);
             ctx.request_repaint();
         }
         Ok(capture)
@@ -312,38 +337,35 @@ mod tests {
     }
 
     #[test]
-    fn export_encodes_original_pixels_and_queues_clipboard_only_when_requested() {
+    fn export_encodes_original_pixels_and_copies_the_clipboard_only_when_requested() {
         let ctx = Context::default();
         let image = ColorImage::new([2, 1], vec![Color32::RED, Color32::BLUE]);
         let mut screenshots = Screenshots::default();
-        let mut capture = None;
-        let output = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                capture = Some(
-                    screenshots
-                        .export(ui.ctx(), "panel".into(), image.clone(), true)
-                        .unwrap(),
-                );
-            })
-            .discard_textures();
+        let capture = screenshots.export(&ctx, "panel".into(), image.clone(), true).unwrap();
         assert!(
-            matches!(&output.platform_output.commands[..], [egui::OutputCommand::CopyImage(copied)] if copied == &image)
+            crate::clipboard::wait_for(
+                |copy| matches!(copy, crate::clipboard::Copy::Image(copied) if copied == &image)
+            ),
+            "the requested copy of the image reaches the clipboard owner"
         );
-        let capture = capture.unwrap();
         assert_eq!((capture.width, capture.height), (2, 1));
         let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&capture.path).unwrap()));
         let mut reader = decoder.read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         reader.next_frame(&mut pixels).unwrap();
         assert_eq!(pixels, [255, 0, 0, 255, 0, 0, 255, 255]);
-        let output = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                screenshots
-                    .export(ui.ctx(), "panel".into(), image.clone(), false)
-                    .unwrap();
-            })
-            .discard_textures();
-        assert!(output.platform_output.commands.is_empty());
+        let not_copied = ColorImage::filled([1, 1], Color32::from_rgb(0x11, 0x22, 0x33));
+        let before = crate::clipboard::recorded_len();
+        screenshots
+            .export(&ctx, "panel".into(), not_copied.clone(), false)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !crate::clipboard::recorded()[before..]
+                .iter()
+                .any(|(_, copy)| matches!(copy, crate::clipboard::Copy::Image(copied) if copied == &not_copied)),
+            "a capture that nobody asked for reaches no clipboard"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -386,14 +408,17 @@ mod tests {
                 .len(),
             MAX_EXPORTS
         );
-        let output = ctx
-            .run_ui(egui::RawInput::default(), |ui| {
-                let mut malformed = image.clone();
-                malformed.size = [usize::MAX, 2];
-                assert!(screenshots.export(ui.ctx(), "panel".into(), malformed, true).is_err());
-            })
-            .discard_textures();
-        assert!(output.platform_output.commands.is_empty());
+        let malformed = ColorImage::filled([1, 1], Color32::from_rgb(0x77, 0x88, 0x99));
+        let mut broken = malformed.clone();
+        broken.size = [usize::MAX, 2];
+        assert!(screenshots.export(&ctx, "panel".into(), broken, true).is_err());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !crate::clipboard::recorded()
+                .iter()
+                .any(|(_, copy)| matches!(copy, crate::clipboard::Copy::Image(copied) if copied == &malformed)),
+            "an image that no one can encode reaches no clipboard"
+        );
         assert_eq!(
             screenshots
                 .files

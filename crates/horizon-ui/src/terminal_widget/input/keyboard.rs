@@ -71,13 +71,13 @@ pub(crate) fn handle_terminal_keyboard_input(
                     terminal.write_input(&[3]);
                 } else if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
-                    ui.ctx().copy_text(text);
+                    crate::clipboard::copy_text(text);
                 }
             }
             egui::Event::Cut => {
                 if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
-                    ui.ctx().copy_text(text);
+                    crate::clipboard::copy_text(text);
                 }
                 terminal.write_input(&[24]);
             }
@@ -129,7 +129,7 @@ fn run_terminal_local_command(
         input::TerminalLocalCommand::Copy => {
             if let Some(text) = take_selection_for_copy(terminal) {
                 primary_selection.copy(&text);
-                ui.ctx().copy_text(text);
+                crate::clipboard::copy_text(text);
             }
         }
         // The toolkit reads the desktop clipboard for this viewport, so the text
