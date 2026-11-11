@@ -15,17 +15,27 @@
 //! - [`service`] builds the multipart body of one request and reads one answer.
 //! - [`text`] cleans the text of an answer: no line break, no tab and no other
 //!   control character, trimmed, cut at 8 KiB.
+//! - [`take`] runs one take on a worker thread: the recorder child, the bounds, the
+//!   transcription and the delete of the file.
+//! - [`clock`] is the clock of the bounds, which a test replaces.
 //!
 //! `docs/review/trust-boundaries/speech-input.md` states what is untrusted here,
 //! what leaves the computer, what this module guarantees and what it does not.
 
+pub mod clock;
 pub mod command;
 pub mod endpoint;
 pub mod service;
+pub mod take;
 pub mod text;
 
+pub use clock::{Clock, SystemClock};
 pub use command::{CommandLine, CommandLineError, FILE_PLACEHOLDER};
 pub use endpoint::{Endpoint, EndpointError};
+pub use take::{
+    MAX_MESSAGE_CHARS, MAX_TAKE_BYTES, MIN_TAKE, SpeechEvent, SpeechEventKind, SpeechInput, SpeechKeyStore,
+    SpeechWorker, TAKE_FOLDER, TakeBounds, TakePlan, Transcriber,
+};
 pub use text::{MAX_TEXT_BYTES, clean_text};
 
 /// One operating system that this build supports, where a default of speech input

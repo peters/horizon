@@ -17,6 +17,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rustix::process::Signal;
 use zeroize::Zeroizing;
 
 /// The most bytes that one program may print. One answer of a keyring entry is at
@@ -48,6 +49,12 @@ pub struct ProgramEnvironment {
     pub session_bus: Option<OsString>,
     /// `XDG_RUNTIME_DIR`, where a session bus of Linux often lives.
     pub runtime_dir: Option<OsString>,
+    /// Whether the child keeps every variable of this process instead of the four
+    /// names above. A program that a person wrote and named in the settings, such
+    /// as a recorder of speech input, reads the session that the person set, and
+    /// it reads no value of a named secret: no named secret is a variable of this
+    /// process.
+    pub inherit: bool,
 }
 
 impl ProgramEnvironment {
@@ -60,6 +67,19 @@ impl ProgramEnvironment {
             home: std::env::var_os("HOME"),
             session_bus: std::env::var_os("DBUS_SESSION_BUS_ADDRESS"),
             runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
+            inherit: false,
+        }
+    }
+
+    /// The environment of this process as it is, for a program that a person wrote
+    /// and named in the settings. The child reads the variables of the session of
+    /// the person, and the caller that starts such a program never puts a value of
+    /// a secret in one of them.
+    #[must_use]
+    pub fn inherited() -> Self {
+        Self {
+            inherit: true,
+            ..Self::of_this_process()
         }
     }
 
@@ -73,6 +93,7 @@ impl ProgramEnvironment {
             home: None,
             session_bus: None,
             runtime_dir: None,
+            inherit: false,
         }
     }
 
@@ -93,6 +114,9 @@ impl ProgramEnvironment {
     }
 
     fn apply(&self, command: &mut Command) {
+        if self.inherit {
+            return;
+        }
         command.env_clear();
         command.env("PATH", &self.path);
         for (name, value) in [
@@ -185,6 +209,125 @@ pub fn run(
             return Err(ProgramFailure::TimedOut);
         }
         thread::sleep(POLL);
+    }
+}
+
+/// Why a program that a caller started did not run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProgramStart {
+    /// No folder of the environment holds a program of that name.
+    NotInstalled,
+    /// The program is there, and this process could not start it.
+    Failed,
+}
+
+/// One program of this process that runs until its caller stops it.
+///
+/// A recorder of speech input runs while a hotkey is down, so its caller starts it,
+/// polls it and stops it by its own process id: [`StartedProgram::signal`] sends one
+/// signal to that id and to no process group, so no other program of this computer
+/// can be touched. The standard error of the child is read while it runs, so a child
+/// that fills the pipe cannot stop before its end, and the last line of it answers
+/// why a child ended early.
+pub struct StartedProgram {
+    child: Child,
+    stderr: Option<thread::JoinHandle<Result<Zeroizing<Vec<u8>>, ProgramFailure>>>,
+}
+
+impl StartedProgram {
+    /// Start `program` with `args` and the environment that `environment` applies.
+    ///
+    /// # Errors
+    /// Reports [`ProgramStart::NotInstalled`] when no folder of the environment
+    /// holds the program, and [`ProgramStart::Failed`] when the child cannot be
+    /// started.
+    pub fn start(program: &Path, args: &[OsString], environment: &ProgramEnvironment) -> Result<Self, ProgramStart> {
+        crate::ui_thread::blocking("a program of this process is started and left to run");
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        environment.apply(&mut command);
+        let child = spawn_started(&mut command)?;
+        let mut child = child;
+        let stderr = child
+            .stderr
+            .take()
+            .map(|stderr| thread::spawn(move || read_capped(stderr)));
+        Ok(Self { child, stderr })
+    }
+
+    /// The process id of the child. Every signal of this type goes to this id and
+    /// to no group.
+    #[must_use]
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Whether the child ended, and the status that it ended with.
+    pub fn try_wait(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
+    }
+
+    /// Send `signal` to the process id of this child.
+    ///
+    /// Answers `false` when the signal did not reach the child, which a child that
+    /// already ended causes.
+    pub fn signal(&self, signal: Signal) -> bool {
+        let Ok(raw) = i32::try_from(self.id()) else {
+            return false;
+        };
+        let Some(pid) = rustix::process::Pid::from_raw(raw) else {
+            return false;
+        };
+        rustix::process::kill_process(pid, signal).is_ok()
+    }
+
+    /// Send `SIGKILL` to the process id of this child, and reap it.
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
+    /// The last line of the standard error of a child that ended.
+    ///
+    /// Call this only after the child ended: the reader of the pipe finishes at the
+    /// end of the child, so this waits for a child that still runs.
+    pub fn last_stderr_line(&mut self) -> Option<String> {
+        let stderr = self.stderr.take()?.join().ok()?.ok()?;
+        let text = String::from_utf8_lossy(&stderr);
+        let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
+        Some(line.trim().to_owned())
+    }
+}
+
+/// Start a child of this process, and try again while this computer cannot start it
+/// now. A name that no folder of the environment holds answers
+/// [`ProgramStart::NotInstalled`], so a caller can name the program that a person
+/// must install.
+fn spawn_started(command: &mut Command) -> Result<Child, ProgramStart> {
+    let deadline = Instant::now() + SPAWN_RETRY;
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ProgramStart::NotInstalled);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::ExecutableFileBusy
+                ) && Instant::now() < deadline =>
+            {
+                thread::sleep(POLL);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "a program of this process did not start");
+                return Err(ProgramStart::Failed);
+            }
+        }
     }
 }
 
