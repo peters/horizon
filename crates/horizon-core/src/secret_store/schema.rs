@@ -4,9 +4,13 @@
 //! The schema itself is [`schema.sql`](schema.sql), because the smoke fixture of
 //! the repository writes the same file with Python's `sqlite3` and must not
 //! drift from this build. The file is made private before SQLite opens it, and
-//! SQLite copies the mode of that file to the `-wal` and `-shm` files that it
-//! makes, so the three are the owner's alone whatever the umask of the process
-//! is.
+//! SQLite copies the mode of that file to the journal that it makes beside it, so
+//! both are the owner's alone whatever the umask of the process is.
+//!
+//! The connection uses the rollback journal and no write-ahead log. The file holds
+//! a few rows and it is written rarely, and a rollback journal maps no file beside
+//! the database: a home that is removed while a worker still uses it then answers
+//! the typed error of this store instead of ending the process in a signal.
 
 use std::{
     fs::{self, OpenOptions},
@@ -31,11 +35,13 @@ const FILE_MODE: u32 = 0o600;
 /// The mode of a directory that this build makes for the file.
 const DIRECTORY_MODE: u32 = 0o700;
 
-/// The pragmas of a connection. A write-ahead log lets a reader of the file (a
-/// second Horizon window, or a tool) read while this build writes, and
-/// `synchronous=FULL` keeps a committed value across a power loss.
+/// The pragmas of a connection. The rollback journal is set on every open, so a
+/// file that an earlier build left in write-ahead mode is converted at its next
+/// open and keeps no `-wal` file that another process would have to recover.
+/// `synchronous=FULL` keeps a committed value across a power loss, and the busy
+/// timeout lets a reader of another process wait for a write of this one.
 const PRAGMAS: &str = "
-PRAGMA journal_mode = WAL;
+PRAGMA journal_mode = DELETE;
 PRAGMA synchronous = FULL;
 PRAGMA busy_timeout = 5000;
 ";

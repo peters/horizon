@@ -1,5 +1,5 @@
-//! The secrets file of one Horizon home: its rows, its modes and the one connection
-//! that this process holds for it.
+//! The secrets file of one Horizon home: its rows, its modes, its journal and the
+//! one connection that this process holds for it.
 
 use std::{
     path::{Path, PathBuf},
@@ -42,6 +42,33 @@ fn value_of(store: &Arc<SecretStore>, locator: &CredentialLocator) -> Option<Vec
     let mut sink = ValueSink::default();
     store.with_secret(locator, &mut sink).ok()?;
     sink.value
+}
+
+/// The name of every file that the folder of `path` holds, sorted.
+fn files_of(path: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(path.parent().expect("a folder"))
+        .expect("the folder")
+        .map(|entry| entry.expect("an entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The files that SQLite keeps beside a database, which the rollback journal of
+/// this store must not leave behind.
+fn side_files(path: &Path) -> Vec<String> {
+    files_of(path)
+        .into_iter()
+        .filter(|name| name.ends_with("-wal") || name.ends_with("-shm"))
+        .collect()
+}
+
+/// The journal mode that the connection of `store` uses.
+fn journal_mode(store: &SecretStore) -> String {
+    store
+        .lock()
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .expect("the journal mode")
 }
 
 #[derive(Default)]
@@ -157,6 +184,37 @@ fn many_threads_open_one_new_path_and_make_its_schema_once() {
 }
 
 #[test]
+fn a_home_that_is_removed_under_a_store_ends_in_its_typed_error_or_in_its_value() {
+    // The store keeps the file open, so a home that goes away under a worker must
+    // answer the typed error of this store or the value of the unlinked file. It
+    // must never end the process, which is what a memory mapping of a side file did.
+    for round in 0..50 {
+        let root = tempfile::tempdir().expect("a directory");
+        let path = home(root.path());
+        let store = SecretStore::open(path.clone()).expect("the store");
+        store.write("credential/grid", b"a-value").expect("the value");
+        std::fs::remove_dir_all(path.parent().expect("the folder")).expect("the home goes away");
+
+        match store.write("credential/grid", b"another-value") {
+            Ok(()) => {}
+            Err(error) => assert!(
+                matches!(error, RemoteCredentialError::File { .. }),
+                "round {round}: the write answers the typed error: {error:?}"
+            ),
+        }
+        match store.read("credential/grid") {
+            Ok(Some(value)) => assert_eq!(value.as_slice(), b"a-value", "round {round}: the unlinked file"),
+            Ok(None) => panic!("round {round}: the row of an unlinked file is not gone"),
+            Err(error) => assert!(
+                matches!(error, RemoteCredentialError::File { .. }),
+                "round {round}: the read answers the typed error: {error:?}"
+            ),
+        }
+        drop(store);
+    }
+}
+
+#[test]
 fn a_credential_reference_and_a_named_secret_are_two_rows() {
     let (_root, mut store) = store();
     store.put(&credential("key"), b"one").expect("the value");
@@ -200,12 +258,85 @@ fn the_file_and_its_folder_are_private_from_the_first_byte() {
     assert_eq!(mode(&path), 0o600, "the file is private before SQLite writes to it");
     store.put(&credential("key"), b"one").expect("the value");
     assert_eq!(mode(&path), 0o600, "the file of the values is private");
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-shm", "-journal"] {
         let side = Path::new(&format!("{}{suffix}", path.display())).to_path_buf();
         if side.exists() {
             assert_eq!(mode(&side), 0o600, "the {suffix} file is private");
         }
     }
+}
+
+#[test]
+fn a_write_leaves_no_write_ahead_file_beside_the_secrets_file() {
+    let root = tempfile::tempdir().expect("a directory");
+    let path = home(root.path());
+    let store = SecretStore::open(path.clone()).expect("the store");
+    assert_eq!(journal_mode(&store), "delete", "the file keeps a rollback journal");
+    store.write("credential/key", b"a-value").expect("the value");
+    assert_eq!(journal_mode(&store), "delete", "a write keeps the rollback journal");
+    assert!(
+        side_files(&path).is_empty(),
+        "a write leaves no other file: {:?}",
+        files_of(&path)
+    );
+    drop(store);
+    assert!(
+        side_files(&path).is_empty(),
+        "a closed store leaves no other file: {:?}",
+        files_of(&path)
+    );
+}
+
+#[test]
+fn a_file_that_an_earlier_build_left_in_write_ahead_mode_is_read() {
+    let root = tempfile::tempdir().expect("a directory");
+    let path = home(root.path());
+    {
+        let store = SecretStore::open(path.clone()).expect("the store");
+        store
+            .write("credential/key", b"a-value")
+            .expect("the value of this build");
+    }
+    // The earlier build of this file wrote in write-ahead mode. The mode stays in
+    // the header of the file, so a build that reads it must convert it.
+    {
+        let connection = rusqlite::Connection::open(&path).expect("the file");
+        let mode: String = connection
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
+            .expect("the write-ahead mode");
+        assert_eq!(mode, "wal");
+        connection
+            .execute_batch(
+                "INSERT INTO secrets (id, body, version, updated_millis) VALUES ('named/TOKEN', x'746f6b656e', 1, 1)",
+            )
+            .expect("a row of the earlier build");
+    }
+
+    let store = SecretStore::open(path.clone()).expect("the file of the earlier build");
+    assert_eq!(journal_mode(&store), "delete", "the file is converted at its next open");
+    assert_eq!(
+        store
+            .read("credential/key")
+            .expect("the row")
+            .as_deref()
+            .map(Vec::as_slice),
+        Some(&b"a-value"[..]),
+        "the row of this build is there"
+    );
+    assert_eq!(
+        store
+            .read("named/TOKEN")
+            .expect("the row")
+            .as_deref()
+            .map(Vec::as_slice),
+        Some(&b"token"[..]),
+        "the row of the earlier build is there"
+    );
+    assert!(
+        side_files(&path).is_empty(),
+        "the converted file keeps no side file: {:?}",
+        files_of(&path)
+    );
 }
 
 #[test]

@@ -6,9 +6,8 @@
 //! environment variable. Both are here, as rows of `<Horizon home>/secrets.sqlite`
 //! under the id `credential/<reference>` and `named/<NAME>`.
 //!
-//! The file is the whole protection: the folder is `0700`, the file and its
-//! `-wal` and `-shm` are `0600` from the first byte, and a value is stored as it
-//! is, never sealed. A person who can
+//! The file is the whole protection: the folder is `0700`, the file is `0600` from
+//! the first byte, and a value is stored as it is, never sealed. A person who can
 //! read one file of that home reads every value, as a person who can read the
 //! machine keys under `machine-keys/` reads every key and a person who can read
 //! `~/.ssh` reads every ssh key. The pages
@@ -29,7 +28,8 @@
 //! The connection is one lock, so every write of this process is serialized, and
 //! no method here runs on the UI thread: the Settings workbench, the named secrets
 //! worker and the link to a server each reach the store from a worker thread. The
-//! write-ahead log lets a second Horizon process read while this one writes.
+//! file uses the rollback journal, so no side file is mapped and a home that is
+//! removed under a worker ends in the typed error of this store.
 //!
 //! A machine key is not here. `ssh` needs the private key as a path, so a machine
 //! key stays the three files of `machine-keys/<name>`.
