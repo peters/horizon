@@ -57,9 +57,9 @@ pub use board::{
     WorkspaceLayout,
 };
 pub use config::{
-    AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, FeaturesConfig, OverlaysConfig, PresetConfig,
-    RemoteHostsConfig, ServerConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig, browser_host,
-    browser_mcp_args, configure_browser_host, configure_server, server,
+    AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, FeaturesConfig, OverlaysConfig,
+    PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, TerminalConfig, WindowConfig, WorkspaceConfig,
+    browser_host, browser_mcp_args, configure_browser_host, configure_server, server,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

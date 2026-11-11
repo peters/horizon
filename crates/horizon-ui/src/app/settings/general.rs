@@ -4,14 +4,123 @@ use horizon_core::{AppearanceTheme, Config};
 use crate::theme;
 
 /// Render the General settings tab: window dimensions, feature toggles,
-/// and overlay sizes.  Returns `true` when any value was modified.
+/// the machine entries and overlay sizes.  Returns `true` when any value was
+/// modified.
 pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     changed |= render_window_section(ui, config);
     changed |= render_appearance_section(ui, config);
     changed |= render_features_section(ui, config);
+    changed |= render_machines_section(ui, config);
     changed |= render_overlays_section(ui, config);
     changed
+}
+
+/// The two entries that say which machine serves the browser panels and which
+/// computer holds the machine list. Both apply at the next start.
+fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    super::section_heading(ui, "Browser host");
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "Browser panels open in that profile of Chromium on that machine, over SSH. A blank SSH \
+             target keeps the browser panels of this computer. A change applies at the next start.",
+        );
+        ui.add_space(8.0);
+
+        egui::Grid::new("settings_browser_host_grid")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
+                changed |= optional_text_field(
+                    ui,
+                    &mut config.browser_host.ssh_target,
+                    "user@host or an SSH alias",
+                    "settings_browser_host_target",
+                );
+                ui.end_row();
+
+                ui.label(egui::RichText::new("Profile").color(theme::FG_SOFT()).size(12.0));
+                changed |= optional_text_field(
+                    ui,
+                    &mut config.browser_host.profile,
+                    "profile name on that machine",
+                    "settings_browser_host_profile",
+                );
+                ui.end_row();
+            });
+        validation_notice(ui, config.browser_host.validate());
+    });
+
+    super::section_heading(ui, "Server");
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "Other computers of yours that name the same server show the same machines, keys and \
+             settings. A blank SSH target keeps the machine list on this computer. A change applies \
+             at the next start.",
+        );
+        ui.add_space(8.0);
+
+        egui::Grid::new("settings_server_grid")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
+                changed |= optional_text_field(
+                    ui,
+                    &mut config.server.ssh_target,
+                    "user@host or an SSH alias",
+                    "settings_server_target",
+                );
+                ui.end_row();
+
+                ui.label(egui::RichText::new("Command").color(theme::FG_SOFT()).size(12.0));
+                changed |= optional_text_field(
+                    ui,
+                    &mut config.server.command,
+                    horizon_core::DEFAULT_LINK_COMMAND,
+                    "settings_server_command",
+                );
+                ui.end_row();
+            });
+        validation_notice(ui, config.server.validate());
+    });
+    changed
+}
+
+/// One field of an entry that a person may leave blank. The box edits a copy,
+/// so a blank box means the entry is not set; an entry that is not set gives an
+/// empty copy, so the common case allocates nothing. The value is written back
+/// only when the text changed, never on every frame.
+fn optional_text_field(ui: &mut Ui, value: &mut Option<String>, hint: &str, id: &str) -> bool {
+    let mut text = value.clone().unwrap_or_default();
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut text)
+            .hint_text(hint)
+            .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
+            .id_salt(id),
+    );
+    if !response.changed() {
+        return false;
+    }
+    let trimmed = text.trim();
+    *value = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    true
+}
+
+/// The refusal of an entry, in the words of its rule.
+fn validation_notice(ui: &mut Ui, result: horizon_core::Result<()>) {
+    if let Err(error) = result {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(error.to_string())
+                .color(theme::PALETTE_RED())
+                .size(11.0),
+        );
+    }
 }
 
 fn render_window_section(ui: &mut Ui, config: &mut Config) -> bool {

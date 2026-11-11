@@ -128,3 +128,33 @@ fn visit_width(shape: &egui::Shape, widest: &mut f32) {
         _ => {}
     }
 }
+
+/// The two machine entries have a field in General, so a render must keep the
+/// values that the fields edit: a section that rebuilt its entry would drop a
+/// host or a server without a word.
+#[test]
+fn the_machine_fields_keep_their_entries_while_they_render() {
+    let mut config = Config::default();
+    config.browser_host.ssh_target = Some("browser-vm".into());
+    config.browser_host.profile = Some("mail".into());
+    config.server.ssh_target = Some("server-vm".into());
+    config.server.command = Some("/opt/horizon --server-link".into());
+
+    let _ = crate::test_egui::DiscardTextures::discard_textures(render_general_tab(&mut config));
+
+    assert_eq!(config.browser_host.ssh_target.as_deref(), Some("browser-vm"));
+    assert_eq!(config.browser_host.profile.as_deref(), Some("mail"));
+    assert_eq!(config.server.ssh_target.as_deref(), Some("server-vm"));
+    assert_eq!(config.server.command.as_deref(), Some("/opt/horizon --server-link"));
+}
+
+/// One headless pass of the General tab, with the textures handled so a
+/// dropped frame does not report an unapplied delta.
+fn render_general_tab(config: &mut Config) -> egui::FullOutput {
+    let ctx = egui::Context::default();
+    ctx.run_ui(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            super::general::render(ui, config);
+        });
+    })
+}

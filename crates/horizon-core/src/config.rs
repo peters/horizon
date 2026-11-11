@@ -25,7 +25,7 @@ pub(crate) use presets::{
     insert_missing_kilo_presets, insert_missing_opencode_presets, insert_missing_pi_presets,
 };
 pub use remote_hosts::RemoteHostsConfig;
-pub use server::{ServerConfig, configure_server, server};
+pub use server::{DEFAULT_LINK_COMMAND, ServerConfig, configure_server, server};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
