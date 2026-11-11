@@ -8,8 +8,8 @@ use super::super::readers::{Bound, libsecret, platform, secret_tool, security};
 use super::super::{KeyringImportError, ProgramEnvironment};
 use super::stand_in::{StandIns, found};
 
-/// One item of `secret-tool search`, as `on_retrieve_secret` of libsecret 0.21
-/// (`tool/secret-tool.c`) writes it: the item on stdout, its attributes on stderr.
+/// One item of `secret-tool search`, as `on_retrieve_secret` of `tool/secret-tool.c`
+/// of libsecret writes it: the item on stdout, its attributes on stderr.
 ///
 /// A value of this helper holds no single quote, because a `/bin/sh` script quotes
 /// its argument with one.

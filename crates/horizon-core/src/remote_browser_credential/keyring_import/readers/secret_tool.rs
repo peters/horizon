@@ -1,8 +1,8 @@
 //! `secret-tool search --all --unlock service horizon-remote-browser`: one process
 //! that prints every item of the service of an older Horizon.
 //!
-//! The format below is the one of `secret-tool` in
-//! `tool/secret-tool.c` of libsecret 0.21 (`on_retrieve_secret`): for each item,
+//! The format below is the one of `secret-tool` in `tool/secret-tool.c` of libsecret,
+//! function `on_retrieve_secret` (read from the project on 2026-11-11): for each item,
 //! stdout holds `[<last part of the item path>]`, `label = <label>`,
 //! `secret = <the value>` (the value is written as its own bytes and then a
 //! newline), `created = <date or empty>`, `modified = <date or empty>` and, when the
