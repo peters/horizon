@@ -163,13 +163,34 @@ fn a_locked_store_shows_its_state_and_never_a_value() {
 }
 
 #[test]
-fn a_computer_without_a_vault_still_answers_the_window() {
+fn a_window_whose_vault_is_not_ready_yet_answers_checking_and_no_failure() {
     let _guard = exclusive();
     let token = name();
     let mut bench = NamedSecretWorkbench::new(None, std::slice::from_ref(&token));
     bench.poll();
     assert_eq!(bench.state(&token), NamedSecretState::Checking);
+    assert!(
+        bench.take_failure().is_none(),
+        "a store that has not answered is no failure"
+    );
+}
+
+#[test]
+fn a_computer_without_a_credential_store_says_so_for_every_name() {
+    let _guard = exclusive();
+    let token = name();
+    let vault = Arc::new(NamedSecretVault::new(None));
+    vault.set_names(["HETZNER_TOKEN".to_owned()]);
+    let mut bench = NamedSecretWorkbench::new(Some(vault), std::slice::from_ref(&token));
+    assert_eq!(
+        settle(&mut bench, &token, NamedSecretState::StoreUnavailable),
+        NamedSecretState::StoreUnavailable
+    );
     assert_eq!(bench.take_failure(), Some(NamedSecretError::StoreUnavailable));
+    assert!(
+        super::super::published_names().is_empty(),
+        "no panel of this computer gets a value"
+    );
 }
 
 /// Polls the workbench until `name` reaches `wanted`, and answers the state that it

@@ -244,6 +244,12 @@ impl NamedSecretVault {
     /// A locked or unavailable store, or a store that failed. The published values
     /// of the last successful read stay.
     pub fn refresh(&self) -> Result<Vec<SecretName>, NamedSecretError> {
+        if !self.has_store() {
+            // A computer without a credential store holds no value at all, so no
+            // panel of it gets one and the window says why.
+            environment::publish(std::collections::BTreeMap::new());
+            return Err(NamedSecretError::StoreUnavailable);
+        }
         let mut values = std::collections::BTreeMap::new();
         for name in self.names() {
             match self.value(&name) {

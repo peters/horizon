@@ -153,6 +153,7 @@ pub(in crate::app) fn secret_vault(keys: MachineKeys, remote: &RemoteBrowserConf
         }
     };
     let named_store = named_secret_vault(names);
+
     let vault = SecretVault::new(keys, credentials.clone()).with_named(Arc::clone(&named_store));
     SecretHandles {
         target: Arc::new(vault),
@@ -173,6 +174,10 @@ fn named_secret_vault(names: &[String]) -> Arc<NamedSecretVault> {
     let store = named_secrets::open_store();
     let vault = Arc::new(NamedSecretVault::new(store));
     vault.set_names(names.iter().cloned());
+    if !vault.has_store() {
+        tracing::info!("this computer has no credential store, so its agent panels get no named secret");
+        return vault;
+    }
     match vault.refresh() {
         Ok(present) => {
             tracing::info!(count = present.len(), "the named secrets of this computer are ready");

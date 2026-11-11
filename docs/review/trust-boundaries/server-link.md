@@ -48,9 +48,11 @@ never on the UI thread.
   one secret body holds at most 16 KiB, and one link holds at most 32 open waits.
   A push above its limit and a wait above its limit get a typed error.
 - **A secret id is checked at the server, and its body is not read.** An id is
-  `machine-key/<name>` with the key-name rule, or `credential/<reference>` with the
-  reference rule, so no id is a path, a command or a longer name than a name. The
-  server stores the body as opaque bytes and never parses it.
+  `machine-key/<name>` with the key-name rule, `credential/<reference>` with the
+  reference rule, or `named/<NAME>` with the name rule of a named secret (1 to 64
+  characters of `A-Z`, `0-9` and `_` that starts with `A-Z`, and no name that
+  Horizon or the system own), so no id is a path, a command or a longer name than a
+  name. The server stores the body as opaque bytes and never parses it.
 - **A secret intent carries its value.** An intent of a secret without a body is
   `invalid_intent`, and a body above 16 KiB is refused: the server never asks a
   computer for a value.
@@ -84,11 +86,13 @@ never on the UI thread.
   breaks one is a line of the log and no binding.
 - **A secret is checked twice, and written only where a value of that kind
   lives.** A `secret` row of a pull passes `SecretId::parse`, so its id is one
-  machine key or one credential reference. A machine key body is JSON of a key
-  pair with a private key and a public line; a body that is not one is refused
-  with a line of the log and the local value stays. A credential body is written
-  at the address that the settings of this computer bind to that reference, and a
-  reference that no provider binds is refused with a line of the log.
+  machine key, one credential reference or one named secret. A machine key body is
+  JSON of a key pair with a private key and a public line; a body that is not one
+  is refused with a line of the log and the local value stays. A credential body is
+  written at the address that the settings of this computer bind to that reference,
+  and a reference that no provider binds is refused with a line of the log. A named
+  secret body is checked against the value rule of the named secrets and written
+  under the reference `named/<NAME>`, and a body that breaks the rule is refused.
 - **A restored or malicious server can change the machine records, the key
   bindings and the values of the secrets.** That is what the person asked for,
   and it is bounded: an id is never a path and a body of the wrong kind is
@@ -140,7 +144,9 @@ never on the UI thread.
 - **The server holds no other secret.** It holds no ssh login key of the person,
   no provider CLI login (az, gcloud, hcloud, aws), no browser profile, no session
   cookie, no agent token, no terminal content, no transcript and no setting of the
-  person. A machine record holds no key name: the binding is an object of its own.
+  person. The one value that a person names for their own tools is a named secret,
+  which they asked the server to hold and which its boundary page states. A
+  machine record holds no key name: the binding is an object of its own.
 - **A refusal quotes a bounded part of a frame.** A value that the server copies
   into the log or into a refusal is at most 64 characters and then three dots, so
   one intent writes about a line of log and not a frame.

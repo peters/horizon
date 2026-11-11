@@ -313,11 +313,12 @@ comparison is never against a value that the computer assumes.
 
 The server holds no ssh login key of the person, no provider CLI login (az, gcloud,
 hcloud, aws), no browser profile, no session cookie, no agent token, no terminal
-content, no transcript and no setting of the person. `secret.key` itself never
-leaves the server home. The push path accepts three ids and no other: a path, a
-command, a name that is not one key name, a reference that is not one reference and
-a name that is not one name of a named secret are typed refusals, so no other value
-can arrive.
+content, no transcript and no setting of the person. A named secret is the one value
+that the person names for their own tools: they ask the server to hold it, and it is
+sealed like the other two kinds. `secret.key` itself never leaves the server home.
+The push path accepts three ids and no other: a path, a command, a name that is not
+one key name, a reference that is not one reference and a name that is not one name
+of a named secret are typed refusals, so no other value can arrive.
 
 ## When the server is away
 

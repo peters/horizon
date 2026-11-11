@@ -255,6 +255,7 @@ fn a_computer_without_a_credential_store_holds_its_names_and_no_value() {
         Err(NamedSecretError::StoreUnavailable)
     );
     assert_eq!(vault.state(&token), Ok(NamedSecretState::StoreUnavailable));
+    assert_eq!(vault.refresh(), Err(NamedSecretError::StoreUnavailable));
     assert!(vault.local_ids().is_empty(), "no value, so no secret travels");
 }
 

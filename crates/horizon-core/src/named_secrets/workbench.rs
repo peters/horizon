@@ -90,7 +90,9 @@ impl NamedSecretWorkbench {
                 asked_at: None,
                 in_flight: 0,
                 changes: Vec::new(),
-                failure: Some(NamedSecretError::StoreUnavailable),
+                // No vault yet: the startup read of the machine list opens the store
+                // on its own thread and hands the vault over when it answers.
+                failure: None,
             };
         };
         let (commands, command_rx) = channel::<Command>();
