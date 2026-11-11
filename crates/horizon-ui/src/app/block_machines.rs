@@ -32,13 +32,17 @@ impl HorizonApp {
     pub(super) fn load_machines(&mut self, ctx: &Context) {
         let registry = self.machine_registry();
         let server = horizon_core::server().cloned();
-        let secrets = super::server_sync::secret_vault(self.session_store.home(), &self.template_config.browser.remote);
+        // The keys are a path of this home, so a name is cheap here; the OS
+        // credential store opens on the worker, never on this thread.
+        let keys = horizon_core::MachineKeys::from_home(self.session_store.home());
+        let remote = self.template_config.browser.remote.clone();
         let wake = {
             let ctx = ctx.clone();
             move || ctx.request_repaint()
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
+            let secrets = super::server_sync::secret_vault(keys, &remote);
             let _ = tx.send(super::server_sync::load(registry, server, secrets, wake));
         });
         self.machine_load_rx = Some(rx);

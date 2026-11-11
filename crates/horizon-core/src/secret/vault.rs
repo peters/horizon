@@ -69,12 +69,18 @@ impl SecretTarget for SecretVault {
     fn read(&self, id: &SecretId) -> Result<Option<Zeroizing<Vec<u8>>>, SecretError> {
         match id.kind() {
             SecretKind::MachineKey => match self.key_files(id)? {
-                Some(files) => {
+                Some(files) if files.is_usable() => {
                     let body = serde_json::to_vec(&files).map_err(|error| SecretError::Unavailable {
                         reason: format!("the machine key {}: {error}", id.name()),
                     })?;
                     Ok(Some(Zeroizing::new(body)))
                 }
+                Some(_) => Err(SecretError::Unreadable {
+                    message: format!(
+                        "The machine key {} of this Horizon home is incomplete, so it is not sent",
+                        id.name()
+                    ),
+                }),
                 None => Ok(None),
             },
             SecretKind::Credential => match self.credentials.as_deref() {

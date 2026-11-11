@@ -116,13 +116,14 @@ pub(in crate::app) struct MachineLoad {
 /// its credential values when this computer has an OS credential store. Both are
 /// written where the code of this computer already reads them.
 ///
-/// A computer without an OS store keeps its machine keys alone; a credential
-/// value of the server then stays unread here, with one line of the log.
+/// This opens the OS credential store, so it runs on the worker thread that starts
+/// the link and never on the UI thread. A computer without an OS store keeps its
+/// machine keys alone; a credential value of the server then stays unread here,
+/// with one line of the log.
 pub(in crate::app) fn secret_vault(
-    home: &horizon_core::HorizonHome,
+    keys: MachineKeys,
     remote: &RemoteBrowserConfig,
 ) -> (Arc<dyn SecretTarget>, Option<Arc<CredentialVault>>) {
-    let keys = MachineKeys::from_home(home);
     let credentials = match KeyringCredentialStore::open() {
         Ok(store) => {
             let vault = Arc::new(CredentialVault::new(Box::new(store)));

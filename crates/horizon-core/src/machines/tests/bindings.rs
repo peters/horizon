@@ -238,3 +238,54 @@ fn the_machine_store_is_a_trait_that_another_implementation_can_hold() {
     assert_eq!(loaded.records, vec![record("build-1", "203.0.113.10")]);
     assert!(loaded.keys.is_empty(), "a store of records carries no key binding");
 }
+
+/// A store that answers the whole set of key bindings, as the store of a link to a
+/// server does.
+#[derive(Debug, Default)]
+struct ServerStore {
+    records: Mutex<Vec<Machine>>,
+    keys: Mutex<Vec<(String, String)>>,
+}
+
+impl MachineStore for ServerStore {
+    fn load(&self) -> Result<LoadedMachines, MachineError> {
+        Ok(LoadedMachines {
+            records: self.records.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            keys: self.keys.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+        })
+    }
+
+    fn save(&self, records: &[Machine]) -> Result<(), MachineError> {
+        *self.records.lock().unwrap_or_else(PoisonError::into_inner) = records.to_vec();
+        Ok(())
+    }
+
+    fn holds_bindings(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_store_of_a_server_decides_the_bindings_and_a_file_store_fills_a_gap() {
+    let temp = tempfile::tempdir().expect("a directory");
+    let (registry, mut bindings) = home(&temp);
+    bindings.set("build-1", Some("one"));
+    bindings.set("build-2", Some("two"));
+    bindings.save().expect("the bindings before the server");
+
+    // The file store holds the bindings itself: a load through it keeps them.
+    let file = Machines::from_store(&registry, std::sync::Arc::new(registry.clone())).expect("the file store");
+    assert_eq!(file.key("build-1"), Some("one"));
+    assert_eq!(file.key("build-2"), Some("two"));
+
+    // A store of a server answers the whole set: the binding that the server
+    // removed goes, and the one that it added comes.
+    let server = std::sync::Arc::new(ServerStore::default());
+    *server.keys.lock().expect("the keys") = vec![("build-1".to_owned(), "theirs".to_owned())];
+    let machines = Machines::from_store(&registry, server).expect("the store of the server");
+    assert_eq!(machines.key("build-1"), Some("theirs"), "the server decides");
+    assert_eq!(machines.key("build-2"), None, "a binding of the server wins");
+    let file = registry.bindings().load().expect("the binding file");
+    assert_eq!(file.key("build-1"), Some("theirs"));
+    assert_eq!(file.key("build-2"), None, "the file holds the set of the server");
+}

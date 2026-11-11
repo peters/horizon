@@ -118,9 +118,12 @@ pub(super) fn secret_rows_of(state: &mut SyncState, changes: &Changes) -> Vec<Se
 }
 
 /// Writes the secrets of one answer where this computer reads them, and keeps a
-/// local value that lost. A value that this computer cannot write is one line of
-/// the log: the mark of the log does not move past it, so the next link tries
-/// again with the same row.
+/// local value that lost.
+///
+/// A value that this computer cannot write is one line of the log with its id: the
+/// mark of the log moves on, because one value that this computer cannot use must
+/// not hold the machine list of every computer, and the value comes again at the
+/// next change of that secret or at a reset of the mirror.
 pub(super) fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
     let (secrets, at_millis) = {
         let state = handle.lock();

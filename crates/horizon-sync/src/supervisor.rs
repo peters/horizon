@@ -15,6 +15,12 @@
 //! from the server alone is one that this computer has no key binding for, and a
 //! click on it must not try the keys of the person.
 //!
+//! The secrets of this computer follow the server in the same link: a machine key
+//! and a credential value are written where the code of this computer reads them,
+//! and their bodies come into a push here and nowhere else. [`pull`] applies one
+//! answer of the server, [`secrets`] fills a push and keeps a value that lost, and
+//! [`view`] answers the machine list and its key bindings.
+//!
 //! Nothing here reads a clock of the computer for the store, and no frame of the
 //! server makes this computer run a command: the only process is the `ssh` of the
 //! entry, and the only value that reaches it is its validated target and command.
@@ -923,6 +929,10 @@ impl MachineStore for SyncedMachineStore {
 
     fn save_bindings(&self, bindings: &MachineBindings) -> Result<(), MachineError> {
         self.handle.save_bindings(bindings)
+    }
+
+    fn holds_bindings(&self) -> bool {
+        true
     }
 }
 

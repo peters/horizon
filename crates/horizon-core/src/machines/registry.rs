@@ -38,6 +38,17 @@ pub trait MachineStore: std::fmt::Debug + Send + Sync {
     /// Returns why the store cannot be written.
     fn save(&self, records: &[Machine]) -> Result<(), MachineError>;
 
+    /// Whether [`Self::load`] answers the whole set of key bindings of the person.
+    ///
+    /// A store that a server holds does, and a caller may then make the binding
+    /// file of this computer equal to that answer. The file store holds the
+    /// bindings itself and answers only the names that a record of an older Horizon
+    /// still held, so a caller fills a gap there and never replaces the set.
+    #[must_use]
+    fn holds_bindings(&self) -> bool {
+        false
+    }
+
     /// Writes the key binding of this computer to where the store keeps it. The
     /// file store already holds it beside the records, so it writes nothing here;
     /// a store that a server holds turns the difference into intents.
@@ -189,22 +200,36 @@ impl Machines {
     /// The records of `store` and the key bindings of this computer beside
     /// `registry`, read now.
     ///
-    /// A list whose records come from a server keeps its key bindings in the
-    /// Horizon home of this computer: a key name resolves in one home only, so
-    /// no store of another computer can carry it.
+    /// A store that a server holds answers the whole set of key bindings, and this
+    /// computer takes that set: the key of a machine is the key of the server, and a
+    /// binding that the server removed goes from the file of this computer. The
+    /// file keeps them, so a click reads a binding without a read of the server. A
+    /// file store answers only the names of an older record, so a caller fills a gap
+    /// there.
     ///
     /// # Errors
     /// Returns why the store or the binding file cannot be read or written.
     pub fn from_store(registry: &MachineRegistry, store: Arc<dyn MachineStore>) -> Result<Self, MachineError> {
         let loaded = store.load()?;
         let mut bindings = registry.bindings().load()?;
-        if !loaded.keys.is_empty() {
-            let moved = loaded.keys.iter().fold(false, |moved, (machine, key)| {
-                bindings.bind_if_absent(machine, key) || moved
-            });
-            if moved {
-                bindings.save()?;
+        let mut changed = false;
+        if store.holds_bindings() {
+            let wanted: std::collections::BTreeMap<String, String> = loaded.keys.iter().cloned().collect();
+            for machine in bindings.names().clone().keys() {
+                if !wanted.contains_key(machine) {
+                    changed |= bindings.set(machine, None);
+                }
             }
+            for (machine, key) in &wanted {
+                changed |= bindings.set(machine, Some(key));
+            }
+        } else {
+            for (machine, key) in &loaded.keys {
+                changed |= bindings.bind_if_absent(machine, key);
+            }
+        }
+        if changed {
+            bindings.save()?;
         }
         Ok(Self {
             records: in_name_order(loaded.records),

@@ -269,15 +269,5 @@ pub trait SecretTarget: Send + Sync + fmt::Debug {
     fn local_ids(&self, kind: SecretKind) -> Vec<String>;
 }
 
-/// The ids of the secrets that `target` holds, in id order.
-#[must_use]
-pub fn local_ids(target: &dyn SecretTarget) -> Vec<String> {
-    let mut ids = target.local_ids(SecretKind::MachineKey);
-    ids.extend(target.local_ids(SecretKind::Credential));
-    ids.sort();
-    ids.dedup();
-    ids
-}
-
 #[cfg(test)]
 mod tests;

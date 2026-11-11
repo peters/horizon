@@ -968,3 +968,4 @@ fn read_answer(reply: &mut CredentialValueReply) -> Result<Vec<u8>, RemoteCreden
 mod native_keyring;
 
 mod relock;
+mod value_changes;

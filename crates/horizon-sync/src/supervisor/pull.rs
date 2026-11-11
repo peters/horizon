@@ -175,6 +175,18 @@ pub(super) fn seed_local(state: &mut SyncState) -> Result<(), SyncError> {
             state.client.enqueue(None, Op::MachinePut { record })?;
             state.owned.insert(name);
         }
+        // A secret is compared once: a key or a value that this computer makes
+        // after its first link enters the queue where its writer makes it.
+        for id in super::secrets::local_ids(state) {
+            let Ok(id) = SecretId::parse(&id) else {
+                continue;
+            };
+            if state.client.secret_version(id.as_str()).is_some() {
+                // A secret that the server has keeps the value of the server.
+                continue;
+            }
+            state.client.enqueue_secret(id.as_str())?;
+        }
     }
     for (machine, key) in std::mem::take(&mut state.local_bindings) {
         if state.bindings.contains_key(&machine) {
@@ -182,16 +194,6 @@ pub(super) fn seed_local(state: &mut SyncState) -> Result<(), SyncError> {
             continue;
         }
         state.client.enqueue_binding(&machine, Some(&key))?;
-    }
-    for id in super::secrets::local_ids(state) {
-        let Ok(id) = SecretId::parse(&id) else {
-            continue;
-        };
-        if state.client.secret_version(id.as_str()).is_some() {
-            // A secret that the server has keeps the value of the server.
-            continue;
-        }
-        state.client.enqueue_secret(id.as_str())?;
     }
     state.seeded = true;
     Ok(())

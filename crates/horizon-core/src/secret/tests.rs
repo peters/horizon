@@ -94,5 +94,5 @@ fn a_target_without_a_value_takes_one_and_keeps_nothing() {
     let id = SecretId::machine_key("build-1").expect("an id");
     assert!(target.read(&id).expect("a read").is_none());
     assert!(target.take_over(&id, b"body", true, 7).expect("a take over").is_none());
-    assert!(target.local_ids(SecretKind::MachineKey).is_empty());
+    assert_eq!(target.local_ids(SecretKind::MachineKey), Vec::<String>::new());
 }
