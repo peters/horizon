@@ -199,15 +199,7 @@ impl HorizonApp {
             return;
         }
 
-        // Keyboard/text events are collected exactly once, by
-        // handle_canvas_pan_in_rect below: a second pass would consume the
-        // one-shot frame keyboard metadata twice.
-        self.filter_held_navigation_keys(ctx);
-        let session_picker_open =
-            super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
-        if !self.host_dialog_open() && !session_picker_open {
-            self.handle_detached_shortcuts(ctx, workspace_id);
-        }
+        self.handle_detached_keys(ctx, workspace_id);
         self.render_detached_toolbar(ui, workspace_id, workspace_local_id, &workspace_name);
 
         let canvas_rect = detached_canvas_rect(ctx);
@@ -227,8 +219,12 @@ impl HorizonApp {
         self.render_browser_connector_lines(ctx, canvas_rect, Some(workspace_id));
         self.record_detached_device_presentation(workspace_id, canvas_rect);
         self.render_panels_for_workspace(ctx, workspace_id);
-        let session_picker_open = session_picker_open
-            || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        // The mark of a take belongs to the window that read its hotkey, and it is
+        // painted after every panel of that window so the panel cannot cover it.
+        self.paint_detached_speech_mark(ctx, workspace_id, workspace_local_id);
+        // The picker can open while this window draws, so it is asked again.
+        let session_picker_open =
+            super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
         if session_picker_open {
             self.clear_file_drop_state(ctx);
         } else {
@@ -280,6 +276,26 @@ impl HorizonApp {
         detached_state.pan_target = None;
         detached_state.interaction = super::DetachedCanvasInteractionState::default();
         detached_state.initial_fit_pending = false;
+    }
+
+    /// The keys of this window: its speech hotkey first, then the filter of the
+    /// held keys, and then its shortcuts.
+    ///
+    /// The child viewport has its own input, so the main window never saw this
+    /// press. Keyboard/text events are collected exactly once, by
+    /// `handle_canvas_pan_in_rect`, and a second pass would consume the one-shot
+    /// frame keyboard metadata twice.
+    fn handle_detached_keys(&mut self, ctx: &Context, workspace_id: WorkspaceId) {
+        let session_picker_open =
+            super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());
+        let input_blocked = self.host_dialog_open() || session_picker_open;
+        if !input_blocked {
+            self.handle_speech_key(ctx, super::speech::SpeechWindow::Detached(workspace_id));
+        }
+        self.filter_held_navigation_keys(ctx);
+        if !input_blocked {
+            self.handle_detached_shortcuts(ctx, workspace_id);
+        }
     }
 
     // The root-window shortcut dispatch only sees root-viewport input, so the
@@ -473,6 +489,25 @@ impl HorizonApp {
 
         self.apply_panel_transitions();
         self.apply_pending_workspace_changes();
+    }
+
+    /// The mark of a take of this window, when this window drew the panel of the
+    /// take this frame.
+    fn paint_detached_speech_mark(&self, ctx: &Context, workspace_id: WorkspaceId, workspace_local_id: &str) {
+        let Some(target) = self.speech.target() else {
+            return;
+        };
+        if self.board.panel_workspace_id(target) != Some(workspace_id) {
+            return;
+        }
+        let Some(rect) = self.panel_screen_rects.get(&target).copied() else {
+            return;
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::unique(("speech_state_mark", workspace_local_id)),
+        ));
+        self.paint_speech_mark(&painter, target, rect);
     }
 
     fn detached_canvas_view(&self, ctx: &Context, workspace_id: WorkspaceId) -> CanvasViewState {

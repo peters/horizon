@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use egui::{Context, Event, Key, Modifiers};
-use horizon_core::{Config, PanelId, StartupDecision, TranscriberKind};
+use horizon_core::{Config, PanelId, PanelOptions, StartupDecision, TranscriberKind, WorkspaceId};
 
 use super::{NO_TERMINAL, SETTINGS_TRY, SpeechUi, clock_text};
 use crate::app::test_support::{test_app, test_app_with_startup};
@@ -21,6 +21,16 @@ fn key(key: Key, pressed: bool) -> Event {
 
 /// One frame with `events`, in which the window handles its speech hotkey.
 fn frame_with_keys(ctx: &Context, app: &mut crate::app::HorizonApp, events: Vec<Event>) -> Vec<Event> {
+    frame_with_keys_in(ctx, app, super::SpeechWindow::Root, events)
+}
+
+/// One frame with `events`, in which `window` handles its speech hotkey.
+fn frame_with_keys_in(
+    ctx: &Context,
+    app: &mut crate::app::HorizonApp,
+    window: super::SpeechWindow,
+    events: Vec<Event>,
+) -> Vec<Event> {
     let mut input = egui::RawInput {
         events,
         time: Some(0.0),
@@ -32,7 +42,7 @@ fn frame_with_keys(ctx: &Context, app: &mut crate::app::HorizonApp, events: Vec<
     let mut remaining = Vec::new();
     let _ = ctx
         .run_ui(input, |_ui| {
-            app.handle_speech_key(ctx);
+            app.handle_speech_key(ctx, window);
             remaining = ctx.input(|input| input.events.clone());
         })
         .discard_textures();
@@ -251,4 +261,90 @@ fn a_window_of_a_session_with_no_panel_of_a_take_draws_no_mark() {
     });
     assert_eq!(app.speech.target(), None);
     assert!(app.speech.mark(Instant::now()).is_none());
+}
+
+/// A settings document where speech input is on, with a recorder that cannot start
+/// on any computer: a test starts no program and opens no microphone.
+fn speech_on_with_a_recorder_that_cannot_start() -> Config {
+    let mut config = speech_on();
+    config.speech.recorder = "/nonexistent/horizon-test-recorder {file}".to_owned();
+    config
+}
+
+/// The board of two workspaces: one in the main window, one detached, each with one
+/// terminal panel, and the focus on the panel of the detached workspace.
+fn app_with_a_detached_workspace() -> (tempfile::TempDir, Context, crate::app::HorizonApp, WorkspaceId, PanelId) {
+    let (temp, mut app) = test_app();
+    app.apply_runtime_config(&speech_on_with_a_recorder_that_cannot_start());
+    let main = app.board.create_workspace("main window");
+    let side = app.board.create_workspace("side window");
+    let options = || PanelOptions {
+        kind: horizon_core::PanelKind::Shell,
+        rows: 6,
+        cols: 40,
+        ..PanelOptions::default()
+    };
+    app.board
+        .create_panel(options(), main)
+        .expect("a panel of the main window");
+    let side_panel = app
+        .board
+        .create_panel(options(), side)
+        .expect("a panel of the side window");
+    app.detach_workspace(side);
+    assert!(app.workspace_is_detached(side), "the side workspace is detached");
+    app.board.focus(side_panel);
+    (temp, Context::default(), app, side, side_panel)
+}
+
+#[test]
+fn the_hotkey_of_the_main_window_never_takes_a_panel_of_a_detached_workspace() {
+    // The focus is on a panel that the main window does not draw. A take for it
+    // would record with nothing on screen in this window and insert the text into a
+    // panel that the person cannot see.
+    let (_temp, ctx, mut app, _side, _side_panel) = app_with_a_detached_workspace();
+
+    let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true)]);
+
+    assert_eq!(app.speech.target(), None, "the main window has no panel of a take");
+    assert!(app.speech.input.is_none(), "no take runs for a panel of another window");
+    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    assert_eq!(message, NO_TERMINAL);
+    assert!(
+        !remaining
+            .iter()
+            .any(|event| matches!(event, Event::Key { key: Key::F9, .. })),
+        "the key of a take never reaches a program of a panel"
+    );
+}
+
+#[test]
+fn the_hotkey_of_a_detached_window_takes_the_panel_that_has_the_focus_there() {
+    // The same board, and the hotkey of the window that draws the workspace: the
+    // take belongs to the panel of that window.
+    let (_temp, ctx, mut app, side, side_panel) = app_with_a_detached_workspace();
+
+    let remaining = frame_with_keys_in(
+        &ctx,
+        &mut app,
+        super::SpeechWindow::Detached(side),
+        vec![key(Key::F9, true)],
+    );
+
+    assert_eq!(
+        app.speech.target(),
+        Some(side_panel),
+        "the take belongs to the panel of the detached window"
+    );
+    assert!(
+        app.speech.is_listening(),
+        "the press of the detached window started one take"
+    );
+    assert!(
+        !remaining
+            .iter()
+            .any(|event| matches!(event, Event::Key { key: Key::F9, .. })),
+        "the key of a take never reaches a program of a panel"
+    );
+    app.speech.finish();
 }

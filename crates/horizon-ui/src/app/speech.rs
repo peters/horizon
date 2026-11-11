@@ -24,6 +24,28 @@ use super::HorizonApp;
 use super::shortcuts::{key_pressed_in_events, shortcut_pressed_in_events, shortcut_released_in_events};
 use crate::theme;
 
+/// The window that reads the hotkey of speech input, and holds the panel of its
+/// take.
+///
+/// A window of Horizon draws one workspace of the board, so the panel of a take is
+/// the focused panel of the window that the hotkey came from. The main window holds
+/// every workspace that is not detached.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::app) enum SpeechWindow {
+    Root,
+    Detached(horizon_core::WorkspaceId),
+}
+
+impl SpeechWindow {
+    /// Whether `workspace` is drawn by this window.
+    fn holds(self, detached: bool, workspace: horizon_core::WorkspaceId) -> bool {
+        match self {
+            Self::Root => !detached,
+            Self::Detached(detached_workspace) => detached && detached_workspace == workspace,
+        }
+    }
+}
+
 pub(in crate::app) use pill::MarkTone;
 
 /// How long the sentence of a failed take stays on the panel.
@@ -293,7 +315,7 @@ impl HorizonApp {
     /// This runs before the filter of the held keys, so the release of the hotkey
     /// still reaches the take. The press is taken out of the input of the terminal,
     /// so the key never reaches the program of the panel.
-    pub(super) fn handle_speech_key(&mut self, ctx: &Context) {
+    pub(super) fn handle_speech_key(&mut self, ctx: &Context, window: SpeechWindow) {
         let Some(binding) = self.speech.binding else {
             return;
         };
@@ -314,7 +336,7 @@ impl HorizonApp {
         if start {
             // The press belongs to the take, whatever the take does with it.
             self.consume_navigation_key(ctx, binding);
-            self.start_speech_take(ctx);
+            self.start_speech_take(ctx, window);
         }
         // A tap whose release is in the same frame ends the take of that frame: a
         // take of a few milliseconds is dropped, as every short take is.
@@ -324,12 +346,12 @@ impl HorizonApp {
     }
 
     /// Start the take of one press of the hotkey, or say why nothing started.
-    fn start_speech_take(&mut self, ctx: &Context) {
+    fn start_speech_take(&mut self, ctx: &Context, window: SpeechWindow) {
         let Some(plan) = self.template_config.speech.plan() else {
             self.speech.fail(NOT_SET);
             return;
         };
-        let Some(target) = self.speech_target() else {
+        let Some(target) = self.speech_target(window) else {
             self.speech.fail(NO_TERMINAL);
             return;
         };
@@ -345,13 +367,19 @@ impl HorizonApp {
         self.speech.configure(&whole);
     }
 
-    /// The panel that a take records for: the focused panel, when it is one that a
-    /// paste enters.
-    fn speech_target(&self) -> Option<PanelId> {
+    /// The panel that a take records for, in the window that read the hotkey: the
+    /// focused panel, when this window draws it and a paste enters it. A panel of a
+    /// workspace that another window draws is no target, because the person does
+    /// not see it here.
+    fn speech_target(&self, window: SpeechWindow) -> Option<PanelId> {
         let focused = self.board.focused?;
         self.board
             .panel(focused)
-            .filter(|panel| panel.visible && panel.terminal().is_some())
+            .filter(|panel| {
+                panel.visible
+                    && panel.terminal().is_some()
+                    && window.holds(self.workspace_is_detached(panel.workspace_id), panel.workspace_id)
+            })
             .map(|panel| panel.id)
     }
 

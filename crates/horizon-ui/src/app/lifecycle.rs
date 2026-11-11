@@ -60,7 +60,7 @@ impl HorizonApp {
         if !input_blocked {
             // The hotkey of speech input reads its key events before the filter of
             // the held keys takes the release of a held key.
-            self.handle_speech_key(ctx);
+            self.handle_speech_key(ctx, super::speech::SpeechWindow::Root);
         }
         self.filter_held_navigation_keys(ctx);
         if input_blocked {
