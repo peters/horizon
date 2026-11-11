@@ -6,9 +6,7 @@
 mod panels;
 mod rules;
 
-use std::sync::MutexGuard;
-
 /// One test at a time reads or writes the published environment.
-fn exclusive() -> MutexGuard<'static, ()> {
+fn exclusive() -> super::environment::Exclusive {
     super::environment::exclusive()
 }

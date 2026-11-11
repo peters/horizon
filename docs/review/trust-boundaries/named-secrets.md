@@ -70,6 +70,12 @@ value are, where a value is allowed to go, and what it never reaches.
   and the arguments of a panel. A restored agent panel reads the values from the
   store again at its start, because the environment of a panel comes from this
   process and never from a file.
+- **That read answers before an agent panel starts, or the panel says that it did
+  not.** The start of a panel can come before the worker of that start published
+  the values, so the worker of the start waits for the answer for at most 2
+  seconds. A panel that the bound reaches starts without the variables and says in
+  one line that the named secrets were not read in time. A plain terminal reads no
+  named secret and never waits.
 - **No `tracing` line, panel title, work ledger, audit log, crash text or error
   text holds a value.** The only exits of a value are the environment of a child
   process and the body of one sealed server secret.

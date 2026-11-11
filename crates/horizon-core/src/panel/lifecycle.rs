@@ -4,7 +4,8 @@ use crate::ssh::SshConnectionStatus;
 use crate::terminal::{Terminal, TerminalSpawnOptions};
 
 use super::spawn::{
-    PanelStart, PreparedLaunch, current_unix_millis, kitty_keyboard_for_kind, scrollback_limit_for_kind,
+    PanelStart, PreparedLaunch, current_unix_millis, kitty_keyboard_for_kind, replay_bytes_with_notice,
+    scrollback_limit_for_kind,
 };
 use super::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, Panel, PanelKind};
 
@@ -92,6 +93,7 @@ impl Panel {
             args,
             env,
             work,
+            named_secrets_late,
         } = launch;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
@@ -103,7 +105,7 @@ impl Panel {
             cell_height: DEFAULT_CELL_HEIGHT,
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
-            replay_bytes: start.replay_bytes,
+            replay_bytes: replay_bytes_with_notice(start.replay_bytes, named_secrets_late),
             env,
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);

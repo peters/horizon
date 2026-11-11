@@ -44,6 +44,9 @@ pub struct PreparedLaunch {
     pub(in crate::panel) args: Vec<String>,
     pub(in crate::panel) env: HashMap<String, String>,
     pub(in crate::panel) work: StartupPlan,
+    /// Whether the read of the named secrets of this start ended before this
+    /// agent panel started, so it keeps no variable and says that in one line.
+    pub(in crate::panel) named_secrets_late: bool,
 }
 
 /// The work that a start reads, and the values that it needs for it. The frame
@@ -124,6 +127,9 @@ fn prepare_launch(
         program,
         mut launch_args,
     } = resolve_spawn_launch(id, opts, transcript);
+    // The store of this start answers after the first frames, and this panel can
+    // start before that answer. The wait is the worker's, bounded by the store.
+    let named_secrets_published = super::wait_for_named_secrets(opts.kind);
     let mut env = agent_env(opts.kind, local_id, opts.command.is_none());
     let work = crate::agent_work::WorkLaunch {
         panel: local_id,
@@ -146,6 +152,7 @@ fn prepare_launch(
         args: launch_args,
         env,
         work,
+        named_secrets_late: !named_secrets_published,
     }
 }
 
@@ -180,6 +187,8 @@ pub struct PendingRestart {
     env: HashMap<String, String>,
     owned: Option<String>,
     work_brief: Option<String>,
+    /// Whether the read of the named secrets ended before this restart started.
+    named_secrets_late: bool,
 }
 
 /// Reads the pre-flight of a restart and resolves its launch. This is the work
@@ -236,6 +245,7 @@ pub fn prepare_restart(request: RestartRequest) -> Result<RestartPreflight> {
         None,
         true,
     );
+    let named_secrets_published = super::wait_for_named_secrets(work.kind);
     let env = agent_env(work.kind, &work.local_id, work.launch_command.is_none());
     if work_brief.is_some() && !should_resume {
         return Err(crate::error::Error::State(
@@ -255,6 +265,7 @@ pub fn prepare_restart(request: RestartRequest) -> Result<RestartPreflight> {
             env,
             owned,
             work_brief,
+            named_secrets_late: !named_secrets_published,
         }),
     })
 }
@@ -299,6 +310,7 @@ pub fn finish_restart(pending: PendingRestart) -> Result<PanelStart> {
         mut env,
         owned,
         work_brief,
+        named_secrets_late,
     } = pending;
     let crate::panel::work_resume::RestartWork { owner, state } =
         work.prepare_restart_work(owned.as_deref(), &mut args, &mut env, work_brief.as_deref())?;
@@ -312,6 +324,7 @@ pub fn finish_restart(pending: PendingRestart) -> Result<PanelStart> {
             args,
             env,
             work: StartupPlan::settled(owner, state),
+            named_secrets_late,
         }),
         editor_text: None,
         work_brief_wanted: work_brief.is_some(),

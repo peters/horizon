@@ -46,6 +46,9 @@ impl HorizonApp {
             move || ctx.request_repaint()
         };
         let (tx, rx) = std::sync::mpsc::channel();
+        // An agent panel that starts in the first frames of this start waits for the
+        // values of this read, at most for the bound of the store.
+        horizon_core::named_secrets::expect_a_publish();
         std::thread::spawn(move || {
             let secrets = super::server_sync::secret_vault(&home, keys, &remote, &names);
             let _ = tx.send(super::server_sync::load(registry, server, secrets, wake));

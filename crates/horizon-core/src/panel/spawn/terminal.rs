@@ -16,7 +16,7 @@ use super::super::{
 };
 use super::{
     PanelStart, PreparedLaunch, ResolvedTerminalLaunch, current_unix_millis, default_shell, kitty_keyboard_for_kind,
-    resolve_terminal_launch, scrollback_limit_for_kind, start::StartRequest,
+    replay_bytes_with_notice, resolve_terminal_launch, scrollback_limit_for_kind, start::StartRequest,
 };
 
 struct TerminalPanelBuildArgs {
@@ -296,7 +296,9 @@ pub(super) fn spawn_started_terminal(
         args: launch_args,
         env,
         work,
+        named_secrets_late,
     } = launch;
+    let replay_bytes = replay_bytes_with_notice(replay_bytes, named_secrets_late);
     let (has_custom_name, title) = panel_title(name, name_is_custom, id, saved_ssh_connection.as_ref());
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
     let panel_args = TerminalPanelBuildArgs {

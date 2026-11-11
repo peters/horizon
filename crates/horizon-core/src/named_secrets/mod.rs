@@ -34,7 +34,7 @@ mod name;
 mod store;
 mod workbench;
 
-pub use environment::{apply, publish, published_names};
+pub use environment::{apply, expect_a_publish, publish, published_names, wait_until_published};
 pub use name::{MAX_NAME_CHARS, NamedSecretError, SecretName, check_value, is_reserved};
 pub use store::{NAMED_PREFIX, NAMED_SECRET_ORIGIN, NamedSecretChange, NamedSecretVault, locator};
 pub use workbench::NamedSecretWorkbench;
@@ -43,6 +43,11 @@ use crate::remote_browser_credential::RemoteCredentialError;
 
 /// The most named secrets that one computer keeps.
 pub const MAX_NAMED_SECRETS: usize = 64;
+
+/// How long an agent panel that starts before the read of this start answered
+/// waits for the values of this computer. The disk can be slow, and a panel must
+/// still start: after this bound it starts without the values and says so.
+pub const PUBLISH_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most bytes of one value: 16 KiB, the bound of one server secret body.
 pub const MAX_VALUE_BYTES: usize = 16 * 1024;

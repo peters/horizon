@@ -778,6 +778,36 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
+/// The line that a panel says when the named secrets of this start were not read
+/// before its launch. One line, and the panel runs: an agent without its keys is
+/// better than a panel that never starts.
+pub(crate) const NAMED_SECRETS_LATE_LINE: &str =
+    "The named secrets of this computer were not read in time, so this panel has none of them.\r\n";
+
+/// Waits for the read of the named secrets that this start announced, so an agent
+/// panel that starts in the first frames of a start still gets the values of the
+/// store. Answers `true` when the values stand, and `false` when the bound ended
+/// first, which the panel then says in one line.
+///
+/// The wait runs on the worker thread of a panel start. A plain terminal reads no
+/// named secret, so it never waits.
+pub(crate) fn wait_for_named_secrets(kind: PanelKind) -> bool {
+    if !kind.is_agent() {
+        return true;
+    }
+    crate::named_secrets::wait_until_published(crate::named_secrets::PUBLISH_BOUND)
+}
+
+/// The bytes that a terminal replays before the output of its process: the saved
+/// screen of the panel, and the one line of a launch whose named secrets were not
+/// read in time.
+pub(crate) fn replay_bytes_with_notice(mut replay_bytes: Vec<u8>, named_secrets_late: bool) -> Vec<u8> {
+    if named_secrets_late {
+        replay_bytes.extend_from_slice(NAMED_SECRETS_LATE_LINE.as_bytes());
+    }
+    replay_bytes
+}
+
 pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
     let mut env = HashMap::new();
     // Nested launches must not inherit another panel's work-hook identity.

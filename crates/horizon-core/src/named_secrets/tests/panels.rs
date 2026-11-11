@@ -15,9 +15,11 @@ use crate::panel::spawn::agent_env;
 use crate::place::SessionKill;
 use crate::ssh::SshConnection;
 use crate::{
-    Board, CanvasViewState, Config, PanelId, PanelKind, PanelOptions, PanelState, RuntimeState, WindowConfig,
+    Board, CanvasViewState, Config, PanelId, PanelKind, PanelOptions, PanelState, RuntimeState, StartRequest,
+    WindowConfig,
     machines::session_command,
-    named_secrets::{SecretName, publish},
+    named_secrets::{PUBLISH_BOUND, SecretName, expect_a_publish, publish},
+    prepare_panel_start,
 };
 
 const MARKER: &str = "MARKER-4d7e-only-in-an-agent-panel";
@@ -228,4 +230,107 @@ fn a_name_whose_value_this_computer_does_not_hold_is_not_injected() {
         !env.contains_key("HETZNER_TOKEN"),
         "a name without a value is no variable"
     );
+}
+
+/// The saved board of one agent panel that prints the value of its named secret,
+/// as a start restores it: the panel waits for the preparation of a worker.
+fn restored_board() -> (RuntimeState, PanelState) {
+    let (command, args) = prints_the_token();
+    let panel = PanelState {
+        local_id: "restored-agent".to_owned(),
+        name: "restored agent".to_owned(),
+        kind: PanelKind::Pi,
+        command,
+        args,
+        rows: 6,
+        cols: 60,
+        ..PanelState::default()
+    };
+    let mut saved = panel.clone();
+    saved.local_id = "restored-agent".to_owned();
+    (
+        RuntimeState {
+            workspaces: vec![crate::WorkspaceState {
+                local_id: "workspace".to_owned(),
+                name: "workspace".to_owned(),
+                panels: vec![saved],
+                ..crate::WorkspaceState::default()
+            }],
+            ..RuntimeState::default()
+        },
+        panel,
+    )
+}
+
+/// Starts the panels of a restored board the way the coordination worker starts
+/// them: the frame asks for the preparation and the answer starts the process.
+fn start_waiting_panels(board: &mut Board) {
+    for pending in board.take_pending_starts() {
+        let request = StartRequest {
+            id: pending.id,
+            local_id: pending.options.local_id.clone().unwrap_or_default(),
+            opts: pending.options.clone(),
+        };
+        let start = prepare_panel_start(request);
+        board
+            .start_panel(pending.id, &pending.options, start)
+            .expect("a panel of the restored board starts");
+    }
+}
+
+#[test]
+fn an_agent_panel_of_a_restored_board_gets_the_value_that_the_read_publishes_later() {
+    let _guard = exclusive();
+    // The worker of this start reads the store, and its answer comes after the
+    // board was restored, as it does when the disk is slow: the panel starts
+    // before the values of this computer are here.
+    expect_a_publish();
+    let read = thread::spawn(|| {
+        thread::sleep(Duration::from_millis(250));
+        publish_marker();
+    });
+
+    let (state, panel_state) = restored_board();
+    let mut board = Board::from_runtime_state_waiting(&state, None).expect("the restored board");
+    start_waiting_panels(&mut board);
+    let panel = board
+        .panel_id_by_local_id(&panel_state.local_id)
+        .expect("the panel of the restored board");
+    let text = screen_with(&mut board, panel, MARKER);
+    read.join().expect("the read of the store ends");
+    assert!(
+        text.contains(&format!("token:{MARKER}")),
+        "the panel of the restored board waits for the values of this start: {text}"
+    );
+    board.shutdown_terminal_panels();
+}
+
+#[test]
+fn an_agent_panel_of_a_start_that_never_answers_starts_after_the_bound_and_says_one_line() {
+    let _guard = exclusive();
+    // The store does not answer in the bound, so the panel starts without the
+    // values of this computer instead of waiting for them.
+    expect_a_publish();
+    let (state, panel_state) = restored_board();
+    let mut board = Board::from_runtime_state_waiting(&state, None).expect("the restored board");
+    let asked = Instant::now();
+    start_waiting_panels(&mut board);
+    let waited = asked.elapsed();
+    assert!(
+        waited >= PUBLISH_BOUND,
+        "the panel waits for the bound of the read of this start: {waited:?}"
+    );
+    let panel = board
+        .panel_id_by_local_id(&panel_state.local_id)
+        .expect("the panel of the restored board");
+    let text = screen_with(&mut board, panel, "named secrets");
+    assert!(
+        text.contains("The named secrets of this computer were not read in time"),
+        "the panel says that it has no named secret: {text}"
+    );
+    assert!(
+        !text.contains(&format!("token:{MARKER}")),
+        "the panel of a store that did not answer reads no value: {text}"
+    );
+    board.shutdown_terminal_panels();
 }

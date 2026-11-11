@@ -17,7 +17,7 @@ fn name(text: &str) -> SecretName {
 
 /// The published values are one map of the process, so a test that publishes
 /// takes this guard and starts from no secret.
-fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+fn exclusive() -> super::super::environment::Exclusive {
     super::super::environment::exclusive()
 }
 
