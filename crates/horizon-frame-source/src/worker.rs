@@ -148,8 +148,15 @@ fn supervise(
             );
         }
         // A program that ended by itself is the end of the viewer, whatever its
-        // threads say, and its own words are the reason.
+        // threads say, and its own words are the reason. The messages that it wrote
+        // before its end are read first, so a program that answers one word and then
+        // exits keeps the word in the sentence of the panel.
         if child.try_wait().ok().flatten().is_some() {
+            while let Ok(event) = events.try_recv() {
+                if let Some(status) = viewer.handle(event, stdin.as_mut().map(|stdin| &mut *stdin)) {
+                    return Some(status);
+                }
+            }
             return None;
         }
     }

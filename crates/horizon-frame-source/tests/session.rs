@@ -186,6 +186,34 @@ fn a_viewer_shows_the_pictures_of_its_program() {
 }
 
 #[test]
+fn a_still_stream_asks_for_no_frame_of_the_ui() {
+    let mut viewer = Viewer::start(&[
+        "--width",
+        "32",
+        "--height",
+        "16",
+        "--rate",
+        "0.2",
+        "--report",
+        "{folder}/report.json",
+    ]);
+    viewer.wait_for_picture();
+    // Drain the wakes of the pictures that arrived, and then prove that a stream
+    // that sends nothing asks for nothing: no repaint loop, and no second thread
+    // that keeps a frame busy.
+    while viewer.wakes.try_recv().is_ok() {}
+    std::thread::sleep(Duration::from_millis(300));
+    while viewer.session.take_updates().image.is_some() {}
+    assert!(
+        viewer.wakes.try_recv().is_err(),
+        "a viewer whose program sends no picture asks for no frame"
+    );
+    let pid = viewer.child_pid();
+    viewer.children.push(pid);
+    viewer.end();
+}
+
+#[test]
 fn the_child_gets_the_picture_socket_as_descriptor_three() {
     let mut viewer = Viewer::start(&["--width", "32", "--height", "16", "--report", "{folder}/report.json"]);
     let pid = viewer.child_pid();
