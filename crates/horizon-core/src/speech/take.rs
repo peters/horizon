@@ -781,4 +781,6 @@ fn millis(duration: Duration) -> u64 {
 mod wav;
 
 #[cfg(test)]
+mod kept_tests;
+#[cfg(test)]
 mod tests;

@@ -27,7 +27,7 @@ use std::time::Duration;
 use crate::cdp::CdpError;
 
 /// The budget of one call to a browser of this computer.
-pub(super) const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The budget of one call to a browser that another process or another computer
 /// runs, which answers across a link.
@@ -69,6 +69,15 @@ impl Call {
     /// send.
     pub(super) fn retries(self, error: &CdpError) -> bool {
         matches!(error, CdpError::Timeout { .. }) && self.repeats_after_timeout()
+    }
+
+    /// The call of one session's browser: its answer crosses a link when another
+    /// process or another computer runs that browser.
+    pub(super) fn of(browser: &crate::session::BrowserSessionConfig, kind: Kind) -> Self {
+        Self {
+            kind,
+            far: browser.attach.is_some() || browser.remote.is_some(),
+        }
     }
 }
 

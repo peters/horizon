@@ -39,21 +39,21 @@ const TARGET: PanelId = PanelId(7);
 const PATIENCE: Duration = Duration::from_secs(20);
 
 /// A home of one test, its clock and its worker.
-struct Take {
-    home: tempfile::TempDir,
-    clock: Arc<TestClock>,
-    input: SpeechInput,
+pub(super) struct Take {
+    pub(super) home: tempfile::TempDir,
+    pub(super) clock: Arc<TestClock>,
+    pub(super) input: SpeechInput,
     children: Vec<Child>,
 }
 
 impl Take {
     /// A take of the bounds of the code, whose clock only the test moves.
-    fn new(keys: Arc<dyn SpeechKeyStore>) -> Self {
+    pub(super) fn new(keys: Arc<dyn SpeechKeyStore>) -> Self {
         Self::with_bounds(keys, TakeBounds::default())
     }
 
     /// A take of the bounds of `bounds`, whose clock only the test moves.
-    fn with_bounds(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds) -> Self {
+    pub(super) fn with_bounds(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds) -> Self {
         let home = tempfile::tempdir().expect("a home of a test");
         let clock = Arc::new(TestClock::new());
         let worker = SpeechWorker::new(home.path().to_path_buf(), keys)
@@ -67,7 +67,7 @@ impl Take {
         }
     }
 
-    fn folder(&self) -> PathBuf {
+    pub(super) fn folder(&self) -> PathBuf {
         self.home.path().join(TAKE_FOLDER)
     }
 
@@ -77,13 +77,13 @@ impl Take {
     /// the shell reads it. A test thread that forks while another test writes a
     /// script cannot then make that script refuse its own start with `ETXTBSY`; the
     /// supervisor of a recorder runs the command line as its program.
-    fn script(&self, name: &str, body: &str) -> String {
+    pub(super) fn script(&self, name: &str, body: &str) -> String {
         let body = body.strip_prefix("#!/bin/sh\n").unwrap_or(body);
         crate::util::stand_in_shell_in(self.home.path(), name, body.trim_end_matches('\n')).expect("a script of a test")
     }
 
     /// A file that a recorder copies, so a take holds the bytes of a recording.
-    fn prepared(&self) -> PathBuf {
+    pub(super) fn prepared(&self) -> PathBuf {
         let path = self.home.path().join("prepared.wav");
         let mut bytes = b"RIFF$\x00\x00\x00WAVEfmt ".to_vec();
         bytes.extend_from_slice(&[0u8; 64]);
@@ -108,7 +108,7 @@ impl Take {
 
     /// A recorder that copies the prepared file, writes its own pid and waits for
     /// its signal until it ends.
-    fn recorder(&self, name: &str, prepared: &Path) -> CommandLine {
+    pub(super) fn recorder(&self, name: &str, prepared: &Path) -> CommandLine {
         let pid = self.pid_file(name);
         let program = self.script(
             name,
@@ -149,7 +149,7 @@ impl Take {
 
     /// Wait until `ready` answers, and report what the worker said when it does
     /// not.
-    fn wait_for(&self, what: &str, mut ready: impl FnMut() -> bool) {
+    pub(super) fn wait_for(&self, what: &str, mut ready: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
         let mut seen = Vec::new();
         while !ready() {
@@ -167,7 +167,7 @@ impl Take {
     /// Wait until the recorder of `name` runs: it wrote its own pid and the file of
     /// the take holds the bytes that it copied. Only then may a test move the clock,
     /// because a bound of the take may not pass a program that has not started.
-    fn wait_for_recorder(&self, name: &str) {
+    pub(super) fn wait_for_recorder(&self, name: &str) {
         self.wait_for("the recorder", || self.pid_file(name).exists() && self.file_bytes() > 0);
     }
 
@@ -181,7 +181,7 @@ impl Take {
     }
 
     /// One event of one of `wanted`, or a failure that names what the worker said.
-    fn wait_for_event(&self, wanted: &[&str]) -> Vec<SpeechEventKind> {
+    pub(super) fn wait_for_event(&self, wanted: &[&str]) -> Vec<SpeechEventKind> {
         self.wait_for_event_on(None, wanted)
     }
 
@@ -254,7 +254,7 @@ impl Take {
             .collect()
     }
 
-    fn files(&self) -> Vec<String> {
+    pub(super) fn files(&self) -> Vec<String> {
         fs::read_dir(self.folder())
             .map(|entries| {
                 entries
@@ -285,12 +285,12 @@ impl Drop for Take {
     }
 }
 
-fn plan(recorder: CommandLine, transcriber: Transcriber) -> TakePlan {
+pub(super) fn plan(recorder: CommandLine, transcriber: Transcriber) -> TakePlan {
     TakePlan { recorder, transcriber }
 }
 
 /// A command that records that it ran and answers one text.
-fn transcriber_script(take: &Take, answer: &str) -> (CommandLine, PathBuf) {
+pub(super) fn transcriber_script(take: &Take, answer: &str) -> (CommandLine, PathBuf) {
     let marker = take.home.path().join("transcribed.txt");
     let program = take.script(
         "transcriber",
@@ -977,112 +977,4 @@ fn the_value_of_the_key_reaches_one_request_and_no_file_of_the_take() {
     assert!(request.contains("name=\"language\"\r\n\r\nno"), "{request}");
     assert!(request.contains("name=\"file\"; filename=\"take-"), "{request}");
     take.wait_for("the delete of the file", || take.files().is_empty());
-}
-
-#[test]
-fn a_take_that_a_slow_transcriber_did_not_answer_stays_for_one_retry() {
-    let take = Take::with_bounds(
-        Arc::new(()),
-        TakeBounds {
-            transcribe: Duration::from_millis(200),
-            ..TakeBounds::default()
-        },
-    );
-    let prepared = take.prepared();
-    let recorder = take.recorder("rec", &prepared);
-    let slow = take.script("slow", "#!/bin/sh\nsleep 5\nprintf 'late'\n");
-    let transcriber = CommandLine::parse(&format!("{slow} {{file}}")).expect("a line");
-    take.input.begin(
-        plan(recorder.clone(), Transcriber::Command(transcriber.clone())),
-        TARGET,
-    );
-    take.wait_for_recorder("rec");
-    take.clock.advance(Duration::from_secs(1));
-    take.input.end();
-    let events = take.wait_for_event(&["kept"]);
-    assert!(
-        matches!(&events[0], SpeechEventKind::Kept(message) if message.contains("did not answer")),
-        "{events:?}"
-    );
-    let kept = take.files();
-    assert_eq!(kept.len(), 1, "the take stays for one retry: {kept:?}");
-    let kept_path = take.folder().join(&kept[0]);
-    assert_eq!(
-        fs::metadata(&kept_path).expect("the kept take").permissions().mode() & 0o777,
-        0o600,
-        "a kept take is private"
-    );
-
-    // The service answers at the retry, and the take of the same file is sent.
-    let (quick, marker) = transcriber_script(&take, "heisan");
-    take.input.retry(plan(recorder, Transcriber::Command(quick)), TARGET);
-    let events = take.wait_for_event(&["writing", "text"]);
-    assert!(
-        matches!(&events[1], SpeechEventKind::Text(text) if text == "heisan"),
-        "{events:?}"
-    );
-    assert!(marker.exists(), "the retry transcribed the kept take");
-    take.wait_for("the delete of the sent take", || take.files().is_empty());
-}
-
-#[test]
-fn the_upload_bound_grows_with_the_size_of_the_take() {
-    use super::upload_bound;
-    // A take of 640 KB, which is twenty seconds of a 16 kHz recording.
-    assert_eq!(
-        upload_bound(640 * 1024, super::TRANSCRIBE_BOUND),
-        Duration::from_secs(40),
-        "the way up of a take at 128 kbit/s holds forty seconds"
-    );
-    assert_eq!(
-        upload_bound(1024, super::TRANSCRIBE_BOUND),
-        super::TRANSCRIBE_BOUND,
-        "a small take still gets the bound of the answer"
-    );
-    assert!(
-        upload_bound(super::MAX_TAKE_BYTES, super::TRANSCRIBE_BOUND) > Duration::from_secs(600),
-        "the largest take gets minutes on a slow uplink"
-    );
-}
-
-#[test]
-fn a_service_that_stays_away_keeps_the_take_and_an_answer_that_refused_does_not() {
-    use crate::speech::service::ServiceError;
-    for kept in [
-        ServiceError::Unreachable {
-            host: "speech.example".into(),
-        },
-        ServiceError::Tls {
-            host: "speech.example".into(),
-            reason: "certificate".into(),
-        },
-        ServiceError::NoAnswer {
-            host: "speech.example".into(),
-            seconds: 30,
-        },
-        ServiceError::UploadTooSlow {
-            host: "speech.example".into(),
-            seconds: 40,
-        },
-    ] {
-        assert!(kept.keeps_the_take(), "{kept}");
-    }
-    for dropped in [
-        ServiceError::Refused {
-            host: "speech.example".into(),
-            status: 401,
-            message: "no".into(),
-        },
-        ServiceError::NoText {
-            host: "speech.example".into(),
-        },
-        ServiceError::EndedEarly {
-            host: "speech.example".into(),
-        },
-        ServiceError::Unresolved {
-            host: "speech.example".into(),
-        },
-    ] {
-        assert!(!dropped.keeps_the_take(), "{dropped}");
-    }
 }

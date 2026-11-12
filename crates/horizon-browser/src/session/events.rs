@@ -13,8 +13,9 @@ use crate::cdp::{CdpEvent, CdpLink, CdpMsg};
 use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::frames::FrameSlot;
 
+use super::address::normalized_committed_url;
 use super::clipboard::target_event_session_id;
-use super::{BrowserEvent, BrowserEventSender, DriverState, normalized_committed_url, publish_frame};
+use super::{BrowserEvent, BrowserEventSender, DriverState, publish_frame};
 use crate::navigation::NavigationSignal;
 
 impl DriverState {
