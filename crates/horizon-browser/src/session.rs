@@ -24,6 +24,7 @@
 //! - the screencast is implicitly terminated by navigation, so it is
 //!   restarted on every top-level `Page.frameNavigated`.
 
+mod address;
 mod call;
 mod clipboard;
 mod command_queue;
@@ -179,9 +180,7 @@ pub struct BrowserSession {
 }
 
 const WS_URL_TIMEOUT: Duration = Duration::from_secs(15);
-/// The budget of one call to a loopback browser; [`call::Call::budget`] holds
-/// the larger one of a browser that answers across a link.
-const CALL_TIMEOUT: Duration = call::CALL_TIMEOUT;
+pub(super) use call::CALL_TIMEOUT;
 const RESTART_BACKOFF: Duration = Duration::from_millis(250);
 const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
@@ -756,76 +755,16 @@ impl DriverState {
         outcome.result
     }
 
-    /// Whether the browser of this session answers across a link, because another
-    /// process or another computer runs it.
-    fn far_browser(&self) -> bool {
-        self.config.attach.is_some() || self.config.remote.is_some()
-    }
-
     /// The budget of one protocol call of this session: the loopback budget, or
-    /// the larger one of a browser that another process or another computer
-    /// runs.
+    /// the larger one of a browser that another process or another computer runs.
     pub(super) fn call_budget(&self) -> Duration {
-        call::Call {
-            kind: call::Kind::Change,
-            far: self.far_browser(),
-        }
-        .budget()
+        call::Call::of(&self.config, call::Kind::Change).budget()
     }
 
     /// One read of this session: it holds the budget of this browser, and a
     /// timeout of a far browser is sent once more.
     pub(super) fn read_call(&self) -> call::Call {
-        call::Call {
-            kind: call::Kind::Read,
-            far: self.far_browser(),
-        }
-    }
-
-    /// Freeze an in-flight navigation, route every event received while that
-    /// happens, then ask the target for its authoritative committed URL.
-    fn capture_final_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
-        if let Some(session_id) = self.session_id.clone() {
-            let outcome = link.call_and_drain(
-                Duration::from_secs(1),
-                "Page.stopLoading",
-                &serde_json::json!({}),
-                Some(session_id.as_str()),
-            );
-            for message in outcome.drained {
-                self.handle_message(link, event_tx, frame_slot, message);
-            }
-        }
-        if self.navigation_failed {
-            return;
-        }
-        let Some(target_id) = self.target_id.clone() else {
-            return;
-        };
-        let outcome = link.call_and_drain(
-            Duration::from_secs(1),
-            "Target.getTargetInfo",
-            &serde_json::json!({ "targetId": target_id }),
-            None,
-        );
-        for message in outcome.drained {
-            self.handle_message(link, event_tx, frame_slot, message);
-        }
-        let Some(target_url) = outcome.result.ok().and_then(|result| {
-            result
-                .pointer("/targetInfo/url")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        }) else {
-            return;
-        };
-        let url = normalized_committed_url(&target_url).to_string();
-        if self.url != url {
-            self.url = url;
-            self.manifest_dirty = true;
-            self.write_manifest(true);
-        }
-        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        call::Call::of(&self.config, call::Kind::Read)
     }
 
     fn send_page_command(
@@ -1013,14 +952,6 @@ impl DriverState {
     }
 }
 
-fn normalized_committed_url(url: &str) -> &str {
-    if url.is_empty() || url == "about:blank" {
-        ""
-    } else {
-        url
-    }
-}
-
 fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mut HashMap<u64, String>, session: &str) {
     requested.remove(session);
     inflight.retain(|_, tracked| tracked != session);
@@ -1030,13 +961,6 @@ fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mu
 mod tests {
     use super::*;
     use crate::input::is_user_activity;
-
-    #[test]
-    fn blank_target_is_an_empty_committed_url() {
-        assert_eq!(normalized_committed_url("about:blank"), "");
-        assert_eq!(normalized_committed_url(""), "");
-        assert_eq!(normalized_committed_url("https://example.com"), "https://example.com");
-    }
 
     #[test]
     fn page_controls_count_as_user_steering_but_system_controls_do_not() {

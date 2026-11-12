@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::tests::{Take, plan, transcriber_script};
-use super::{MAX_TAKE_BYTES, SpeechEventKind, TRANSCRIBE_BOUND, TakeBounds, Transcriber};
+use super::{SpeechEventKind, TakeBounds, Transcriber};
 use crate::panel::PanelId;
 use crate::speech::command::CommandLine;
 
