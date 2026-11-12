@@ -91,12 +91,7 @@ fn title_focus_indicator_rect(titlebar_rect: Rect) -> Rect {
     )
 }
 
-pub(super) fn panel_kind_icon(
-    kind: PanelKind,
-    frame_source: bool,
-    workspace_color: Color32,
-    focused: bool,
-) -> (&'static str, Color32) {
+pub(super) fn panel_kind_icon(kind: PanelKind, workspace_color: Color32, focused: bool) -> (&'static str, Color32) {
     if let Some(definition) = agent_definition(kind) {
         let [r, g, b] = definition.accent_rgb;
         return (
@@ -110,9 +105,6 @@ pub(super) fn panel_kind_icon(
         PanelKind::Ssh => ("SSH", panel_kind_label_color(theme::PALETTE_YELLOW(), focused)),
         PanelKind::Editor => ("MD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::Browser => ("WEB", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
-        // A viewer of a program of this computer shows no VNC desktop: its tag
-        // says what the panel is, and the details of the panel name the program.
-        PanelKind::Device if frame_source => ("VIEW", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Device => ("VNC", panel_kind_label_color(theme::PALETTE_CYAN(), focused)),
         PanelKind::Block => ("CARD", panel_kind_label_color(theme::PALETTE_GREEN(), focused)),
         PanelKind::Codex
@@ -691,10 +683,9 @@ mod tests {
 
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
-        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_kind_icon,
-        panel_title_color, panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_mark,
-        ssh_status_color, title_focus_indicator_rect, title_right_boundary, working_indicator_reserve,
-        working_indicator_width,
+        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
+        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_mark, ssh_status_color,
+        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -901,17 +892,6 @@ mod tests {
         assert_ne!(panel_fill(accent, true), panel_fill(accent, false));
         assert_ne!(panel_titlebar_fill(accent, true), panel_titlebar_fill(accent, false));
         assert_ne!(panel_title_color(true), panel_title_color(false));
-    }
-
-    #[test]
-    fn a_viewer_of_a_program_of_this_computer_has_a_tag_of_its_own() {
-        let color = egui::Color32::WHITE;
-        assert_eq!(panel_kind_icon(super::PanelKind::Device, true, color, false).0, "VIEW");
-        assert_eq!(
-            panel_kind_icon(super::PanelKind::Device, false, color, false).0,
-            "VNC",
-            "a desktop of another computer keeps its own word"
-        );
     }
 
     #[test]

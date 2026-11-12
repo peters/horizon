@@ -26,8 +26,6 @@ pub enum CommandId {
     OpenRemoteHosts,
     ToggleSessions,
     CreatePanelFromPreset(usize),
-    /// Open the viewer of one frame source program of the settings, by its name.
-    OpenFrameSource(String),
 
     // Settings
     ToggleSettings,
@@ -75,35 +73,11 @@ fn command_entry(id: CommandId, label: &str, shortcut: String, keywords: &[&str]
 
 /// Build the static list of action commands (not workspace/panel -- those are
 /// dynamic and assembled at query time by the palette).
-pub fn action_commands(
-    shortcuts: &AppShortcuts,
-    primary_label: &str,
-    frame_sources: &horizon_core::FrameSourcesConfig,
-) -> Vec<CommandEntry> {
+pub fn action_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
     let mut commands = workspace_commands(shortcuts, primary_label);
     commands.extend(view_commands(shortcuts, primary_label));
     commands.extend(global_commands(shortcuts, primary_label));
-    commands.extend(frame_source_commands(frame_sources));
     commands
-}
-
-/// One command for each frame source program of the settings, so a person opens a
-/// viewer without the Settings window.
-fn frame_source_commands(frame_sources: &horizon_core::FrameSourcesConfig) -> Vec<CommandEntry> {
-    frame_sources
-        .sources
-        .iter()
-        .filter(|source| source.is_set())
-        .map(|source| CommandEntry {
-            id: CommandId::OpenFrameSource(source.name.trim().to_owned()),
-            label: format!("Open frame source: {}", source.name.trim()),
-            shortcut: None,
-            keywords: ["frame", "source", "device", "viewer", "view"]
-                .iter()
-                .map(|keyword| (*keyword).into())
-                .collect(),
-        })
-        .collect()
 }
 
 fn workspace_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<CommandEntry> {
@@ -231,11 +205,7 @@ mod tests {
 
     #[test]
     fn action_commands_have_unique_labels() {
-        let entries = action_commands(
-            &AppShortcuts::default(),
-            "Ctrl",
-            &horizon_core::FrameSourcesConfig::default(),
-        );
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
         let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
         let mut deduped = labels.clone();
         deduped.sort_unstable();
@@ -245,22 +215,14 @@ mod tests {
 
     #[test]
     fn action_commands_all_have_shortcuts() {
-        for entry in action_commands(
-            &AppShortcuts::default(),
-            "Ctrl",
-            &horizon_core::FrameSourcesConfig::default(),
-        ) {
+        for entry in action_commands(&AppShortcuts::default(), "Ctrl") {
             assert!(entry.shortcut.is_some(), "entry '{}' has no shortcut", entry.label);
         }
     }
 
     #[test]
     fn action_commands_include_workspace_alignment() {
-        let entries = action_commands(
-            &AppShortcuts::default(),
-            "Ctrl",
-            &horizon_core::FrameSourcesConfig::default(),
-        );
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
         let entry = entries
             .iter()
             .find(|entry| entry.id == CommandId::AlignWorkspacesHorizontally)
@@ -272,11 +234,7 @@ mod tests {
 
     #[test]
     fn action_commands_include_workspace_focus_and_fit() {
-        let entries = action_commands(
-            &AppShortcuts::default(),
-            "Ctrl",
-            &horizon_core::FrameSourcesConfig::default(),
-        );
+        let entries = action_commands(&AppShortcuts::default(), "Ctrl");
 
         let focus = entries
             .iter()
@@ -292,39 +250,13 @@ mod tests {
     }
 
     #[test]
-    fn each_frame_source_program_is_one_command_of_the_palette() {
-        let mut config = horizon_core::Config::default();
-        config.frame_sources.sources = vec![
-            horizon_core::FrameSource {
-                name: "bench".to_owned(),
-                command: "/usr/bin/a-frame-source-program {target}".to_owned(),
-            },
-            horizon_core::FrameSource::default(),
-        ];
-
-        let entries = action_commands(&AppShortcuts::default(), "Ctrl", &config.frame_sources);
-        let entry = entries
-            .iter()
-            .find(|entry| entry.id == CommandId::OpenFrameSource("bench".to_owned()))
-            .expect("the program of the settings opens a viewer");
-        assert_eq!(entry.label, "Open frame source: bench");
-        assert_eq!(entry.shortcut, None, "the program has no key of its own");
-        assert!(
-            !entries
-                .iter()
-                .any(|entry| matches!(&entry.id, CommandId::OpenFrameSource(name) if name.is_empty())),
-            "a program that is not set opens nothing"
-        );
-    }
-
-    #[test]
     fn action_commands_reflect_custom_shortcuts() {
         let shortcuts = AppShortcuts {
             toggle_sidebar: ShortcutBinding::new(ShortcutModifiers::ALT, ShortcutKey::Letter('S')),
             ..AppShortcuts::default()
         };
 
-        let entries = action_commands(&shortcuts, "Cmd", &horizon_core::FrameSourcesConfig::default());
+        let entries = action_commands(&shortcuts, "Cmd");
         let entry = entries
             .iter()
             .find(|entry| entry.id == CommandId::ToggleSidebar)

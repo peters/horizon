@@ -51,7 +51,6 @@ fn sidebar_shows_panels_for_the_active_workspace_when_accordion_is_enabled() {
 // board's own focus state, not the sidebar entry flag.
 fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEntry {
     SidebarPanelEntry {
-        is_frame_source: false,
         id,
         title: "panel".to_string(),
         label: "panel".to_string(),

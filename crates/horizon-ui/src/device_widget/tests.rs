@@ -2,7 +2,6 @@ use super::*;
 use crate::test_egui::DiscardTextures;
 use horizon_core::browser::manifest::device::Connection;
 
-mod frame_input;
 mod interact;
 mod presentation;
 
@@ -25,29 +24,6 @@ fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing label {label}"))
-}
-
-/// The rendered desktop: the largest texture-filled rectangle.
-fn image_rect(output: &egui::FullOutput) -> egui::Rect {
-    output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Rect(rect)
-                if rect
-                    .brush
-                    .as_ref()
-                    .is_some_and(|brush| brush.fill_texture_id != egui::TextureId::default()) =>
-            {
-                Some(rect.rect)
-            }
-            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
-                Some(shape.shape.visual_bounding_rect())
-            }
-            _ => None,
-        })
-        .max_by(|a, b| a.area().total_cmp(&b.area()))
-        .expect("desktop image")
 }
 
 fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {

@@ -21,7 +21,6 @@ workspace = true
 [dependencies]
 horizon-browser.workspace = true
 horizon-browser-control.workspace = true
-horizon-frame-source.workspace = true
 horizon-vnc.workspace = true
 bytemuck.workspace = true
 thiserror.workspace = true
@@ -51,7 +50,6 @@ tokio = { workspace = true, features = ["io-util", "net", "process", "sync"] }
 
 [dev-dependencies]
 horizon-browser = { workspace = true, features = ["test-support"] }
-horizon-frame-source = { workspace = true, features = ["test-support"] }
 horizon-vnc = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
 # The session board and lease files that the tests read are still YAML.

@@ -157,7 +157,6 @@ fn two_claimed_requests_apply_in_claim_order() {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
-                frame_source: None,
                 identity: None,
                 ssh: None,
             },

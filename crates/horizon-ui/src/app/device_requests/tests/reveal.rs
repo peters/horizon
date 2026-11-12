@@ -6,7 +6,6 @@ fn revealing_a_hidden_viewer_does_not_create_keyboard_focus() {
     let create = request(
         &app,
         Operation::Create {
-            frame_source: None,
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
             ssh: None,
@@ -35,7 +34,6 @@ fn reveal_keeps_a_distant_viewer_on_screen_at_minimum_zoom() {
     let create = request(
         &app,
         Operation::Create {
-            frame_source: None,
             identity: None,
             endpoint: "127.0.0.1:5900".into(),
             ssh: None,

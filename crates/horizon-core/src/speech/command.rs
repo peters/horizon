@@ -72,28 +72,6 @@ impl CommandLine {
             .any(|argument| argument.contains(FILE_PLACEHOLDER))
     }
 
-    /// How many arguments are exactly `placeholder`, which is the count that a
-    /// line may hold at most once.
-    #[must_use]
-    pub fn whole_arguments(&self, placeholder: &str) -> usize {
-        self.arguments
-            .iter()
-            .filter(|argument| argument.as_str() == placeholder)
-            .count()
-    }
-
-    /// The arguments of one run, after the program, with every `placeholder`
-    /// replaced by `value`. One argument stays one argument, so a value with a
-    /// space or a quote in it is the whole text of that argument.
-    #[must_use]
-    pub fn arguments_with(&self, placeholder: &str, value: &str) -> Vec<OsString> {
-        self.arguments
-            .iter()
-            .skip(1)
-            .map(|argument| OsString::from(argument.replace(placeholder, value)))
-            .collect()
-    }
-
     /// The arguments of one run, after the program, with every `{file}` replaced
     /// by `file`.
     ///
@@ -102,7 +80,12 @@ impl CommandLine {
     /// again.
     #[must_use]
     pub fn arguments_for(&self, file: &Path) -> Vec<OsString> {
-        self.arguments_with(FILE_PLACEHOLDER, &file.to_string_lossy())
+        let file = file.to_string_lossy();
+        self.arguments
+            .iter()
+            .skip(1)
+            .map(|argument| OsString::from(argument.replace(FILE_PLACEHOLDER, &file)))
+            .collect()
     }
 }
 

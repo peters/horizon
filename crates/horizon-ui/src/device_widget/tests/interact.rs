@@ -39,6 +39,29 @@ fn frame(
     output
 }
 
+/// The rendered desktop: the largest texture-filled rectangle.
+fn image_rect(output: &egui::FullOutput) -> egui::Rect {
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect)
+                if rect
+                    .brush
+                    .as_ref()
+                    .is_some_and(|brush| brush.fill_texture_id != egui::TextureId::default()) =>
+            {
+                Some(rect.rect)
+            }
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                Some(shape.shape.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("desktop image")
+}
+
 fn drain(receiver: &mut SentInput) -> Vec<InputEvent> {
     receiver.drain()
 }
@@ -563,7 +586,7 @@ fn clipboard_chords_and_ime_commits_reach_the_desktop_without_the_local_clipboar
 fn the_press_and_the_release_of_one_wheel_button_are_one_notch_of_the_desktop() {
     // winit's X11 backend sends one wheel event for the press of a wheel button and
     // one for its release, with the same delta, so one notch of a wheel without
-    // scroll valuators - and of the XTEST click of the fixture - arrives twice, with
+    // scroll valuators - and the XTEST click of the fixture - arrives twice, with
     // `horizon_vnc::SCROLL_NOTCH_POINTS` per event.
     let (ctx, device, mut state, mut receiver) = viewer_with_input();
     click_label(&ctx, &mut state, &device, "Interact");

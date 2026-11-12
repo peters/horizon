@@ -116,39 +116,6 @@ fn a_connected_empty_desktop_says_so_and_a_busy_one_does_not() {
 }
 
 #[test]
-fn a_frame_source_program_that_draws_one_colour_is_no_empty_desktop() {
-    let ctx = egui::Context::default();
-    let (session, _sent) = Session::frame_fixture();
-    let mut state = DeviceUiState {
-        initialized: true,
-        status: Status::Connected,
-        session: Some(session),
-        frame_input: Some(horizon_frame_source::InputHello {
-            allowed: true,
-            reason: None,
-        }),
-        ..Default::default()
-    };
-    state.update_texture(&ctx, ColorImage::filled([64, 48], egui::Color32::BLACK));
-    let device = super::frame_input::frame_device();
-    let output = ctx
-        .run_ui(egui::RawInput::default(), |ui| state.show(ui, &device, true))
-        .discard_textures();
-    let texts: Vec<String> = output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect();
-    assert!(
-        !texts.iter().any(|text| text == EMPTY_HINT),
-        "a program shows its own picture, and the hint of a VNC desktop is no word about it: {texts:?}"
-    );
-}
-
-#[test]
 fn the_hint_stays_inside_the_part_of_the_picture_that_is_on_screen() {
     let ctx = egui::Context::default();
     let room = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(300.0, 200.0));

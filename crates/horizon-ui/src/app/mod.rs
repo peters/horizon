@@ -9,7 +9,7 @@ mod block_panels;
 mod block_requests;
 mod block_terminals;
 mod board_notice;
-pub(crate) mod bootstrap;
+mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;
 mod browser_connectors;

@@ -151,9 +151,6 @@ struct PanelBodyContext<'a> {
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
     device_ui_state: Option<&'a mut crate::device_widget::DeviceUiState>,
-    /// The frame source programs of the settings, so a viewer resolves the run of
-    /// its program again when the settings change.
-    frame_sources: &'a horizon_core::FrameSourcesConfig,
     /// The clicks and row selection of a card panel.
     card_runtime: Option<&'a mut horizon_core::CardRuntime>,
     /// The address of the link a card's person pressed in this pass.
@@ -172,21 +169,6 @@ struct PanelBodyContext<'a> {
     terminal_scrollbar_bottom_clearance: f32,
 }
 
-/// The run of the source program of one viewer, when it shows a frame source.
-fn frame_plan_of(
-    device: &horizon_core::DevicePanelState,
-    sources: &horizon_core::FrameSourcesConfig,
-) -> Option<horizon_core::FrameSourcePlan> {
-    let reference = device.target.frame_source_ref()?;
-    match sources.plan(&reference.name, reference.target.as_deref()) {
-        Ok(plan) => Some(plan),
-        Err(error) => {
-            tracing::debug!(%error, "the frame source of a viewer is not one that the settings hold");
-            None
-        }
-    }
-}
-
 fn show_panel_body_contents(
     ui: &mut egui::Ui,
     panel: &mut Panel,
@@ -199,9 +181,6 @@ fn show_panel_body_contents(
             .show(ui, body_context.editor_save_shortcut),
         PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
-                // A frame source panel resolves its program again, so a change of the
-                // settings or a restored panel finds the line that it runs.
-                state.set_frame_plan(frame_plan_of(device, body_context.frame_sources));
                 state.show(ui, device, interactive);
             }
             false
@@ -432,7 +411,6 @@ impl HorizonApp {
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
-                                    frame_sources: &self.template_config.frame_sources,
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
                                     card_agent_present,
@@ -809,7 +787,6 @@ impl HorizonApp {
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
                                     device_ui_state: device_state,
-                                    frame_sources: &self.template_config.frame_sources,
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
                                     card_agent_present,

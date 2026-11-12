@@ -559,11 +559,7 @@ mod tests {
             detail: "ssh".into(),
             keywords: vec!["prod".into(), "deploy".into()],
         }];
-        let actions = crate::command_registry::action_commands(
-            &AppShortcuts::default(),
-            "Ctrl",
-            &horizon_core::FrameSourcesConfig::default(),
-        );
+        let actions = crate::command_registry::action_commands(&AppShortcuts::default(), "Ctrl");
 
         let results = build_results(PaletteMode::ActionsOnly, "", &workspaces, &panels, &presets, &actions);
         assert!(

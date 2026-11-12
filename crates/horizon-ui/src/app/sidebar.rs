@@ -50,9 +50,6 @@ struct SidebarPanelEntry {
     /// does not show.
     label: String,
     kind: PanelKind,
-    /// This viewer shows the pictures of a program of this computer, not a VNC
-    /// desktop.
-    is_frame_source: bool,
     is_focused: bool,
     /// The one attention state of the panel: which agent waits, finished or works.
     attention: horizon_core::Attention,
@@ -195,7 +192,6 @@ impl HorizonApp {
             title,
             label,
             kind: panel.kind,
-            is_frame_source: panel.device().is_some_and(|device| device.target.is_frame_source()),
             is_focused: self.board.focused == Some(panel.id),
             attention: self.panel_attention(&panel.local_id),
         }

@@ -6,67 +6,26 @@ use horizon_vnc::{ImageLayout, InputEvent, InputState, SCROLL_NOTCH_POINTS};
 
 use super::DeviceUiState;
 use super::keys::{self, button_bit, desktop_point};
-use super::session;
 
 pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
 
-/// Interact is off for a frame source viewer whose panel takes no input.
-pub(super) const FRAME_SOURCE_VIEW_ONLY_PANEL: &str = "View only: this viewer sends no input to the program";
-
-/// Interact is off for a frame source until it says that it reads input.
-pub(super) const FRAME_SOURCE_NO_HELLO: &str = "The frame source has not said yet whether it reads input";
-
-/// Interact is off for a frame source that says it reads no input and gives no reason.
-pub(super) const FRAME_SOURCE_VIEW_ONLY: &str = "The frame source takes no input";
-
 impl DeviceUiState {
-    /// Why this viewer takes no input, when it takes none: a VNC server that
-    /// drops input, or a frame source program whose `hello` says `input` false.
-    fn no_input_reason(&self, input: DeviceInput) -> Option<String> {
-        let frame_source = self.session.as_ref().is_some_and(session::Session::is_frame_source);
-        if input == DeviceInput::ViewOnly {
-            return Some(if frame_source {
-                FRAME_SOURCE_VIEW_ONLY_PANEL.to_owned()
-            } else {
-                VIEW_ONLY_REASON.to_owned()
-            });
-        }
-        self.session.as_ref().filter(|session| session.is_frame_source())?;
-        match &self.frame_input {
-            Some(hello) if hello.allowed => None,
-            Some(hello) => Some(match &hello.reason {
-                Some(reason) => format!("The frame source takes no input: {reason}"),
-                None => FRAME_SOURCE_VIEW_ONLY.to_owned(),
-            }),
-            None => Some(FRAME_SOURCE_NO_HELLO.to_owned()),
-        }
-    }
-
     pub(super) fn interact_toggle(&mut self, ui: &mut Ui, input: DeviceInput) {
         ui.horizontal(|ui| {
-            if let Some(reason) = self.no_input_reason(input) {
-                if self.interact {
-                    self.interact = false;
-                    self.release_input();
-                }
+            if input == DeviceInput::ViewOnly {
                 ui.add_enabled_ui(false, |ui| ui.toggle_value(&mut false, "Interact"))
                     .inner
-                    .on_disabled_hover_text(&reason);
+                    .on_disabled_hover_text(VIEW_ONLY_REASON);
                 // Wrapped, so a narrow viewer does not grow to fit the reason.
-                ui.add(egui::Label::new(egui::RichText::new(&reason).weak()).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(VIEW_ONLY_REASON).weak()).wrap());
                 return;
             }
             let was = self.interact;
-            let target = if self.shows_frame_source() {
-                "the program"
-            } else {
-                "the desktop"
-            };
-            ui.toggle_value(&mut self.interact, "Interact").on_hover_text(format!(
-                "Send your mouse and keyboard to {target} while the image has focus. \
+            ui.toggle_value(&mut self.interact, "Interact").on_hover_text(
+                "Send your mouse and keyboard to the desktop while the image has focus. \
                  Click the image to start; click outside it or turn this off to stop. \
-                 Off by default, and never turned on by agents."
-            ));
+                 Off by default, and never turned on by agents.",
+            );
             if was && !self.interact {
                 self.release_input();
             }
@@ -86,17 +45,10 @@ impl DeviceUiState {
         self.controls.options.for_desktop(desktop).layout(desktop).ok()
     }
 
-    /// Forward the input of this frame to the source of the viewer: a VNC desktop
-    /// or a frame source program.
     pub(super) fn forward_input(&mut self, ui: &Ui, response: &egui::Response) {
         let Some(layout) = self.image_layout() else {
             return;
         };
-        let frame_source = self.session.as_ref().is_some_and(session::Session::is_frame_source);
-        if frame_source {
-            self.forward_frame_input(ui, response, &layout);
-            return;
-        }
         let press = ui.input(|input| {
             input
                 .pointer
@@ -301,16 +253,6 @@ impl DeviceUiState {
         let events = self.input.release_all();
         self.captured = false;
         self.pointer_global = None;
-        if self.session.as_ref().is_some_and(session::Session::is_frame_source) {
-            self.frame_wheel.clear();
-            let events = self.frame_state.release_all();
-            if !events.is_empty()
-                && let Some(session) = &self.session
-            {
-                session.send_frame_input(events);
-            }
-            return;
-        }
         if let Some(session) = &self.session
             && !events.is_empty()
         {
@@ -336,7 +278,7 @@ fn publish_ime_output(ui: &Ui, image: egui::Rect) {
 
 /// One wheel event's travel in points, from raw events rather than egui's
 /// smoothed delta, which hands out only a fraction of it per repaint.
-pub(super) fn wheel_points(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> [f32; 2] {
+fn wheel_points(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> [f32; 2] {
     let points = match unit {
         egui::MouseWheelUnit::Point => delta,
         egui::MouseWheelUnit::Line => delta * SCROLL_NOTCH_POINTS,

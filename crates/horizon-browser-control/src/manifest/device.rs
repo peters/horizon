@@ -22,14 +22,8 @@ pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
         /// Numeric loopback address and nonzero port of the VNC server, as seen
-        /// from this machine or, with `ssh`, from that SSH host. Give this, or give
-        /// `frame_source`, and not both.
-        #[serde(default)]
+        /// from this machine or, with `ssh`, from that SSH host.
         endpoint: String,
-        /// A frame source program of this computer, by the name that the person
-        /// gave it in the settings. An agent passes no command and no argument.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        frame_source: Option<FrameSourceRequest>,
         /// Optional labels supplied by the session creator, not verified by VNC.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         identity: Option<DeviceIdentity>,
@@ -74,19 +68,6 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
-}
-
-/// The frame source program that one viewer shows.
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct FrameSourceRequest {
-    /// The name of one source of the section `frame_sources` of the settings of this
-    /// computer.
-    pub name: String,
-    /// The text that replaces `{target}` in the line of the settings, when the source
-    /// holds that placeholder.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
@@ -389,12 +370,6 @@ pub struct DeviceServerDetails {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PanelState {
     pub panel_id: String,
-    /// Which kind of source this viewer shows: a VNC desktop of another program, or
-    /// a frame source program of this computer. A viewer of an older host shows a
-    /// VNC desktop and sends no kind.
-    #[serde(default)]
-    pub kind: ViewerKind,
-    /// The address of the VNC desktop, or the name of the frame source program.
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<DeviceIdentity>,
@@ -414,25 +389,8 @@ pub struct PanelState {
     /// Absent on older hosts; lack of diagnostics is not proof of a stalled stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Diagnostics>,
-    /// The counters of the last `stats` message of a frame source program, and the
-    /// age of its newest picture. Absent for a VNC desktop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frames_dropped: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub age_ms: Option<u64>,
     #[serde(flatten)]
     pub image: ImageEvidence,
-}
-
-/// The kind of source that one native Device viewer shows.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ViewerKind {
-    /// A VNC desktop, on this machine or reached through an SSH tunnel.
-    #[default]
-    Vnc,
-    /// A frame source program of this computer, named in the settings.
-    FrameSource,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -963,31 +921,6 @@ mod tests {
         .unwrap();
         assert!(diagnostics.last_uploaded_age_millis.is_none());
         assert!(diagnostics.host.is_none());
-    }
-
-    #[test]
-    fn a_viewer_of_an_answer_is_the_first_member_of_panels() {
-        // The scripted client of the device smoke fixture
-        // (scripts/device-smoke/frame_source_agent.py) reads the viewer of a create,
-        // inspect or visibility answer at `panels[0]`, and its self test sends this
-        // shape. A change of this shape without that client breaks every word of
-        // the procedure after `create`.
-        let viewer = r#"{"panel_id":"d1","endpoint":"standin","visible":true,"owned_by_caller":true,"connection":"connecting","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
-        let answer = serde_json::to_value(Outcome::Panels {
-            panels: vec![serde_json::from_str(viewer).unwrap()],
-        })
-        .unwrap();
-        assert_eq!(answer["status"], "panels");
-        assert_eq!(answer["panels"][0]["panel_id"], "d1");
-        assert_eq!(answer["panels"][0]["connection"], "connecting");
-        assert!(
-            answer.get("panel_id").is_none(),
-            "the id of the viewer is inside panels, not a member of the answer: {answer}"
-        );
-
-        let closed = serde_json::to_value(Outcome::Closed { panel_id: "d1".into() }).unwrap();
-        assert_eq!(closed["status"], "closed");
-        assert_eq!(closed["panel_id"], "d1");
     }
 
     #[test]

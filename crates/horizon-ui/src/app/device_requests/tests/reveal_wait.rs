@@ -14,7 +14,6 @@ fn off_canvas_viewer() -> (tempfile::TempDir, Context, HorizonApp, PanelId, Stri
         &app,
         Operation::Create {
             endpoint: "127.0.0.1:5900".into(),
-            frame_source: None,
             identity: None,
             ssh: None,
         },
@@ -235,7 +234,6 @@ fn a_superseded_reveal_answers_without_waiting() {
         &app,
         Operation::Create {
             endpoint: "127.0.0.1:5900".into(),
-            frame_source: None,
             identity: None,
             ssh: None,
         },

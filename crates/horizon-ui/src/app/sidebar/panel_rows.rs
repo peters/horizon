@@ -84,7 +84,7 @@ pub(super) fn paint_panel_row(
         painter.rect_filled(highlight, 8, theme::alpha(theme::PANEL_BG_ALT(), 170));
     }
 
-    let (icon, icon_color) = panel_kind_icon(panel.kind, panel.is_frame_source, workspace.color, true);
+    let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, true);
     let icon = text::mono(ui, icon, 9.5, icon_color);
     let title_left = left + icon.size().x.max(18.0) + 6.0;
     painter.galley(pos2(left, center_y - icon.size().y / 2.0), icon, icon_color);

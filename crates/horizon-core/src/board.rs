@@ -5,8 +5,6 @@ mod geometry;
 mod shutdown;
 mod workspaces;
 
-pub use workspaces::FRAME_SOURCE_PANEL_SIZE;
-
 pub use arrangement::WorkspaceAlignment;
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};

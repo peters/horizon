@@ -14,7 +14,6 @@ use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
 mod browser_host;
-mod frame_sources;
 mod presets;
 mod remote_hosts;
 mod secrets;
@@ -22,10 +21,6 @@ mod server;
 mod speech;
 
 pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
-pub use frame_sources::{
-    FrameSource, FrameSourceError, FrameSourcePlan, FrameSourcesConfig, MAX_NAME_CHARS, MAX_SOURCES, MAX_TARGET_CHARS,
-    TARGET_PLACEHOLDER, frame_source_name, frame_source_target,
-};
 use presets::default_presets;
 pub use presets::{PresetConfig, preset_named};
 pub(crate) use presets::{
@@ -67,9 +62,6 @@ pub struct Config {
     pub secrets: SecretsConfig,
     #[serde(default)]
     pub speech: SpeechConfig,
-    /// The programs that a native Device panel can show pictures of.
-    #[serde(default)]
-    pub frame_sources: FrameSourcesConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -98,7 +90,6 @@ impl Default for Config {
             server: ServerConfig::default(),
             secrets: SecretsConfig::default(),
             speech: SpeechConfig::default(),
-            frame_sources: FrameSourcesConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -575,7 +566,6 @@ impl Config {
         self.browser_host.validate()?;
         self.server.validate()?;
         self.secrets.validate().map_err(Error::Config)?;
-        self.frame_sources.validate().map_err(Error::Config)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;
         Ok(())
     }

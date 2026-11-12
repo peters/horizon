@@ -43,14 +43,7 @@ impl NativeLabels {
     }
 }
 
-pub(super) fn show(
-    ui: &mut Ui,
-    device: &DevicePanelState,
-    server: &DeviceServerDetails,
-    connected: bool,
-    stream: Option<horizon_frame_source::Stats>,
-    input_error: Option<&str>,
-) {
+pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
     ui.collapsing("Connection details", |ui| {
         let height = (ui.available_height() * 0.6).clamp(96.0, 300.0);
         egui::ScrollArea::vertical()
@@ -67,7 +60,7 @@ pub(super) fn show(
                         if device.identity.is_some() && ui.available_width() >= 620.0 {
                             ui.columns(2, |columns| {
                                 machine(&mut columns[0], device);
-                                connection(&mut columns[1], device, server, connected, stream, input_error);
+                                connection(&mut columns[1], device, server, connected);
                             });
                         } else {
                             if device.identity.is_some() {
@@ -76,7 +69,7 @@ pub(super) fn show(
                                 ui.separator();
                                 ui.add_space(8.0);
                             }
-                            connection(ui, device, server, connected, stream, input_error);
+                            connection(ui, device, server, connected);
                         }
                     });
             });
@@ -92,45 +85,6 @@ fn section(ui: &mut Ui, title: &str) {
 fn caption(ui: &mut Ui, text: &str) {
     ui.add(Label::new(RichText::new(text).size(12.0).color(theme::FG_SOFT())).wrap());
     ui.add_space(6.0);
-}
-
-/// The address of the VNC desktop of this viewer, for the row of its connection.
-/// The kind of source that one viewer shows, for the header of the panel.
-fn transport_label(device: &DevicePanelState) -> &'static str {
-    if device.target.is_frame_source() {
-        "Frame source program"
-    } else if device.ssh_tunnel.is_some() {
-        "VNC desktop over SSH"
-    } else {
-        "VNC desktop"
-    }
-}
-
-/// The word for the name or the text that the source reported: a VNC server names
-/// its desktop, and a frame source program names itself.
-fn reported_name_label(frame_source: bool) -> &'static str {
-    if frame_source { "Source name" } else { "VNC name" }
-}
-
-/// The mode of the input of this viewer: a person's mouse and keyboard go to the
-/// program of a frame source viewer, and to the desktop of a VNC viewer.
-fn mode_line(frame_source: bool, interact: bool) -> &'static str {
-    if !interact {
-        return "Read-only";
-    }
-    if frame_source {
-        "Interactive: your mouse and keyboard go to the program"
-    } else {
-        "Interactive: your mouse and keyboard go to the desktop"
-    }
-}
-
-fn endpoint_address(device: &DevicePanelState) -> String {
-    device
-        .target
-        .vnc_address()
-        .map(|address| address.to_string())
-        .unwrap_or_default()
 }
 
 fn machine(ui: &mut Ui, device: &DevicePanelState) {
@@ -153,40 +107,17 @@ fn machine(ui: &mut Ui, device: &DevicePanelState) {
     }
 }
 
-fn connection(
-    ui: &mut Ui,
-    device: &DevicePanelState,
-    server: &DeviceServerDetails,
-    connected: bool,
-    stream: Option<horizon_frame_source::Stats>,
-    input_error: Option<&str>,
-) {
+fn connection(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
     section(ui, "Connection");
-    // A frame source viewer names the program of the settings and not an address,
-    // and it has no tunnel.
-    if let Some(reference) = device.target.frame_source_ref() {
-        row(ui, "Frame source", &reference.name);
-        if let Some(target) = &reference.target {
-            row(ui, "Target", target);
-        }
-    } else {
-        match &device.ssh_tunnel {
-            Some(tunnel) => {
-                row(ui, "SSH host", &tunnel.display_label());
-                if let Some(port) = tunnel.port {
-                    row(ui, "SSH port", &port.to_string());
-                }
-                row(ui, "Remote endpoint", &endpoint_address(device));
+    match &device.ssh_tunnel {
+        Some(tunnel) => {
+            row(ui, "SSH host", &tunnel.display_label());
+            if let Some(port) = tunnel.port {
+                row(ui, "SSH port", &port.to_string());
             }
-            None => row(ui, "Local endpoint", &endpoint_address(device)),
+            row(ui, "Remote endpoint", &device.target.address().to_string());
         }
-    }
-    if let Some(stream) = stream {
-        row(ui, "Dropped pictures", &stream.frames_dropped.to_string());
-        row(ui, "Age of the newest picture", &format!("{} ms", stream.age_ms));
-    }
-    if let Some(error) = input_error {
-        row(ui, "Last input refusal", error);
+        None => row(ui, "Local endpoint", &device.target.address().to_string()),
     }
     if server.name.is_some() || server.desktop_size.is_some() {
         ui.add_space(6.0);
@@ -199,7 +130,7 @@ fn connection(
             },
         );
         if let Some(name) = &server.name {
-            row(ui, reported_name_label(device.target.is_frame_source()), name);
+            row(ui, "VNC name", name);
         }
         if let Some([width, height]) = server.desktop_size {
             row(ui, "Resolution", &format!("{width} × {height}"));
@@ -253,14 +184,13 @@ pub(super) fn header(
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(8.0);
         let endpoint = device.endpoint_label();
-        let frame_source = device.target.is_frame_source();
-        let transport = transport_label(device);
-        // A frame source viewer is named by its program in the settings, and the
-        // text that the program gives itself is a row of the connection details.
+        let transport = if device.ssh_tunnel.is_some() {
+            "VNC desktop over SSH"
+        } else {
+            "VNC desktop"
+        };
         let name = if server.native_session.is_some() {
             Some(native_labels.device.as_str())
-        } else if frame_source {
-            device.display_name(None)
         } else {
             device.display_name(server.name.as_deref())
         };
@@ -309,7 +239,11 @@ pub(super) fn header(
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             connection_status(ui, status);
-            let mode = mode_line(frame_source, interact);
+            let mode = if interact {
+                "Interactive: your mouse and keyboard go to the desktop"
+            } else {
+                "Read-only"
+            };
             ui.label(RichText::new(mode).size(12.0).color(theme::FG_SOFT()));
             if name.is_some() {
                 let source = if server.native_session.is_some() {
@@ -374,33 +308,6 @@ fn desktop_icon(ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn frame_source_device() -> DevicePanelState {
-        DevicePanelState {
-            target: horizon_core::DeviceViewTarget::frame_source(horizon_core::FrameSourceRef {
-                name: "standin".into(),
-                target: None,
-            }),
-            input: horizon_core::DeviceInput::Accepted,
-            identity: None,
-            connect_on_start: false,
-            ssh_tunnel: None,
-        }
-    }
-
-    #[test]
-    fn a_frame_source_is_named_as_a_program_and_not_as_a_vnc_desktop() {
-        assert_eq!(transport_label(&frame_source_device()), "Frame source program");
-        assert_eq!(
-            transport_label(&DevicePanelState {
-                target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
-                ..frame_source_device()
-            }),
-            "VNC desktop"
-        );
-        assert_eq!(reported_name_label(true), "Source name");
-        assert_eq!(reported_name_label(false), "VNC name");
-    }
     #[test]
     fn repeated_recipe_ids_show_active_step_then_latest_result() {
         let mut native = super::super::tests::native_metadata();

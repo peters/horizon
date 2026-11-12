@@ -11,7 +11,6 @@ members = [
     "crates/horizon-browser-protocol",
     "crates/horizon-browser-routines",
     "crates/horizon-core",
-    "crates/horizon-frame-source",
     "crates/horizon-cursor",
     "crates/horizon-sync",
     "crates/horizon-terminal",
@@ -57,8 +56,6 @@ horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 horizon-browser-protocol = { path = "crates/horizon-browser-protocol", version = "0.2.7" }
 horizon-browser-routines = { path = "crates/horizon-browser-routines", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
-# A live picture session of a frame source program, usable by any UI.
-horizon-frame-source = { path = "crates/horizon-frame-source", version = "0.2.7" }
 # The store and the link protocol of one Horizon server, usable by a UI or a server.
 horizon-sync = { path = "crates/horizon-sync", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }

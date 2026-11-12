@@ -2,9 +2,6 @@ mod bar;
 mod browser;
 #[cfg(test)]
 mod footer_tests;
-#[cfg(test)]
-mod frame_source_tests;
-mod frame_sources;
 mod general;
 #[cfg(test)]
 mod panel_test_support;
@@ -131,9 +128,6 @@ pub(super) struct SettingsEditor {
     portable_profile: remote_browsers::PortableProfilePanel,
     provider_usage: remote_usage::UsagePanels,
     secret_inputs: secrets::SecretInputs,
-    /// The target a person typed for a frame source program, and the program that
-    /// the person asked to open.
-    pub(super) frame_sources: frame_sources::State,
     pub(in crate::app) server: server::ServerTabState,
 }
 
@@ -195,7 +189,6 @@ impl HorizonApp {
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
                 provider_usage: remote_usage::UsagePanels::default(),
                 secret_inputs: secrets::SecretInputs::default(),
-                frame_sources: frame_sources::State::default(),
                 server,
             });
         }
@@ -265,7 +258,6 @@ impl HorizonApp {
         // A press in the bar is applied after the panel drew it, and so is a press
         // of the Server tab, which asks the server one question.
         self.apply_settings_action(action);
-        self.open_requested_frame_source(ui.ctx());
         if let Some(asked) = self.settings.as_mut().and_then(|editor| editor.server.action.take()) {
             self.apply_server_action(asked, ui.ctx().clone());
         }
@@ -538,11 +530,8 @@ impl HorizonApp {
         }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
-        self.action_commands_cache = crate::command_registry::action_commands(
-            &self.shortcuts,
-            util::primary_shortcut_label(),
-            &config.frame_sources,
-        );
+        self.action_commands_cache =
+            crate::command_registry::action_commands(&self.shortcuts, util::primary_shortcut_label());
         self.presets = config.ssh_presets(self.ssh_hosts.hosts());
         if self.appearance_theme != config.appearance.theme {
             self.appearance_theme = config.appearance.theme;
@@ -675,7 +664,6 @@ fn render_tab(
         portable_profile,
         provider_usage,
         secret_inputs,
-        frame_sources: source_state,
         server,
         active_tab,
         ..
@@ -697,7 +685,6 @@ fn render_tab(
                 SettingsTab::Browser => (browser::render(ui, config), false),
                 SettingsTab::RemoteBrowsers => {
                     remote_recovery::render(ui, allocations);
-                    let sources = frame_sources::render(ui, config, source_state);
                     (
                         remote_browsers::render(
                             ui,
@@ -709,7 +696,7 @@ fn render_tab(
                             keyring,
                             named_secrets,
                         ),
-                        sources.changed,
+                        false,
                     )
                 }
                 SettingsTab::Secrets => (secrets::render(ui, config, named_secrets, secret_inputs), false),

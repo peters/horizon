@@ -4,7 +4,7 @@ use horizon_core::browser::manifest::{
     self,
     device::{
         Connection, ConnectionFailure, ConnectionFailureCode, Diagnostics, ImageEvidence, ObservedSshHostKey,
-        PanelState, Presentation, SshHostKeyFailure, SshRoute, ViewerKind,
+        PanelState, Presentation, SshHostKeyFailure, SshRoute,
     },
 };
 use horizon_vnc::{HostKeyFailure, HostKeyRefusal};
@@ -63,12 +63,7 @@ impl DeviceUiState {
         };
         PanelState {
             panel_id,
-            kind: if device.target.is_frame_source() {
-                ViewerKind::FrameSource
-            } else {
-                ViewerKind::Vnc
-            },
-            endpoint: endpoint_of(device),
+            endpoint: device.target.address().to_string(),
             identity: device.identity.clone(),
             ssh: device.ssh_tunnel.as_ref().map(|connection| SshRoute {
                 host: connection.host.clone(),
@@ -95,25 +90,10 @@ impl DeviceUiState {
                 last_displayed_age_millis: age(self.image.last_displayed),
                 host: self.host.observation(),
             }),
-            frames_dropped: self.stats.map(|stats| stats.frames_dropped),
-            age_ms: self.stats.map(|stats| stats.age_ms),
             connection,
             connection_error,
             connection_failure: failure,
         }
-    }
-}
-
-/// The endpoint of a viewer: the address of the VNC desktop, or the name of the
-/// frame source program that the settings hold.
-fn endpoint_of(device: &DevicePanelState) -> String {
-    match device.target.frame_source_ref() {
-        Some(reference) => reference.name.clone(),
-        None => device
-            .target
-            .vnc_address()
-            .map(|address| address.to_string())
-            .unwrap_or_default(),
     }
 }
 

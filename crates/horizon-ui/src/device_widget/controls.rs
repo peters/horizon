@@ -14,15 +14,7 @@ impl Controls {
         self.error = Some(error);
     }
 
-    /// `frame_source` names the whole of what the viewer shows: a frame source
-    /// program sends a picture, and a VNC viewer shows a desktop.
-    pub(super) fn show(
-        &mut self,
-        ui: &mut Ui,
-        desktop: Option<[usize; 2]>,
-        rendered: Option<[usize; 2]>,
-        frame_source: bool,
-    ) -> bool {
+    pub(super) fn show(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
         let before = self.options;
         if let Some(desktop) = desktop {
             self.options = self.options.for_desktop(desktop);
@@ -51,8 +43,7 @@ impl Controls {
                 ui.selectable_value(&mut self.one_to_one, false, "Fit");
                 ui.selectable_value(&mut self.one_to_one, true, "1:1")
                     .on_hover_text("One rendered image pixel per UI point; image limits still apply.");
-                let whole = if frame_source { "Whole picture" } else { "Whole desktop" };
-                if (desktop.is_some() || self.options.viewport.is_some()) && ui.button(whole).clicked() {
+                if (desktop.is_some() || self.options.viewport.is_some()) && ui.button("Whole desktop").clicked() {
                     self.options.viewport = None;
                     self.draft = None;
                     self.error = None;
@@ -110,11 +101,7 @@ impl Controls {
             if let Some(error) = &self.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            ui.weak(if frame_source {
-                "Image limits affect rendering only."
-            } else {
-                "Image limits affect rendering; they do not change desktop resolution or VNC compression."
-            });
+            ui.weak("Image limits affect rendering; they do not change desktop resolution or VNC compression.");
         });
         before != self.options
     }
@@ -144,7 +131,7 @@ mod tests {
         let context = egui::Context::default();
         let _ = context
             .run_ui(egui::RawInput::default(), |ui| {
-                assert!(controls.show(ui, Some([1280, 720]), None, false));
+                assert!(controls.show(ui, Some([1280, 720]), None));
             })
             .discard_textures();
         assert!(controls.options.viewport.is_none());
@@ -177,7 +164,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        changed = controls.show(ui, None, None, false);
+                        changed = controls.show(ui, None, None);
                     },
                 )
                 .discard_textures();

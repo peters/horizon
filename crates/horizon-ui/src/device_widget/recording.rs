@@ -112,7 +112,7 @@ impl Recording {
     }
 
     fn status(&self) -> Result<VideoRecording, String> {
-        let worker = self.worker.as_ref().ok_or("No recording has been started")?;
+        let worker = self.worker.as_ref().ok_or("No VNC recording has been started")?;
         let capture = worker.handle.snapshot().ok_or("No recording progress is available")?;
         let running = worker.thread.as_ref().is_some_and(|thread| !thread.is_finished());
         Ok(VideoRecording {
@@ -130,11 +130,11 @@ impl Recording {
                 .as_ref()
                 .is_some_and(|worker| worker.thread.as_ref().is_some_and(|thread| !thread.is_finished()))
         {
-            return Err("A recording is already active or finalizing".into());
+            return Err("A VNC recording is already active or finalizing".into());
         }
         let frames = Arc::new(FrameSlot::new());
         if !publish(&frames, first) {
-            return Err("The picture dimensions exceed the recording limit".into());
+            return Err("The desktop dimensions exceed the recording limit".into());
         }
         self.error = None;
         self.start = Some(PendingVideoStart {
@@ -299,7 +299,6 @@ impl DeviceUiState {
 
     pub(super) fn recording_controls(&mut self, ui: &mut egui::Ui, interactive: bool) {
         let status = self.recording.status().ok();
-        let frame_source = self.shows_frame_source();
         if let Some(status) = &status
             && (status.capture.active || status.finalizing)
         {
@@ -316,8 +315,6 @@ impl DeviceUiState {
             }
             ui.label(if status.finalizing {
                 "Finishing recording…"
-            } else if frame_source {
-                "Recording the program"
             } else {
                 "Recording VNC desktop"
             });
@@ -327,11 +324,7 @@ impl DeviceUiState {
             if crate::icon_button::icon_button(ui, can_record, "Record video", |painter, rect, _color| {
                 crate::icon_button::paint_record(painter, rect, can_record);
             })
-            .on_hover_text(if frame_source {
-                "Record the full picture, including when hidden. Maximum five minutes or 256 MiB. No audio."
-            } else {
-                "Record the full desktop, including when hidden. Maximum five minutes or 256 MiB. No audio."
-            })
+            .on_hover_text("Record the full desktop, including when hidden. Maximum five minutes or 256 MiB. No audio.")
             .clicked()
             {
                 self.recording.error = self.start_recording().err();

@@ -2,46 +2,6 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
-
-/// The chrome above the picture of a frame source viewer, in the body of its panel:
-/// the row of the screenshot and recording controls, the header with the name, the
-/// mode line and the reconnect control, the image controls and the Interact toggle,
-/// with the separators and the spacing between them. The style of the window sets
-/// them, and the widget test that draws a viewer measures this height.
-/// [`FRAME_SOURCE_PANEL_SIZE`] adds it to the picture, so the picture of a new
-/// viewer gets the full width of its body.
-pub const FRAME_SOURCE_VIEWER_CHROME_HEIGHT: f32 = 252.0;
-
-/// The height of the 16:9 picture of a program in a body of 544 points: the width
-/// of a default panel less its padding on both sides.
-pub const FRAME_SOURCE_PICTURE_HEIGHT: f32 = 306.0;
-
-/// The titlebar and the padding on both sides of a panel, around its body.
-const PANEL_FRAME_HEIGHT: f32 = 34.0 + 2.0 * 8.0;
-
-/// The room above the picture and the panel that keeps the width of the picture
-/// when a font or a padding of the window grows by a point or two.
-const FRAME_SOURCE_PANEL_HEADROOM: f32 = 8.0;
-
-/// The default size of a frame source viewer, so the 16:9 picture of the first
-/// `stream` message of its program gets the full width of the body of its panel,
-/// and the height of the body does not bind it.
-pub const FRAME_SOURCE_PANEL_SIZE: [f32; 2] = [
-    560.0,
-    FRAME_SOURCE_PICTURE_HEIGHT + FRAME_SOURCE_VIEWER_CHROME_HEIGHT + PANEL_FRAME_HEIGHT + FRAME_SOURCE_PANEL_HEADROOM,
-];
-
-/// The size of a new panel of this workspace, when the caller names none: the
-/// picture of a frame source viewer gets the room of its first `stream` message.
-fn new_panel_size(options: &PanelOptions) -> [f32; 2] {
-    options.size.unwrap_or_else(|| {
-        if options.frame_source.is_some() {
-            FRAME_SOURCE_PANEL_SIZE
-        } else {
-            DEFAULT_PANEL_SIZE
-        }
-    })
-}
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
@@ -254,7 +214,7 @@ impl Board {
             opts.cwd.clone_from(&ws.cwd);
         }
 
-        let layout_size = new_panel_size(&opts);
+        let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
         let layout_position = opts.position.unwrap_or_else(|| {
             let beside = beside
                 .filter(|id| self.panel(*id).is_some_and(|panel| panel.workspace_id == workspace))

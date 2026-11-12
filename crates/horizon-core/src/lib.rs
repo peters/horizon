@@ -59,19 +59,18 @@ pub use block_panel::{
     WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
 };
 pub use board::{
-    Board, EditorSave, FRAME_SOURCE_PANEL_SIZE, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress,
-    WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
+    Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
+    WorkspaceDockSide, WorkspaceLayout,
 };
 pub use bounded_program::ProgramEnvironment;
 pub use config::{
     AppearanceConfig, AppearanceTheme, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, DEFAULT_SPEECH_ENDPOINT,
-    DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig, FrameSource,
-    FrameSourceError, FrameSourcePlan, FrameSourcesConfig, MAX_LANGUAGE_CHARS, MAX_NAME_CHARS, MAX_SOURCES,
-    MAX_TARGET_CHARS, OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig,
-    TARGET_PLACEHOLDER, TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig,
-    browser_host, browser_mcp_args, configure_browser_host, configure_server, language_hint, preset_named, server,
+    DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig, MAX_LANGUAGE_CHARS,
+    OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig, TerminalConfig,
+    TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args,
+    configure_browser_host, configure_server, language_hint, preset_named, server,
 };
-pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget, FrameSourceRef};
+pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};

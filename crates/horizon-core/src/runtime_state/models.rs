@@ -290,11 +290,6 @@ impl PanelState {
             // Not saved: a restored device panel has no viewer yet, and the
             // input is set again when the viewer attaches.
             device_input: crate::DeviceInput::default(),
-            // A frame source viewer saves the name of its source in its command, so
-            // a restored panel finds the program of the settings again.
-            frame_source: (self.kind == PanelKind::Device)
-                .then(|| crate::FrameSourceRef::parse(self.command.as_deref().unwrap_or_default()))
-                .flatten(),
             name: if self.name.is_empty() {
                 None
             } else {

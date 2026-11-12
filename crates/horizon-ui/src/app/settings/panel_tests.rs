@@ -79,7 +79,6 @@ fn every_tab_draws_on_one_line_at_the_default_panel_width() {
         portable_profile: super::remote_browsers::PortableProfilePanel::new(std::path::Path::new("/s.json")),
         provider_usage: super::remote_usage::UsagePanels::default(),
         secret_inputs: super::secrets::SecretInputs::default(),
-        frame_sources: super::frame_sources::State::default(),
         server: super::server::ServerTabState::default(),
     };
     let mut measured = (0.0_f32, 0.0_f32);
@@ -757,13 +756,6 @@ fn the_panel_holds_the_longest_values_of_every_tab() {
         texts_of("Server")
     );
     assert!(
-        texts_of("Remote")
-            .iter()
-            .any(|text| text.contains("a-frame-source-of-a-long-name")),
-        "the Remote tab draws the names of the frame source programs: {:?}",
-        texts_of("Remote")
-    );
-    assert!(
         texts_of("Remote").iter().any(|text| text.starts_with("Imported ")),
         "the Remote tab draws the line of its last import: {:?}",
         texts_of("Remote")
@@ -938,12 +930,6 @@ fn seed_long_values(app: &mut crate::app::HorizonApp) {
         .expect("the three names of the recipe");
     app.keyring_import
         .adopt_offer(horizon_core::remote_browser_credential::TailnetOffer::of(vec![line]));
-    // One frame source program of a name and a command line of the length that the
-    // Remote tab draws.
-    editor.config.frame_sources.sources.push(horizon_core::FrameSource {
-        name: "a-frame-source-of-a-long-name".to_owned(),
-        command: format!("{} --size 1920x1080", "a-frame-source-program ".repeat(8)),
-    });
     // One refused value in every card that shows the line of its rule.
     editor.config.remote_hosts.vnc_port = 0;
     editor.config.browser.quality = 0;
