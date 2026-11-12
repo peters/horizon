@@ -359,7 +359,8 @@ const SUPERVISOR_WAIT: Duration = Duration::from_secs(2);
 /// microphone of the person open with no window that shows it. The group of the
 /// watcher takes the read end on file descriptor 3, because a non-interactive shell
 /// gives the standard input of an asynchronous list `/dev/null`, and the program gets
-/// neither descriptor.
+/// neither descriptor. The one second of the watcher is a `sleep` of the environment
+/// that `environment` builds, so that environment holds a program of that name.
 const SUPERVISOR: &str = "\
 exec 3<&0
 \"$@\" </dev/null >/dev/null 3<&- &
