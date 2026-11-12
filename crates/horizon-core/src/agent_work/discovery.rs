@@ -6,7 +6,29 @@ use std::path::{Path, PathBuf};
 pub(super) enum Presence {
     Absent,
     Stale,
+    /// A process that the identity read of this system named as this session.
+    /// Only Linux names a live id without starting a program.
+    #[cfg(target_os = "linux")]
     Live,
+}
+
+impl Presence {
+    /// Whether an identity read of this system named a live process as this
+    /// session, so no prompt may be dispatched to a second attach.
+    ///
+    /// Only the read of Linux answers it. Another Unix reports a live id as an
+    /// uncertain identity, which its caller refuses before this question.
+    #[must_use]
+    pub(super) fn names_the_session(self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self == Self::Live
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
 }
 
 pub(super) fn session_presence(home: &Path, session: &str) -> io::Result<Presence> {
@@ -70,10 +92,14 @@ pub(super) fn session_presence(home: &Path, session: &str) -> io::Result<Presenc
             }
             return Ok(Presence::Live);
         }
-        // This system keeps no `/proc` entry, so the id is the whole answer:
-        // the registry entry names a process that lives.
+        // This system keeps no `/proc` entry. An id says that some process
+        // exists, and the system gives an id again after its process ends, so
+        // the id alone cannot prove that this session is the one that lives.
+        // The command line would tell, but reading it needs a program that
+        // this read does not start. The entry is uncertain, and the caller
+        // asks the person instead of dropping the offer.
         #[cfg(not(target_os = "linux"))]
-        return Ok(Presence::Live);
+        return Err(io::Error::other("live process session identity is uncertain"));
     }
     Ok(result)
 }
@@ -171,10 +197,9 @@ mod tests {
             format!(r#"{{"sessionId":"session","pid":{}}}"#, std::process::id()),
         )
         .expect("entry");
-        #[cfg(target_os = "linux")]
+        // An id of a process that this session never started is not a live
+        // session, on Linux or on a Mac.
         assert!(session_presence(temp.path(), "session").is_err());
-        #[cfg(not(target_os = "linux"))]
-        assert_eq!(session_presence(temp.path(), "session").expect("live"), Presence::Live);
         std::fs::remove_file(dir.join("live.json")).expect("remove");
         std::fs::write(dir.join("bad.json"), "broken").expect("entry");
         assert!(session_presence(temp.path(), "session").is_err());

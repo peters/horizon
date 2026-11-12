@@ -84,10 +84,12 @@ function, update this document in the same PR.
 6. Horizon continues the work of a Claude panel after a restart when the panel
    allows it and the evidence proves a clean suspension
    (`crates/horizon-core/src/agent_work/lifecycle.rs:67-76`). The rule is the
-   same on both systems. The handoff and continuation tests run on both, and the
-   process checks that they need answer on both: signal 0 names a process that
-   exists and `ps` or `/proc` names its start time. No run has used a real Mac
-   yet, so the live lane of that path is "Not tested" there.
+   same on both systems. The handoff and continuation tests pass on Linux and on
+   a real Mac, and the process checks that they need answer on both: signal 0
+   names a process that exists, and `/proc` or `ps` names its start time. A Mac
+   cannot read the command line of a live process without a program, so an entry
+   that names a live process asks the person for a decision. No run has watched
+   the live lane of that path on a Mac yet, so that lane is "Not tested" there.
 7. The two-finger pinch turns the canvas only on Linux Wayland, through the
    `libwayland` bridge of this workspace (`crates/horizon-wayland/src/lib.rs`).
    Linux X11 has no pinch, and macOS has none: its toolkit sends no magnify

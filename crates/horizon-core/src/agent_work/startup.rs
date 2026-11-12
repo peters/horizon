@@ -182,7 +182,7 @@ fn inspect_at(
     store: &WorkStore,
 ) -> Option<(RestartDecision, Option<String>)> {
     let live = super::discovery::session_presence(home, session).ok();
-    if live == Some(super::discovery::Presence::Live) {
+    if live.is_some_and(super::discovery::Presence::names_the_session) {
         return Some((RestartDecision::NotResumable, None));
     }
     let cwd = launch
@@ -253,7 +253,12 @@ fn inspect_at(
         let record = record.as_ref()?;
         // Re-read the live registry after repository inspection and claim the
         // exact persisted turn before any provider can submit its seeded prompt.
-        if super::discovery::session_presence(home, session).ok()? == super::discovery::Presence::Live {
+        // A live entry, or an identity that this system cannot read, refuses
+        // the seed.
+        if super::discovery::session_presence(home, session)
+            .ok()?
+            .names_the_session()
+        {
             return Some((RestartDecision::NotResumable, None));
         }
         if !store.claim_handoff(record).ok()? {
