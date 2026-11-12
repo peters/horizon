@@ -761,9 +761,10 @@ fn hostname() -> String {
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            fs::read_to_string("/etc/hostname")
-                .ok()
-                .map(|value| value.trim().to_string())
+            // The system call answers on every Unix. macOS keeps no
+            // `/etc/hostname`, so a file read gave every Mac `localhost`.
+            let name = rustix::system::uname().nodename().to_string_lossy().trim().to_string();
+            (!name.is_empty()).then_some(name)
         })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "localhost".to_string())

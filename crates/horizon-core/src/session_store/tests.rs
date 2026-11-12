@@ -607,3 +607,10 @@ fn the_worker_of_a_store_that_the_window_let_go_ends_and_closes_its_files() {
         "the worker ends because the last store went away, not because its idle wait ran out"
     );
 }
+
+#[test]
+fn the_recorded_host_name_is_the_name_of_this_computer() {
+    let name = super::hostname();
+    assert!(!name.is_empty(), "a lease names a computer");
+    assert_ne!(name, "localhost", "the fallback is not the answer of a Mac");
+}
