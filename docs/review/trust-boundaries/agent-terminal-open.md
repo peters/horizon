@@ -1,11 +1,14 @@
 ---
-applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/secret/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-core/src/place.rs,crates/horizon-core/src/place/**,crates/horizon-core/src/workspace.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/session_kill.rs,crates/horizon-ui/src/app/actions/panels.rs,crates/horizon-ui/src/app/actions/panels/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**,crates/horizon-ui/src/app/sidebar/place.rs,crates/horizon-ui/src/app/sidebar/place/**,crates/horizon-ui/src/app/sidebar/menus.rs"
+applyTo: "crates/horizon-browser-control/src/manifest/block_terminal.rs,crates/horizon-browser-control/src/manifest/block_keys.rs,crates/horizon-browser-control/src/manifest/block_machines.rs,crates/horizon-core/src/ssh/mod.rs,crates/horizon-core/src/ssh/machine_keys.rs,crates/horizon-core/src/ssh/machine_keys/**,crates/horizon-core/src/secret/**,crates/horizon-core/src/machines.rs,crates/horizon-core/src/machines/**,crates/horizon-core/src/place.rs,crates/horizon-core/src/place/**,crates/horizon-core/src/workspace.rs,crates/horizon-browser-control/src/manifest/block_preset.rs,crates/horizon-core/src/config/presets.rs,crates/horizon-ui/src/app/block_terminals.rs,crates/horizon-ui/src/app/block_terminals/**,crates/horizon-ui/src/app/block_panels.rs,crates/horizon-ui/src/app/block_panels/**,crates/horizon-ui/src/app/block_machine_keys.rs,crates/horizon-ui/src/app/block_machine_keys/**,crates/horizon-ui/src/app/block_machines.rs,crates/horizon-ui/src/app/block_machines/**,crates/horizon-ui/src/app/machine_open.rs,crates/horizon-ui/src/app/machine_open/**,crates/horizon-ui/src/app/machine_click.rs,crates/horizon-ui/src/app/machine_click/**,crates/horizon-ui/src/app/session_kill.rs,crates/horizon-ui/src/app/actions/panels.rs,crates/horizon-ui/src/app/actions/panels/**,crates/horizon-ui/src/app/sidebar/machines.rs,crates/horizon-ui/src/app/sidebar/machines/**,crates/horizon-ui/src/app/sidebar/place.rs,crates/horizon-ui/src/app/sidebar/place/**,crates/horizon-ui/src/app/sidebar/menus.rs"
 ---
 
-# Trust boundary of an agent-opened SSH terminal and of a machine record
+# Trust boundary of an agent-opened panel and of a machine record
 
-An agent asks Horizon to open an SSH terminal panel for the person with the
-`open_terminal` operation of `block_panel`. Horizon builds the `ssh` command
+An agent asks Horizon to open a panel for the person with one operation of
+`block_panel`. With `open_terminal` it opens an SSH terminal. With `open_panel`
+it opens a panel of one preset of the person's settings in one folder. Both
+operations carry the same rules of the caller, the workspace and the focus, and
+both leave a panel that only the person controls. Horizon builds the `ssh` command
 line itself, so the agent chooses a host, a command and, when it wants one, the
 name of a key that Horizon keeps. The module comment of
 [`block_terminal.rs`](../../../crates/horizon-browser-control/src/manifest/block_terminal.rs)
@@ -73,6 +76,70 @@ describe the same boundary. The key half is described by
 - **The panel is then the person's.** No operation of `block_panel` reads,
   writes to or closes the terminal. The agent cannot type into it, and it has no
   card document and no `next_click`.
+
+## The panel of a preset that an agent opens
+
+An agent that runs one task in its own git worktree shows that task with
+`open_panel`: it names a preset of the person's settings and the folder of the
+worktree. The task is agent work, so the input of this operation is untrusted in
+the same way as the route of an SSH terminal. The module comments of
+`crates/horizon-browser-control/src/manifest/block_preset.rs` and
+`crates/horizon-ui/src/app/block_panels.rs` describe the same boundary.
+
+### Untrusted: the name of the preset, the folder and the title
+
+`open_panel` takes `preset`, `directory` and `title` from an agent.
+
+- **The preset is a name, not a command.** Horizon compares `preset` with the
+  name and the alias of each preset of the settings, exactly. A name that the
+  person did not save is `unknown_preset`, and the answer lists the names and the
+  aliases only: a command or an argument of a preset is never in an answer.
+- **The command line is the preset's.** Horizon copies the command, the
+  arguments, the kind and the resume rule from the preset into the panel. The
+  agent sends no command, no argument, no environment and no prompt, and the
+  request schema refuses an unknown field.
+- **The kind must run a local program.** A preset of a browser page, a Device
+  viewer, a card or an SSH terminal has no working directory on this computer, so
+  it is `invalid_request` and the message names the preset. An agent cannot use
+  this operation to open a page, a viewer or a remote session.
+- **The folder is one absolute path.** `directory` is an absolute path of at most
+  1 024 bytes with no control character, so it is `invalid_request` when it is
+  relative, longer or holds a control character. The check that it is a directory
+  of this computer runs on the coordination worker, and a folder that is not
+  there, or that is a file, is `directory_missing`. No frame reads the file
+  system for this operation.
+- **The title is a label.** `title` is folded to one line, cut to 80 characters,
+  and a title without text is the name of the preset.
+
+### Guarantees of the operation
+
+- **Workspace scope.** Only an agent panel that Horizon launched, in the
+  workspace that holds it, reaches `open_panel`; a caller without that panel is
+  `caller_unavailable`, and a request of another host is `wrong_host`. The panel
+  goes beside the calling agent panel in that workspace.
+- **The bound and the focus.** One agent panel opens at most eight panels in ten
+  minutes, and a ninth request is `rate_limited` with the seconds to wait. The
+  window is the Horizon run and it is not saved. The new panel does not take
+  keyboard focus.
+- **The mark is Horizon's text.** The titlebar shows the chip `opened by <agent>`
+  from the display name of the calling panel, never from a request field. It is
+  saved with the panel as `opened_by` and it comes back after a restart.
+- **The panel is then the person's.** No operation of `block_panel` reads, writes
+  to or closes the panel. It has no card document and no `next_click`.
+
+### Does not guarantee
+
+- **The folder is the agent's choice.** A panel of a preset runs with the rights
+  of the person in a folder that the agent named, and that folder may hold files
+  that the agent wrote. Horizon checks that the folder is a directory, and it
+  checks nothing about its content.
+- **A preset of a shell is a shell.** A panel of a shell preset runs the program
+  of that preset with the environment of the person, in that folder. An agent can
+  therefore open a shell in the worktree of its own task, and the person is the
+  one who types in it.
+- **The mark says who opened the panel, not who controls it.** A person may find
+  the panel later with no agent present, and a snapshot that a person edits by
+  hand can hold another name.
 
 ## Machine records
 

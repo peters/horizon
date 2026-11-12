@@ -149,8 +149,9 @@ boundary pages went away with their features.
     that profile's folder; a canceled download can leave a partial file.
 - [`agent-terminal-open`](trust-boundaries/agent-terminal-open.md)
   - Untrusted: the host, the user, the port, the remote command, the title and
-    the machine key name that an agent sends to `open_terminal`, and the key name
-    of `machine_key` and `delete_machine_key`.
+    the machine key name that an agent sends to `open_terminal`, the name of the
+    preset, the folder and the title that it sends to `open_panel`, and the key
+    name of `machine_key` and `delete_machine_key`.
   - Guarantees: the route is an object with three fields and refuses every other
     field, so no identity file, proxy or ssh option arrives; a host and a user
     pass the same label check as a Device viewer route, a port is 1 to 65535, and
@@ -180,7 +181,12 @@ boundary pages went away with their features.
     this computer; the private key is a file that a local agent running as the
     person can read; Horizon does not put the public key on the machine; and the
     panel is an ordinary SSH terminal afterwards that no operation of
-    `block_panel` reads or changes.
+    `block_panel` reads or changes. The `open_panel` half matches the preset
+    name and alias exactly, so the panel runs the command, the arguments and the
+    kind that the person saved and no field of the request; a preset of a kind
+    that runs no local program is refused, the folder is an absolute path of at
+    most 1 024 bytes that the coordination worker checks, and one agent panel
+    opens at most eight panels in ten minutes.
 
 - [`named-secrets`](trust-boundaries/named-secrets.md)
   (added after this audit, with the named secrets of the Settings window)
