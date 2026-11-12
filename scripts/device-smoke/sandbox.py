@@ -9,6 +9,9 @@ import time
 
 
 BUS_SOCKET_NAME = 'bus'
+# The socket of the sound server of the session. A run that names the host sound
+# binds this one name into the private runtime folder, and nothing else of it.
+HOST_AUDIO_SOCKET_NAME = 'pipewire-0'
 APPARMOR_ACCESS = Path('/sys/kernel/security/apparmor/.access')
 X11_SOCKET_DIR = Path('/tmp/.X11-unix')
 SSH_FOLDER = '.ssh'
@@ -37,6 +40,22 @@ def runtime_dest(uid=None):
 
 def bus_address(uid=None):
     return f'unix:path={runtime_dest(uid)}/{BUS_SOCKET_NAME}'
+
+
+def host_audio_socket(environ=None):
+    """The PipeWire socket of the person, or `None` while this computer has none.
+
+    The fixture binds a runtime folder of its own over `/run/user/<uid>`, so the
+    socket of the session is not inside the sandbox and a recorder that a panel
+    starts cannot reach the sound server. A run that names the host sound binds
+    this one socket at the same name inside that folder and nothing else of it.
+    """
+    env = os.environ if environ is None else environ
+    runtime = env.get('XDG_RUNTIME_DIR')
+    if not runtime:
+        return None
+    socket = Path(runtime) / HOST_AUDIO_SOCKET_NAME
+    return socket if socket.exists() else None
 
 
 def diagnose_apparmor(bound):
@@ -217,7 +236,8 @@ def prepare_state(state, reuse=False):
     return state
 
 
-def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), reuse=False):
+def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), reuse=False,
+            host_audio=None):
     """Create private dirs, bwrap prefix, host env, and sandbox env.
 
     `state` must already exist. Host processes keep XDG_RUNTIME_DIR on the
@@ -226,6 +246,8 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), re
     `extra_ro_binds` are re-mounted after that `/tmp` overlay so documented
     executable and tools paths under `/tmp` stay visible. `reuse` keeps the
     private dirs and everything in them, so an earlier run's home comes back.
+    `host_audio` is the sound socket of the person that this run binds into the
+    private runtime folder, or `None`.
     """
     state = Path(state).resolve()
     data = state / 'data'
@@ -253,6 +275,9 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), re
         '--dir', str(Path(dest).parent),
         '--dir', dest,
         '--bind', str(runtime), dest,
+        # After the folder itself: the one socket of the person takes its own name
+        # in the private folder, so `pipewire-0` resolves and the rest stays private.
+        *(['--bind', str(host_audio), f'{dest}/{HOST_AUDIO_SOCKET_NAME}'] if host_audio else []),
         '--bind', str(private_tmp), '/tmp',
         '--bind', str(state), str(state),
         '--bind', str(private_home), str(Path.home()),

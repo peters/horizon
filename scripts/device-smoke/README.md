@@ -252,6 +252,68 @@ takes the focus of the desktop away from Horizon: `xterm` when this computer has
 it, and `xmessage` or a window of Tk otherwise. The procedure is
 [the desktop notification procedure](../../docs/testing/procedures/desktop-notifications.md).
 
+### Speech input with the real recorder of the session
+
+The fixture writes the section `speech` of its private settings, so a procedure
+shows speech input without a microphone of the developer and without a real
+service.
+
+- `--speech-recorder LINE` writes `speech.recorder`, one command line with
+  `{file}`, such as `speech_standin_recorder.py` of this folder.
+- `--speech-service ENDPOINT` writes `speech.transcriber` of the kind `service`
+  with that endpoint, such as `speech_standin_service.py` of this folder. The key
+  of the service is the named secret `SPEECH_API_KEY` of `--named-secret`.
+- `--speech-transcriber-command LINE` writes `speech.transcriber` of the kind
+  `command` with that line instead, one command with `{file}`.
+
+A run names one recorder and one transcriber. The fixture refuses a run with one
+of them alone, and a run that names two transcribers. Without these options the
+fixture writes no `speech` section, and the candidate keeps the defaults of its
+platform.
+
+The stand-in recorder copies a prepared file and opens no audio device. A task
+that needs the real recorder of a Linux session, such as `pw-record`, needs
+`--host-audio` as well.
+
+`--host-audio` binds the PipeWire socket of this computer,
+`$XDG_RUNTIME_DIR/pipewire-0`, into the sandbox at the same name. It binds that
+one socket and nothing else of that folder: the rest of the runtime folder of the
+sandbox stays private, and the default device of the person does not change.
+Without the option nothing changes, and a recorder inside the sandbox fails with
+`pw_context_connect() failed`. When the socket is absent, the fixture stops with
+one line before it creates its state and before it starts the candidate. The
+option writes no settings, so it also fits a run with `--plain-start`.
+
+Use a null sink of the session for the take, so the recipe needs no speaker and
+changes no default device. Make the sink, read its node id, and keep the name:
+
+```sh
+pw-cli create-node adapter '{ factory.name=support.null-audio-sink \
+  node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+```
+
+The command prints JSON that holds the id and the name of the node. This is
+`<name>` and `<id>` below. Then record from that sink with the recorder line of
+`--speech-recorder`, play a clip into it while the hotkey is held, and destroy
+the node:
+
+```sh
+pw-record --target <name> --properties stream.capture.sink=true \
+  --rate 16000 --channels 1 --format s16 {file}
+pw-play --target <name> <clip.wav>
+pw-cli destroy <id>
+```
+
+> **CAUTION:** DESTROY THE NULL SINK AT THE END OF THE TASK. A node with
+> `object.linger=true` stays after the program that made it exits.
+
+Measured limit: on a busy computer a clip that goes through a null sink is
+damaged, so the transcription of that take holds the wrong words. The same clip
+sent as a file is transcribed right. This route therefore proves that the
+recorder of the candidate reaches the sound server and writes a file, and it
+does not prove the quality of the words. The procedure is
+[the speech input procedure](../../docs/testing/procedures/speech-input.md).
+
 ### A scripted card agent
 
 A procedure that needs an agent which draws cards, answers the clicks of the

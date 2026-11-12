@@ -29,6 +29,19 @@ one request header and no file of the run.
 - This procedure does not test: a real microphone, a real service, a model of a
   speech engine, or the recognition quality of a vendor.
 
+## 2.1 The real recorder of a Linux session
+
+The tasks of this procedure use stand-ins and open no audio device. One extra
+task, SI-16, uses the real recorder `pw-record` and the sound server of the
+computer. It needs the option `--host-audio`, because the sandbox binds a private
+runtime folder over `/run/user/<uid>`, and the socket `pipewire-0` of the person
+is not in that folder. `--host-audio` binds that one socket at the same name.
+
+That task does not use a microphone. It records from a null sink that it makes
+and destroys, so it changes no default device. See
+[the fixture README](../../../scripts/device-smoke/README.md#speech-input-with-the-real-recorder-of-the-session)
+for the commands of the sink and for the measured limit of that route.
+
 ## 3. Safety
 
 > **CAUTION:** USE A MARKER VALUE AND A NEW STATE DIRECTORY. Never type a real
@@ -467,6 +480,69 @@ tests below prove that the take of this procedure passes in that situation too.
 
    Result: The status line shows `Saved`. The next take reaches the stand-in
    service of the setup again.
+
+### 6.16 SI-16 — A take with the real recorder of the session
+
+This task uses the recorder of the Linux session and the sound server of the
+computer. It answers the state that a live run showed, when the sandbox held no
+sound socket and the take said `pw-record ended early: error:
+  pw_context_connect() failed`.
+
+> **CAUTION:** MAKE AND DESTROY ONE NULL SINK OF THE SESSION. Use the name of
+> this run, and keep the id of the node for the destroy step. Do not change the
+> default device of the person.
+
+1. Make the null sink of the session:
+
+   ```sh
+   pw-cli create-node adapter '{ factory.name=support.null-audio-sink \
+     node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+   ```
+
+   Result: The command prints JSON with the id and the name of the node. This is
+   `<id>` and `<name>` below.
+
+2. Stop the fixture of the setup. Start it again with the real recorder, the
+   stand-in service of the setup and `--host-audio`:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <frozen>/horizon --native-view \
+     --state <evidence>/fixture-real --host-audio \
+     --speech-recorder "pw-record --target <name> --properties stream.capture.sink=true \
+   --rate 16000 --channels 1 --format s16 {file}" \
+     --speech-service "http://<stand-in>/v1/audio/transcriptions" \
+     --named-secret SPEECH_API_KEY=<marker>
+   ```
+
+   Result: The manifest prints `vnc_address`, and the run starts. A run without
+   the socket `pipewire-0` stops with one line that names `--host-audio` and no
+   traceback.
+
+3. Play one clip into the null sink, and press and hold `F9` at the same time:
+
+   ```sh
+   pw-play --target <name> <evidence>/take.wav
+   ```
+
+   Result: The pill counts the seconds of the take. After the release it says
+   `Writing…`, and then it goes. The state mark holds no line of
+   `pw_context_connect()`.
+
+4. Read the last line of the panel, and read the record of the stand-in service
+   as in SI-1 step 3.
+
+   Result: The panel holds the text of that take, and the service received one
+   request with the fields of SI-1. The words can be wrong: a clip through a null
+   sink of a busy computer is damaged. This task proves the path of the recorder
+   and of the request, and it does not prove the words.
+
+5. Destroy the null sink:
+
+   ```sh
+   pw-cli destroy <id>
+   ```
+
+   Result: The node goes, and the default device of the person did not change.
 
 ## 7. Pass criteria
 

@@ -416,6 +416,24 @@ def speech_section(recorder=None, transcriber_command=None, service=None):
     return section
 
 
+def host_audio_bind(environ=None):
+    """The sound socket of the person for `--host-audio`, or stop with one line.
+
+    A run that names the host sound binds the PipeWire socket into the private
+    runtime folder, so a recorder that a panel starts reaches the sound server of
+    the session. Without that socket the candidate would start with speech input
+    that cannot record, so the fixture stops before it creates its state and
+    before it starts the candidate.
+    """
+    socket = sandbox.host_audio_socket(environ)
+    if socket is None:
+        raise SystemExit(
+            f'--host-audio needs {sandbox.HOST_AUDIO_SOCKET_NAME} in the runtime folder of this '
+            'computer, and it is absent: start the sound server of the session, or start the run '
+            'without --host-audio')
+    return socket
+
+
 def worktree_card_repository(state):
     """The throwaway repository of the worktree card, with one commit and no remote.
 
@@ -872,6 +890,12 @@ def arguments():
              'http://127.0.0.1:40913/v1/audio/transcriptions of the stand-in service. Its key is the '
              'named secret SPEECH_API_KEY of --named-secret.')
     parser.add_argument(
+        '--host-audio', action='store_true',
+        help='Bind the PipeWire socket of this computer into the private runtime folder of the '
+             'fixture, so a recorder that a panel starts reaches the sound server of the session. '
+             'It binds that one socket and nothing else of the folder. Without it the sandbox '
+             'keeps its own runtime folder, which holds no sound socket')
+    parser.add_argument(
         '--presets',
         type=Path,
         help='JSON list of New Workspace presets for the fixture config, such as two presets of one agent')
@@ -998,12 +1022,14 @@ def main():
         secret_rows = [parse_secret_row(text) for text in args.secret_row or []]
     except ValueError as problem:
         parser.error(f'--secret-row {problem}')
+    host_audio = host_audio_bind() if args.host_audio else None
     args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
     if args.tools:
         extra_ro_binds.append(args.tools.resolve())
-    box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds, reuse=args.reuse_state)
+    box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds, reuse=args.reuse_state,
+                          host_audio=host_audio)
     sandbox.seed_ssh(box.private_home, ssh_config, ssh_identity)
     data = box.data
     namespace = box.namespace
@@ -1184,6 +1210,13 @@ def main():
         # A reused state is what the next run starts from; a fresh one leaves nothing.
         if not args.reuse_state:
             shutil.rmtree(args.state / 'data', ignore_errors=True)
+        elif host_audio is not None:
+            # bwrap made the mount point of the sound socket in the private runtime
+            # folder, which a reused state keeps. A later run without --host-audio
+            # must find no name there, so only that plain file goes.
+            placeholder = box.runtime / sandbox.HOST_AUDIO_SOCKET_NAME
+            if placeholder.is_file() and not placeholder.is_socket():
+                placeholder.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':
