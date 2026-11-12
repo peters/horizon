@@ -139,6 +139,22 @@ impl ServerSync {
     }
 }
 
+/// The line about the settings of this computer on the server, or `None` while
+/// they are in step and nothing waits.
+///
+/// It is the same small line as the state of the link: one text of the state, so
+/// the person reads the settings of the server where the other lines of the link
+/// are, and never as a second kind of message.
+fn settings_line(view: &horizon_sync::SettingsSyncView) -> Option<String> {
+    if let Some(line) = view.refused() {
+        return Some(line.to_owned());
+    }
+    if !view.pending().is_empty() {
+        return Some(format!("Settings: {} pending", view.pending().len()));
+    }
+    (!view.in_step()).then(|| "Settings: reading the server".to_owned())
+}
+
 /// What one read of the machine list of this start answered.
 pub(in crate::app) struct MachineLoad {
     pub(in crate::app) machines: Machines,
@@ -237,6 +253,7 @@ fn named_secret_vault(home: &HorizonHome, names: &[String]) -> Arc<NamedSecretVa
 pub(in crate::app) fn load(
     registry: MachineRegistry,
     server: Option<ServerConfig>,
+    settings_path: &std::path::Path,
     secrets: SecretHandles,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<MachineLoad, MachineError> {
@@ -280,6 +297,10 @@ pub(in crate::app) fn load(
         }
     };
     config.token_store.clone_from(&secrets.store);
+    // The sections of the settings of this computer follow the server through the
+    // same link: a start reads the store first, so no frame waits for the server,
+    // and a section that arrives afterwards is written to that store.
+    config.settings_path = Some(settings_path.to_path_buf());
     config.address = server.address().map(str::to_owned).filter(|_| token.is_some());
     if server.address().is_some() && config.address.is_none() && server.ssh_target().is_none() {
         return file_list(
@@ -340,8 +361,10 @@ impl HorizonApp {
         let snapshot = sync.snapshot();
         let state = snapshot.state();
         let logged_out = matches!(state, LinkState::Removed | LinkState::NotLoggedIn);
+        let settings = snapshot.settings();
         ServerView {
             line: ServerLine::of(state).text(),
+            settings: settings_line(settings),
             device: snapshot.device().to_owned(),
             // A computer that the server removed has no link that could ask for an
             // invitation or read the list, so the tab shows the join alone.
@@ -440,7 +463,9 @@ impl HorizonApp {
             return;
         }
         self.template_config.server = stored.server.clone();
-        self.settings_io.save_config(self.config_path.clone(), stored.clone());
+        // The entry `server` stays with this computer, so a join queues no section.
+        self.settings_io
+            .save_config(self.config_path.clone(), stored.clone(), Vec::new());
         if let Some(editor) = self.settings.as_mut() {
             editor.config.server = stored.server.clone();
             editor.original.server = stored.server.clone();
@@ -452,6 +477,7 @@ impl HorizonApp {
         // The old link ends before the new one starts, so one computer never holds
         // two writers of one queue.
         self.server_sync = None;
+        self.settings_io.set_link(None);
         self.load_machines(ctx);
     }
 
@@ -606,22 +632,25 @@ impl HorizonApp {
             tracing::warn!(%error, "the names of the named secrets of the link cannot be kept");
             return;
         }
+        // The names are one shared section: a name that this computer learned from
+        // the server or added for its own tools follows the other computers too.
+        let shared = horizon_core::settings_sync::changed_sections(&self.template_config, &config);
         self.apply_runtime_config(&config);
         if let Some(editor) = self.settings.as_mut() {
             editor.config.secrets.names.clone_from(&config.secrets.names);
         }
-        self.settings_io.save_config(self.config_path.clone(), config);
+        self.settings_io.save_config(self.config_path.clone(), config, shared);
     }
 
     /// Reads the machine list again when the link brought a change, on the
     /// coordination worker, so no frame reads a file of this home.
     pub(super) fn poll_server_sync(&mut self) {
-        // A secret of this computer that lost the version rule is kept, and the
-        // person reads where it went in the sidebar.
+        // A secret or a setting of this computer that lost the version rule is
+        // kept, and the person reads where it went in the sidebar.
         let notices = self
             .server_sync
             .as_ref()
-            .map(|sync| sync.handle().take_secret_notices())
+            .map(|sync| sync.handle().take_notices())
             .unwrap_or_default();
         if let Some(notice) = notices.into_iter().next_back() {
             self.set_sidebar_notice(notice);
@@ -721,6 +750,32 @@ mod tests {
             ids,
             vec![first.as_str(), second.as_str()],
             "the queue holds the secrets in the order that the frame asked for them"
+        );
+        drop(temp);
+    }
+
+    #[test]
+    fn a_save_of_a_shared_section_without_a_server_queues_nothing_and_starts_no_child() {
+        // The frame path of a save runs under the guard in strict mode, and a
+        // computer without a server writes its store alone.
+        horizon_core::ui_thread::use_strict_mode();
+        let (temp, mut app) = test_app();
+        assert!(app.server_sync.is_none(), "the settings of this window name no server");
+        let mut config = app.template_config.clone();
+        config.appearance.theme = horizon_core::AppearanceTheme::Light;
+        let shared = horizon_core::settings_sync::changed_sections(&app.template_config, &config);
+        assert_eq!(shared, vec!["appearance".to_owned()], "one shared section changed");
+        app.settings_io.save_config(app.config_path.clone(), config, shared);
+        app.wait_for_settings_io();
+
+        let queue = app.machine_registry().root().join("server-queue.json");
+        assert!(!queue.exists(), "a computer without a server has no queue of intents");
+        assert!(!queue.with_file_name("server-settings.json").exists(), "and no mirror of settings");
+        assert!(app.server_sync.is_none(), "no link started");
+        assert_eq!(
+            app.template_config.appearance.theme,
+            horizon_core::AppearanceTheme::Light,
+            "the value of this computer is in its store"
         );
         drop(temp);
     }

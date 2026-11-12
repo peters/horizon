@@ -43,10 +43,13 @@ impl HorizonApp {
         }
         let mut config = self.template_config.clone();
         mutate(&mut config);
+        // The sections that this change writes follow the store to the server of
+        // this computer, one intent for each of them.
+        let shared = horizon_core::settings_sync::changed_sections(&self.template_config, &config);
         self.apply_runtime_config(&config);
         // The write waits on the settings thread; its reply moves the editor
         // onto the saved settings.
-        self.settings_io.save_config(self.config_path.clone(), config);
+        self.settings_io.save_config(self.config_path.clone(), config, shared);
         tracing::info!(setting = what, path = %self.config_path.display(), "config change queued");
         true
     }

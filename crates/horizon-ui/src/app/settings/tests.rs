@@ -1,6 +1,6 @@
 use horizon_core::{Config, RuntimeState, StartupDecision};
 
-use super::SettingsStatus;
+use super::{SettingsAction, SettingsStatus};
 use crate::app::test_support::{run_app_frame, test_app_with_startup};
 
 #[test]
@@ -294,4 +294,89 @@ fn the_secrets_tab_draws_the_names_the_hidden_field_and_the_missing_value() {
         bench.state(&stored),
         horizon_core::named_secrets::NamedSecretState::Present
     ));
+}
+
+/// A window with its Settings window open, and a draft that the person edits.
+fn editor_app() -> (tempfile::TempDir, crate::app::HorizonApp) {
+    let (temp, mut app) = crate::app::test_support::test_app();
+    app.toggle_settings();
+    assert!(app.settings.is_some(), "the Settings window is open");
+    (temp, app)
+}
+
+#[test]
+fn a_value_of_another_computer_keeps_the_edits_of_a_section_and_applies_the_others() {
+    let (_temp, mut app) = editor_app();
+    let stored = app.template_config.clone();
+    // The person edits the theme and leaves the minimap at the value of the store.
+    if let Some(editor) = app.settings.as_mut() {
+        editor.config.appearance.theme = horizon_core::AppearanceTheme::Light;
+        editor.dirty = true;
+        editor.status = SettingsStatus::LivePreview;
+    }
+
+    // Another computer changed both sections in the store.
+    let mut other = stored.clone();
+    other.appearance.theme = horizon_core::AppearanceTheme::Dark;
+    other.overlays.minimap_width = 500.0;
+    horizon_core::Config::save(&app.config_path, &other).expect("the settings of another computer");
+    app.adopt_reloaded_settings(&other);
+
+    let editor = app.settings.as_ref().expect("the Settings window");
+    assert_eq!(
+        editor.config.appearance.theme,
+        horizon_core::AppearanceTheme::Light,
+        "the draft keeps the edit of the person"
+    );
+    assert_eq!(
+        editor.config.overlays.minimap_width, 500.0,
+        "a section that the person does not edit applies at once"
+    );
+    let conflict = editor.conflict.as_ref().expect("one line about the other computer");
+    assert_eq!(conflict.sections, vec!["appearance".to_owned()]);
+    assert_eq!(
+        conflict.stored.appearance.theme,
+        horizon_core::AppearanceTheme::Dark,
+        "the window holds the value that it did not take"
+    );
+    assert_eq!(
+        app.appearance_theme,
+        horizon_core::AppearanceTheme::Light,
+        "the window shows the draft of the person"
+    );
+
+    // Keep editing: the draft stays and the line goes.
+    app.apply_settings_action(SettingsAction::KeepEditing);
+    let editor = app.settings.as_ref().expect("the Settings window");
+    assert!(editor.conflict.is_none());
+    assert_eq!(editor.config.appearance.theme, horizon_core::AppearanceTheme::Light);
+}
+
+#[test]
+fn the_value_of_another_computer_is_taken_when_the_person_takes_it() {
+    let (_temp, mut app) = editor_app();
+    let stored = app.template_config.clone();
+    if let Some(editor) = app.settings.as_mut() {
+        editor.config.appearance.theme = horizon_core::AppearanceTheme::Light;
+        editor.dirty = true;
+    }
+    let mut other = stored.clone();
+    other.appearance.theme = horizon_core::AppearanceTheme::Dark;
+    horizon_core::Config::save(&app.config_path, &other).expect("the settings of another computer");
+    app.adopt_reloaded_settings(&other);
+    assert!(
+        app.settings.as_ref().is_some_and(|editor| editor.conflict.is_some()),
+        "the window offers the value"
+    );
+
+    app.apply_settings_action(SettingsAction::TakeRemote);
+    let editor = app.settings.as_ref().expect("the Settings window");
+    assert!(editor.conflict.is_none());
+    assert_eq!(
+        editor.config.appearance.theme,
+        horizon_core::AppearanceTheme::Dark,
+        "the draft takes the value of the other computer"
+    );
+    assert!(!editor.dirty, "the draft is the value of the store again");
+    assert_eq!(app.appearance_theme, horizon_core::AppearanceTheme::Dark);
 }

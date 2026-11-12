@@ -72,6 +72,7 @@ fn every_tab_draws_on_one_line_at_the_default_panel_width() {
         original: Config::default(),
         dirty: false,
         status: super::SettingsStatus::None,
+        conflict: None,
         panel_rect: None,
         active_tab: super::SettingsTab::General,
         credential_inputs: super::remote_browsers::CredentialInputs::default(),

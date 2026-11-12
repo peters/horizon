@@ -161,11 +161,10 @@ impl HorizonApp {
 
     #[profiling::function]
     fn poll_config_reload(&mut self) {
-        // Skip while settings editor is open (it manages its own save/reload).
-        if self.settings.is_some() {
-            return;
-        }
-
+        // The watch runs while the Settings window is open as well: a section that
+        // another computer changed applies at once, and the window keeps the edits
+        // of the person with the two choices in its footer.
+        //
         // Check at most every 2 seconds.
         let now = Instant::now();
         if self

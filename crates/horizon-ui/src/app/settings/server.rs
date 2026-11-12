@@ -55,6 +55,9 @@ pub(in crate::app) struct ServerView {
     /// Whether the name of this computer belongs to the token of a login, so the
     /// field of the name is read-only.
     pub(in crate::app) name_locked: bool,
+    /// The line about the settings of this computer on the server, when their sync
+    /// is not in step. It is the same small line as the state of the link.
+    pub(in crate::app) settings: Option<String>,
 }
 
 /// The state of the tab, which outlives the answers that it polls.
@@ -415,6 +418,9 @@ fn render_state_line(ui: &mut Ui, view: &ServerView) {
         theme::FG_SOFT()
     };
     ui.label(egui::RichText::new(&view.line).color(color).size(TEXT_SIZE));
+    if let Some(settings) = &view.settings {
+        ui.label(egui::RichText::new(settings).color(color).size(SMALL_SIZE));
+    }
     if view.logged_out {
         super::dim_label(
             ui,
@@ -819,6 +825,7 @@ mod tests {
             linked: true,
             logged_out: false,
             name_locked: true,
+            settings: None,
         };
         let mut config = Config::default();
         let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
@@ -847,6 +854,7 @@ mod tests {
                 linked: false,
                 logged_out: true,
                 name_locked: false,
+                settings: None,
             };
             let mut config = Config::default();
             let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));
@@ -899,6 +907,7 @@ mod tests {
             linked: true,
             logged_out: false,
             name_locked: true,
+            settings: None,
         };
         let mut config = Config::default();
         let texts = tall_frame(|ui| render(ui, &mut config, &mut state, &view));

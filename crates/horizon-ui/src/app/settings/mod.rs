@@ -86,6 +86,17 @@ impl SettingsTab {
     ];
 }
 
+/// The sections where a value of another computer arrived while the person has
+/// unsaved edits, and the settings of the store that hold that value.
+///
+/// The draft of the tab keeps the edits of the person, and the footer offers the
+/// two choices: take the value of the other computer, or keep editing. Every other
+/// section of the store applies at once.
+pub(super) struct SettingsConflict {
+    pub(super) sections: Vec<String>,
+    pub(super) stored: Box<Config>,
+}
+
 pub(super) enum SettingsStatus {
     None,
     LivePreview,
@@ -103,6 +114,8 @@ pub(super) struct SettingsEditor {
     /// Whether a tab changed `config` since it was adopted.
     pub(super) dirty: bool,
     pub(super) status: SettingsStatus,
+    /// A value of another computer for a section that the person edits.
+    pub(super) conflict: Option<SettingsConflict>,
     /// The rectangle that the panel took in the last frame that drew it, so the
     /// canvas paints only beside it. A closed panel has none.
     pub(super) panel_rect: Option<Rect>,
@@ -121,6 +134,7 @@ impl SettingsEditor {
         self.config = config.clone();
         self.original = config;
         self.dirty = false;
+        self.conflict = None;
         self.status = SettingsStatus::Saved;
         // A saved value is in the store, so the window keeps no copy of it.
         self.secret_inputs.scrub();
@@ -139,6 +153,11 @@ enum SettingsAction {
     Revert,
     ResetDefaults,
     Save,
+    /// Take the value of another computer for the sections that this window kept
+    /// in its draft.
+    TakeRemote,
+    /// Keep the edits of this window, and let the next Save write them.
+    KeepEditing,
 }
 
 impl HorizonApp {
@@ -159,6 +178,7 @@ impl HorizonApp {
                 config,
                 dirty: false,
                 status: SettingsStatus::None,
+                conflict: None,
                 panel_rect: None,
                 active_tab: SettingsTab::General,
                 credential_inputs: remote_browsers::CredentialInputs::default(),
@@ -185,6 +205,7 @@ impl HorizonApp {
             status_text: &status_text,
             status_color,
             has_changes: editor.dirty,
+            conflict: editor.conflict.as_ref().map(|conflict| conflict.sections.join(", ")),
         };
         // The canvas takes this rectangle from the editor, so it ends at the panel
         // whatever the active tab asked for.
@@ -198,7 +219,7 @@ impl HorizonApp {
         };
         let (action, changed, try_take) = render_settings_panel(
             ui,
-            panel_state,
+            &panel_state,
             editor,
             &mut TabWorkbenches {
                 credentials: &mut self.remote_browser_credentials,
@@ -279,19 +300,128 @@ impl HorizonApp {
             SettingsAction::Save => {
                 self.save_settings();
             }
+            SettingsAction::TakeRemote => {
+                self.take_remote_settings();
+            }
+            SettingsAction::KeepEditing => {
+                if let Some(editor) = self.settings.as_mut() {
+                    editor.conflict = None;
+                }
+            }
         }
+    }
+
+    /// Takes the value of the other computer for the sections that this window kept
+    /// in its draft, and leaves every other edit of the person alone.
+    fn take_remote_settings(&mut self) {
+        let Some(editor) = self.settings.as_mut() else {
+            return;
+        };
+        let Some(conflict) = editor.conflict.take() else {
+            return;
+        };
+        let mut draft = editor.config.clone();
+        for section in &conflict.sections {
+            let Some(value) = horizon_core::settings_sync::body_of(&conflict.stored, section)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            if let Ok(next) = horizon_core::settings_sync::with_section(&draft, section, &value) {
+                draft = next;
+            }
+        }
+        editor.dirty = draft_dirty(&draft, &editor.original);
+        if editor.dirty {
+            editor.status = SettingsStatus::LivePreview;
+        } else {
+            editor.status = SettingsStatus::None;
+        }
+        editor.config = draft;
+        let draft = editor.config.clone();
+        self.apply_live_preview(&draft);
+    }
+
+    /// Reads the settings that the worker read again, and applies them.
+    ///
+    /// While the Settings window holds unsaved edits in a section that the store
+    /// changed, the draft keeps them, the footer offers the two choices, and every
+    /// other section applies at once. Without such an edit the whole store applies,
+    /// as a change of another window always did.
+    fn adopt_reloaded_settings(&mut self, config: &Config) {
+        let Some(editor) = self.settings.as_mut() else {
+            self.apply_runtime_config(config);
+            self.board.sync_workspace_metadata(config);
+            return;
+        };
+        let mut sections: Vec<String> = editor
+            .conflict
+            .take()
+            .map(|conflict| conflict.sections)
+            .unwrap_or_default();
+        let changed = horizon_core::settings_sync::changed_sections(&editor.original, config);
+        let mut draft = editor.config.clone();
+        for section in changed {
+            let edited = horizon_core::settings_sync::body_of(&editor.config, &section).ok()
+                != horizon_core::settings_sync::body_of(&editor.original, &section).ok();
+            if edited || sections.contains(&section) {
+                if !sections.contains(&section) {
+                    sections.push(section);
+                }
+                continue;
+            }
+            let Some(value) = horizon_core::settings_sync::body_of(config, &section).ok().flatten() else {
+                continue;
+            };
+            if let Ok(next) = horizon_core::settings_sync::with_section(&draft, &section, &value) {
+                draft = next;
+            }
+        }
+        // A section that the person took, or that the draft already holds the value
+        // of, is no conflict any more.
+        sections.retain(|section| {
+            horizon_core::settings_sync::body_of(&draft, section).ok()
+                != horizon_core::settings_sync::body_of(config, section).ok()
+        });
+        editor.original = config.clone();
+        editor.config = draft;
+        editor.dirty = draft_dirty(&editor.config, &editor.original);
+        editor.conflict = None;
+        if !sections.is_empty() {
+            editor.conflict = Some(SettingsConflict {
+                sections,
+                stored: Box::new(config.clone()),
+            });
+            editor.status = SettingsStatus::LivePreview;
+        } else if editor.dirty {
+            editor.status = SettingsStatus::LivePreview;
+        } else {
+            editor.status = SettingsStatus::None;
+        }
+        let draft = editor.config.clone();
+        self.apply_live_preview(&draft);
     }
 
     fn save_settings(&mut self) {
         let Some(config) = self.settings.as_ref().map(|editor| editor.config.clone()) else {
             return;
         };
+        // The sections that this save changes, so the worker queues one intent for
+        // each of them after the store is written. The store of the window is the
+        // baseline, not the live draft: a value that arrived from another computer
+        // is already in the store and is no change of this window.
+        let stored = self
+            .settings
+            .as_ref()
+            .map_or_else(|| self.template_config.clone(), |editor| editor.original.clone());
+        let shared = horizon_core::settings_sync::changed_sections(&stored, &config);
         // The draft is checked here, in memory; the write waits on the settings
         // thread, and a reply applies the saved settings in a later frame.
         match config.validate() {
             Ok(()) => {
                 self.apply_runtime_config(&config);
-                self.settings_io.save_config(self.config_path.clone(), config);
+                self.settings_io.save_config(self.config_path.clone(), config, shared);
                 if let Some(editor) = self.settings.as_mut() {
                     editor.status = SettingsStatus::Saving;
                 }
@@ -347,9 +477,8 @@ impl HorizonApp {
                 SettingsReply::Reloaded { path, config } => {
                     self.settings_reload_pending = false;
                     if let Some(config) = config {
-                        tracing::info!(path = %path.display(), "settings changed, reloading presets");
-                        self.apply_runtime_config(&config);
-                        self.board.sync_workspace_metadata(&config);
+                        tracing::info!(path = %path.display(), "settings changed, applying them");
+                        self.adopt_reloaded_settings(&config);
                     }
                 }
                 SettingsReply::Failed { what, error } => {
@@ -421,6 +550,9 @@ pub(super) fn panel_rect(ui: &egui::Ui) -> egui::Rect {
     egui::Rect::from_min_max(egui::Pos2::new(available.max.x - width, available.min.y), available.max)
 }
 
+/// The line of the footer while a value of another computer waits for the person.
+pub(super) const CONFLICT_LINE: &str = "This setting changed on another computer.";
+
 fn settings_status(status: &SettingsStatus) -> (String, Color32) {
     match status {
         SettingsStatus::None => (String::new(), theme::FG_DIM()),
@@ -433,16 +565,19 @@ fn settings_status(status: &SettingsStatus) -> (String, Color32) {
 
 /// What the Settings panel shows besides its tabs: the status bar and whether
 /// the draft differs from the store.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PanelState<'a> {
     status_text: &'a str,
     status_color: Color32,
     has_changes: bool,
+    /// The sections of this window that a value of another computer reached while
+    /// the person edits them.
+    conflict: Option<String>,
 }
 
 fn render_settings_panel(
     ui: &mut egui::Ui,
-    panel_state: PanelState<'_>,
+    panel_state: &PanelState<'_>,
     editor: &mut SettingsEditor,
     workbenches: &mut TabWorkbenches<'_>,
     view: &server::ServerView,
@@ -473,6 +608,7 @@ fn render_settings_panel(
                 panel_state.status_text,
                 panel_state.status_color,
                 panel_state.has_changes,
+                panel_state.conflict.as_deref(),
             );
             ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
             ui.add_space(16.0);
@@ -700,4 +836,13 @@ fn section_card<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) 
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
     ui.add(egui::Label::new(egui::RichText::new(text).color(theme::FG_DIM()).size(11.0)).wrap());
+}
+
+/// Whether the draft of the Settings window differs from the store in one section.
+fn draft_dirty(draft: &Config, stored: &Config) -> bool {
+    !horizon_core::settings_sync::changed_sections(stored, draft).is_empty()
+        || horizon_core::settings_sync::SECTIONS.iter().any(|section| {
+            horizon_core::settings_sync::body_of(draft, section.name).ok()
+                != horizon_core::settings_sync::body_of(stored, section.name).ok()
+        })
 }

@@ -9,8 +9,10 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use horizon_core::Config;
+use horizon_sync::SyncHandle;
 
 use std::time::SystemTime;
 
@@ -19,6 +21,9 @@ enum Request {
     Save {
         path: PathBuf,
         config: Box<Config>,
+        /// The shared sections that this save changed, so one intent per section
+        /// follows the write of the store.
+        shared: Vec<String>,
     },
     Reload {
         path: PathBuf,
@@ -50,6 +55,10 @@ pub(super) struct SettingsIo {
     replies: Receiver<SettingsReply>,
     /// How many requests have no reply yet.
     pending: AtomicUsize,
+    /// The link of this computer, when its settings follow a server. The save of a
+    /// shared section writes the store and then queues its intent here, so the two
+    /// writes have the order of one worker and the window keeps no state of them.
+    link: Arc<Mutex<Option<SyncHandle>>>,
 }
 
 impl SettingsIo {
@@ -57,11 +66,13 @@ impl SettingsIo {
     pub(super) fn new() -> Self {
         let (requests, request_rx) = channel::<Request>();
         let (reply_tx, replies) = channel::<SettingsReply>();
+        let link = Arc::new(Mutex::new(None));
+        let link_of_thread = Arc::clone(&link);
         let spawned = std::thread::Builder::new()
             .name("horizon-settings".to_string())
             .spawn(move || {
                 while let Ok(request) = request_rx.recv() {
-                    if reply_tx.send(serve(request)).is_err() {
+                    if reply_tx.send(serve(request, &link_of_thread)).is_err() {
                         return;
                     }
                 }
@@ -75,7 +86,16 @@ impl SettingsIo {
             requests,
             replies,
             pending: AtomicUsize::new(0),
+            link,
         }
+    }
+
+    /// Holds the link of this computer, whose supervisor queues the sections that
+    /// a save of the Settings window changes. `None` when this computer has no
+    /// server, or its link stopped.
+    pub(super) fn set_link(&self, link: Option<SyncHandle>) {
+        let mut held = self.link.lock().unwrap_or_else(PoisonError::into_inner);
+        *held = link;
     }
 
     /// Whether a request is still running, so the window keeps drawing frames
@@ -85,10 +105,11 @@ impl SettingsIo {
     }
 
     /// Save the configuration.
-    pub(super) fn save_config(&self, path: PathBuf, config: Config) {
+    pub(super) fn save_config(&self, path: PathBuf, config: Config, shared: Vec<String>) {
         self.send(Request::Save {
             path,
             config: Box::new(config),
+            shared,
         });
     }
 
@@ -124,10 +145,15 @@ impl SettingsIo {
     }
 }
 
-fn serve(request: Request) -> SettingsReply {
+fn serve(request: Request, link: &Mutex<Option<SyncHandle>>) -> SettingsReply {
     match request {
-        Request::Save { path, config } => match Config::save(&path, &config) {
-            Ok(()) => SettingsReply::Saved { path, config },
+        Request::Save { path, config, shared } => match Config::save(&path, &config) {
+            Ok(()) => {
+                if !shared.is_empty() {
+                    queue_sections(link, &config, &shared);
+                }
+                SettingsReply::Saved { path, config }
+            }
             Err(error) => SettingsReply::Failed {
                 what: "save",
                 error: error.to_string(),
@@ -169,6 +195,26 @@ fn settings_mtime(config_path: &std::path::Path) -> Option<SystemTime> {
         .and_then(|metadata| metadata.modified().ok())
 }
 
+/// Queues one intent for each shared section that a save changed, on this worker,
+/// after the store holds the value.
+///
+/// A computer without a link queues nothing: its settings are its own, and the
+/// value stays in the store.
+fn queue_sections(link: &Mutex<Option<SyncHandle>>, config: &Config, shared: &[String]) {
+    let handle = {
+        let held = link.lock().unwrap_or_else(PoisonError::into_inner);
+        held.clone()
+    };
+    let Some(handle) = handle else {
+        return;
+    };
+    for section in shared {
+        if let Err(error) = handle.enqueue_setting(config, section) {
+            tracing::warn!(%error, section = %section, "a setting of this window did not enter the queue");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +242,7 @@ mod tests {
             },
             ..Config::default()
         };
-        io.save_config(path.clone(), config);
+        io.save_config(path.clone(), config, Vec::new());
 
         match wait(&io) {
             SettingsReply::Saved { config, .. } => {
@@ -225,6 +271,7 @@ mod tests {
                 },
                 ..Config::default()
             },
+            Vec::new(),
         );
         let _ = wait(&io);
 
@@ -261,7 +308,7 @@ mod tests {
             SettingsReply::Probed { mtime: None }
         ));
 
-        io.save_config(path.clone(), Config::default());
+        io.save_config(path.clone(), Config::default(), Vec::new());
         let _ = wait(&io);
         match wait_after(&io, Request::Probe { path }) {
             SettingsReply::Probed { mtime: Some(_) } => {}

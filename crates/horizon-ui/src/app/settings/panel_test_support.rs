@@ -150,6 +150,8 @@ pub(super) const BUTTON_LABELS: &[&str] = &[
     "Replace value",
     "Store",
     "Cancel",
+    "Keep editing",
+    "Take it",
     "Save",
     "Revert",
     "Close",

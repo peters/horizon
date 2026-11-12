@@ -49,9 +49,16 @@ impl HorizonApp {
         // An agent panel that starts in the first frames of this start waits for the
         // values of this read, at most for the bound of the store.
         horizon_core::named_secrets::expect_a_publish();
+        let settings_path = self.config_path.clone();
         std::thread::spawn(move || {
             let secrets = super::server_sync::secret_vault(&home, keys, &remote, &names);
-            let _ = tx.send(super::server_sync::load(registry, server, secrets, wake));
+            let _ = tx.send(super::server_sync::load(
+                registry,
+                server,
+                &settings_path,
+                secrets,
+                wake,
+            ));
         });
         self.machine_load_rx = Some(rx);
     }
@@ -71,6 +78,10 @@ impl HorizonApp {
                     self.set_sidebar_notice(format!("The machine list: {reason}"));
                 }
                 self.server_sync = load.server;
+                // The settings worker queues the section of a save on this link,
+                // so the store and the queue have the order of one worker.
+                self.settings_io
+                    .set_link(self.server_sync.as_ref().map(|sync| sync.handle().clone()));
                 self.adopt_named_secrets(load.named_secrets);
             }
             Ok(Ok(_)) => {}

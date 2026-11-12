@@ -202,3 +202,56 @@ fn status_line_width(ctx: &egui::Context, text: &str) -> f32 {
             .x
     })
 }
+
+/// The footer gives the person the two choices of a value that another computer
+/// changed while the same section is edited here: the line and both buttons stay
+/// in the panel, and the line keeps the place that the buttons leave.
+#[test]
+fn the_footer_offers_the_two_choices_of_a_value_of_another_computer() {
+    let viewport = [1480.0_f32, 900.0];
+    let (_temp, ctx, mut app, _names) = app_with_stored_secrets();
+    if let Some(editor) = app.settings.as_mut() {
+        editor.dirty = true;
+        editor.status = super::SettingsStatus::LivePreview;
+        editor.conflict = Some(super::SettingsConflict {
+            sections: vec!["appearance".to_owned()],
+            stored: Box::new(horizon_core::Config::default()),
+        });
+    }
+    for tab in super::SettingsTab::ALL {
+        let shapes = settings_frame(&ctx, &mut app, viewport, *tab);
+        let panel = panel_background_rect(&shapes, reserved_panel_rect(&app));
+        let band = footer_band(&shapes, panel);
+        let texts = footer_texts(&shapes, panel);
+        let buttons: Vec<egui::Rect> = texts
+            .iter()
+            .filter(|(text, _)| BUTTON_LABELS.contains(&text.as_str()))
+            .map(|(_, rect)| *rect)
+            .collect();
+        assert_eq!(
+            buttons.len(),
+            2,
+            "the {} tab draws the two choices in its footer: {texts:?}",
+            tab.label()
+        );
+        for button in &buttons {
+            assert!(
+                band.expand(1.0).contains_rect(*button) && button.min.x >= panel.min.x + 1.0,
+                "the choice at {button:?} is in the footer bar {band:?} of the panel {panel:?}"
+            );
+        }
+        let lines: Vec<&(String, egui::Rect)> = texts
+            .iter()
+            .filter(|(text, _)| !BUTTON_LABELS.contains(&text.as_str()))
+            .collect();
+        assert_eq!(lines.len(), 1, "one line: {texts:?}");
+        assert_eq!(lines[0].0, super::CONFLICT_LINE);
+        for button in &buttons {
+            assert!(
+                !lines[0].1.intersects(*button) && lines[0].1.max.x + 6.0 <= button.min.x,
+                "the line {:?} stays clear of the button {button:?}",
+                lines[0].1
+            );
+        }
+    }
+}
