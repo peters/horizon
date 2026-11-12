@@ -186,7 +186,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn an_exact_session_provider_process_is_live_even_with_a_stale_entry() {
-        use std::os::unix::fs::PermissionsExt;
         use std::process::{Child, Command, Stdio};
         use std::time::{Duration, Instant};
 
@@ -199,19 +198,20 @@ mod tests {
         }
 
         let temp = tempfile::tempdir().expect("home");
-        let provider = temp.path().join("claude");
         let ready = temp.path().join("ready");
-        std::fs::write(&provider, "#!/bin/sh\nprintf ready > \"$1\"\nread ignored\n").expect("fixture");
-        std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).expect("permissions");
+        let provider = crate::util::stand_in_program_in(temp.path(), "claude", "printf ready > \"$1\"\nread ignored")
+            .expect("the fixture program");
         let child = DisposableChild(
-            Command::new(&provider)
-                .arg(&ready)
-                .args(["--session-id", "session"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("disposable provider"),
+            crate::util::spawn_stand_in(|| {
+                Command::new(&provider)
+                    .arg(&ready)
+                    .args(["--session-id", "session"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            })
+            .expect("disposable provider"),
         );
         let deadline = Instant::now() + Duration::from_secs(2);
         while !ready.exists() {

@@ -427,7 +427,6 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::path::PathBuf;
 
@@ -602,14 +601,8 @@ mod tests {
     #[test]
     fn detect_script_support_reports_incompatible_script() {
         let root = temp_script_root("incompatible");
-        let script_path = root.join("script");
-        write_executable_script(
-            &script_path,
-            r"#!/bin/sh
-echo unsupported flags >&2
-exit 64
-",
-        );
+        crate::util::stand_in_program_in(&root, "script", "echo unsupported flags >&2\nexit 64")
+            .expect("the script of the test");
 
         let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::UtilLinux);
 
@@ -626,18 +619,17 @@ exit 64
     #[test]
     fn detect_script_support_accepts_util_linux_probe_shape() {
         let root = temp_script_root("util-linux");
-        let script_path = root.join("script");
-        write_executable_script(
-            &script_path,
-            r#"#!/bin/sh
-[ "$1" = "-qef" ] || exit 11
+        let script_path = crate::util::stand_in_program_in(
+            &root,
+            "script",
+            r#"[ "$1" = "-qef" ] || exit 11
 [ "$2" = "--log-out" ] || exit 12
 [ "$4" = "--command" ] || exit 13
 [ "$5" = "/bin/sh -c 'exit 0'" ] || exit 14
 : > "$3"
-exit 0
-"#,
-        );
+exit 0"#,
+        )
+        .expect("the script of the test");
 
         let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::UtilLinux);
 
@@ -655,20 +647,19 @@ exit 0
     #[test]
     fn detect_script_support_accepts_bsd_probe_shape() {
         let root = temp_script_root("bsd");
-        let script_path = root.join("script");
-        write_executable_script(
-            &script_path,
-            r#"#!/bin/sh
-[ "$1" = "-q" ] || exit 21
+        let script_path = crate::util::stand_in_program_in(
+            &root,
+            "script",
+            r#"[ "$1" = "-q" ] || exit 21
 [ "$2" = "-e" ] || exit 22
 [ "$3" = "-F" ] || exit 23
 [ "$5" = "/bin/sh" ] || exit 24
 [ "$6" = "-c" ] || exit 25
 [ "$7" = "exit 0" ] || exit 26
 : > "$4"
-exit 0
-"#,
-        );
+exit 0"#,
+        )
+        .expect("the script of the test");
 
         let support = ScriptSupport::detect(Some(root.as_os_str()), ScriptFlavor::Bsd);
 
@@ -687,14 +678,5 @@ exit 0
         let root = std::env::temp_dir().join(format!("horizon-transcript-script-{label}-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("temp script root");
         root
-    }
-
-    fn write_executable_script(path: &Path, contents: &str) {
-        let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, contents).expect("script body");
-        let mut permissions = fs::metadata(&temp_path).expect("script metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&temp_path, permissions).expect("script permissions");
-        fs::rename(&temp_path, path).expect("script rename");
     }
 }

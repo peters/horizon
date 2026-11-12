@@ -68,14 +68,8 @@ fn stand_in(directory: &Path, socket: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("relay.py");
     fs::write(&relay, RELAY).expect("the relay of the stand-in");
-    let program = directory.join("ssh");
-    let script = format!(
-        "#!/bin/sh\nexec /usr/bin/env python3 '{}' '{}'\n",
-        relay.display(),
-        socket.display()
-    );
-    fs::write(&program, script).expect("the stand-in ssh");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), socket.display());
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 

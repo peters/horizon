@@ -557,15 +557,16 @@ fn a_detached_session_releases_its_tunnel_process() -> Result<(), Error> {
     std::fs::create_dir_all(&home)?;
     let marker = home.join("tunnel.pid");
     let program = home.join("tunnel.sh");
+    // `/bin/sh` reads the script, so the kernel never executes a file that this
+    // test wrote: a fork of another test thread cannot refuse it with `ETXTBSY`.
     std::fs::write(
         &program,
-        format!("#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\ncat\n", marker.display()),
+        format!("printf '%s\\n' \"$$\" > '{}'\ncat\n", marker.display()),
     )?;
-    std::fs::set_permissions(&program, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     let session = Session::start(
         Config::new(Route::Tunnel {
-            program: program.display().to_string(),
-            args: Vec::new(),
+            program: "/bin/sh".to_owned(),
+            args: vec![program.display().to_string()],
             host: "127.0.0.1".to_owned(),
             port: Some(1),
         }),

@@ -3,7 +3,6 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -46,16 +45,11 @@ fn script_text(value: &str) -> String {
 /// One `sh` program that stands in for `ssh`: it logs the call it got and
 /// answers it the way that test needs.
 fn stand_in(directory: &Path, log: &Path, body: &str) -> String {
-    let path = directory.join("ssh");
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" | tr '\\n' ' ' >> {log}\nprintf '\\n' >> {log}\n{body}\n",
-            log = quoted(log)
-        ),
-    )
-    .expect("write the stand-in ssh");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).expect("make it executable");
+    let script = format!(
+        "printf '%s\\n' \"$*\" | tr '\\n' ' ' >> {log}\nprintf '\\n' >> {log}\n{body}",
+        log = quoted(log)
+    );
+    let path = crate::util::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     path.to_string_lossy().into_owned()
 }
 

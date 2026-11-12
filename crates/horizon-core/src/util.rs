@@ -22,13 +22,13 @@ pub fn stand_in_program() -> &'static str {
 /// a stand-in program instead of a program of the system.
 ///
 /// The file is a shell script with the permissions of a program, so the reader of
-/// either system runs it on the computer that runs the tests.
+/// either system runs it on the computer that runs the tests. A body that starts
+/// with `#!` keeps its own first line, so a test of a `bash` program writes one.
 ///
-/// The script is closed before this function answers. A caller that needs both
-/// the script and a command line around it writes it with
-/// [`stand_in_shell_in`] instead, because a file that this process still writes,
-/// or that a fork of another test still holds open for writing, refuses an
-/// `exec` with `ETXTBSY`.
+/// No descriptor of the script is open in this process at any time, so a fork of
+/// another test thread cannot copy one, and both this process and any production
+/// code under test can execute it at once. A caller that only needs a command
+/// line around the script writes it with [`stand_in_shell_in`] instead.
 ///
 /// # Errors
 ///
@@ -36,6 +36,38 @@ pub fn stand_in_program() -> &'static str {
 #[doc(hidden)]
 pub fn stand_in_program_in(folder: &Path, name: &str, body: &str) -> std::io::Result<PathBuf> {
     write_stand_in(folder, name, body, 0o755)
+}
+
+/// Starts one program that a test wrote, and starts it again while the kernel
+/// answers `ExecutableFileBusy`.
+///
+/// The tests of this workspace run in parallel threads of one process. A thread
+/// that writes a script holds it open for writing for a few microseconds, and a
+/// fork of another thread in that window copies the descriptor: the child holds
+/// the script open for writing until its own `exec`, and the kernel then refuses
+/// to execute that script with `ETXTBSY` (`Text file busy`). No write can remove
+/// that window, so a test that starts a script of its own retries the start
+/// instead. Every other answer of a start is the answer of the first try.
+///
+/// `start` performs one try and builds its command line again for each try, so a
+/// retry can never reuse a command that a child already took.
+///
+/// # Errors
+///
+/// Returns the error of the last try: the error of `start`, or
+/// `ExecutableFileBusy` when the attempts end first.
+#[doc(hidden)]
+pub fn spawn_stand_in<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match start() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < STAND_IN_ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(STAND_IN_RETRY);
+            }
+            answer => return answer,
+        }
+    }
 }
 
 /// Writes `body` as the program `name` of `folder` and answers the command line
@@ -56,28 +88,47 @@ pub fn stand_in_shell_in(folder: &Path, name: &str, body: &str) -> std::io::Resu
     Ok(format!("/bin/sh '{}'", path.display()))
 }
 
-/// Writes one `/bin/sh` script of a test, closes it, and answers its path.
+/// The most times that [`spawn_stand_in`] starts a script of a test, and how long it
+/// waits between two tries. A fork that copied the descriptor of the script ends its
+/// own `exec` within a millisecond, so the bounded time is the whole window of a
+/// script that a busy test process wrote.
+const STAND_IN_ATTEMPTS: usize = 200;
+const STAND_IN_RETRY: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Writes one script of a test and answers its path.
 ///
-/// The file is opened once with `O_CLOEXEC`, which the standard library sets on
-/// every file that it opens, so a program that this process starts never holds
-/// the descriptor after its `exec`. A fork that copies the descriptor needs the
-/// script within microseconds of the write, so the callers that read the script
-/// instead of executing it, as [`stand_in_shell_in`] does, remove that window.
+/// A `/bin/sh` of the system writes the file. A write from this process keeps a
+/// descriptor of the script open for a few microseconds, and a fork of another
+/// test thread in that window copies it: the child then holds the script open for
+/// writing until its own `exec`, and the kernel refuses to execute the script with
+/// `ETXTBSY` (`Text file busy`). The descriptor of a child belongs to that child,
+/// so nothing of this process can hold the script and the window does not exist.
+///
+/// A body that starts with `#!` keeps its own first line, so a test of a `bash`
+/// program writes the shell that its script needs.
 fn write_stand_in(folder: &Path, name: &str, body: &str, mode: u32) -> std::io::Result<PathBuf> {
     use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
 
     let path = folder.join(name);
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&path)?;
-    let written = file
-        .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
-        .and_then(|()| file.set_permissions(std::fs::Permissions::from_mode(mode)));
-    drop(file);
+    let first_line = if body.starts_with("#!") { "" } else { "#!/bin/sh\n" };
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cat > \"$1\" && chmod \"$2\" \"$1\"", "sh"])
+        .arg(&path)
+        .arg(format!("{mode:o}"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    let written = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(format!("{first_line}{body}\n").as_bytes()),
+        None => Ok(()),
+    };
+    let status = child.wait()?;
     written?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!(
+            "the shell that wrote `{}` ended with {status}",
+            path.display()
+        )));
+    }
     Ok(path)
 }
 
@@ -110,7 +161,7 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
+    use super::{spawn_stand_in, stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
 
     #[test]
     fn stand_in_program_names_a_program_that_exists() {
@@ -126,13 +177,59 @@ mod tests {
         let program =
             stand_in_program_in(folder.path(), "answer", "printf 'yes\\n'").expect("the stand-in program of the test");
 
-        let output = std::process::Command::new(&program)
-            .env_clear()
-            .output()
+        let output = spawn_stand_in(|| std::process::Command::new(&program).env_clear().output())
             .expect("the stand-in program runs");
 
         assert_eq!(output.status.code(), Some(0));
         assert_eq!(String::from_utf8_lossy(&output.stdout), "yes\n");
+    }
+
+    /// A test thread of this process writes a script while another thread forks, and the
+    /// child of that fork then holds the script open for writing: the kernel refuses to
+    /// execute it with `ETXTBSY` until the child ends its own `exec`. This test holds the
+    /// descriptor itself, which is the same refusal, and proves that the helper starts
+    /// the program once the window closes.
+    #[test]
+    fn spawn_stand_in_starts_a_program_that_a_fork_still_holds_open() {
+        let folder = tempfile::tempdir().expect("folder of a stand-in program");
+        let program =
+            stand_in_program_in(folder.path(), "answer", "printf 'yes\\n'").expect("the stand-in program of the test");
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&program)
+            .expect("an open descriptor of the script");
+        let refused = std::process::Command::new(&program)
+            .env_clear()
+            .output()
+            .expect_err("the kernel refuses a program that a descriptor still writes");
+        assert_eq!(
+            refused.kind(),
+            std::io::ErrorKind::ExecutableFileBusy,
+            "the refusal of this test is the refusal of a fork: {refused}"
+        );
+
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(held);
+        });
+        let output = spawn_stand_in(|| std::process::Command::new(&program).env_clear().output())
+            .expect("the helper starts the program after the window");
+        release.join().expect("the release of the descriptor");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "yes\n");
+    }
+
+    #[test]
+    fn a_body_with_its_own_first_line_keeps_the_shell_it_names() {
+        let folder = tempfile::tempdir().expect("folder of a stand-in program");
+        let program = stand_in_program_in(folder.path(), "answer", "#!/bin/sh\nprintf 'own\\n'")
+            .expect("the stand-in program of the test");
+        let body = std::fs::read_to_string(&program).expect("the script of the test");
+
+        assert!(
+            body.starts_with("#!/bin/sh\n"),
+            "the body keeps its own shell: {body:?}"
+        );
+        assert_eq!(body.matches("#!").count(), 1, "one first line, and not two: {body:?}");
     }
 
     #[test]

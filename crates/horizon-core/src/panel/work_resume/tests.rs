@@ -1,5 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
-
 use super::*;
 use crate::agent_work::{ResumePolicy, StartupPlan, WorkLaunch};
 use crate::runtime_state::AgentSessionBinding;
@@ -16,9 +14,9 @@ fn confirmed_restart_replaces_the_process_and_submits_the_brief_once() {
     let bin = home.path().join("bin");
     std::fs::create_dir(&bin).expect("fixture bin");
     std::fs::write(home.path().join(".bashrc"), "").expect("isolated shell config");
-    let provider = bin.join("pi");
-    std::fs::write(
-        &provider,
+    let provider = crate::util::stand_in_program_in(
+        &bin,
+        "pi",
         r#"#!/bin/bash
 if test -f "$HOME/provider.pid"; then
     read -r previous < "$HOME/provider.pid"
@@ -30,11 +28,9 @@ printf '%s\0' "$@" > "$HOME/args.$$"
 printf '%s\n' "$$" > "$HOME/provider.pid"
 trap 'rm -f "$HOME/.claude/sessions/$$.json"; exit 0' HUP TERM
 printf '%s\n' "$$" >> "$HOME/launches"
-while :; do read -r -t 1 || :; done
-"#,
+while :; do read -r -t 1 || :; done"#,
     )
     .expect("fixture executable");
-    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).expect("executable permission");
     std::fs::copy(&provider, bin.join("claude")).expect("second disposable provider");
     // Re-exec isolates HOME, PATH and SHELL from concurrent tests and ensures
     // the ordinary launch resolver can only find our disposable provider.

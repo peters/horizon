@@ -9,7 +9,6 @@
 use std::{
     collections::BTreeSet,
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -97,15 +96,13 @@ fn stand_in(directory: &Path, socket: &Path) -> String {
     let relay = directory.join("relay.py");
     fs::write(&relay, RELAY).expect("the relay of the stand-in");
     let arguments = directory.join("ssh-arguments.txt");
-    let program = directory.join("ssh");
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec /usr/bin/env python3 '{}' '{}'\n",
+        "printf '%s\\n' \"$@\" > '{}'\nexec /usr/bin/env python3 '{}' '{}'",
         arguments.display(),
         relay.display(),
         socket.display()
     );
-    fs::write(&program, script).expect("the stand-in ssh");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 
@@ -150,14 +147,8 @@ fn silent_stand_in(directory: &Path, starts: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("silent.py");
     fs::write(&relay, SILENT_RELAY).expect("the silent relay of the stand-in");
-    let program = directory.join("ssh");
-    let script = format!(
-        "#!/bin/sh\nexec /usr/bin/env python3 '{}' '{}'\n",
-        relay.display(),
-        starts.display()
-    );
-    fs::write(&program, script).expect("the silent stand-in ssh");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), starts.display());
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the silent stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 
@@ -639,15 +630,13 @@ fn refusing_stand_in(directory: &Path, code: &str, starts: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("refusing.py");
     fs::write(&relay, REFUSING_RELAY).expect("the refusing relay of the stand-in");
-    let program = directory.join("ssh");
     let script = format!(
-        "#!/bin/sh\nexec /usr/bin/env python3 '{}' '{}' '{}'\n",
+        "exec /usr/bin/env python3 '{}' '{}' '{}'",
         relay.display(),
         code,
         starts.display()
     );
-    fs::write(&program, script).expect("the refusing stand-in ssh");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).expect("an executable stand-in");
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the refusing stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 

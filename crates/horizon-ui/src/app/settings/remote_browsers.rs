@@ -893,8 +893,6 @@ mod tests {
     /// stdout, its account on stderr, in the format of `secret-tool` of libsecret, or
     /// the value of one account for the Keychain of macOS.
     fn stand_in_keyring(folder: &std::path::Path, platform: Platform, user: &str) {
-        use std::os::unix::fs::PermissionsExt as _;
-
         let (name, script) = match platform {
             Platform::SecretService => (
                 "secret-tool",
@@ -923,9 +921,7 @@ mod tests {
                 ),
             ),
         };
-        let path = folder.join(name);
-        std::fs::write(&path, script).expect("the stand-in");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
+        horizon_core::stand_in_program_in(folder, name, script.trim_end()).expect("the stand-in");
     }
 
     /// A stand-in for `secret-tool` that answers the OAuth client of the saved network

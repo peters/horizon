@@ -130,6 +130,13 @@ elif grep -R -n -E "$ALLOW_PATTERN" "${SOURCE_DIRS[@]}" >/dev/null; then
   status=1
 fi
 
+# A test writes a stand-in program with the helper of horizon-core: a script that
+# this process writes and then makes executable can refuse an `exec` with
+# `ETXTBSY` while a fork of another test thread holds its descriptor.
+if ! python3 "$ROOT_DIR/scripts/check-test-executable-scripts.py"; then
+  status=1
+fi
+
 # The exceptions of the UI-thread guard and the list of known UI-thread work in
 # docs/architecture/ui-thread.md must name the same reasons.
 if ! python3 "$ROOT_DIR/scripts/check-ui-thread-exceptions.py"; then
