@@ -178,8 +178,6 @@ Right-click a host for **Open over SSH**, **Open over VNC**, **Save SSH shortcut
 
 The same viewer also watches loopback VNC servers on this computer, one port per copy of an app. See [Watch an app over VNC](#watch-an-app-over-vnc).
 
-A Device panel can also show the pictures of a **frame source program**: a program of your own that you name in Settings, under **Remote**, and that Horizon starts when a viewer opens. Horizon keeps no screen capture of its own, so you choose the program that gives the pictures. See [frame source programs](docs/architecture/frame-source.md).
-
 #### One machine list on more than one computer
 
 Two computers of yours can show the same machine list, use the same machine keys and the same provider credentials. One of them runs the Horizon server (`horizon --server`), and the others follow it. A computer joins in one of two ways:

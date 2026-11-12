@@ -45,7 +45,6 @@ function, update this document in the same PR.
 | Passkey bridge in local Chromium and Firefox panels | Yes | Not tested |
 | BrowserStack browsers and phones | Yes | Yes |
 | Device panels (VNC viewer) | Yes | Yes |
-| Device panels (frame source program) | Yes | Yes |
 | Agent input to an isolated desktop | Partial (note 2) | No (note 2) |
 | Remote Hosts: SSH and Tailscale | Yes | Yes |
 | Browser panel of a browser on another machine | Yes (note 4) | Yes (note 4) |
@@ -130,27 +129,6 @@ and up to 20 seconds for the whole import on Linux.
 When the program of a system is not found, the line under the button says what
 that system needs. Linux names the package `libsecret-tools`. macOS names the
 program `security`, which is a part of macOS.
-
-## Frame source programs
-
-A Device panel can show a VNC desktop, or the pictures of a frame source program
-of the computer that runs Horizon. Horizon holds no codec and no library of that
-program: the person names it in the `frame_sources` section of the settings, and
-the program gives raw NV12 pictures over a Unix stream socket
-(`crates/horizon-frame-source/`). The reader is plain Unix, so the platform
-gives nothing and needs nothing.
-
-| Function | Linux | macOS |
-|---|---|---|
-| A viewer of a frame source program | Yes | Yes |
-| A frame source program that this repository gives | No | No: the stand-in of the tests is the only one |
-| The stand-in program of the fixture | Yes | Yes, with `python3` |
-
-A program that speaks the contract for a system is the person's to install, or to
-write. The stand-in program, `scripts/device-smoke/frame_source_standin.py`,
-draws a pattern of its own and opens no device and no screen, so a test needs no
-desktop and no capture program on either platform. See
-[the frame source viewer procedure](testing/procedures/frame-source-viewer.md).
 
 ## Speech input
 
