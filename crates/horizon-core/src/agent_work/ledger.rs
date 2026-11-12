@@ -61,6 +61,15 @@ fn legacy_stop_review() -> StopReview {
 }
 
 impl TurnLedger {
+    /// Whether an event of this launch has advanced the ledger. A launch whose
+    /// hooks never run keeps a record that answers `false`, and its panel keeps
+    /// the state of its terminal screen. The moment of the last event is zero
+    /// until an accepted event sets it, so no separate field is stored.
+    #[must_use]
+    pub fn heard_an_event(&self) -> bool {
+        self.updated_at_millis != 0
+    }
+
     /// Apply one event from the owning session. Unsupported events and stale
     /// prompt events cannot clear a permission/question blocker.
     pub fn apply(&mut self, event: &HookEvent, now_millis: i64) {

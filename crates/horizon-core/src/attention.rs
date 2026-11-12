@@ -1,11 +1,13 @@
 //! Which agent panel needs the person, which one finished while the person was
 //! elsewhere, and which one works.
 //!
-//! One panel has one state. An agent kind whose launch registered a work ledger
-//! takes the state from that ledger: the hooks know that a question waits and
-//! that a turn ended. Every other agent kind keeps the working indicator of its
-//! terminal screen, and a turn that ends while the panel did not have the
-//! focus is unread.
+//! One panel has one state. An agent panel whose launch registered a work ledger
+//! takes the state from that ledger once the first event of its launch arrives:
+//! the hooks know that a question waits and that a turn ended. Until then, and
+//! for every agent panel without a ledger, the working indicator of the terminal
+//! screen decides, and a turn that ends while the panel did not have the focus is
+//! unread. A wrapper that drops Horizon's arguments and an agent that runs no
+//! hooks therefore keep the signal of the screen.
 use std::collections::BTreeMap;
 
 use crate::PanelId;
@@ -121,7 +123,9 @@ struct Panel {
     generation: u64,
     /// The latest moment of a ledger observation, so an older read is dropped.
     observed_at_millis: i64,
-    /// Whether the launch of this panel registered a work ledger.
+    /// Whether an event of this launch has reached its ledger. Until it has, the
+    /// screen decides, because a launch whose hooks never run would otherwise
+    /// hold a ledger that says nothing.
     hooked: bool,
     /// The last state of the ledger.
     state: TurnState,
@@ -159,10 +163,10 @@ impl Panel {
     }
 
     fn attention(&self) -> Attention {
-        // A panel without hooks has no ledger: its working indicator is the
-        // signal, and the state that the indicator left is unread until a look.
-        if !self.hooked && self.working {
-            return Attention::Working;
+        // A panel that has heard no event of its launch has no ledger to read:
+        // the working indicator and the end of a turn on the screen decide.
+        if !self.hooked {
+            return self.screen_attention();
         }
         let mut state = match self.state {
             // An open question is the person's answer to give, so a look does
@@ -180,6 +184,18 @@ impl Panel {
         state
     }
 
+    /// The state that the terminal screen gives: a working indicator, and a turn
+    /// that ended while the person looked elsewhere.
+    fn screen_attention(&self) -> Attention {
+        if self.working {
+            return Attention::Working;
+        }
+        if (self.state == TurnState::Finished && self.unseen()) || self.marked_unread {
+            return Attention::Done;
+        }
+        Attention::Idle
+    }
+
     fn apply(&mut self, state: TurnState, ended_at_millis: Option<i64>, background_tasks: u32) {
         self.state = state;
         self.ended_at_millis = ended_at_millis;
@@ -190,6 +206,10 @@ impl Panel {
 impl AttentionBoard {
     /// Records one read of the work ledger of `panel`, whose launch registered
     /// that ledger. Answers whether the state of the panel changed.
+    ///
+    /// The ledger answers for the panel from the first event of its launch on. A
+    /// launch that has heard no event yet, and every later launch until it hears
+    /// one, leaves the state to the screen.
     pub fn observe_ledger(&mut self, panel: &str, ledger: &TurnLedger, now_millis: i64) -> bool {
         let before = self.state(panel);
         let held = self
@@ -200,26 +220,36 @@ impl AttentionBoard {
         // a timeline of its own. A read of the same launch that is older than
         // the one this panel holds describes a turn that is already behind it.
         let first = held.observed_at_millis == i64::MIN;
-        let relaunched = held.hooked && (ledger.session_id != held.session_id || ledger.generation != held.generation);
+        if !first && ledger.generation < held.generation {
+            // A record of an earlier launch of the panel cannot describe the
+            // launch that replaced it.
+            return false;
+        }
+        let relaunched = !first && (ledger.session_id != held.session_id || ledger.generation != held.generation);
         if first || relaunched || ledger.updated_at_millis >= held.observed_at_millis {
             if first || relaunched {
                 // A panel that the board reads for the first time, or after a
                 // relaunch, is not asked about a turn that ended before that.
+                // The turn of the launch before it is not part of this one.
                 held.seen_at_millis = ledger.updated_at_millis;
+                held.apply(TurnState::Unknown, None, 0);
             }
             held.session_id.clone_from(&ledger.session_id);
             held.generation = ledger.generation;
             held.observed_at_millis = ledger.updated_at_millis;
-            held.hooked = true;
-            let (state, ended_at) = ledger_outcome(ledger);
-            held.apply(state, ended_at, ledger.background_tasks);
+            held.hooked = ledger.heard_an_event();
+            if held.hooked {
+                let (state, ended_at) = ledger_outcome(ledger);
+                held.apply(state, ended_at, ledger.background_tasks);
+            }
         }
         let after = self.state(panel);
         after != before
     }
 
     /// Records the working indicator of a panel whose agent kind has no
-    /// lifecycle hooks. A panel that has a ledger keeps the ledger's answer.
+    /// lifecycle hooks, or whose launch has heard no event. A panel whose
+    /// ledger answers for it keeps the ledger's answer.
     pub fn observe_working(&mut self, panel: &str, working: bool, focused: bool, now_millis: i64) -> bool {
         let before = self.state(panel);
         let held = self
@@ -290,8 +320,8 @@ impl AttentionBoard {
         self.panels.get(panel).map_or(Attention::Idle, Panel::attention)
     }
 
-    /// Whether the launch of `panel` registered a work ledger, so its state
-    /// comes from the lifecycle hooks and not from its terminal screen.
+    /// Whether the state of `panel` comes from its lifecycle hooks now, because
+    /// an event of its launch has arrived.
     #[must_use]
     pub fn from_ledger(&self, panel: &str) -> bool {
         self.panels.get(panel).is_some_and(|held| held.hooked)

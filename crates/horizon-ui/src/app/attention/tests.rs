@@ -127,6 +127,67 @@ fn an_open_question_of_the_ledger_does_not_clear_on_a_look() {
     assert_eq!(app.panel_attention(&local), Attention::NeedsYou);
 }
 
+/// The record of a launch whose hooks have not run yet: the launch registered
+/// its session and its generation, and no event has arrived.
+fn quiet_ledger(session: &str, generation: u64) -> TurnLedger {
+    let mut ledger = TurnLedger::default();
+    ledger.session_id = session.into();
+    ledger.generation = generation;
+    ledger
+}
+
+#[test]
+fn a_ledger_that_has_heard_no_event_keeps_the_working_indicator_of_its_panel() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    let now = horizon_core::current_unix_millis();
+    app.board.focused = None;
+    // A read of the registered launch, before any event of it: the panel keeps
+    // the signal of its own screen.
+    app.apply_attention_values(vec![(panel, local.clone(), Some(quiet_ledger("session", 1)))], &ctx);
+    assert!(!app.attention.states.from_ledger(&local));
+    app.attention.states.observe_working(&local, true, false, now);
+    assert_eq!(app.panel_attention(&local), Attention::Working);
+    // The session start of the agent is the first event, and the ledger answers
+    // from then on.
+    let mut session_start = quiet_ledger("session", 1);
+    session_start.updated_at_millis = now;
+    assert!(app.apply_attention_values(vec![(panel, local.clone(), Some(session_start))], &ctx));
+    assert!(app.attention.states.from_ledger(&local));
+    assert_eq!(app.panel_attention(&local), Attention::Idle);
+    app.attention.states.observe_working(&local, true, false, now + 1);
+    assert_eq!(
+        app.panel_attention(&local),
+        Attention::Idle,
+        "the screen cannot decide a panel that its ledger describes"
+    );
+}
+
+#[test]
+fn the_state_of_an_observed_panel_with_the_policy_off_comes_from_a_read_alone() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    let now = horizon_core::current_unix_millis();
+    // The panel's continuation policy is off, and Horizon still reads its
+    // ledger: the sidebar shows the state that the hooks report.
+    assert!(!app.board.panel(panel).expect("panel").work_resume.enabled);
+    app.board.focused = None;
+    app.apply_attention_values(
+        vec![(panel, local.clone(), Some(ledger(TurnState::Blocked, now)))],
+        &wake(),
+    );
+    assert_eq!(app.panel_attention(&local), Attention::NeedsYou);
+}
+
 #[test]
 fn a_workspace_row_shows_the_heaviest_state_and_the_count_of_the_agents_that_wait() {
     let (_temp, mut app) = test_app();

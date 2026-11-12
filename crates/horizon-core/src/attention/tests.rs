@@ -272,3 +272,84 @@ fn the_jump_reaches_the_focused_panel_when_it_is_the_only_one() {
         None
     );
 }
+
+/// The record of a launch whose hooks have not run yet: the store registers the
+/// session and the generation before the agent starts, and no event has set the
+/// moment of the last one.
+fn quiet_ledger(session: &str, generation: u64) -> TurnLedger {
+    let mut ledger = TurnLedger::default();
+    ledger.session_id = session.into();
+    ledger.generation = generation;
+    ledger
+}
+
+#[test]
+fn a_launch_that_heard_no_event_keeps_the_screen_rule() {
+    let mut board = board();
+    board.observe_ledger("panel", &quiet_ledger("session", 1), 10);
+    assert!(!board.from_ledger("panel"), "no event has arrived");
+    assert_eq!(board.state("panel"), Attention::Idle);
+    // The screen of the panel decides, exactly as for a panel without hooks.
+    assert!(board.observe_working("panel", true, false, 20));
+    assert_eq!(board.state("panel"), Attention::Working);
+    // A late read of the same quiet launch changes nothing.
+    assert!(!board.observe_ledger("panel", &quiet_ledger("session", 1), 30));
+    assert_eq!(board.state("panel"), Attention::Working);
+    assert!(board.observe_working("panel", false, false, 40));
+    assert_eq!(board.state("panel"), Attention::Done);
+    assert!(!board.from_ledger("panel"));
+}
+
+#[test]
+fn the_first_event_of_a_launch_switches_the_panel_to_its_ledger() {
+    let mut board = board();
+    board.observe_ledger("panel", &quiet_ledger("session", 1), 10);
+    board.observe_working("panel", true, false, 20);
+    assert_eq!(board.state("panel"), Attention::Working);
+    // The agent starts: its session start is the first event of the launch.
+    let mut session_start = ledger(TurnState::Unknown, 30);
+    session_start.generation = 1;
+    assert!(board.observe_ledger("panel", &session_start, 30));
+    assert_eq!(board.state("panel"), Attention::Idle, "the ledger answers now");
+    assert!(board.from_ledger("panel"));
+    // The screen cannot reopen what the ledger holds.
+    board.observe_working("panel", true, false, 35);
+    assert_eq!(board.state("panel"), Attention::Idle);
+    // And the turn of the ledger is read as a panel with hooks reads it.
+    let mut working = ledger(TurnState::Working, 40);
+    working.generation = 1;
+    board.observe_ledger("panel", &working, 40);
+    assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn a_stale_event_of_an_older_launch_does_not_switch_the_panel() {
+    let mut board = board();
+    // The panel runs its second launch and has heard no event of it.
+    board.observe_ledger("panel", &quiet_ledger("second", 2), 10);
+    board.observe_working("panel", true, false, 20);
+    assert_eq!(board.state("panel"), Attention::Working);
+    // A read of the launch before it arrives late, with an event of its own. It
+    // describes a panel process that is gone.
+    let mut older = ledger(TurnState::Blocked, 40);
+    older.generation = 1;
+    assert!(!board.observe_ledger("panel", &older, 50));
+    assert!(!board.from_ledger("panel"), "the older launch cannot answer");
+    assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn a_relaunch_begins_again_with_the_screen_rule() {
+    let mut board = board();
+    let mut working = ledger(TurnState::Working, 10);
+    working.generation = 1;
+    board.observe_ledger("panel", &working, 10);
+    assert!(board.from_ledger("panel"));
+    // A new process of the same panel registered a new launch, and its hooks
+    // have not run yet.
+    board.observe_ledger("panel", &quiet_ledger("session", 2), 20);
+    assert!(!board.from_ledger("panel"));
+    assert_eq!(board.state("panel"), Attention::Idle);
+    assert!(board.observe_working("panel", true, false, 30));
+    assert_eq!(board.state("panel"), Attention::Working);
+}
