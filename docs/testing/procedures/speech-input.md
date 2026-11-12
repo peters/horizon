@@ -365,7 +365,7 @@ tests below prove that the take of this procedure passes in that situation too.
 3. Read the log for a failure:
 
    ```sh
-   rg "test result|^    speech::" <evidence>/take-tests.log
+   grep -E "test result|^    speech::" <evidence>/take-tests.log
    ```
 
    Result: Every test of the module passed, including the two stand-ins that
@@ -374,7 +374,7 @@ tests below prove that the take of this procedure passes in that situation too.
 4. List the recorders that the tests left:
 
    ```sh
-   ps -eo pid,args | rg "[.]tmp.*/rec " || echo "no recorder stays"
+   ps -eo pid,args | grep "[.]tmp.*/rec " || echo "no recorder stays"
    ```
 
    Result: `no recorder stays`. A test that failed before it stopped its recorder

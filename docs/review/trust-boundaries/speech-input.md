@@ -96,10 +96,10 @@ What the clean does not guarantee:
   program that Horizon starts for speech input.
 - **The recorder is the exact program.** Horizon starts one program under the
   supervisor shell, reads the process id of that program from the supervisor, and
-  sends `SIGINT` to that id. When the child still runs after 0.3
-  seconds Horizon sends `SIGTERM` to that id, and when two seconds pass it sends
-  `SIGKILL` to that id. No signal goes to a process group and no name is matched,
-  so no other program of this computer can be touched.
+  sends `SIGINT` to that id. When the program still runs after 0.3 seconds Horizon
+  sends `SIGTERM` to that id, and when two seconds pass it sends `SIGKILL` to that
+  id. No signal goes to a process group and no name is matched, so no other program
+  of this computer can be touched.
 - **The stop does not depend on one signal.** A program that a script, `nohup` or
   a launcher started in the background inherits `SIGINT` set to "ignore", keeps
   that across `exec`, and a non-interactive shell cannot trap it. `SIGTERM` is not
