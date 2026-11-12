@@ -29,9 +29,9 @@ a panel after the container stops.
 
 ## 3. Safety
 
-> **CAUTION:** THE PROCEDURE RENTS A MACHINE, AND THAT MACHINE COSTS MONEY UNTIL YOU DELETE IT. Rent the smallest machine that the provider offers, and do task BM-8 in the same session.
+> **CAUTION:** THE PROCEDURE RENTS A MACHINE, AND THAT MACHINE COSTS MONEY UNTIL YOU DELETE IT. Rent the smallest machine that the provider offers, and do task BM-9 in the same session.
 
-> **CAUTION:** THE PROCEDURE DELETES THE MACHINE IN TASK BM-8, WITH EVERY FILE ON IT. Use a new machine, and no machine that holds work of the person.
+> **CAUTION:** THE PROCEDURE DELETES THE MACHINE IN TASK BM-9, WITH EVERY FILE ON IT. Use a new machine, and no machine that holds work of the person.
 
 > **CAUTION:** SIGN IN ONLY WITH A TEST ACCOUNT. The profile folder of the machine holds every sign-in that the browser takes, and every local account of that machine can drive the browser.
 
@@ -181,7 +181,7 @@ a panel after the container stops.
    and `docker ps` shows `127.0.0.1:<m>->9222/tcp` with a port `<m>` that can
    differ from `<n>`. The endpoint file holds `<m>` on line 1.
 
-### 6.4 BM-4 — a lost browser keeps the panel, says why, and comes back
+### 6.4 BM-4 — a stopped browser keeps the panel, says why, and needs Retry
 
 1. With a browser panel open on a page, stop the browser of the container:
 
@@ -205,19 +205,59 @@ a panel after the container stops.
 
 3. Do not press a control. Wait 30 seconds.
 
-   Result: the panel connects again by itself. Horizon starts the browser of
-   that machine again, and the panel paints one new page at the address of
-   step 1. The panel stays in the same place on the canvas. The line above the
-   page states `The link was lost, so this page is new: text that you had typed
-   into it, its scroll position and its session are gone.`
+   Result: the panel tries again by itself about 3 seconds after the loss, and
+   that attempt reaches no browser, because the browser of that machine
+   stopped. The panel states `the browser of bvm-1 in the profile work gave no
+   answer on its DevTools port through the forward: ...; use Retry`, with the
+   `Retry` button. It keeps its last address and its place on the canvas, and it
+   starts no browser of its own. The attempts end here.
 
-4. Type text into a field of the page, stop the browser again, and wait 30
-   seconds.
+4. Press `Retry`.
 
-   Result: the panel comes back at the same address, and the field is empty.
-   The line of step 3 is there again.
+   Result: Horizon starts the browser of that machine again, and the panel
+   paints one new page at the address of step 1. The line above the page states
+   `The link was lost, so this page is new: text that you had typed into it, its
+   scroll position and its session are gone.`
 
-### 6.5 BM-5 — a machine without the wrapper names that reason
+### 6.5 BM-5 — a cut of the link comes back by itself
+
+> **CAUTION:** ROUTE THE SSH CONNECTION OF THE TEST THROUGH THE LOOPBACK PROXY.
+> Do not put the proxy between Horizon and a machine that you need. Keep the
+> address, the account and the key out of the log of the proxy.
+
+1. Add the proxy to the `Host bvm-1` block of the setup step 6, with the port of
+   the proxy and `nc`:
+
+   ```sshconfig
+       ProxyCommand nc 127.0.0.1 <proxy port>
+   ```
+
+   Result: `ssh -T -o BatchMode=yes bvm-1 'echo ok'` on the client prints `ok`.
+
+2. Start the loopback TCP proxy of
+   [the device viewer procedure](device-viewer-reconnect.md) section 4, from a
+   free loopback port to the address of the destination on port 22. Write the
+   proxy port down as `PROXY`.
+
+3. Start Horizon again, open a browser panel on a page of the machine, type text
+   into a field of that page, and turn the wheel over the page.
+
+   Result: the panel paints the page with the text and the new scroll position.
+
+4. Cut the flow in the proxy for 20 seconds, then release it.
+
+   Result: the panel states `The link is lost. The panel connects again in N s
+   (attempt 1).`, where N counts down from 3. After the release the panel
+   connects again by itself, at the first or the second attempt, and paints one
+   new page at the address of step 3. No person pressed a control. The field is
+   empty and the page is at its top. The line above the page states that the
+   page is new and that its state is gone.
+
+5. Remove the `ProxyCommand` line of step 1 and stop the proxy.
+
+   Result: `ssh -T -o BatchMode=yes bvm-1 'echo ok'` prints `ok` again.
+
+### 6.6 BM-6 — a machine without the wrapper names that reason
 
 1. Remove the wrapper on the destination:
 
@@ -239,7 +279,7 @@ a panel after the container stops.
 
    Result: the last line is `browser-machine ready profile=work port=<n>`.
 
-### 6.6 BM-6 — a second setup run changes nothing
+### 6.7 BM-7 — a second setup run changes nothing
 
 1. Run the setup again on the destination.
 
@@ -251,7 +291,7 @@ a panel after the container stops.
    it`, the last line holds the same port when the container did not restart, and
    `docker ps` shows one container.
 
-### 6.7 BM-7 — the setup refuses a machine that has a browser
+### 6.8 BM-8 — the setup refuses a machine that has a browser
 
 1. On a machine that has a real Chromium, run the setup without `--force`.
 
@@ -262,7 +302,7 @@ a panel after the container stops.
 
    Result: the setup continues and installs the wrapper.
 
-### 6.8 BM-8 — clean up, and delete the machine
+### 6.9 BM-9 — clean up, and delete the machine
 
 > **CAUTION:** THIS STEP DELETES THE CONTAINER, THE IMAGE, THE WRAPPER, THE PROFILE FOLDER AND THE MACHINE. Every sign-in of that browser is lost, and no file of that machine remains.
 
@@ -296,15 +336,18 @@ a panel after the container stops.
   a resize through the tunnel of that machine.
 - A second panel reuses the running container, and a stopped container restarts
   at the next panel on a port that the wrapper reads again.
-- A lost browser keeps the panel, says why, reports
-  `attached_host_connection_lost` to an agent, and comes back by itself at the
-  same address in a new page that says its state is gone.
+- A stopped browser keeps the panel, says why, and reports
+  `attached_host_connection_lost` to an agent. Its automatic attempt starts no
+  browser, and `Retry` starts the browser again at the same address in a new page
+  that says its state is gone.
+- A cut of the SSH flow that leaves the browser running comes back by itself at
+  the same address in a new page that says its state is gone.
 - A machine without the wrapper reports `attached_host_no_browser`.
 - No step of the run leaves a machine, a container or a process.
 
 ## 8. Cleanup
 
-Task BM-8 is the cleanup. Run it before the end of the session, also when a task
+Task BM-9 is the cleanup. Run it before the end of the session, also when a task
 failed.
 
 ## 9. Record of results
