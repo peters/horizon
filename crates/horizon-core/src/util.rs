@@ -24,18 +24,60 @@ pub fn stand_in_program() -> &'static str {
 /// The file is a shell script with the permissions of a program, so the reader of
 /// either system runs it on the computer that runs the tests.
 ///
+/// The script is closed before this function answers. A caller that needs both
+/// the script and a command line around it writes it with
+/// [`stand_in_shell_in`] instead, because a file that this process still writes,
+/// or that a fork of another test still holds open for writing, refuses an
+/// `exec` with `ETXTBSY`.
+///
 /// # Errors
 ///
 /// Returns the error of the write or of the permissions of the file.
 #[doc(hidden)]
 pub fn stand_in_program_in(folder: &Path, name: &str, body: &str) -> std::io::Result<PathBuf> {
+    write_stand_in(folder, name, body, 0o755)
+}
+
+/// Writes `body` as the program `name` of `folder` and answers the command line
+/// that runs it: `/bin/sh <path>` with the path quoted for the shell.
+///
+/// A test whose command line names a stand-in script uses this form, and the
+/// kernel then never executes the script file: `/bin/sh` reads it as input. A
+/// script file that another test thread forks over cannot refuse a read, so a
+/// parallel run of these tests has no `ETXTBSY`. The file is not executable,
+/// because nothing runs it as a program.
+///
+/// # Errors
+///
+/// Returns the error of the write of the script.
+#[doc(hidden)]
+pub fn stand_in_shell_in(folder: &Path, name: &str, body: &str) -> std::io::Result<String> {
+    let path = write_stand_in(folder, name, body, 0o644)?;
+    Ok(format!("/bin/sh '{}'", path.display()))
+}
+
+/// Writes one `/bin/sh` script of a test, closes it, and answers its path.
+///
+/// The file is opened once with `O_CLOEXEC`, which the standard library sets on
+/// every file that it opens, so a program that this process starts never holds
+/// the descriptor after its `exec`. A fork that copies the descriptor needs the
+/// script within microseconds of the write, so the callers that read the script
+/// instead of executing it, as [`stand_in_shell_in`] does, remove that window.
+fn write_stand_in(folder: &Path, name: &str, body: &str, mode: u32) -> std::io::Result<PathBuf> {
+    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
 
     let path = folder.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}\n"))?;
-    let mut permissions = std::fs::metadata(&path)?.permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&path, permissions)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)?;
+    let written = file
+        .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+        .and_then(|()| file.set_permissions(std::fs::Permissions::from_mode(mode)));
+    drop(file);
+    written?;
     Ok(path)
 }
 
@@ -68,7 +110,7 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{stand_in_program, stand_in_program_in, truncate_chars};
+    use super::{stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
 
     #[test]
     fn stand_in_program_names_a_program_that_exists() {
@@ -91,6 +133,33 @@ mod tests {
 
         assert_eq!(output.status.code(), Some(0));
         assert_eq!(String::from_utf8_lossy(&output.stdout), "yes\n");
+    }
+
+    #[test]
+    fn stand_in_shell_in_writes_a_script_that_its_shell_reads() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let folder = tempfile::tempdir().expect("folder of a stand-in script");
+        let command = stand_in_shell_in(folder.path(), "answer", "printf 'yes %s\\n' \"$1\"")
+            .expect("the stand-in script of the test");
+        let script = folder.path().join("answer");
+
+        assert_eq!(
+            script.metadata().expect("the script").permissions().mode() & 0o111,
+            0,
+            "nothing executes the script file, so it is not executable"
+        );
+        let line = crate::speech::command::CommandLine::parse(&format!("{command} {{file}}"))
+            .expect("a command line of the script");
+        assert_eq!(line.program(), "/bin/sh", "the shell is the program of the line");
+
+        let output = std::process::Command::new(line.program())
+            .args(line.arguments_for(std::path::Path::new("one argument")))
+            .env_clear()
+            .output()
+            .expect("the shell reads the script");
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "yes one argument\n");
     }
 
     #[test]

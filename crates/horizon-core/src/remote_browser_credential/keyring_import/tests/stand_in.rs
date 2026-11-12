@@ -10,8 +10,6 @@
 //! [`keyring`] writes the stand-in of one [`Platform`], so a test reads the keyring of
 //! either system on the computer that runs the tests.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
@@ -75,11 +73,15 @@ impl StandIns {
     }
 
     /// Write `script` as the executable program `name` of this folder.
+    ///
+    /// The program is a `/bin/sh` script that the import runs as a program of the
+    /// `PATH`, and the import tries an `ETXTBSY` of a script that a parallel test
+    /// still holds open again. A test of a recorder that reads its script instead
+    /// of executing it uses `horizon_core::stand_in_shell_in`.
     pub(super) fn program(&self, name: &str, script: &str) -> PathBuf {
-        let path = self.folder.path().join(name);
-        fs::write(&path, script).expect("the stand-in program");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("an executable program");
-        path
+        let body = script.strip_prefix("#!/bin/sh\n").unwrap_or(script);
+        crate::util::stand_in_program_in(self.folder.path(), name, body.trim_end_matches('\n'))
+            .expect("the stand-in program")
     }
 
     /// A file of this folder, such as the pid that a stand-in wrote.

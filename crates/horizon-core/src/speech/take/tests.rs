@@ -71,12 +71,15 @@ impl Take {
         self.home.path().join(TAKE_FOLDER)
     }
 
-    /// A script of this test, in the home of the test.
+    /// The command line of a `/bin/sh` script of this test, in the home of the test.
+    ///
+    /// The line is `/bin/sh '<path>'`, so the kernel never executes the script file:
+    /// the shell reads it. A test thread that forks while another test writes a
+    /// script cannot then make that script refuse its own start with `ETXTBSY`; the
+    /// supervisor of a recorder runs the command line as its program.
     fn script(&self, name: &str, body: &str) -> String {
-        let path = self.home.path().join(name);
-        fs::write(&path, body).expect("a script of a test");
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("an executable script");
-        path.to_string_lossy().into_owned()
+        let body = body.strip_prefix("#!/bin/sh\n").unwrap_or(body);
+        crate::util::stand_in_shell_in(self.home.path(), name, body.trim_end_matches('\n')).expect("a script of a test")
     }
 
     /// A file that a recorder copies, so a take holds the bytes of a recording.
@@ -139,7 +142,7 @@ impl Take {
             ),
         );
         CommandLine::parse(&format!(
-            "sh -c 'trap \"\" {ignored}; exec \"$0\" \"$@\"' '{program}' {{file}}"
+            "sh -c 'trap \"\" {ignored}; exec \"$@\"' sh {program} {{file}}"
         ))
         .expect("a recorder line")
     }
@@ -803,17 +806,16 @@ fn a_take_that_its_window_kills_leaves_no_recorder() {
     let prepared = home.path().join("prepared.wav");
     fs::write(&prepared, b"RIFF$\x00\x00\x00WAVEfmt ").expect("a recording of a test");
     let pid_file = home.path().join("helper.pid");
-    let recorder = home.path().join("rec");
-    fs::write(
-        &recorder,
-        format!(
-            "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\nwhile :; do sleep 0.02; done\n",
+    let recorder = crate::util::stand_in_shell_in(
+        home.path(),
+        "rec",
+        &format!(
+            "cp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\nwhile :; do sleep 0.02; done",
             prepared.display(),
             pid_file.display()
         ),
     )
     .expect("a recorder of a test");
-    fs::set_permissions(&recorder, fs::Permissions::from_mode(0o700)).expect("an executable recorder");
 
     let mut helper = Command::new(std::env::current_exe().expect("the test binary"))
         .args(["--exact", HELPER_TEST, "--nocapture", "--test-threads", "1"])

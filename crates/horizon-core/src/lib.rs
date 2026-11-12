@@ -113,6 +113,6 @@ pub use ssh::{
 pub use terminal::{ClipboardTarget, ClipboardWrite, CwdReader, PROGRAM_BOUND, Terminal, open_url, read_cwd};
 pub use transcript::PanelTranscript;
 pub use transcript::warm_script_support;
-pub use util::{stand_in_program, stand_in_program_in, truncate_chars};
+pub use util::{stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
 pub use view::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};
