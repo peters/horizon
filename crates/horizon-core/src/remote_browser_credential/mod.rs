@@ -30,7 +30,8 @@ use zeroize::Zeroizing;
 pub use environment::EnvironmentCredentialStore;
 pub use keyring_import::{
     Bound, ImportLine, KeyringImport, KeyringImportError, KeyringImportOutcome, KeyringImportPlan, KeyringImportReport,
-    Platform, ProgramEnvironment, import_from_keyring,
+    Platform, ProgramEnvironment, TailnetLine, TailnetOffer, TailnetReport, Tailnets, create_tailnets,
+    import_from_keyring, net_of,
 };
 pub use resolved::ReadCredentialStore;
 pub use session::SessionCredentialStore;

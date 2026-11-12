@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, test_kill_process};
 
-use super::super::readers::{Bound, libsecret, platform, secret_tool, security};
+use super::super::readers::{Bound, SERVICE, libsecret, platform, secret_tool, security};
 use super::super::{KeyringImportError, KeyringImportPlan, Platform, ProgramEnvironment};
 use super::fixtures::settings;
 use super::stand_in::{StandIns, found};
@@ -68,7 +68,7 @@ fn two_entries_of_the_secret_service_keep_their_accounts_and_values() {
             )
         )),
     );
-    let entries = secret_tool::read(&program, &stand_ins.environment(), bound()).expect("two entries");
+    let entries = secret_tool::read(&program, SERVICE, &stand_ins.environment(), bound()).expect("two entries");
 
     assert_eq!(
         answered(&entries),
@@ -97,7 +97,7 @@ fn a_value_with_spaces_equals_and_non_ascii_is_kept_byte_for_byte() {
             "https://grid.example.net|remote-browser/grid/key",
         )),
     );
-    let entries = secret_tool::read(&program, &stand_ins.environment(), bound()).expect("one entry");
+    let entries = secret_tool::read(&program, SERVICE, &stand_ins.environment(), bound()).expect("one entry");
 
     assert_eq!(
         &*entries[0].value,
@@ -123,7 +123,7 @@ fn a_value_with_a_line_break_is_one_typed_refusal() {
     let program = stand_ins.program("secret-tool", &script(&body));
 
     assert_eq!(
-        secret_tool::read(&program, &stand_ins.environment(), bound()).err(),
+        secret_tool::read(&program, SERVICE, &stand_ins.environment(), bound()).err(),
         Some(KeyringImportError::Unreadable)
     );
 }
@@ -136,7 +136,7 @@ fn a_failure_of_the_program_is_one_typed_refusal_without_its_output() {
         &script("printf '%s\\n' 'a value of the keyring' >&2\nexit 3\n"),
     );
 
-    let error = secret_tool::read(&program, &stand_ins.environment(), bound()).expect_err("a refusal");
+    let error = secret_tool::read(&program, SERVICE, &stand_ins.environment(), bound()).expect_err("a refusal");
     assert_eq!(
         error,
         KeyringImportError::ProgramFailed {
@@ -162,7 +162,7 @@ fn a_locked_keyring_names_the_lock() {
     );
 
     assert_eq!(
-        secret_tool::read(&program, &stand_ins.environment(), bound()).err(),
+        secret_tool::read(&program, SERVICE, &stand_ins.environment(), bound()).err(),
         Some(KeyringImportError::Locked)
     );
 }
@@ -205,7 +205,12 @@ fn a_search_that_passes_the_bound_is_ended_and_its_pid_is_gone() {
         let clock = Arc::clone(&clock);
         std::thread::spawn(move || {
             let _installed = bound_clock::install(clock);
-            secret_tool::read(&program, &environment, Bound::WholeImport(Duration::from_millis(400)))
+            secret_tool::read(
+                &program,
+                SERVICE,
+                &environment,
+                Bound::WholeImport(Duration::from_millis(400)),
+            )
         })
     };
     let pid = pid_in(&pid_file);
@@ -231,6 +236,7 @@ fn a_search_that_passes_the_bound_does_not_hold_the_import() {
     let started = Instant::now();
     let error = secret_tool::read(
         &program,
+        SERVICE,
         &stand_ins.environment(),
         Bound::WholeImport(Duration::from_millis(400)),
     )
@@ -261,7 +267,7 @@ fn the_python_reading_answers_the_json_document() {
         ),
     );
 
-    let entries = platform::secret_service(&stand_ins.environment(), bound()).expect("one entry");
+    let entries = platform::secret_service(SERVICE, &stand_ins.environment(), bound()).expect("one entry");
 
     assert_eq!(
         answered(&entries),
@@ -284,7 +290,7 @@ fn a_python_without_the_binding_names_the_package() {
     );
 
     assert_eq!(
-        platform::secret_service(&stand_ins.environment(), bound()).err(),
+        platform::secret_service(SERVICE, &stand_ins.environment(), bound()).err(),
         Some(KeyringImportError::ToolMissing {
             platform: Platform::SecretService
         })
@@ -295,7 +301,7 @@ fn a_python_without_the_binding_names_the_package() {
 fn a_computer_with_neither_program_names_the_package() {
     let stand_ins = StandIns::new();
 
-    let error = platform::secret_service(&stand_ins.environment(), bound()).expect_err("a refusal");
+    let error = platform::secret_service(SERVICE, &stand_ins.environment(), bound()).expect_err("a refusal");
     assert_eq!(
         error,
         KeyringImportError::ToolMissing {
@@ -389,7 +395,7 @@ fn a_sentence_names_no_program_of_the_other_system() {
 fn the_python_reading_of_a_folder_without_python_names_the_package() {
     let stand_ins = StandIns::new();
     assert_eq!(
-        libsecret::read(&stand_ins.environment(), bound()).err(),
+        libsecret::read(SERVICE, &stand_ins.environment(), bound()).err(),
         Some(KeyringImportError::ToolMissing {
             platform: Platform::SecretService
         })
@@ -404,6 +410,7 @@ fn the_keychain_answers_a_value() {
     let value = security::read_with(
         &program,
         &stand_ins.environment(),
+        SERVICE,
         "https://grid.example.net|remote-browser/grid/key",
         bound(),
     )
@@ -417,7 +424,7 @@ fn the_keychain_answers_no_item_with_status_44() {
     let stand_ins = StandIns::new();
     let program = stand_ins.program("security", &script("exit 44\n"));
 
-    let value = security::read_with(&program, &stand_ins.environment(), "an-account", bound())
+    let value = security::read_with(&program, &stand_ins.environment(), SERVICE, "an-account", bound())
         .expect("no item is not a failure");
 
     assert!(value.is_none(), "this computer holds no value under that account");
@@ -431,7 +438,8 @@ fn the_keychain_answers_a_failure_with_its_code() {
         &script("printf '%s\\n' 'security: SecKeychainSearchCopyNext: The user name or passphrase' >&2\nexit 51\n"),
     );
 
-    let error = security::read_with(&program, &stand_ins.environment(), "an-account", bound()).expect_err("a refusal");
+    let error =
+        security::read_with(&program, &stand_ins.environment(), SERVICE, "an-account", bound()).expect_err("a refusal");
 
     assert_eq!(
         error,

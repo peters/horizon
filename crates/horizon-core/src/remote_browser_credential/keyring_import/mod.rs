@@ -33,13 +33,15 @@ mod outcome;
 mod plan;
 mod readers;
 mod run;
+mod tailnet;
 
 pub use crate::bounded_program::ProgramEnvironment;
 pub use click::{ImportLine, KeyringImport};
-pub use import::import_from_keyring;
-pub use outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport};
+pub use import::{Tailnets, create_tailnets, import_from_keyring};
+pub use outcome::{KeyringImportError, KeyringImportOutcome, KeyringImportReport, TailnetReport};
 pub use plan::KeyringImportPlan;
 pub use readers::{Bound, Platform};
+pub use tailnet::{TailnetLine, TailnetOffer, net_of};
 
 #[cfg(test)]
 mod tests;

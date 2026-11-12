@@ -1,5 +1,5 @@
-//! `secret-tool search --all --unlock service horizon-remote-browser`: one process
-//! that prints every item of the service of an older Horizon.
+//! `secret-tool search --all --unlock service <service>`: one process that prints
+//! every item of one service of an older Horizon.
 //!
 //! The format below is the one of `secret-tool` in `tool/secret-tool.c` of libsecret,
 //! function `on_retrieve_secret` (read from the project on 2026-11-11): for each item,
@@ -22,7 +22,7 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::{Bound, KeyringEntry, SERVICE, ended, failure, field, lines, mentions, text};
+use super::{Bound, KeyringEntry, ended, failure, field, lines, mentions, text};
 use crate::bounded_program::{ProgramEnvironment, ProgramOutput, run};
 
 /// The program that reads the Secret Service.
@@ -31,22 +31,23 @@ pub(crate) const PROGRAM: &str = "secret-tool";
 /// The fields of one item that this import reads as presence only.
 const IGNORED: [&str; 4] = ["label = ", "created = ", "modified = ", "schema = "];
 
-/// The arguments of the search: every item of the service, with its value, and the
+/// The arguments of the search: every item of `service`, with its value, and the
 /// unlock of an item that is locked, so the system asks the person for it.
-fn arguments() -> Vec<OsString> {
-    ["search", "--all", "--unlock", "service", SERVICE]
+fn arguments(service: &str) -> Vec<OsString> {
+    ["search", "--all", "--unlock", "service", service]
         .map(OsString::from)
         .to_vec()
 }
 
-/// The entries of the service, read by one process.
+/// The entries of `service`, read by one process.
 pub(crate) fn read(
     program: &Path,
+    service: &str,
     environment: &ProgramEnvironment,
     bound: Bound,
 ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
-    let output =
-        run(program, &arguments(), environment, bound.program()).map_err(|failed| failure(PROGRAM, failed, bound))?;
+    let output = run(program, &arguments(service), environment, bound.program())
+        .map_err(|failed| failure(PROGRAM, failed, bound))?;
     if !output.status.success() {
         return Err(refusal(&output));
     }
@@ -145,7 +146,7 @@ fn split_field(line: &[u8]) -> Option<(&[u8], &[u8])> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, secrets, users};
+    use super::{arguments, parse, secrets, users};
 
     /// The output of `secret-tool search --all --unlock service
     /// horizon-remote-browser` for two items, as `on_retrieve_secret` of libsecret
@@ -167,6 +168,16 @@ modified = \n";
 attribute.username = https://grid.example.net|remote-browser/grid/user\n\
 attribute.service = horizon-remote-browser\n\
 attribute.username = https://grid.example.net|remote-browser/grid/key\n";
+
+    #[test]
+    fn the_arguments_name_the_service_of_the_caller() {
+        assert_eq!(
+            arguments("horizon-cloud-tailnet-api"),
+            ["search", "--all", "--unlock", "service", "horizon-cloud-tailnet-api"]
+                .map(std::ffi::OsString::from)
+                .to_vec()
+        );
+    }
 
     #[test]
     fn two_items_hold_their_value_and_their_account() {

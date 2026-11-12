@@ -47,7 +47,7 @@ fn an_import_that_reads_a_stand_in(platform: Platform) {
     let mut import = KeyringImport::with_programs(platform, stand_ins.environment(), bound());
 
     assert!(import.line().is_none(), "no line before a click");
-    import.start(plan, shared);
+    import.start(plan, shared, None);
     answered(&mut import);
 
     let line = import.line().expect("the answer of the click").clone();
@@ -83,7 +83,7 @@ fn an_import_without_a_program(platform: Platform) {
     ));
     let mut import = KeyringImport::with_programs(platform, stand_ins.environment(), bound());
 
-    import.start(plan, shared);
+    import.start(plan, shared, None);
     answered(&mut import);
 
     let line = import.line().expect("the answer of the click").clone();
@@ -105,7 +105,7 @@ fn an_import_of_settings_that_name_no_reference_does_nothing() {
         Box::new(Arc::clone(&values)) as Box<dyn RemoteCredentialStore + Send>
     ));
 
-    import.start(KeyringImportPlan::of(&RemoteBrowserConfig::default()), shared);
+    import.start(KeyringImportPlan::of(&RemoteBrowserConfig::default()), shared, None);
     answered(&mut import);
 
     let line = import.line().expect("the answer of the click").clone();

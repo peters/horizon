@@ -325,7 +325,7 @@ fn render_keyring_section(
             if ui.add_enabled(ready && !busy, button).clicked()
                 && let Some(store) = store
             {
-                keyring.start(plan.clone(), store);
+                keyring.start(plan.clone(), store, None);
                 ui.ctx().request_repaint();
             }
             // The permission of macOS belongs to the Keychain, so the line follows the
@@ -920,7 +920,7 @@ mod tests {
         // the card.
         let plan = KeyringImportPlan::of(&config.browser.remote);
         let store = workbench.store_handle().expect("the secrets file of the workbench");
-        keyring.start(plan, store);
+        keyring.start(plan, store, None);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while keyring.is_busy() && std::time::Instant::now() < deadline {
             keyring.poll();
@@ -1025,7 +1025,7 @@ mod tests {
         );
 
         app.keyring_import
-            .start(KeyringImportPlan::of(&config.browser.remote), store);
+            .start(KeyringImportPlan::of(&config.browser.remote), store, None);
         // A frame takes the answer of the import worker, and the same frame routes
         // its reference into the change list that the link to a server reads. This
         // app follows no server, so that list is empty again when the frame ends:

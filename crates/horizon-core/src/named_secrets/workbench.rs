@@ -135,6 +135,13 @@ impl NamedSecretWorkbench {
         bench
     }
 
+    /// The named secrets of this computer, for a tab that writes a value through the
+    /// same path as a typed one. `None` before the startup read handed the vault over.
+    #[must_use]
+    pub fn vault(&self) -> Option<Arc<NamedSecretVault>> {
+        self.vault.as_ref().map(Arc::clone)
+    }
+
     /// Asks the worker to read the store again: the values that the next agent panel
     /// inherits, and the state of every name.
     pub fn refresh(&mut self, names: &[SecretName]) {

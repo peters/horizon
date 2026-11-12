@@ -19,7 +19,7 @@ use serde::Deserialize;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::{Bound, KeyringEntry, Platform, SERVICE, ended, failure, mentions};
+use super::{Bound, KeyringEntry, Platform, ended, failure, mentions};
 use crate::bounded_program::{ProgramEnvironment, run};
 
 /// The interpreter that the binding of libsecret runs in.
@@ -54,27 +54,32 @@ for item in items:
 json.dump({"entries": entries}, sys.stdout)
 "#;
 
-/// The script of this version, with the service name of the older Horizon in it.
-fn script() -> String {
+/// The script of this version, with the exact service name in it. A service name
+/// of this module holds no quote, so it reaches the script as one Python string.
+fn script(service: &str) -> String {
     SCRIPT
-        .replace("SERVICE_NAME", &format!("\"{SERVICE}\""))
+        .replace("SERVICE_NAME", &format!("\"{service}\""))
         .replace("NO_VALUE_CODE", &NO_VALUE.to_string())
 }
 
 /// The arguments of one run of the script.
-fn arguments() -> Vec<OsString> {
-    ["-I", "-c", &script()].map(OsString::from).to_vec()
+fn arguments(service: &str) -> Vec<OsString> {
+    ["-I", "-c", &script(service)].map(OsString::from).to_vec()
 }
 
-/// The entries of the service, read through the binding of libsecret.
-pub(crate) fn read(environment: &ProgramEnvironment, bound: Bound) -> Result<Vec<KeyringEntry>, KeyringImportError> {
+/// The entries of `service`, read through the binding of libsecret.
+pub(crate) fn read(
+    service: &str,
+    environment: &ProgramEnvironment,
+    bound: Bound,
+) -> Result<Vec<KeyringEntry>, KeyringImportError> {
     let Some(program) = environment.find(PROGRAM) else {
         return Err(KeyringImportError::ToolMissing {
             platform: Platform::SecretService,
         });
     };
-    let output =
-        run(&program, &arguments(), environment, bound.program()).map_err(|failed| failure(PROGRAM, failed, bound))?;
+    let output = run(&program, &arguments(service), environment, bound.program())
+        .map_err(|failed| failure(PROGRAM, failed, bound))?;
     if !output.status.success() {
         if lacks_binding(&output.stderr) {
             // The computer has Python and no binding of libsecret, so the package
@@ -135,15 +140,15 @@ mod tests {
 
     #[test]
     fn the_script_names_the_service_of_the_older_horizon_and_no_value_code_remains() {
-        let script = script();
-        assert!(script.contains("\"horizon-remote-browser\""), "{script}");
+        let script = script("horizon-cloud-tailnet-api");
+        assert!(script.contains("\"horizon-cloud-tailnet-api\""), "{script}");
         assert!(script.contains("sys.exit(4)"), "{script}");
         assert!(!script.contains("SERVICE_NAME") && !script.contains("NO_VALUE_CODE"));
     }
 
     #[test]
     fn the_arguments_isolate_python_and_carry_the_script() {
-        let arguments = arguments();
+        let arguments = arguments("horizon-remote-browser");
         assert_eq!(arguments[0], "-I");
         assert_eq!(arguments[1], "-c");
         assert!(arguments[2].to_string_lossy().contains("gi.require_version"));

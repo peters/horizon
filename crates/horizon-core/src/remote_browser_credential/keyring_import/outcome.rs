@@ -14,6 +14,8 @@ use thiserror::Error;
 
 use super::super::{CredentialValueChange, RemoteCredentialError};
 use super::readers::Platform;
+use super::tailnet::TailnetOffer;
+use crate::named_secrets::NamedSecretChange;
 
 /// The counts of one import, as the Settings tab writes them: "Imported 2 values.
 /// 1 was already here. 3 entries of the keyring are not used by this version."
@@ -74,18 +76,78 @@ fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
     if count == 1 { one } else { many }
 }
 
-/// What one import answered: the counts for the line, and the references whose row
-/// this process wrote, for the link to a server.
+/// The counts of the named secrets that one click created for the networks of an
+/// older Horizon.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TailnetReport {
+    /// The names that this click created.
+    pub created: usize,
+    /// The names that this computer already had, so no value was written over.
+    pub already_here: usize,
+    /// The networks of the click that hold the three names.
+    pub networks: usize,
+    /// The entries of the two services of the keyring that name no OAuth client of a
+    /// saved network.
+    pub unused: usize,
+}
+
+impl fmt::Display for TailnetReport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.networks == 0 {
+            return formatter.write_str("The keyring holds no client of a network of an older version.");
+        }
+        if self.created == 0 {
+            let count = self.already_here;
+            return write!(
+                formatter,
+                "Every one of the {count} {} of the network is here already.",
+                plural(count, "name", "names")
+            );
+        }
+        write!(
+            formatter,
+            "Created {} {} of the network.",
+            self.created,
+            plural(self.created, "secret", "secrets")
+        )?;
+        if self.already_here > 0 {
+            let verb = if self.already_here == 1 { "was" } else { "were" };
+            write!(
+                formatter,
+                " {} {} {verb} already here.",
+                self.already_here,
+                plural(self.already_here, "name", "names")
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// What one import answered: the counts for the line, the references whose row this
+/// process wrote, the networks that the first click offers, and the named secrets that
+/// the second click created. Neither the offer nor the changes holds a value.
 pub struct KeyringImportOutcome {
     pub report: KeyringImportReport,
     pub changes: Vec<CredentialValueChange>,
+    /// The networks of an older Horizon that the keyring answers, as names only.
+    pub offer: Option<TailnetOffer>,
+    /// The named secrets that this click created, oldest first.
+    pub created: Vec<NamedSecretChange>,
+    /// The counts of the named secrets of this click.
+    pub created_report: TailnetReport,
 }
 
 impl KeyringImportOutcome {
     /// The counts of one import that wrote `changes`.
     #[must_use]
     pub fn new(report: KeyringImportReport, changes: Vec<CredentialValueChange>) -> Self {
-        Self { report, changes }
+        Self {
+            report,
+            changes,
+            offer: None,
+            created: Vec::new(),
+            created_report: TailnetReport::default(),
+        }
     }
 }
 
@@ -95,6 +157,9 @@ impl fmt::Debug for KeyringImportOutcome {
             .debug_struct("KeyringImportOutcome")
             .field("report", &self.report)
             .field("changes", &self.changes)
+            .field("offer", &self.offer)
+            .field("created", &self.created)
+            .field("created_report", &self.created_report)
             .finish()
     }
 }
@@ -135,6 +200,14 @@ pub enum KeyringImportError {
     /// The value of an entry breaks the rule that the secrets file applies.
     #[error("The keyring holds a value that this version cannot keep, so no value was imported.")]
     RefusedValue,
+    /// The networks that an older Horizon saved are not a document that this version
+    /// reads, so no network is offered.
+    #[error("The saved networks of the older version cannot be read, so no network was offered.")]
+    OldNetworks,
+    /// The names of the older version cannot be created, because the secrets file of
+    /// this computer cannot be read or written.
+    #[error("The secrets file of this computer cannot be changed, so no secret was created.")]
+    SecretsNotReadable,
     /// The secrets file of this computer refused the write.
     #[error(transparent)]
     Store(#[from] RemoteCredentialError),
@@ -166,6 +239,8 @@ impl KeyringImportError {
             Self::ProgramFailed { .. } | Self::ProgramSignalled { .. } => "keyring_program_failed",
             Self::RefusedReference { .. } => "keyring_reference_refused",
             Self::RefusedValue => "keyring_value_refused",
+            Self::OldNetworks => "keyring_networks_unreadable",
+            Self::SecretsNotReadable => "keyring_secrets_unreadable",
             Self::Store(_) => "keyring_store",
             Self::FileNotOpen => "keyring_file_not_open",
             Self::Busy => "keyring_busy",

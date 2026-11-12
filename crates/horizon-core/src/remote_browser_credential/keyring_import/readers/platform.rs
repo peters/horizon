@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use super::super::KeyringImportError;
 use super::super::plan::KeyringImportPlan;
-use super::{Bound, KeyringEntry, libsecret, secret_tool, security};
+use super::{Bound, KeyringEntry, SERVICE, libsecret, secret_tool, security};
 use crate::bounded_program::ProgramEnvironment;
 
 /// The keyring of one system, as the programs that read it and the words of its
@@ -76,22 +76,37 @@ impl Platform {
         environment: &ProgramEnvironment,
         bound: Bound,
     ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
+        self.service(SERVICE, &plan.users(), environment, bound)
+    }
+
+    /// The entries of one service of an older Horizon, read with the programs of this
+    /// keyring. `users` names the accounts that the Keychain reads one at a time; the
+    /// Secret Service searches the whole service and reads no account of its own.
+    pub(crate) fn service(
+        self,
+        service: &str,
+        users: &[&str],
+        environment: &ProgramEnvironment,
+        bound: Bound,
+    ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
         match self {
-            Self::Keychain => each(environment, bound, &plan.users()),
-            Self::SecretService => secret_service(environment, bound),
+            Self::Keychain => each(environment, service, bound, users),
+            Self::SecretService => secret_service(service, environment, bound),
         }
     }
 }
 
-/// The Secret Service answers every entry at once, so one process is the whole
-/// import. A closed item asks the person to unlock it, which the bound covers.
+/// The Secret Service answers every entry of one service at once, so one process is
+/// the whole reading. A closed item asks the person to unlock it, which the bound
+/// covers.
 pub(crate) fn secret_service(
+    service: &str,
     environment: &ProgramEnvironment,
     bound: Bound,
 ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
     match environment.find(secret_tool::PROGRAM) {
-        Some(program) => secret_tool::read(&program, environment, bound),
-        None => libsecret::read(environment, bound),
+        Some(program) => secret_tool::read(&program, service, environment, bound),
+        None => libsecret::read(service, environment, bound),
     }
 }
 
@@ -99,12 +114,13 @@ pub(crate) fn secret_service(
 /// once for each answer. An account that the keychain does not hold says nothing.
 pub(crate) fn each(
     environment: &ProgramEnvironment,
+    service: &str,
     bound: Bound,
     users: &[&str],
 ) -> Result<Vec<KeyringEntry>, KeyringImportError> {
     let mut entries = Vec::new();
     for user in users {
-        let Some(value) = security::read(environment, user, bound)? else {
+        let Some(value) = security::read(environment, service, user, bound)? else {
             continue;
         };
         entries.push(KeyringEntry {

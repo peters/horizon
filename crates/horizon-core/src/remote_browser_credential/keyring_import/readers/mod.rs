@@ -29,6 +29,14 @@ pub use platform::Platform;
 /// provider, as `KEYRING_SERVICE` of that version wrote it.
 pub(crate) const SERVICE: &str = "horizon-remote-browser";
 
+/// The service name that an older Horizon gave the OAuth client of one Tailscale
+/// network, as `API_KEYCHAIN_SERVICE` of that version wrote it.
+pub(crate) const TAILNET_API_SERVICE: &str = "horizon-cloud-tailnet-api";
+
+/// The service name that an older Horizon gave the enrollment key of one network,
+/// as `KEYCHAIN_SERVICE` of that version wrote it.
+pub(crate) const TAILNET_SERVICE: &str = "horizon-cloud-tailnets";
+
 /// How long the programs of one import may run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Bound {

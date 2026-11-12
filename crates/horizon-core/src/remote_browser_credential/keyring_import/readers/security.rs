@@ -22,7 +22,7 @@ use std::path::Path;
 use zeroize::Zeroizing;
 
 use super::super::KeyringImportError;
-use super::{Bound, Platform, SERVICE, ended, failure};
+use super::{Bound, Platform, ended, failure};
 use crate::bounded_program::{ProgramEnvironment, run};
 
 /// The program that reads the Keychain.
@@ -31,16 +31,18 @@ pub(crate) const PROGRAM: &str = "security";
 /// The status of "no such item", which is not an error.
 const NO_ITEM: i32 = 44;
 
-/// The arguments of one reading of `user`'s value.
-fn arguments(user: &str) -> Vec<OsString> {
-    ["find-generic-password", "-s", SERVICE, "-a", user, "-w"]
+/// The arguments of one reading of the value of `user` under `service`.
+fn arguments(service: &str, user: &str) -> Vec<OsString> {
+    ["find-generic-password", "-s", service, "-a", user, "-w"]
         .map(OsString::from)
         .to_vec()
 }
 
-/// The value of the item of `user`, or `None` when the keychain holds none.
+/// The value of the item of `user` under `service`, or `None` when the keychain
+/// holds none.
 pub(crate) fn read(
     environment: &ProgramEnvironment,
+    service: &str,
     user: &str,
     bound: Bound,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, KeyringImportError> {
@@ -50,17 +52,18 @@ pub(crate) fn read(
             platform: Platform::Keychain,
         });
     };
-    read_with(&program, environment, user, bound)
+    read_with(&program, environment, service, user, bound)
 }
 
 /// The same reading with the program that [`read`] found, so a test names its own.
 pub(crate) fn read_with(
     program: &Path,
     environment: &ProgramEnvironment,
+    service: &str,
     user: &str,
     bound: Bound,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, KeyringImportError> {
-    let output = run(program, &arguments(user), environment, bound.program())
+    let output = run(program, &arguments(service, user), environment, bound.program())
         .map_err(|failed| failure(PROGRAM, failed, bound))?;
     if output.code() == Some(NO_ITEM) {
         return Ok(None);
@@ -89,7 +92,10 @@ mod tests {
 
     #[test]
     fn the_arguments_name_the_service_and_the_account() {
-        let arguments = arguments("https://grid.example.net|remote-browser/grid/key");
+        let arguments = arguments(
+            "horizon-remote-browser",
+            "https://grid.example.net|remote-browser/grid/key",
+        );
         assert_eq!(
             arguments,
             [
