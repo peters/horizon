@@ -2,6 +2,7 @@ mod clipboard_paste;
 mod ime;
 mod input;
 mod layout;
+mod link_notice;
 mod render;
 mod scrollbar;
 
@@ -13,6 +14,7 @@ pub(crate) use self::input::SSH_RECONNECT_SHORTCUT;
 pub(crate) use self::input::TerminalSelectionDragState;
 use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
+use self::link_notice::LinkNotice;
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
 use self::scrollbar::render_scrollbar;
@@ -168,6 +170,11 @@ impl<'a> TerminalView<'a> {
             self.grid_cache = grid_cache;
         }
 
+        // The line of a panel that has no shell sits under the grid, so a person
+        // reads why the keys do nothing and where the next attempt starts. Only a
+        // panel in that state builds it; a connected terminal has no such work.
+        self.show_link_notice(ui, interaction.layout.body, interactive, keyboard.reconnect_requested);
+
         if interactive && has_terminal_focus {
             *keyboard.reconnect_requested |= handle_terminal_keyboard_input(
                 ui,
@@ -181,6 +188,20 @@ impl<'a> TerminalView<'a> {
         }
 
         interaction.body.clicked()
+    }
+
+    /// Paints the line of a panel whose shell is not there, and takes the
+    /// `Reconnect` that the person presses in it.
+    fn show_link_notice(&self, ui: &mut egui::Ui, body: egui::Rect, interactive: bool, reconnect_requested: &mut bool) {
+        let Some(connection) = self.panel.ssh_connection.as_ref() else {
+            return;
+        };
+        let Some(notice) = LinkNotice::of(self.panel.kind, self.panel.ssh_status(), &connection.display_label()) else {
+            return;
+        };
+        if link_notice::show(ui, body, &notice, interactive) {
+            *reconnect_requested = true;
+        }
     }
 }
 
