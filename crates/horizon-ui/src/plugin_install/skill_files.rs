@@ -116,6 +116,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/tailscale.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-mobile/SKILL.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -309,6 +316,13 @@ pub(super) const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/codex/skills/horizon-machines/references/runpod.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/tailscale.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/tailscale.md"
         )),
     },
 ];

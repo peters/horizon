@@ -304,6 +304,8 @@ there, and that their tmux sessions end with the machine.
 1. A press on `Delete` updates the card to the confirm document.
 2. A press on `Keep` returns to the machine card, and nothing is deleted.
 3. A press on `Delete it` runs the provider delete in the order of the reference.
+   A machine of a Tailscale network first loses its login there and then its
+   device, as [tailscale](references/tailscale.md) says.
 4. Prove that nothing tagged with this name is left, with the find-again command.
 5. Call `machine_delete` with the machine name, so the record and its row in the
    sidebar go; an answer of `machine_unavailable` means that the record is
@@ -316,6 +318,45 @@ there, and that their tmux sessions end with the machine.
 
 A leftover resource means the delete did not finish. Show the provider's own
 words on the card and keep `Delete it`, so the person can try again.
+
+## A machine on a Tailscale network
+
+The person can ask to put a machine on one of their Tailscale networks: "put
+`build-1` on my home network". The networks of this computer are the three named
+secrets of each one, in the environment of your panel:
+`TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read
+[tailscale](references/tailscale.md) for the one-time setup of the person, the
+commands, the proof, the delete and the relay recipes.
+
+Three rules have no exception:
+
+- **The client secret stays on this computer.** You make one API token here and
+  one auth key for one machine. Never send the secret to a machine and never run
+  `tailscale up --auth-key=<client secret>` there, although the Tailscale
+  documents allow that form.
+- **The auth key reaches the machine on standard input.** Pipe it into `ssh`: the
+  remote script writes a root-only file under `/run`, `tailscale up` reads it
+  with `--auth-key=file:<path>`, and the same command removes the file. No
+  argument, no environment variable and no file of this computer holds the key.
+- **Prove the login before port 22 closes.** A login over the network with the
+  machine key answers first, and only then does the provider close inbound port
+  22. When the proof fails, the port stays open and the card says why.
+
+Step 5b writes the record with the network name as its `ssh.host`, so a click in
+the Machines section connects over the network. The machine card of step 6 then
+holds three more rows:
+
+```json
+{"type": "kv", "rows": [
+  {"label": "Network", "value": "home", "mono": true},
+  {"label": "Network name", "value": "build-1.tail1234.ts.net", "mono": true},
+  {"label": "Internet SSH", "value": "closed"}]}
+```
+
+When the person asks for the internet through a home computer of the network, the
+card also holds the row `Internet through` with `this machine` or the name of
+that computer, and the buttons `Use <home name> as exit` and `Stop using exit`.
+The reference gives the steps that belong to the person, the proof and the undo.
 
 ## Card documents
 
