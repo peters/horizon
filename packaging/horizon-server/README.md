@@ -7,9 +7,11 @@ server in its settings, so a machine that an agent or the person adds on one
 computer shows on the other computers within a few seconds, and it opens with the
 same key.
 
-This folder holds one sample: a launchd user agent for macOS. The server is the
-same `horizon` binary that the person already runs, with `--server`. It needs no
-second program and no account.
+This folder holds one sample: a launchd user agent for macOS,
+`net.horizon.server.plist`. Its text is in the section
+[Run the server at login](#run-the-server-at-login), which also gives the systemd
+user unit of Linux. The server is the same `horizon` binary that the person
+already runs, with `--server`. It needs no second program and no account.
 
 ## What the server is
 
@@ -71,37 +73,267 @@ the key in `<server home>/secret.key`.
    Result: the process writes one line about the socket and stays in the
    foreground. Stop it with Ctrl-C.
 
-## Install the launchd agent
+## Run the server at login
+
+The server must run while the other computers use it, and a person wants it to
+start without a terminal. One service of the user starts it at login and starts it
+again when it ends: a launchd user agent on macOS, and a systemd user unit on
+Linux. Both start the binary with `--server`, and both use the label
+`net.horizon.server`.
+
+### macOS
 
 1. Make the folders of the server home and of its log:
 
    ```sh
-   mkdir -p "$HOME/.horizon-server/log"
+   mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.horizon-server/log"
    chmod 700 "$HOME/.horizon-server"
    ```
 
-2. Copy `net.horizon.server.plist` to `~/Library/LaunchAgents/`.
+2. Make the file `~/Library/LaunchAgents/net.horizon.server.plist` with this text.
+   Replace each `CHANGE-ME` with your user name, and change
+   `/Users/CHANGE-ME/bin/horizon` when the binary is in another folder:
 
-3. Replace `CHANGE-ME` in the copy with your user name, so it names the binary
-   and the server home.
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+     <key>Label</key>
+     <string>net.horizon.server</string>
+
+     <key>ProgramArguments</key>
+     <array>
+       <string>/Users/CHANGE-ME/bin/horizon</string>
+       <string>--server</string>
+     </array>
+
+     <!-- Keep this block only when the server home is not ~/.horizon-server. -->
+     <!--
+     <key>EnvironmentVariables</key>
+     <dict>
+       <key>HORIZON_SERVER_HOME</key>
+       <string>/Users/CHANGE-ME/.horizon-server</string>
+     </dict>
+     -->
+
+     <key>RunAtLoad</key>
+     <true/>
+
+     <key>KeepAlive</key>
+     <true/>
+
+     <key>ProcessType</key>
+     <string>Background</string>
+
+     <key>StandardOutPath</key>
+     <string>/Users/CHANGE-ME/.horizon-server/log/server.log</string>
+
+     <key>StandardErrorPath</key>
+     <string>/Users/CHANGE-ME/.horizon-server/log/server.log</string>
+
+     <key>ExitTimeOut</key>
+     <integer>10</integer>
+   </dict>
+   </plist>
+   ```
+
+   `RunAtLoad` starts the server at each login, and `KeepAlive` starts it again
+   when it ends. `ProcessType` is `Background`, so the system does not slow the
+   server down for a person who waits at the window. The two paths name one log
+   file, because the log of the server is its standard error. `ExitTimeOut` gives
+   the server ten seconds to close its store at a stop.
+
+3. To hand out invitations as QR codes, the `ProgramArguments` array holds the
+   listener too. A plist comment cannot hold the `--` of a flag, so replace the
+   array of step 2 with this one:
+
+   ```xml
+   <key>ProgramArguments</key>
+   <array>
+     <string>/Users/CHANGE-ME/bin/horizon</string>
+     <string>--server</string>
+     <string>--listen</string>
+     <string>100.64.0.1:7000</string>
+     <string>--name</string>
+     <string>server-computer</string>
+   </array>
+   ```
+
+   `100.64.0.1:7000` is an address of a private overlay network, and
+   `server-computer` is the name that the other computers resolve. The server
+   refuses every other address.
 
 4. Load the agent:
 
    ```sh
-   launchctl load ~/Library/LaunchAgents/net.horizon.server.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.horizon.server.plist
    ```
 
-   Result: the agent starts the server at each login and starts it again when it
-   ends.
+   Result: the agent starts the server now, and at each login.
 
-5. Read the state:
+5. Read the state and the log:
 
    ```sh
    launchctl print "gui/$(id -u)/net.horizon.server" | head -20
    tail -n 20 "$HOME/.horizon-server/log/server.log"
    ```
 
-   Result: the state is `running`, and the log holds the socket line.
+   Result: the state is `running`, and the log holds the line about the socket.
+
+6. Stop the server and remove it from the login items:
+
+   ```sh
+   launchctl bootout "gui/$(id -u)/net.horizon.server"
+   ```
+
+   Result: the server receives `SIGTERM`, closes its store and removes its socket.
+   The plist stays in `~/Library/LaunchAgents`, so a delete of that file removes
+   the agent for good.
+
+7. To put a new binary in place, boot the agent out, copy the file, and boot it in
+   again:
+
+   ```sh
+   launchctl bootout "gui/$(id -u)/net.horizon.server"
+   cp target/release/horizon /Users/CHANGE-ME/bin/horizon
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.horizon.server.plist
+   ```
+
+### Linux
+
+1. Make the folder of the unit and the server home:
+
+   ```sh
+   mkdir -p "$HOME/.config/systemd/user" "$HOME/.horizon-server"
+   chmod 700 "$HOME/.horizon-server"
+   ```
+
+2. Make the file `~/.config/systemd/user/horizon-server.service` with this text.
+   Replace each `CHANGE-ME` with your user name, and change
+   `/home/CHANGE-ME/bin/horizon` when the binary is in another folder:
+
+   ```ini
+   [Unit]
+   Description=Horizon server
+
+   [Service]
+   Type=simple
+   ExecStart=/home/CHANGE-ME/bin/horizon --server
+   Restart=on-failure
+   # Keep this line only when the server home is not ~/.horizon-server.
+   # Environment=HORIZON_SERVER_HOME=/home/CHANGE-ME/.horizon-server
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   `Restart=on-failure` starts the server again when it ends with a failure, for
+   example when the address of the listener is not there yet.
+
+3. Read the unit and start it:
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now horizon-server
+   ```
+
+   Result: the unit runs now, and at each login of the user.
+
+4. Read the state and the log:
+
+   ```sh
+   systemctl --user status horizon-server
+   journalctl --user -u horizon-server -n 20
+   ```
+
+   Result: the state is `active (running)`, and the log holds the line about the
+   socket. The standard output and the standard error of the unit go to the
+   journal.
+
+5. Stop the server and remove it from the login items:
+
+   ```sh
+   systemctl --user disable --now horizon-server
+   ```
+
+   Result: the server receives `SIGTERM`, closes its store and removes its socket.
+
+6. On a computer where nobody logs in, a linger starts the unit at boot and keeps
+   it after a logout. Run this step on the server computer only:
+
+   > **CAUTION:** ENABLE A LINGER ONLY FOR THE USER OF THE SERVER. The linger keeps
+   > every process of that user alive after the logout, also a process that the
+   > person forgot, and the server holds every secret of the person.
+
+   ```sh
+   sudo loginctl enable-linger CHANGE-ME
+   ```
+
+   Result: the unit starts when the computer starts, without a login.
+
+### The server home
+
+The service reads and writes the server home at each start:
+`HORIZON_SERVER_HOME`, or `~/.horizon-server`. The home holds these files:
+
+| File | What it is |
+|---|---|
+| `server.sqlite` | The store: the machine list, the keys and the values, sealed. |
+| `secret.key` | The key that seals each value of the store. |
+| `server.sock` | The socket that the link of a computer reaches. |
+| `server.lock` | The lock that says that a server runs. |
+| `log/server.log` | The log of the macOS agent. The Linux unit writes the journal. |
+
+The socket belongs to one run of the server: a stop removes it and a start makes
+it. The lock file stays, because the lock is the open file of the running server.
+The log grows with each run. `server.sqlite` and `secret.key` survive a restart of
+the service, with its `-wal` and `-shm` files, so a server that stops and starts
+again answers with the same machine list, the same keys and the same values.
+
+A person must keep `secret.key` safe. Without it, the server reads no stored
+secret, and a copy of `server.sqlite` alone holds no readable value. The section
+[The key of the secrets](#the-key-of-the-secrets) gives the rules of that key.
+
+### The setting of the other computers
+
+Each other computer names the server in **Settings** (**Ctrl+Shift+,**), in the
+**Server** tab. Two fields name it:
+
+- **SSH target**: the SSH name of the server computer, for example
+  `server-computer`.
+- **Command**: the absolute path of the binary and `--server-link`, for example
+  `/Users/<user>/bin/horizon --server-link`.
+
+A non-interactive SSH session of macOS has only the system folders on its `PATH`,
+so it finds neither `/usr/local/bin` nor `~/bin`. The **Command** field gives the
+whole path, so the link needs no `PATH`. Without that field, Horizon runs
+`horizon --server-link` and the `PATH` of the login decides.
+
+### Check the service
+
+1. Ask the server for one invitation while the service runs:
+
+   ```sh
+   HORIZON_SERVER_HOME="$HOME/.horizon-server" <path>/horizon --server-invite
+   ```
+
+   Result: the command prints the link, the code, the minutes that it lives and
+   the QR code of the link as blocks of text. It ends with exit code 0. Without
+   `--listen`, the answer is one sentence about a server that has no listener.
+
+2. Stop the service, as the macOS steps or the Linux steps above say, and run the
+   same command again.
+
+   Result: the command prints one line and ends with exit code 1:
+
+   ```text
+   error: no Horizon server answers at /Users/<user>/.horizon-server/server.sock; start `horizon --server` on that computer
+   ```
+
+   The mode of the same home that ends with exit code 3 is `--server-link`: that
+   is the command of the link of another computer, and a computer reads that code
+   as a server that is away.
 
 ## Set the server on each computer
 
@@ -110,24 +342,19 @@ server computer, or with a link that a logged-in computer shows as a QR code. Th
 SSH link stays as the second transport, and a person who has no SSH key on a
 computer joins it with a code.
 
-1. In the settings of Horizon on each computer, set the entry `server`:
+1. In **Settings** (**Ctrl+Shift+,**) of Horizon on each computer, open the
+   **Server** tab and set the **SSH target** field:
 
-   ```yaml
-   server:
-     ssh_target: server-computer
-   ```
+   `server-computer` is a name that `ssh` resolves, such as the `Host` name of your
+   own SSH configuration. Horizon adds the command `horizon --server-link` itself.
 
-   `ssh_target` is a name that `ssh` resolves, such as the `Host` name of your own
-   SSH configuration. Horizon adds the command `horizon --server-link` itself.
+2. When the `PATH` of the `ssh` login does not hold the binary, set the
+   **Command** field to the whole path:
 
-2. When the `PATH` of the `ssh` login does not hold the binary, name the whole
-   path:
+   `/Users/<user>/bin/horizon --server-link`
 
-   ```yaml
-   server:
-     ssh_target: server-computer
-     command: /Users/<user>/bin/horizon --server-link
-   ```
+   The section [The setting of the other computers](#the-setting-of-the-other-computers)
+   says why a non-interactive SSH session needs that path.
 
 3. Start Horizon again. The Machines section shows the line `Server: in step`.
 
@@ -139,12 +366,9 @@ address inside `100.64.0.0/10`, or an address inside `fd7a:115c:a1e0::/48`, whic
 are the addresses of a private overlay network. The overlay carries the
 encryption.
 
-1. On the server computer, stop the server and start it with the address of the
-   overlay and the name that the other computers resolve:
-
-   ```sh
-   /Users/<user>/bin/horizon --server --listen 100.64.0.1:7000 --name server-computer
-   ```
+1. On the server computer, add the listener and the name to the service, as the
+   macOS or the Linux steps of [Run the server at login](#run-the-server-at-login)
+   say, and start the service again.
 
    Result: the log names the socket and the listener. Without `--listen` the
    server opens no port, and an invitation answers `no_listener`.
@@ -180,18 +404,24 @@ encryption.
 
 ## Replace the binary and restart
 
-1. Build the new binary and copy it over the old path.
+1. Build the new binary.
 
-2. Restart the agent:
+2. Restart the service with the new binary:
 
    ```sh
-   launchctl kickstart -k "gui/$(id -u)/net.horizon.server"
+   launchctl bootout "gui/$(id -u)/net.horizon.server"
+   cp target/release/horizon /Users/CHANGE-ME/bin/horizon
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.horizon.server.plist
    ```
 
-   Result: the process ends with `SIGTERM`, removes its socket, closes its store,
-   and the agent starts the new binary.
+   On Linux, copy the file over the old path and run
+   `systemctl --user restart horizon-server` instead.
 
-3. Read the log again, as in step 5 of the install section.
+   Result: the process ends with `SIGTERM`, removes its socket, closes its store,
+   and the service starts the new binary.
+
+3. Read the log again, as step 5 of [Run the server at login](#run-the-server-at-login)
+   says.
 
 A change that a computer made while the server was away stays in its queue and
 settles when the server returns. An in-flight push is sent again with the same

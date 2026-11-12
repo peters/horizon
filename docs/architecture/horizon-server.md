@@ -29,6 +29,11 @@ server of the same home finds the lock held and refuses with one typed line
 instead of removing the socket of the first one. The module comment of
 `crates/horizon-sync/src/host.rs` states the same rules.
 
+A person who wants the server to run at login starts it as a service of that
+person: a launchd user agent on macOS, or a systemd user unit on Linux, as
+[the server guide](../../packaging/horizon-server/README.md#run-the-server-at-login)
+shows.
+
 A stop leaves its files in the home on purpose. `server.lock` stays, because the
 lock is the open file of the running server and not the name of the file: a file
 that no process holds blocks nothing. A killed server also leaves `server.sqlite`
