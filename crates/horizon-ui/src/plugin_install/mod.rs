@@ -16,12 +16,13 @@ mod user_skills;
 mod work_hooks;
 use skill_files::{
     BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-    MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, SPEECH_SKILL_FILES,
+    MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, SPEECH_SKILL_FILES, WORKTREE_SKILL_FILES,
 };
 use user_skills::{
     HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL,
-    HORIZON_SPEECH_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck,
-    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_SPEECH_SKILL, HORIZON_WORKTREE_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL,
+    SkillOwnershipCheck, SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots,
+    remove_horizon_skill_dir,
 };
 
 fn validate_block_skill(dir: &Path) -> io::Result<()> {
@@ -37,6 +38,24 @@ fn install_block_skill(dir: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
     let staging = tempfile::Builder::new().prefix(".horizon-block-").tempdir_in(parent)?;
     sync_plugin_files(staging.path(), BLOCK_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
+
+fn validate_worktree_skill(dir: &Path) -> io::Result<()> {
+    owned_skills::validate_files(dir, WORKTREE_SKILL_FILES)
+}
+
+fn install_worktree_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".horizon-worktree-")
+        .tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), WORKTREE_SKILL_FILES)?;
     std::fs::rename(staging.path(), dir)
 }
 
@@ -244,6 +263,16 @@ impl AgentPluginHostLease {
         );
     }
 
+    fn bind_grok_worktree_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        self.bind_grok_skill(
+            grok_root,
+            browser_bound,
+            HORIZON_WORKTREE_SKILL,
+            validate_worktree_skill,
+            install_worktree_skill,
+        );
+    }
+
     fn bind_grok_speech_skill(&mut self, grok_root: &Path, browser_bound: bool) {
         self.bind_grok_skill(
             grok_root,
@@ -338,6 +367,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
                 lease.bind_grok_machines_skill(&root, true);
                 lease.bind_grok_mobile_skill(&root, true);
                 lease.bind_grok_speech_skill(&root, true);
+                lease.bind_grok_worktree_skill(&root, true);
             }
             Err(error) => {
                 tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -346,6 +376,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
                 lease.bind_grok_machines_skill(&root, false);
                 lease.bind_grok_mobile_skill(&root, false);
                 lease.bind_grok_speech_skill(&root, false);
+                lease.bind_grok_worktree_skill(&root, false);
             }
         }
     }
@@ -522,6 +553,10 @@ fn install_agent_plugins_impl(
         &horizon_home.codex_integrations_dir().join(HORIZON_SPEECH_SKILL),
         SPEECH_SKILL_FILES,
     )?;
+    updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_WORKTREE_SKILL),
+        WORKTREE_SKILL_FILES,
+    )?;
 
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
@@ -530,6 +565,7 @@ fn install_agent_plugins_impl(
         let machines_dir = grok_root.join("skills").join(HORIZON_MACHINES_SKILL);
         let mobile_dir = grok_root.join("skills").join(HORIZON_MOBILE_SKILL);
         let speech_dir = grok_root.join("skills").join(HORIZON_SPEECH_SKILL);
+        let worktree_dir = grok_root.join("skills").join(HORIZON_WORKTREE_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             match grok_mcp::register(&grok_root) {
                 Ok(changed) => {
@@ -550,6 +586,9 @@ fn install_agent_plugins_impl(
                     if skill_dir_is_leased(lease, &speech_dir) {
                         updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
                     }
+                    if skill_dir_is_leased(lease, &worktree_dir) {
+                        updated_files += sync_plugin_files(&worktree_dir, WORKTREE_SKILL_FILES)?;
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -564,6 +603,7 @@ fn install_agent_plugins_impl(
         let machines_dir = codex_root.join("skills").join(HORIZON_MACHINES_SKILL);
         let mobile_dir = codex_root.join("skills").join(HORIZON_MOBILE_SKILL);
         let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
+        let worktree_dir = codex_root.join("skills").join(HORIZON_WORKTREE_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
         }
@@ -582,6 +622,9 @@ fn install_agent_plugins_impl(
         if skill_dir_is_leased(lease, &speech_dir) {
             updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
         }
+        if skill_dir_is_leased(lease, &worktree_dir) {
+            updated_files += sync_plugin_files(&worktree_dir, WORKTREE_SKILL_FILES)?;
+        }
     }
     Ok(updated_files)
 }
@@ -599,6 +642,7 @@ fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) ->
         dirs.push(codex_root.join("skills").join(HORIZON_MACHINES_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_MOBILE_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_WORKTREE_SKILL));
     }
     dirs
 }

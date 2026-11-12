@@ -39,6 +39,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-worktree/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-worktree/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-machines/SKILL.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -235,6 +242,16 @@ pub(super) const BLOCK_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     content: include_str!(concat!(
         env!("OUT_DIR"),
         "/assets/plugins/codex/skills/horizon-block/SKILL.md"
+    )),
+}];
+
+/// The skill that starts each task in its own git worktree and shows the
+/// worktrees of one repository on a card.
+pub(super) const WORKTREE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-worktree/SKILL.md"
     )),
 }];
 

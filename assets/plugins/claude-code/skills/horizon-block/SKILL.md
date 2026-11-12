@@ -17,8 +17,8 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`next_click`, `visibility`, `close`, `open_terminal`, `machine_set`,
-`machine_delete`, `machines`, `machine_key`, `machine_keys` and
+`next_click`, `visibility`, `close`, `open_terminal`, `open_panel`,
+`machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys` and
 `delete_machine_key`.
 
 ## Create a card
@@ -150,6 +150,41 @@ titlebar of the panel carries the mark `opened by <agent>`, so the person knows
 that you opened it. The panel is an ordinary SSH terminal after that: the person
 types in it and closes it. You cannot read it, write to it or close it with this
 tool.
+
+## Open a panel of a preset
+
+`open_panel` opens a panel of one preset of the person's settings in one folder
+of this computer. Use it when a task of the person runs in its own folder, such
+as a git worktree of a repository:
+
+```json
+{"operation": "open_panel", "preset": "<a preset of the settings>",
+ "directory": "/abs/path/of/the/worktree", "title": "fix login"}
+```
+
+- `preset` is the name or the alias of a preset of the settings, exactly. Horizon
+  takes the command, the arguments and the kind from that preset, so you send no
+  command, no argument, no environment and no prompt. A name that the settings do
+  not hold is `unknown_preset`, and the message lists the names of the presets
+  and no command.
+- `directory` is an absolute path of at most 1 024 bytes with no control
+  character. It must be a directory of this computer, and it becomes the working
+  directory of the panel. A folder that is not there is `directory_missing`.
+- `title` is one line of at most 80 characters. It defaults to the name of the
+  preset.
+- A preset of a kind that opens no program of this computer, such as a browser
+  page, a native viewer, a card or an SSH terminal, is `invalid_request`. Ask for
+  a shell, a command or an agent preset.
+- One agent panel opens at most eight panels in ten minutes. The ninth answer is
+  `rate_limited` with the seconds to wait.
+
+The answer is `opened` with the `panel_id`. The panel goes in your workspace,
+beside your agent panel, it does not take keyboard focus, and its titlebar
+carries the mark `opened by <agent>`. The panel is the person's afterwards: this
+tool cannot read it, write to it or close it.
+
+For the worktrees of a repository, use the `horizon-worktree` skill: it names
+the branch, the folder, the card and the rules of a merge and of a remove.
 
 ## Register a machine
 
