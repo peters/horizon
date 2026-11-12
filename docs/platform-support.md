@@ -149,13 +149,17 @@ works, so the platform gives the default and the recipe.
 | Function | Linux | macOS |
 |---|---|---|
 | The hotkey, the state mark and the insert of the text | Yes | Yes |
-| The default recorder line | Yes: `pw-record` of PipeWire records 16 kHz on one channel | No: the line is empty, and the person installs a recorder |
-| A recorder recipe that the documents give | `pw-record --rate 16000 --channels 1 --format s16 {file}` | `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}`, or `rec -c 1 -r 16000 {file}` |
+| The default recorder line | Yes: `pw-record` of PipeWire records 16 kHz on one channel | No: no recorder is a part of macOS, so the line is empty and the person installs one |
+| A recorder recipe that the documents give | `pw-record --rate 16000 --channels 1 --format s16 {file}` | `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}`, or `rec -c 1 -r 16000 {file}` of SoX |
 | A take with a real microphone | Yes with PipeWire | Not tested: no run of this repository used a real microphone on macOS |
 | The transcription service over HTTPS | Yes | Yes |
 | The transcription command | Yes | Yes |
 
 A Linux computer needs a PipeWire session, because `pw-record` records from it.
+macOS holds no recorder that a person can use without an install, so the tab says
+which two programs work and the exact line of each. Settings › Speech names the
+same lines, and [the speech input procedure](testing/procedures/speech-input.md)
+has a task for each.
 The stand-in recorder of the fixture,
 `scripts/device-smoke/speech_standin_recorder.py`, copies one prepared file and
 opens no audio device, so a test needs no microphone on either platform. See

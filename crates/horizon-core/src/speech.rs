@@ -64,9 +64,10 @@ impl SpeechPlatform {
     /// The recorder line that the settings hold until a person changes it.
     ///
     /// `pw-record` of `PipeWire` gives a recording of 16 kHz on one channel in the
-    /// format that every transcription service reads. macOS has no recorder command
-    /// of the system, so the line stays empty and the documents give two recipes
-    /// that a person installs.
+    /// format that every transcription service reads. macOS has no recorder that
+    /// is a part of the system, so the line stays empty and the documents give two
+    /// recipes that a person installs: `ffmpeg` with the `avfoundation` input, or
+    /// `rec` of SoX.
     #[must_use]
     pub const fn default_recorder(self) -> &'static str {
         match self {
@@ -97,7 +98,11 @@ mod tests {
             SpeechPlatform::Linux.default_recorder(),
             "pw-record --rate 16000 --channels 1 --format s16 {file}"
         );
-        assert_eq!(SpeechPlatform::MacOs.default_recorder(), "");
+        assert_eq!(
+            SpeechPlatform::MacOs.default_recorder(),
+            "",
+            "macOS has no recorder that is a part of the system"
+        );
         for platform in [SpeechPlatform::Linux, SpeechPlatform::MacOs] {
             let line = platform.default_recorder();
             assert!(

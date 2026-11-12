@@ -271,16 +271,25 @@ one request header and no file of the run.
 
 2. Open **Settings** › **Speech**.
 
-   Result: The recorder line is empty, because macOS has no recorder of its own,
-   and the tab names the two recipes of the skill `horizon-speech`.
+   Result: The recorder line is empty, because macOS has no recorder that is a
+   part of the system. The tab names two programs and the exact line of each:
+   `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}` and
+   `rec -c 1 -r 16000 {file}` of SoX.
 
-3. Install one recipe, such as `ffmpeg -f avfoundation -i :default -ac 1 -ar
-   16000 -y {file}`, type it in the recorder line, and press **Save**.
+3. Install `ffmpeg`, type `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000
+   -y {file}` in the recorder line, and press **Save**.
 
 4. Press and hold `F9`, and speak one short sentence.
 
    Result: The pill counts the seconds, then the panel gains the text of the
    sentence with no line break. This step needs a microphone on the test machine.
+
+5. If SoX is installed, repeat steps 3 and 4 with
+   `rec -c 1 -r 16000 {file}`.
+
+   Result: The take records with SoX and the panel gains the text. A machine
+   without SoX reports that `rec` is not installed, and the take records
+   nothing.
 
 ### 6.10 SI-10 — The language hint of the service
 
