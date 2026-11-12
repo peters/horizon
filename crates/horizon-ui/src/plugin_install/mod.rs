@@ -571,24 +571,12 @@ fn install_agent_plugins_impl(
                 Ok(changed) => {
                     updated_files += usize::from(changed);
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
-                    if skill_dir_is_leased(lease, &device_dir) {
-                        updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
-                    }
-                    if skill_dir_is_leased(lease, &block_dir) {
-                        updated_files += sync_plugin_files(&block_dir, BLOCK_SKILL_FILES)?;
-                    }
-                    if skill_dir_is_leased(lease, &machines_dir) {
-                        updated_files += sync_plugin_files(&machines_dir, MACHINES_SKILL_FILES)?;
-                    }
-                    if skill_dir_is_leased(lease, &mobile_dir) {
-                        updated_files += sync_plugin_files(&mobile_dir, MOBILE_SKILL_FILES)?;
-                    }
-                    if skill_dir_is_leased(lease, &speech_dir) {
-                        updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
-                    }
-                    if skill_dir_is_leased(lease, &worktree_dir) {
-                        updated_files += sync_plugin_files(&worktree_dir, WORKTREE_SKILL_FILES)?;
-                    }
+                    updated_files += sync_leased_skill(lease, &device_dir, DEVICE_SKILL_FILES)?;
+                    updated_files += sync_leased_skill(lease, &block_dir, BLOCK_SKILL_FILES)?;
+                    updated_files += sync_leased_skill(lease, &machines_dir, MACHINES_SKILL_FILES)?;
+                    updated_files += sync_leased_skill(lease, &mobile_dir, MOBILE_SKILL_FILES)?;
+                    updated_files += sync_leased_skill(lease, &speech_dir, SPEECH_SKILL_FILES)?;
+                    updated_files += sync_leased_skill(lease, &worktree_dir, WORKTREE_SKILL_FILES)?;
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -604,33 +592,32 @@ fn install_agent_plugins_impl(
         let mobile_dir = codex_root.join("skills").join(HORIZON_MOBILE_SKILL);
         let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
         let worktree_dir = codex_root.join("skills").join(HORIZON_WORKTREE_SKILL);
-        if skill_dir_is_leased(lease, &browser_dir) {
-            updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &device_dir) {
-            updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &block_dir) {
-            updated_files += sync_plugin_files(&block_dir, BLOCK_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &machines_dir) {
-            updated_files += sync_plugin_files(&machines_dir, MACHINES_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &mobile_dir) {
-            updated_files += sync_plugin_files(&mobile_dir, MOBILE_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &speech_dir) {
-            updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &worktree_dir) {
-            updated_files += sync_plugin_files(&worktree_dir, WORKTREE_SKILL_FILES)?;
-        }
+        updated_files += sync_leased_skill(lease, &browser_dir, BROWSER_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &device_dir, DEVICE_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &block_dir, BLOCK_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &machines_dir, MACHINES_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &mobile_dir, MOBILE_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &speech_dir, SPEECH_SKILL_FILES)?;
+        updated_files += sync_leased_skill(lease, &worktree_dir, WORKTREE_SKILL_FILES)?;
     }
     Ok(updated_files)
 }
 
 fn skill_dir_is_leased(lease: Option<&AgentPluginHostLease>, skill_dir: &Path) -> bool {
     lease.is_none_or(|lease| lease.covers_skill_dir(skill_dir))
+}
+
+/// Writes the files of one skill of a root of the person, and only while this
+/// host owns that directory: a root another host leases keeps its own copy.
+fn sync_leased_skill(
+    lease: Option<&AgentPluginHostLease>,
+    skill_dir: &Path,
+    files: &[EmbeddedFile],
+) -> std::io::Result<usize> {
+    if !skill_dir_is_leased(lease, skill_dir) {
+        return Ok(0);
+    }
+    sync_plugin_files(skill_dir, files)
 }
 
 fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) -> Vec<PathBuf> {
