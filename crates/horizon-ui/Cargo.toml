@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 horizon-browser.workspace = true
 horizon-browser-control.workspace = true
+horizon-frame-source.workspace = true
 horizon-vnc.workspace = true
 bytemuck.workspace = true
 thiserror.workspace = true

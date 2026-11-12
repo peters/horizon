@@ -43,7 +43,14 @@ impl NativeLabels {
     }
 }
 
-pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
+pub(super) fn show(
+    ui: &mut Ui,
+    device: &DevicePanelState,
+    server: &DeviceServerDetails,
+    connected: bool,
+    stream: Option<horizon_frame_source::Stats>,
+    input_error: Option<&str>,
+) {
     ui.collapsing("Connection details", |ui| {
         let height = (ui.available_height() * 0.6).clamp(96.0, 300.0);
         egui::ScrollArea::vertical()
@@ -60,7 +67,7 @@ pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServer
                         if device.identity.is_some() && ui.available_width() >= 620.0 {
                             ui.columns(2, |columns| {
                                 machine(&mut columns[0], device);
-                                connection(&mut columns[1], device, server, connected);
+                                connection(&mut columns[1], device, server, connected, stream, input_error);
                             });
                         } else {
                             if device.identity.is_some() {
@@ -69,7 +76,7 @@ pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServer
                                 ui.separator();
                                 ui.add_space(8.0);
                             }
-                            connection(ui, device, server, connected);
+                            connection(ui, device, server, connected, stream, input_error);
                         }
                     });
             });
@@ -85,6 +92,15 @@ fn section(ui: &mut Ui, title: &str) {
 fn caption(ui: &mut Ui, text: &str) {
     ui.add(Label::new(RichText::new(text).size(12.0).color(theme::FG_SOFT())).wrap());
     ui.add_space(6.0);
+}
+
+/// The address of the VNC desktop of this viewer, for the row of its connection.
+fn endpoint_address(device: &DevicePanelState) -> String {
+    device
+        .target
+        .vnc_address()
+        .map(|address| address.to_string())
+        .unwrap_or_default()
 }
 
 fn machine(ui: &mut Ui, device: &DevicePanelState) {
@@ -107,17 +123,40 @@ fn machine(ui: &mut Ui, device: &DevicePanelState) {
     }
 }
 
-fn connection(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
+fn connection(
+    ui: &mut Ui,
+    device: &DevicePanelState,
+    server: &DeviceServerDetails,
+    connected: bool,
+    stream: Option<horizon_frame_source::Stats>,
+    input_error: Option<&str>,
+) {
     section(ui, "Connection");
-    match &device.ssh_tunnel {
-        Some(tunnel) => {
-            row(ui, "SSH host", &tunnel.display_label());
-            if let Some(port) = tunnel.port {
-                row(ui, "SSH port", &port.to_string());
-            }
-            row(ui, "Remote endpoint", &device.target.address().to_string());
+    // A frame source viewer names the program of the settings and not an address,
+    // and it has no tunnel.
+    if let Some(reference) = device.target.frame_source_ref() {
+        row(ui, "Frame source", &reference.name);
+        if let Some(target) = &reference.target {
+            row(ui, "Target", target);
         }
-        None => row(ui, "Local endpoint", &device.target.address().to_string()),
+    } else {
+        match &device.ssh_tunnel {
+            Some(tunnel) => {
+                row(ui, "SSH host", &tunnel.display_label());
+                if let Some(port) = tunnel.port {
+                    row(ui, "SSH port", &port.to_string());
+                }
+                row(ui, "Remote endpoint", &endpoint_address(device));
+            }
+            None => row(ui, "Local endpoint", &endpoint_address(device)),
+        }
+    }
+    if let Some(stream) = stream {
+        row(ui, "Dropped pictures", &stream.frames_dropped.to_string());
+        row(ui, "Age of the newest picture", &format!("{} ms", stream.age_ms));
+    }
+    if let Some(error) = input_error {
+        row(ui, "Last input refusal", error);
     }
     if server.name.is_some() || server.desktop_size.is_some() {
         ui.add_space(6.0);

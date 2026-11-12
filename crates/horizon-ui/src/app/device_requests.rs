@@ -131,9 +131,18 @@ impl HorizonApp {
         match &request.operation {
             Operation::Create {
                 endpoint,
+                frame_source,
                 identity,
                 ssh,
-            } => Some(self.create_device_viewer(endpoint, identity.clone(), ssh.clone(), actor, &request.actor, ctx)),
+            } => Some(self.create_device_viewer(
+                endpoint,
+                frame_source.as_ref(),
+                identity.clone(),
+                ssh.clone(),
+                actor,
+                &request.actor,
+                ctx,
+            )),
             Operation::List => {
                 let ids: Vec<_> = self
                     .board
@@ -266,15 +275,52 @@ impl HorizonApp {
         None
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a viewer needs its request, its owner, its workspace and the frame that starts it"
+    )]
     fn create_device_viewer(
         &mut self,
         endpoint: &str,
+        frame_source: Option<&device::FrameSourceRequest>,
         mut identity: Option<device::DeviceIdentity>,
         mut ssh: Option<device::SshRoute>,
         actor: ActorPanel,
         owner: &str,
         ctx: &Context,
     ) -> Outcome {
+        // One kind of source, and exactly one: a VNC endpoint, or the name of a
+        // program of this computer.
+        match (frame_source, endpoint.trim().is_empty()) {
+            (Some(_), false) => {
+                return Outcome::failed("invalid_request", "Give endpoint or frame_source, and not both");
+            }
+            (None, true) => {
+                return Outcome::failed("invalid_request", "Create needs an endpoint or a frame_source");
+            }
+            _ => {}
+        }
+        if let Some(request) = frame_source {
+            if ssh.is_some() {
+                return Outcome::failed(
+                    "invalid_request",
+                    "A frame source program runs on this computer, so it takes no ssh route",
+                );
+            }
+            let sources = &self.template_config.frame_sources;
+            let plan = match sources.plan(&request.name, request.target.as_deref()) {
+                Ok(plan) => plan,
+                Err(error) => return Outcome::failed(error.code(), &error.to_string()),
+            };
+            let environment = horizon_core::ProgramEnvironment::inherited();
+            if plan.installed(&environment).is_none() {
+                return Outcome::failed(
+                    "frame_source_program_missing",
+                    &format!("{} is not installed on this computer", plan.program),
+                );
+            }
+            return self.create_frame_source_viewer(plan, identity, actor, owner, ctx);
+        }
         if let Some(identity) = &mut identity
             && let Err(error) = horizon_core::DevicePanelState::normalize_identity(identity)
         {
@@ -317,6 +363,50 @@ impl HorizonApp {
         }
         let state = self.panel_render_caches.device_ui_state.entry(id).or_default();
         state.owner = Some(owner.into());
+        if let Some(device) = self.board.panel(id).and_then(horizon_core::Panel::device) {
+            state.reconnect(ctx, device);
+        }
+        self.mark_runtime_dirty();
+        self.single_device_observation(id, owner)
+    }
+
+    /// Create one viewer of a frame source program of this computer. The plan is the
+    /// line of the settings, resolved here and kept by the viewer: an agent passes a
+    /// name and a target, and never a command.
+    fn create_frame_source_viewer(
+        &mut self,
+        plan: horizon_core::FrameSourcePlan,
+        mut identity: Option<device::DeviceIdentity>,
+        actor: ActorPanel,
+        owner: &str,
+        ctx: &Context,
+    ) -> Outcome {
+        if let Some(identity) = &mut identity
+            && let Err(error) = horizon_core::DevicePanelState::normalize_identity(identity)
+        {
+            return Outcome::failed("invalid_identity", &error.to_string());
+        }
+        let reference = horizon_core::FrameSourceRef {
+            name: plan.name.clone(),
+            target: None,
+        };
+        let options = PanelOptions {
+            kind: PanelKind::Device,
+            device_identity: identity,
+            frame_source: Some(reference),
+            ..PanelOptions::default()
+        };
+        let focused = self.board.focused;
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
+            return Outcome::failed("panel_unavailable", "The frame source viewer could not be created");
+        };
+        // Creating a viewer must not steal keyboard input from the caller.
+        if let Some(focused) = focused {
+            self.board.focus(focused);
+        }
+        let state = self.panel_render_caches.device_ui_state.entry(id).or_default();
+        state.owner = Some(owner.into());
+        state.set_frame_plan(Some(plan));
         if let Some(device) = self.board.panel(id).and_then(horizon_core::Panel::device) {
             state.reconnect(ctx, device);
         }
@@ -569,6 +659,7 @@ mod tests {
                 &app,
                 Operation::Create {
                     endpoint: "127.0.0.1:1".into(),
+                    frame_source: None,
                     identity: None,
                     ssh: None,
                 },
@@ -807,6 +898,7 @@ mod tests {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
+                frame_source: None,
                 identity: None,
                 ssh: None,
             },
@@ -868,6 +960,7 @@ mod tests {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
+                frame_source: None,
                 identity: None,
                 ssh: None,
             },
@@ -997,6 +1090,7 @@ mod tests {
                 &app,
                 Operation::Create {
                     endpoint: "127.0.0.1:5900".into(),
+                    frame_source: None,
                     identity: None,
                     ssh: None,
                 },
@@ -1034,6 +1128,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                frame_source: None,
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
                 ssh: None,
@@ -1069,7 +1164,8 @@ mod tests {
             let create = request(
                 &app,
                 Operation::Create {
-                    identity: None,
+                    frame_source: None,
+                identity: None,
                     endpoint: endpoint.into(),
                     ssh: None,
                 },
@@ -1082,6 +1178,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                frame_source: None,
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
                 ssh: None,
@@ -1116,6 +1213,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                frame_source: None,
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
                 ssh: None,
@@ -1160,6 +1258,7 @@ mod tests {
         let create = request(
             &app,
             Operation::Create {
+                frame_source: None,
                 identity: None,
                 endpoint: "127.0.0.1:5900".into(),
                 ssh: None,
@@ -1263,6 +1362,7 @@ mod tests {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
+                frame_source: None,
                 identity: Some(identity),
                 ssh: None,
             },
@@ -1287,6 +1387,7 @@ mod tests {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5900".into(),
+                frame_source: None,
                 identity: Some(device::DeviceIdentity {
                     machine_name: Some("a".repeat(257)),
                     ..Default::default()
@@ -1312,6 +1413,7 @@ mod tests {
             &app,
             Operation::Create {
                 endpoint: "127.0.0.1:5901".into(),
+                frame_source: None,
                 identity: None,
                 ssh: Some(route),
             },
@@ -1372,6 +1474,7 @@ mod tests {
                 &app,
                 Operation::Create {
                     endpoint: "127.0.0.1:5901".into(),
+                    frame_source: None,
                     identity: None,
                     ssh: Some(device::SshRoute {
                         host: host.into(),

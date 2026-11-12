@@ -14,7 +14,6 @@
 //! that one argument and nothing else.
 
 use std::ffi::OsString;
-use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -191,6 +190,22 @@ impl FrameSource {
     }
 }
 
+/// The name of one source, checked against the rule of the section.
+///
+/// # Errors
+/// Reports a name that is not 1 to [`MAX_NAME_CHARS`] characters of the rule.
+pub fn frame_source_name(name: &str) -> Result<String, String> {
+    check_name(name)
+}
+
+/// The target of one viewer, checked against the rule of the section.
+///
+/// # Errors
+/// Reports a target that is not 1 to [`MAX_TARGET_CHARS`] characters of the rule.
+pub fn frame_source_target(target: &str) -> Result<String, String> {
+    check_target(target).map_err(|error| error.to_string())
+}
+
 fn check_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     let valid = !name.is_empty()
@@ -223,27 +238,6 @@ fn check_target(target: &str) -> Result<String, FrameSourceError> {
         )));
     }
     Ok(target.to_owned())
-}
-
-/// One command line of this section as the arguments of one program, for a test
-/// and for a caller that must show what a source runs.
-#[must_use]
-pub fn program_of(line: &str) -> Option<String> {
-    let line = CommandLine::parse(line.trim()).ok()?;
-    Some(line.program().to_owned())
-}
-
-/// The program of one target, for the sentence of a refusal: a name that is not on
-/// this computer.
-#[must_use]
-pub fn missing_program(plan: &FrameSourcePlan, environment: &ProgramEnvironment) -> Option<String> {
-    match plan.installed(environment) {
-        Some(_) => None,
-        None => Some(format!(
-            "{} is not installed on this computer",
-            Path::new(&plan.program).display()
-        )),
-    }
 }
 
 #[cfg(test)]
@@ -364,14 +358,22 @@ mod tests {
     }
 
     #[test]
-    fn a_program_that_no_folder_of_the_environment_holds_is_named() {
+    fn a_program_that_no_folder_of_the_environment_holds_is_not_installed() {
         let sources = section(&[("bench", "frame-tool-missing {target}")]);
         let plan = sources.plan("bench", None).expect("a run");
         let environment = ProgramEnvironment::with_path("/nonexistent-folder-for-this-test");
-        assert_eq!(
-            missing_program(&plan, &environment).as_deref(),
-            Some("frame-tool-missing is not installed on this computer")
-        );
-        assert_eq!(program_of("frame-tool --flag"), Some("frame-tool".to_owned()));
+        assert!(plan.installed(&environment).is_none());
+        assert_eq!(plan.program, "frame-tool-missing");
+        // A program of a folder of the environment is one that this process may run.
+        let folder = tempfile::tempdir().expect("a folder of a test");
+        let program = folder.path().join("frame-tool");
+        std::fs::write(&program, b"#!/bin/sh\nexit 0\n").expect("a program of a test");
+        let mut mode = std::fs::metadata(&program).expect("a program of a test").permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        std::fs::set_permissions(&program, mode).expect("a mode of a test");
+        let sources = section(&[("bench", &format!("{} {{target}}", program.display()))]);
+        let plan = sources.plan("bench", None).expect("a run");
+        let environment = ProgramEnvironment::with_path(folder.path().to_string_lossy().into_owned());
+        assert!(plan.installed(&environment).is_some(), "the program of the folder is found");
     }
 }

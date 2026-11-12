@@ -3,6 +3,7 @@
 mod capture;
 mod controls;
 mod details;
+mod frame_input;
 mod host;
 mod keys;
 mod observation;
@@ -53,6 +54,19 @@ pub(crate) struct DeviceUiState {
     /// What is shown is one flat colour: nothing is open on the desktop yet.
     empty_desktop: bool,
     controls: controls::Controls,
+    /// The run of the frame source program of this viewer, as the settings resolve
+    /// it. A VNC viewer holds none.
+    frame_plan: Option<horizon_core::FrameSourcePlan>,
+    /// The counters of the last `stats` message of a frame source program.
+    stats: Option<horizon_frame_source::Stats>,
+    /// What the frame source program said about input, after its `hello`.
+    frame_input: Option<horizon_frame_source::InputHello>,
+    /// The last input refusal of a frame source program.
+    input_error: Option<String>,
+    /// This frame drew the picture, so a frame source continues with its pictures.
+    drawn: bool,
+    /// The pointer, buttons and keys that a frame source program has been given.
+    frame_state: horizon_frame_source::InputState,
     /// A person's choice for this session only; never persisted, never set by agents.
     interact: bool,
     input: InputState,
@@ -134,6 +148,7 @@ impl DeviceUiState {
         self.commit_pass();
         self.image.displayed = false;
         self.rendered = false;
+        self.drawn = false;
     }
 
     pub(crate) fn finish_frame(&mut self, ctx: &Context) {
@@ -145,7 +160,14 @@ impl DeviceUiState {
             self.upload_in_background(ctx);
         }
         if let Some(session) = &self.session {
-            session.set_visible(self.rendered);
+            // A frame source sends no picture while it is not drawn, and it keeps
+            // reading its counters, so an inspection of the panel stays live.
+            let visible = if session.is_frame_source() {
+                self.rendered && self.drawn
+            } else {
+                self.rendered
+            };
+            session.set_visible(visible);
         }
         // Observations between passes (request pump, held reveals) describe
         // this completed pass rather than the one before it.
@@ -181,6 +203,15 @@ impl DeviceUiState {
         let disconnected = matches!(updates.status, Some(Status::Disconnected { .. } | Status::Stopped));
         let full = disconnected.then(|| session.latest_full()).flatten();
         self.image.received_sequence = updates.received_frame_sequence;
+        if updates.stats.is_some() {
+            self.stats = updates.stats;
+        }
+        if let Some(input) = updates.input {
+            self.frame_input = Some(input);
+        }
+        if updates.input_error.is_some() {
+            self.input_error = updates.input_error;
+        }
         if let Some(desktop) = updates.desktop {
             self.desktop = Some(desktop);
             self.server.desktop_size = Some(desktop);
@@ -250,7 +281,14 @@ impl DeviceUiState {
             self.reconnect(ui.ctx(), device);
         }
         ui.add_enabled_ui(interactive, |ui| {
-            details::show(ui, device, &self.server, matches!(self.status, Status::Connected));
+            details::show(
+                ui,
+                device,
+                &self.server,
+                matches!(self.status, Status::Connected),
+                self.stats,
+                self.input_error.as_deref(),
+            );
         });
         let previous = self.controls.options;
         let changed = ui
@@ -278,8 +316,18 @@ impl DeviceUiState {
                 let scale = (available.x / size.x).min(available.y / size.y);
                 visible_image(ui, texture, size * scale, interact)
             };
+            self.drawn = image_visible;
             if self.empty_desktop && image_visible && matches!(self.status, Status::Connected) {
                 paint_empty_hint(ui, response.rect);
+            }
+            // The program of a frame source sends the size that it draws at, in
+            // physical pixels, after that size was stable for a moment. A VNC
+            // desktop keeps its own resolution.
+            if image_visible
+                && let Some(session) = &self.session
+                && session.is_frame_source()
+            {
+                session.set_view_size(Some(drawn_pixels(ui, response.rect)));
             }
             self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
             if self.image.displayed {
@@ -421,6 +469,31 @@ impl DeviceUiState {
         self.set_source(ctx, image);
     }
 
+    /// The run of the source program of this viewer, resolved again when the panel
+    /// names another source. A VNC viewer holds none and this clears it.
+    pub(crate) fn set_frame_plan(&mut self, plan: Option<horizon_core::FrameSourcePlan>) {
+        self.frame_plan = plan;
+    }
+
+    /// The run of the frame source of `device`, or the sentence that says why there
+    /// is none.
+    fn frame_config(&self, device: &DevicePanelState) -> Result<Option<horizon_frame_source::Config>, String> {
+        let Some(reference) = device.target.frame_source_ref() else {
+            return Ok(None);
+        };
+        match &self.frame_plan {
+            Some(plan) if plan.name == reference.name => Ok(Some(horizon_frame_source::Config {
+                name: plan.name.clone(),
+                program: std::path::PathBuf::from(&plan.program),
+                arguments: plan.arguments.clone(),
+            })),
+            _ => Err(format!(
+                "The frame source {} is not one that the settings of this computer hold",
+                reference.name
+            )),
+        }
+    }
+
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
         self.recording.stop();
         self.initialized = true;
@@ -431,16 +504,26 @@ impl DeviceUiState {
         self.native_labels = details::NativeLabels::default();
         self.input = InputState::default();
         self.captured = false;
+        self.stats = None;
+        self.frame_input = None;
+        self.input_error = None;
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
         self.end_session();
-        match Session::start(device, ctx.clone(), ctx.viewport_id(), self.controls.options) {
+        let frame = match self.frame_config(device) {
+            Ok(frame) => frame,
+            Err(message) => {
+                self.status = Status::disconnected(message);
+                return;
+            }
+        };
+        match Session::start(device, frame, ctx.clone(), ctx.viewport_id(), self.controls.options) {
             Ok(session) => {
                 self.session = Some(session);
                 self.status = Status::Connecting;
             }
-            Err(error) => self.status = Status::disconnected(error.to_string()),
+            Err(error) => self.status = Status::disconnected(error),
         }
     }
 }
@@ -466,6 +549,18 @@ fn paint_empty_hint(ui: &Ui, image: egui::Rect) {
     let backing = egui::Rect::from_center_size(visible.center(), galley.size() + egui::vec2(24.0, 14.0));
     painter.rect_filled(backing, 8.0, egui::Color32::from_black_alpha(170));
     painter.galley(backing.center() - galley.size() * 0.5, galley, color);
+}
+
+/// The size that the picture is drawn at, in physical pixels. A picture of the
+/// contract has even sides of 16 or more, so a small or odd size is rounded to one.
+fn drawn_pixels(ui: &Ui, rect: egui::Rect) -> [u32; 2] {
+    let scale = ui.ctx().pixels_per_point();
+    let side = |points: f32| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pixels = (points * scale).round().max(0.0) as u32;
+        (pixels + 1) & !1
+    };
+    [side(rect.width()).max(16), side(rect.height()).max(16)]
 }
 
 fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2, interact: bool) -> (bool, egui::Response) {

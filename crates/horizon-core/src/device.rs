@@ -4,10 +4,62 @@ use crate::browser::manifest::device::DeviceIdentity;
 use crate::ssh::SshConnection;
 use crate::{Error, Result};
 
-/// An explicit local VNC endpoint; connecting and rendering belong to the UI.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The frame source program that a viewer shows, by the name that the person gave
+/// it in the settings and with the target that an agent passed.
+///
+/// Horizon keeps no command here: the line of the settings is the program, and a
+/// viewer of this reference runs that line and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameSourceRef {
+    /// The name of one source of the section `frame_sources` of the settings.
+    pub name: String,
+    /// The text that replaces `{target}` in that line, when a viewer passed one.
+    pub target: Option<String>,
+}
+
+impl FrameSourceRef {
+    /// The prefix of the command line of a panel that shows a frame source, so a
+    /// restored panel finds its source again.
+    pub const PREFIX: &'static str = "frame-source:";
+
+    /// The command of a panel that shows this source.
+    #[must_use]
+    pub fn command(&self) -> String {
+        match &self.target {
+            Some(target) => format!("{}{}?target={}", Self::PREFIX, self.name, target),
+            None => format!("{}{}", Self::PREFIX, self.name),
+        }
+    }
+
+    /// The reference of a command of a panel, or `None` when it is not one.
+    #[must_use]
+    pub fn parse(command: &str) -> Option<Self> {
+        let rest = command.trim().strip_prefix(Self::PREFIX)?;
+        let (name, target) = match rest.split_once("?target=") {
+            Some((name, target)) => (name, Some(target)),
+            None => (rest, None),
+        };
+        let name = crate::config::frame_source_name(name).ok()?;
+        let target = match target {
+            Some(target) => Some(crate::config::frame_source_target(target).ok()?),
+            None => None,
+        };
+        Some(Self { name, target })
+    }
+}
+
+/// The source of one viewer: a VNC desktop on this machine or another, or a frame
+/// source program of this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceViewTarget {
-    address: SocketAddr,
+    source: ViewSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ViewSource {
+    /// A numeric loopback address, as seen directly or from the tunnel host.
+    Vnc(SocketAddr),
+    FrameSource(FrameSourceRef),
 }
 
 impl DeviceViewTarget {
@@ -24,12 +76,51 @@ impl DeviceViewTarget {
                 "Device target requires a loopback address and nonzero port".into(),
             ));
         }
-        Ok(Self { address })
+        Ok(Self {
+            source: ViewSource::Vnc(address),
+        })
     }
 
+    /// A viewer of one frame source program of the settings.
     #[must_use]
-    pub const fn address(self) -> SocketAddr {
-        self.address
+    pub fn frame_source(reference: FrameSourceRef) -> Self {
+        Self {
+            source: ViewSource::FrameSource(reference),
+        }
+    }
+
+    /// The VNC address of this target, or `None` when it is a frame source.
+    #[must_use]
+    pub fn vnc_address(&self) -> Option<SocketAddr> {
+        match &self.source {
+            ViewSource::Vnc(address) => Some(*address),
+            ViewSource::FrameSource(_) => None,
+        }
+    }
+
+    /// The frame source of this target, or `None` when it is a VNC desktop.
+    #[must_use]
+    pub fn frame_source_ref(&self) -> Option<&FrameSourceRef> {
+        match &self.source {
+            ViewSource::FrameSource(reference) => Some(reference),
+            ViewSource::Vnc(_) => None,
+        }
+    }
+
+    /// Whether this viewer shows the pictures of a program of this computer.
+    #[must_use]
+    pub fn is_frame_source(&self) -> bool {
+        self.frame_source_ref().is_some()
+    }
+
+    /// The command of a panel that shows this target, for the session that restores
+    /// the panel.
+    #[must_use]
+    pub fn command(&self) -> String {
+        match &self.source {
+            ViewSource::Vnc(address) => address.to_string(),
+            ViewSource::FrameSource(reference) => reference.command(),
+        }
     }
 }
 
@@ -60,12 +151,19 @@ pub struct DevicePanelState {
 impl DevicePanelState {
     const MAX_LABEL_CHARS: usize = 256;
 
-    /// Where the desktop lives, for titles and connection details.
+    /// Where the pictures come from, for titles and connection details.
     #[must_use]
     pub fn endpoint_label(&self) -> String {
+        if let Some(reference) = self.target.frame_source_ref() {
+            return match &reference.target {
+                Some(target) => format!("frame source {} of {}", reference.name, target),
+                None => format!("frame source {}", reference.name),
+            };
+        }
+        let address = self.target.vnc_address().map(|address| address.to_string()).unwrap_or_default();
         match &self.ssh_tunnel {
-            Some(connection) => format!("{} via {}", self.target.address(), connection.display_label()),
-            None => self.target.address().to_string(),
+            Some(connection) => format!("{address} via {}", connection.display_label()),
+            None => address,
         }
     }
 
@@ -238,7 +336,7 @@ mod tests {
         assert!(
             panel
                 .device()
-                .is_some_and(|device| !device.connect_on_start && device.target.address().to_string() == "[::1]:5901")
+                .is_some_and(|device| !device.connect_on_start && device.target.vnc_address().map(|address| address.to_string()).as_deref() == Some("[::1]:5901"))
         );
         assert!(panel.terminal().is_none());
         Ok(())
@@ -289,7 +387,7 @@ mod tests {
             .device()
             .ok_or_else(|| crate::Error::State("missing device".into()))?;
         assert_eq!(device.ssh_tunnel.as_ref(), Some(&tunnel));
-        assert_eq!(device.target.address().to_string(), "127.0.0.1:5901");
+        assert_eq!(device.target.vnc_address().map(|address| address.to_string()).as_deref(), Some("127.0.0.1:5901"));
         assert!(!device.connect_on_start);
         Ok(())
     }

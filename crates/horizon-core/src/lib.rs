@@ -71,7 +71,7 @@ pub use config::{
     TARGET_PLACEHOLDER, TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_host,
     browser_mcp_args, configure_browser_host, configure_server, language_hint, preset_named, server,
 };
-pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
+pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget, FrameSourceRef};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};

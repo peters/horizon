@@ -88,6 +88,7 @@ fn add_point(object: &mut Value, at: Option<Point>) {
 pub struct InputState {
     position: Option<Point>,
     buttons: u8,
+    held_keys: Vec<Key>,
 }
 
 impl InputState {
@@ -148,9 +149,45 @@ impl InputState {
     }
 
     /// A key that a person pressed or released.
-    #[must_use]
     pub fn key(&mut self, key: Key, down: bool) -> Vec<InputEvent> {
+        if down {
+            if !self.held_keys.contains(&key) {
+                self.held_keys.push(key);
+            }
+        } else {
+            self.held_keys.retain(|held| *held != key);
+        }
         vec![InputEvent::Key { key, down }]
+    }
+
+    /// Whether this key is down.
+    #[must_use]
+    pub fn is_held(&self, key: Key) -> bool {
+        self.held_keys.contains(&key)
+    }
+
+    /// Let go of every key and button that is still held, for the moment that the
+    /// person loses the image: a program that is shown again must not keep a key
+    /// down. The program also lets go of everything itself when it is told that the
+    /// viewer is hidden, and this is the earlier message of the two.
+    pub fn release_all(&mut self) -> Vec<InputEvent> {
+        let mut events: Vec<InputEvent> = self
+            .held_keys
+            .drain(..)
+            .map(|key| InputEvent::Key { key, down: false })
+            .collect();
+        if self.buttons != 0 {
+            let at = self.position;
+            self.buttons = 0;
+            for button in [Button::Left, Button::Middle, Button::Right] {
+                events.push(InputEvent::Button {
+                    button,
+                    down: false,
+                    at,
+                });
+            }
+        }
+        events
     }
 
     /// Text that a person typed: one message for the whole text of this frame, and
@@ -251,6 +288,25 @@ mod tests {
         );
         state.button(Button::Left, false, None);
         assert_eq!(state.buttons(), 0);
+    }
+
+    #[test]
+    fn a_lost_image_lets_go_of_every_key_and_button_it_held() {
+        let mut state = InputState::default();
+        state.pointer(Some(Point { x: 2, y: 3 }));
+        state.button(Button::Right, true, None);
+        state.key(Key::Named(crate::keys::NamedKey::Ctrl), true);
+        state.key(Key::Character('a'), true);
+        assert!(state.is_held(Key::Character('a')));
+        let events = state.release_all();
+        assert_eq!(events.len(), 5, "two keys and three buttons: {events:?}");
+        assert!(
+            events[..2].iter().all(|event| matches!(event, InputEvent::Key { down: false, .. })),
+            "the two keys are released first: {events:?}"
+        );
+        assert_eq!(state.buttons(), 0);
+        assert!(!state.is_held(Key::Named(crate::keys::NamedKey::Ctrl)));
+        assert!(state.release_all().is_empty(), "nothing is held twice");
     }
 
     #[test]

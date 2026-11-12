@@ -31,7 +31,7 @@ pub(crate) use presets::{
 };
 pub use frame_sources::{
     FrameSource, FrameSourceError, FrameSourcePlan, FrameSourcesConfig, MAX_NAME_CHARS, MAX_SOURCES, MAX_TARGET_CHARS,
-    TARGET_PLACEHOLDER,
+    TARGET_PLACEHOLDER, frame_source_name, frame_source_target,
 };
 pub use remote_hosts::RemoteHostsConfig;
 pub use secrets::SecretsConfig;

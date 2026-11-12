@@ -48,6 +48,7 @@ mod session;
 mod text;
 mod worker;
 
+pub use control::Stats;
 pub use error::Error;
 pub use horizon_vnc::{Frame, Image, Status, Wake};
 pub use input::{InputEvent, InputState, Point};

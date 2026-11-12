@@ -22,8 +22,14 @@ pub enum Operation {
     /// Create in the calling agent's workspace. Returns immediately; inspect for image readiness.
     Create {
         /// Numeric loopback address and nonzero port of the VNC server, as seen
-        /// from this machine or, with `ssh`, from that SSH host.
+        /// from this machine or, with `ssh`, from that SSH host. Give this, or give
+        /// `frame_source`, and not both.
+        #[serde(default)]
         endpoint: String,
+        /// A frame source program of this computer, by the name that the person
+        /// gave it in the settings. An agent passes no command and no argument.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_source: Option<FrameSourceRequest>,
         /// Optional labels supplied by the session creator, not verified by VNC.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         identity: Option<DeviceIdentity>,
@@ -68,6 +74,19 @@ pub enum Operation {
     Close {
         panel_id: String,
     },
+}
+
+/// The frame source program that one viewer shows.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrameSourceRequest {
+    /// The name of one source of the section `frame_sources` of the settings of this
+    /// computer.
+    pub name: String,
+    /// The text that replaces `{target}` in the line of the settings, when the source
+    /// holds that placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
@@ -370,6 +389,10 @@ pub struct DeviceServerDetails {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct PanelState {
     pub panel_id: String,
+    /// Which kind of source this viewer shows: a VNC desktop of another program, or
+    /// a frame source program of this computer.
+    pub kind: ViewerKind,
+    /// The address of the VNC desktop, or the name of the frame source program.
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<DeviceIdentity>,
@@ -389,8 +412,24 @@ pub struct PanelState {
     /// Absent on older hosts; lack of diagnostics is not proof of a stalled stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Diagnostics>,
+    /// The counters of the last `stats` message of a frame source program, and the
+    /// age of its newest picture. Absent for a VNC desktop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames_dropped: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age_ms: Option<u64>,
     #[serde(flatten)]
     pub image: ImageEvidence,
+}
+
+/// The kind of source that one native Device viewer shows.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerKind {
+    /// A VNC desktop, on this machine or reached through an SSH tunnel.
+    Vnc,
+    /// A frame source program of this computer, named in the settings.
+    FrameSource,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

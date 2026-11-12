@@ -140,6 +140,9 @@ impl Default for PanelLayout {
 pub struct PanelOptions {
     pub device_identity: Option<crate::browser::manifest::device::DeviceIdentity>,
     pub device_input: crate::DeviceInput,
+    /// The frame source program of this viewer, when it shows one instead of a VNC
+    /// desktop. It holds a name of the settings and never a command.
+    pub frame_source: Option<crate::FrameSourceRef>,
     /// The card that a block panel holds; a block panel without one is empty.
     pub block: Option<crate::BlockPanelState>,
     pub name: Option<String>,
@@ -209,6 +212,7 @@ impl Default for PanelOptions {
         Self {
             device_identity: None,
             device_input: crate::DeviceInput::default(),
+            frame_source: None,
             block: None,
             name: None,
             name_is_custom: None,

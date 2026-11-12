@@ -284,6 +284,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
                 opts.device_identity.take(),
                 opts.device_input,
                 opts.ssh_connection.take(),
+                opts.frame_source.take(),
             )
         }
         PanelKind::Block => {
