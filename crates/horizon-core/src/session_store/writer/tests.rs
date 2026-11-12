@@ -1,5 +1,6 @@
 use super::*;
 use crate::HorizonHome;
+use crate::session_store::test_support::SAVE_WAIT;
 
 fn store() -> (tempfile::TempDir, SessionStore) {
     let temp = tempfile::tempdir().unwrap();
@@ -34,7 +35,7 @@ fn a_queued_board_is_read_back_before_it_is_written_and_then_is_durable_on_disk(
     let read = store.load_runtime("session").unwrap().unwrap();
     assert_eq!(read.active_workspace_local_id.as_deref(), Some("second"));
     assert_eq!(
-        store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
+        store.wait_runtime_state_durable("session", generation, SAVE_WAIT),
         Ok(())
     );
     assert_eq!(on_disk(&store).as_deref(), Some("second"));
@@ -50,7 +51,7 @@ fn a_newer_board_replaces_one_that_is_not_written_yet() {
         .collect();
     let newest = *boards.last().unwrap();
     assert_eq!(store.queued_runtime_state("session"), Some(newest));
-    assert!(store.flush_runtime_states(Duration::from_secs(30)));
+    assert!(store.flush_runtime_states(SAVE_WAIT));
     assert_eq!(
         on_disk(&store).as_deref(),
         Some("step-19"),
@@ -70,7 +71,7 @@ fn a_session_switch_reads_the_board_the_writer_still_holds() {
     let _ = store.queue_runtime_state("session", board("new"));
     let resumed = store.resume_session("session").unwrap();
     assert_eq!(resumed.runtime_state.active_workspace_local_id.as_deref(), Some("new"));
-    assert!(store.flush_runtime_states(Duration::from_secs(30)));
+    assert!(store.flush_runtime_states(SAVE_WAIT));
 }
 
 #[test]
@@ -88,10 +89,7 @@ fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
         Err(Some(_))
     ));
     let healthy = store.queue_runtime_state("session", board("saved"));
-    assert_eq!(
-        store.wait_runtime_state_durable("session", healthy, Duration::from_secs(30)),
-        Ok(())
-    );
+    assert_eq!(store.wait_runtime_state_durable("session", healthy, SAVE_WAIT), Ok(()));
     assert_eq!(on_disk(&store).as_deref(), Some("saved"));
     assert!(
         !store.flush_runtime_states(Duration::from_secs(30)),
@@ -113,7 +111,7 @@ fn a_save_outside_the_queue_replaces_the_queued_board() {
     while store.save_runtime_state("session", &board("direct")).is_err() {
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(store.flush_runtime_states(Duration::from_secs(30)));
+    assert!(store.flush_runtime_states(SAVE_WAIT));
     assert_eq!(on_disk(&store).as_deref(), Some("direct"));
     let read = store.load_runtime("session").unwrap().unwrap();
     assert_eq!(read.active_workspace_local_id.as_deref(), Some("direct"));
@@ -160,7 +158,7 @@ fn the_writer_leaves_a_session_alone_while_a_save_outside_the_queue_writes_it() 
     );
     drop(direct);
     assert_eq!(
-        store.wait_runtime_state_durable("session", generation, Duration::from_secs(30)),
+        store.wait_runtime_state_durable("session", generation, SAVE_WAIT),
         Ok(())
     );
     assert_eq!(on_disk(&store).as_deref(), Some("queued"));

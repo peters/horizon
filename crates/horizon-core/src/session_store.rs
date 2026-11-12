@@ -4,6 +4,8 @@ mod lease;
 mod model;
 mod runtime_index;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 pub(crate) mod writer;
 
