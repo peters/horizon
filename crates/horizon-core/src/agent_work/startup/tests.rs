@@ -72,6 +72,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let home = tempfile::tempdir().expect("home");
+        // The provider reports the physical directory of its process. A Mac
+        // spells the temporary folder through `/var`, which is a link, so the
+        // spelling of the fixture must not decide what the product compares.
+        let cwd = home.path().canonicalize().expect("physical home");
         std::fs::create_dir_all(home.path().join(".claude/sessions")).expect("registry");
         let repo = git2::Repository::init(home.path()).expect("repo");
         let mut index = repo.index().expect("index");
@@ -89,7 +93,7 @@ impl Fixture {
         store
             .register_owner("panel", PanelKind::Claude, "owner", Some("session"), home.path())
             .expect("owner");
-        let input = serde_json::from_value(serde_json::json!({"session_id":"session", "prompt_id":"prompt", "hook_event_name":"UserPromptSubmit", "cwd":home.path(),"transcript_path":path})).expect("hook");
+        let input = serde_json::from_value(serde_json::json!({"session_id":"session", "prompt_id":"prompt", "hook_event_name":"UserPromptSubmit", "cwd":cwd,"transcript_path":path})).expect("hook");
         store
             .apply_hook("panel", PanelKind::Claude, "owner", &input, current_unix_millis() - 100)
             .expect("working");
@@ -117,15 +121,10 @@ impl Fixture {
                     prompt_id: "prompt".into(),
                     generation: record.ledger.generation,
                     suspended_at_millis: current_unix_millis() - 50,
-                    cwd: self
-                        .home
-                        .path()
-                        .canonicalize()
-                        .expect("cwd")
-                        .to_str()
-                        .expect("utf8")
-                        .into(),
-                    repo_fingerprint: super::super::repository::fingerprint(self.home.path()),
+                    // The suspension records the directory of the record, as
+                    // the teardown of a panel does.
+                    cwd: record.cwd.to_str().expect("utf8").into(),
+                    repo_fingerprint: super::super::repository::fingerprint(&record.cwd),
                     final_transcript: None,
                     cancelled_by_horizon: true,
                 },
