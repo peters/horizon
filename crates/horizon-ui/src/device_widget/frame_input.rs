@@ -18,6 +18,7 @@ impl DeviceUiState {
     /// Forward the input of this frame to the program, in the pixels of the
     /// picture that the widget shows.
     pub(super) fn forward_frame_input(&mut self, ui: &Ui, response: &egui::Response, layout: &ImageLayout) {
+        Self::focus_picture(ui, response);
         let mut events = self.frame_source_pointer(ui, response, layout);
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         if window_focused && response.has_focus() {
@@ -30,6 +31,31 @@ impl DeviceUiState {
             self.captured = false;
         }
         self.send_frame_input(events);
+    }
+
+    /// A press inside the picture takes the keyboard, and a press outside it gives
+    /// the keyboard back, as the VNC viewer does. A viewer that never takes the
+    /// keyboard never sends a key: the picture is the only target of one.
+    fn focus_picture(ui: &Ui, response: &egui::Response) {
+        let press = ui.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        let Some(position) = press else {
+            return;
+        };
+        let local = ui
+            .ctx()
+            .layer_transform_from_global(response.layer_id)
+            .map_or(position, |transform| transform * position);
+        if response.rect.contains(local) && ui.ctx().layer_id_at(position) == Some(response.layer_id) {
+            response.request_focus();
+        } else {
+            response.surrender_focus();
+        }
     }
 
     fn send_frame_input(&mut self, events: Vec<horizon_frame_source::InputEvent>) {
@@ -123,7 +149,31 @@ impl DeviceUiState {
         });
         let raw_events = ui.input(|input| input.events.clone());
         let mut events = Vec::new();
+        // The program reads what the person typed as one message of this frame, so
+        // the characters of a frame are collected and sent together, in their place
+        // among the keys.
+        let mut typed = String::new();
+        let flush = |typed: &mut String, events: &mut Vec<horizon_frame_source::InputEvent>| {
+            if !typed.is_empty() {
+                events.extend(InputState::text(typed));
+                typed.clear();
+            }
+        };
         for event in raw_events {
+            // egui-winit reports the platform chord of C, X and V as these instead
+            // of a key press. The program gets the chord as its keys, and the local
+            // clipboard text of Paste is never typed into it.
+            let clipboard_letter = match &event {
+                egui::Event::Copy => Some('c'),
+                egui::Event::Cut => Some('x'),
+                egui::Event::Paste(_) => Some('v'),
+                _ => None,
+            };
+            if let Some(letter) = clipboard_letter {
+                flush(&mut typed, &mut events);
+                events.extend(self.frame_chord(letter));
+                continue;
+            }
             match event {
                 egui::Event::Key {
                     key,
@@ -131,12 +181,20 @@ impl DeviceUiState {
                     modifiers: at,
                     ..
                 } => {
+                    flush(&mut typed, &mut events);
                     let chord_modifier = at.ctrl || at.alt || at.mac_cmd;
                     events.extend(self.modifier_keys(at));
                     let keysym = keysym_for_key(key);
                     let named = keysym.and_then(Key::of_keysym);
                     match (named, chord_modifier) {
-                        (Some(key), _) => events.extend(self.frame_state.key(key, pressed)),
+                        (Some(key), _) => {
+                            // A release follows its press and no other: a press that
+                            // Horizon handled as its own shortcut never reached the
+                            // program, and its release must not reach it either.
+                            if pressed || self.frame_state.is_held(key) {
+                                events.extend(self.frame_state.key(key, pressed));
+                            }
+                        }
                         (None, true) => {
                             if let Some(character) = keysym.and_then(character_of_keysym) {
                                 events.extend(self.frame_state.key(Key::Character(character), pressed));
@@ -147,18 +205,28 @@ impl DeviceUiState {
                         (None, false) => {}
                     }
                 }
-                egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
-                    events.extend(InputState::text(&text));
-                }
+                egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => typed.push_str(&text),
                 _ => {}
             }
         }
+        flush(&mut typed, &mut events);
         // The modifier keys of the frame, as the frame ended it, so a key that was
         // pressed with Ctrl reaches the program with Ctrl down and no modifier
         // stays down after the frame.
         let at = ui.input(|input| input.modifiers);
         events.extend(self.modifier_keys(at));
         events
+    }
+
+    /// One clipboard letter as the chord of the platform: the command key held
+    /// around the letter, so the program runs its own clipboard action.
+    fn frame_chord(&mut self, letter: char) -> Vec<horizon_frame_source::InputEvent> {
+        let command = if cfg!(target_os = "macos") {
+            NamedKey::Super
+        } else {
+            NamedKey::Ctrl
+        };
+        self.frame_state.chord(letter, command)
     }
 
     /// The four modifier keys as the names of the contract, sent as their changes.

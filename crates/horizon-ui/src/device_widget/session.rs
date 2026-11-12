@@ -18,6 +18,8 @@ use horizon_frame_source::{
 };
 use horizon_vnc::{Config, Frame, InputEvent, Route, ViewOptions, Wake};
 
+#[cfg(test)]
+pub(super) use horizon_frame_source::SentFrameInput as FrameSentInput;
 pub(super) use horizon_vnc::{Error as ViewError, Observation, Status, StreamEvidence};
 
 use super::picture::color_image;
@@ -413,6 +415,14 @@ impl Session {
     ) -> (Self, horizon_vnc::SentInput) {
         let (session, input) = VncSession::pending_frame_with_input(latest_full, image, produced_with);
         (Self::Vnc(session), input)
+    }
+
+    /// A frame source session with no program, whose queued input the test can
+    /// read back.
+    #[cfg(test)]
+    pub(super) fn frame_fixture() -> (Self, FrameSentInput) {
+        let (session, input) = FrameSession::fixture();
+        (Self::Frame(Box::new(session)), input)
     }
 }
 

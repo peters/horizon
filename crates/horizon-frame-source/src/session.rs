@@ -498,5 +498,10 @@ impl Drop for Session {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+mod fixture;
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "test-support"))]
+pub use fixture::SentFrameInput;

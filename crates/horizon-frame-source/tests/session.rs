@@ -357,6 +357,7 @@ fn each_input_event_reaches_the_program_in_the_pixels_of_the_picture() {
     events.extend(state.button(Button::Left, true, Some(Point { x: 5, y: 6 })));
     events.extend(state.wheel(0, 1));
     events.extend(state.key(Key::Named(NamedKey::Enter), true));
+    events.extend(state.key(Key::Character('a'), true));
     events.extend(state.key(Key::Character('a'), false));
     events.extend(InputState::text("hei"));
     events.extend(state.button(Button::Left, false, None));
@@ -386,10 +387,14 @@ fn each_input_event_reaches_the_program_in_the_pixels_of_the_picture() {
     );
     assert_eq!(
         lines[4],
-        serde_json::json!({"type": "input", "event": "key", "key": "a", "down": false})
+        serde_json::json!({"type": "input", "event": "key", "key": "a", "down": true})
     );
     assert_eq!(
         lines[5],
+        serde_json::json!({"type": "input", "event": "key", "key": "a", "down": false})
+    );
+    assert_eq!(
+        lines[6],
         serde_json::json!({"type": "input", "event": "text", "text": "hei"})
     );
     let pid = viewer.child_pid();

@@ -39,29 +39,6 @@ fn frame(
     output
 }
 
-/// The rendered desktop: the largest texture-filled rectangle.
-fn image_rect(output: &egui::FullOutput) -> egui::Rect {
-    output
-        .shapes
-        .iter()
-        .filter_map(|shape| match &shape.shape {
-            egui::Shape::Rect(rect)
-                if rect
-                    .brush
-                    .as_ref()
-                    .is_some_and(|brush| brush.fill_texture_id != egui::TextureId::default()) =>
-            {
-                Some(rect.rect)
-            }
-            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
-                Some(shape.shape.visual_bounding_rect())
-            }
-            _ => None,
-        })
-        .max_by(|a, b| a.area().total_cmp(&b.area()))
-        .expect("desktop image")
-}
-
 fn drain(receiver: &mut SentInput) -> Vec<InputEvent> {
     receiver.drain()
 }

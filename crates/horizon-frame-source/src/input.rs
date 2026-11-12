@@ -89,6 +89,8 @@ pub struct InputState {
     position: Option<Point>,
     buttons: u8,
     held_keys: Vec<Key>,
+    /// The letter of a clipboard chord whose key release is still to come.
+    pending_chord: Option<char>,
 }
 
 impl InputState {
@@ -148,8 +150,22 @@ impl InputState {
         }]
     }
 
-    /// A key that a person pressed or released.
+    /// A key that a person pressed or released. A key that is already released is
+    /// no message, so a press that the viewer did not send is not followed by a
+    /// release of it.
     pub fn key(&mut self, key: Key, down: bool) -> Vec<InputEvent> {
+        if !down {
+            if let Key::Character(character) = key
+                && self.pending_chord == Some(character)
+            {
+                // The chord already sent this key down and up.
+                self.pending_chord = None;
+                return Vec::new();
+            }
+            if !self.is_held(key) {
+                return Vec::new();
+            }
+        }
         if down {
             if !self.held_keys.contains(&key) {
                 self.held_keys.push(key);
@@ -158,6 +174,17 @@ impl InputState {
             self.held_keys.retain(|held| *held != key);
         }
         vec![InputEvent::Key { key, down }]
+    }
+
+    /// One clipboard chord: the command key held around one letter, and the
+    /// release of that letter swallowed when the viewer reports it. The command
+    /// key stays down, and the state of the frame releases it.
+    pub fn chord(&mut self, letter: char, command: crate::keys::NamedKey) -> Vec<InputEvent> {
+        let mut events = self.key(Key::Named(command), true);
+        events.extend(self.key(Key::Character(letter), true));
+        events.extend(self.key(Key::Character(letter), false));
+        self.pending_chord = Some(letter);
+        events
     }
 
     /// Whether this key is down.
@@ -315,6 +342,55 @@ mod tests {
         assert_eq!(state.buttons(), 0);
         assert!(!state.is_held(Key::Named(crate::keys::NamedKey::Ctrl)));
         assert!(state.release_all().is_empty(), "nothing is held twice");
+    }
+
+    #[test]
+    fn a_key_goes_down_once_and_only_a_held_key_is_released() {
+        let mut state = InputState::default();
+        assert!(state.key(Key::Character('a'), false).is_empty(), "no press, no release");
+        let enter = Key::Named(crate::keys::NamedKey::Enter);
+        assert_eq!(state.key(enter, true), [InputEvent::Key { key: enter, down: true }]);
+        assert_eq!(
+            state.key(enter, false),
+            [InputEvent::Key {
+                key: enter,
+                down: false
+            }]
+        );
+        assert!(state.key(enter, false).is_empty(), "one release for one press");
+    }
+
+    #[test]
+    fn a_clipboard_chord_holds_the_command_key_and_swallows_the_letter_release() {
+        let mut state = InputState::default();
+        let events = state.chord('c', crate::keys::NamedKey::Ctrl);
+        assert_eq!(
+            events,
+            [
+                InputEvent::Key {
+                    key: Key::Named(crate::keys::NamedKey::Ctrl),
+                    down: true
+                },
+                InputEvent::Key {
+                    key: Key::Character('c'),
+                    down: true
+                },
+                InputEvent::Key {
+                    key: Key::Character('c'),
+                    down: false
+                }
+            ],
+            "the command key stays down for the frame"
+        );
+        assert!(
+            state.key(Key::Character('c'), false).is_empty(),
+            "the release that follows the chord is no second release"
+        );
+        assert!(state.is_held(Key::Named(crate::keys::NamedKey::Ctrl)));
+        assert!(state.release_all().contains(&InputEvent::Key {
+            key: Key::Named(crate::keys::NamedKey::Ctrl),
+            down: false
+        }));
     }
 
     #[test]

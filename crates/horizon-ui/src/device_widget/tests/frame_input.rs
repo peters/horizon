@@ -1,0 +1,350 @@
+//! Interact sends a person's keys and text to a frame source program, and only
+//! while the picture has the keyboard.
+use super::*;
+use horizon_frame_source::{InputEvent, InputHello};
+
+const SCREEN: egui::Vec2 = egui::vec2(1200.0, 800.0);
+
+fn frame_device() -> DevicePanelState {
+    DevicePanelState {
+        target: horizon_core::DeviceViewTarget::frame_source(horizon_core::FrameSourceRef {
+            name: "standin".into(),
+            target: None,
+        }),
+        input: horizon_core::DeviceInput::Accepted,
+        identity: None,
+        connect_on_start: false,
+        ssh_tunnel: None,
+    }
+}
+
+fn frame_viewer() -> (
+    egui::Context,
+    DevicePanelState,
+    DeviceUiState,
+    horizon_frame_source::SentFrameInput,
+) {
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let (session, sent) = Session::frame_fixture();
+    let state = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        session: Some(session),
+        frame_input: Some(InputHello {
+            allowed: true,
+            reason: None,
+        }),
+        ..DeviceUiState::default()
+    };
+    (ctx, frame_device(), state, sent)
+}
+
+fn frame(
+    ctx: &egui::Context,
+    state: &mut DeviceUiState,
+    device: &DevicePanelState,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    state.begin_frame();
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                ..Default::default()
+            },
+            |ui| {
+                if state.source.is_none() {
+                    state.update_texture(ui.ctx(), ColorImage::filled([160, 80], egui::Color32::GREEN));
+                }
+                state.show(ui, device, true);
+            },
+        )
+        .discard_textures();
+    state.finish_frame(ctx);
+    output
+}
+
+fn key_event(key: egui::Key, pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers,
+    }
+}
+
+fn named(events: &[InputEvent]) -> Vec<(String, bool)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            InputEvent::Key { key, down } => Some((key.name(), *down)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn texts(events: &[InputEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            InputEvent::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A viewer with Interact on and the keyboard in the picture, as a person leaves it
+/// after a click on the image.
+fn captured_viewer() -> (
+    egui::Context,
+    DevicePanelState,
+    DeviceUiState,
+    horizon_frame_source::SentFrameInput,
+) {
+    let (ctx, device, mut state, mut sent) = frame_viewer();
+    click_label(&ctx, &mut state, &device, "Interact");
+    assert!(state.interact);
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    assert!(state.captured, "the click on the picture took the keyboard");
+    sent.drain();
+    (ctx, device, state, sent)
+}
+
+#[test]
+fn the_picture_takes_the_keyboard_and_the_text_of_a_frame_is_one_message() {
+    let (ctx, device, mut state, mut sent) = frame_viewer();
+    click_label(&ctx, &mut state, &device, "Interact");
+    // Interact is on, but no press has reached the picture yet: no key leaves.
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    frame(&ctx, &mut state, &device, vec![egui::Event::Text("no".into())]);
+    assert!(
+        texts(&sent.drain()).is_empty(),
+        "a picture without the keyboard sends no text"
+    );
+
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, click_events(middle, true));
+    frame(&ctx, &mut state, &device, click_events(middle, false));
+    assert!(state.captured, "the click on the picture took the keyboard");
+    sent.drain();
+
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::Text("h".into()), egui::Event::Text("i".into())],
+    );
+    assert_eq!(
+        texts(&sent.drain()),
+        vec!["hi".to_owned()],
+        "the characters of one frame are one text message"
+    );
+
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::Ime(egui::ImeEvent::Commit("ø".into()))],
+    );
+    assert_eq!(texts(&sent.drain()), vec!["ø".to_owned()]);
+}
+
+#[test]
+fn every_named_key_reaches_the_program_as_its_own_name() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    for (key, name) in [
+        (egui::Key::ArrowUp, "up"),
+        (egui::Key::ArrowDown, "down"),
+        (egui::Key::Enter, "enter"),
+        (egui::Key::Escape, "escape"),
+        (egui::Key::Tab, "tab"),
+        (egui::Key::Backspace, "backspace"),
+        (egui::Key::Delete, "delete"),
+        (egui::Key::F1, "f1"),
+        (egui::Key::F12, "f12"),
+    ] {
+        frame(
+            &ctx,
+            &mut state,
+            &device,
+            vec![
+                key_event(key, true, egui::Modifiers::NONE),
+                key_event(key, false, egui::Modifiers::NONE),
+            ],
+        );
+        assert_eq!(
+            named(&sent.drain()),
+            vec![(name.to_owned(), true), (name.to_owned(), false)],
+            "{name} goes down and up"
+        );
+        assert!(state.captured, "{name} stays in the picture");
+    }
+}
+
+#[test]
+fn a_chord_reaches_the_program_as_keys_and_no_text() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::CTRL),
+            key_event(egui::Key::C, true, egui::Modifiers::CTRL),
+            key_event(egui::Key::C, false, egui::Modifiers::CTRL),
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        ],
+    );
+    let sent_events = sent.drain();
+    assert_eq!(
+        named(&sent_events),
+        vec![
+            ("ctrl".to_owned(), true),
+            ("c".to_owned(), true),
+            ("c".to_owned(), false),
+            ("ctrl".to_owned(), false)
+        ],
+        "the chord holds Ctrl around c"
+    );
+    assert!(texts(&sent_events).is_empty(), "a chord is no text");
+
+    // What egui-winit reports for a quick command+C: the chord as Copy, then the
+    // release of c, and the command key up by the end of the frame.
+    let (command_modifier, command) = if cfg!(target_os = "macos") {
+        (egui::Modifiers::MAC_CMD, "super")
+    } else {
+        (egui::Modifiers::CTRL, "ctrl")
+    };
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::ModifiersChanged(command_modifier),
+            egui::Event::Copy,
+            key_event(egui::Key::C, false, command_modifier),
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        ],
+    );
+    let copied = sent.drain();
+    assert_eq!(
+        named(&copied),
+        vec![
+            (command.to_owned(), true),
+            ("c".to_owned(), true),
+            ("c".to_owned(), false),
+            (command.to_owned(), false)
+        ],
+        "one clipboard chord, and no second release of c"
+    );
+    assert!(texts(&copied).is_empty());
+}
+
+#[test]
+fn a_key_that_horizon_handled_as_its_shortcut_is_not_sent() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    let binding = horizon_core::ShortcutBinding::parse("Ctrl+K").expect("a shortcut of the settings");
+    state.begin_frame();
+    let _ = ctx
+        .run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::ModifiersChanged(egui::Modifiers::CTRL),
+                    key_event(egui::Key::K, true, egui::Modifiers::CTRL),
+                    key_event(egui::Key::K, false, egui::Modifiers::CTRL),
+                    egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                ],
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                ..Default::default()
+            },
+            |ui| {
+                // The shortcut of the app is read before the panels are drawn.
+                crate::app::shortcuts::consume_shortcut(ui.ctx(), binding);
+                state.show(ui, &device, true);
+            },
+        )
+        .discard_textures();
+    state.finish_frame(&ctx);
+    let sent_events = sent.drain();
+    assert!(
+        !named(&sent_events).iter().any(|(name, _)| name == "k"),
+        "a chord of Horizon never reaches the program: {sent_events:?}"
+    );
+    assert!(texts(&sent_events).is_empty());
+}
+
+#[test]
+fn a_key_that_was_never_sent_down_is_not_released() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    // Only the release arrives, as it does for a press that Horizon consumed.
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::Enter, false, egui::Modifiers::NONE)],
+    );
+    assert!(
+        named(&sent.drain()).is_empty(),
+        "a key that never went down is not released"
+    );
+}
+
+#[test]
+fn a_press_outside_the_picture_gives_the_keyboard_back_and_releases_held_keys() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::Enter, true, egui::Modifiers::NONE)],
+    );
+    assert_eq!(named(&sent.drain()), vec![("enter".to_owned(), true)]);
+
+    let outside = egui::Pos2::new(SCREEN.x - 4.0, SCREEN.y - 4.0);
+    frame(&ctx, &mut state, &device, click_events(outside, true));
+    frame(&ctx, &mut state, &device, click_events(outside, false));
+    assert!(!state.captured);
+    assert_eq!(
+        named(&sent.drain()),
+        vec![("enter".to_owned(), false)],
+        "the held key is released when the focus leaves"
+    );
+    frame(&ctx, &mut state, &device, vec![egui::Event::Text("x".into())]);
+    assert!(texts(&sent.drain()).is_empty(), "no keyboard, no text");
+}
+
+#[test]
+fn turning_interact_off_releases_a_held_key() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::Tab, true, egui::Modifiers::NONE)],
+    );
+    assert_eq!(named(&sent.drain()), vec![("tab".to_owned(), true)]);
+    click_label(&ctx, &mut state, &device, "Interact");
+    assert!(!state.interact);
+    assert_eq!(named(&sent.drain()), vec![("tab".to_owned(), false)]);
+}
+
+#[test]
+fn a_viewer_that_is_not_drawn_releases_a_held_key() {
+    let (ctx, device, mut state, mut sent) = captured_viewer();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![key_event(egui::Key::F5, true, egui::Modifiers::NONE)],
+    );
+    assert_eq!(named(&sent.drain()), vec![("f5".to_owned(), true)]);
+    state.begin_frame();
+    state.finish_frame(&ctx);
+    assert_eq!(named(&sent.drain()), vec![("f5".to_owned(), false)]);
+}
