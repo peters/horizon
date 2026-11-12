@@ -330,11 +330,13 @@ fn a_machine_of_one_computer_arrives_at_the_other_and_a_removal_comes_back() {
     in_step(&b);
 
     a.add("build-1", "203.0.113.10");
-    eventually("the machine of the first computer", || {
-        b.names().contains(&"build-1".to_string()).then_some(())
+    // The server holds the machine before the link of this computer reads the
+    // answer that commits the intent, and the other computer pulls the row in
+    // between, so the test waits for both rather than for one of them.
+    eventually("the machine at both computers and the committed intent", || {
+        (b.names().contains(&"build-1".to_string()) && a.pending().is_empty()).then_some(())
     });
     assert_eq!(server.machines().len(), 1, "the server holds the machine once");
-    assert!(a.pending().is_empty(), "a committed intent is not pending");
     assert!(
         server.machines()[0].added_at_millis > 1,
         "the server stamps the record with its own clock, not the clock of the computer"
