@@ -1,7 +1,7 @@
 use egui::Context;
 
 use crate::app::HorizonApp;
-use crate::app::shortcuts::shortcut_pressed;
+use crate::app::shortcuts::{consume_shortcut, shortcut_pressed};
 use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::search_overlay::SearchOverlay;
@@ -175,15 +175,21 @@ impl HorizonApp {
             let command = shortcut_bindings
                 .iter()
                 .find(|(binding, _)| shortcut_pressed(input, *binding))
-                .map(|(_, id)| id.clone());
+                .map(|(binding, id)| (*binding, id.clone()));
             (palette, command)
         });
 
         if toggle_palette {
             self.toggle_command_palette();
+            // The chord belongs to Horizon, also when the palette takes the focus.
+            consume_shortcut(ctx, self.shortcuts.command_palette);
         }
-        if let Some(command_id) = triggered_command {
+        if let Some((binding, command_id)) = triggered_command {
             self.execute_command(ctx, &command_id);
+            // The command may give the keyboard focus to a terminal, and that
+            // terminal reads this frame after this point: it must not also type
+            // the chord that ran the command.
+            consume_shortcut(ctx, binding);
         }
     }
 }

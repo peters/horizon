@@ -20,6 +20,22 @@ pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBind
     events.iter().any(|event| shortcut_event_matches(event, binding))
 }
 
+/// Takes the events of a shortcut that Horizon handled out of this frame, so a
+/// consumer after it, such as the terminal of the panel that the command focused,
+/// never sees the chord. The text that a printable key of the chord emits goes
+/// with it.
+pub(crate) fn consume_shortcut(ctx: &egui::Context, binding: ShortcutBinding) {
+    ctx.input_mut(|input| {
+        let mut after_chord = false;
+        input.events.retain(|event| {
+            let chord = event_uses_shortcut_key(event, binding);
+            let text_of_chord = after_chord && matches!(event, Event::Text(_));
+            after_chord = chord && shortcut_key_may_emit_text(binding.key);
+            !chord && !text_of_chord
+        });
+    });
+}
+
 /// Whether an event is a key event (press, repeat, or release) for the
 /// binding's key, regardless of modifiers. Used to keep a push-to-talk
 /// chord out of the terminal input stream.

@@ -286,3 +286,98 @@ fn the_jump_says_one_line_when_no_agent_waits() {
     );
     assert_eq!(app.board.focused, None, "nothing took the focus");
 }
+
+/// One press of `binding` in the input of a frame.
+fn shortcut_press(binding: horizon_core::ShortcutBinding) -> egui::Event {
+    let key = match binding.key {
+        horizon_core::ShortcutKey::Letter(letter) => {
+            egui::Key::from_name(&letter.to_string()).expect("key of the letter")
+        }
+        other => panic!("the test presses a letter: {other:?}"),
+    };
+    egui::Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            alt: binding.modifiers.alt(),
+            ctrl: binding.modifiers.ctrl(),
+            shift: binding.modifiers.shift(),
+            mac_cmd: binding.modifiers.mac_cmd(),
+            command: binding.modifiers.command(),
+        },
+    }
+}
+
+/// The key events that are left for the panel that a shortcut focused.
+fn remaining_keys(ctx: &egui::Context) -> Vec<String> {
+    ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::Key { key, pressed: true, .. } => Some(format!("{key:?}")),
+                egui::Event::Text(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_shortcut_that_moves_the_focus_types_nothing_into_the_panel_that_it_focuses() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let here = app.board.create_workspace("here");
+    let there = app.board.create_workspace("there");
+    let shell = agent_panel(&mut app, here, "Notes");
+    let asking = agent_panel(&mut app, there, "Fix the sync");
+    let now = horizon_core::current_unix_millis();
+    app.apply_attention_values(
+        vec![(
+            asking,
+            local_id(&app, asking),
+            Some(ledger(TurnState::Blocked, now - 1)),
+        )],
+        &wake(),
+    );
+    assert_eq!(app.panel_attention(&local_id(&app, asking)), Attention::NeedsYou);
+    app.board.focused = Some(shell);
+    app.board.active_workspace = Some(here);
+
+    // The jump of Ctrl+Shift+G takes the focus into the other workspace.
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.focused = true;
+    input.events.push(shortcut_press(app.shortcuts.next_attention));
+    run_app_frame_with_input(&ctx, &mut app, input);
+    assert_eq!(app.board.focused, Some(asking), "the jump reached the agent that waits");
+    assert!(
+        remaining_keys(&ctx).is_empty(),
+        "the panel that the jump focused reads no key of the chord: {:?}",
+        remaining_keys(&ctx)
+    );
+
+    // An older shortcut that moves the focus keeps the same rule.
+    app.board.active_workspace = Some(there);
+    app.board.focused = None;
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.focused = true;
+    input.events.push(shortcut_press(app.shortcuts.focus_active_workspace));
+    run_app_frame_with_input(&ctx, &mut app, input);
+    assert!(
+        app.board.focused.is_some(),
+        "the shortcut focused the panel of the workspace"
+    );
+    assert!(
+        remaining_keys(&ctx).is_empty(),
+        "the panel that the shortcut focused reads no key of the chord: {:?}",
+        remaining_keys(&ctx)
+    );
+}
