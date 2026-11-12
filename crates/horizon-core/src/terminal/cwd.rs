@@ -344,20 +344,7 @@ exec /bin/sleep 60"#,
         // The walk starts one program for each level of the tree and reads the
         // directory with another one, so the test moves the clock past the bound of
         // every program of the read until the read answers.
-        let deadline = Instant::now() + Duration::from_secs(20);
-        let cwd = loop {
-            clock.advance(Duration::from_millis(300));
-            match answer.recv_timeout(Duration::from_millis(50)) {
-                Ok(cwd) => break cwd,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => assert!(
-                    Instant::now() < deadline,
-                    "the read of this test did not answer at its bound"
-                ),
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    panic!("the read of this test ended without an answer")
-                }
-            }
-        };
+        let cwd = bound_clock::advance_until(&clock, Duration::from_millis(300), &answer);
         read.join().expect("the read of this test");
 
         assert_eq!(cwd, None, "a bound that passes answers no directory");

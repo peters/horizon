@@ -276,6 +276,48 @@ pub(crate) mod bound_clock {
     pub(crate) fn installed() -> Option<Arc<TestClock>> {
         INSTALLED.with(|slot| slot.borrow().clone())
     }
+
+    /// The most time that [`advance_until`] waits for a reading of a test, and how long
+    /// it pauses between two moves of the clock. A reading that the bound ends answers
+    /// within one pause of the move, and the bound is a whole reading of a program that
+    /// copies the clock of the test.
+    const ADVANCE_LIMIT: Duration = Duration::from_secs(20);
+    const ADVANCE_PAUSE: Duration = Duration::from_millis(50);
+
+    /// The value that the reading of a test answers, once `clock` is moved past the bound
+    /// of that reading.
+    ///
+    /// A program measures the deadline of its bound after it started, as
+    /// [`super::run`] measures it after the spawn and after the readers of its pipes. A
+    /// test that moves the clock once, at the moment that the program wrote the proof
+    /// that it runs, can move it before that measurement: the deadline then lies one
+    /// bound further away, the bound never passes, and the program runs to its own end
+    /// instead of being ended. The clock is therefore moved again, with a pause for the
+    /// reading, until the reading answers, so no test asserts the bound of a program at
+    /// an instant that the program did not choose.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the reading of the test ends without an answer, or when it does not
+    /// answer within [`ADVANCE_LIMIT`].
+    pub(crate) fn advance_until<T>(clock: &TestClock, bound: Duration, answer: &std::sync::mpsc::Receiver<T>) -> T {
+        let limit = Instant::now() + ADVANCE_LIMIT;
+        loop {
+            clock.advance(bound);
+            match answer.recv_timeout(ADVANCE_PAUSE) {
+                Ok(value) => return value,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(
+                        Instant::now() < limit,
+                        "the reading of this test did not answer at its bound"
+                    );
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the reading of this test ended without an answer")
+                }
+            }
+        }
+    }
 }
 
 /// Run `program`, a path that [`ProgramEnvironment::find`] answered, with `args`

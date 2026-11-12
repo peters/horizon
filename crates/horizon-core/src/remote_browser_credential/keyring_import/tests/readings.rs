@@ -201,21 +201,26 @@ fn a_search_that_passes_the_bound_is_ended_and_its_pid_is_gone() {
     // the bound ends is a program that runs, on a computer of any load.
     let clock = Arc::new(TestClock::new());
     let environment = stand_ins.environment();
+    let (answered, answer) = std::sync::mpsc::channel();
     let read = {
         let clock = Arc::clone(&clock);
         std::thread::spawn(move || {
             let _installed = bound_clock::install(clock);
-            secret_tool::read(
+            let error = secret_tool::read(
                 &program,
                 SERVICE,
                 &environment,
                 Bound::WholeImport(Duration::from_millis(400)),
-            )
+            );
+            let _ = answered.send(error);
         })
     };
     let pid = pid_in(&pid_file);
-    clock.advance(Duration::from_millis(400));
-    let error = read.join().expect("the reading of this test").expect_err("a refusal");
+    // The reading measures the deadline of its bound after the stand-in started, so
+    // this test moves the clock past that bound until the reading answers.
+    let error = bound_clock::advance_until(&clock, Duration::from_millis(400), &answer);
+    read.join().expect("the reading of this test");
+    let error = error.expect_err("a refusal");
 
     assert!(error == KeyringImportError::TimedOut { seconds: 0 }, "{error}");
     let pid = Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
