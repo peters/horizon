@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError, mpsc::Receiver};
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc::Receiver};
 use std::time::Duration;
 
 use uuid::Uuid;
@@ -53,6 +53,10 @@ pub struct SessionStore {
     profile_id: String,
     index: runtime_index::IndexCache,
     writer: writer::Writer,
+    /// The stores that this window holds. The last one that goes ends the worker of
+    /// this store, so a store that a window lets go keeps no file open and no thread
+    /// idle.
+    handles: Arc<writer::Handles>,
     /// The sessions whose board came from an older build or lost panels of a
     /// removed kind, so the first write of this build keeps the old file.
     boards_of_older_builds: Arc<Mutex<BTreeSet<String>>>,
@@ -62,14 +66,36 @@ impl SessionStore {
     #[must_use]
     pub fn new(home: HorizonHome, config_path: PathBuf) -> Self {
         let profile_id = profile_id_for_home(&home, &config_path);
+        let writer = writer::Writer::default();
         Self {
             home,
             config_path,
             profile_id,
             index: runtime_index::IndexCache::default(),
-            writer: writer::Writer::default(),
+            handles: Arc::new(writer::Handles::new(writer.clone())),
+            writer,
             boards_of_older_builds: Arc::default(),
         }
+    }
+
+    /// The store that the worker of this store holds: the same queue, index and home,
+    /// and a marker of its own, so it keeps no store of the window alive.
+    fn worker_copy(&self) -> Self {
+        Self {
+            home: self.home.clone(),
+            config_path: self.config_path.clone(),
+            profile_id: self.profile_id.clone(),
+            index: self.index.clone(),
+            writer: self.writer.clone(),
+            handles: Arc::new(writer::Handles::detached()),
+            boards_of_older_builds: Arc::clone(&self.boards_of_older_builds),
+        }
+    }
+
+    /// The marker that the worker watches, so it ends when the window let the store
+    /// go.
+    fn handles_marker(&self) -> Weak<writer::Handles> {
+        Arc::downgrade(&self.handles)
     }
 
     #[must_use]

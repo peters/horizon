@@ -555,3 +555,29 @@ fn boards_and_index_changes_are_written_in_queue_order() {
     let profile = index.profile(store.profile_id()).unwrap();
     assert_eq!(profile.last_session_id.as_deref(), Some(touched.session_id.as_str()));
 }
+
+#[test]
+fn the_worker_of_a_store_that_the_window_let_go_ends_and_closes_its_files() {
+    let root_dir = test_root("worker-ends");
+    let home = HorizonHome::from_root(root_dir.path().to_path_buf());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let created = store.create_new_session(&Config::default()).expect("create session");
+    let _queued = store.queue_runtime_state(&created.session_id, RuntimeState::from_config(&Config::default()));
+    // The queue starts the worker of the store, which writes the board and waits for
+    // the next job while it holds a store of its own.
+    let writer = store.writer.clone();
+    assert!(writer.is_running(), "the save started the worker of the store");
+
+    // A window that lets its store go leaves no worker and no open file of the
+    // index behind: the idle wait of the worker is thirty seconds, so only the end
+    // of the last store brings it here.
+    drop(store);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while writer.is_running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !writer.is_running(),
+        "the worker of a store that the window let go ends at once"
+    );
+}

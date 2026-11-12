@@ -20,7 +20,7 @@ use std::{
     io::Write as _,
     path::Path,
     sync::{
-        Arc, Condvar, Mutex, MutexGuard, PoisonError,
+        Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak,
         mpsc::{Receiver, Sender},
     },
     time::{Duration, Instant},
@@ -36,6 +36,37 @@ const IDLE: Duration = Duration::from_secs(30);
 #[derive(Clone, Default)]
 pub(super) struct Writer {
     shared: Arc<Shared>,
+}
+
+/// The stores that one window holds, and the end of the worker of that store.
+///
+/// The worker writes the boards of a store on its own thread and holds a store of
+/// its own while it waits for the next job, so no store can tell that a window let
+/// it go: the store of the worker is one clone of it. The stores of the window
+/// share this marker instead. The last one that goes wakes the worker, which then
+/// ends, and the open file of the session index closes with it.
+#[derive(Debug)]
+pub(super) struct Handles {
+    writer: Option<Writer>,
+}
+
+impl Handles {
+    pub(super) fn new(writer: Writer) -> Self {
+        Self { writer: Some(writer) }
+    }
+
+    /// The marker of a store that no window holds, as the worker's own store has.
+    pub(super) fn detached() -> Self {
+        Self { writer: None }
+    }
+}
+
+impl Drop for Handles {
+    fn drop(&mut self) {
+        if let Some(writer) = self.writer.take() {
+            writer.wake();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -177,9 +208,21 @@ impl Writer {
     fn start(&self, state: &mut State, store: &SessionStore) {
         if !state.running {
             state.running = true;
-            let (writer, store) = (self.clone(), store.clone());
-            std::thread::spawn(move || writer.run(&store));
+            let (writer, store, handles) = (self.clone(), store.worker_copy(), store.handles_marker());
+            std::thread::spawn(move || writer.run(&store, &handles));
         }
+    }
+
+    /// Whether the worker of this store runs now, for a test that drops the store.
+    #[cfg(test)]
+    pub(super) fn is_running(&self) -> bool {
+        self.lock().running
+    }
+
+    /// Wakes the worker, so it reads the queue and the marker of its stores again.
+    pub(super) fn wake(&self) {
+        let _state = self.lock();
+        self.shared.changed.notify_all();
     }
 
     /// Queues one write of a lease; a worker of `store` runs it in the order the
@@ -367,10 +410,10 @@ impl Writer {
         }
     }
 
-    fn run(&self, store: &SessionStore) {
+    fn run(&self, store: &SessionStore, handles: &Weak<Handles>) {
         let _panic = PanicGuard { writer: self, store };
         loop {
-            let (session_id, queued) = match self.next_job() {
+            let (session_id, queued) = match self.next_job(handles) {
                 None => return,
                 Some(Job::Index(change)) => {
                     let written = store.write_index_changes([&change]);
@@ -451,7 +494,7 @@ impl Writer {
 
     /// Takes the index change or board that is due and was queued first, so every session is
     /// written in turn; `None` ends an idle worker.
-    fn next_job(&self) -> Option<Job> {
+    fn next_job(&self, handles: &Weak<Handles>) -> Option<Job> {
         let mut state = self.lock();
         loop {
             let now = Instant::now();
@@ -477,6 +520,18 @@ impl Writer {
             {
                 state.writing = Some((session_id.clone(), queued.clone()));
                 return Some(Job::Board(session_id, Box::new(queued)));
+            }
+            // No window holds this store any more, and no job waits: the worker ends
+            // now instead of after its idle wait, so the files of the store close
+            // with the window that wrote them. The last store can go at any moment,
+            // so this is asked before the wait as well as after it.
+            let idle = state.queued.is_empty()
+                && state.index.is_empty()
+                && state.leases.is_empty()
+                && state.notices.is_empty();
+            if idle && handles.strong_count() == 0 {
+                state.running = false;
+                return None;
             }
             let wait = state.next_retry(now);
             let (next, timeout) = self
