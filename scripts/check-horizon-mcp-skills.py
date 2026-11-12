@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check shipped MCP tool coverage, skill parity, references, and embedded assets."""
 from pathlib import Path
+import json
 import re
 import sys
 
@@ -47,6 +48,113 @@ def enum_variants(source, name):
 
 def snake_case(name):
     return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+
+# The operations whose fenced examples are checked against their own fields.
+# A skill example is a request that a caller sends, so an example of the skill
+# can name an operation and no other field than the ones that operation has.
+EXAMPLE_OPERATIONS = {
+    'block_panel': (
+        'crates/horizon-browser-control/src/manifest/block.rs',
+        'Operation',
+        'horizon-block',
+    ),
+}
+# The nested object that an operation field carries, with the struct of its
+# fields, so an example of a route is checked like an operation.
+NESTED_FIELDS = {
+    ('block_panel', 'ssh'): ('crates/horizon-browser-control/src/manifest/block_terminal.rs', 'TerminalRoute'),
+}
+EXAMPLE = re.compile(r'```json\n(.*?)```', re.S)
+
+
+def variant_fields(source, name):
+    """The top-level field names of each variant of an externally tagged enum."""
+    start = re.search(r'\benum\s+' + re.escape(name) + r'\s*\{', source)
+    if start is None:
+        raise ValueError(f'enum {name} not found')
+    fields = {}
+    current = None
+    depth = 1
+    for line in source[start.end():].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(('//', '#')):
+            continue
+        if depth == 1:
+            variant = re.match(r'([A-Z]\w*)\s*(?:[,({]|$)', stripped)
+            if variant:
+                current = snake_case(variant.group(1))
+                fields[current] = set()
+                # A variant whose fields fit on its own line.
+                if '{' in stripped and '}' in stripped:
+                    inside = stripped.split('{', 1)[1].rsplit('}', 1)[0]
+                    for part in inside.split(','):
+                        field = re.match(r'\s*([a-z_]\w*)\s*:', part)
+                        if field:
+                            fields[current].add(field.group(1))
+        elif depth == 2 and current is not None:
+            field = re.match(r'([a-z_]\w*)\s*:', stripped)
+            if field:
+                fields[current].add(field.group(1))
+        depth += stripped.count('{') - stripped.count('}')
+        if depth <= 1:
+            current = None
+        if depth == 0:
+            break
+    return fields
+
+
+def struct_fields(source, name):
+    """The field names of a plain struct."""
+    start = re.search(r'\bstruct\s+' + re.escape(name) + r'\s*\{', source)
+    if start is None:
+        raise ValueError(f'struct {name} not found')
+    fields = set()
+    for line in source[start.end():].split('\n}')[0].splitlines():
+        stripped = line.strip()
+        if stripped.startswith(('//', '#')):
+            continue
+        field = re.match(r'(?:pub\s+)?([a-z_]\w*)\s*:', stripped)
+        if field:
+            fields.add(field.group(1))
+    return fields
+
+
+def example_errors(documents):
+    """Every fenced JSON example names only fields of its operation schema."""
+    errors = []
+    for api, (source_name, enum, skill) in EXAMPLE_OPERATIONS.items():
+        fields = variant_fields((ROOT / source_name).read_text(), enum)
+        nested = {
+            field: struct_fields((ROOT / nested_source).read_text(), nested_name)
+            for (nested_api, field), (nested_source, nested_name) in NESTED_FIELDS.items()
+            if nested_api == api
+        }
+        for block in EXAMPLE.findall(documents.get(skill, '')):
+            try:
+                value = json.loads(block)
+            except json.JSONDecodeError:
+                errors.append(f'{skill}: a fenced JSON example does not parse: {block.strip()[:60]}')
+                continue
+            if not isinstance(value, dict) or 'operation' not in value:
+                continue
+            operation = value['operation']
+            if operation not in fields:
+                errors.append(f'{skill}: an example names no operation of {api}: {operation}')
+                continue
+            allowed = ', '.join(sorted(fields[operation] | {'operation'}))
+            for key, entry in value.items():
+                if key not in fields[operation] and key != 'operation':
+                    errors.append(f'{skill}: the {operation} example of {api} names {key}; the schema has {allowed}')
+                if key in nested and isinstance(entry, dict):
+                    for nested_key in entry:
+                        if nested_key not in nested[key]:
+                            names = ', '.join(sorted(nested[key]))
+                            errors.append(
+                                f'{skill}: the {operation} example of {api} names {key}.{nested_key}; '
+                                f'the schema has {names}'
+                            )
+    return errors
 
 
 def check():
@@ -135,6 +243,7 @@ def check():
         for name in enum_variants((ROOT / source).read_text(), enum):
             if name not in excluded and snake_case(name) not in documented:
                 errors.append(f'{enum}.{name}: operation missing from {skill}')
+    errors.extend(example_errors(documents))
     standalone = ROOT / 'crates/horizon-device/skills/horizon-device/SKILL.md'
     if standalone.read_bytes() != (codex / 'horizon-device/SKILL.md').read_bytes():
         errors.append('standalone device skill differs from bundled skill')

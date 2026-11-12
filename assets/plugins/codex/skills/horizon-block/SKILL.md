@@ -474,7 +474,13 @@ the button or row that the person hit and the document revision that they saw:
 A click reaches an agent at most once. Keep a listen loop:
 
 1. Create or update the card with the choice that the person must make.
-2. Call `next_click` without `panel_id`.
+2. Call `next_click` without `panel_id`, with these exact field names and no
+   other field:
+
+   ```json
+   {"operation": "next_click", "timeout_millis": 300000}
+   ```
+
 3. Act on the click, and send the result with `update`.
 4. Call `next_click` again.
 5. On `timed_out`, call `next_click` again while the card matters, or stop and
