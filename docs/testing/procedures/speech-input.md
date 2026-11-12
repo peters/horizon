@@ -371,6 +371,48 @@ tests below prove that the take of this procedure passes in that situation too.
    Result: Every test of the module passed, including the two stand-ins that
    ignore `SIGINT` and the one that ignores `SIGINT` and `SIGTERM`.
 
+### 6.14 SI-14 — A recording that its recorder did not close is still sent
+
+> **CAUTION:** RUN THIS TASK WITH THE STAND-IN RECORDER OF THE SETUP. Do not start
+> a recorder of this computer, because a recorder opens the microphone.
+
+1. Write a transcription command that answers a text only when the two length
+   fields of the take name the bytes of the file:
+
+   ```sh
+   cat > <evidence>/closed.sh <<'SH'
+   #!/bin/sh
+   set -e
+   size=$(wc -c < "$1")
+   data=$(od -An -tu4 -j40 -N4 "$1" | tr -d ' ')
+   if [ "$data" = "$((size - 44))" ]; then printf 'closed header'; fi
+   SH
+   chmod 700 <evidence>/closed.sh
+   ```
+
+2. Open **Settings** › **Speech**, and set the recorder line to the stand-in of the
+   setup with `--open-header`, which leaves the two length fields at zero as a
+   recorder that had to be killed does:
+
+   ```sh
+   /usr/bin/python3 -B scripts/device-smoke/speech_standin_recorder.py {file} \
+     --source <evidence>/take.wav --open-header
+   ```
+
+3. Select the transcriber `Command`, type `<evidence>/closed.sh {file}`, and press
+   **Save**.
+
+4. Press and hold `F9` for two seconds, then release it.
+
+   Result: The panel gains `closed header`. The length fields of the take named the
+   bytes of the file before the command read it, so the repair ran before the
+   request.
+
+5. Read the folder of the takes as in SI-2 step 2.
+
+   Result: The folder is empty. The file of the take is deleted after the take,
+   repaired or not.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
@@ -379,6 +421,9 @@ tests below prove that the take of this procedure passes in that situation too.
 - No file of a take stays after a success, an error or a cancel.
 - A recorder that ignores the interrupt signal ends on the termination signal, and
   its take reaches the service.
+- A recording that its recorder did not close reaches the transcriber with the
+  length of its file in its header, and a recording of another shape reaches it
+  unchanged.
 - Every test of the module of a take passes as a background job of a
   non-interactive shell.
 - The marker value is in the secrets file and in no log file, no settings file

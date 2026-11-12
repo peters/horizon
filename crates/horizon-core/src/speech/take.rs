@@ -386,6 +386,7 @@ impl Worker {
             );
             return;
         }
+        self.close_header(&file, bytes);
         self.send(target, SpeechEventKind::Writing);
         let file_name = file
             .file_name()
@@ -570,6 +571,20 @@ impl Worker {
     fn failed(&self, target: PanelId, message: &str) {
         self.send(target, SpeechEventKind::Failed(cut_message(message)));
     }
+
+    /// Write the length of the take into a header that its recorder never closed.
+    ///
+    /// A recorder that the stop had to kill leaves the two length fields of a
+    /// canonical PCM header at zero or at `0xFFFFFFFF`, and a service reads such a
+    /// file as a recording of no data. The fields are written from the size of the
+    /// file here, before either transcriber reads it, and a file of any other shape
+    /// is sent as it is. A take that cannot be repaired is still sent: the file may
+    /// be the shape of another recorder.
+    fn close_header(&self, file: &Path, bytes: u64) {
+        if let Err(error) = close_take_header(file, bytes) {
+            tracing::warn!(path = %file.display(), %error, "the header of a take stays open");
+        }
+    }
 }
 
 /// The size of the file of one take, or 0 when it cannot be read.
@@ -582,6 +597,32 @@ fn take_bytes(file: &Path) -> u64 {
 fn read_take_file(file: &Path) -> Result<Vec<u8>, String> {
     crate::ui_thread::blocking("the file of a take is read");
     fs::read(file).map_err(|_| "The file of the take cannot be read".to_owned())
+}
+
+/// Write the two length fields of an unclosed header of `file` from its size.
+fn close_take_header(file: &Path, bytes: u64) -> std::io::Result<()> {
+    if bytes <= wav::CANONICAL_HEADER as u64 {
+        return Ok(());
+    }
+    crate::ui_thread::blocking("the header of a take is read and written");
+    let mut header = [0u8; wav::CANONICAL_HEADER];
+    let mut open = fs::File::open(file)?;
+    {
+        use std::io::Read as _;
+        open.read_exact(&mut header)?;
+    }
+    if !wav::close(&mut header, bytes) {
+        return Ok(());
+    }
+    {
+        use std::io::{Seek as _, SeekFrom, Write as _};
+        let mut write = fs::OpenOptions::new().write(true).open(file)?;
+        write.seek(SeekFrom::Start(4))?;
+        write.write_all(&header[4..8])?;
+        write.seek(SeekFrom::Start(40))?;
+        write.write_all(&header[40..44])?;
+    }
+    Ok(())
 }
 
 /// Delete the file of one take.
@@ -606,3 +647,5 @@ fn millis(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+mod wav;

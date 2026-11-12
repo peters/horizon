@@ -88,6 +88,16 @@ impl Take {
         path
     }
 
+    /// A recording of `data` bytes whose canonical header holds the length that a
+    /// killed recorder leaves: zero in both length fields.
+    fn unclosed(&self, data: usize) -> PathBuf {
+        let path = self.home.path().join("unclosed.wav");
+        let mut bytes = super::wav::header_of(0, 0);
+        bytes.resize(super::wav::CANONICAL_HEADER + data, 0);
+        fs::write(&path, bytes).expect("a recording of a test");
+        path
+    }
+
     /// The path of the pid of one recorder.
     fn pid_file(&self, name: &str) -> PathBuf {
         self.home.path().join(format!("{name}.pid"))
@@ -460,6 +470,65 @@ fn a_recorder_that_ignores_both_signals_ends_by_the_kill_of_the_bound() {
     assert!(
         alive(bystander),
         "the signal of the stop reached a program of this computer that the take did not start"
+    );
+}
+
+#[test]
+fn a_recording_that_its_recorder_did_not_close_is_still_sent() {
+    let take = Take::new(Arc::new(()));
+    let unclosed = take.unclosed(1024);
+    // The recorder copies the file and ignores both signals, so the stop kills it and
+    // it never writes the length of the recording, as a killed recorder never does.
+    let recorder = take.ignoring("killed", "INT TERM", &unclosed, "");
+    let copy = take.home.path().join("copied.wav");
+    let program = take.script(
+        "copy",
+        &format!("#!/bin/sh\ncp \"$1\" '{}'\nprintf 'kept'", copy.display()),
+    );
+    let transcriber = CommandLine::parse(&format!("{program} {{file}}")).expect("a transcriber line");
+    take.input
+        .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
+    take.wait_for_recorder("killed");
+    take.clock.advance(Duration::from_secs(1));
+    take.input.end();
+    let events = take.wait_for_event_on(Some(POLL), &["writing", "text"]);
+    assert!(
+        matches!(events[1], SpeechEventKind::Text(ref text) if text == "kept"),
+        "{events:?}"
+    );
+    let sent = fs::read(&copy).expect("the file that the transcriber received");
+    let riff = u32::from_le_bytes(sent[4..8].try_into().expect("the RIFF size"));
+    let data = u32::from_le_bytes(sent[40..44].try_into().expect("the data size"));
+    assert_eq!(
+        (u64::from(riff), u64::from(data)),
+        (sent.len() as u64 - 8, sent.len() as u64 - 44),
+        "the take that the transcriber received is a closed recording"
+    );
+}
+
+#[test]
+fn a_recording_of_another_shape_is_sent_as_it_is() {
+    let take = Take::new(Arc::new(()));
+    let prepared = take.prepared();
+    let recorder = take.recorder("rec", &prepared);
+    let copy = take.home.path().join("copied.wav");
+    let program = take.script(
+        "copy",
+        &format!("#!/bin/sh\ncp \"$1\" '{}'\nprintf 'kept'", copy.display()),
+    );
+    let transcriber = CommandLine::parse(&format!("{program} {{file}}")).expect("a transcriber line");
+    take.input
+        .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
+    take.wait_for_recorder("rec");
+    take.clock.advance(Duration::from_secs(1));
+    take.input.end();
+    take.wait_for_event(&["writing", "text"]);
+    // The prepared file is not the canonical shape of a PCM header, so every byte of
+    // it reaches the transcriber unchanged.
+    assert_eq!(
+        fs::read(&copy).expect("the file that the transcriber received"),
+        fs::read(&prepared).expect("the prepared recording"),
+        "a file of another shape is sent as it is"
     );
 }
 

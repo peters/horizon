@@ -151,6 +151,14 @@ What the guarantees do not cover:
   byte, sends no request to a service and runs no command.
 - **A large file is refused.** A take above 25 MiB is one error line and no
   request.
+- **A recording that its recorder did not close is still sent.** A recorder that
+  the stop had to kill writes no length, so it leaves the two length fields of a
+  canonical 44-byte `RIFF`/`WAVE` header of PCM audio at zero or at `0xFFFFFFFF`. A
+  service reads that file as a recording of no data. Horizon writes those two
+  fields from the size of the file before either transcriber reads it, and only
+  for that shape: a header of another shape, such as one with a `fact` chunk or a
+  stream of raw bytes, is sent as it is. Horizon repairs a length and adds no
+  audio, so a take of silence stays a take of silence.
 - **Every bound is one number in the code.** The stop waits 2 seconds, a take runs
   at most 120 seconds, a transcription runs at most 30 seconds, the answer is
   1 MiB and the text is 8 KiB. A test injects a shorter bound through the clock,
