@@ -295,45 +295,6 @@ the seconds of one wait. The Connect button of the machine card opens an SSH
 terminal for the host in `CARD_AGENT_SSH_HOST` and the one line in
 `CARD_AGENT_SSH_COMMAND`.
 
-### A scripted client of the device panel tool
-
-A procedure that needs a viewer of a frame source program of the fixture cannot
-use the `device_panel` tool of the reader's own Horizon: that tool belongs to the
-Horizon of the reader, not to the candidate in the fixture. `--frame-source-agent`
-adds the panel of a scripted client of the candidate:
-
-```sh
-python3 scripts/device-smoke/serve.py --horizon target/debug/horizon \
-  --state "${TMPDIR:-/var/tmp}/frame-source-run" --native-view --frame-source-agent \
-  --frame-source "standin=/usr/bin/python3 {standin} --width 640 --height 360 --rate 10"
-```
-
-The panel runs `scripts/device-smoke/frame_source_agent.py`, which starts
-`<candidate> --browser-mcp` as its child and calls the one tool `device_panel`.
-Type one word on the terminal of the panel, one operation per line:
-
-| Word | Operation |
-|------|-----------|
-| `create [name] [target]` | create a viewer of that program of the settings |
-| `inspect` | inspect the viewer of this run |
-| `watch [n]` | inspect once a second, `n` times, default three |
-| `hide` / `show` | change the visibility of the viewer |
-| `close` | close the viewer |
-| `list` | list the viewers of this workspace |
-
-Each answer is one line that starts with `frame-source-agent: `, with the kind of
-the source and the evidence members of the answer: `connection`, `image_received`,
-`image_displayed`, `frame_sequence`, `received_frame_sequence`, `desktop_size`,
-`frames_dropped` and `age_ms`. A refusal is one line with its code and its
-message. The fixture copies the script into the state folder, as it does with
-every program of a panel.
-
-`--frame-source` writes one program of the `frame_sources` section of the
-settings and never starts it. A line that holds `{standin}` runs the copy of
-`scripts/device-smoke/frame_source_standin.py` in the state folder, because the
-sandbox binds the private home over the home of the person and a checkout under
-that home is not inside it.
-
 To see the same board again after a restart, start the fixture with
 `--saved-session --reuse-state`, and start it again with `--reuse-state
 --resume-session`, as [the restart recipe](#restart-the-candidate-in-the-same-state)
