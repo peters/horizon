@@ -62,6 +62,65 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Write the Info.plist of the bundle. The microphone sentence is the reason
+# that macOS gives the person when speech input starts a recorder: without it,
+# the system ends Horizon instead of asking.
+write_info_plist() {
+  local destination="$1"
+  local minimum_macos_version="$2"
+  local version="$3"
+  local version_fields=""
+  if [[ -n "$version" ]]; then
+    version_fields="  <key>CFBundleVersion</key>
+  <string>${version}</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${version}</string>
+"
+  fi
+
+  cat > "$destination" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Horizon</string>
+  <key>CFBundleDisplayName</key>
+  <string>Horizon</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.github.peters.horizon</string>
+${version_fields}  <key>CFBundleExecutable</key>
+  <string>horizon</string>
+  <key>CFBundleIconFile</key>
+  <string>Horizon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>${minimum_macos_version}</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Horizon records a take from the microphone only while you hold the speech-input hotkey.</string>
+</dict>
+</plist>
+PLIST
+}
+
+# Write only the plist, so a test on a system without the macOS tools proves
+# its keys. No binary, no otool and no sips take part in this mode.
+if [[ "${HORIZON_APP_BUNDLE_PLIST_ONLY:-}" == "1" ]]; then
+  PLIST_PATH="${HORIZON_APP_BUNDLE_PLIST:?set HORIZON_APP_BUNDLE_PLIST to the file to write}"
+  install -d "$(dirname -- "$PLIST_PATH")"
+  write_info_plist "$PLIST_PATH" "${HORIZON_APP_BUNDLE_MINIMUM_MACOS_VERSION:-11.0}" "${HORIZON_APP_BUNDLE_VERSION:-}"
+  printf 'Wrote %s\n' "$PLIST_PATH"
+  exit 0
+fi
+
+
+
 if [[ ! -x "$BINARY" ]]; then
   printf 'Error: binary not found at %s\n' "$BINARY" >&2
   printf 'Run `cargo build --release` first.\n' >&2
@@ -88,43 +147,10 @@ install -d "$LOCAL_APP_BUNDLE/Contents/Resources"
 install -m 0755 "$BINARY" "$LOCAL_APP_BUNDLE/Contents/MacOS/horizon"
 install -m 0644 "$ICNS" "$LOCAL_APP_BUNDLE/Contents/Resources/Horizon.icns"
 
-# Build version fields conditionally
-VERSION_FIELDS=""
-if [[ -n "$VERSION" ]]; then
-  VERSION_FIELDS="  <key>CFBundleVersion</key>
-  <string>${VERSION}</string>
-  <key>CFBundleShortVersionString</key>
-  <string>${VERSION}</string>
-"
-fi
-
-cat > "$LOCAL_APP_BUNDLE/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key>
-  <string>Horizon</string>
-  <key>CFBundleDisplayName</key>
-  <string>Horizon</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.github.peters.horizon</string>
-${VERSION_FIELDS}  <key>CFBundleExecutable</key>
-  <string>horizon</string>
-  <key>CFBundleIconFile</key>
-  <string>Horizon</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>${MINIMUM_MACOS_VERSION}</string>
-  <key>NSHighResolutionCapable</key>
-  <true/>
-  <key>NSSupportsAutomaticGraphicsSwitching</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+write_info_plist \
+  "$LOCAL_APP_BUNDLE/Contents/Info.plist" \
+  "$MINIMUM_MACOS_VERSION" \
+  "$VERSION"
 
 printf 'Built Horizon.app at %s\n' "$LOCAL_APP_BUNDLE"
 

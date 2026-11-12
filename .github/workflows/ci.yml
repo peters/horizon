@@ -75,6 +75,8 @@ jobs:
         run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
       - name: Verify GitHub release orchestration
         run: python3 -B scripts/test_release_github.py -v
+      - name: Verify the macOS app bundle's microphone reason
+        run: python3 -B scripts/test_make_app_bundle.py -v
       - name: Isolated desktop session bus
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - name: Horizon MCP skill coverage
