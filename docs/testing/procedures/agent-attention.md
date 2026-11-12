@@ -56,7 +56,8 @@ the sidebar reads them.
    ```
 
    Result: the fixture prints one JSON line with `vnc_address`. Horizon shows one
-   workspace with one panel, **Attention stand-in**, and the panel prints:
+   workspace with three panels. The panel **Attention stand-in** is in front of
+   the other two, and it prints:
 
    ```
    attention-stand-in: type one of start, ask, answer, stop, background, failed and press Enter
