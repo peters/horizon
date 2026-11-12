@@ -113,16 +113,24 @@ def agent_for(host: FakeHost) -> card_agent.CardAgent:
     return card_agent.CardAgent(host, 'continuous', 60.0)
 
 
-def buttons_of(card, rich=True) -> list[dict]:
+def button_rows(card, rich=True) -> list[list[dict]]:
+    """The rows of buttons of the document, in document order."""
     document = card.document(rich)
-    for component in document['components']:
-        if component['type'] == 'buttons':
-            return component['items']
-    raise AssertionError('the document holds no buttons')
+    return [component['items'] for component in document['components']
+            if component['type'] == 'buttons']
+
+
+def buttons_of(card, rich=True) -> list[dict]:
+    """The standing row of buttons, which is the first row of the card."""
+    return button_rows(card, rich)[0]
+
+
+def all_buttons(card, rich=True) -> list[dict]:
+    return [button for row in button_rows(card, rich) for button in row]
 
 
 def button_ids(card, rich=True) -> list[str]:
-    return [button['id'] for button in buttons_of(card, rich)]
+    return [button['id'] for button in all_buttons(card, rich)]
 
 
 def rows_of(card, rich=True) -> list[dict]:
@@ -285,7 +293,7 @@ class WorktreeCardTest(unittest.TestCase):
         agent.react_worktree(card, 'merge')
         self.assertEqual(card.pending, 'merge')
         self.assertIn('merge.confirm', button_ids(card))
-        confirm = [button for button in buttons_of(card) if button['id'] == 'merge.confirm'][0]
+        confirm = [button for button in all_buttons(card) if button['id'] == 'merge.confirm'][0]
         self.assertEqual(confirm['label'], 'Merge task/ahead into main')
         self.assertEqual(git(fixture.repo, 'log', '--format=%s', '-1', 'main'), before,
                          'no merge runs before the second press')
@@ -498,14 +506,49 @@ class WorktreeCardTest(unittest.TestCase):
         document = card.document(True)
         self.assertLessEqual(len(document['components']), 64)
         buttons = buttons_of(card)
-        self.assertLessEqual(len(buttons), 8)
         self.assertEqual([button['id'] for button in buttons],
                          ['refresh', 'changes', 'merge', 'remove'])
         self.assertEqual([button.get('tone') for button in buttons],
                          [None, None, 'primary', 'danger'])
+        for row in button_rows(card):
+            self.assertLessEqual(len(row), 8)
         for component in document['components']:
             if component['type'] == 'text':
                 self.assertLessEqual(len(component['text']), card_agent.WORKTREE_TEXT_CHARS)
+
+    def test_the_confirm_button_keeps_a_row_of_its_own_under_the_standing_row(self):
+        _fixture, host, card = self.prepare()
+        agent = agent_for(host)
+
+        def rows() -> list[list[str]]:
+            return [[button['id'] for button in row] for row in button_rows(card)]
+
+        self.assertEqual(rows(), [['refresh', 'changes', 'merge', 'remove']])
+
+        agent.react_worktree(card, 'merge')
+        self.assertEqual(len(rows()), 2, 'the confirm button stands in a row of its own')
+        self.assertEqual(rows()[0], ['refresh', 'changes', 'merge', 'remove'],
+                         'the standing buttons keep their order and their row')
+        self.assertEqual(rows()[1], ['cancel', 'merge.confirm'],
+                         'the confirm button is the last button of its row')
+        self.assertEqual([button.get('tone') for button in button_rows(card)[1]],
+                         [None, 'primary'])
+
+        agent.react_worktree(card, 'cancel')
+        self.assertIsNone(card.pending)
+        self.assertEqual(rows(), [['refresh', 'changes', 'merge', 'remove']],
+                         'Cancel drops the second row, and no standing button moves')
+        self.assertIn('Nothing ran', card.note)
+
+        agent.react_worktree(card, 'changes')
+        self.assertEqual(rows(), [['refresh', 'changes', 'worktrees', 'merge', 'remove']],
+                         'the button of the view joins the standing row at its place')
+
+        agent.react_worktree(card, 'worktree.dirty')
+        agent.react_worktree(card, 'remove')
+        self.assertEqual(rows()[0], ['refresh', 'changes', 'merge', 'remove'])
+        self.assertEqual(rows()[1], ['cancel', 'remove.confirm'])
+        self.assertEqual(button_rows(card)[1][1].get('tone'), 'danger')
 
 
 if __name__ == '__main__':

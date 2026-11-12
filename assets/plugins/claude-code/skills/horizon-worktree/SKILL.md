@@ -112,6 +112,13 @@ Give the card these buttons:
 - `merge`, tone primary, label `Merge`;
 - `remove`, tone danger, label `Remove`.
 
+The four buttons keep their order and their row while the text of the card changes,
+because a person who presses a button twice presses it in the same place. A
+confirm button is never one of them: give it a `buttons` component of its own,
+under the four, with a `cancel` button beside it, and make the confirm button the
+last button of that row. The `cancel` button, tone neutral, label `Cancel`, drops
+the waiting action and runs nothing.
+
 Call `update` with the whole document after each change of the worktrees.
 
 ## Refresh and show changes
@@ -134,11 +141,12 @@ A merge changes the base branch, so ask before you merge.
    When one of the two rules fails, say why on the card and merge nothing.
 2. Show on the card the commits that will arrive: the subjects of
    `git log --oneline <base>..<branch>`, cut to the bounds of a card.
-3. Add one button with the label `Merge <branch> into <base>` and the id
-   `merge.confirm`.
+3. Add one `buttons` component under the four standing buttons. It holds a
+   `cancel` button first and the button `Merge <branch> into <base>` with the id
+   `merge.confirm` last. Nothing joins the row of the four standing buttons.
 4. Wait for that button with `next_click`. A click with `stale: true` means the
    document changed after the person pressed: show the commits again and ask
-   again.
+   again. A click on `cancel` drops the waiting merge and runs nothing.
 5. Run the merge in the worktree of the base branch. Use the method that the
    repository names; when it names none, run `git merge --no-ff <branch>`.
 6. Never push. A push is a separate request of the person.
@@ -154,8 +162,11 @@ A remove deletes files, so ask before you remove.
    - the files that are not committed, from `git status --porcelain`;
    - the commits that are on no other branch, from
      `git log --oneline <base>..<branch>`.
-2. Add one button with the label `Remove <folder>` and the id `remove.confirm`.
-3. Wait for that button with `next_click`.
+2. Add one `buttons` component under the four standing buttons. It holds a
+   `cancel` button first and the button `Remove <folder>` with the id
+   `remove.confirm` last.
+3. Wait for that button with `next_click`. A click on `cancel` drops the waiting
+   remove and runs nothing.
 4. Run `git worktree remove <folder>` in the root. Add `--force` only when the
    worktree has files that are not committed, and only after the person pressed
    the second button.

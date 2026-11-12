@@ -1071,17 +1071,11 @@ class WorktreeCard(Card):
         return cut_text(f'{text}\n\nLast commits:\n{subjects or "no commit yet"}')
 
     def buttons(self) -> list[dict]:
-        items = []
-        if self.pending_label:
-            items.append({
-                'id': 'merge.confirm' if self.pending == 'merge' else 'remove.confirm',
-                'label': self.pending_label,
-                'tone': 'primary' if self.pending == 'merge' else 'danger',
-            })
-        items.extend([
+        """The four standing buttons, in the order that the person knows."""
+        items = [
             {'id': 'refresh', 'label': 'Refresh'},
             {'id': 'changes', 'label': 'Show changes'},
-        ])
+        ]
         if self.view == 'changes':
             items.append({'id': 'worktrees', 'label': 'Worktrees'})
         items.extend([
@@ -1089,6 +1083,23 @@ class WorktreeCard(Card):
             {'id': 'remove', 'label': 'Remove', 'tone': 'danger'},
         ])
         return items
+
+    def confirm_buttons(self) -> list[dict]:
+        """The confirm button of a waiting merge or remove, in a row of its own.
+
+        The person presses twice, so a confirm button that takes the place of a
+        standing button is a trap: the second press lands on another action. It
+        stands under the standing row, as the last button of that row, and `Cancel`
+        is the safe choice beside it.
+        """
+        if not self.pending_label:
+            return []
+        return [
+            {'id': 'cancel', 'label': 'Cancel'},
+            {'id': 'merge.confirm' if self.pending == 'merge' else 'remove.confirm',
+             'label': self.pending_label,
+             'tone': 'primary' if self.pending == 'merge' else 'danger'},
+        ]
 
     def document(self, rich: bool) -> dict:
         count = len(self.worktrees)
@@ -1103,6 +1114,9 @@ class WorktreeCard(Card):
         if self.note:
             components.append({'type': 'text', 'text': cut_text(self.note)})
         components.append({'type': 'buttons', 'items': self.buttons()})
+        confirm = self.confirm_buttons()
+        if confirm:
+            components.append({'type': 'buttons', 'items': confirm})
         return {'components': components}
 
     # -- the actions of the buttons ---------------------------------------
@@ -1733,6 +1747,8 @@ class CardAgent:
         elif component == 'worktrees':
             card.view = 'worktrees'
             card.files, card.file = [], None
+        elif component == 'cancel':
+            card.note = 'Nothing ran; the prompt went away.'
         elif component == 'merge':
             card.ask_merge()
         elif component == 'merge.confirm':

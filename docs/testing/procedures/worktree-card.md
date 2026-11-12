@@ -291,7 +291,7 @@ section does not replace them.
 
    Result: under the list the card shows the text of `git diff --stat main...` of
    that branch and the subjects of its last three commits. It holds the buttons
-   `Refresh`, `Show changes`, `Merge` and `Remove`.
+   `Refresh`, `Show changes`, `Merge` and `Remove`, in that order, in one row.
 
 ### 7.3 Refresh and Show changes
 
@@ -325,14 +325,17 @@ section does not replace them.
 
 2. Select the row `first-change`, and press `Merge`.
 
-   Result: the card shows the commits that arrive in `main`, and it holds the
-   button `Merge task/first-change into main`. No merge runs yet.
+   Result: the card shows the commits that arrive in `main`. A row of its own
+   under the four standing buttons holds `Cancel` and the button
+   `Merge task/first-change into main`, and the confirm button is the last button
+   of that row. No merge runs yet.
 
 3. Press the button of step 2.
 
    Result: the card says `Merged task/first-change into main. Nothing was pushed.`
-   The row shows `ahead 0`. In the repository, `git log --oneline main` holds the
-   commits of the branch, and `git status --porcelain` answers nothing.
+   The row shows `ahead 0`. The four standing buttons keep their place. In the
+   repository, `git log --oneline main` holds the commits of the branch, and
+   `git status --porcelain` answers nothing.
 
 4. Type one line in a new file `dirty.txt` in the panel `first change`, press
    `Refresh`, and press `Merge`.
@@ -375,14 +378,20 @@ section does not replace them.
 1. Select the row `first-change`, and press `Remove`.
 
    Result: the card lists the files that are not committed, which holds
-   `dirty.txt`, and the commits that are on no other branch. It holds the button
+   `dirty.txt`, and the commits that are on no other branch. A row of its own
+   under the four standing buttons holds `Cancel` and the button
    `Remove first-change`, and the folder is still there.
 
-2. Press `Refresh` instead of that button.
+2. Press `Cancel`, and examine the card.
 
-   Result: the second button is gone, and the folder is still there.
+   Result: the second row is gone, and the four standing buttons keep their
+   place. The folder is still there.
 
-3. Press `Remove`, then press `Remove first-change`.
+3. Press `Remove`, then press `Refresh` instead of its second button.
+
+   Result: the second row is gone, and the folder is still there.
+
+4. Press `Remove`, then press `Remove first-change`.
 
    Result: the folder is gone from `git worktree list`. The branch is merged into
    `main`, so the card says that it is deleted, and
@@ -391,14 +400,14 @@ section does not replace them.
    `The panel of first-change is still open; its folder is removed. Close it yourself.`
    The panel of the task stays open, and the person closes it.
 
-4. Select the row `conflict`, press `Remove`, and press `Remove conflict`.
+5. Select the row `conflict`, press `Remove`, and press `Remove conflict`.
 
    Result: the folder is gone. The branch holds a commit that `main` does not
    have, so the card says that it stays, and
    `git -C /var/tmp/worktree-card-2/data/repo branch --list task/conflict` names
    `task/conflict`.
 
-5. Select the row `repo`, and press `Remove`.
+6. Select the row `repo`, and press `Remove`.
 
    Result: the card says that the row is the main worktree, so it stays. The card
    holds no second button.
@@ -410,6 +419,9 @@ section does not replace them.
 - Each row shows the branch, `ahead N`, the changed files, the age of the last
   commit, and the main worktree.
 - `Refresh` and `Show changes` read git again and show the cut diff.
+- The four standing buttons keep their order and their row, and the confirm
+  button of a merge or a remove stands in a row of its own under them, as the
+  last button of that row, with `Cancel` beside it.
 - A merge needs two presses, refuses a dirty worktree and a branch that is not
   ahead, aborts a conflict and pushes nothing.
 - A remove needs two presses, deletes a branch only when it is merged, refuses
