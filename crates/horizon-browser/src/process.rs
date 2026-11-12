@@ -4,6 +4,8 @@ pub mod attach;
 mod control;
 #[cfg(target_os = "linux")]
 mod locale;
+#[cfg(unix)]
+mod watch;
 
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -18,6 +20,8 @@ use crate::AutomationDisclosurePolicy;
 use crate::cdp::parse_devtools_ws_url;
 
 pub(crate) use control::{ChromeProcessControl, ProcessLifecycle, ServiceProcess};
+#[cfg(unix)]
+use watch::BrowserWatch;
 
 pub(super) type ProcessChild = Child;
 
@@ -77,6 +81,10 @@ pub struct ChromeLaunch {
 pub struct ChromeProcess {
     child: Arc<Mutex<ProcessChild>>,
     control: ChromeProcessControl,
+    /// The child that ends this browser when this process is gone, whatever ended
+    /// it. A browser of a panel has one; a watch that cannot start is no browser
+    /// failure.
+    watch: Option<BrowserWatch>,
     /// Cached once the child has been reaped, so repeated
     /// [`ChromeProcess::child_status`]/[`ChromeProcess::kill`] calls stay cheap.
     exit_status: Option<std::process::ExitStatus>,
@@ -162,9 +170,11 @@ impl ChromeProcess {
 
         let child = Arc::new(Mutex::new(child));
         control.register(&child);
+        let watch = start_watch(child_id(&child));
         Ok(Self {
             child,
             control,
+            watch,
             exit_status: None,
             ws_url_rx,
             ws_url: None,
@@ -227,11 +237,13 @@ impl ChromeProcess {
     #[must_use]
     pub fn kill(&mut self) -> bool {
         if self.child_status().is_some() {
+            // A browser that ended by itself leaves no work for its watch.
+            self.stop_watch();
             return true;
         }
         let mut child = self.child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = child.id();
-        match kill_and_reap(&mut child, Duration::from_secs(3)) {
+        let killed = match kill_and_reap(&mut child, Duration::from_secs(3)) {
             Ok(Some(status)) => {
                 self.exit_status = Some(status);
                 true
@@ -244,6 +256,29 @@ impl ChromeProcess {
                 tracing::warn!(pid, "failed to kill or reap Chrome: {error}");
                 false
             }
+        };
+        drop(child);
+        // The browser is gone, so the watch of it has nothing left to do, and a
+        // normal quit leaves no child of a watch behind.
+        self.stop_watch();
+        killed
+    }
+
+    /// Ends the watch of this browser. A watch that still runs after the browser is
+    /// killed is not a failure of the browser: it acts only when this process dies.
+    fn stop_watch(&mut self) {
+        if let Some(mut watch) = self.watch.take() {
+            watch.stop();
+        }
+    }
+
+    /// Lets the watch act as it does when this process dies: the kernel closes the
+    /// pipe of the watch, whatever ended the process. A test uses it to be that
+    /// death without killing itself.
+    #[cfg(all(test, unix))]
+    fn release_watch(&mut self) {
+        if let Some(watch) = self.watch.take() {
+            watch.release();
         }
     }
 
@@ -253,6 +288,34 @@ impl ChromeProcess {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .to_string()
     }
+}
+
+/// The process id of the browser that a watch must end.
+#[cfg(unix)]
+fn child_id(child: &Arc<Mutex<ProcessChild>>) -> u32 {
+    child.lock().unwrap_or_else(std::sync::PoisonError::into_inner).id()
+}
+
+/// The watch of the browser whose process id is `browser`, or `None` on a system
+/// without it.
+#[cfg(unix)]
+fn start_watch(browser: u32) -> Option<BrowserWatch> {
+    match BrowserWatch::start(browser) {
+        Ok(watch) => Some(watch),
+        Err(error) => {
+            tracing::warn!(
+                browser,
+                %error,
+                "the browser has no watch, so a Horizon that is killed leaves it"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn start_watch(_browser: u32) -> Option<BrowserWatch> {
+    None
 }
 
 fn prepare_profile_dir(profile_dir: &Path) -> std::io::Result<()> {
@@ -810,6 +873,68 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// A browser that this process starts has a watch, and the watch ends it when
+    /// this process dies without a cleanup: the kernel closes the pipe of the watch
+    /// for a `SIGTERM`, a `SIGINT` and a `SIGKILL` of Horizon alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_browser_of_a_panel_ends_when_the_horizon_that_started_it_is_gone() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::time::Instant;
+
+        let directory = tempfile::tempdir().expect("a directory");
+        let helper_pid = directory.path().join("helper.pid");
+        let stand_in = directory.path().join("browser-stand-in.sh");
+        std::fs::write(
+            &stand_in,
+            "#!/bin/sh\ntrap '' TERM\n/bin/sleep 30 &\nprintf '%s\\n' \"$!\" > \"$(dirname \"$0\")/helper.pid\"\nwait\n",
+        )
+        .expect("the stand-in of a browser");
+        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700)).expect("the mode");
+        let launch = ChromeLaunch {
+            command: stand_in.to_string_lossy().into_owned(),
+            profile_dir: directory.path().join("profile"),
+            width: 800,
+            height: 600,
+            headless: true,
+            extra_args: Vec::new(),
+            automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+            background_windows: false,
+        };
+        let mut process =
+            ChromeProcess::spawn(&launch, ChromeProcessControl::default()).expect("the stand-in of a browser");
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let helper = loop {
+            if let Ok(text) = std::fs::read_to_string(&helper_pid)
+                && !text.trim().is_empty()
+            {
+                break text.trim().to_owned();
+            }
+            assert!(Instant::now() < deadline, "the helper reported its process id");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+
+        process.release_watch();
+        let gone = |pid: &str| {
+            let deadline = Instant::now() + std::time::Duration::from_secs(6);
+            while Instant::now() < deadline {
+                let alive = Command::new("/bin/kill")
+                    .args(["-0", "--", pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success());
+                if !alive {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            false
+        };
+        assert!(gone(&helper), "the browser of a dead Horizon is gone with its helpers");
+        assert!(process.child_status().is_some(), "the browser of a dead Horizon ended");
     }
 
     #[test]
