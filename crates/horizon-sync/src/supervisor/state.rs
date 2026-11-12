@@ -259,6 +259,12 @@ pub(crate) struct SyncState {
     /// The version of each section that this computer refused, so one refusal is
     /// one notice and not one for each answer of the server.
     pub(super) settings_refused: BTreeMap<String, u64>,
+    /// The sections whose push the server refused, with the version that decided
+    /// the refusal. The row of that version says whether the value of this
+    /// computer differs from the value of the server at all: a refusal alone is no
+    /// loss, because a computer that pushed the value that the server already
+    /// holds kept everything.
+    pub(super) settings_lost_pending: BTreeMap<String, u64>,
     /// The last sentence about a section that this computer did not apply.
     pub(super) settings_refusal: Option<String>,
     /// The file of the mirror of the settings.
@@ -455,6 +461,7 @@ impl SyncHandle {
                 settings_applied: settings.applied,
                 settings_seeded: settings.seeded,
                 settings_refused: BTreeMap::new(),
+                settings_lost_pending: BTreeMap::new(),
                 settings_refusal: None,
                 settings_file: config.settings_mirror_file.clone(),
                 settings_path: config.settings_path.clone(),

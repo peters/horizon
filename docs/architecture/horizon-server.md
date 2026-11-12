@@ -188,11 +188,19 @@ body and the number of sections, and it stores the JSON.
   values through the path that the Settings window uses. A section that the person
   edits at that moment is not replaced and is not dropped: the footer of the
   Settings window offers the value of the other computer, and every other section
-  applies at once.
+  applies at once. A section whose content is the content that this computer holds
+  is not written: the computer takes the version of the server and keeps its row.
 - **A local save queues one intent for each section that changed.** The settings
   worker writes the store, and then it writes one `setting` intent for each shared
   section whose value differs from the store that it wrote. The intent carries the
   version that this computer saw, so the version rule of the next list decides it.
+- **A push that loses decides nothing by itself.** A push that the version rule
+  refuses moves the mark of the computer back, and the row of the version that
+  decided it says whether the value of this computer differs from that row. A row
+  with another content replaces the row of this computer, and one line names the
+  sections whose content differed. A row with the same content replaces nothing:
+  the computer takes its version, writes no row, keeps no backup and reads no line,
+  so nothing of that computer was lost.
 - **The first link compares once.** For each shared section, a server that has no
   row takes the value of this computer, and a server that has a row decides it: the
   value of the server wins, and the value of this computer is kept one time in

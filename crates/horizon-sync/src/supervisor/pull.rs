@@ -13,7 +13,7 @@ use horizon_core::secret::SecretId;
 use super::SyncHandle;
 use super::files::{MirrorFile, MirroredMachine, MirroredSetting};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
-use super::settings::{apply as apply_settings, refuse_settings};
+use super::settings::{RefusedSection, apply as apply_settings, refuse_settings};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState};
 use crate::client::PullOutcome;
@@ -26,7 +26,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     // The queue loses the refused intent here, so the ids of the secrets that the
     // server refused and the version that a refusal names are read before the
     // queue is settled.
-    let (refused_secrets, refused_settings, rewind): (Vec<String>, Vec<String>, Option<u64>) = {
+    let (refused_secrets, refused_settings, rewind): (Vec<String>, Vec<RefusedSection>, Option<u64>) = {
         let state = handle.lock();
         let mut ids = Vec::new();
         let mut sections = Vec::new();
@@ -44,7 +44,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
                 continue;
             };
             if intent.op.kind() == crate::intent::KIND_SETTING {
-                sections.push(intent.op.object_id().to_owned());
+                sections.push((intent.op.object_id().to_owned(), refusal.version()));
             } else {
                 ids.push(intent.op.object_id().to_owned());
             }

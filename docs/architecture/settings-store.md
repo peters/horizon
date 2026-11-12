@@ -219,7 +219,7 @@ JSON and reads none of it; the frames and the rules are in
 | A section of the server, after the first link | The row of the store is replaced on the worker of the link, after the merged settings passed the rule of this computer. The window reads the store again through its watch of the settings file. |
 | A section of the server that breaks a rule | The row of this computer stays, the section stays on the server, and one sentence shows. |
 | A section of a newer configuration version | The row of this computer stays, the section stays on the server, and one sentence says that this computer runs an older Horizon. |
-| A change that loses the version rule | The value of the other computer arrives and this computer takes it, with one sentence for the person. |
+| A change that loses the version rule | The row of the version that decided it is read again. A row with another content replaces the row of this computer and one sentence names the sections that differed. A row with the same content replaces nothing: this computer takes the version of the server and reads no sentence. |
 | The first link, a section that the server has | The value of the server wins, and the value of this computer is kept one time in `settings.before-server.<time>.json` beside the store, at mode 0600. |
 | The first link, a section that the server does not have | The value of this computer is pushed. |
 | A section that this build does not know | It is kept in the store as it arrived, and its fields survive the save of this build. |

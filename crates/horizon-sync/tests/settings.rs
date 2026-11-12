@@ -63,8 +63,73 @@ except Exception:
     pass
 ";
 
+/// A relay that holds the first push of the settings until the test writes
+/// [`RELEASE`] in the directory of the stand-in.
+///
+/// Two computers whose relays hold their push link at the same moment: each one
+/// composes its first push on a server that holds no section, and the server
+/// decides both pushes when the test releases them. The push that it decides
+/// second meets the row that the first one wrote.
+const GATED_RELAY: &str = "\
+import os
+import socket
+import sys
+import threading
+import time
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+directory = sys.argv[2]
+held = os.path.join(directory, 'held.log')
+release = os.path.join(directory, 'release')
+
+
+def outward():
+    buffer = b''
+    try:
+        while True:
+            data = os.read(sys.stdin.fileno(), 65536)
+            if not data:
+                break
+            buffer += data
+            while len(buffer) >= 4:
+                length = int.from_bytes(buffer[:4], 'big')
+                if len(buffer) < 4 + length:
+                    break
+                frame = buffer[:4 + length]
+                buffer = buffer[4 + length:]
+                if b'setting_put' in frame:
+                    with open(held, 'a') as log:
+                        log.write('held\\n')
+                    while not os.path.exists(release):
+                        time.sleep(0.01)
+                sock.sendall(frame)
+    except Exception:
+        pass
+    try:
+        sock.shutdown(socket.SHUT_WR)
+    except Exception:
+        pass
+
+
+threading.Thread(target=outward, daemon=True).start()
+try:
+    while True:
+        data = sock.recv(65536)
+        if not data:
+            break
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+except Exception:
+    pass
+";
+
 /// The file that holds one line for each start of the stand-in of a computer.
 const STARTS: &str = "starts.log";
+/// The file whose existence releases the push that a gated stand-in holds, and the
+/// log of the pushes that it held.
+const RELEASE: &str = "release";
+const HELD: &str = "held.log";
 
 /// A stand-in `ssh` that runs the link relay against the socket of the server.
 ///
@@ -72,14 +137,25 @@ const STARTS: &str = "starts.log";
 /// instant of an attempt of the link itself and not the handshake that follows
 /// the start of its transport.
 fn stand_in(directory: &Path, socket: &Path) -> String {
+    stand_in_with(directory, socket, false)
+}
+
+/// A stand-in whose relay holds the first push of the settings until the test
+/// writes [`RELEASE`] beside [`HELD`].
+fn gated_stand_in(directory: &Path, socket: &Path) -> String {
+    stand_in_with(directory, socket, true)
+}
+
+fn stand_in_with(directory: &Path, socket: &Path, gate: bool) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("relay.py");
-    fs::write(&relay, RELAY).expect("the relay of the stand-in");
+    fs::write(&relay, if gate { GATED_RELAY } else { RELAY }).expect("the relay of the stand-in");
     let script = format!(
-        "printf '.\\n' >> '{}'\nexec /usr/bin/env python3 '{}' '{}'",
+        "printf '.\\n' >> '{}'\nexec /usr/bin/env python3 '{}' '{}' '{}'",
         directory.join(STARTS).display(),
         relay.display(),
-        socket.display()
+        socket.display(),
+        directory.display()
     );
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
@@ -190,6 +266,16 @@ impl Computer {
     /// A computer at `home` with `config` in its settings store, linked to
     /// `socket`.
     fn start(home: &Path, config: &Config, socket: &Path) -> Self {
+        Self::start_with(home, config, socket, false)
+    }
+
+    /// A computer whose stand-in holds its first push of the settings until the
+    /// test writes [`RELEASE`], so two computers can link at the same moment.
+    fn start_gated(home: &Path, config: &Config, socket: &Path) -> Self {
+        Self::start_with(home, config, socket, true)
+    }
+
+    fn start_with(home: &Path, config: &Config, socket: &Path, gate: bool) -> Self {
         fs::create_dir_all(home).expect("the home of the computer");
         let config_path = home.join("config.json");
         Config::save(&config_path, config).expect("the settings store of the computer");
@@ -202,7 +288,11 @@ impl Computer {
             keys_only(keys),
         )
         .expect("the settings of the link");
-        link.program = stand_in(&stand_in_dir, socket);
+        link.program = if gate {
+            gated_stand_in(&stand_in_dir, socket)
+        } else {
+            stand_in(&stand_in_dir, socket)
+        };
         link.settings_path = Some(config_path.clone());
         let supervisor = Supervisor::start(link, || {}).expect("the supervisor");
         let settings = SyncedSettings::new(supervisor.handle().clone());
@@ -371,6 +461,68 @@ fn section_body(config: &Config, section: &str) -> Value {
     serde_json::from_str(&text).expect("one body")
 }
 
+/// Waits until the link of `computer` is away, so a change waits in its queue.
+fn away(computer: &Computer) {
+    eventually("the link away", || {
+        matches!(computer.handle().state(), LinkState::Away { .. }).then_some(())
+    });
+}
+
+/// Waits until the stand-in of `computer` holds its first push of the settings.
+fn held(computer: &Computer) {
+    eventually("the first push of the settings in the stand-in", || {
+        fs::read_to_string(computer.home.join("stand-in").join(HELD))
+            .ok()
+            .filter(|text| !text.is_empty())
+            .map(|_| ())
+    });
+}
+
+/// Releases the push that the stand-in of `computer` holds.
+fn release(computer: &Computer) {
+    fs::write(computer.home.join("stand-in").join(RELEASE), b"release").expect("the release of the push");
+}
+
+/// The backup files that the first link of `computer` wrote beside its store.
+fn backups(computer: &Computer) -> Vec<PathBuf> {
+    fs::read_dir(computer.home.as_path())
+        .expect("the home of the computer")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|name| name.starts_with("settings.before-server."))
+        })
+        .collect()
+}
+
+/// Writes one section of `config` as the computer `device` writes it, and answers
+/// the outcome of the push. `id` is the counter of that computer: the server answers
+/// a counter that it decided once with the first result.
+fn push_of_another_computer(
+    server: &Server,
+    device: &str,
+    id: u64,
+    section: &str,
+    config: &Config,
+) -> horizon_sync::Outcome {
+    let seen = server.setting(section).map(|(version, _)| version);
+    server.push_setting(device, id, section, seen, section_body(config, section))
+}
+
+/// Waits until the link of `computer` is in step again after a loss, with no intent
+/// that waits for the server.
+fn settled(computer: &Computer) {
+    eventually("the link in step with the settings of the server", || {
+        let settings = computer.handle().snapshot().settings().clone();
+        (matches!(computer.handle().state(), LinkState::InStep { .. })
+            && settings.in_step()
+            && settings.pending().is_empty())
+        .then_some(())
+    });
+}
+
 #[test]
 fn a_theme_change_of_one_computer_reaches_the_other_and_is_applied() {
     let home = tempfile::tempdir().expect("a directory");
@@ -500,6 +652,178 @@ fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_sticky_l
         "the computer whose value stayed reads no such line"
     );
     a.stop();
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn two_computers_with_equal_settings_that_join_together_read_no_line() {
+    // Both computers keep the default settings and join an empty server at the same
+    // moment: each one pushes every shared section, and the push that the server
+    // decides second meets the row of the first one. The content of that row is the
+    // content of the second computer, so nothing of it was replaced.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start_gated(&home.path().join("a"), &Config::default(), &server.socket);
+    let mut b = Computer::start_gated(&home.path().join("b"), &Config::default(), &server.socket);
+    // The relay of each computer holds its push, so both pushes are composed on a
+    // server that holds no section yet.
+    held(&a);
+    held(&b);
+    assert!(
+        server.sections().is_empty(),
+        "no section reached the server while both pushes wait: {:?}",
+        server.sections()
+    );
+    release(&a);
+    release(&b);
+    in_step(&a);
+    in_step(&b);
+
+    assert_eq!(
+        server.sections().len(),
+        settings_sync::shared_sections().count(),
+        "the server holds every shared section once"
+    );
+    for (name, computer) in [("a", &a), ("b", &b)] {
+        assert!(
+            computer.handle().settings_lost().is_none(),
+            "the computer {name} reads no line about a setting that it kept: {:?}",
+            computer.handle().settings_lost()
+        );
+        assert_eq!(
+            computer.theme(),
+            Config::default().appearance.theme,
+            "the computer {name} keeps the value of its own settings"
+        );
+        assert!(
+            backups(computer).is_empty(),
+            "nothing of the computer {name} was replaced, so no backup was written: {:?}",
+            backups(computer)
+        );
+    }
+    a.stop();
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn a_push_that_loses_against_the_same_value_of_another_computer_reads_no_line() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&b);
+
+    // The server is away, so the change of this computer waits in its queue.
+    server.stop();
+    away(&b);
+    let light = config_with_theme(AppearanceTheme::Light);
+    b.save(&light);
+    eventually("the change in the queue of this computer", || {
+        b.queued_settings().contains(&"appearance".to_owned()).then_some(())
+    });
+
+    // Another computer sends the same content of the section before the queue of
+    // this computer reaches the server, so the push of this computer loses against
+    // a value that is its own value.
+    let outcome = push_of_another_computer(&server, "other-2c", 1, "appearance", &light);
+    assert!(
+        matches!(outcome, horizon_sync::Outcome::Applied { .. }),
+        "the other computer writes the section first: {outcome:?}"
+    );
+    server.restart();
+    settled(&b);
+
+    assert_eq!(
+        b.theme(),
+        AppearanceTheme::Light,
+        "the value of this computer is the value of the server"
+    );
+    assert!(
+        b.handle().settings_lost().is_none(),
+        "the value that this computer kept is the value of the server, so it reads no line: {:?}",
+        b.handle().settings_lost()
+    );
+    assert!(
+        backups(&b).is_empty(),
+        "nothing of this computer was replaced, so no backup was written: {:?}",
+        backups(&b)
+    );
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn a_lost_push_names_only_the_setting_whose_value_differs() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&b);
+
+    server.stop();
+    away(&b);
+    let light = config_with_theme(AppearanceTheme::Light);
+    b.save(&light);
+    eventually("the change in the queue of this computer", || {
+        b.queued_settings().contains(&"appearance".to_owned()).then_some(())
+    });
+    let dark = config_with_theme(AppearanceTheme::Dark);
+    push_of_another_computer(&server, "other-2c", 1, "appearance", &dark);
+    server.restart();
+    settled(&b);
+
+    let line = b.handle().settings_lost().expect("the line of the setting that lost");
+    assert!(
+        line.contains("for the setting appearance, so this computer takes that value."),
+        "the line names one setting, in the singular: {line}"
+    );
+    assert_eq!(
+        b.theme(),
+        AppearanceTheme::Dark,
+        "this computer takes the value of the server"
+    );
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn a_lost_push_that_names_two_settings_says_the_settings() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&b);
+
+    server.stop();
+    away(&b);
+    let mut light = config_with_theme(AppearanceTheme::Light);
+    light.overlays.minimap_width = 500.0;
+    b.save(&light);
+    eventually("the two changes in the queue of this computer", || {
+        (b.queued_settings().contains(&"appearance".to_owned()) && b.queued_settings().contains(&"overlays".to_owned()))
+            .then_some(())
+    });
+    let mut dark = config_with_theme(AppearanceTheme::Dark);
+    dark.overlays.minimap_width = 620.0;
+    push_of_another_computer(&server, "other-2c", 1, "appearance", &dark);
+    push_of_another_computer(&server, "other-2c", 2, "overlays", &dark);
+    server.restart();
+    settled(&b);
+
+    let line = b.handle().settings_lost().expect("the line of the settings that lost");
+    assert!(
+        line.contains("for the settings appearance, overlays, so this computer takes that value."),
+        "the line names both settings, in the plural: {line}"
+    );
+    assert_eq!(
+        b.theme(),
+        AppearanceTheme::Dark,
+        "this computer takes the value of the server"
+    );
+    assert_eq!(
+        b.stored().overlays.minimap_width,
+        620.0,
+        "the section that lost holds the value of the server"
+    );
     b.stop();
     server.stop();
 }
