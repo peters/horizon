@@ -20,6 +20,12 @@ const TRY_ANSWER_HEIGHT: f32 = 64.0;
 /// The size of the lines that the tab adds under a field.
 const HINT_SIZE: f32 = 11.0;
 
+/// The examples of a language hint, as the field shows them while it is empty.
+pub(super) const LANGUAGE_EXAMPLES: &str = "no, en";
+
+/// The line under the language field: what an empty hint means.
+pub(super) const EMPTY_LANGUAGE: &str = "An empty language lets the service detect the language of each take.";
+
 /// What the tab asks of the window after it drew.
 #[derive(Clone, Copy, Default)]
 pub(super) struct SpeechTabOutcome {
@@ -197,7 +203,7 @@ fn render_service(ui: &mut Ui, config: &mut Config, workbench: &NamedSecretWorkb
             changed |= super::text_field(
                 ui,
                 &mut config.speech.transcriber.language,
-                "no",
+                LANGUAGE_EXAMPLES,
                 "settings_speech_language",
             );
             ui.end_row();
@@ -214,9 +220,9 @@ fn render_service(ui: &mut Ui, config: &mut Config, workbench: &NamedSecretWorkb
     super::dim_label(
         ui,
         "The endpoint is https, or http on an address of this computer for a stand-in service. The recording of a \
-         take goes to the host of the endpoint, so read its host before you keep it. The language is a hint such as \
-         no, and an empty hint leaves the choice to the service.",
+         take goes to the host of the endpoint, so read its host before you keep it.",
     );
+    super::dim_label(ui, EMPTY_LANGUAGE);
     let state = if view.secret == NamedSecretState::Checking {
         workbench.state_of(config.speech.transcriber.key_secret.trim())
     } else {

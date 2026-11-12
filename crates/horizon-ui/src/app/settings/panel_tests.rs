@@ -660,6 +660,35 @@ fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() 
 }
 
 #[test]
+fn the_speech_tab_keeps_the_language_empty_and_says_what_an_empty_one_means() {
+    use horizon_core::TranscriberKind;
+    use horizon_core::named_secrets::{NamedSecretState, NamedSecretWorkbench};
+
+    let mut config = Config::default();
+    config.speech.transcriber.kind = TranscriberKind::Service;
+    let workbench = NamedSecretWorkbench::new(None, &[]);
+    let view = super::speech::SpeechView {
+        answer: None,
+        running: false,
+        secret: NamedSecretState::NoValue,
+    };
+    let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
+
+    assert!(
+        config.speech.transcriber.language.is_empty(),
+        "the settings leave the language of a take to the service"
+    );
+    assert!(
+        texts.iter().any(|text| text == super::speech::LANGUAGE_EXAMPLES),
+        "the empty field shows the examples of a language hint: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains(super::speech::EMPTY_LANGUAGE)),
+        "the tab says what an empty language means: {texts:?}"
+    );
+}
+
+#[test]
 fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
     let mut config = Config::default();
     let workbench = horizon_core::named_secrets::NamedSecretWorkbench::new(None, &[]);
