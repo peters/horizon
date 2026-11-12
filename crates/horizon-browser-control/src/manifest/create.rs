@@ -811,6 +811,42 @@ mod tests {
         tempfile::tempdir().expect("isolated create root")
     }
 
+    /// How long a test gives a contended lock to become free again, which is not
+    /// the budget of [`super::LOCK_WAIT`].
+    const LOCK_PATIENCE: Duration = Duration::from_mins(2);
+
+    /// One enqueue of a browser panel, retried while another thread holds the lock
+    /// of the queue for longer than the budget of the product.
+    ///
+    /// The budget is a latency rule, and a loaded computer holds that lock through
+    /// a slow write of the disk for longer than it. The rule of this test is the
+    /// bound of the queue, which a refused turn does not change, so a turn that the
+    /// budget refused is tried again.
+    fn enqueue_until_settled(root: &Path, actor: &str) -> std::io::Result<String> {
+        let deadline = std::time::Instant::now() + LOCK_PATIENCE;
+        loop {
+            let answer = enqueue_at(
+                root,
+                AgentIdentity::new(actor, Some("host-a")),
+                None,
+                None,
+                None,
+                true,
+                Duration::from_secs(30),
+            );
+            match answer {
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the lock of the queue stayed taken: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                answer => return answer,
+            }
+        }
+    }
+
     #[test]
     fn create_request_is_private_claimed_once_and_consumed_by_its_actor() {
         let root = root();
@@ -959,23 +995,26 @@ mod tests {
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
                 let actor = format!("horizon:agent-{index}");
-                enqueue_at(
-                    &root_path,
-                    AgentIdentity::new(&actor, Some("host-a")),
-                    None,
-                    None,
-                    None,
-                    true,
-                    Duration::from_secs(30),
-                )
+                enqueue_until_settled(&root_path, &actor)
             }));
         }
-        let accepted = workers
+        let answers: Vec<std::io::Result<String>> = workers
             .into_iter()
-            .flat_map(|worker| worker.join().expect("enqueue worker"))
-            .count();
+            .map(|worker| worker.join().expect("enqueue worker"))
+            .collect();
+        let mut accepted = 0;
+        for answer in answers {
+            match answer {
+                Ok(_) => accepted += 1,
+                Err(error) => assert_eq!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock,
+                    "the queue answers its bound and no other failure: {error}"
+                ),
+            }
+        }
 
-        assert_eq!(accepted, MAX_PENDING_REQUESTS);
+        assert_eq!(accepted, MAX_PENDING_REQUESTS, "the queue takes its bound and no more");
         assert_eq!(
             request_count(&create_directory(&root_path)).expect("request count"),
             MAX_PENDING_REQUESTS
