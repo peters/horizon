@@ -183,7 +183,13 @@ fn disconnected_ssh_reconnect_requested(
         // never ends it, because a person who types ahead on a link of 300 ms
         // would otherwise keep cancelling a connect that is only slow.
         Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).any(|input_event| {
-            matches!(&input_event.event, egui::Event::Key { key: Key::Enter | Key::Escape, .. })
+            matches!(
+                &input_event.event,
+                egui::Event::Key {
+                    key: Key::Enter | Key::Escape,
+                    ..
+                }
+            )
         }),
         Some(SshConnectionStatus::Connecting | SshConnectionStatus::Connected) | None => false,
     }
@@ -525,7 +531,14 @@ mod tests {
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 true,
-                &[key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE)],
+                &[key_event(
+                    Key::Space,
+                    Some(Key::Space),
+                    Some(" "),
+                    true,
+                    false,
+                    Modifiers::NONE
+                )],
             ),
             "a space is text too"
         );
@@ -562,7 +575,14 @@ mod tests {
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 false,
-                &[key_event(Key::Escape, Some(Key::Escape), None, true, false, Modifiers::NONE)],
+                &[key_event(
+                    Key::Escape,
+                    Some(Key::Escape),
+                    None,
+                    true,
+                    false,
+                    Modifiers::NONE
+                )],
             ),
             "a plain ssh panel that runs a silent command keeps its attempt"
         );
