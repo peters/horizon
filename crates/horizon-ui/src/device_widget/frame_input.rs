@@ -103,7 +103,15 @@ impl DeviceUiState {
         let on_top_at =
             |global: egui::Pos2| ui.ctx().layer_id_at(global).unwrap_or_else(egui::LayerId::background) == this_layer;
         let mut events = Vec::new();
+        if self.pointer_global.is_none() {
+            // The first frame of a capture, or a viewer that was drawn again: the
+            // best known position is the current one.
+            self.pointer_global = ui.input(|input| input.pointer.latest_pos());
+        }
         for event in pointer_events {
+            if let egui::Event::PointerMoved(pos) | egui::Event::PointerButton { pos, .. } = event {
+                self.pointer_global = Some(pos);
+            }
             match event {
                 egui::Event::PointerMoved(pos) => {
                     let inside = mapped(pos).filter(|_| on_top_at(pos));
@@ -136,13 +144,15 @@ impl DeviceUiState {
                             .button(horizon_frame_source::Button::Right, false, None),
                     );
                 }
+                // A wheel event belongs to the picture under the pointer when it
+                // happened, and one notch is one step of the contract.
                 egui::Event::MouseWheel { unit, delta, .. } => {
-                    let [dx, dy] = super::capture::wheel_points(unit, delta);
-                    // A positive `dy` of the contract is down, and a positive `dx` is
-                    // right, so the sign of the wheel of this UI is turned around.
-                    #[allow(clippy::cast_possible_truncation)]
-                    let (dx, dy) = (-dx.round() as i32, -dy.round() as i32);
-                    events.extend(self.frame_state.wheel(dx, dy));
+                    let at = self.pointer_global.filter(|pos| on_top_at(*pos)).and_then(mapped);
+                    if let Some(point) = at {
+                        events.extend(self.frame_state.pointer(Some(point)));
+                        let (dx, dy) = self.frame_wheel.steps(unit, delta);
+                        events.extend(self.frame_state.wheel(dx, dy));
+                    }
                 }
                 _ => {}
             }

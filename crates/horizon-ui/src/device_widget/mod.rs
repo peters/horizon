@@ -4,6 +4,7 @@ mod capture;
 mod controls;
 mod details;
 mod frame_input;
+mod frame_wheel;
 mod host;
 mod keys;
 mod observation;
@@ -67,6 +68,8 @@ pub(crate) struct DeviceUiState {
     drawn: bool,
     /// The pointer, buttons and keys that a frame source program has been given.
     frame_state: horizon_frame_source::InputState,
+    /// The wheel travel of a frame source viewer that is not yet a whole step.
+    frame_wheel: frame_wheel::WheelSteps,
     /// A person's choice for this session only; never persisted, never set by agents.
     interact: bool,
     input: InputState,

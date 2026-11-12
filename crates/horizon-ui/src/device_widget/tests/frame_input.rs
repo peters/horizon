@@ -469,3 +469,121 @@ fn a_release_beside_the_picture_keeps_the_last_point_the_program_saw() {
         "the release is at the last point of the picture, never at an edge"
     );
 }
+
+/// One sent wheel event: its steps on both axes and the point it was sent at.
+type SentWheel = (i32, i32, Option<(u32, u32)>);
+
+fn wheel_events(events: &[InputEvent]) -> Vec<SentWheel> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            InputEvent::Wheel { dx, dy, at } => Some((*dx, *dy, at.map(|at| (at.x, at.y)))),
+            _ => None,
+        })
+        .collect()
+}
+
+fn notch(unit: egui::MouseWheelUnit, delta: egui::Vec2) -> egui::Event {
+    egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit,
+        delta,
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    }
+}
+
+/// A viewer with Interact on and the pointer in the middle of the picture.
+fn viewer_with_pointer_in_the_picture() -> (
+    egui::Context,
+    DevicePanelState,
+    DeviceUiState,
+    horizon_frame_source::SentFrameInput,
+) {
+    let (ctx, device, mut state, mut sent) = interacting_viewer();
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let middle = image_rect(&output).center();
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(middle)]);
+    sent.drain();
+    (ctx, device, state, sent)
+}
+
+#[test]
+fn one_notch_of_the_wheel_is_one_step_of_the_contract() {
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))],
+    );
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(0, 1, Some((80, 60)))],
+        "one notch down is one step at the pointer, and one event"
+    );
+}
+
+#[test]
+fn a_smooth_scroll_of_two_half_notches_is_one_step() {
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    let half = egui::vec2(0.0, -horizon_vnc::SCROLL_NOTCH_POINTS / 2.0);
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Point, half)],
+    );
+    assert!(wheel_events(&sent.drain()).is_empty(), "half a notch is no step yet");
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Point, half)],
+    );
+    assert_eq!(wheel_events(&sent.drain()), vec![(0, 1, Some((80, 60)))]);
+
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0))],
+    );
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(0, -1, Some((80, 60)))],
+        "up is negative"
+    );
+}
+
+#[test]
+fn a_scroll_sideways_is_its_own_step_and_a_wheel_beside_the_picture_is_ignored() {
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Line, egui::vec2(-1.0, 0.0))],
+    );
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(1, 0, Some((80, 60)))],
+        "a wheel to the left is a positive dx"
+    );
+
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let image = image_rect(&output);
+    let letterbox = egui::Pos2::new(image.max.x + 30.0, image.center().y);
+    frame(&ctx, &mut state, &device, vec![egui::Event::PointerMoved(letterbox)]);
+    sent.drain();
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))],
+    );
+    assert!(
+        wheel_events(&sent.drain()).is_empty(),
+        "a wheel beside the picture belongs to the canvas"
+    );
+}

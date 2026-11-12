@@ -66,7 +66,10 @@ settings and a target, and never a command. The refusals are
   closed by the kernel when the process that holds them ends.
 - **Input** reaches the program only after the person turned Interact on in the
   panel, and only when the program said `input: true` in its `hello`. A point is
-  a pixel of the picture that the panel shows.
+  a pixel of the picture that the panel shows, and never a point beside it. An
+  `input` message is one `pointer`, `button`, `wheel`, `key` or `text` event: a
+  `wheel` holds whole steps of the wheel, where a positive `dy` is down and a
+  positive `dx` is right.
 
 ## Why a program and not a capture library
 

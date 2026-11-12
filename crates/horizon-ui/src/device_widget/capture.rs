@@ -285,6 +285,7 @@ impl DeviceUiState {
         self.captured = false;
         self.pointer_global = None;
         if self.session.as_ref().is_some_and(session::Session::is_frame_source) {
+            self.frame_wheel.clear();
             let events = self.frame_state.release_all();
             if !events.is_empty()
                 && let Some(session) = &self.session
