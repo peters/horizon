@@ -40,8 +40,10 @@ and an agent panel, and not in an editor, browser or card panel.
 
 ## The recorder of this computer
 
-The recorder line is one command line with the placeholder `{file}`. Horizon runs
-the program itself and never a shell, so a quoted argument stays one argument.
+The recorder line is one command line with the placeholder `{file}`. Horizon splits
+it into arguments itself and gives them to one fixed script of a supervisor shell as
+positional parameters, so no argument is read as shell text and a quoted argument
+stays one argument.
 
 | Platform | Recorder line |
 |---|---|
