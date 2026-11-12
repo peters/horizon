@@ -154,6 +154,65 @@ The mirror file records that this comparison happened, so a restart does not pus
 the same values again. A server that returned after its `secret.key` was lost
 asks for the values again, whatever the mirror says.
 
+## The settings of every computer
+
+The owner decided that every setting of Horizon is on the server too, so that no
+computer has rules of its own. A change of a setting on one computer is on the
+other computers within a few seconds, and there is no per-computer override.
+
+The settings store keeps one row for each configuration section. One row is one
+object of the kind `setting`: the id is the name of the section and the body is
+the JSON of that section inside an envelope. The table of the sections and their
+decisions is in
+[the settings store page](settings-store.md#the-settings-that-every-computer-shares).
+That page names the three sections that stay with one computer and the reason for
+each one.
+
+```json
+{"format":1,"config_version":12,"section":{"theme":"light"}}
+```
+
+The envelope says which configuration version wrote the section. An older section
+is migrated with the migrations of the computer that receives it, and a section of
+a version above the newest version of that computer stays on the server: the
+computer keeps its own row and the window says that it runs an older Horizon. The
+server reads neither value. It checks the id (`[a-z0-9_]{1,40}`), the size of the
+body and the number of sections, and it stores the JSON.
+
+- **The store of a computer is the first read.** A start reads
+  `settings.sqlite`, so a start never waits for the server. The link compares the
+  sections when it is in step, and a section of the server replaces the local row
+  through the write path of the settings store, on the worker thread of the link.
+- **A change of the link applies the sections.** The window reads the store again
+  through the watch of the settings file that it already has, and applies the new
+  values through the path that the Settings window uses. A section that the person
+  edits at that moment is not replaced and is not dropped: the footer of the
+  Settings window offers the value of the other computer, and every other section
+  applies at once.
+- **A local save queues one intent for each section that changed.** The settings
+  worker writes the store, and then it writes one `setting` intent for each shared
+  section whose value differs from the store that it wrote. The intent carries the
+  version that this computer saw, so the version rule of the next list decides it.
+- **The first link compares once.** For each shared section, a server that has no
+  row takes the value of this computer, and a server that has a row decides it: the
+  value of the server wins, and the value of this computer is kept one time in
+  `settings.before-server.<time>.json` beside the store, at mode 0600, with one
+  notice for the person. The mirror file of the settings records that the
+  comparison happened, so a restart does not repeat it.
+- **A section that fails a rule of the computer is not applied.** The merged
+  configuration passes `Config::validate` before one row is written, so a server
+  can never make a computer run a setting that its own settings could not hold. A
+  refused section stays on the server, the computer keeps its own row, and the
+  window shows one line about it.
+- **No setting is lost.** A section that this build does not know is shared and
+  kept, and a field of a known section that this build does not know survives the
+  save of an older computer, because the body of a push is merged with the fields
+  of the server's body.
+
+`window`, `server` and `version` stay with one computer. Their values say where
+the window of this computer stands, how it reaches its server, and which
+configuration version its store holds, so no other computer can decide them.
+
 ## The listener and the token
 
 `ssh` is the first transport of a server, and it stays the rule for a computer
@@ -252,9 +311,9 @@ the device name of that hello as the claim that it always was.
 
 The machine list is **last write wins**: two computers that add and remove
 machines decide by the commit order of the server, and the version rule is not
-read for it. The version rule holds for the objects that a later slice adds, such
-as cards and waits, and it holds today for an internal `probe` object that a
-person never sees.
+read for it. The version rule holds for a section of the settings, for the objects
+that a later slice adds, such as cards and waits, and for an internal `probe`
+object that a person never sees.
 
 ## The file
 
@@ -271,15 +330,17 @@ file to the two files that it makes. `PRAGMA journal_mode=WAL`,
 | `meta` | `key`, `value` | The store id, random at creation, and the schema version. |
 | `log` | `idx`, `at_millis`, `device`, `intent`, `kind`, `object_id`, `result_json` | One row for each decided intent, with its result. A refused intent has a row and no object. |
 | `applied` | `device`, `intent`, `idx`, unique on `(device, intent)` | The identifiers that the server decided, and the log row of each. |
-| `objects` | `kind`, `id`, `body_json`, `version`, `deleted`, primary key `(kind, id)` | The state that a computer pulls: the `machine` rows, the `binding` rows and the internal `probe` rows. A removed object is a row with `deleted = 1`. |
+| `objects` | `kind`, `id`, `body_json`, `version`, `deleted`, primary key `(kind, id)` | The state that a computer pulls: the `machine` rows, the `binding` rows, the `setting` rows and the internal `probe` rows. A removed object is a row with `deleted = 1`. |
 | `secrets` | `id`, `nonce`, `sealed`, `version`, `deleted`, primary key `id` | One secret: a sealed body, and the log index of its last change. The body is never in `objects`, because that table holds JSON that a person's server copy would show. |
 | `devices` | `name`, `first_seen`, `last_seen`, `last_intent` | One row for each computer that sent an intent, with the highest counter that it spent. |
 | `removed` | `token_hash`, `name`, `removed_millis` | The name of a computer that a person removed and the hash of the token that it presented, for 30 days. The hash is the login of nothing: it answers `removed` to a greeting of that computer and it is pruned at the next removal or join. |
 
 The schema version is one integer. A file of a newer Horizon is refused, never
-migrated down. Version 2 adds the `secrets` table, and `MIGRATIONS` in
-`crates/horizon-sync/src/store/schema.rs` is where a change from one version to
-the next goes.
+migrated down. Version 2 adds the `secrets` table, version 3 adds the login of a
+computer, version 4 adds the greeting of a join, version 5 keeps the name of a
+removed computer, and version 6 adds the index that the bound of a kind reads.
+`MIGRATIONS` in `crates/horizon-sync/src/store/schema.rs` is where a change from
+one version to the next goes.
 
 ### The key of the secrets
 
@@ -316,11 +377,11 @@ is `hello`; after that a computer pushes, pulls and waits. Each example below is
 one frame.
 
 ```json
-{"hello":{"protocol":3,"device":"mbp-7c1","store":"6f1c…"}}
-{"hello_ok":{"protocol":3,"store":"6f1c…","now_millis":1760000000000}}
+{"hello":{"protocol":4,"device":"mbp-7c1","store":"6f1c…"}}
+{"hello_ok":{"protocol":4,"store":"6f1c…","now_millis":1760000000000}}
 {"join":{"code":"ABCD-EFGH-JKMN","device":"laptop-b"}}
 {"joined":{"device":"laptop-b","token":"n7Qd…"}}
-{"hello":{"protocol":3,"device":"laptop-b","token":"n7Qd…"}}
+{"hello":{"protocol":4,"device":"laptop-b","token":"n7Qd…"}}
 {"invite":{}}
 {"invited":{"code":"ABCD-EFGH-JKMN","link":"horizon://server-computer:7000/join#ABCD-EFGH-JKMN","expires_millis":600000,"now_millis":1760000000000}}
 {"devices":{}}
@@ -362,10 +423,11 @@ protocol version, a device name that breaks its rule, a second hello and a push 
 more than 256 intents end the link. A wait above the maximum and a store that
 could not answer keep the link.
 
-The limits are: 64 machines, 64 internal probe objects, 256 secrets, 16 KiB of one
-secret body, 256 intents and 8 secrets in one push, 256 KiB in one frame and 32
-open waits for each link. The protocol version is 3: version 1 has no secret row
-and no `secrets_lost`, and version 2 has no `join`, no token and no invitation.
+The limits are: 64 machines, 64 settings, 64 internal probe objects, 256 secrets,
+16 KiB of one secret body, 64 KiB of one setting, 256 intents and 8 secrets in one
+push, 256 KiB in one frame and 32 open waits for each link. The protocol version
+is 4: version 1 has no secret row and no `secrets_lost`, version 2 has no `join`,
+no token and no invitation, and version 3 has no `setting` object.
 
 ## The secrets, and what the server holds
 
@@ -426,7 +488,10 @@ comparison is never against a value that the computer assumes.
 
 The server holds no ssh login key of the person, no provider CLI login (az, gcloud,
 hcloud, aws), no browser profile, no session cookie, no agent token, no terminal
-content, no transcript and no setting of the person. A named secret is the one value
+content, no transcript and no setting that stays with one computer. The shared
+settings are on the server on purpose: they are the rules of every computer of the
+person, and some of them name a command or a path. Their boundary is stated in
+[the boundary of the link](../review/trust-boundaries/server-link.md#untrusted-the-settings-of-a-person). A named secret is the one value
 that the person names for their own tools: they ask the server to hold it, and it is
 sealed like the other two kinds. `secret.key` itself never leaves the server home.
 The push path accepts three ids and no other: a path, a command, a name that is not

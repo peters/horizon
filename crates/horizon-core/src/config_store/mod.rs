@@ -184,6 +184,7 @@ impl ConfigStore {
         connection
             .busy_timeout(std::time::Duration::from_secs(BUSY_TIMEOUT_SECONDS))
             .map_err(|error| state_error(&error))?;
+        check_version(&connection)?;
         read_rows(&connection)
     }
 
@@ -199,6 +200,9 @@ impl ConfigStore {
     pub fn write_sections(&self, rows: &BTreeMap<String, String>) -> Result<()> {
         crate::ui_thread::blocking("the settings store is committed");
         let mut connection = self.open_for_write()?;
+        // A store of another Horizon version may hold settings that this build does
+        // not know, so a write of a section must not replace it.
+        check_version(&connection)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| state_error(&error))?;
@@ -308,6 +312,20 @@ impl ConfigStore {
 
 /// How long a connection of one store waits for the writer of another one.
 const BUSY_TIMEOUT_SECONDS: u64 = 5;
+
+/// Refuses a store that another Horizon version wrote.
+fn check_version(connection: &Connection) -> Result<()> {
+    let found = meta(connection, META_SCHEMA_VERSION).map_err(|fault| match fault {
+        StoreFault::Damaged(reason) | StoreFault::OtherVersion(reason) => Error::State(reason),
+    })?;
+    match found {
+        Some(version) if version == SETTINGS_SCHEMA_VERSION.to_string() => Ok(()),
+        Some(version) => Err(Error::State(format!(
+            "settings store has schema {version} and this Horizon reads schema {SETTINGS_SCHEMA_VERSION}"
+        ))),
+        None => Err(Error::State("settings store has no schema version".to_owned())),
+    }
+}
 
 /// The raw data of every row of the store, by section name.
 fn read_rows(connection: &Connection) -> Result<BTreeMap<String, String>> {

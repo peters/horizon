@@ -48,7 +48,10 @@ exported copy. This build writes no copy, so it does not read that row and does
 not delete it: an older Horizon finds its store as it left it.
 
 A row of a section that this build does not know stays in the store. An older
-Horizon does not delete the settings of a newer one.
+Horizon does not delete the settings of a newer one. A row is the whole value of
+its section: a save writes every row, and the two paths of
+[a section of the server](#the-settings-that-every-computer-shares) write the rows
+of the sections that arrived and no other row.
 
 ## The settings file of a run
 
@@ -163,11 +166,77 @@ commits the store with `synchronous=FULL`.
 |---|---|
 | Save in the Settings window | Write the store, answer with the saved settings. |
 | Save of a remote-host preference | Write the store, answer with the saved settings. |
-| The store changed on disk | Read the settings, answer with them. |
+| The store changed on disk | Read the settings, answer with them, and apply them to the window. |
+| A section of the server, after the link is in step | Write the rows of the sections that arrived, on the worker of the link, after the merged settings passed the rule. |
 
 A reload is pending from the moment it is asked for until its answer arrives, so
 the window never starts a second one. The bar at the bottom of the Settings
 panel shows `Saving` while a write runs and `Saved` when it ends.
+
+## The settings that every computer shares
+
+A settings store belongs to one computer. A person who names a server in the
+settings entry `server` makes the shared rows of every computer of that server the
+same, because the owner decided that no computer has rules of its own. One
+table in `crates/horizon-core/src/settings_sync.rs` names every section of the
+store with its decision, and a test reads the table against the rows that the
+store writes, so a new section without a decision fails it.
+
+| Section | Scope | Reason |
+|---|---|---|
+| `version` | Local | The configuration version of the settings store of this computer. |
+| `window` | Local | The size and the position of the window on the screen of this computer. |
+| `appearance` | Shared | One theme for every computer of the person. |
+| `shortcuts` | Shared | One set of key bindings, so a key does the same thing on every computer. |
+| `overlays` | Shared | |
+| `features` | Shared | |
+| `browser` | Shared | |
+| `remote_hosts` | Shared | One list of remote hosts. |
+| `browser_host` | Shared | One browser host. A computer that cannot reach that host shows the notice that it already shows. |
+| `server` | Local | How this computer reaches the server. |
+| `secrets` | Shared | The names of the named secrets. A value is a row of `secrets.sqlite`, and the values follow the server as sealed secrets of their own. |
+| `speech` | Shared | One recorder line and one transcriber. A recorder that this computer does not have fails its take with the sentence that it already says, and an empty line turns speech off with its sentence. |
+| `presets` | Shared | |
+| `workspaces` | Shared | |
+
+A section that a newer build adds is shared as well, so it is kept and never
+deleted: the rule of "no setting is lost" holds across the computers and the
+versions of the person. The key bindings of the machines are not a section of the
+store. They follow the server as objects of their own, and a credential value is a
+row of `secrets.sqlite`, as the machine list page says.
+
+### One section on the server, and one on the computer
+
+One shared section is one object of the kind `setting` of the server of the
+person: the id is the name of the section and the body is the JSON of that section
+inside an envelope that names its configuration version. The server stores that
+JSON and reads none of it; the frames and the rules are in
+[the server page](horizon-server.md#the-settings-of-every-computer).
+
+| Event | What happens |
+|---|---|
+| A save of a shared section | The settings thread writes the store and then one `setting` intent for each section whose value changed. The intent carries the version that this computer saw. |
+| A section of the server, after the first link | The row of the store is replaced on the worker of the link, after the merged settings passed the rule of this computer. The window reads the store again through its watch of the settings file. |
+| A section of the server that breaks a rule | The row of this computer stays, the section stays on the server, and one sentence shows. |
+| A section of a newer configuration version | The row of this computer stays, the section stays on the server, and one sentence says that this computer runs an older Horizon. |
+| A change that loses the version rule | The value of the other computer arrives and this computer takes it, with one sentence for the person. |
+| The first link, a section that the server has | The value of the server wins, and the value of this computer is kept one time in `settings.before-server.<time>.json` beside the store, at mode 0600. |
+| The first link, a section that the server does not have | The value of this computer is pushed. |
+| A section that this build does not know | It is kept in the store as it arrived, and its fields survive the save of this build. |
+
+The store is written by two workers: the settings thread of the window, and the
+worker of the link that applies a section of the server. Each write is short, and
+the store waits for the other writer for five seconds instead of failing, so the
+two writers do not lose a change.
+
+### The sections that the person edits during a change
+
+The Settings window reads the store again while it is open. A section that
+another computer changed and that the person also edits is not replaced and is not
+dropped: the footer of the panel shows `This setting changed on another computer.`
+with two choices. `Take it` writes the value of the other computer into the draft.
+`Keep editing` keeps the draft, and the next Save writes it as the next change of
+that section. Every other section applies at once.
 
 ## What the Settings window changes
 

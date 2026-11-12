@@ -450,3 +450,18 @@ fn one_section_named_by_the_wrong_build_is_one_fault_and_not_a_panic() {
         "a section of the wrong shape is a fault and not a panic"
     );
 }
+
+#[test]
+fn a_store_of_another_schema_is_refused_by_both_write_paths_of_a_section() {
+    let (_directory, store) = saved(&Config::default());
+    {
+        let connection = rusqlite::Connection::open(store.path()).expect("the store");
+        connection
+            .execute("UPDATE meta SET value = '99' WHERE key = 'schema_version'", [])
+            .expect("a newer schema");
+    }
+    assert!(store.section_rows().is_err(), "a newer store is refused by a read");
+    let mut rows = BTreeMap::new();
+    rows.insert("appearance".to_owned(), json!({ "theme": "light" }).to_string());
+    assert!(store.write_sections(&rows).is_err(), "a newer store is never written");
+}

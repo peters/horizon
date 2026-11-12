@@ -35,6 +35,8 @@ computer, and the rule of the address.
   or macOS.
 - This procedure does not test a rented machine, a card, a click that waits for an
   agent, or two servers.
+- The tasks from S14 test the settings that every computer shares. They need the
+  candidate of this slice on each computer.
 - This procedure does not test a computer that is away for more than five
   minutes.
 
@@ -604,6 +606,142 @@ gone, and that it catches up when the server returns.
    the computers are gone, the section `Join with a link` is shown, and the field
    `This computer` is read-only no more.
 
+### 6.14 S14 — a theme change of one computer applies on the other
+
+1. On client computer A, open the Settings window and the tab `General`. Change
+   `Theme` from `Auto` to `Light`, and press `Save`.
+
+   Result: the window of client computer A is light at once, and the footer shows
+   `Saved`.
+
+2. Look at client computer B, within ten seconds.
+
+   Result: the window of client computer B is light, and its footer does not change
+   while the Settings window of client computer B is closed. The state line of its
+   Machines section says `Server: in step`.
+
+3. On client computer B, open the Settings window and the tab `General`.
+
+   Result: the field `Theme` shows `Light`, so the value of the store is the value
+   of client computer A.
+
+4. On client computer B, change `Theme` back to `Auto` and press `Save`, then look
+   at client computer A.
+
+   Result: within ten seconds the window of client computer A is dark or light as
+   the system of that computer says, and its Settings window shows `Auto`.
+
+### 6.15 S15 — a shortcut change of one computer applies on the other
+
+1. On client computer A, open the Settings window and the tab `Keys`. Change the
+   key of `Toggle the sidebar` to a key that no other action uses, such as
+   `Alt+Shift+B`, and press `Save`.
+
+2. On client computer B, press that key.
+
+   Result: within ten seconds the sidebar of client computer B hides and shows
+   again, and its Settings tab `Keys` shows the same key. No second window of
+   client computer B is needed.
+
+3. On client computer B, change that key back to `Ctrl+Shift+B` and press `Save`,
+   then press `Ctrl+Shift+B` on client computer A.
+
+   Result: the sidebar of client computer A hides and shows again.
+
+### 6.16 S16 — one section changed on both computers while the server is away
+
+1. On the server computer, stop the server with Ctrl-C.
+
+   Result: both client computers show `Server away · 0 pending` within a few
+   seconds.
+
+2. On client computer A, open the Settings window and the tab `General`. Change
+   `Theme` to `Light` and press `Save`. Do not close the Settings window.
+
+   Result: the status line of the Settings window of client computer A says
+   `Server away · 1 pending`.
+
+3. On client computer B, change `Theme` to `Dark` and press `Save`.
+
+   Result: the status line of client computer B says `Server away · 1 pending`.
+
+4. On the server computer, start the server again with the command of step 5.1.
+
+   Result: both client computers say `Server: in step` within a few seconds. Both
+   computers show the theme of the change that the server decided first: the
+   window of the computer that lost reads one line that says that the server kept
+   the value of another computer, and its theme becomes the theme of the winner.
+   No computer keeps its own losing theme.
+
+5. Open the tab `General` on both computers.
+
+   Result: the field `Theme` shows the same value on both computers.
+
+### 6.17 S17 — the first link keeps the value of this computer in a backup file
+
+1. Stop client computer B. Start it again without `--server-target`, with the same
+   `--state` folder and `--reuse-state --resume-session`. Open the Settings window
+   and the tab `General`. Change `Theme` to `Dark` and press `Save`. Stop the
+   fixture.
+
+   Result: the store of client computer B holds `Dark`, and the sidebar shows no
+   `Server` line, because that run names no server.
+
+2. On the server computer, start the server. On client computer A, change `Theme`
+   to `Light` and press `Save`. Client computer B is not running.
+
+   Result: the server holds `Light` for the section `appearance`.
+
+3. Start client computer B with the `--server-target` of step 5, and open the tab
+   `General` after the state line says `Server: in step`.
+
+   Result: the field `Theme` shows `Light`, and the sidebar shows one line that
+   names the file `settings.before-server.<time>.json`.
+
+4. Look at the folder of the settings store of client computer B:
+
+   ```bash
+   ls -l /path/to/b/data/home/.horizon/settings.before-server.*.json
+   ```
+
+   Result: one file exists, its mode is 0600, and its content holds the value
+   `"theme":"dark"` of the section `appearance`.
+
+5. Start client computer B a second time with the same `--state`.
+
+   Result: no second `settings.before-server.<time>.json` file appears, and the
+   theme stays `Light`.
+
+### 6.18 S18 — a preset with a folder that the other computer does not have
+
+1. On client computer A, open the Settings window and the tab `Presets`. Add a
+   preset of the kind `Shell` with the name `Moved shell` and the command
+   `/bin/sh`, and press `Save`.
+
+2. On client computer B, open the tab `Presets`.
+
+   Result: within ten seconds client computer B shows `Moved shell`, so the section
+   arrived.
+
+3. On client computer A, add a workspace with the name `Moved` whose directory is
+   a folder that client computer A has and client computer B does not, such as
+   `/tmp/a-only-folder`. Press `Save`, and wait until client computer B shows the
+   workspace.
+
+4. On client computer B, start a terminal of the workspace `Moved`.
+
+   Result: the panel of client computer B shows the placeholder
+   `Horizon could not start this panel` with the reason
+   `the directory does not exist`. The window of client computer B keeps running,
+   and no start of client computer B stops.
+
+5. On client computer B, start a speech take while the recorder line of client
+   computer A names a program that client computer B does not have.
+
+   Result: the take says that the program is not installed on this computer, and
+   the window keeps running. The Settings tab `Speech` shows the recorder line of
+   client computer A.
+
 ## 7. Pass criteria
 
 - A machine that one computer adds appears on the other computer within a few
@@ -636,6 +774,21 @@ gone, and that it catches up when the server returns.
   and `server.lock` stays in the home after a stop of the server.
 - A computer without a server in its settings behaves as before, and it starts
   no child.
+- A theme and a shortcut that one computer saves apply on the other computer
+  within a few seconds, and the Settings window of the other computer shows the
+  new value.
+- With the server away, a change of one shared section on each computer waits in
+  its queue, and one of them decides the section when the server returns: both
+  computers show the value that the server decided first, and the computer that
+  lost reads one line about it.
+- The first link of a computer keeps the value of this computer for a section that
+  the server has in `settings.before-server.<time>.json` beside the store, at mode
+  0600, writes that file one time, and the value of the server wins.
+- A preset or a workspace that names a folder or a program that this computer does
+  not have applies and does not stop the start: the panel says why, and the speech
+  take names the program that is not installed.
+- A change of a local section, `window`, `server` or `version`, never reaches the
+  server, and `machines/server-queue.json` holds no intent of it.
 - A server with `--listen` on a private overlay network address answers the join
   of a computer, and a server without `--listen` answers `no_listener` to an
   invitation.
