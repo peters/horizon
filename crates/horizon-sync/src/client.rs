@@ -584,7 +584,24 @@ impl Client {
         let mut outcome = PushOutcome::default();
         self.settle(reply, &mut outcome)?;
         if !outcome.applied.is_empty() {
-            self.link = LinkState::Behind;
+            // A wait that answered before this answer may already hold the row of
+            // these intents, because the server writes its answer after it decided
+            // them. The link is in step then, and a state of `Behind` would read as
+            // a link that is still catching up until the next change of the server.
+            let last = reply
+                .results
+                .iter()
+                .filter_map(|result| match &result.outcome {
+                    crate::intent::Outcome::Applied { index } => Some(*index),
+                    crate::intent::Outcome::Refused(_) => None,
+                })
+                .max();
+            self.link = match last {
+                Some(index) if index <= self.state.index => LinkState::InStep {
+                    index: self.state.index,
+                },
+                Some(_) | None => LinkState::Behind,
+            };
         }
         Ok(outcome)
     }

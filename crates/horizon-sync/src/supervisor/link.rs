@@ -166,6 +166,10 @@ impl Link<'_> {
     }
 
     /// Asks for the changes of the server, unless one request waits for its answer.
+    ///
+    /// A link that is behind asks for the changes at once instead of opening a wait:
+    /// its push was applied, so the row of that push is on the server now, and a wait
+    /// would answer only at the next change or at its own bound.
     fn pull(&mut self) -> bool {
         if self.waiting.is_some() {
             return true;
@@ -173,7 +177,7 @@ impl Link<'_> {
         let frame = {
             let state = self.handle.lock();
             self.asking_from = state.client.read_from();
-            if self.first {
+            if self.first || matches!(state.client.state(), crate::client::LinkState::Behind) {
                 state.client.pull_frame()
             } else {
                 state.client.wait_frame()
