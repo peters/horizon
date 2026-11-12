@@ -173,10 +173,10 @@ impl BrowserRuntimePaths {
     /// directory per panel and action. They stay while the panel's page may
     /// still read them lazily and are pruned by age, count and size when the
     /// panel's next attachment is staged. The browser must be able to read
-    /// them: on Linux a Snap-confined
-    /// browser cannot open hidden directories directly beneath the home
-    /// directory, so a runtime root such as `~/.horizon` stages under the
-    /// visible `~/Horizon` directory the Snap profile root already uses.
+    /// them: a Snap-confined browser of Linux cannot open hidden directories
+    /// directly beneath the home directory, and the open dialog of Linux and of
+    /// macOS hides a dot folder. A runtime root such as `~/.horizon` therefore
+    /// stages under the visible `~/Horizon` directory.
     /// That visible directory is namespaced by the runtime root, so two
     /// hidden roots under one home (say `~/.horizon` and `~/.horizon-dev`)
     /// never share staging or sweep each other's. The path is absolute even
@@ -199,7 +199,8 @@ impl BrowserRuntimePaths {
     }
 }
 
-#[cfg(target_os = "linux")]
+/// The visible folder of the attachments of a runtime root that is hidden
+/// beneath the home of the person, or `None` when the root is visible itself.
 fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<PathBuf> {
     let home = home?;
     let hidden_beneath_home = root
@@ -217,7 +218,6 @@ fn browser_visible_attachments_dir(root: &Path, home: Option<&Path>) -> Option<P
 /// A bounded directory name derived from a path's exact platform bytes (a
 /// SHA-256 digest in hex, 64 characters), so two distinct roots never share
 /// it however they are spelled and however long they are.
-#[cfg(target_os = "linux")]
 fn encode_path_bytes(path: &Path) -> String {
     use sha2::{Digest, Sha256};
     use std::os::unix::ffi::OsStrExt;
@@ -228,11 +228,6 @@ fn encode_path_bytes(path: &Path) -> String {
         encoded.push(LOWER_HEX[(byte & 0x0f) as usize] as char);
     }
     encoded
-}
-
-#[cfg(not(target_os = "linux"))]
-fn browser_visible_attachments_dir(_root: &Path, _home: Option<&Path>) -> Option<PathBuf> {
-    None
 }
 
 #[must_use]
@@ -322,7 +317,7 @@ mod home_tests {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     #[test]
     fn hidden_runtime_roots_under_one_home_stage_in_separate_visible_directories() {
