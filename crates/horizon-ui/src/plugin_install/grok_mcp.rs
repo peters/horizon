@@ -55,12 +55,12 @@ fn install_browser_skill(dir: &Path) -> io::Result<()> {
     let staging = tempfile::Builder::new()
         .prefix(".horizon-browser-")
         .tempdir_in(parent)?;
-    super::sync_plugin_files(staging.path(), super::BROWSER_SKILL_FILES)?;
+    super::sync_plugin_files(staging.path(), super::skill_files::BROWSER_SKILL_FILES)?;
     fs::rename(staging.path(), dir)
 }
 
 fn validate_browser_skill(dir: &Path) -> io::Result<()> {
-    super::owned_skills::validate_files(dir, super::BROWSER_SKILL_FILES)
+    super::owned_skills::validate_files(dir, super::skill_files::BROWSER_SKILL_FILES)
 }
 
 pub(super) fn register(home: &Path) -> io::Result<bool> {

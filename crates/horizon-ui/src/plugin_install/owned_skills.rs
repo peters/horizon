@@ -3,7 +3,7 @@
 use std::io;
 use std::path::Path;
 
-use super::EmbeddedFile;
+use super::skill_files::EmbeddedFile;
 
 /// Whether `dir` holds exactly the bundled `files` and nothing else: no
 /// partial, extra or modified content that Horizon must not take over.

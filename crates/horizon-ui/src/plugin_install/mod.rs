@@ -11,247 +11,18 @@ use horizon_core::{
 
 mod grok_mcp;
 mod owned_skills;
+mod skill_files;
 mod user_skills;
 mod work_hooks;
+use skill_files::{
+    BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
+    MACHINES_SKILL_FILES, SPEECH_SKILL_FILES,
+};
 use user_skills::{
     HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_MACHINES_SKILL, HORIZON_SPEECH_SKILL,
     RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck, SkillRootLease,
     bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
-
-struct EmbeddedFile {
-    relative_path: &'static str,
-    content: &'static str,
-}
-
-const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile {
-        relative_path: ".claude-plugin/plugin.json",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/.claude-plugin/plugin.json"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-browser/SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-browser/SKILL.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-device/SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-device/SKILL.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-block/SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-block/SKILL.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/SKILL.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/aws.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/aws.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/browser-machine.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/browser-machine/Dockerfile",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/Dockerfile"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/browser-machine/entrypoint.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/entrypoint.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/browser-machine/setup.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/browser-machine/setup.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/azure.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/azure.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/gcp.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/gcp.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/hetzner.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/hetzner.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-machines/references/runpod.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/references/runpod.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "skills/horizon-speech/SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-speech/SKILL.md"
-        )),
-    },
-];
-
-const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-speech/SKILL.md"
-    )),
-}];
-
-const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-browser/SKILL.md"
-    )),
-}];
-
-const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-device/SKILL.md"
-    )),
-}];
-
-const BLOCK_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-block/SKILL.md"
-    )),
-}];
-
-/// The first skill with reference files: the body of the skill and the five
-/// provider references that it links, under their own `references/` directory.
-const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
-    EmbeddedFile {
-        relative_path: "SKILL.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/SKILL.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/aws.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/aws.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/browser-machine.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/browser-machine/Dockerfile",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/Dockerfile"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/browser-machine/entrypoint.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/entrypoint.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/browser-machine/horizon-browser-wrapper.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/horizon-browser-wrapper.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/browser-machine/setup.sh",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/browser-machine/setup.sh"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/azure.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/azure.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/gcp.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/gcp.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/hetzner.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/hetzner.md"
-        )),
-    },
-    EmbeddedFile {
-        relative_path: "references/runpod.md",
-        content: include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/codex/skills/horizon-machines/references/runpod.md"
-        )),
-    },
-];
 
 fn validate_block_skill(dir: &Path) -> io::Result<()> {
     owned_skills::validate_files(dir, BLOCK_SKILL_FILES)
@@ -899,13 +670,16 @@ mod tests {
 
     use horizon_core::HorizonHome;
 
+    use super::skill_files::{
+        BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
+        MACHINES_SKILL_FILES, SPEECH_SKILL_FILES,
+    };
     use super::{
-        AgentMcpEntry, AgentPluginHostLease, BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES,
-        DEVICE_SKILL_FILES, EmbeddedFile, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
-        HORIZON_MACHINES_SKILL, MACHINES_SKILL_FILES, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
-        SPEECH_SKILL_FILES, abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config,
-        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
-        sync_leased_user_skills, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
+        AgentMcpEntry, AgentPluginHostLease, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
+        HORIZON_MACHINES_SKILL, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
+        agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl, open_lock_file,
+        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills, sync_plugin_files,
+        user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
