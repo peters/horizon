@@ -12,11 +12,13 @@ use crate::{AutomationDisclosurePolicy, BrowserConfig};
 use super::shared::{AttachedBrowser, DriverProcess, SharedBrowserSession, SharedDriverReservation};
 
 mod disclosure;
+mod page;
 
 use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
+pub(crate) use page::{caller_page, create_page_target, first_page_target};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -284,23 +286,7 @@ fn initialize_target(
     // A browser of another process already holds the pages of its person: this
     // session takes a page of a sibling only when it created one before, and
     // otherwise creates its own.
-    let resume_target = config.resume_target.as_deref().filter(|_| chrome.is_attached());
-    let resumed_target = resume_target.and_then(|target| existing_page_target(&mut link, stop_requested, target));
-    if resume_target.is_some() && resumed_target.is_none() {
-        tracing::info!(
-            target: "browser",
-            target_id = resume_target.unwrap_or_default(),
-            "the page of the lost link is gone, so this session opens the last address in a new page"
-        );
-    }
-    let resumed_page = resumed_target.is_some();
-    let existing_target = if resumed_page {
-        resumed_target
-    } else if chrome.is_shared() || chrome.is_attached() {
-        chrome.registered_target()
-    } else {
-        first_page_target(&mut link, stop_requested)
-    };
+    let (resumed_page, existing_target) = caller_page(config, &chrome, &mut link, stop_requested);
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
@@ -544,64 +530,6 @@ pub(super) fn run_driver(
         .close_page(&mut connection.link, &connection.target_id);
 }
 
-/// The page target `wanted` of the browser, when it still exists as a page.
-///
-/// This is the question that decides a reattach: a link that comes back to a
-/// browser that kept running finds the old page and keeps its state; a browser
-/// that restarted has no such target, and the caller opens a new page of the
-/// last address.
-fn existing_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, wanted: &str) -> Option<String> {
-    let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
-    result
-        .get("targetInfos")
-        .and_then(|targets| targets.as_array())
-        .and_then(|targets| {
-            targets.iter().find(|target| {
-                target.get("targetId").and_then(serde_json::Value::as_str) == Some(wanted)
-                    && target.get("type").and_then(serde_json::Value::as_str) == Some("page")
-            })
-        })
-        .and_then(|target| target.get("targetId"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-}
-
-/// First existing `page` target, if any.
-pub(super) fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
-    let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
-    result
-        .get("targetInfos")
-        .and_then(|t| t.as_array())
-        .and_then(|targets| first_available_page_target_id(targets))
-        .map(str::to_string)
-}
-
-fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str> {
-    targets
-        .iter()
-        .find(|target| {
-            target.get("type").and_then(serde_json::Value::as_str) == Some("page")
-                && !target
-                    .get("attached")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-        })
-        .and_then(|target| target.get("targetId"))
-        .and_then(serde_json::Value::as_str)
-}
-
-/// Create a fresh page target as a fallback (browser opened without one).
-/// `background` opens it in its own window that does not take the focus.
-pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, background: bool) -> Option<String> {
-    let params = if background {
-        serde_json::json!({ "url": "about:blank", "newWindow": true, "background": true })
-    } else {
-        serde_json::json!({ "url": "about:blank" })
-    };
-    let result = call_during_startup(link, stop_requested, "Target.createTarget", &params).ok()?;
-    result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
-}
-
 /// The Chromium switch of the egress record, when the browser profile names one.
 ///
 /// # Errors
@@ -755,7 +683,8 @@ mod tests {
     use crate::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::{build_launch, first_available_page_target_id, profile_dir};
+    use super::page::first_available_page_target_id;
+    use super::{build_launch, profile_dir};
 
     /// Write `body` as the program `name` of `folder`, with the permissions of a
     /// program, so the session under test starts a program that this test wrote.

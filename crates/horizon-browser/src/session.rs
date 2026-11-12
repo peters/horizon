@@ -529,22 +529,10 @@ fn run_loop(
             break;
         }
 
-        report_blocked_pass(link, pass_started);
+        crate::latency::report_blocked_pass(link, pass_started);
         std::thread::sleep(Duration::from_millis(5));
     }
     state.finish_pending_resize("browser_unavailable", "browser session stopped");
-}
-
-/// A pass that blocked on the protocol says so, with the command it waited for.
-fn report_blocked_pass(link: &mut CdpLink, pass_started: Instant) {
-    if !crate::latency::enabled() {
-        return;
-    }
-    let waited = link.take_blocking_call();
-    crate::latency::stall(
-        pass_started.elapsed(),
-        waited.as_ref().map(|(method, waited)| (method.as_str(), *waited)),
-    );
 }
 
 fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut DriverProcess, event_tx: &BrowserEventSender) -> bool {

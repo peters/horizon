@@ -296,6 +296,18 @@ pub(crate) fn stall_fields(pass: Duration, waited: Option<(&str, Duration)>) -> 
     )
 }
 
+/// A pass that blocked on the protocol says so, with the command it waited for.
+pub(crate) fn report_blocked_pass(link: &mut crate::cdp::CdpLink, pass_started: Instant) {
+    if !enabled() {
+        return;
+    }
+    let waited = link.take_blocking_call();
+    stall(
+        pass_started.elapsed(),
+        waited.as_ref().map(|(method, waited)| (method.as_str(), *waited)),
+    );
+}
+
 /// One driver pass that blocked on the protocol.
 pub(crate) fn stall(pass: Duration, waited: Option<(&str, Duration)>) {
     if !enabled() || pass <= STALL_THRESHOLD {

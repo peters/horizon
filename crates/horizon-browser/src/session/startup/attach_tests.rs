@@ -98,7 +98,7 @@ fn an_attached_session_drives_its_own_page_and_never_stops_the_browser() {
     assert_eq!(connection.session_id, "ours-session");
 
     let downloads_note = connection.downloads_note.clone();
-    assert!(connection.downloads_reporting == false);
+    assert!(!connection.downloads_reporting);
     connection
         .chrome
         .close_page(&mut connection.link, &connection.target_id);

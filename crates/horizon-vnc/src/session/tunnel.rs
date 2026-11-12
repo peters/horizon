@@ -154,35 +154,15 @@ fn cause(error: &Error, tail: &str, host_key: Option<&HostKeyFailure>) -> Cause 
     }
     let ssh_says_refused = tail.contains("Connection refused") || tail.contains("Permission denied");
     let ssh_says_timeout = tail.contains("timed out") || tail.contains("Timeout") || tail.contains("not responding");
-    match error {
-        Error::Timeout => Cause::TimedOut,
-        Error::Closed => {
-            if ssh_says_refused {
-                Cause::Refused
-            } else if ssh_says_timeout {
-                Cause::TimedOut
-            } else {
-                Cause::Closed
-            }
-        }
-        Error::Tunnel { .. } => {
-            if ssh_says_refused {
-                Cause::Refused
-            } else if ssh_says_timeout {
-                Cause::TimedOut
-            } else {
-                Cause::Closed
-            }
-        }
-        _ => {
-            if ssh_says_refused {
-                Cause::Refused
-            } else if ssh_says_timeout {
-                Cause::TimedOut
-            } else {
-                Cause::Closed
-            }
-        }
+    if matches!(error, Error::Timeout) {
+        return Cause::TimedOut;
+    }
+    if ssh_says_refused {
+        Cause::Refused
+    } else if ssh_says_timeout {
+        Cause::TimedOut
+    } else {
+        Cause::Closed
     }
 }
 
