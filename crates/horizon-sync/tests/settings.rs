@@ -829,3 +829,49 @@ fn a_computer_without_a_settings_path_applies_nothing_and_queues_nothing() {
 fn current_config_version() -> u32 {
     horizon_core::Config::default().version
 }
+
+/// A save while the server is away starts one attempt at once.
+///
+/// The wait of a lost link grows with every attempt, so a server that someone
+/// started again is followed only at the end of that wait. A person who saves a
+/// setting expects it to travel, so the save ends the wait of one attempt. The test
+/// measures the real time of the attempt rather than a clock of the link: the first
+/// delay of a lost link is three seconds and this bound is under it.
+#[test]
+fn a_save_while_the_server_is_away_starts_an_attempt_at_once() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
+    in_step(&a);
+
+    server.stop();
+    eventually("the link away", || {
+        matches!(a.handle().state(), LinkState::Away { .. }).then_some(())
+    });
+    // The server returns, and the link stays in its wait: it is not due yet.
+    server.restart();
+    thread::sleep(Duration::from_millis(600));
+    assert!(
+        matches!(a.handle().state(), LinkState::Away { .. }),
+        "the link waits for the end of its delay: {:?}",
+        a.handle().state()
+    );
+
+    let saved_at = Instant::now();
+    let mut config = a.stored();
+    config.appearance.theme = AppearanceTheme::Light;
+    a.save(&config);
+    eventually("the link of the save", || {
+        matches!(a.handle().state(), LinkState::InStep { .. }).then_some(())
+    });
+    let waited = saved_at.elapsed();
+    assert!(
+        waited < Duration::from_secs(2),
+        "the save started one attempt at once instead of waiting for the delay: {waited:?}"
+    );
+    eventually("the section of the save on the server", || {
+        server.setting("appearance").is_some().then_some(())
+    });
+    a.stop();
+    server.stop();
+}

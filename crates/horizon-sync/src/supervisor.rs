@@ -577,6 +577,12 @@ fn read_answers(mut output: impl std::io::Read, answers: &Sender<Frame>) {
 
 /// Waits for the delay of the next attempt, and returns at once when the
 /// supervisor is stopped or a local change arrives.
+///
+/// A local change is a person who saved a setting or a secret while the server
+/// was away, so it starts one attempt at once instead of waiting for the rest of
+/// the delay: the person who saves a setting expects it to travel. The attempt
+/// counter keeps counting through such an attempt, so a server that stays away
+/// still reaches the longer delays.
 fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) {
     let deadline = Instant::now() + delay;
     while !stop.load(Ordering::SeqCst) {
@@ -585,7 +591,11 @@ fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) {
             return;
         }
         match kicked.recv_timeout(remaining.min(LINK_SLICE)) {
-            Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(()) => {
+                tracing::debug!("a local change ended the wait of the next attempt of the link");
+                return;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
     }
