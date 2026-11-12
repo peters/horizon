@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use egui::Context;
 use horizon_browser_control::manifest::block;
+use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_preset;
 use horizon_core::{BlockPanelState, PresetConfig, preset_named};
 
@@ -97,7 +98,7 @@ impl HorizonApp {
         };
         if !preset.requires_workspace_cwd() {
             return Some(block::Outcome::failed(
-                horizon_browser_control::manifest::block_machines::INVALID_REQUEST,
+                block_machines::INVALID_REQUEST,
                 &format!(
                     "The preset {} opens no program of this computer, so it has no working directory: name a preset of a shell, a command or an agent",
                     preset.name
