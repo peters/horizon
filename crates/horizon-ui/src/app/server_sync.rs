@@ -144,8 +144,13 @@ impl ServerSync {
 ///
 /// It is the same small line as the state of the link: one text of the state, so
 /// the person reads the settings of the server where the other lines of the link
-/// are, and never as a second kind of message.
-fn settings_line(view: &horizon_sync::SettingsSyncView) -> Option<String> {
+/// are, and never as a second kind of message. The line about a setting that
+/// another computer changed first comes before the state, because it is the one
+/// line of the three that a person has to read and close.
+fn settings_line(view: &horizon_sync::SettingsSyncView, lost: Option<&str>) -> Option<String> {
+    if let Some(line) = lost {
+        return Some(line.to_owned());
+    }
     if let Some(line) = view.refused() {
         return Some(line.to_owned());
     }
@@ -364,7 +369,7 @@ impl HorizonApp {
         let settings = snapshot.settings();
         ServerView {
             line: ServerLine::of(state).text(),
-            settings: settings_line(settings),
+            settings: settings_line(settings, self.settings_lost.as_deref()),
             device: snapshot.device().to_owned(),
             // A computer that the server removed has no link that could ask for an
             // invitation or read the list, so the tab shows the join alone.
@@ -374,6 +379,16 @@ impl HorizonApp {
             // made the token, so it is read-only until the token is gone.
             name_locked: sync.holds_token(),
         }
+    }
+
+    /// Ends the line about a setting of this computer that another computer
+    /// changed first: the link forgets it, so the Server tab loses it in the same
+    /// frame as the sidebar.
+    pub(in crate::app) fn dismiss_settings_lost(&mut self) {
+        if let Some(sync) = self.server_sync.as_ref() {
+            sync.handle().dismiss_settings_lost();
+        }
+        self.settings_lost = None;
     }
 
     /// Applies one press of the Server tab, after the panel drew it.
@@ -665,6 +680,12 @@ impl HorizonApp {
     /// Reads the machine list again when the link brought a change, on the
     /// coordination worker, so no frame reads a file of this home.
     pub(super) fn poll_server_sync(&mut self) {
+        // A setting of this computer that lost to the value of another computer
+        // stays under the state line of the server until the person closes it, so a
+        // frame reads it here and never as one of the short notices of an action.
+        if let Some(sync) = self.server_sync.as_ref() {
+            self.settings_lost = sync.handle().settings_lost();
+        }
         // A secret or a setting of this computer that lost the version rule is
         // kept, and the person reads where it went in the sidebar.
         let notices = self
@@ -878,6 +899,33 @@ mod tests {
         assert!(app.server_sync.is_none(), "this window follows no server");
         app.wait_for_settings_io();
         drop(temp);
+    }
+
+    /// The Server tab reads the line about a setting that another computer
+    /// changed first, beside the state line of the link, and loses it with the
+    /// sidebar when the person closes it.
+    #[test]
+    fn the_server_tab_shows_the_line_about_a_setting_of_another_computer() {
+        let (_temp, mut app, _link_dir) = test_link_app();
+        assert_eq!(
+            app.server_view().settings,
+            None,
+            "nothing waits and no such line stands"
+        );
+        let line = "The server kept the value of another computer for the setting appearance, so this computer takes \
+                    that value.";
+        app.settings_lost = Some(line.to_owned());
+        assert_eq!(
+            app.server_view().settings.as_deref(),
+            Some(line),
+            "the tab reads the line under the state of the link"
+        );
+        app.dismiss_settings_lost();
+        assert_eq!(
+            app.server_view().settings,
+            None,
+            "the close control of the sidebar ends the line of the tab too"
+        );
     }
 
     #[test]

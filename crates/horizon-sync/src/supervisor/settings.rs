@@ -343,6 +343,11 @@ fn enqueue_value(state: &mut SyncGuard<'_>, section: &str, config_version: u32, 
 
 /// Writes the one line of a refusal of a section that this computer sent, and
 /// reads the row of the version that decided it again.
+///
+/// The line stays in the window until the person closes it and not for the ten
+/// seconds of a short notice: a person who looks away when the server returns
+/// would never read which setting took the value of another computer. The log
+/// names the section and no value.
 pub(super) fn refuse_settings(handle: &SyncHandle, refused: &[String], rewind: Option<u64>) {
     if refused.is_empty() {
         return;
@@ -355,10 +360,14 @@ pub(super) fn refuse_settings(handle: &SyncHandle, refused: &[String], rewind: O
     if let Some(version) = rewind {
         state.client.replay_before(version);
     }
-    state.settings_refusal = Some(line.clone());
-    state.settings_generation = state.settings_generation.wrapping_add(1);
     drop(state);
-    handle.push_notice(line);
+    for section in refused {
+        tracing::info!(
+            section = %section,
+            "the server kept the value of another computer for a setting, so this computer takes that value"
+        );
+    }
+    handle.set_settings_lost(line);
     (handle.wake)();
 }
 

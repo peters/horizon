@@ -697,3 +697,91 @@ fn the_close_control_of_the_line_answers_the_keyboard() {
         "Space on the focused close control ended the line"
     );
 }
+
+/// A setting that the server decided for another computer says so in the machine
+/// section beside the state line of the server, and no timer ends that line: a
+/// person who looks away while the link returns would never read it otherwise.
+#[test]
+fn the_line_about_a_setting_of_another_computer_stays_until_it_is_closed() {
+    use std::time::Duration;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let line = "The server kept the value of another computer for the setting appearance, so this computer takes \
+                that value.";
+    app.settings_lost = Some(line.to_owned());
+    let ctx = egui::Context::default();
+
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("kept the value of another computer")),
+        "the line is drawn in the machine section: {texts:?}"
+    );
+
+    // The ten seconds of a short notice pass, and the line is still there.
+    app.notice_clock.ahead = super::machines::NOTICE + Duration::from_secs(1);
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("kept the value of another computer")),
+        "no timer ends the line: {texts:?}"
+    );
+
+    let control = ctx
+        .read_response(super::machines::settings_lost_close_id())
+        .expect("the close control of the line");
+    press_at(&ctx, &mut app, control.rect.center());
+
+    assert!(
+        app.settings_lost.is_none(),
+        "the close control ends the line in the window, not only in the frame"
+    );
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        !texts
+            .iter()
+            .any(|drawn| drawn.contains("kept the value of another computer")),
+        "the line is gone: {texts:?}"
+    );
+}
+
+/// The short notice of an action neither replaces the line about a setting of
+/// another computer nor ends with it.
+#[test]
+fn a_short_notice_leaves_the_line_about_a_setting_of_another_computer() {
+    use std::time::Duration;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let line = "The server kept the value of another computer for the setting appearance, so this computer takes \
+                that value.";
+    app.settings_lost = Some(line.to_owned());
+    app.set_sidebar_notice("build-a-machine: the terminal did not open".to_owned());
+    let ctx = egui::Context::default();
+
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("kept the value of another computer")),
+        "the line of the setting is drawn: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|drawn| drawn.contains("the terminal did not open")),
+        "the short notice is drawn beside it: {texts:?}"
+    );
+
+    app.notice_clock.ahead = super::machines::NOTICE + Duration::from_secs(1);
+    let texts = sidebar_frame_texts(&ctx, &mut app);
+    assert!(
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("kept the value of another computer")),
+        "the line of the setting stays after the short notice ends: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|drawn| drawn.contains("the terminal did not open")),
+        "the short notice ended on its own: {texts:?}"
+    );
+}

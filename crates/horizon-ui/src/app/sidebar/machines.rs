@@ -215,6 +215,7 @@ impl HorizonApp {
             && self.machine_rows.server_line().is_none()
             && self.sidebar_notice.is_none()
             && self.sidebar_sticky_notice.is_none()
+            && self.settings_lost.is_none()
         {
             return;
         }
@@ -249,6 +250,16 @@ impl HorizonApp {
             });
             ui.add_space(2.0);
         }
+        // The setting that the server decided for another computer stays under the
+        // state line of the server, in the pattern of the line that names the
+        // panels that a session left out: its own close control and no timer.
+        if let Some(line) = self.settings_lost.clone() {
+            ui.add_space(2.0);
+            if render_sticky_notice(ui, &line, settings_lost_close_id()) {
+                self.dismiss_settings_lost();
+            }
+            ui.add_space(2.0);
+        }
         for row in rows.rows() {
             self.render_sidebar_machine(ui, row, actions);
         }
@@ -258,7 +269,7 @@ impl HorizonApp {
         // out, and the short reason of an action belongs under it.
         if let Some(note) = self.sidebar_sticky_notice.clone() {
             ui.add_space(2.0);
-            if render_sticky_notice(ui, &note) {
+            if render_sticky_notice(ui, &note, sticky_close_id()) {
                 self.dismiss_sidebar_sticky_notice();
             }
         }
@@ -361,7 +372,7 @@ impl HorizonApp {
 /// The control is a press target of its own, as a machine row is, so a keyboard
 /// reaches it with Tab and ends it with Space or Enter, and the ring of the focus
 /// says where the keyboard is.
-fn render_sticky_notice(ui: &mut egui::Ui, note: &str) -> bool {
+fn render_sticky_notice(ui: &mut egui::Ui, note: &str, id: egui::Id) -> bool {
     let mut closed = false;
     ui.horizontal_top(|ui| {
         ui.add_space(18.0);
@@ -375,7 +386,7 @@ fn render_sticky_notice(ui: &mut egui::Ui, note: &str) -> bool {
             width,
         ));
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(CLOSE_SIDE), Sense::hover());
-        let response = ui.interact(rect, sticky_close_id(), Sense::click());
+        let response = ui.interact(rect, id, Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, CLOSE_SPOKEN));
         if response.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -416,6 +427,12 @@ const CLOSE_SPOKEN: &str = "Close this line";
 /// The id of the close control of the sticky line, which a test presses.
 pub(in crate::app) fn sticky_close_id() -> egui::Id {
     egui::Id::unique("sidebar-sticky-notice-close")
+}
+
+/// The id of the close control of the line about a setting that another computer
+/// changed first, which a test presses.
+pub(in crate::app) fn settings_lost_close_id() -> egui::Id {
+    egui::Id::unique("sidebar-settings-lost-close")
 }
 
 /// What a screen reader and a hover say about one row.

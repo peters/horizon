@@ -373,6 +373,11 @@ pub struct SyncHandle {
     /// The lines for the person about a secret of this computer that the server
     /// decided differently. The frame takes them without the lock of the state.
     pub(crate) notices: Arc<Mutex<Vec<String>>>,
+    /// The line about a setting of this computer that the server decided for
+    /// another computer: the value of that computer stays and this one takes it.
+    /// It stays until the person closes it, so it is one value beside the notices
+    /// and not one of them.
+    pub(crate) lost_settings: Arc<Mutex<Option<String>>>,
     /// The order of the writes of the queue and the mirror.
     pub(crate) writes: Arc<Mutex<WriteOrder>>,
     pub(crate) kick: Sender<()>,
@@ -462,6 +467,7 @@ impl SyncHandle {
             })),
             view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
             notices: Arc::new(Mutex::new(Vec::new())),
+            lost_settings: Arc::new(Mutex::new(None)),
             writes: Arc::new(Mutex::new(WriteOrder::default())),
             kick,
             requests,
@@ -552,6 +558,32 @@ impl SyncHandle {
     #[must_use]
     pub fn settings_view(&self) -> SettingsSyncView {
         self.snapshot().settings().clone()
+    }
+
+    /// The line about a setting of this computer that another computer changed
+    /// first, until the person closes it, or `None` while no such line stands.
+    ///
+    /// A frame reads it beside the state line of the server, and dismisses it from
+    /// its close control: neither takes the lock of the state.
+    #[must_use]
+    pub fn settings_lost(&self) -> Option<String> {
+        self.lost_settings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Keeps one line about a setting of this computer that the server decided for
+    /// another computer. The last line replaces the one before it, and the line
+    /// stays until the person closes it.
+    pub(super) fn set_settings_lost(&self, line: String) {
+        *self.lost_settings.lock().unwrap_or_else(PoisonError::into_inner) = Some(line);
+    }
+
+    /// Ends the line about a setting that another computer changed first, which is
+    /// what its close control asks for.
+    pub fn dismiss_settings_lost(&self) {
+        *self.lost_settings.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     /// Queues one section of the settings for the server, as the person saved it

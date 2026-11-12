@@ -302,6 +302,11 @@ pub struct HorizonApp {
     /// read otherwise. It has its own close control and no timer, and a short
     /// notice never replaces it.
     pub(in crate::app) sidebar_sticky_notice: Option<String>,
+    /// The line about a setting of this computer that the server decided for
+    /// another computer, read from the link on each frame. It stays in the machine
+    /// section under the state line of the server until its close control ends it,
+    /// and the Server tab shows it beside them.
+    pub(in crate::app) settings_lost: Option<String>,
     /// The clock of the short notice, so a test moves it forward instead of
     /// waiting for the ten seconds of a notice.
     pub(in crate::app) notice_clock: sidebar::machines::NoticeClock,

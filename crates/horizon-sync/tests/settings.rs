@@ -390,7 +390,7 @@ fn a_theme_change_of_one_computer_reaches_the_other_and_is_applied() {
 }
 
 #[test]
-fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_notice() {
+fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_sticky_line() {
     let home = tempfile::tempdir().expect("a directory");
     let mut server = Server::start(&home.path().join("server"));
     let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
@@ -443,11 +443,37 @@ fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_notice()
         lines.extend(b.handle().take_notices());
         lines
     };
+    // The computer whose change lost reads one line about the setting, and the
+    // line is not one of the notices that a frame takes and ends: it stays until
+    // the person closes it.
+    let lost: Vec<(&str, String)> = [("a", &a), ("b", &b)]
+        .into_iter()
+        .filter_map(|(name, computer)| computer.handle().settings_lost().map(|line| (name, line)))
+        .collect();
+    assert_eq!(
+        lost.len(),
+        1,
+        "exactly one computer reads the line about the setting that it did not keep: {lost:?}"
+    );
+    let (loser_name, line) = &lost[0];
     assert!(
-        loser_notices
-            .iter()
-            .any(|line| line.contains("kept the value of another computer")),
-        "the computer that lost reads one line about it: {loser_notices:?}"
+        line.contains("appearance"),
+        "the line names the setting that another computer changed first: {line}"
+    );
+    assert!(
+        !loser_notices.iter().any(|notice| notice.contains("kept the value")),
+        "the line is no short notice that a frame ends: {loser_notices:?}"
+    );
+    let loser = if *loser_name == "a" { &a } else { &b };
+    loser.handle().dismiss_settings_lost();
+    assert!(
+        loser.handle().settings_lost().is_none(),
+        "the line is gone when the person closes it"
+    );
+    let keeper = if *loser_name == "a" { &b } else { &a };
+    assert!(
+        keeper.handle().settings_lost().is_none(),
+        "the computer whose value stayed reads no such line"
     );
     a.stop();
     b.stop();

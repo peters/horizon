@@ -152,7 +152,7 @@ impl HorizonApp {
             agent_terminals: super::block_terminals::AgentTerminals::default(),
             machine_list: empty_machine_list(session_store.home()),
             sidebar_notice: None, sidebar_notice_until: None, sidebar_sticky_notice: None,
-            person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
+            settings_lost: None, person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
             machine_rows: super::sidebar::machines::MachineRows::default(), notice_clock: NoticeClock::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
