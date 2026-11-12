@@ -464,8 +464,7 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn platform_process_start_identity(pid: u32) -> Option<String> {
-    let output = Command::new(process_info::START_TIME_PROGRAM)
-        .args(process_info::start_time_arguments(pid))
+    let output = process_info::start_time_command(pid)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()

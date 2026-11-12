@@ -63,7 +63,9 @@ pub(crate) fn start_time(pid: u32) -> Option<String> {
 /// The start time that the `ps` of the system reports for `pid`.
 ///
 /// This is the reader of every Unix, and a test of Linux calls it directly. The
-/// program comes from `programs`, so a test names its own stand-in.
+/// program comes from `programs`, so a test names its own stand-in. The runner
+/// clears the environment of the child, so a Mac writes the date in the `C`
+/// locale of the shared reader whatever the person set.
 #[must_use]
 pub(crate) fn unix_start_time(pid: u32, programs: &ProgramEnvironment, bound: Duration) -> Option<String> {
     let program = programs.find(horizon_browser_control::process_info::START_TIME_PROGRAM)?;
