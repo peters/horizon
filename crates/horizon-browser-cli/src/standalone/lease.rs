@@ -17,6 +17,27 @@ const KEEP_ALIVE_IDLE: Duration = Duration::from_mins(1);
 const KEEP_ALIVE_POLL: Duration = Duration::from_millis(100);
 const STOP_GRACE: Duration = Duration::from_secs(15);
 const STOP_ESCALATION: Duration = Duration::from_secs(3);
+/// The time after `SIGKILL` that a keep-alive host is given to leave its lease.
+const STOP_KILL: Duration = Duration::from_secs(3);
+
+/// The three waits of a stop: the polite request, the termination signal and the kill.
+/// A test gives shorter waits, and the code path of a stop stays the same one.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StopBounds {
+    pub grace: Duration,
+    pub escalation: Duration,
+    pub kill: Duration,
+}
+
+impl Default for StopBounds {
+    fn default() -> Self {
+        Self {
+            grace: STOP_GRACE,
+            escalation: STOP_ESCALATION,
+            kill: STOP_KILL,
+        }
+    }
+}
 
 /// Recorded keep-alive host a later MCP client or `resume` can reconnect to.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -198,6 +219,21 @@ pub(super) fn reconnect(root: &Path, host: &StandaloneHostRef) -> Result<(), Str
 }
 
 pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<String>, String> {
+    stop_hosts_within(root, panel_id, StopBounds::default())
+}
+
+/// [`stop_hosts`] with the waits of `bounds`.
+///
+/// A host that inherited "ignore `SIGTERM`" — the disposition of a background job of a
+/// non-interactive shell, of `nohup`, or of a launcher — keeps that across `exec`, so
+/// the termination signal of a stop never reaches it. `SIGKILL` cannot be ignored, and
+/// the alternative is a browser host of a closed panel that runs on and holds its
+/// profile.
+pub(super) fn stop_hosts_within(
+    root: &Path,
+    panel_id: Option<&str>,
+    bounds: StopBounds,
+) -> Result<Vec<String>, String> {
     prune_dead_at(root);
     let targets = match panel_id {
         Some(panel_id) => {
@@ -215,13 +251,23 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
         request_stop(root, &host.panel_id)?;
         stopped.push(host.panel_id.clone());
     }
-    wait_until_exited(&targets, STOP_GRACE);
+    wait_until_exited(&targets, bounds.grace);
     for host in &targets {
         if host_is_current(host) {
             let _ = signal_terminate(host.host_pid);
         }
     }
-    wait_until_exited(&targets, STOP_ESCALATION);
+    wait_until_exited(&targets, bounds.escalation);
+    // The termination signal reached a host that did not end on it, so this exact
+    // process id alone is killed. `host_is_current` compares the start identity of the
+    // process with the identity of the lease, so the signal never reaches a process that
+    // took the id of a host that ended.
+    for host in &targets {
+        if host_is_current(host) {
+            let _ = signal_kill(host.host_pid);
+        }
+    }
+    wait_until_exited(&targets, bounds.kill);
     prune_dead_at(root);
     let remaining = targets
         .iter()
@@ -479,6 +525,20 @@ fn signal_terminate(pid: u32) -> bool {
     }
 }
 
+fn signal_kill(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            // GNU kill reads a negative pid as an option, and the explicit signal name
+            // keeps the argument one pid for every kill of this computer.
+            .args(["-KILL", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+}
+
 pub(crate) const fn keep_alive_idle() -> Duration {
     KEEP_ALIVE_IDLE
 }
@@ -707,6 +767,81 @@ mod tests {
 
         let reused = host(&recorded.panel_id, recorded.host_pid, recorded.created_at, "other");
         assert!(reconnect(home.path(), &reused).is_err());
+    }
+
+    /// A stand-in of a keep-alive host, which ignores the termination signal.
+    ///
+    /// The stand-in is reaped on a thread of its own, because the liveness of a lease
+    /// reads `kill -0` and a zombie answers it: a stop cannot see the end of a host that
+    /// nobody reaps. The drop kills the stand-in by its own process id, so a test that
+    /// failed before the stop left no process behind.
+    struct HostStandin {
+        pid: u32,
+        reaper: Option<std::thread::JoinHandle<std::io::Result<std::process::ExitStatus>>>,
+    }
+
+    impl HostStandin {
+        /// A stand-in that inherited "ignore `SIGTERM`" as a background job does, so
+        /// only the kill of the stop ends it.
+        fn spawn() -> Self {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "trap '' TERM; while :; do sleep 0.02; done"])
+                .spawn()
+                .unwrap_or_else(|error| panic!("a host stand-in: {error}"));
+            let pid = child.id();
+            let reaper = std::thread::spawn(move || child.wait());
+            Self {
+                pid,
+                reaper: Some(reaper),
+            }
+        }
+
+        /// The status that the stand-in ended with, once it ended.
+        fn ended(&mut self) -> std::process::ExitStatus {
+            (self.reaper.take())
+                .and_then(|reaper| reaper.join().ok())
+                .and_then(std::io::Result::ok)
+                .unwrap_or_else(|| panic!("the stand-in of a host does not end"))
+        }
+    }
+
+    impl Drop for HostStandin {
+        fn drop(&mut self) {
+            let _ = signal_kill(self.pid);
+            if let Some(reaper) = self.reaper.take() {
+                let _ = reaper.join();
+            }
+        }
+    }
+
+    #[test]
+    fn a_host_that_ignores_the_termination_signal_ends_by_the_kill_of_the_stop() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
+        let panel_id = "standalone-9-kill";
+        write_manifest(home.path(), panel_id);
+        let mut host_process = HostStandin::spawn();
+        let identity =
+            process_start_identity(host_process.pid).unwrap_or_else(|| panic!("the identity of the stand-in"));
+        publish(home.path(), &host(panel_id, host_process.pid, 1, &identity))
+            .unwrap_or_else(|error| panic!("publish: {error}"));
+
+        let stopped = stop_hosts_within(
+            home.path(),
+            Some(panel_id),
+            StopBounds {
+                grace: Duration::from_millis(100),
+                escalation: Duration::from_millis(200),
+                kill: Duration::from_secs(5),
+            },
+        )
+        .unwrap_or_else(|error| panic!("stop: {error}"));
+
+        assert_eq!(stopped, vec![panel_id.to_string()]);
+        let ended = host_process.ended();
+        assert!(
+            !ended.success(),
+            "the stand-in ended on the kill of the stop and not by itself"
+        );
     }
 
     #[tokio::test]
