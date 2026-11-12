@@ -380,3 +380,42 @@ fn the_value_of_another_computer_is_taken_when_the_person_takes_it() {
     assert!(!editor.dirty, "the draft is the value of the store again");
     assert_eq!(app.appearance_theme, horizon_core::AppearanceTheme::Dark);
 }
+
+/// A theme that the person picks in the tab is drawn at once, in the frame that
+/// applies it: the panel of that frame takes the palette of the new theme before it
+/// paints anything, so its fields, check boxes and text boxes must take the same
+/// theme in that frame. A frame that changes the style of the context but not the
+/// style of its own ui leaves a dark panel around light fields until the next
+/// frame, which an idle window reaches only at its next refresh.
+#[test]
+fn the_frame_that_applies_another_theme_draws_its_fields_with_it() {
+    use horizon_core::{AppearanceTheme, Config, RuntimeState, StartupDecision};
+
+    let mut config = Config::default();
+    config.appearance.theme = AppearanceTheme::Light;
+    let (_temp, ctx, mut app) = crate::app::test_support::test_app_with_config_and_startup(
+        &config,
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        },
+    );
+    app.toggle_settings();
+    assert!(
+        !crate::app::test_support::run_app_frame_visuals(&ctx, &mut app).dark_mode,
+        "the window draws the light theme of its store"
+    );
+
+    // The person picks Dark in the General tab, which previews the theme at once.
+    let mut draft = app.template_config.clone();
+    draft.appearance.theme = AppearanceTheme::Dark;
+    app.apply_live_preview(&draft);
+    assert!(!app.theme_applied, "the frame after the pick applies the theme");
+
+    let visuals = crate::app::test_support::run_app_frame_visuals(&ctx, &mut app);
+    assert_eq!(app.resolved_theme, crate::theme::ResolvedTheme::Dark);
+    assert!(app.theme_applied, "the theme of the pick is applied");
+    assert!(
+        visuals.dark_mode,
+        "the fields of the frame that applies the theme are drawn in it"
+    );
+}

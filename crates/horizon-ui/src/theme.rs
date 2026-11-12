@@ -187,6 +187,18 @@ pub fn set_theme(theme: ResolvedTheme) {
     CURRENT_THEME.store(theme.as_u8(), Ordering::Relaxed);
 }
 
+/// The visuals of one theme, for the frame that changes the theme.
+///
+/// The root ui of a frame takes the style of the theme that was active when the
+/// frame began, and every widget of the frame inherits it. A frame that applies
+/// another theme gives its own ui these visuals as well, so the fields and the
+/// check boxes of that frame are drawn in the theme that the panel around them
+/// already has.
+#[must_use]
+pub fn visuals_of(theme: ResolvedTheme) -> Visuals {
+    visuals(theme)
+}
+
 #[must_use]
 pub fn current_theme() -> ResolvedTheme {
     ResolvedTheme::from_u8(CURRENT_THEME.load(Ordering::Relaxed))

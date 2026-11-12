@@ -52,6 +52,24 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
     run_app_frame_with_input(ctx, app, RawInput::default());
 }
 
+/// Runs one frame of the window and answers the visuals that its panels drew with.
+///
+/// The root ui of a frame takes the style of the theme that was active when the
+/// frame began, and every widget of the frame inherits it, so this is the style of
+/// the fields and the check boxes of the frame.
+pub(super) fn run_app_frame_visuals(ctx: &Context, app: &mut HorizonApp) -> egui::Visuals {
+    let _frame = horizon_core::ui_thread::FrameScope::enter();
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut visuals = None;
+    let _ = ctx
+        .run_ui(RawInput::default(), |ui| {
+            eframe::App::ui(app, ui, &mut frame);
+            visuals = Some(ui.style().visuals.clone());
+        })
+        .discard_textures();
+    visuals.expect("one frame of the window")
+}
+
 pub(super) fn run_app_frame_with_input(ctx: &Context, app: &mut HorizonApp, input: RawInput) -> egui::FullOutput {
     let _frame = horizon_core::ui_thread::FrameScope::enter();
     let mut frame = eframe::Frame::_new_kittest();

@@ -32,6 +32,12 @@ impl HorizonApp {
         let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ui, self.appearance_theme);
+            // The root ui of this frame took the style of the theme that ran until
+            // this call, and every widget of the frame inherits it: the panel would
+            // already stand in the new theme around fields, check boxes and text
+            // boxes of the old one. The frame draws its widgets in its own theme as
+            // well, so a person who picks another theme sees one panel, not two.
+            ui.style_mut().visuals = theme::visuals_of(self.resolved_theme);
             self.theme_applied = true;
             self.panel_render_caches.terminal_grid_cache.clear();
             self.canvas_grid_cache = CanvasGridCache::default();
