@@ -54,7 +54,11 @@ def check():
     codex = ROOT / 'assets/plugins/codex/skills'
     claude = ROOT / 'assets/plugins/claude-code/skills'
     build = (ROOT / 'crates/horizon-ui/build.rs').read_text()
-    installed = (ROOT / 'crates/horizon-ui/src/plugin_install/mod.rs').read_text()
+    # The installer writes the bundled files from the embedded lists, which the
+    # module of the lists and the installer hold between them.
+    installed = '\n'.join(
+        path.read_text() for path in sorted((ROOT / 'crates/horizon-ui/src/plugin_install').glob('*.rs'))
+    )
     documents = {}
     primary_skills = {p.name for p in codex.iterdir() if p.is_dir()}
     other_skills = {p.name for p in claude.iterdir() if p.is_dir()}
