@@ -119,7 +119,7 @@ impl DeviceUiState {
         self.session
             .as_ref()
             .and_then(Session::latest_frame)
-            .ok_or_else(|| "Device viewer has not received a desktop frame".into())
+            .ok_or_else(|| "Device viewer has not received a frame yet".into())
     }
 
     /// Connected, and this session already has a desktop. Status becomes
@@ -297,10 +297,11 @@ impl DeviceUiState {
             );
         });
         let previous = self.controls.options;
+        let rendered = self.texture.as_ref().map(TextureHandle::size);
+        let frame_source = self.shows_frame_source();
         let changed = ui
             .add_enabled_ui(interactive, |ui| {
-                self.controls
-                    .show(ui, self.desktop, self.texture.as_ref().map(TextureHandle::size))
+                self.controls.show(ui, self.desktop, rendered, frame_source)
             })
             .inner;
         if changed && self.apply_view_options(previous) {
@@ -353,7 +354,7 @@ impl DeviceUiState {
                 self.release_input();
             }
         } else {
-            ui.label("The device desktop appears here after connection.");
+            placeholder(ui, self.shows_frame_source());
         }
     }
 
@@ -546,6 +547,16 @@ impl DeviceUiState {
 }
 
 const EMPTY_DESKTOP_HINT: &str = "Nothing is open on this desktop yet. Programs you start on it appear here.";
+
+/// What a viewer without a picture says: a frame source program sends its picture
+/// after it connects, and a VNC viewer shows the desktop of its server.
+fn placeholder(ui: &mut Ui, frame_source: bool) {
+    ui.label(if frame_source {
+        "The picture of the program appears here after it connects."
+    } else {
+        "The device desktop appears here after connection."
+    });
+}
 
 /// A blank picture reads as a broken connection, so the picture says what it is. Painted over
 /// the part of it that is on screen and clipped to it, so nothing around the image moves or is

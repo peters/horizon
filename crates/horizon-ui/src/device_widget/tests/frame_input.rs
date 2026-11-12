@@ -696,6 +696,56 @@ fn the_picture_of_a_new_viewer_is_drawn_wide_enough_to_read() {
 }
 
 #[test]
+fn the_mode_line_names_the_program_of_a_frame_source_and_the_desktop_of_a_vnc_viewer() {
+    let painted = |output: &egui::FullOutput| -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let (ctx, device, mut state, _sent) = frame_viewer();
+    click_label(&ctx, &mut state, &device, "Interact");
+    assert!(state.interact);
+    let texts = painted(&frame(&ctx, &mut state, &device, Vec::new()));
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "Interactive: your mouse and keyboard go to the program"),
+        "the input of a frame source viewer goes to its program: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("go to the desktop")),
+        "a frame source viewer shows no desktop: {texts:?}"
+    );
+
+    let desktop = ColorImage::filled([160, 80], egui::Color32::GREEN);
+    let (session, _input) = Session::pending_frame_with_input(desktop.clone(), desktop, ViewOptions::default());
+    let mut vnc = DeviceUiState {
+        initialized: true,
+        status: Status::Connected,
+        session: Some(session),
+        ..DeviceUiState::default()
+    };
+    let vnc_device = fixture_device();
+    let vnc_ctx = egui::Context::default();
+    vnc_ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    click_label(&vnc_ctx, &mut vnc, &vnc_device, "Interact");
+    assert!(vnc.interact);
+    let texts = painted(&frame(&vnc_ctx, &mut vnc, &vnc_device, Vec::new()));
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "Interactive: your mouse and keyboard go to the desktop"),
+        "the sentence of a VNC viewer stays: {texts:?}"
+    );
+}
+
+#[test]
 fn the_chrome_of_a_frame_source_viewer_names_the_program_and_its_source() {
     let (ctx, device, mut state, _sent) = frame_viewer();
     // What the program said of itself in its `hello`.

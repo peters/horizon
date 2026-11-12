@@ -10,6 +10,9 @@ use super::session;
 
 pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
 
+/// Interact is off for a frame source viewer whose panel takes no input.
+pub(super) const FRAME_SOURCE_VIEW_ONLY_PANEL: &str = "View only: this viewer sends no input to the program";
+
 /// Interact is off for a frame source until it says that it reads input.
 pub(super) const FRAME_SOURCE_NO_HELLO: &str = "The frame source has not said yet whether it reads input";
 
@@ -20,11 +23,15 @@ impl DeviceUiState {
     /// Why this viewer takes no input, when it takes none: a VNC server that
     /// drops input, or a frame source program whose `hello` says `input` false.
     fn no_input_reason(&self, input: DeviceInput) -> Option<String> {
+        let frame_source = self.session.as_ref().is_some_and(session::Session::is_frame_source);
         if input == DeviceInput::ViewOnly {
-            return Some(VIEW_ONLY_REASON.to_owned());
+            return Some(if frame_source {
+                FRAME_SOURCE_VIEW_ONLY_PANEL.to_owned()
+            } else {
+                VIEW_ONLY_REASON.to_owned()
+            });
         }
-        let source = self.session.as_ref().filter(|session| session.is_frame_source())?;
-        let _ = source;
+        self.session.as_ref().filter(|session| session.is_frame_source())?;
         match &self.frame_input {
             Some(hello) if hello.allowed => None,
             Some(hello) => Some(match &hello.reason {
@@ -50,11 +57,16 @@ impl DeviceUiState {
                 return;
             }
             let was = self.interact;
-            ui.toggle_value(&mut self.interact, "Interact").on_hover_text(
-                "Send your mouse and keyboard to the desktop while the image has focus. \
+            let target = if self.shows_frame_source() {
+                "the program"
+            } else {
+                "the desktop"
+            };
+            ui.toggle_value(&mut self.interact, "Interact").on_hover_text(format!(
+                "Send your mouse and keyboard to {target} while the image has focus. \
                  Click the image to start; click outside it or turn this off to stop. \
-                 Off by default, and never turned on by agents.",
-            );
+                 Off by default, and never turned on by agents."
+            ));
             if was && !self.interact {
                 self.release_input();
             }

@@ -20,7 +20,7 @@ pub(super) struct WheelSteps {
 /// The wheel buttons of one frame.
 ///
 /// winit's X11 backend turns the press and the release of a wheel button into one
-/// wheel event each, with the same delta: it maps the buttons 4 to 7 of an XInput2
+/// wheel event each, with the same delta: it maps the buttons 4 to 7 of an `XInput2`
 /// button event and reads no state of the button (`xinput2_button_input` of
 /// winit 0.30). A wheel without scroll valuators, and the XTEST click of the
 /// fixture, is therefore one notch that arrives twice, and a viewer that counts both

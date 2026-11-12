@@ -112,6 +112,19 @@ fn reported_name_label(frame_source: bool) -> &'static str {
     if frame_source { "Source name" } else { "VNC name" }
 }
 
+/// The mode of the input of this viewer: a person's mouse and keyboard go to the
+/// program of a frame source viewer, and to the desktop of a VNC viewer.
+fn mode_line(frame_source: bool, interact: bool) -> &'static str {
+    if !interact {
+        return "Read-only";
+    }
+    if frame_source {
+        "Interactive: your mouse and keyboard go to the program"
+    } else {
+        "Interactive: your mouse and keyboard go to the desktop"
+    }
+}
+
 fn endpoint_address(device: &DevicePanelState) -> String {
     device
         .target
@@ -296,11 +309,7 @@ pub(super) fn header(
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             connection_status(ui, status);
-            let mode = if interact {
-                "Interactive: your mouse and keyboard go to the desktop"
-            } else {
-                "Read-only"
-            };
+            let mode = mode_line(frame_source, interact);
             ui.label(RichText::new(mode).size(12.0).color(theme::FG_SOFT()));
             if name.is_some() {
                 let source = if server.native_session.is_some() {
