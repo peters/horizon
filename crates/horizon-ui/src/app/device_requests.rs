@@ -319,7 +319,7 @@ impl HorizonApp {
                     &format!("{} is not installed on this computer", plan.program),
                 );
             }
-            return self.create_frame_source_viewer(plan, identity, actor, owner, ctx);
+            return self.create_frame_source_viewer(plan, request.target.clone(), identity, actor, owner, ctx);
         }
         if let Some(identity) = &mut identity
             && let Err(error) = horizon_core::DevicePanelState::normalize_identity(identity)
@@ -376,6 +376,7 @@ impl HorizonApp {
     fn create_frame_source_viewer(
         &mut self,
         plan: horizon_core::FrameSourcePlan,
+        target: Option<String>,
         mut identity: Option<device::DeviceIdentity>,
         actor: ActorPanel,
         owner: &str,
@@ -386,9 +387,11 @@ impl HorizonApp {
         {
             return Outcome::failed("invalid_identity", &error.to_string());
         }
+        // The reference names the source and the target that the plan was made
+        // with, so the line of the settings is resolved the same way each frame.
         let reference = horizon_core::FrameSourceRef {
             name: plan.name.clone(),
-            target: None,
+            target,
         };
         let options = PanelOptions {
             kind: PanelKind::Device,

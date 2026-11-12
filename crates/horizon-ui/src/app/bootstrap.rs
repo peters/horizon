@@ -75,7 +75,8 @@ impl HorizonApp {
         // the frame that the window draws.
         let _frame = horizon_core::ui_thread::FrameScope::enter();
         let shortcuts = resolve_shortcuts(config);
-        let action_commands_cache = command_registry::action_commands(&shortcuts, util::primary_shortcut_label());
+        let action_commands_cache =
+            command_registry::action_commands(&shortcuts, util::primary_shortcut_label(), &config.frame_sources);
         pin_chrome_to_native_display_scale(egui_ctx);
         egui_ctx.set_fonts(configure_fonts());
         let board = Board::new();

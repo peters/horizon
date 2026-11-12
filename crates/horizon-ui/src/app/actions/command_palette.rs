@@ -132,6 +132,12 @@ impl HorizonApp {
                     self.add_panel_to_workspace(ctx, workspace_id, preset, None);
                 }
             }
+            CommandId::OpenFrameSource(ref name) => {
+                let sources = self.template_config.frame_sources.clone();
+                if let Some(sentence) = self.open_frame_source(&sources, ctx, name, None) {
+                    self.set_sidebar_notice(sentence);
+                }
+            }
             CommandId::ToggleSettings => self.toggle_settings(),
             CommandId::ToggleSearch => {
                 // Focus the toolbar search input (or create it with focus

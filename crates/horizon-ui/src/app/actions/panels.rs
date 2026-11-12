@@ -26,6 +26,76 @@ pub(in crate::app) fn normalize_new_panel_resume(options: &mut PanelOptions) {
 }
 
 impl HorizonApp {
+    /// Open one frame source program of `sources` in the active workspace, by the
+    /// same checked path that the `device_panel` operation of an agent takes: the
+    /// name and the target follow the rule of the settings, and a program that this
+    /// computer does not hold opens nothing. Answers the sentence of a refusal, for
+    /// the row of the settings that asked.
+    pub(in crate::app) fn open_frame_source(
+        &mut self,
+        sources: &horizon_core::FrameSourcesConfig,
+        ctx: &egui::Context,
+        name: &str,
+        target: Option<&str>,
+    ) -> Option<String> {
+        let plan = match sources.plan(name, target) {
+            Ok(plan) => plan,
+            Err(error) => return Some(error.to_string()),
+        };
+        let environment = horizon_core::ProgramEnvironment::inherited();
+        if plan.installed(&environment).is_none() {
+            return Some(format!("{} is not installed on this computer", plan.program));
+        }
+        let reference = horizon_core::FrameSourceRef {
+            name: plan.name.clone(),
+            target: target.map(str::to_owned),
+        };
+        let options = PanelOptions {
+            kind: horizon_core::PanelKind::Device,
+            frame_source: Some(reference),
+            ..PanelOptions::default()
+        };
+        let workspace_id = self
+            .board
+            .active_workspace
+            .unwrap_or_else(|| self.ensure_workspace_visible(ctx));
+        match self.create_panel_with_options(options, workspace_id) {
+            Ok(panel_id) => {
+                self.reveal_new_panel(ctx, workspace_id, panel_id);
+                self.mark_runtime_dirty();
+                None
+            }
+            Err(error) => Some(error.to_string()),
+        }
+    }
+
+    /// Open the frame source program that the Remote tab asked for, and say why it
+    /// opened nothing under its row.
+    pub(in crate::app) fn open_requested_frame_source(&mut self, ctx: &egui::Context) {
+        let Some(request) = self
+            .settings
+            .as_mut()
+            .and_then(|editor| editor.frame_sources.take_open_request())
+        else {
+            return;
+        };
+        let sources = self
+            .settings
+            .as_ref()
+            .map_or_else(horizon_core::FrameSourcesConfig::default, |editor| {
+                editor.config.frame_sources.clone()
+            });
+        let refusal = self.open_frame_source(&sources, ctx, &request.name, request.target.as_deref());
+        if let Some(editor) = self.settings.as_mut() {
+            match refusal {
+                Some(sentence) => editor.frame_sources.refuse(&request.name, sentence),
+                None => editor.frame_sources.opened(&request.name),
+            }
+        }
+        // The sentence of a refusal shows without a move of the pointer.
+        ctx.request_repaint();
+    }
+
     pub(in crate::app) fn create_panel(&mut self, ctx: &egui::Context) {
         let workspace_id = self.ensure_workspace_visible(ctx);
         let options = PanelOptions::default();
