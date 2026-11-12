@@ -218,6 +218,10 @@ mod tests {
         let file = temp.path().join("notes.md");
         std::fs::write(&file, "the saved text\n").expect("the file of the editor");
         let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
+        // The worker is held before the frame that closes the window, because a
+        // write of a few bytes finishes faster than the assertion that the exit
+        // waits for it on a quiet disk.
+        let releasing = hold_the_worker(&mut app);
         app.settle_browser_host_io();
 
         {
@@ -234,6 +238,7 @@ mod tests {
             "the text of the person\n",
             "the write that the frames of the exit waited for reached the file"
         );
+        releasing.join().expect("the releasing thread ends");
     }
 
     #[test]
