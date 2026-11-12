@@ -699,6 +699,77 @@ mod tests {
         );
     }
 
+    /// A normal answer of a first link is not a warning. The row of the server
+    /// decides a write that names no version, and its content says whether the
+    /// person lost a value: the settings and the secrets write the line about a
+    /// loss themselves, so the line of the refusal is a debug line. A refusal that
+    /// loses a change of this computer with no other line stays a warning.
+    #[test]
+    fn a_refusal_that_lost_nothing_is_a_debug_line_and_a_loss_is_a_warning() {
+        use std::sync::{Arc, Mutex};
+
+        use crate::error::Refusal;
+
+        /// The captured lines of one log.
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("the log").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&log);
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || Sink(Arc::clone(&sink)))
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            // The answer of the first link of a computer that already holds the
+            // eleven sections of the server: the row of the server decides.
+            super::pull::log_refusal(7, &Refusal::AlreadyAnswered { version: 1 });
+            // A change of this computer that another computer got first: no other
+            // line says why it is gone for a record that is not a setting.
+            super::pull::log_refusal(8, &Refusal::ChangedSinceSeen { seen: 1, version: 2 });
+        });
+
+        let text = String::from_utf8_lossy(&log.lock().expect("the log")).into_owned();
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("horizon_sync::supervisor::pull"))
+            .collect();
+        let answered: Vec<&&str> = lines.iter().filter(|line| line.contains("already_answered")).collect();
+        assert_eq!(answered.len(), 1, "the equal-content case has one line: {text}");
+        assert!(
+            answered[0].contains("DEBUG"),
+            "the normal answer is a debug line: {}",
+            answered[0]
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("WARN") && line.contains("already_answered")),
+            "a normal case is no warning: {text}"
+        );
+        let lost: Vec<&&str> = lines
+            .iter()
+            .filter(|line| line.contains("changed_since_seen"))
+            .collect();
+        assert_eq!(lost.len(), 1, "the real loss has one line: {text}");
+        assert!(
+            lost[0].contains("WARN"),
+            "a refusal that a person must know about is a warning: {}",
+            lost[0]
+        );
+    }
+
     /// A server that answers with another store than the one this computer saw
     /// last replaces the machine list and the settings of this computer at the next
     /// pull, so the person reads one line about it. The first link of a computer is

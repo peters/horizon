@@ -61,12 +61,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     match outcome {
         Ok(outcome) => {
             for (id, refusal) in &outcome.refused {
-                tracing::warn!(
-                    id,
-                    code = refusal.code(),
-                    reason = %refusal,
-                    "the server refused an intent"
-                );
+                log_refusal(*id, refusal);
             }
         }
         Err(error) => {
@@ -83,6 +78,40 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     state.mirror_dirty = true;
     drop(state);
     (handle.wake)();
+}
+
+/// The line about one refusal of the server.
+///
+/// A refusal that a person must read about is a warning: the change of this
+/// computer is gone, and nothing else says why. A write that names no version and
+/// meets a row of the server is not one of them, whatever the content of the two
+/// is: `already_answered` is the normal answer of a first link, and the row of the
+/// server decides. A value that both sides hold the same way is no loss at all,
+/// and a value that differs keeps its own line from the settings or the secrets,
+/// so this one stays a debug line and a first link of eleven sections writes no
+/// warning.
+pub(super) fn log_refusal(intent: u64, refusal: &crate::error::Refusal) {
+    if refusal_is_a_warning(refusal) {
+        tracing::warn!(
+            intent,
+            code = refusal.code(),
+            reason = %refusal,
+            "the server refused an intent"
+        );
+    } else {
+        tracing::debug!(
+            intent,
+            code = refusal.code(),
+            version = refusal.version(),
+            "the server already answered this intent, and its row decides"
+        );
+    }
+}
+
+/// Whether a person must read about one refusal of the server.
+#[must_use]
+fn refusal_is_a_warning(refusal: &crate::error::Refusal) -> bool {
+    !matches!(refusal, crate::error::Refusal::AlreadyAnswered { .. })
 }
 
 /// Applies one answer of changes to the mirror and moves the mark of this

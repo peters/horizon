@@ -437,10 +437,16 @@ one frame.
 
 A refusal of one intent is not a link error. It is the `outcome` of that intent:
 `changed_since_seen`, `already_answered`, `too_many`, `invalid_record`,
-`unknown_kind` or `invalid_intent`. A broken frame, an oversize frame, a higher
-protocol version, a device name that breaks its rule, a second hello and a push of
-more than 256 intents end the link. A wait above the maximum and a store that
-could not answer keep the link.
+`unknown_kind` or `invalid_intent`. The first link of a computer that already
+holds the sections of the server answers `already_answered` for each of them: the
+row of the server decides, so the log writes that answer at debug and a lost
+value keeps the one line that the settings or the secrets write about it. The
+other refusals are a warning, because no other line says why the change of that
+computer is gone.
+
+A broken frame, an oversize frame, a higher protocol version, a device name that
+breaks its rule, a second hello and a push of more than 256 intents end the link.
+A wait above the maximum and a store that could not answer keep the link.
 
 The limits are: 64 machines, 64 settings, 64 internal probe objects, 256 secrets,
 16 KiB of one secret body, 64 KiB of one setting, 256 intents and 8 secrets in one
