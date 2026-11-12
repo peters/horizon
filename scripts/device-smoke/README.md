@@ -175,22 +175,28 @@ value Horizon reads. Any other value stops the fixture with an error.
 
 ### An agent that shows the attention states
 
-`scripts/device-smoke/agent_attention_standin.py` is an agent-kind panel that
-needs no model and no login. It sends the lifecycle events of a turn through the
-same entry point that the installed hooks use, so the sidebar shows the four
-attention states: `Needs you`, `Done`, `Working` and `Works in the background`.
+`scripts/device-smoke/agent_attention_standin.py` is the program of an agent
+panel that needs no model and no login. Horizon starts it as the agent of a
+Claude panel and attaches the work ledger of that panel, and the stand-in sends
+the lifecycle events of a turn through the same entry point that the installed
+hooks use. The sidebar then shows the four attention states: `Needs you`, `Done`,
+`Working` and `Works in the background`.
 
 ```bash
 scripts/device-smoke/serve.py --horizon target/debug/horizon \
   --state /var/tmp/attention-1 --native-view --attention-agent
 ```
 
-`--attention-agent [SECONDS]` writes the work record of the launch in the private
-Horizon home, opens the stand-in as the only panel of the board, and starts it
-with `--timer SECONDS`, which is six seconds when the option names none. Type
-`start`, `ask`, `answer`, `stop`, `background` or `failed` in the panel and press
-Enter to send one event, or give `--attention-agent 0` to wait for the typed
-words alone. The procedure is
+`--attention-agent [SECONDS]` puts a `claude` program that is the stand-in itself
+first on the `PATH` of the candidate, and adds the panel entry of
+`scripts/device-smoke/attention_panel.json` to the board. The entry asks for work
+continuation, which is what makes Horizon attach the ledger of the panel. The
+stand-in sends the events of its sequence every SECONDS, which is six seconds
+when the option names none. Type `start`, `ask`, `answer`, `stop`, `background` or
+`failed` in the panel and press Enter to send one event, also while the timer
+runs, or give `--attention-agent 0` to wait for the typed words alone. The panel
+shares its workspace with the panels of the default board and covers the first
+one. The procedure is
 [the agent attention procedure](../../docs/testing/procedures/agent-attention.md).
 
 ### A scripted card agent
