@@ -168,3 +168,51 @@ fn a_port_file_that_is_not_two_lines_around_a_port_is_refused() {
         );
     }
 }
+
+/// One listener that reads one request and answers it only after `delay`, so a
+/// test reads what a slow forward to a browser of another machine does.
+fn answer_late(delay: Duration) -> (u16, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the mock");
+    let port = listener.local_addr().expect("mock address").port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept the mock request");
+        let _ = read_request(&mut stream);
+        std::thread::sleep(delay);
+        let body = version_document(&format!("ws://127.0.0.1:9222{BROWSER_PATH}"));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    });
+    (port, server)
+}
+
+#[test]
+fn an_answer_that_passes_its_bound_is_no_browser_without_an_endpoint() {
+    let (port, server) = answer_late(Duration::from_millis(400));
+    let error = DevtoolsEndpoint::from_port_within(port, Duration::from_millis(150))
+        .expect_err("the answer came after the bound");
+    assert_eq!(
+        error.waited_out(),
+        Some(1),
+        "a bound that passed is typed, so the caller names the link: {error}"
+    );
+    assert!(
+        error.to_string().contains("gave no answer within 1 second"),
+        "the sentence holds the wait: {error}"
+    );
+    let _ = server.join();
+}
+
+#[test]
+fn the_answer_bound_of_a_fresh_forward_fits_a_browser_on_another_machine() {
+    // The envelope of the ssh steps of a browser host is twenty seconds; a
+    // loopback bound of five seconds read a slow link as a missing browser.
+    assert!(
+        super::ANSWER_TIMEOUT >= Duration::from_secs(20),
+        "the answer bound of a forwarded browser is {} s",
+        super::ANSWER_TIMEOUT.as_secs()
+    );
+}

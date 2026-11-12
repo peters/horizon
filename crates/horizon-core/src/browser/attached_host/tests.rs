@@ -866,3 +866,36 @@ fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
     );
     panel.stop();
 }
+
+#[test]
+fn a_slow_answer_of_a_browser_names_the_link_and_the_wait() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let failure = super::AttachedHostFailure::no_endpoint_too_slow(
+        &host,
+        20,
+        "the DevTools port 127.0.0.1:40000 gave no answer within 20 seconds: timed out",
+    );
+    assert_eq!(
+        failure.kind(),
+        AttachedHostFailureKind::NoEndpoint,
+        "an agent branches on the same typed code"
+    );
+    assert!(
+        failure
+            .message()
+            .starts_with("the link to browser-vm did not carry an answer"),
+        "the sentence names the link, not the browser: {}",
+        failure.message()
+    );
+    assert!(
+        failure.message().contains("within 20 seconds") && failure.message().contains("profile mail"),
+        "the sentence holds the wait and the profile: {}",
+        failure.message()
+    );
+    assert!(
+        failure.message().contains("a slow link or a busy machine"),
+        "the sentence says what the wait means: {}",
+        failure.message()
+    );
+}

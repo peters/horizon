@@ -182,8 +182,12 @@ fn forward_to(ssh: &Ssh, host: &AttachedHost, remote_port: u16) -> Result<Attach
         local_port = forward.local_port(),
         "the browser of a browser host answers through a loopback forward"
     );
-    let endpoint = DevtoolsEndpoint::from_port(forward.local_port())
-        .map_err(|error| AttachedHostFailure::no_endpoint(host, &error.to_string()))?;
+    let endpoint = DevtoolsEndpoint::from_port(forward.local_port()).map_err(|error| match error.waited_out() {
+        // A bound that passed over a fresh forward is the link of that machine,
+        // not a browser that gave the wrong answer.
+        Some(seconds) => AttachedHostFailure::no_endpoint_too_slow(host, seconds, &error.to_string()),
+        None => AttachedHostFailure::no_endpoint(host, &error.to_string()),
+    })?;
     Ok(AttachedBrowser { forward, endpoint })
 }
 
