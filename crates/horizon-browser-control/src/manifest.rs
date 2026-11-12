@@ -1182,6 +1182,30 @@ mod tests {
         assert!(!manifest.user_is_active(1_001));
     }
 
+    /// One locked update of the manifest, retried while another thread holds the
+    /// lock for longer than the budget of the product.
+    ///
+    /// The budget of [`LOCK_WAIT`] is a latency rule, and a loaded computer holds
+    /// that lock through a slow write of the disk for longer than it. The rule of
+    /// this test is the serialization of two read-modify-write turns, which a turn
+    /// that the budget refused does not change, so such a turn is tried again.
+    fn update_until_settled(path: &Path, panel_local_id: &str, mut change: impl FnMut(&mut BrowserManifest)) {
+        let deadline = Instant::now() + Duration::from_mins(2);
+        loop {
+            match update_at(path, panel_local_id, |manifest| change(manifest)) {
+                Ok(_) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the lock of the manifest stayed taken: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("the update of the manifest: {error}"),
+            }
+        }
+    }
+
     #[test]
     fn concurrent_updates_preserve_independent_fields() {
         let root_dir = test_root();
@@ -1193,19 +1217,17 @@ mod tests {
             let title_path = path.clone();
             scope.spawn(move || {
                 for value in 0..50 {
-                    update_at(&title_path, "race", |manifest| {
+                    update_until_settled(&title_path, "race", |manifest| {
                         manifest.title = format!("title-{value}");
-                    })
-                    .unwrap();
+                    });
                 }
             });
             let activity_path = path.clone();
             scope.spawn(move || {
                 for value in 0..50 {
-                    update_at(&activity_path, "race", |manifest| {
+                    update_until_settled(&activity_path, "race", |manifest| {
                         manifest.user_active_at = value;
-                    })
-                    .unwrap();
+                    });
                 }
             });
         });
