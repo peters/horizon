@@ -600,21 +600,20 @@ fn close_take_header(file: &Path, bytes: u64) -> std::io::Result<()> {
     }
     crate::ui_thread::blocking("the header of a take is read and written");
     let mut header = [0u8; wav::CANONICAL_HEADER];
-    let mut open = fs::File::open(file)?;
+    let mut take = fs::OpenOptions::new().read(true).write(true).open(file)?;
     {
         use std::io::Read as _;
-        open.read_exact(&mut header)?;
+        take.read_exact(&mut header)?;
     }
     if !wav::close(&mut header, bytes) {
         return Ok(());
     }
     {
         use std::io::{Seek as _, SeekFrom, Write as _};
-        let mut write = fs::OpenOptions::new().write(true).open(file)?;
-        write.seek(SeekFrom::Start(4))?;
-        write.write_all(&header[4..8])?;
-        write.seek(SeekFrom::Start(40))?;
-        write.write_all(&header[40..44])?;
+        take.seek(SeekFrom::Start(4))?;
+        take.write_all(&header[4..8])?;
+        take.seek(SeekFrom::Start(40))?;
+        take.write_all(&header[40..44])?;
     }
     Ok(())
 }
@@ -639,7 +638,7 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+mod wav;
+
 #[cfg(test)]
 mod tests;
-
-mod wav;
