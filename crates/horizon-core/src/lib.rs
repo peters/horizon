@@ -3,6 +3,7 @@
 pub mod agent_work;
 mod agents;
 mod atomic_file;
+pub mod attention;
 mod block_panel;
 mod board;
 mod bounded_program;
@@ -51,6 +52,7 @@ pub use agents::{
 pub use alacritty_terminal::index::Side as TerminalSide;
 pub use alacritty_terminal::selection::SelectionType;
 pub use atomic_file::AtomicFile;
+pub use attention::{Attention, AttentionBoard, AttentionTarget, next_attention_target};
 pub use block_panel::{
     BlockPanelState, CLICK_RETENTION_MILLIS, CardFrames, CardRuntime, ClickQueue, MAX_PENDING_CLICKS, PendingClick,
     WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,

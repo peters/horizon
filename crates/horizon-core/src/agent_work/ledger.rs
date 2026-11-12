@@ -17,6 +17,10 @@ pub struct HookEvent {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_use_id: Option<String>,
+    /// The background work that the agent still runs when its turn ends. An
+    /// adapter that cannot count it sends nothing.
+    #[serde(default)]
+    pub background_tasks: Option<u32>,
 }
 
 /// A matching Stop closes only its own prompt. Missing identifiers never
@@ -31,6 +35,10 @@ pub struct TurnLedger {
     pub ended_at_millis: Option<i64>,
     pub deliberate_exit: bool,
     pub generation: u64,
+    /// The background work that the agent reported when its turn ended, so a
+    /// panel whose agent still works in the background stays working.
+    #[serde(default)]
+    pub background_tasks: u32,
     pub(super) pending_questions: Vec<String>,
     pub(super) turn_closed: bool,
     #[serde(default = "legacy_stop_review")]
@@ -74,6 +82,7 @@ impl TurnLedger {
                 self.deliberate_exit = false;
                 self.turn_closed = false;
                 self.stop_review = StopReview::Clear;
+                self.background_tasks = 0;
             }
             "UserPromptSubmit" => {
                 self.prompt_id = event.prompt_id.clone().filter(|id| !id.is_empty());
@@ -87,6 +96,7 @@ impl TurnLedger {
                 self.deliberate_exit = false;
                 self.turn_closed = false;
                 self.stop_review = StopReview::Clear;
+                self.background_tasks = 0;
             }
             "SessionEnd" => {
                 self.ended_at_millis = Some(now_millis);
@@ -97,10 +107,12 @@ impl TurnLedger {
                 if self.stop_review != StopReview::Vetoed {
                     self.stop_review = StopReview::Clear;
                 }
+                self.background_tasks = event.background_tasks.unwrap_or(0);
                 self.close_turn(TurnState::Finished);
             }
             "StopFailure" => {
                 self.stop_review = StopReview::Vetoed;
+                self.background_tasks = 0;
                 self.close_turn(TurnState::Failed);
             }
             "Interrupt" => {
@@ -180,6 +192,7 @@ mod tests {
             source: None,
             tool_name: None,
             tool_use_id: None,
+            background_tasks: None,
         }
     }
 
@@ -230,6 +243,28 @@ mod tests {
         ledger.apply(&event("StopFailure", Some("q")), 5);
         ledger.apply(&event("PostToolUse", Some("q")), 6);
         assert_eq!(ledger.state, TurnState::Failed);
+    }
+
+    #[test]
+    fn a_stop_keeps_the_background_work_that_the_agent_reported() {
+        let mut ledger = TurnLedger::default();
+        ledger.apply(&event("UserPromptSubmit", Some("p")), 1);
+        let mut stop = event("Stop", Some("p"));
+        stop.background_tasks = Some(2);
+        ledger.apply(&stop, 2);
+        assert_eq!(ledger.state, TurnState::Finished);
+        assert_eq!(ledger.background_tasks, 2);
+        // A new turn starts without the background work of the turn before it.
+        ledger.apply(&event("UserPromptSubmit", Some("q")), 3);
+        assert_eq!(ledger.background_tasks, 0);
+        // A stop without the number leaves nothing in the background.
+        let mut finished = event("Stop", Some("q"));
+        finished.background_tasks = Some(1);
+        ledger.apply(&finished, 4);
+        assert_eq!(ledger.background_tasks, 1);
+        ledger.apply(&event("UserPromptSubmit", Some("r")), 5);
+        ledger.apply(&event("Stop", Some("r")), 6);
+        assert_eq!(ledger.background_tasks, 0);
     }
 
     #[test]
