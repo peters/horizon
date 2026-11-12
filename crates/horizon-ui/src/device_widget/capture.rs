@@ -204,7 +204,12 @@ impl DeviceUiState {
                 // it happened, not where the pointer ended the frame.
                 egui::Event::MouseWheel { unit, delta, .. } => {
                     // The notch goes where the pointer is now; the desktop may
-                    // still hold an older position if no move preceded it.
+                    // still hold an older position if no move preceded it. A notch of
+                    // a wheel button arrives as its press and its release of the same
+                    // delta, and the two of them are one notch.
+                    if self.wheel_buttons.repeats_previous(unit, delta) {
+                        continue;
+                    }
                     let at = self.pointer_global.filter(|pos| on_top_at(*pos)).and_then(mapped);
                     if let Some(point) = at {
                         let buttons = self.input.buttons();

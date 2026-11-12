@@ -69,7 +69,10 @@ settings and a target, and never a command. The refusals are
   a pixel of the picture that the panel shows, and never a point beside it. An
   `input` message is one `pointer`, `button`, `wheel`, `key` or `text` event: a
   `wheel` holds whole steps of the wheel, where a positive `dy` is down and a
-  positive `dx` is right.
+  positive `dx` is right. One notch of the wheel of a person is one step: the X11
+  backend of the window reports the press and the release of a wheel button as two
+  wheel events with the same delta, so the viewer counts that pair as the one notch
+  it is.
 
 ## Why a program and not a capture library
 

@@ -548,6 +548,68 @@ fn one_notch_of_the_wheel_is_one_step_of_the_contract() {
 }
 
 #[test]
+fn one_notch_stays_one_step_over_the_frames_of_the_smoothing() {
+    // The context of a frame source viewer of the window: the options that a start of
+    // Horizon sets, so a test reads the same smoothing as a person.
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    crate::app::bootstrap::pin_chrome_to_native_display_scale(&ctx);
+    frame(
+        &ctx,
+        &mut state,
+        &device,
+        vec![notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))],
+    );
+    // egui hands the travel of a notch out over a few frames of the smoothing, and
+    // none of those frames may send the step again.
+    for _ in 0..6 {
+        frame(&ctx, &mut state, &device, Vec::new());
+    }
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(0, 1, Some((80, 60)))],
+        "one notch is one step in all of the frames that the smoothing takes"
+    );
+}
+
+#[test]
+fn the_press_and_the_release_of_one_wheel_button_are_one_step() {
+    // winit's X11 backend sends one wheel event for the press of a wheel button and
+    // one for its release, with the same delta, so one notch of a wheel without
+    // scroll valuators - and of the XTEST click of the fixture - arrives twice.
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    let one = notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0));
+    frame(&ctx, &mut state, &device, vec![one.clone(), one]);
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(0, 1, Some((80, 60)))],
+        "the press and the release of one notch are one step"
+    );
+    frame(&ctx, &mut state, &device, Vec::new());
+    assert!(
+        wheel_events(&sent.drain()).is_empty(),
+        "and no frame after it sends it again"
+    );
+}
+
+#[test]
+fn a_notch_of_each_frame_is_its_own_step() {
+    let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
+    for _ in 0..2 {
+        frame(
+            &ctx,
+            &mut state,
+            &device,
+            vec![notch(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))],
+        );
+    }
+    assert_eq!(
+        wheel_events(&sent.drain()),
+        vec![(0, 1, Some((80, 60))), (0, 1, Some((80, 60)))],
+        "one notch a frame is one step a frame"
+    );
+}
+
+#[test]
 fn a_smooth_scroll_of_two_half_notches_is_one_step() {
     let (ctx, device, mut state, mut sent) = viewer_with_pointer_in_the_picture();
     let half = egui::vec2(0.0, -horizon_vnc::SCROLL_NOTCH_POINTS / 2.0);

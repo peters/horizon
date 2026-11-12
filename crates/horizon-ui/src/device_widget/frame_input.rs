@@ -145,8 +145,13 @@ impl DeviceUiState {
                     );
                 }
                 // A wheel event belongs to the picture under the pointer when it
-                // happened, and one notch is one step of the contract.
+                // happened, and one notch is one step of the contract. A notch of a
+                // wheel button arrives as its press and its release, and the two of
+                // them are one notch.
                 egui::Event::MouseWheel { unit, delta, .. } => {
+                    if self.wheel_buttons.repeats_previous(unit, delta) {
+                        continue;
+                    }
                     let at = self.pointer_global.filter(|pos| on_top_at(*pos)).and_then(mapped);
                     if let Some(point) = at {
                         events.extend(self.frame_state.pointer(Some(point)));

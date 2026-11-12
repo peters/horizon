@@ -985,10 +985,7 @@ mod tests {
             "the id of the viewer is inside panels, not a member of the answer: {answer}"
         );
 
-        let closed = serde_json::to_value(Outcome::Closed {
-            panel_id: "d1".into(),
-        })
-        .unwrap();
+        let closed = serde_json::to_value(Outcome::Closed { panel_id: "d1".into() }).unwrap();
         assert_eq!(closed["status"], "closed");
         assert_eq!(closed["panel_id"], "d1");
     }

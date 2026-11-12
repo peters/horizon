@@ -70,6 +70,8 @@ pub(crate) struct DeviceUiState {
     frame_state: horizon_frame_source::InputState,
     /// The wheel travel of a frame source viewer that is not yet a whole step.
     frame_wheel: frame_wheel::WheelSteps,
+    /// The wheel buttons of this frame, which one notch may arrive twice.
+    wheel_buttons: frame_wheel::WheelButtons,
     /// A person's choice for this session only; never persisted, never set by agents.
     interact: bool,
     input: InputState,
@@ -148,6 +150,7 @@ impl DeviceUiState {
 
     pub(crate) fn begin_frame(&mut self) {
         self.host.begin_frame();
+        self.wheel_buttons.begin_frame();
         self.commit_pass();
         self.image.displayed = false;
         self.rendered = false;

@@ -316,7 +316,7 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
 /// independently of the canvas. That GUI zoom does not follow a later
 /// desktop resolution or DPI change, so chrome stays oversized on a large
 /// display. Pin zoom to 1.0 and leave pixel density to `native_pixels_per_point`.
-pub(super) fn pin_chrome_to_native_display_scale(ctx: &Context) {
+pub(crate) fn pin_chrome_to_native_display_scale(ctx: &Context) {
     let zoom_with_keyboard = ctx.options(|options| options.zoom_with_keyboard);
     if zoom_with_keyboard {
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
