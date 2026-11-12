@@ -63,14 +63,34 @@ except Exception:
     pass
 ";
 
+/// The file that holds one line for each start of the stand-in of a computer.
+const STARTS: &str = "starts.log";
+
 /// A stand-in `ssh` that runs the link relay against the socket of the server.
+///
+/// The stand-in writes one line to [`STARTS`] before it relays, so a test reads the
+/// instant of an attempt of the link itself and not the handshake that follows
+/// the start of its transport.
 fn stand_in(directory: &Path, socket: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("relay.py");
     fs::write(&relay, RELAY).expect("the relay of the stand-in");
-    let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), socket.display());
+    let script = format!(
+        "printf '.\\n' >> '{}'\nexec /usr/bin/env python3 '{}' '{}'",
+        directory.join(STARTS).display(),
+        relay.display(),
+        socket.display()
+    );
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
+}
+
+/// How many times the stand-in of the computer at `home` started, which is one
+/// attempt of its link for each start.
+fn attempts_of(home: &Path) -> usize {
+    fs::read_to_string(home.join("stand-in").join(STARTS))
+        .map(|text| text.lines().count())
+        .unwrap_or(0)
 }
 
 /// One server of a temporary home, which a test can stop and start again over the
@@ -233,6 +253,11 @@ impl Computer {
         self.settings()
             .enqueue(config, &shared)
             .expect("the intents of the settings");
+    }
+
+    /// How many attempts of the link this computer started.
+    fn attempts(&self) -> usize {
+        attempts_of(&self.home)
     }
 
     /// The ids of the setting intents that wait in the queue of this computer.
@@ -836,8 +861,9 @@ fn current_config_version() -> u32 {
 /// The wait of a lost link grows with every attempt, so a server that someone
 /// started again is followed only at the end of that wait. A person who saves a
 /// setting expects it to travel, so the save ends the wait of one attempt. The test
-/// measures the real time of the attempt rather than a clock of the link: the first
-/// delay of a lost link is three seconds and this bound is under it.
+/// measures the start of the transport of the next attempt rather than a clock of
+/// the link: the delay after a lost link is six seconds and this bound is well
+/// under it.
 #[test]
 fn a_save_while_the_server_is_away_starts_an_attempt_at_once() {
     let home = tempfile::tempdir().expect("a directory");
@@ -858,14 +884,23 @@ fn a_save_while_the_server_is_away_starts_an_attempt_at_once() {
         a.handle().state()
     );
 
+    let attempts = a.attempts();
     let saved_at = Instant::now();
     let mut config = a.stored();
     config.appearance.theme = AppearanceTheme::Light;
     a.save(&config);
-    eventually("the link of the save", || {
-        matches!(a.handle().state(), LinkState::InStep { .. }).then_some(())
+    // A loaded computer starts a program and answers a hello at no bound, so the
+    // test waits for the transport of the next attempt and not for the link that
+    // follows it.
+    eventually("the attempt that the save started", || {
+        (a.attempts() > attempts).then_some(())
     });
     let waited = saved_at.elapsed();
+    assert_eq!(
+        a.attempts(),
+        attempts + 1,
+        "one save starts one attempt and no other one"
+    );
     assert!(
         waited < Duration::from_secs(2),
         "the save started one attempt at once instead of waiting for the delay: {waited:?}"
