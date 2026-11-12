@@ -222,10 +222,13 @@ impl Terminal {
     /// Preparation, cancellation and final evidence stay inside the existing
     /// asynchronous shutdown budget; the UI never waits for repository I/O.
     pub(crate) fn begin_work_shutdown(&mut self, completed: &Arc<AtomicUsize>) -> bool {
-        if self.work_owner.is_none() || self.event_loop_handle.is_none() {
+        if self.event_loop_handle.is_none() {
             return false;
         }
-        let Some(owner) = self.work_owner.clone() else {
+        // A launch that only reports the state of its panel continues nothing:
+        // it shuts down like any other terminal, without a cancellation and
+        // without evidence of a continuation.
+        let Some(owner) = self.work_owner.clone().filter(|owner| owner.continues_work()) else {
             return false;
         };
         let Some(handle) = self.event_loop_handle.take() else {

@@ -26,6 +26,10 @@ pub(crate) struct WorkOwner {
     panel: String,
     token: String,
     interrupted: AtomicBool,
+    /// Whether this launch continues the work of its panel. Only such a launch
+    /// may prepare a handoff and interrupt its agent at shutdown; a launch that
+    /// only reports its state writes no evidence of a continuation.
+    continues: bool,
 }
 
 impl WorkLaunch<'_> {
@@ -129,6 +133,7 @@ impl WorkLaunch<'_> {
             panel: self.panel.to_owned(),
             token,
             interrupted: AtomicBool::new(false),
+            continues: self.continues_work(),
         }))
     }
 }
@@ -142,8 +147,15 @@ impl WorkOwner {
         }
     }
 
+    /// Whether this launch continues the work of its panel at a shutdown. A
+    /// launch that only reports its state ends with its process and leaves no
+    /// handoff, so the panel of a report shuts down like any other terminal.
+    pub(crate) fn continues_work(&self) -> bool {
+        self.continues
+    }
+
     pub(crate) fn prepare_suspend(&self) -> bool {
-        if self.interrupted.load(Ordering::Acquire) {
+        if !self.continues || self.interrupted.load(Ordering::Acquire) {
             return false;
         }
         self.save_suspend().is_some()
@@ -354,6 +366,7 @@ mod tests {
             panel: "panel".into(),
             token: "owner".into(),
             interrupted: AtomicBool::new(false),
+            continues: true,
         };
         owner.note_input(b"ordinary input");
         assert!(!owner.interrupted.load(Ordering::Acquire));
@@ -395,6 +408,7 @@ mod tests {
             panel: "panel".into(),
             token: "owner".into(),
             interrupted: AtomicBool::new(false),
+            continues: true,
         };
         assert!(owner.prepare_suspend());
         let before = store
@@ -435,6 +449,47 @@ mod tests {
         owner.note_input(b"\x03");
         owner.finish_suspend();
         assert!(store.read("panel").is_err());
+    }
+
+    #[test]
+    fn a_launch_that_only_reports_writes_no_handoff() {
+        let directory = tempfile::tempdir().expect("fixture");
+        let path = directory.path().join("transcript.jsonl");
+        std::fs::write(&path, "{\"type\":\"user\",\"message\":{\"content\":\"work\"}}\n").expect("transcript");
+        let store = WorkStore::new(directory.path());
+        store
+            .register_owner("panel", PanelKind::Claude, "owner", Some("session"), directory.path())
+            .expect("owner");
+        let input: super::super::HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "session", "prompt_id": "prompt", "hook_event_name": "UserPromptSubmit",
+            "cwd": directory.path(), "transcript_path": path
+        }))
+        .expect("input");
+        store
+            .apply_hook("panel", PanelKind::Claude, "owner", &input, current_unix_millis())
+            .expect("working");
+        // The panel runs its turn under a policy that continues nothing, which is
+        // the case of a report without a continuation.
+        let owner = WorkOwner {
+            store: store.clone(),
+            panel: "panel".into(),
+            token: "owner".into(),
+            interrupted: AtomicBool::new(false),
+            continues: false,
+        };
+        assert!(!owner.continues_work());
+        assert!(
+            !owner.prepare_suspend(),
+            "a panel that only reports prepares no handoff"
+        );
+        owner.finish_suspend();
+        let record = store.read("panel").expect("read").expect("record");
+        assert!(record.handoff.is_none(), "no handoff is written");
+        assert_eq!(
+            record.ledger.state,
+            TurnState::Working,
+            "the ledger of the running turn stays as the agent reported it"
+        );
     }
 
     #[test]
