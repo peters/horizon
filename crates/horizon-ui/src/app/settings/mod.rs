@@ -2,6 +2,7 @@ mod bar;
 mod browser;
 #[cfg(test)]
 mod footer_tests;
+mod frame_sources;
 mod general;
 #[cfg(test)]
 mod panel_test_support;
@@ -685,6 +686,7 @@ fn render_tab(
                 SettingsTab::Browser => (browser::render(ui, config), false),
                 SettingsTab::RemoteBrowsers => {
                     remote_recovery::render(ui, allocations);
+                    let sources = frame_sources::render(ui, config);
                     (
                         remote_browsers::render(
                             ui,
@@ -696,7 +698,7 @@ fn render_tab(
                             keyring,
                             named_secrets,
                         ),
-                        false,
+                        sources.changed,
                     )
                 }
                 SettingsTab::Secrets => (secrets::render(ui, config, named_secrets, secret_inputs), false),

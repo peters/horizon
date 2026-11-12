@@ -85,8 +85,14 @@ impl DeviceUiState {
                 }
                 egui::Event::PointerGone => {
                     events.extend(self.frame_state.button(horizon_frame_source::Button::Left, false, None));
-                    events.extend(self.frame_state.button(horizon_frame_source::Button::Middle, false, None));
-                    events.extend(self.frame_state.button(horizon_frame_source::Button::Right, false, None));
+                    events.extend(
+                        self.frame_state
+                            .button(horizon_frame_source::Button::Middle, false, None),
+                    );
+                    events.extend(
+                        self.frame_state
+                            .button(horizon_frame_source::Button::Right, false, None),
+                    );
                 }
                 egui::Event::MouseWheel { unit, delta, .. } => {
                     let [dx, dy] = super::capture::wheel_points(unit, delta);
@@ -205,6 +211,10 @@ mod tests {
         assert_eq!(character_of_keysym(u32::from('\n')), None);
         // A keysym of the function range above Latin-1 is no character that a person
         // types, and the caller sends the key of the table for it first.
-        assert_eq!(character_of_keysym(0xff0d), None, "a key of the function range is no character");
+        assert_eq!(
+            character_of_keysym(0xff0d),
+            None,
+            "a key of the function range is no character"
+        );
     }
 }

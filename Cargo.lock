@@ -1978,6 +1978,7 @@ dependencies = [
  "horizon-browser-mcp",
  "horizon-core",
  "horizon-cursor",
+ "horizon-frame-source",
  "horizon-sync",
  "horizon-vnc",
  "horizon-wayland",

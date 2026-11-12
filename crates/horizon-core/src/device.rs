@@ -160,7 +160,11 @@ impl DevicePanelState {
                 None => format!("frame source {}", reference.name),
             };
         }
-        let address = self.target.vnc_address().map(|address| address.to_string()).unwrap_or_default();
+        let address = self
+            .target
+            .vnc_address()
+            .map(|address| address.to_string())
+            .unwrap_or_default();
         match &self.ssh_tunnel {
             Some(connection) => format!("{address} via {}", connection.display_label()),
             None => address,
@@ -333,11 +337,15 @@ mod tests {
             workspace,
             saved.to_panel_options(&crate::browser::BrowserConfig::default()),
         )?;
-        assert!(
-            panel
-                .device()
-                .is_some_and(|device| !device.connect_on_start && device.target.vnc_address().map(|address| address.to_string()).as_deref() == Some("[::1]:5901"))
-        );
+        assert!(panel.device().is_some_and(|device| {
+            !device.connect_on_start
+                && device
+                    .target
+                    .vnc_address()
+                    .map(|address| address.to_string())
+                    .as_deref()
+                    == Some("[::1]:5901")
+        }));
         assert!(panel.terminal().is_none());
         Ok(())
     }
@@ -387,7 +395,14 @@ mod tests {
             .device()
             .ok_or_else(|| crate::Error::State("missing device".into()))?;
         assert_eq!(device.ssh_tunnel.as_ref(), Some(&tunnel));
-        assert_eq!(device.target.vnc_address().map(|address| address.to_string()).as_deref(), Some("127.0.0.1:5901"));
+        assert_eq!(
+            device
+                .target
+                .vnc_address()
+                .map(|address| address.to_string())
+                .as_deref(),
+            Some("127.0.0.1:5901")
+        );
         assert!(!device.connect_on_start);
         Ok(())
     }

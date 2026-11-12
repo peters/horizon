@@ -63,7 +63,9 @@ pub fn convert(y: &[u8], uv: &[u8], width: usize, pixels: &mut [u32]) -> Result<
         return Err(Error::Frame("the size of a picture is not one even picture".into()));
     }
     if y.len() != width * height || uv.len() != width * height / 2 {
-        return Err(Error::Frame("the planes of a picture are not the size of its header".into()));
+        return Err(Error::Frame(
+            "the planes of a picture are not the size of its header".into(),
+        ));
     }
     let tables = Tables::new();
     for row in 0..height {
@@ -128,7 +130,10 @@ mod tests {
     fn pixel_of(y: u8, cb: u8, cr: u8) -> [u8; 4] {
         let mut pixels = [0_u32; 4];
         convert(&[y; 4], &[cb, cr], 2, &mut pixels).expect("one picture of 2x2");
-        assert!(pixels.iter().all(|pixel| *pixel == pixels[0]), "one chroma for the whole block");
+        assert!(
+            pixels.iter().all(|pixel| *pixel == pixels[0]),
+            "one chroma for the whole block"
+        );
         pixels[0].to_ne_bytes()
     }
 

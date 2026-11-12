@@ -23,9 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horizon_vnc::{
-    Frame, Image, Observation, Region, ServerDetails, Status, StreamEvidence, ViewOptions, Wake,
-};
+use horizon_vnc::{Frame, Image, Observation, Region, ServerDetails, Status, StreamEvidence, ViewOptions, Wake};
 
 use crate::{
     Error, Picture,

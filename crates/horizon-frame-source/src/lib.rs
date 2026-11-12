@@ -54,7 +54,5 @@ pub use horizon_vnc::{Frame, Image, Status, Wake};
 pub use input::{InputEvent, InputState, Point};
 pub use keys::{Button, Key};
 pub use picture::{Header, Picture};
-pub use session::{
-    Config, InputHello, MAX_LABEL_CHARS, Session, STOP_WAIT, Updates, VIEW_DEBOUNCE,
-};
+pub use session::{Config, InputHello, MAX_LABEL_CHARS, STOP_WAIT, Session, Updates, VIEW_DEBOUNCE};
 pub use worker::PICTURE_FD;

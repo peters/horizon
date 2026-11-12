@@ -14,7 +14,7 @@ use std::{
 };
 
 use horizon_frame_source::{
-    Button, Config, InputState, Key, Point, Session, Status, STOP_WAIT, VIEW_DEBOUNCE, keys::NamedKey,
+    Button, Config, InputState, Key, Point, STOP_WAIT, Session, Status, VIEW_DEBOUNCE, keys::NamedKey,
 };
 
 /// The most time that one test waits for the stand-in to say something.
@@ -240,10 +240,7 @@ fn a_header_that_breaks_a_bound_ends_the_viewer_and_stops_the_child() {
         if let Some(Status::Disconnected { message, .. }) = viewer.session.observation().status {
             break message;
         }
-        assert!(
-            Instant::now() < deadline,
-            "a picture of another magic ends the viewer"
-        );
+        assert!(Instant::now() < deadline, "a picture of another magic ends the viewer");
         std::thread::sleep(Duration::from_millis(5));
     };
     assert!(status.contains("NV12FRM1"), "{status}");
@@ -355,9 +352,18 @@ fn each_input_event_reaches_the_program_in_the_pixels_of_the_picture() {
     assert_eq!(lines[1]["down"], true);
     assert_eq!(lines[2]["event"], "wheel");
     assert_eq!((lines[2]["dx"].clone(), lines[2]["dy"].clone()), (0.into(), 1.into()));
-    assert_eq!(lines[3], serde_json::json!({"type": "input", "event": "key", "key": "enter", "down": true}));
-    assert_eq!(lines[4], serde_json::json!({"type": "input", "event": "key", "key": "a", "down": false}));
-    assert_eq!(lines[5], serde_json::json!({"type": "input", "event": "text", "text": "hei"}));
+    assert_eq!(
+        lines[3],
+        serde_json::json!({"type": "input", "event": "key", "key": "enter", "down": true})
+    );
+    assert_eq!(
+        lines[4],
+        serde_json::json!({"type": "input", "event": "key", "key": "a", "down": false})
+    );
+    assert_eq!(
+        lines[5],
+        serde_json::json!({"type": "input", "event": "text", "text": "hei"})
+    );
     let pid = viewer.child_pid();
     viewer.children.push(pid);
     viewer.end();
@@ -399,7 +405,16 @@ fn the_program_is_asked_for_the_size_of_the_viewer_once_it_was_stable() {
 
 #[test]
 fn a_hidden_viewer_is_told_so_and_still_reads_the_counters() {
-    let mut viewer = Viewer::start(&["--width", "64", "--height", "32", "--rate", "50", "--report", "{folder}/report.json"]);
+    let mut viewer = Viewer::start(&[
+        "--width",
+        "64",
+        "--height",
+        "32",
+        "--rate",
+        "50",
+        "--report",
+        "{folder}/report.json",
+    ]);
     viewer.wait_for_picture();
     viewer.session.set_visible(false);
     // The program stops its pictures and keeps its counters, so an inspection of
@@ -408,7 +423,10 @@ fn a_hidden_viewer_is_told_so_and_still_reads_the_counters() {
     let mut counters = false;
     while !counters {
         counters = viewer.session.take_updates().stats.is_some();
-        assert!(Instant::now() < deadline, "the counters of a hidden viewer come each second");
+        assert!(
+            Instant::now() < deadline,
+            "the counters of a hidden viewer come each second"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     viewer.session.set_visible(true);

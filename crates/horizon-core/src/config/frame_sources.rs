@@ -169,8 +169,8 @@ impl FrameSourcesConfig {
             if seen.contains(&name) {
                 return Err(format!("frame_sources holds the name {name:?} twice"));
             }
-            let line = CommandLine::parse(source.command.trim())
-                .map_err(|error| format!("frame_sources.{name}: {error}"))?;
+            let line =
+                CommandLine::parse(source.command.trim()).map_err(|error| format!("frame_sources.{name}: {error}"))?;
             if line.whole_arguments(TARGET_PLACEHOLDER) > 1 {
                 return Err(format!(
                     "frame_sources.{name} holds {TARGET_PLACEHOLDER} more than once as a whole argument"
@@ -263,10 +263,13 @@ mod tests {
         assert!(sources.sources.is_empty());
         assert!(sources.names().is_empty());
         assert!(sources.validate().is_ok());
-        assert_eq!(sources.plan("anything", None), Err(FrameSourceError::UnknownName {
-            name: "anything".into(),
-            listed: "none".into(),
-        }));
+        assert_eq!(
+            sources.plan("anything", None),
+            Err(FrameSourceError::UnknownName {
+                name: "anything".into(),
+                listed: "none".into(),
+            })
+        );
     }
 
     #[test]
@@ -275,12 +278,18 @@ mod tests {
         let plan = sources.plan("bench", Some("lab:1")).expect("the run of a named source");
         assert_eq!(plan.name, "bench");
         assert_eq!(plan.program, "frame-tool");
-        assert_eq!(plan.arguments, [OsString::from("--size"), "1920x1080".into(), "lab:1".into()]);
+        assert_eq!(
+            plan.arguments,
+            [OsString::from("--size"), "1920x1080".into(), "lab:1".into()]
+        );
 
         // A viewer that names no target passes an empty argument for the
         // placeholder, so the argument count of the line never changes.
         let plan = sources.plan("bench", None).expect("the run without a target");
-        assert_eq!(plan.arguments, [OsString::from("--size"), "1920x1080".into(), String::new().into()]);
+        assert_eq!(
+            plan.arguments,
+            [OsString::from("--size"), "1920x1080".into(), String::new().into()]
+        );
     }
 
     #[test]
@@ -297,7 +306,9 @@ mod tests {
     fn a_target_follows_its_rule() {
         let sources = section(&[("bench", "frame-tool {target}")]);
         for target in ["", "-starts-with-a-dash", "has space", "a\"b", "a\nb", &"a".repeat(256)] {
-            let error = sources.plan("bench", Some(target)).expect_err("a target that is refused");
+            let error = sources
+                .plan("bench", Some(target))
+                .expect_err("a target that is refused");
             assert_eq!(error.code(), "invalid_request", "{target:?}: {error}");
         }
         for target in ["a", "lab:1/desk_2", "a.b-c", &"a".repeat(255)] {
@@ -353,7 +364,10 @@ mod tests {
 
     #[test]
     fn the_section_follows_the_server_as_the_recorder_of_speech_does() {
-        assert_eq!(crate::settings_sync::scope("frame_sources"), Some(crate::settings_sync::Scope::Shared));
+        assert_eq!(
+            crate::settings_sync::scope("frame_sources"),
+            Some(crate::settings_sync::Scope::Shared)
+        );
         assert!(crate::settings_sync::is_shared("frame_sources"));
     }
 
@@ -374,6 +388,9 @@ mod tests {
         let sources = section(&[("bench", &format!("{} {{target}}", program.display()))]);
         let plan = sources.plan("bench", None).expect("a run");
         let environment = ProgramEnvironment::with_path(folder.path().to_string_lossy().into_owned());
-        assert!(plan.installed(&environment).is_some(), "the program of the folder is found");
+        assert!(
+            plan.installed(&environment).is_some(),
+            "the program of the folder is found"
+        );
     }
 }

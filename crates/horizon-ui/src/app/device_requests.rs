@@ -1165,7 +1165,7 @@ mod tests {
                 &app,
                 Operation::Create {
                     frame_source: None,
-                identity: None,
+                    identity: None,
                     endpoint: endpoint.into(),
                     ssh: None,
                 },

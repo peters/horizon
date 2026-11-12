@@ -5,8 +5,8 @@ use horizon_core::DeviceInput;
 use horizon_vnc::{ImageLayout, InputEvent, InputState, SCROLL_NOTCH_POINTS};
 
 use super::DeviceUiState;
-use super::session;
 use super::keys::{self, button_bit, desktop_point};
+use super::session;
 
 pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
 

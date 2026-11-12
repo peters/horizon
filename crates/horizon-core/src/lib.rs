@@ -68,8 +68,8 @@ pub use config::{
     DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig, FrameSource,
     FrameSourceError, FrameSourcePlan, FrameSourcesConfig, MAX_LANGUAGE_CHARS, MAX_NAME_CHARS, MAX_SOURCES,
     MAX_TARGET_CHARS, OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig,
-    TARGET_PLACEHOLDER, TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_host,
-    browser_mcp_args, configure_browser_host, configure_server, language_hint, preset_named, server,
+    TARGET_PLACEHOLDER, TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig,
+    browser_host, browser_mcp_args, configure_browser_host, configure_server, language_hint, preset_named, server,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget, FrameSourceRef};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

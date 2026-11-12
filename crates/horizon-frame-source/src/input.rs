@@ -121,11 +121,7 @@ impl InputState {
     pub fn button(&mut self, button: Button, down: bool, at: Option<Point>) -> Vec<InputEvent> {
         let bit = mask_of(button);
         let before = self.buttons;
-        self.buttons = if down {
-            self.buttons | bit
-        } else {
-            self.buttons & !bit
-        };
+        self.buttons = if down { self.buttons | bit } else { self.buttons & !bit };
         if before == self.buttons {
             return Vec::new();
         }
@@ -145,7 +141,11 @@ impl InputState {
         if dx == 0 && dy == 0 {
             return Vec::new();
         }
-        vec![InputEvent::Wheel { dx, dy, at: self.position }]
+        vec![InputEvent::Wheel {
+            dx,
+            dy,
+            at: self.position,
+        }]
     }
 
     /// A key that a person pressed or released.
@@ -264,7 +264,10 @@ mod tests {
                 at: Point { x: 4, y: 5 }
             }]
         );
-        assert!(state.pointer(Some(Point { x: 4, y: 5 })).is_empty(), "one position is one message");
+        assert!(
+            state.pointer(Some(Point { x: 4, y: 5 })).is_empty(),
+            "one position is one message"
+        );
         assert_eq!(state.buttons(), 0);
         let events = state.button(Button::Left, true, Some(Point { x: 6, y: 7 }));
         assert_eq!(
@@ -276,7 +279,10 @@ mod tests {
             }]
         );
         assert_eq!(state.buttons(), horizon_vnc::BUTTON_LEFT);
-        assert!(state.button(Button::Left, true, None).is_empty(), "a held button is no news");
+        assert!(
+            state.button(Button::Left, true, None).is_empty(),
+            "a held button is no news"
+        );
         assert_eq!(state.wheel(0, 0), Vec::new(), "no travel is no message");
         assert_eq!(
             state.wheel(0, 1),
@@ -301,7 +307,9 @@ mod tests {
         let events = state.release_all();
         assert_eq!(events.len(), 5, "two keys and three buttons: {events:?}");
         assert!(
-            events[..2].iter().all(|event| matches!(event, InputEvent::Key { down: false, .. })),
+            events[..2]
+                .iter()
+                .all(|event| matches!(event, InputEvent::Key { down: false, .. })),
             "the two keys are released first: {events:?}"
         );
         assert_eq!(state.buttons(), 0);

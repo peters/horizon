@@ -31,7 +31,9 @@ pub(super) fn spawn_device(
         })?)?,
     };
     if target.is_frame_source() && ssh_tunnel.is_some() {
-        return Err(Error::Config("A frame source viewer is a program of this computer".into()));
+        return Err(Error::Config(
+            "A frame source viewer is a program of this computer".into(),
+        ));
     }
     let label = target.command();
     let (title, has_custom_name) = seed.take_title(|| match target.frame_source_ref() {

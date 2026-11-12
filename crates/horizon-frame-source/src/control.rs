@@ -594,6 +594,11 @@ mod tests {
 
         let mut stream = Vec::new();
         write(&mut stream, &Outgoing::Bye).expect("one bye message");
-        assert_eq!(&stream[..], &[0, 0, 0, 14, b'{', b'"', b't', b'y', b'p', b'e', b'"', b':', b'"', b'b', b'y', b'e', b'"', b'}']);
+        assert_eq!(
+            &stream[..],
+            &[
+                0, 0, 0, 14, b'{', b'"', b't', b'y', b'p', b'e', b'"', b':', b'"', b'b', b'y', b'e', b'"', b'}'
+            ]
+        );
     }
 }

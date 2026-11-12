@@ -57,6 +57,44 @@ When the person reports that the host is trusted, call `reconnect` and inspect
 again. Without a code, `connection_error` alone stands and the failure may be a
 network or ssh configuration problem.
 
+A viewer can also show a **frame source program** of the Horizon machine, which
+gives raw NV12 pictures itself. Horizon holds no codec, no library and no name of
+such a program: the person names it in the `frame_sources` section of the
+settings, and the section is the whole of what Horizon knows. Create such a
+viewer with `operation: "create"` and `frame_source` instead of `endpoint`:
+
+```json
+{ "operation": "create", "frame_source": { "name": "bench", "target": "lab:1" } }
+```
+
+Give exactly one of `endpoint` and `frame_source`; both or neither is
+`invalid_request`. `name` is the name of a program of the settings, and `target`
+is optional: 1 to 255 characters of letters, digits, `.`, `_`, `:`, `/` and `-`,
+not starting with `-`, which replaces the `{target}` placeholder of that
+program's line. You pass no command and no argument, and a frame source viewer
+takes no `ssh` route. A name that this Horizon does not hold is
+`unknown_frame_source`, and the message lists the names and never a command. A
+program that is not installed on the Horizon machine is
+`frame_source_program_missing`; a person installs it, and Horizon starts nothing
+else.
+
+`list` and `inspect` report `kind`: `vnc` for a VNC desktop, `frame_source` for a
+program. Every evidence member means the same for both kinds:
+`connection`, `image_received`, `image_displayed`, `frame_sequence`,
+`received_frame_sequence`, `server.desktop_size` and `diagnostics`. A frame
+source adds `frames_dropped` and `age_ms`, from the program's last `stats`
+message, so a still picture is not a stalled one. `screenshot` and `video` work
+for both kinds.
+
+A frame source sends a picture only while its viewer is drawn. A viewer that is
+hidden, off canvas or behind a fullscreen panel still receives its counters and
+keeps `connection: "connected"`, so `inspect` stays live while
+`image_displayed` is false. The program is asked for the size that the viewer
+draws at, at most the size that it captures. `reconnect` starts the program
+again; `close` asks it to end and then stops that exact process. A source whose
+program says `input` false is view only: Interact is disabled for the person with
+the reason that the program gave, and no operation can turn it on.
+
 When known, include optional `identity` in create: `machine_name`, `hostname`,
 `ip_addresses` (numeric IPv4/IPv6 list), and `tailscale_name`. These are labels
 supplied by the session creator, not verified identity. Use details for the

@@ -393,6 +393,24 @@ def extra_column(placed):
     return right + 40
 
 
+def frame_sources_section(entries):
+    """The `frame_sources` section of the fixture config, or `None` while a run names none.
+
+    Each entry is one `name=command line` of a frame source program of the fixture, so
+    a smoke run opens a viewer of the stand-in without a hand edit of the private
+    settings.
+    """
+    if not entries:
+        return None
+    sources = []
+    for entry in entries:
+        name, separator, command = entry.partition('=')
+        if not separator or not name.strip() or not command.strip():
+            raise SystemExit('--frame-source needs <name>=<command line>, such as standin={python} {script}')
+        sources.append({'name': name.strip(), 'command': command.strip()})
+    return {'sources': sources}
+
+
 def speech_section(recorder=None, transcriber_command=None, service=None):
     """The `speech` section of the fixture config, or `None` while a run names no speech.
 
@@ -643,7 +661,8 @@ def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None)
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
-                         server_command=None, server_address=None, secret_names=None, speech=None):
+                         server_command=None, server_address=None, secret_names=None, speech=None,
+                         frame_sources=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -707,6 +726,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         # The hotkey, the recorder line and the transcriber of speech input, so a
         # procedure proves a take with a stand-in recorder and a stand-in service.
         fixture['speech'] = speech
+    if frame_sources:
+        # The programs that a native Device viewer of the fixture can show, so a
+        # procedure opens a viewer of the stand-in frame source program.
+        fixture['frame_sources'] = frame_sources
     if secret_names:
         # The named secrets that the candidate reads as the environment of an agent
         # panel. The section holds the names: the values are in the private state of
@@ -761,7 +784,7 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
     ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
     ('speech_recorder', '--speech-recorder'), ('speech_transcriber_command', '--speech-transcriber-command'),
-    ('speech_service', '--speech-service'),
+    ('speech_service', '--speech-service'), ('frame_source', '--frame-source'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
 )
 
@@ -849,6 +872,14 @@ def arguments():
         metavar='LINE',
         help='Write speech.transcriber as command with this line in the fixture config, one command '
              'with {file} whose standard output is the text')
+    parser.add_argument(
+        '--frame-source',
+        action='append',
+        default=None,
+        metavar='NAME=COMMAND',
+        help='Write one program of the frame_sources section of the fixture config, so a native Device '
+             'viewer can show it, such as standin=/usr/bin/python3 <script> --frame-source writes the '
+             'settings section and never starts the program; give it more than once for several sources.')
     parser.add_argument(
         '--speech-service',
         metavar='ENDPOINT',
@@ -1100,10 +1131,11 @@ def main():
             seed_secret_rows(secrets_file, named_secrets, secret_rows)
         held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
         speech = speech_section(args.speech_recorder, args.speech_transcriber_command, args.speech_service)
+        frame_sources = frame_sources_section(args.frame_source)
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
-            args.server_command, args.server_address, named_secret_names(held), speech)
+            args.server_command, args.server_address, named_secret_names(held), speech, frame_sources)
         if not args.plain_start:
             # A plain start keeps the home as its own settings writer: the fixture
             # writes no settings file into that home.

@@ -184,8 +184,27 @@ mod tests {
         unique.dedup();
         assert_eq!(names, unique, "one keysym and one name each");
         for name in [
-            "ctrl", "shift", "alt", "super", "enter", "tab", "escape", "backspace", "delete", "space", "up", "down",
-            "left", "right", "home", "end", "pageup", "pagedown", "insert", "menu", "capslock",
+            "ctrl",
+            "shift",
+            "alt",
+            "super",
+            "enter",
+            "tab",
+            "escape",
+            "backspace",
+            "delete",
+            "space",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "insert",
+            "menu",
+            "capslock",
         ] {
             assert!(names.contains(&name), "{name} is a name of the contract");
         }

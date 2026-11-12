@@ -47,7 +47,10 @@ fn vnc_opens_a_tunnelled_device_panel_in_the_default_workspace() {
     assert_eq!(panel.title, "lab");
     let device = panel.device().expect("device state");
     assert_eq!(device.ssh_tunnel.as_ref(), Some(&connection));
-    assert_eq!(device.target.vnc_address().expect("a VNC desktop").to_string(), "127.0.0.1:5900");
+    assert_eq!(
+        device.target.vnc_address().expect("a VNC desktop").to_string(),
+        "127.0.0.1:5900"
+    );
     assert!(device.connect_on_start);
 }
 
@@ -69,7 +72,10 @@ fn the_configured_vnc_port_and_workspace_name_are_used() {
     let workspace_id = app.board.panel_workspace_id(panel_id).expect("workspace");
     assert_eq!(app.board.workspace(workspace_id).unwrap().name, "Ops");
     let device = app.board.panel(panel_id).unwrap().device().expect("device state");
-    assert_eq!(device.target.vnc_address().expect("a VNC desktop").to_string(), "127.0.0.1:5901");
+    assert_eq!(
+        device.target.vnc_address().expect("a VNC desktop").to_string(),
+        "127.0.0.1:5901"
+    );
 }
 
 #[test]
@@ -81,7 +87,13 @@ fn per_host_ports_and_a_typed_port_override_the_global_vnc_port() {
     let (_temp, ctx, mut app) = test_app_with_config_and_startup(&config, ephemeral());
     let target = |app: &crate::app::HorizonApp, panel_id| {
         let panel = app.board.panel(panel_id).unwrap();
-        panel.device().expect("device state").target.vnc_address().expect("a VNC desktop").to_string()
+        panel
+            .device()
+            .expect("device state")
+            .target
+            .vnc_address()
+            .expect("a VNC desktop")
+            .to_string()
     };
 
     let by_label = app

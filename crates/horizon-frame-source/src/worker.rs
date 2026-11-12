@@ -31,7 +31,7 @@ use crate::{
     Error,
     control::{self, Message, Outgoing, Phase},
     picture,
-    session::{Config, Event, IDLE_POLL, MAX_LABEL_CHARS, POLL, Shared, STOP_WAIT, ViewQueue},
+    session::{Config, Event, IDLE_POLL, MAX_LABEL_CHARS, POLL, STOP_WAIT, Shared, ViewQueue},
     text,
 };
 
@@ -142,7 +142,10 @@ fn supervise(
         }
         if let Some(size) = viewer.views.due(Instant::now()) {
             let size = viewer.clamp(size);
-            write(stdin.as_mut().map(|stdin| &mut *stdin), &control::view(Some(size[0]), Some(size[1]), None));
+            write(
+                stdin.as_mut().map(|stdin| &mut *stdin),
+                &control::view(Some(size[0]), Some(size[1]), None),
+            );
         }
         // A program that ended by itself is the end of the viewer, whatever its
         // threads say, and its own words are the reason.

@@ -217,7 +217,10 @@ mod tests {
             );
         }
         for (width, height) in [(16, 16), (8192, 8192), (1920, 1080)] {
-            assert!(Header::parse(&header_bytes(&header(width, height))).is_ok(), "{width}x{height}");
+            assert!(
+                Header::parse(&header_bytes(&header(width, height))).is_ok(),
+                "{width}x{height}"
+            );
         }
     }
 
@@ -234,10 +237,7 @@ mod tests {
         for cut in [1, 20, HEADER_BYTES, HEADER_BYTES + 1, whole.len() - 1] {
             let mut stream = Cursor::new(whole[..cut].to_vec());
             let error = read(&mut stream).expect_err("a picture that ended early");
-            assert!(
-                matches!(error, Error::Picture(Fault::Short { .. })),
-                "{cut}: {error:?}"
-            );
+            assert!(matches!(error, Error::Picture(Fault::Short { .. })), "{cut}: {error:?}");
         }
         let mut empty = Cursor::new(Vec::new());
         assert!(read(&mut empty).expect("no picture").is_none());
