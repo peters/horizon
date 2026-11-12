@@ -74,8 +74,7 @@ impl Terminal {
         let pty =
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
         let child_pid = Some(pty.child().id());
-        #[cfg(target_os = "linux")]
-        let child_start_time = child_pid.and_then(process_start_time);
+        let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
         let pty_term = match output {
             PtyOutput::Shown => term.clone(),
             PtyOutput::Discarded => Arc::new(FairMutex::new(Term::new(
@@ -100,7 +99,6 @@ impl Terminal {
             event_sender,
             event_rx,
             event_loop_handle,
-            #[cfg(target_os = "linux")]
             child_start_time,
             child_pid,
             rows,
@@ -194,7 +192,13 @@ impl Terminal {
         }
     }
 
-    pub(crate) fn owned_process_id(&self) -> Option<u32> {
+    /// The process that this panel owns, with the start time that tells it from
+    /// a later process that took the same id.
+    ///
+    /// `None` while the identity is not known yet, which no caller can mistake
+    /// for a proof of ownership. The caller that compares the value with the
+    /// system runs that read off the UI thread.
+    pub(crate) fn owned_process(&self) -> Option<crate::process::OwnedProcess> {
         if !self.work_continuation.owns_process
             || self.child_exited
             || self.shutdown_complete.load(Ordering::Acquire)
@@ -206,11 +210,8 @@ impl Terminal {
             return None;
         }
         let pid = self.child_pid?;
-        #[cfg(target_os = "linux")]
-        if self.child_start_time.is_none() || process_start_time(pid) != self.child_start_time {
-            return None;
-        }
-        Some(pid)
+        let start_time = self.child_start_time.get()?.clone()?;
+        Some(crate::process::OwnedProcess { pid, start_time })
     }
 
     #[must_use]
@@ -315,18 +316,6 @@ impl Drop for Terminal {
         // synchronously wait for the child, so join and destruction stay on a worker.
         self.release_when_exited();
     }
-}
-
-#[cfg(target_os = "linux")]
-fn process_start_time(pid: u32) -> Option<u64> {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()?
-        .rsplit_once(')')?
-        .1
-        .split_whitespace()
-        .nth(19)?
-        .parse()
-        .ok()
 }
 
 // The regression uses a Unix shell and PTY child that ignores SIGHUP.

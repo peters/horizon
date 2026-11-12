@@ -7,6 +7,7 @@ pub mod attachments;
 pub mod block;
 pub mod manifest;
 pub mod paths;
+pub mod process_info;
 pub mod remote_authorization;
 pub mod remote_release;
 pub mod remote_slots;

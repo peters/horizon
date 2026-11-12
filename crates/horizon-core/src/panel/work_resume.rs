@@ -19,9 +19,9 @@ pub(in crate::panel) struct WorkPanel {
     pub(in crate::panel) launch_cwd: Option<PathBuf>,
     pub(in crate::panel) ssh_connection: Option<SshConnection>,
     pub(in crate::panel) work_resume: crate::agent_work::ResumePolicy,
-    /// The pid of the process that this panel owns, so a competing session of
-    /// the same conversation is not this one.
-    pub(in crate::panel) owned_process_id: Option<u32>,
+    /// The process that this panel owns, so a competing session of the same
+    /// conversation is not this one.
+    pub(in crate::panel) owned_process: Option<crate::process::OwnedProcess>,
     /// The file of an editor panel, which a restart reads again.
     pub(in crate::panel) editor_file: Option<PathBuf>,
 }
@@ -39,7 +39,7 @@ impl Panel {
             launch_cwd: self.launch_cwd.clone(),
             ssh_connection: self.ssh_connection.clone(),
             work_resume: self.work_resume.clone(),
-            owned_process_id: self.terminal().and_then(crate::terminal::Terminal::owned_process_id),
+            owned_process: self.terminal().and_then(crate::terminal::Terminal::owned_process),
             editor_file: self.content.editor().and_then(|editor| editor.file_path.clone()),
         }
     }
@@ -152,7 +152,7 @@ impl WorkPanel {
     ) -> Result<Option<String>> {
         if brief.is_some() {
             self.check_saved_work_session()?;
-            self.check_work_session_exit(self.owned_process_id)?;
+            self.check_work_session_exit(self.owned_process.as_ref())?;
         }
         let owned = self
             .launch_args
@@ -255,7 +255,12 @@ impl WorkPanel {
         state
     }
 
-    fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
+    fn check_work_session_exit(&self, owned: Option<&crate::process::OwnedProcess>) -> Result<()> {
+        // The read of the start time runs here, on the worker that prepares a
+        // restart, and never during a frame.
+        let owned_pid = owned
+            .filter(|owned| owned.still_names_this_process())
+            .map(|owned| owned.pid);
         if self.kind == PanelKind::Claude
             && self
                 .session_binding
@@ -287,7 +292,11 @@ impl Panel {
     }
 
     pub(super) fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
-        self.work_panel().check_work_session_exit(owned_pid)
+        let owned = owned_pid.map(|pid| crate::process::OwnedProcess {
+            pid,
+            start_time: crate::process::start_time(pid).unwrap_or_default(),
+        });
+        self.work_panel().check_work_session_exit(owned.as_ref())
     }
 }
 

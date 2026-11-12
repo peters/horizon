@@ -234,7 +234,8 @@ fn exercise_competing_session(panel: &mut Panel, home: &std::path::Path) {
     let pid = panel
         .terminal()
         .expect("terminal")
-        .owned_process_id()
+        .owned_process()
+        .map(|owned| owned.pid)
         .expect("owned live process");
     std::fs::write(
         directory.join("owned-stale.json"),

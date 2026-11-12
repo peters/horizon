@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "macos")]
+use horizon_browser_control::process_info;
 use horizon_browser_control::{atomic_file, manifest};
 
 #[cfg(unix)]
@@ -462,27 +464,16 @@ fn platform_process_start_identity(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn platform_process_start_identity(pid: u32) -> Option<String> {
-    command_identity(
-        Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", "lstart="])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?,
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn command_identity(output: std::process::Output) -> Option<String> {
+    let output = Command::new(process_info::START_TIME_PROGRAM)
+        .args(process_info::start_time_arguments(pid))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
-    let identity = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .trim_start_matches('\u{feff}')
-        .trim()
-        .to_string();
-    if identity.is_empty() { None } else { Some(identity) }
+    process_info::parse_start_time(&output.stdout)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
