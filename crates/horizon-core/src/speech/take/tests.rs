@@ -237,19 +237,6 @@ impl Take {
             .sum()
     }
 
-    fn files(&self) -> Vec<String> {
-        fs::read_dir(self.folder())
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-}
-
-impl Take {
     /// The process ids of the recorders that this test started, as the stand-ins wrote
     /// them.
     fn recorder_pids(&self) -> Vec<u32> {
@@ -261,6 +248,17 @@ impl Take {
             .filter_map(|entry| fs::read_to_string(entry.path()).ok())
             .filter_map(|text| text.trim().parse().ok())
             .collect()
+    }
+
+    fn files(&self) -> Vec<String> {
+        fs::read_dir(self.folder())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -312,19 +310,7 @@ fn alive(pid: u32) -> bool {
 
 /// The pid that a recorder of this test wrote, once the write of it is complete.
 fn pid_of(take: &Take, name: &str) -> u32 {
-    let deadline = Instant::now() + PATIENCE;
-    loop {
-        if let Ok(text) = fs::read_to_string(take.pid_file(name))
-            && let Ok(pid) = text.trim().parse()
-        {
-            return pid;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the pid of the recorder {name} never arrived"
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    pid_of_file(&take.pid_file(name))
 }
 
 /// The pid that a stand-in recorder wrote into `file`, once the write of it is
