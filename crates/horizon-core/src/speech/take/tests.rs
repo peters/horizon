@@ -249,8 +249,33 @@ impl Take {
     }
 }
 
+impl Take {
+    /// The process ids of the recorders that this test started, as the stand-ins wrote
+    /// them.
+    fn recorder_pids(&self) -> Vec<u32> {
+        let Ok(entries) = fs::read_dir(self.home.path()) else {
+            return Vec::new();
+        };
+        (entries.flatten())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".pid"))
+            .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+            .filter_map(|text| text.trim().parse().ok())
+            .collect()
+    }
+}
+
 impl Drop for Take {
     fn drop(&mut self) {
+        // A test that failed or panicked before it stopped its recorder must not leave
+        // one that records: the drop ends every recorder of this test by its own
+        // process id. A recorder that already ended makes a signal reach nothing.
+        for pid in self.recorder_pids() {
+            if alive(pid)
+                && let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw)
+            {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        }
         for child in &mut self.children {
             let _ = child.kill();
             let _ = child.wait();
@@ -298,6 +323,21 @@ fn pid_of(take: &Take, name: &str) -> u32 {
             Instant::now() < deadline,
             "the pid of the recorder {name} never arrived"
         );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The pid that a stand-in recorder wrote into `file`, once the write of it is
+/// complete.
+fn pid_of_file(file: &Path) -> u32 {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Ok(text) = fs::read_to_string(file)
+            && let Ok(pid) = text.trim().parse()
+        {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "the pid in {} never arrived", file.display());
         std::thread::sleep(Duration::from_millis(2));
     }
 }
@@ -727,6 +767,104 @@ fn a_take_that_records_when_the_window_closes_leaves_no_file_and_no_child() {
     drop(input);
     take.wait_for("the end of the recorder", || !alive(recorder_pid));
     take.wait_for("the delete of the file", || take.files().is_empty());
+}
+
+/// The variables of the helper of the test below: the home of its take, the recorder
+/// stand-in of the take, and the file that the stand-in writes its process id into.
+const HELPER_HOME: &str = "HZ_SPEECH_TAKE_HELPER_HOME";
+const HELPER_RECORDER: &str = "HZ_SPEECH_TAKE_HELPER_RECORDER";
+const HELPER_PID: &str = "HZ_SPEECH_TAKE_HELPER_PID";
+
+/// The name of the helper test that a test starts in a process of its own.
+const HELPER_TEST: &str = "speech::take::tests::a_helper_that_owns_a_take_waits_for_its_parent";
+
+/// The helper of the test below: this process owns a take and records until its
+/// parent kills it.
+///
+/// The take of a real window lives in the process of that window, and a window that a
+/// kill ends runs no cleanup. Only a process of its own shows that the recorder of such
+/// a take ends, so the test below starts this function in one, and a run of the suite
+/// alone finds no variable of the helper and answers at once.
+#[test]
+fn a_helper_that_owns_a_take_waits_for_its_parent() {
+    let (Some(home), Some(recorder), Some(pid)) = (
+        std::env::var_os(HELPER_HOME),
+        std::env::var_os(HELPER_RECORDER),
+        std::env::var_os(HELPER_PID),
+    ) else {
+        return;
+    };
+    let pid = PathBuf::from(pid);
+    let recorder = recorder.to_string_lossy().into_owned();
+    let plan = plan(
+        CommandLine::parse(&format!("{recorder} {{file}}")).expect("a recorder line"),
+        Transcriber::Command(CommandLine::parse("/bin/true {file}").expect("a transcriber line")),
+    );
+    let input = SpeechInput::start(SpeechWorker::new(PathBuf::from(home), Arc::new(())));
+    input.begin(plan, TARGET);
+    let deadline = Instant::now() + PATIENCE;
+    while !pid.exists() {
+        assert!(Instant::now() < deadline, "the recorder of the helper never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The parent kills this process now, so the take never ends by itself.
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+#[test]
+fn a_take_that_its_window_kills_leaves_no_recorder() {
+    let home = tempfile::tempdir().expect("a home of a test");
+    let prepared = home.path().join("prepared.wav");
+    fs::write(&prepared, b"RIFF$\x00\x00\x00WAVEfmt ").expect("a recording of a test");
+    let pid_file = home.path().join("helper.pid");
+    let recorder = home.path().join("rec");
+    fs::write(
+        &recorder,
+        format!(
+            "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\nwhile :; do sleep 0.02; done\n",
+            prepared.display(),
+            pid_file.display()
+        ),
+    )
+    .expect("a recorder of a test");
+    fs::set_permissions(&recorder, fs::Permissions::from_mode(0o700)).expect("an executable recorder");
+
+    let mut helper = Command::new(std::env::current_exe().expect("the test binary"))
+        .args(["--exact", HELPER_TEST, "--nocapture", "--test-threads", "1"])
+        .env(HELPER_HOME, home.path())
+        .env(HELPER_RECORDER, &recorder)
+        .env(HELPER_PID, &pid_file)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the helper of the test");
+
+    // The recorder of the helper records before the helper is killed.
+    let deadline = Instant::now() + PATIENCE;
+    while !pid_file.exists() {
+        assert!(
+            helper.try_wait().expect("the state of the helper").is_none(),
+            "the helper of the test ended before it recorded"
+        );
+        assert!(Instant::now() < deadline, "the recorder of the helper never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let recorder_pid = pid_of_file(&pid_file);
+    assert!(alive(recorder_pid), "the recorder of the helper records");
+
+    // The window is killed: no function of its process runs, so only the promise that
+    // the recorder holds ends it.
+    let _ = helper.kill();
+    let _ = helper.wait();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while alive(recorder_pid) {
+        assert!(
+            Instant::now() < deadline,
+            "the recorder of a killed window still runs after one second"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// The key store of a test: one value for one name.

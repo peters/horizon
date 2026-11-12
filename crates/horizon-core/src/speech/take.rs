@@ -386,7 +386,9 @@ impl Worker {
             );
             return;
         }
-        self.close_header(&file, bytes);
+        if let Err(error) = close_take_header(&file, bytes) {
+            tracing::warn!(path = %file.display(), %error, "the header of a take stays open");
+        }
         self.send(target, SpeechEventKind::Writing);
         let file_name = file
             .file_name()
@@ -571,20 +573,6 @@ impl Worker {
     fn failed(&self, target: PanelId, message: &str) {
         self.send(target, SpeechEventKind::Failed(cut_message(message)));
     }
-
-    /// Write the length of the take into a header that its recorder never closed.
-    ///
-    /// A recorder that the stop had to kill leaves the two length fields of a
-    /// canonical PCM header at zero or at `0xFFFFFFFF`, and a service reads such a
-    /// file as a recording of no data. The fields are written from the size of the
-    /// file here, before either transcriber reads it, and a file of any other shape
-    /// is sent as it is. A take that cannot be repaired is still sent: the file may
-    /// be the shape of another recorder.
-    fn close_header(&self, file: &Path, bytes: u64) {
-        if let Err(error) = close_take_header(file, bytes) {
-            tracing::warn!(path = %file.display(), %error, "the header of a take stays open");
-        }
-    }
 }
 
 /// The size of the file of one take, or 0 when it cannot be read.
@@ -600,6 +588,12 @@ fn read_take_file(file: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// Write the two length fields of an unclosed header of `file` from its size.
+///
+/// A recorder that the stop had to kill leaves the two length fields of a canonical
+/// PCM header at zero or at `0xFFFFFFFF`, and a service reads such a file as a
+/// recording of no data. The fields are written here, before either transcriber reads
+/// the file, and a file of any other shape is left as it is. A file that cannot be
+/// repaired is still sent: it may be the shape of another recorder.
 fn close_take_header(file: &Path, bytes: u64) -> std::io::Result<()> {
     if bytes <= wav::CANONICAL_HEADER as u64 {
         return Ok(());

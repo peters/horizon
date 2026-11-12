@@ -13,8 +13,10 @@ that had the focus. The trust boundary is
 
 ## What one take does
 
-1. The hotkey goes down. Horizon starts the recorder as its exact child, and the
-   recording goes to `<Horizon home>/speech/take-<random>.wav`.
+1. The hotkey goes down. Horizon starts the recorder, and the recording goes to
+   `<Horizon home>/speech/take-<random>.wav`. A small supervisor shell is the parent
+   of that recorder, so a Horizon that a crash or a kill ends still stops the
+   recorder instead of holding the microphone open.
 2. The hotkey comes up. Horizon sends `SIGINT` to that exact child. When the
    child still runs after 0.3 seconds, Horizon sends `SIGTERM` to that id, and it
    kills the id when two seconds pass. `SIGTERM` is the signal that ends a

@@ -47,7 +47,7 @@ fn little_u32(bytes: &[u8], at: usize) -> Option<u32> {
         .map(u32::from_le_bytes)
 }
 
-fn has_marker(bytes: &[u8], at: usize, marker: &[u8; 4]) -> bool {
+fn has_marker(bytes: &[u8], at: usize, marker: [u8; 4]) -> bool {
     bytes.get(at..at + 4).is_some_and(|field| field == marker)
 }
 
@@ -55,10 +55,10 @@ fn has_marker(bytes: &[u8], at: usize, marker: &[u8; 4]) -> bool {
 /// two length fields.
 fn canonical(header: &[u8]) -> Option<Fields> {
     if header.len() < CANONICAL_HEADER
-        || !has_marker(header, 0, b"RIFF")
-        || !has_marker(header, 8, b"WAVE")
-        || !has_marker(header, 12, b"fmt ")
-        || !has_marker(header, 36, b"data")
+        || !has_marker(header, 0, *b"RIFF")
+        || !has_marker(header, 8, *b"WAVE")
+        || !has_marker(header, 12, *b"fmt ")
+        || !has_marker(header, 36, *b"data")
     {
         return None;
     }
@@ -138,6 +138,16 @@ pub(super) fn header_of(data_bytes: u32, length: u32) -> Vec<u8> {
 mod tests {
     use super::{CANONICAL_HEADER, OPEN_LENGTH_MAX, close, header_of};
 
+    #[test]
+    fn the_canonical_header_is_the_length_that_the_repair_reads() {
+        // The tests below state the length of the header as a field of the header, so
+        // this one keeps the two in step.
+        assert_eq!(usize::try_from(HEADER).expect("a header of 44 bytes"), CANONICAL_HEADER);
+    }
+
+    /// The length of the canonical header as a field of the header.
+    const HEADER: u32 = 44;
+
     fn lengths(header: &[u8]) -> (u32, u32) {
         let riff = u32::from_le_bytes(header[4..8].try_into().expect("the RIFF size"));
         let data = u32::from_le_bytes(header[40..44].try_into().expect("the data size"));
@@ -156,22 +166,22 @@ mod tests {
     fn a_header_that_its_recorder_never_closed_gets_the_length_of_the_file() {
         // A recorder that Horizon killed leaves zero, so the file of 44 + 1024 bytes
         // is a recording of 1024 bytes after the repair.
-        let (header, repaired) = closed(0, 0, CANONICAL_HEADER as u64 + 1024);
+        let (header, repaired) = closed(0, 0, u64::from(HEADER) + 1024);
         assert!(repaired);
-        assert_eq!(lengths(&header), (1024 + CANONICAL_HEADER as u32 - 8, 1024));
+        assert_eq!(lengths(&header), (1024 + HEADER - 8, 1024));
         assert_eq!(lengths(&header), (1060, 1024));
     }
 
     #[test]
     fn a_header_that_says_the_longest_length_is_closed_the_same_way() {
-        let (header, repaired) = closed(OPEN_LENGTH_MAX, OPEN_LENGTH_MAX, CANONICAL_HEADER as u64 + 512);
+        let (header, repaired) = closed(OPEN_LENGTH_MAX, OPEN_LENGTH_MAX, u64::from(HEADER) + 512);
         assert!(repaired);
-        assert_eq!(lengths(&header), (512 + CANONICAL_HEADER as u32 - 8, 512));
+        assert_eq!(lengths(&header), (512 + HEADER - 8, 512));
     }
 
     #[test]
     fn one_open_field_of_a_closed_recording_is_closed_with_the_other() {
-        let (header, repaired) = closed(0, 1024, CANONICAL_HEADER as u64 + 1024);
+        let (header, repaired) = closed(0, 1024, u64::from(HEADER) + 1024);
         assert!(repaired);
         assert_eq!(lengths(&header), (1060, 1024));
     }
@@ -180,7 +190,7 @@ mod tests {
     fn a_header_that_its_recorder_closed_is_left_as_it_is() {
         let mut header = header_of(1024, 1060);
         let before = header.clone();
-        assert!(!close(&mut header, CANONICAL_HEADER as u64 + 1024));
+        assert!(!close(&mut header, u64::from(HEADER) + 1024));
         assert_eq!(header, before, "a closed header is the recorder's own bytes");
     }
 
@@ -188,7 +198,7 @@ mod tests {
     fn a_file_that_is_no_longer_than_its_header_is_left_as_it_is() {
         let mut header = header_of(0, 0);
         let before = header.clone();
-        assert!(!close(&mut header, CANONICAL_HEADER as u64));
+        assert!(!close(&mut header, u64::from(HEADER)));
         assert_eq!(header, before);
     }
 
@@ -199,7 +209,7 @@ mod tests {
         let mut extended = header_of(0, 0);
         extended[16..20].copy_from_slice(&18u32.to_le_bytes());
         let before = extended.clone();
-        assert!(!close(&mut extended, CANONICAL_HEADER as u64 + 1024));
+        assert!(!close(&mut extended, u64::from(HEADER) + 1024));
         assert_eq!(extended, before);
 
         // A file of a recorder that writes no `RIFF` header at all, such as a stream
@@ -214,7 +224,7 @@ mod tests {
         let mut short = header_of(0, 0);
         short.truncate(CANONICAL_HEADER - 4);
         let before = short.clone();
-        assert!(!close(&mut short, CANONICAL_HEADER as u64 + 1024));
+        assert!(!close(&mut short, u64::from(HEADER) + 1024));
         assert_eq!(short, before);
     }
 }

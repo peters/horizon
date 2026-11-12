@@ -336,16 +336,73 @@ pub enum ProgramStart {
     Failed,
 }
 
+/// The shell that runs one started program under a supervisor.
+const SUPERVISOR_SHELL: &str = "/bin/sh";
+
+/// How long the supervisor of a started program is given to report the process id of
+/// that program, and to end after the program was killed.
+const SUPERVISOR_WAIT: Duration = Duration::from_secs(2);
+
+/// The script of the supervisor of one started program, and the reason for its shape.
+///
+/// The program is a positional parameter of this script, so the line that a person
+/// wrote in the settings is never read as shell text and no argument is
+/// interpolated again. The supervisor runs the program as its own child, reports the
+/// process id of that child on its standard output, and holds the read end of a pipe
+/// whose write end this process keeps. It ends when the program ends, with the status
+/// of the program.
+///
+/// The second half is the promise that a program does not outlive this process. A
+/// process that dies leaves its pipe closed, whatever ended it, so the supervisor
+/// sends `SIGTERM` to its child and `SIGKILL` one second later: a recorder of speech
+/// input that a killed window left behind then stops recording instead of holding the
+/// microphone of the person open with no window that shows it. The group of the
+/// watcher takes the read end on file descriptor 3, because a non-interactive shell
+/// gives the standard input of an asynchronous list `/dev/null`, and the program gets
+/// neither descriptor.
+const SUPERVISOR: &str = "\
+exec 3<&0
+\"$@\" </dev/null >/dev/null 3<&- &
+child=$!
+printf '%s\\n' \"$child\"
+{
+  while read -r _; do :; done
+  kill -TERM \"$child\" 2>/dev/null
+  sleep 1
+  kill -KILL \"$child\" 2>/dev/null
+} 0<&3 >/dev/null 2>/dev/null &
+watcher=$!
+wait \"$child\"
+status=$?
+kill -TERM \"$watcher\" 2>/dev/null
+wait \"$watcher\" 2>/dev/null
+exit \"$status\"
+";
+
 /// One program of this process that runs until its caller stops it.
 ///
 /// A recorder of speech input runs while a hotkey is down, so its caller starts it,
 /// polls it and stops it by its own process id: [`StartedProgram::signal`] sends one
-/// signal to that id and to no process group, so no other program of this computer
-/// can be touched. The standard error of the child is read while it runs, so a child
-/// that fills the pipe cannot stop before its end, and the last line of it answers
-/// why a child ended early.
+/// signal to the process id of that program and to no process group, so no other
+/// program of this computer can be touched. The program is the child of a small
+/// supervisor shell whose process id this type reports as its own end: the supervisor
+/// reports the process id of the program, and [`Self::try_wait`] answers the end of
+/// the program. The standard error of the program is read while it runs, so a program
+/// that fills the pipe cannot stop before its end, and the last line of it answers why
+/// a program ended early.
+///
+/// The supervisor holds one end of a pipe of this process, so a program that this
+/// process started and could not stop is ended by the supervisor once this process is
+/// gone. [`Drop`] closes that pipe too, so no program of a take outlives the handle
+/// that started it.
 pub struct StartedProgram {
-    child: Child,
+    /// The supervisor shell, which ends with the program and reports its status.
+    supervisor: Child,
+    /// The process id of the program, which every signal of a caller goes to.
+    recorder: u32,
+    /// The write end of the pipe that the supervisor watches. Closing it ends a
+    /// program that still runs.
+    beacon: Option<std::process::ChildStdin>,
     stderr: Option<thread::JoinHandle<Result<Zeroizing<Vec<u8>>, ProgramFailure>>>,
 }
 
@@ -354,42 +411,65 @@ impl StartedProgram {
     ///
     /// # Errors
     /// Reports [`ProgramStart::NotInstalled`] when no folder of the environment
-    /// holds the program, and [`ProgramStart::Failed`] when the child cannot be
-    /// started.
+    /// holds the program, and [`ProgramStart::Failed`] when the supervisor or the
+    /// program cannot be started.
     pub fn start(program: &Path, args: &[OsString], environment: &ProgramEnvironment) -> Result<Self, ProgramStart> {
         crate::ui_thread::blocking("a program of this process is started and left to run");
-        let mut command = Command::new(program);
+        // The supervisor runs the program, so a name that no folder holds is answered
+        // here and not by the shell of the supervisor.
+        if !is_installed(program, environment) {
+            return Err(ProgramStart::NotInstalled);
+        }
+        let mut command = Command::new(SUPERVISOR_SHELL);
         command
+            .arg("-c")
+            .arg(SUPERVISOR)
+            .arg("sh")
+            .arg(program)
             .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         environment.apply(&mut command);
-        let child = spawn_started(&mut command)?;
-        let mut child = child;
-        let stderr = child
+        let mut supervisor = spawn_started(&mut command)?;
+        let reported = supervisor.stdout.take().map(reported_recorder);
+        let stderr = supervisor
             .stderr
             .take()
             .map(|stderr| thread::spawn(move || read_capped(stderr)));
-        Ok(Self { child, stderr })
+        let beacon = supervisor.stdin.take();
+        let recorder = reported.and_then(|reported| reported.recv_timeout(SUPERVISOR_WAIT).ok().flatten());
+        let Some(recorder) = recorder else {
+            // No process id means no program that a caller can stop, so this start
+            // keeps nothing.
+            let _ = supervisor.kill();
+            let _ = supervisor.wait();
+            return Err(ProgramStart::Failed);
+        };
+        Ok(Self {
+            supervisor,
+            recorder,
+            beacon,
+            stderr,
+        })
     }
 
-    /// The process id of the child. Every signal of this type goes to this id and
-    /// to no group.
+    /// The process id of the program that this supervisor runs. Every signal of this
+    /// type goes to this id and to no group.
     #[must_use]
     pub fn id(&self) -> u32 {
-        self.child.id()
+        self.recorder
     }
 
-    /// Whether the child ended, and the status that it ended with.
+    /// Whether the program ended, and the status that it ended with.
     pub fn try_wait(&mut self) -> Option<ExitStatus> {
-        self.child.try_wait().ok().flatten()
+        self.supervisor.try_wait().ok().flatten()
     }
 
-    /// Send `signal` to the process id of this child.
+    /// Send `signal` to the process id of this program.
     ///
-    /// Answers `false` when the signal did not reach the child, which a child that
-    /// already ended causes.
+    /// Answers `false` when the signal did not reach the program, which a program
+    /// that already ended causes.
     pub fn signal(&self, signal: Signal) -> bool {
         let Ok(raw) = i32::try_from(self.id()) else {
             return false;
@@ -400,22 +480,80 @@ impl StartedProgram {
         rustix::process::kill_process(pid, signal).is_ok()
     }
 
-    /// Send `SIGKILL` to the process id of this child, and reap it.
+    /// Send `SIGKILL` to the process id of this program, and reap it through the
+    /// supervisor that owns it.
     pub fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.signal(Signal::KILL);
+        // The beacon goes as well, so a supervisor whose program is gone has nothing
+        // left to watch.
+        self.beacon.take();
+        let deadline = Instant::now() + SUPERVISOR_WAIT;
+        loop {
+            match self.supervisor.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => {}
+                Err(_) => break,
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(POLL);
+        }
+        let _ = self.supervisor.kill();
+        let _ = self.supervisor.wait();
     }
 
-    /// The last line of the standard error of a child that ended.
+    /// The last line of the standard error of a program that ended.
     ///
-    /// Call this only after the child ended: the reader of the pipe finishes at the
-    /// end of the child, so this waits for a child that still runs.
+    /// Call this only after the program ended: the reader of the pipe finishes at the
+    /// end of the program, so this waits for a program that still runs.
     pub fn last_stderr_line(&mut self) -> Option<String> {
         let stderr = self.stderr.take()?.join().ok()?.ok()?;
         let text = String::from_utf8_lossy(&stderr);
         let line = text.lines().rev().find(|line| !line.trim().is_empty())?;
         Some(line.trim().to_owned())
     }
+}
+
+impl Drop for StartedProgram {
+    fn drop(&mut self) {
+        // The write end of the pipe is the promise that this process is alive:
+        // closing it ends a program that still runs, and one that ignores `SIGTERM` is
+        // killed by the supervisor one second later.
+        self.beacon.take();
+    }
+}
+
+/// The process id that the supervisor of one program reports on its standard output.
+///
+/// The reader keeps reading after the line, because a supervisor that prints more
+/// must not hold its pipe full, and it stops at the end of the supervisor.
+fn reported_recorder(stdout: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Option<u32>> {
+    let (reported, answers) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut stdout = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let recorder = match std::io::BufRead::read_line(&mut stdout, &mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => line.trim().parse::<u32>().ok(),
+        };
+        let _ = reported.send(recorder);
+        let mut rest = Vec::new();
+        let _ = stdout.take(MAX_OUTPUT_BYTES).read_to_end(&mut rest);
+    });
+    answers
+}
+
+/// Whether `program` is a program that `environment` can run, so that a name that no
+/// folder of it holds is one answer for the caller and not a shell message.
+fn is_installed(program: &Path, environment: &ProgramEnvironment) -> bool {
+    if program.is_absolute() || program.components().count() > 1 {
+        return is_program(program);
+    }
+    program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| environment.find(name).is_some())
 }
 
 /// Start a child of this process, and try again while this computer cannot start it

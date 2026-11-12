@@ -85,14 +85,18 @@ What the clean does not guarantee:
   by the path of the take, and nothing else is replaced. The path is
   `<Horizon home>/speech/take-<random>.wav`; its name holds no space, no
   metacharacter and no user text.
-- **No shell runs, and no argument is interpolated again.** A line that is empty,
-  or a line whose program is empty, is a typed refusal and no take starts.
+- **No argument of the line is interpolated again.** Horizon runs one fixed script
+  of a supervisor shell with the program and its arguments as positional
+  parameters, so the line of the settings is never read as shell text: a `;`, a
+  `$(...)` or a newline stays a character of one argument. A line that is empty, or
+  a line whose program is empty, is a typed refusal and no take starts.
 - **The child gets the environment of Horizon.** The recorder and the command of
   the person read `PATH`, `HOME` and the variables of the session, and they get
   no named secret. A value of a named secret is never in the environment of a
   program that Horizon starts for speech input.
-- **The recorder is the exact child.** Horizon starts one program, remembers its
-  process id, and sends `SIGINT` to that id. When the child still runs after 0.3
+- **The recorder is the exact program.** Horizon starts one program under the
+  supervisor shell, reads the process id of that program from the supervisor, and
+  sends `SIGINT` to that id. When the child still runs after 0.3
   seconds Horizon sends `SIGTERM` to that id, and when two seconds pass it sends
   `SIGKILL` to that id. No signal goes to a process group and no name is matched,
   so no other program of this computer can be touched.
@@ -103,6 +107,15 @@ What the clean does not guarantee:
   that the first one never reached. Every recorder line of the documents
   (`pw-record`, `arecord`, `ffmpeg`, `rec`) closes the header of its file on
   `SIGTERM`, so the take keeps a length and the stop needs no kill.
+- **The recorder does not outlive the window.** The recorder is the child of a small
+  supervisor shell that holds the read end of a pipe whose write end Horizon keeps.
+  A pipe is closed by the kernel when the process that holds it ends, whatever ends
+  it: a crash, a `SIGKILL`, a panic of the worker or the end of the window. When the
+  pipe closes, the supervisor sends `SIGTERM` to the recorder and `SIGKILL` one
+  second later, so the microphone of the person is not held open by a recorder with
+  no window that shows it. The supervisor also ends when the recorder ends, with the
+  status of the recorder, so a stop that reached the recorder is the whole of the
+  take.
 
 What the guarantees do not cover:
 
@@ -114,6 +127,14 @@ What the guarantees do not cover:
   wrapper that starts another program and waits for it passes `SIGKILL` to
   neither. Give the recorder line the program itself, as the recipes of the
   documents do.
+- **A recorder that ignores `SIGTERM` ends one second later.** The supervisor of a
+  take sends `SIGTERM` and then `SIGKILL`, so such a recorder stops one second after
+  the window ended and not at once.
+- **A supervisor that a person kills leaves the recorder to the kernel.** The
+  guarantee is the pipe: a process that a `SIGKILL` ends runs no code, and only the
+  supervisor that holds the other end of the pipe can end the recorder. A person who
+  kills the supervisor by its own process id ends that promise for that take. Horizon
+  starts one supervisor per take and keeps every one of them until the take ends.
 - **A program that writes to the file after the signal writes what it writes.**
   Horizon deletes the file of the take after every outcome, so a late writer
   writes to a path that is gone.

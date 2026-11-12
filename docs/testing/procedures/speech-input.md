@@ -371,6 +371,16 @@ tests below prove that the take of this procedure passes in that situation too.
    Result: Every test of the module passed, including the two stand-ins that
    ignore `SIGINT` and the one that ignores `SIGINT` and `SIGTERM`.
 
+4. List the recorders that the tests left:
+
+   ```sh
+   ps -eo pid,args | rg "[.]tmp.*/rec " || echo "no recorder stays"
+   ```
+
+   Result: `no recorder stays`. A test that failed before it stopped its recorder
+   ends that recorder by its own process id, and a take whose process a test killed
+   leaves no recorder either.
+
 ### 6.14 SI-14 — A recording that its recorder did not close is still sent
 
 > **CAUTION:** RUN THIS TASK WITH THE STAND-IN RECORDER OF THE SETUP. Do not start
@@ -425,7 +435,7 @@ tests below prove that the take of this procedure passes in that situation too.
   length of its file in its header, and a recording of another shape reaches it
   unchanged.
 - Every test of the module of a take passes as a background job of a
-  non-interactive shell.
+  non-interactive shell, and no recorder of a test stays.
 - The marker value is in the secrets file and in no log file, no settings file
   and no file of a take.
 
