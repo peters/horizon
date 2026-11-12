@@ -279,5 +279,10 @@ fn the_jump_says_one_line_when_no_agent_waits() {
     app.board.focused = None;
     app.go_to_next_attention(&ctx);
     assert_eq!(app.sidebar_notice.as_deref(), Some(super::NOBODY_WAITS));
+    assert_eq!(
+        app.sidebar_notice_tone,
+        crate::app::sidebar::machines::SidebarNoticeTone::Plain,
+        "an answer to a key press is not an error"
+    );
     assert_eq!(app.board.focused, None, "nothing took the focus");
 }

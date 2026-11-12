@@ -308,6 +308,8 @@ pub struct HorizonApp {
     /// machine action that opens nothing both use it.
     pub(in crate::app) sidebar_notice: Option<String>,
     pub(in crate::app) sidebar_notice_until: Option<Instant>,
+    /// The tone of that line: a reason to act, or a plain answer to the person.
+    pub(in crate::app) sidebar_notice_tone: crate::app::sidebar::machines::SidebarNoticeTone,
     /// The line that stays until the person closes it: the panels that an opened
     /// session left out, which a person who looks away at the start would never
     /// read otherwise. It has its own close control and no timer, and a short

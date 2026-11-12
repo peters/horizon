@@ -351,7 +351,7 @@ impl HorizonApp {
     pub(in crate::app) fn go_to_next_attention(&mut self, ctx: &egui::Context) {
         match horizon_core::next_attention_target(&self.attention_targets(), self.board.focused) {
             Some(panel) => self.reveal_selected_panel(ctx, panel),
-            None => self.set_sidebar_notice(NOBODY_WAITS.to_owned()),
+            None => self.set_sidebar_plain_notice(NOBODY_WAITS.to_owned()),
         }
     }
 }

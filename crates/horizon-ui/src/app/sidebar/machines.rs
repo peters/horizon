@@ -41,6 +41,16 @@ pub(in crate::app) struct NoticeClock {
     pub(in crate::app) ahead: Duration,
 }
 
+/// How the short notice of the sidebar is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::app) enum SidebarNoticeTone {
+    /// A reason that the person has to act on.
+    #[default]
+    Error,
+    /// A plain answer to a key press, which names nothing to fix.
+    Plain,
+}
+
 impl NoticeClock {
     /// What this clock reads now.
     fn now(&self) -> Instant {
@@ -179,8 +189,18 @@ impl HorizonApp {
     /// that cannot start and a browser engine that ends at once all say their
     /// reason here, in the danger tone, for [`NOTICE`].
     pub(in crate::app) fn set_sidebar_notice(&mut self, line: String) {
+        self.set_sidebar_notice_in(SidebarNoticeTone::Error, line);
+    }
+
+    /// Says one line that answers a key press of the person and is not an error.
+    pub(in crate::app) fn set_sidebar_plain_notice(&mut self, line: String) {
+        self.set_sidebar_notice_in(SidebarNoticeTone::Plain, line);
+    }
+
+    fn set_sidebar_notice_in(&mut self, tone: SidebarNoticeTone, line: String) {
         self.sidebar_notice = Some(line);
         self.sidebar_notice_until = Some(self.notice_clock.now() + NOTICE);
+        self.sidebar_notice_tone = tone;
     }
 
     /// Says one line that stays until the person closes it, in the machine section.
@@ -274,6 +294,12 @@ impl HorizonApp {
             }
         }
         if let Some(notice) = self.sidebar_notice.clone() {
+            // An error tells the person what to fix; an answer to a key press
+            // only says that nothing waits, so it stays in the muted text.
+            let tone = match self.sidebar_notice_tone {
+                SidebarNoticeTone::Error => theme::PALETTE_RED(),
+                SidebarNoticeTone::Plain => text::secondary(),
+            };
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
@@ -284,7 +310,7 @@ impl HorizonApp {
                     &notice,
                     11.0,
                     text::REGULAR,
-                    theme::PALETTE_RED(),
+                    tone,
                     ui.available_width() - 18.0,
                 ));
             });

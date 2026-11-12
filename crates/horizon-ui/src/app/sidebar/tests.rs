@@ -495,6 +495,40 @@ fn the_notice_of_the_machine_section_wraps_so_its_name_is_readable() {
     );
 }
 
+/// The tone of the notice decides its color, so an answer to a key press never
+/// looks like a reason to act.
+#[test]
+fn the_notice_of_an_error_is_red_and_the_plain_answer_is_muted() {
+    use crate::app::sidebar::machines::SidebarNoticeTone;
+    use crate::test_egui::DiscardTextures;
+
+    let (_temp, mut app) = crate::app::test_support::test_app();
+    let ctx = egui::Context::default();
+    for (tone, colour) in [
+        (SidebarNoticeTone::Error, crate::theme::PALETTE_RED()),
+        (SidebarNoticeTone::Plain, crate::app::sidebar::text::secondary()),
+    ] {
+        let notice = format!("the notice of {tone:?}");
+        match tone {
+            SidebarNoticeTone::Error => app.set_sidebar_notice(notice.clone()),
+            SidebarNoticeTone::Plain => app.set_sidebar_plain_notice(notice.clone()),
+        }
+        assert_eq!(app.sidebar_notice_tone, tone);
+        // A panel shows from its second frame on.
+        let mut drawn = None;
+        for _ in 0..2 {
+            let input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+            let output = ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures();
+            drawn = output.shapes.iter().find_map(|clipped| match &clipped.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == notice => Some(text.galley.clone()),
+                _ => None,
+            });
+        }
+        let galley = drawn.expect("the notice of the sidebar is drawn");
+        assert_eq!(galley.job.sections[0].format.color, colour, "the tone of {tone:?}");
+    }
+}
+
 /// The drawn texts of one frame of the sidebar.
 fn sidebar_frame_texts(ctx: &egui::Context, app: &mut crate::app::HorizonApp) -> Vec<String> {
     use crate::test_egui::DiscardTextures;
