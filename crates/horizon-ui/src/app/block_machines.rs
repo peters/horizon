@@ -370,11 +370,20 @@ fn stopped() -> block::Outcome {
     )
 }
 
+/// How long a test waits for the startup read of the machine list.
+///
+/// The bound is a budget of the test and not a rule of the product: the read
+/// runs on a thread that this computer must schedule, and it opens the secrets of
+/// the home before it reads the registry. A computer that runs this suite beside
+/// other work took more than ten seconds for it.
+#[cfg(test)]
+pub(in crate::app) const MACHINE_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// Waits for the startup read of the machine list, so a test that writes a
 /// record is not overwritten by it.
 #[cfg(test)]
 pub(in crate::app) fn settle_machine_load(app: &mut HorizonApp) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + MACHINE_LOAD_WAIT;
     while app.machine_load_rx.is_some() && std::time::Instant::now() < deadline {
         app.poll_machine_load();
         std::thread::sleep(std::time::Duration::from_millis(5));
