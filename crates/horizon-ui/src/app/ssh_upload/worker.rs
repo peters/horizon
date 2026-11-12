@@ -233,14 +233,21 @@ fn run_upload_worker(
     let mut completed_bytes = 0;
 
     let resolved_destination = match &transport {
-        UploadTransport::Ssh { destination_dir } => match ssh::resolve_remote_directory(connection, destination_dir) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                tracing::warn!(host = %connection.host, destination = %destination_dir, %error, "ssh upload setup failed");
-                let _ = progress_tx.send(UploadMessage::Finished(Err(error)));
-                return;
+        UploadTransport::Ssh { destination_dir } => {
+            match ssh::resolve_remote_directory_cancellable(connection, destination_dir, control_rx) {
+                Ok(path) => Some(path),
+                Err(WorkerExit::Cancelled) => {
+                    tracing::debug!(host = %connection.host, "upload cancelled while it read the destination");
+                    send_cancelled(progress_tx, completed_files, total_files, completed_bytes, total_bytes);
+                    return;
+                }
+                Err(WorkerExit::Failed(error)) => {
+                    tracing::warn!(host = %connection.host, destination = %destination_dir, %error, "ssh upload setup failed");
+                    let _ = progress_tx.send(UploadMessage::Finished(Err(error)));
+                    return;
+                }
             }
-        },
+        }
         UploadTransport::Taildrop { .. } => None,
     };
 
@@ -276,14 +283,7 @@ fn run_upload_worker(
             }
             Err(WorkerExit::Cancelled) => {
                 tracing::debug!(host = %connection.host, file = %file.name, "upload cancelled");
-                let _ = progress_tx.send(UploadMessage::Finished(Ok(UploadOutcome {
-                    cancelled: true,
-                    completed_files,
-                    total_files,
-                    completed_bytes,
-                    total_bytes,
-                    detail: format!("Cancelled after {completed_files} of {total_files} files"),
-                })));
+                send_cancelled(progress_tx, completed_files, total_files, completed_bytes, total_bytes);
                 return;
             }
             Err(WorkerExit::Failed(error)) => {
@@ -307,6 +307,24 @@ fn run_upload_worker(
 
 fn send_upload_snapshot(progress_tx: &Sender<UploadMessage>, snapshot: UploadSnapshot) {
     let _ = progress_tx.send(UploadMessage::Snapshot(snapshot));
+}
+
+/// Answers the window that the person cancelled, with the files that were whole.
+fn send_cancelled(
+    progress_tx: &Sender<UploadMessage>,
+    completed_files: usize,
+    total_files: usize,
+    completed_bytes: u64,
+    total_bytes: u64,
+) {
+    let _ = progress_tx.send(UploadMessage::Finished(Ok(UploadOutcome {
+        cancelled: true,
+        completed_files,
+        total_files,
+        completed_bytes,
+        total_bytes,
+        detail: format!("Cancelled after {completed_files} of {total_files} files"),
+    })));
 }
 
 enum WorkerExit {
