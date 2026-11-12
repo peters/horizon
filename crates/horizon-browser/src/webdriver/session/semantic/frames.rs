@@ -22,7 +22,7 @@ impl Driver {
         max_nodes: u32,
         events: &BrowserEventSender,
     ) -> Result<Value, BrowserControlFailure> {
-        let deadline = Instant::now() + super::super::COMMAND_TIMEOUT;
+        let deadline = Instant::now() + super::super::command_budget(self.host.is_remote());
         let expression = scan_expression(selector, max_nodes);
         let mut scan = self.guarded_semantic_scan(&expression, Some(remaining(deadline)?))?;
         crate::semantic::clear_scan_frames(&mut scan)?;
@@ -257,8 +257,8 @@ fn remaining(deadline: Instant) -> Result<Duration, BrowserControlFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webdriver::session::PendingHistoryStart;
     use crate::webdriver::session::viewport::tests::{events, fixture_driver};
+    use crate::webdriver::session::{COMMAND_TIMEOUT, PendingHistoryStart, command_budget};
     use crate::webdriver::test_server::Server;
     use crate::websocket::JsonWsLink;
     use std::net::TcpListener;
@@ -285,6 +285,12 @@ mod tests {
             commands
         });
         (JsonWsLink::connect(&url).unwrap(), worker)
+    }
+
+    #[test]
+    fn a_semantic_read_of_a_remote_browser_holds_the_link_bound() {
+        assert!(command_budget(true) > command_budget(false));
+        assert_eq!(command_budget(false), COMMAND_TIMEOUT);
     }
 
     #[test]

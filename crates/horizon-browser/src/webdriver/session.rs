@@ -45,6 +45,10 @@ use shutdown::Completion;
 use startup::{BidiLink, establish_bidi, firefox_bidi_mode, start_remote};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+/// The bound of one semantic read of a browser that another computer runs: its
+/// answer crosses the link of its provider, so it holds more than the five
+/// seconds of a loopback browser.
+const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
 /// Page-load bound for the startup navigation, so the servicing loop starts
 /// even when the first page is slow.
@@ -56,6 +60,17 @@ const NAVIGATION_HTTP_TIMEOUT: Duration = Duration::from_millis(PAGE_LOAD_TIMEOU
 // Four keeps a complete physical double-click together while bounding the
 // time before Firefox can publish another frame.
 const MAX_COMMAND_BURST: usize = 4;
+
+/// The bound of one semantic read of a driver: the larger one of a browser that
+/// another computer runs, because its answer crosses the link of its provider,
+/// and the loopback one of a browser of this computer.
+pub(super) const fn command_budget(remote: bool) -> Duration {
+    if remote {
+        REMOTE_COMMAND_TIMEOUT
+    } else {
+        COMMAND_TIMEOUT
+    }
+}
 
 #[allow(clippy::struct_excessive_bools)] // independent per-concern driver flags
 struct Driver {

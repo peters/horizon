@@ -13,14 +13,21 @@
 //!
 //! | Kind | Methods | Sent again after a timeout |
 //! |---|---|---|
-//! | page query and snapshot | `Runtime.evaluate` of a read script, `Page.getFrameTree`, `Page.getLayoutMetrics` | yes |
+//! | page query, scan and snapshot | `Runtime.evaluate` of a read script | yes |
+//! | frame tree, layout metrics | `Page.getFrameTree`, `Page.getLayoutMetrics` | no |
 //! | click, drag, wheel | `Input.dispatchMouseEvent` | no |
 //! | key press and typed text | `Input.dispatchKeyEvent`, `Input.insertText` | no |
 //! | navigation, history, reload | `Page.navigate`, `Page.reload`, `History.*` | no |
 //! | file chooser, download policy, focus, viewport | `DOM.setFileInputFiles`, `Browser.setDownloadBehavior`, `Emulation.*`, `Page.bringToFront` | no |
+//! | viewport screenshot | `Page.captureScreenshot` | no bound is waited on |
 //!
 //! A read is only ever retried, never a call of the second kind: a click that
-//! the page answered after the first bound would otherwise press twice.
+//! the page answered after the first bound would otherwise press twice. The
+//! frame tree and the layout metrics are not repeated here: the scrollbar layout
+//! asks again on its own delay, and the passkey request holds a short bound on
+//! purpose because the frame must still show the calling document. The viewport
+//! screenshot is a request whose answer replaces the next frame, so no call waits
+//! for it and there is no bound to pass.
 
 use std::time::Duration;
 
