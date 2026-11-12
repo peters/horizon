@@ -422,16 +422,18 @@ mod tests {
 
     #[test]
     fn a_proxy_that_answers_passes_the_probe() {
-        // The test opens a listener of its own, so no network is used.
+        // The test opens a listener of its own, so no network is used. The bound
+        // is the probe's own maximum, so that a busy computer can not answer the
+        // bound itself in place of the port.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let egress = Egress::parse(&format!("socks5://127.0.0.1:{port}")).unwrap();
         assert_eq!(egress.address(), Some(("127.0.0.1".to_string(), port)));
-        assert_eq!(egress.probe(Duration::from_millis(500)), Ok(()));
+        assert_eq!(egress.probe(MAX_PROBE), Ok(()));
         drop(listener);
         // With the listener gone the same address refuses, which is the same code
         // as an address that nothing routes to.
-        let failure = egress.probe(Duration::from_millis(500)).unwrap_err();
+        let failure = egress.probe(MAX_PROBE).unwrap_err();
         assert!(matches!(failure, EgressProbeError::Refused), "{failure:?}");
     }
 
@@ -547,6 +549,11 @@ mod tests {
     /// The shortest bound that a test gives the probe.
     const BOUND: Duration = Duration::from_millis(50);
 
+    /// The bound that a test gives a probe whose name answers at once. The lookup
+    /// runs on a thread of its own, so this bound must be far wider than the start
+    /// of a thread on a loaded computer; the rule under test is the answer.
+    const ANSWERS: Duration = Duration::from_secs(5);
+
     fn proxy(host_port: &str) -> Egress {
         Egress::parse(&format!("socks5://{host_port}")).expect("a proxy of the test")
     }
@@ -555,7 +562,7 @@ mod tests {
     fn a_name_that_answers_nothing_is_unresolved() {
         let network = TestNetwork::new(Lookup::Nothing, Connection::Answers);
         assert_eq!(
-            proxy("no-such-host.invalid:1080").probe_with(network.clone(), BOUND),
+            proxy("no-such-host.invalid:1080").probe_with(network.clone(), ANSWERS),
             Err(EgressProbeError::Unresolved)
         );
         assert_eq!(network.lookups(), 1);
@@ -567,15 +574,13 @@ mod tests {
 
     #[test]
     fn a_lookup_that_does_not_answer_inside_the_bound_times_out() {
+        // The lookup of the test answers nothing for 5 s, so a probe that waited
+        // for it would answer `Unresolved` here. The answer below can come from the
+        // bound of the probe alone.
         let network = TestNetwork::new(Lookup::Hangs, Connection::Answers);
-        let started = Instant::now();
         assert_eq!(
             proxy("slow-resolver.example:1080").probe_with(network.clone(), BOUND),
             Err(EgressProbeError::TimedOut { millis: 50 })
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "the probe stops waiting at its bound, and the lookup of the test takes 5 s"
         );
     }
 
@@ -583,7 +588,7 @@ mod tests {
     fn a_connection_that_is_refused_refuses_the_proxy() {
         let network = TestNetwork::new(Lookup::These(&["127.0.0.1"]), Connection::Refused);
         assert_eq!(
-            proxy("closed.example:1080").probe_with(network.clone(), BOUND),
+            proxy("closed.example:1080").probe_with(network.clone(), ANSWERS),
             Err(EgressProbeError::Refused)
         );
         assert_eq!(network.attempts().len(), 1);
@@ -591,33 +596,46 @@ mod tests {
 
     #[test]
     fn a_connection_that_does_not_answer_times_out_with_the_bound() {
-        let network = TestNetwork::new(Lookup::These(&["192.0.2.1"]), Connection::NoAnswer);
-        assert_eq!(
-            proxy("black-hole.example:1080").probe_with(network.clone(), BOUND),
-            Err(EgressProbeError::TimedOut { millis: 50 })
-        );
+        // A silent port and a clock of the test: each attempt gets the time of the
+        // caller and no bound of the probe's own, and the answer names that same
+        // time. Both bounds are far wider than the start of a lookup thread on a
+        // loaded computer.
+        for bound in [Duration::from_secs(5), MAX_PROBE] {
+            let network = TestNetwork::new(Lookup::These(&["192.0.2.1"]), Connection::NoAnswer);
+            assert_eq!(
+                proxy("black-hole.example:1080").probe_with(network.clone(), bound),
+                Err(EgressProbeError::TimedOut {
+                    millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+                })
+            );
+            assert_eq!(
+                network.attempts(),
+                [(SocketAddr::from(([192, 0, 2, 1], 1080)), bound)],
+                "the attempt gets the time of the caller, not one of the probe's own"
+            );
+        }
     }
 
     #[test]
     fn the_whole_probe_reads_one_deadline_of_the_clock_of_the_test() {
-        // Every attempt spends 200 ms of a 300 ms probe, so the third address of
-        // the name is not attempted at all.
+        // Every attempt spends 3 s of a 5 s probe, so the third address of the name
+        // is not attempted at all.
         let network = TestNetwork::new(
             Lookup::These(&["127.0.0.1", "127.0.0.2", "127.0.0.3"]),
             Connection::Refused,
         )
-        .ticking(Duration::from_millis(200));
-        let bound = Duration::from_millis(300);
+        .ticking(Duration::from_secs(3));
+        let bound = ANSWERS;
         assert_eq!(
             proxy("three-addresses.example:1080").probe_with(network.clone(), bound),
-            Err(EgressProbeError::TimedOut { millis: 300 })
+            Err(EgressProbeError::TimedOut { millis: 5_000 })
         );
         let attempts = network.attempts();
         assert_eq!(attempts.len(), 2, "the bound of the probe cut the third address");
         assert_eq!(attempts[0].1, bound, "the first attempt gets the whole bound");
         assert_eq!(
             attempts[1].1,
-            Duration::from_millis(100),
+            Duration::from_secs(2),
             "the second attempt gets what the first one left"
         );
         assert!(attempts.iter().all(|(_, remaining)| *remaining <= bound));

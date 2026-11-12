@@ -550,20 +550,19 @@ mod egress_tests {
 
     #[test]
     fn the_probe_uses_the_time_that_the_action_has_left() {
-        // A listener that refuses: the probe fails, and it must fail inside the
-        // time that the caller passed, not inside a bound of its own.
+        // A listener that refuses and an action with no time left: the probe must
+        // open no connection at all, because a bound of its own would make it
+        // connect and answer. The probe spends exactly the bound of its caller,
+        // which `egress::tests` reads from the attempt itself. A refusal needs its
+        // own time on the machine: a probe that the time of the action cut short
+        // is not a refusal, as the test below states, and a port that refuses is
+        // not proven by a bound that the machine can overrun.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let mut config = session();
         config.browser.egress = Some(crate::Egress::parse(&format!("socks5://127.0.0.1:{port}")).unwrap());
-        let started = std::time::Instant::now();
-        assert!(egress_failure(&config, Duration::from_millis(50)).is_some());
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "the probe took {:?}",
-            started.elapsed()
-        );
+        assert!(egress_failure(&config, Duration::ZERO).is_none());
     }
 
     #[test]

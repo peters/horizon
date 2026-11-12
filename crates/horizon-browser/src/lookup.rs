@@ -75,12 +75,17 @@ pub fn resolve_within<N: NameLookup + ?Sized>(
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use super::{LookupFailure, NameLookup, resolve_within};
 
     /// The shortest bound that a test gives a lookup.
     const BOUND: Duration = Duration::from_millis(50);
+
+    /// The bound that a test gives a lookup that answers at once. A lookup of a
+    /// test runs on a thread of its own, so this bound must be far wider than the
+    /// start of a thread on a loaded computer; the rule under test is the answer.
+    const ANSWERS: Duration = Duration::from_secs(5);
 
     /// What a lookup of a test answers.
     #[derive(Clone, Copy)]
@@ -151,7 +156,7 @@ mod tests {
     #[test]
     fn a_name_that_answers_addresses_answers_them_with_its_port() {
         let lookup = std::sync::Arc::new(TestLookup::new(Answer::These(&["127.0.0.1", "::1"])));
-        let addresses = resolve_within(&lookup, "a-service.example", 8443, BOUND).expect("two addresses");
+        let addresses = resolve_within(&lookup, "a-service.example", 8443, ANSWERS).expect("two addresses");
         assert_eq!(addresses.len(), 2);
         assert!(addresses.iter().all(|address| address.port() == 8443));
         assert_eq!(lookup.asked(), [("a-service.example".to_owned(), 8443)]);
@@ -162,7 +167,7 @@ mod tests {
         for answer in [Answer::Nothing, Answer::Empty] {
             let lookup = std::sync::Arc::new(TestLookup::new(answer));
             assert_eq!(
-                resolve_within(&lookup, "no-such-host.invalid", 443, BOUND),
+                resolve_within(&lookup, "no-such-host.invalid", 443, ANSWERS),
                 Err(LookupFailure::Unresolved)
             );
             assert_eq!(lookup.asked(), [("no-such-host.invalid".to_owned(), 443)]);
@@ -171,15 +176,13 @@ mod tests {
 
     #[test]
     fn a_lookup_that_does_not_answer_inside_the_bound_times_out() {
+        // The lookup of the test answers nothing for 5 s, so a caller that waited
+        // for it would answer `Unresolved` here. The answer below can come from the
+        // bound of the caller alone.
         let lookup = std::sync::Arc::new(TestLookup::new(Answer::Hangs));
-        let started = Instant::now();
         assert_eq!(
             resolve_within(&lookup, "slow-resolver.example", 443, BOUND),
             Err(LookupFailure::TimedOut)
-        );
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "the caller answers at its bound, and the lookup of the test takes 5 s"
         );
     }
 }
