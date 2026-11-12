@@ -881,18 +881,27 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_browser_of_a_panel_ends_when_the_horizon_that_started_it_is_gone() {
-        use std::os::unix::fs::PermissionsExt as _;
         use std::time::Instant;
 
         let directory = tempfile::tempdir().expect("a directory");
         let helper_pid = directory.path().join("helper.pid");
         let stand_in = directory.path().join("browser-stand-in.sh");
-        std::fs::write(
-            &stand_in,
-            "#!/bin/sh\ntrap '' TERM\n/bin/sleep 30 &\nprintf '%s\\n' \"$!\" > \"$(dirname \"$0\")/helper.pid\"\nwait\n",
-        )
-        .expect("the stand-in of a browser");
-        std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o700)).expect("the mode");
+        // A `/bin/sh` child writes the stand-in, as a crate without the helper of
+        // `horizon-core` does: no descriptor of the file stays open here.
+        let written = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf '%s' \"$2\" > \"$1\" && chmod 700 \"$1\"",
+                "browser-stand-in",
+            ])
+            .arg(&stand_in)
+            .arg(
+                "#!/bin/sh\ntrap '' TERM\n/bin/sleep 30 &\n\
+                 printf '%s\\n' \"$!\" > \"$(dirname \"$0\")/helper.pid\"\nwait\n",
+            )
+            .status()
+            .expect("the child that writes the stand-in");
+        assert!(written.success(), "the stand-in of a browser is written");
         let launch = ChromeLaunch {
             command: stand_in.to_string_lossy().into_owned(),
             profile_dir: directory.path().join("profile"),

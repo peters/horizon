@@ -138,7 +138,6 @@ fn watch_script() -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::process::CommandExt as _;
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
@@ -157,10 +156,19 @@ printf '%s\\n' \"$!\" > \"$1\"
 wait
 ";
 
+    /// Writes the stand-in with a `/bin/sh` child, which is what a crate without
+    /// the helper of `horizon-core` does: no descriptor of the file stays open in
+    /// this process, so a fork of another test thread cannot copy it and an `exec`
+    /// never answers `Text file busy`.
     fn stand_in(directory: &Path) -> PathBuf {
         let script = directory.join("stand-in.sh");
-        fs::write(&script, STAND_IN).expect("the stand-in");
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).expect("the mode of the stand-in");
+        let status = Command::new("/bin/sh")
+            .args(["-c", "printf '%s' \"$2\" > \"$1\" && chmod 700 \"$1\"", "stand-in"])
+            .arg(&script)
+            .arg(STAND_IN)
+            .status()
+            .expect("the child that writes the stand-in");
+        assert!(status.success(), "the stand-in is written");
         script
     }
 
