@@ -47,6 +47,7 @@ mod join;
 mod link;
 mod listener;
 mod login;
+mod lookup;
 mod protocol;
 mod refusal;
 mod server;
@@ -69,10 +70,11 @@ pub use intent::{
     MAX_PROBES, MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, MAX_SETTINGS, Op, Outcome, PushReply, SecretBody,
 };
 pub use invite::{InviteError, SERVER_DEVICE, ask, first_invitation, greet, invitation_text};
-pub use join::{JoinBounds, JoinError, join, join_with};
+pub use join::{JoinBounds, JoinError, join, join_with, join_with_lookup};
 pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
 pub use listener::{ListenError, ListenerInfo, TcpServer, run_server_on_tcp};
 pub use login::{hash_code, hash_token, new_code, new_token};
+pub use lookup::LinkLookup;
 pub use protocol::{
     Changes, DeviceList, DeviceLogin, DeviceRemove, DeviceRemoved, DeviceRow, Devices, Frame, Hello, HelloOk, Invite,
     Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait, check_device_name,

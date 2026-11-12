@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 chacha20poly1305.workspace = true
+horizon-browser.workspace = true
 horizon-browser-control.workspace = true
 horizon-core.workspace = true
 rusqlite.workspace = true
@@ -26,7 +27,6 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-horizon-browser.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
 tracing-subscriber.workspace = true

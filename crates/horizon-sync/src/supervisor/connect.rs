@@ -12,19 +12,27 @@
 
 use std::{
     io::{BufRead, BufReader, Write},
-    net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
+    net::{Shutdown, SocketAddr, TcpStream},
     process::{Child, Command, Stdio},
     thread,
     time::Duration,
 };
 
+use horizon_browser::lookup::LookupFailure;
 use horizon_core::server_link::ServerAddress;
+
+use crate::LinkLookup;
 
 use crate::refusal::{LinkRefusal, RefusalCell, drain_within, of_ssh_line};
 use crate::supervisor::MAX_STDERR_LINE;
 
 /// How long one address of the server may take to accept a link.
 const CONNECT_BOUND: Duration = Duration::from_secs(5);
+
+/// How long the name of the server may take to resolve. The resolver of this
+/// computer has no bound of its own, so a name that points at a resolver that is
+/// gone holds a link attempt for the time of that resolver without this one.
+const RESOLVE_BOUND: Duration = Duration::from_secs(5);
 
 /// What a supervisor must end when a link is over or reaches its bound.
 #[derive(Debug)]
@@ -115,12 +123,12 @@ pub(super) fn ssh(command: &mut Command, program: &str, refusal: &RefusalCell) -
 /// link before this call sends one byte, and the fields of the address decide what
 /// the rule is. A name that resolves outside the three ranges of a link is one
 /// plain sentence, and no connection is made.
-pub(super) fn tcp(address: &str, refusal: &RefusalCell) -> Result<Opened, String> {
+pub(super) fn tcp(address: &str, lookup: &LinkLookup, refusal: &RefusalCell) -> Result<Opened, String> {
     let address = ServerAddress::parse(address).map_err(|error| {
         refusal.set(LinkRefusal::Other);
         error.to_string()
     })?;
-    let resolved = resolve(&address, refusal)?;
+    let resolved = resolve(&address, lookup, refusal)?;
     let mut last = None;
     for socket in resolved {
         horizon_core::check_address(socket.ip()).map_err(|error| error.to_string())?;
@@ -155,15 +163,24 @@ pub(super) fn tcp(address: &str, refusal: &RefusalCell) -> Result<Opened, String
 }
 
 /// Every address of `address`, which all pass the rule of the link.
-fn resolve(address: &ServerAddress, refusal: &RefusalCell) -> Result<Vec<SocketAddr>, String> {
+///
+/// The lookup runs on a thread of its own with [`RESOLVE_BOUND`], because the
+/// resolver of this computer has no bound. The attempt therefore ends at a bound
+/// even when the name does not resolve, and the delays of its next attempt run.
+fn resolve(address: &ServerAddress, lookup: &LinkLookup, refusal: &RefusalCell) -> Result<Vec<SocketAddr>, String> {
     let name = address.authority();
-    let resolved: Vec<SocketAddr> = name
-        .to_socket_addrs()
-        .map_err(|error| {
+    let resolved = lookup
+        .resolve(address.host(), address.port(), RESOLVE_BOUND)
+        .map_err(|failure| {
             refusal.set(LinkRefusal::Name);
-            format!("the name {name}: {error}")
-        })?
-        .collect();
+            match failure {
+                LookupFailure::Unresolved => format!("the name {name} answers no address"),
+                LookupFailure::TimedOut => format!(
+                    "the name {name} did not resolve within {} seconds",
+                    RESOLVE_BOUND.as_secs()
+                ),
+            }
+        })?;
     if resolved.is_empty() {
         refusal.set(LinkRefusal::Name);
         return Err(format!("the name {name} answers no address"));

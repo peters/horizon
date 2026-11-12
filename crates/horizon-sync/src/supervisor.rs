@@ -194,6 +194,11 @@ pub struct SupervisorConfig {
     /// The bounds of the requests of the link. A test replaces them so it sees a
     /// link that went silent within a second instead of a minute.
     pub bounds: LinkBounds,
+    /// Where a TCP link asks for the addresses of the name of the server. The
+    /// resolver of this computer has no bound, so the link asks through
+    /// [`crate::LinkLookup`] with a bound of its own. A test replaces it, so no test
+    /// of a name reads the resolver of this computer.
+    pub lookup: crate::LinkLookup,
 }
 
 impl SupervisorConfig {
@@ -243,6 +248,7 @@ impl SupervisorConfig {
             program: horizon_browser_control::ssh_forward::ssh_program(),
             address: None,
             token_store: None,
+            lookup: crate::LinkLookup::system(),
             device,
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
@@ -498,7 +504,7 @@ fn connect(
             .into());
     }
     let opened = if let Some(address) = config.tcp_address() {
-        connect::tcp(address, refusal)?
+        connect::tcp(address, &config.lookup, refusal)?
     } else {
         let mut command = config.command_line();
         connect::ssh(&mut command, &config.program, refusal)?

@@ -12,11 +12,14 @@
 //! that token in every hello.
 
 use std::{
-    net::{SocketAddr, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream},
     time::Duration,
 };
 
+use horizon_browser::lookup::LookupFailure;
 use horizon_core::secret_store::{self, SecretStore};
+
+use crate::LinkLookup;
 use horizon_core::server_link::{JoinLink, LinkError};
 
 use crate::frame::{read_frame, write_frame};
@@ -29,10 +32,17 @@ const CONNECT_BOUND: Duration = Duration::from_secs(10);
 /// that accepts the link and answers nothing is a server that no join waits for.
 const ANSWER_BOUND: Duration = Duration::from_secs(20);
 
+/// How long the name of the server may take to resolve. The resolver of this
+/// computer has no bound of its own, so a name that points at a resolver that is
+/// gone holds a join for that resolver's time without this one.
+const RESOLVE_BOUND: Duration = Duration::from_secs(5);
+
 /// The bounds of one join, so a test sees a join that the server kept silent
 /// within a second instead of a minute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JoinBounds {
+    /// How long the name of the server may take to resolve.
+    pub resolve: Duration,
     /// How long one address of the server may take to accept the link.
     pub connect: Duration,
     /// How long the server may take to answer the join once the link is open.
@@ -42,6 +52,7 @@ pub struct JoinBounds {
 impl JoinBounds {
     /// The bounds of a real join.
     pub const STANDARD: Self = Self {
+        resolve: RESOLVE_BOUND,
         connect: CONNECT_BOUND,
         answer: ANSWER_BOUND,
     };
@@ -134,18 +145,45 @@ pub fn join(text: &str, device: &str, store: &SecretStore) -> Result<Joined, Joi
     join_with(text, device, store, JoinBounds::STANDARD)
 }
 
+/// [`join_with`] with the answers of one name lookup, so a test reads no resolver
+/// of this computer and a caller with its own resolver asks its own way.
+///
+/// # Errors
+/// Refuses text that is not one join link, an address outside the ranges of a link,
+/// and every typed refusal of the server.
+pub fn join_with_lookup(
+    text: &str,
+    device: &str,
+    store: &SecretStore,
+    bounds: JoinBounds,
+    lookup: &LinkLookup,
+) -> Result<Joined, JoinError> {
+    join_inner(text, device, store, bounds, lookup)
+}
+
 /// [`join`] with the bounds of one test.
 ///
 /// # Errors
 /// Refuses text that is not one join link, an address outside the ranges of a link,
 /// and every typed refusal of the server.
 pub fn join_with(text: &str, device: &str, store: &SecretStore, bounds: JoinBounds) -> Result<Joined, JoinError> {
+    join_inner(text, device, store, bounds, &LinkLookup::system())
+}
+
+/// The join with the bounds and the lookup of one caller.
+fn join_inner(
+    text: &str,
+    device: &str,
+    store: &SecretStore,
+    bounds: JoinBounds,
+    lookup: &LinkLookup,
+) -> Result<Joined, JoinError> {
     horizon_core::ui_thread::blocking("the join of a server is made");
     let link = JoinLink::parse(text)?;
     if !crate::protocol::check_device_name(device) {
         return Err(JoinError::Device);
     }
-    let resolved = resolve(&link)?;
+    let resolved = resolve(&link, bounds.resolve, lookup)?;
     let mut last = None;
     for socket in resolved {
         horizon_core::check_address(socket.ip())?;
@@ -169,16 +207,22 @@ pub fn join_with(text: &str, device: &str, store: &SecretStore, bounds: JoinBoun
 }
 
 /// Every address of the name of `link`, which all pass the rule of the link.
-fn resolve(link: &JoinLink) -> Result<Vec<SocketAddr>, JoinError> {
+///
+/// The lookup runs on a thread of its own with `bound`, because the resolver of a
+/// computer has no bound: a name whose resolver does not answer must not hold the
+/// join for the time of that resolver.
+fn resolve(link: &JoinLink, bound: Duration, lookup: &LinkLookup) -> Result<Vec<SocketAddr>, JoinError> {
     if let Some(socket) = link.socket_addr() {
         horizon_core::check_address(socket.ip())?;
         return Ok(vec![socket]);
     }
     let name = link.authority();
-    let resolved: Vec<SocketAddr> = name
-        .to_socket_addrs()
-        .map_err(|error| JoinError::Address(format!("The name {name} did not resolve: {error}")))?
-        .collect();
+    let resolved = lookup.resolve(link.host(), link.port(), bound).map_err(|failure| {
+        JoinError::Address(match failure {
+            LookupFailure::Unresolved => format!("The name {name} did not resolve."),
+            LookupFailure::TimedOut => format!("The name {name} did not resolve within {} seconds.", bound.as_secs()),
+        })
+    })?;
     if resolved.is_empty() {
         return Err(JoinError::Address(format!("The name {name} answers no address.")));
     }
@@ -290,6 +334,7 @@ mod tests {
             "laptop-b",
             &store,
             JoinBounds {
+                resolve: Duration::from_secs(1),
                 connect: Duration::from_secs(2),
                 answer: Duration::from_millis(200),
             },
