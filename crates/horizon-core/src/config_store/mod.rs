@@ -23,6 +23,23 @@ mod tests;
 
 pub use schema::SETTINGS_SCHEMA_VERSION;
 
+/// The JSON value of one section of `config`, or `None` when this build has no
+/// such section.
+///
+/// # Errors
+/// Returns why the section cannot be encoded.
+pub fn section_value(config: &Config, name: &str) -> Result<Option<serde_json::Value>> {
+    sections::value_of(config, name).transpose()
+}
+
+/// The configuration of one set of raw rows of the store.
+///
+/// # Errors
+/// Returns an error when a known section has data that this build cannot read.
+pub fn decode_rows(rows: &BTreeMap<String, String>) -> Result<Config> {
+    sections::decode(rows)
+}
+
 /// The row that holds the schema version of the store.
 pub const META_SCHEMA_VERSION: &str = "schema_version";
 /// The time of the last save, in milliseconds since the Unix epoch.
@@ -146,6 +163,64 @@ impl ConfigStore {
         Error::State(format!("settings store {} {what}: {fault}", self.path.display()))
     }
 
+    /// The raw JSON of every section of the store, by section name.
+    ///
+    /// This reads the rows as they are, so a section that this build does not know
+    /// is in the answer too. A store that does not exist holds no row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file exists and cannot be read.
+    pub fn section_rows(&self) -> Result<BTreeMap<String, String>> {
+        crate::ui_thread::blocking("the settings store is read");
+        if !self.path.is_file() {
+            return Ok(BTreeMap::new());
+        }
+        let connection = Connection::open_with_flags(
+            &self.path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| state_error(&error))?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(BUSY_TIMEOUT_SECONDS))
+            .map_err(|error| state_error(&error))?;
+        read_rows(&connection)
+    }
+
+    /// Write the rows of `rows` and nothing else, so a section that this build
+    /// does not touch keeps its row and its unknown fields.
+    ///
+    /// The caller has checked the configuration that these rows make; the store
+    /// writes the JSON as it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the store cannot be written.
+    pub fn write_sections(&self, rows: &BTreeMap<String, String>) -> Result<()> {
+        crate::ui_thread::blocking("the settings store is committed");
+        let mut connection = self.open_for_write()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| state_error(&error))?;
+        let now = unix_millis();
+        {
+            let mut upsert = transaction
+                .prepare(
+                    "INSERT INTO settings (section, format, data, updated_at) VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT(section) DO UPDATE SET \
+                     format = excluded.format, data = excluded.data, updated_at = excluded.updated_at",
+                )
+                .map_err(|error| state_error(&error))?;
+            for (section, data) in rows {
+                upsert
+                    .execute(params![section, sections::FORMAT, data, now])
+                    .map_err(|error| state_error(&error))?;
+            }
+            set_meta(&transaction, META_SAVED_AT, &now.to_string())?;
+        }
+        transaction.commit().map_err(|error| state_error(&error))
+    }
+
     /// Write every section of `config` in one transaction.
     ///
     /// A row of a section that this build does not know stays as it is, so a
@@ -200,20 +275,7 @@ impl ConfigStore {
             }
             None => return Err(StoreFault::Damaged("it has no schema version".to_string())),
         }
-        let mut rows = BTreeMap::new();
-        let mut statement = connection
-            .prepare("SELECT section, format, data FROM settings")
-            .map_err(reason)?;
-        let mut queried = statement.query([]).map_err(reason)?;
-        while let Some(row) = queried.next().map_err(reason)? {
-            let section: String = row.get(0).map_err(reason)?;
-            let format: String = row.get(1).map_err(reason)?;
-            let data: String = row.get(2).map_err(reason)?;
-            if format != sections::FORMAT {
-                return Err(StoreFault::Damaged(format!("section {section} has format {format}")));
-            }
-            rows.insert(section, data);
-        }
+        let rows = read_rows(&connection).map_err(|error| StoreFault::Damaged(error.to_string()))?;
         // An older build kept a `mirror_sha256` row that hashed an exported
         // copy. This build writes no copy, so the row is inert: it is not read
         // and it is not deleted, so an older Horizon still finds its store.
@@ -232,9 +294,38 @@ impl ConfigStore {
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|error| state_error(&error))?;
+        // Two writers of one store are normal: the settings worker of this window,
+        // the worker of a link that applies a section of the server, and a second
+        // window on the same home. Each write is short, so a writer waits for the
+        // other one instead of failing with `database is locked`.
+        connection
+            .busy_timeout(std::time::Duration::from_secs(BUSY_TIMEOUT_SECONDS))
+            .map_err(|error| state_error(&error))?;
         schema::create(&connection)?;
         Ok(connection)
     }
+}
+
+/// How long a connection of one store waits for the writer of another one.
+const BUSY_TIMEOUT_SECONDS: u64 = 5;
+
+/// The raw data of every row of the store, by section name.
+fn read_rows(connection: &Connection) -> Result<BTreeMap<String, String>> {
+    let mut rows = BTreeMap::new();
+    let mut statement = connection
+        .prepare("SELECT section, format, data FROM settings")
+        .map_err(|error| state_error(&error))?;
+    let mut queried = statement.query([]).map_err(|error| state_error(&error))?;
+    while let Some(row) = queried.next().map_err(|error| state_error(&error))? {
+        let section: String = row.get(0).map_err(|error| state_error(&error))?;
+        let format: String = row.get(1).map_err(|error| state_error(&error))?;
+        let data: String = row.get(2).map_err(|error| state_error(&error))?;
+        if format != sections::FORMAT {
+            return Err(Error::State(format!("settings section {section} has format {format}")));
+        }
+        rows.insert(section, data);
+    }
+    Ok(rows)
 }
 
 fn store_path_for(config_path: &Path) -> PathBuf {

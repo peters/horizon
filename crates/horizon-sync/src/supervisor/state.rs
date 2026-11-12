@@ -14,13 +14,17 @@ use std::{
     time::Instant,
 };
 
+use horizon_core::Config;
 use horizon_core::machines::MachineBindings;
 use horizon_core::secret::{SecretId, SecretKind};
 use horizon_core::ui_thread;
 use horizon_core::{Machine, MachineError, SecretTarget};
 
 use super::SupervisorConfig;
-use super::files::{MirrorFile, MirroredMachine, read_bindings, read_mirror, seed_records, write_mirror};
+use super::files::{
+    MirrorFile, MirroredMachine, MirroredSetting, SETTINGS_MIRROR_FORMAT, SettingsMirror, read_bindings, read_mirror,
+    read_settings_mirror, seed_records, write_mirror, write_settings_mirror,
+};
 use super::pull::{merged_bindings, mirror_of};
 use super::secrets::local_machine_keys;
 use super::view::records_of;
@@ -83,6 +87,41 @@ pub struct LinkSnapshot {
     foreign: BTreeSet<String>,
     machine_keys: BTreeSet<String>,
     generation: u64,
+    settings: SettingsSyncView,
+    settings_generation: u64,
+}
+
+/// What a frame reads about the settings of this computer on the server: whether
+/// every section of the server is in the store of this computer, the sections with
+/// an intent that the server did not decide, and the last section that this
+/// computer did not apply with the sentence that says why.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsSyncView {
+    in_step: bool,
+    pending: BTreeSet<String>,
+    refused: Option<String>,
+}
+
+impl SettingsSyncView {
+    /// Whether the store of this computer holds every section that the server gave
+    /// and this build accepts.
+    #[must_use]
+    pub fn in_step(&self) -> bool {
+        self.in_step
+    }
+
+    /// The sections with an intent that the server did not decide.
+    #[must_use]
+    pub fn pending(&self) -> &BTreeSet<String> {
+        &self.pending
+    }
+
+    /// The last section that this computer did not apply, with the sentence that
+    /// says why.
+    #[must_use]
+    pub fn refused(&self) -> Option<&str> {
+        self.refused.as_deref()
+    }
 }
 
 impl LinkSnapshot {
@@ -124,6 +163,19 @@ impl LinkSnapshot {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// The state of the settings of this computer on its server.
+    #[must_use]
+    pub fn settings(&self) -> &SettingsSyncView {
+        &self.settings
+    }
+
+    /// The number of changes of the settings mirror, so a UI reads them again only
+    /// when one of them changed.
+    #[must_use]
+    pub fn settings_generation(&self) -> u64 {
+        self.settings_generation
+    }
 }
 
 /// What one drop of the lock of the state must write: the files of the change,
@@ -134,16 +186,19 @@ pub(crate) struct Pending {
     queue: Option<(PathBuf, Vec<u8>)>,
     /// The mirror of the machine list, built under the lock.
     mirror: Option<(PathBuf, MirrorFile)>,
+    /// The mirror of the settings, built under the lock.
+    settings: Option<(PathBuf, SettingsMirror)>,
     /// The number of the write of the queue, so a write that a later change
     /// replaced does not land.
     queue_version: u64,
     mirror_version: u64,
+    settings_version: u64,
 }
 
 impl Pending {
     /// Whether a file waits for its write.
     const fn waits(&self) -> bool {
-        self.queue.is_some() || self.mirror.is_some()
+        self.queue.is_some() || self.mirror.is_some() || self.settings.is_some()
     }
 }
 
@@ -157,6 +212,7 @@ pub(crate) struct WriteOrder {
     next: u64,
     written_queue: u64,
     written_mirror: u64,
+    written_settings: u64,
 }
 
 /// The state behind the handle.
@@ -186,6 +242,26 @@ pub(crate) struct SyncState {
     pub(crate) view: BTreeMap<String, Machine>,
     /// The number of changes of the records, for a UI that reads them again.
     pub(crate) generation: u64,
+    /// The sections of the settings that the server last gave, with their bodies.
+    pub(super) settings: BTreeMap<String, MirroredSetting>,
+    /// The version of each section that the store of this computer holds.
+    pub(super) settings_applied: BTreeMap<String, u64>,
+    /// Whether this computer compared its own settings with the server once.
+    pub(super) settings_seeded: bool,
+    /// The version of each section that this computer refused, so one refusal is
+    /// one notice and not one for each answer of the server.
+    pub(super) settings_refused: BTreeMap<String, u64>,
+    /// The last sentence about a section that this computer did not apply.
+    pub(super) settings_refusal: Option<String>,
+    /// The file of the mirror of the settings.
+    pub(super) settings_file: PathBuf,
+    /// The settings file of this computer, whose store holds the sections. A
+    /// computer whose settings do not follow a server holds none.
+    pub(super) settings_path: Option<PathBuf>,
+    /// The mirror of the settings does not hold the state of this computer yet.
+    pub(super) settings_dirty: bool,
+    /// The number of changes of the settings, for a UI that reads them again.
+    pub(crate) settings_generation: u64,
     /// The mirror of the machine list does not hold the records of the state yet.
     pub(crate) mirror_dirty: bool,
     /// The secrets that the server refused and whose value no answer of changes
@@ -223,6 +299,21 @@ impl SyncState {
             })
             .map(|(name, _)| name.clone())
             .collect();
+        let settings_pending = self
+            .client
+            .pending()
+            .iter()
+            .filter(|intent| intent.op.kind() == crate::intent::KIND_SETTING)
+            .map(|intent| intent.op.object_id().to_owned())
+            .collect();
+        // A section that this computer refused keeps the settings out of step: the
+        // store of this computer does not hold what the server gave. A row of a
+        // local section is read by no store here, so it is no part of the answer.
+        let in_step = self
+            .settings
+            .iter()
+            .filter(|(section, _)| horizon_core::settings_sync::is_shared(section))
+            .all(|(section, row)| self.settings_applied.get(section) == Some(&row.version));
         LinkSnapshot {
             state: self.client.state().clone(),
             device: self.client.device().to_owned(),
@@ -230,6 +321,12 @@ impl SyncState {
             foreign,
             machine_keys: self.machine_keys.clone(),
             generation: self.generation,
+            settings: SettingsSyncView {
+                in_step,
+                pending: settings_pending,
+                refused: self.settings_refusal.clone(),
+            },
+            settings_generation: self.settings_generation,
         }
     }
 
@@ -241,9 +338,12 @@ impl SyncState {
             .take_queue_write()
             .map(|encoded| (self.client_path.clone(), encoded));
         let mirror = std::mem::take(&mut self.mirror_dirty).then(|| (self.mirror_file.clone(), mirror_of(self)));
+        let settings =
+            std::mem::take(&mut self.settings_dirty).then(|| (self.settings_file.clone(), settings_mirror_of(self)));
         Pending {
             queue,
             mirror,
+            settings,
             ..Pending::default()
         }
     }
@@ -305,6 +405,7 @@ impl SyncHandle {
         } else {
             read_bindings(&config.machines_dir)?
         };
+        let settings = read_settings_mirror(&config.settings_mirror_file)?;
         let machine_keys = config
             .secrets
             .local_ids(SecretKind::MachineKey)
@@ -336,6 +437,15 @@ impl SyncHandle {
                 seeded: file.seeded,
                 view: BTreeMap::new(),
                 generation: 0,
+                settings: settings.rows,
+                settings_applied: settings.applied,
+                settings_seeded: settings.seeded,
+                settings_refused: BTreeMap::new(),
+                settings_refusal: None,
+                settings_file: config.settings_mirror_file.clone(),
+                settings_path: config.settings_path.clone(),
+                settings_dirty: false,
+                settings_generation: 0,
                 mirror_dirty: true,
                 refused_secrets: BTreeSet::new(),
                 request_since: None,
@@ -413,18 +523,94 @@ impl SyncHandle {
         self.lock().client.secret_version(id)
     }
 
-    /// The lines for the person about a secret that the server decided
-    /// differently, oldest first.
+    /// The lines for the person about a value or a setting that the server
+    /// decided differently, oldest first.
     #[must_use]
-    pub fn take_secret_notices(&self) -> Vec<String> {
+    pub fn take_notices(&self) -> Vec<String> {
         let mut notices = self.notices.lock().unwrap_or_else(PoisonError::into_inner);
         std::mem::take(&mut *notices)
     }
 
-    /// Adds one line for the person about a secret of this computer. The worker
-    /// of the secrets calls it, and no frame waits for the lock it takes.
-    pub(super) fn push_secret_notice(&self, line: String) {
+    /// Adds one line for the person about a value or a setting of this computer.
+    /// The worker of the secrets and the worker of the settings call it, and no
+    /// frame waits for the lock it takes.
+    pub(super) fn push_notice(&self, line: String) {
         self.notices.lock().unwrap_or_else(PoisonError::into_inner).push(line);
+    }
+
+    /// The state of the settings of this computer on its server, from the
+    /// snapshot that a frame reads.
+    #[must_use]
+    pub fn settings_view(&self) -> SettingsSyncView {
+        self.snapshot().settings().clone()
+    }
+
+    /// Queues one section of the settings for the server, as the person saved it
+    /// in the Settings window.
+    ///
+    /// The body of the intent is the envelope of `horizon_core::settings_sync`
+    /// around the value of this computer, merged with the fields that the server's
+    /// body holds and this build does not know, so a newer Horizon's field survives
+    /// the save of an older one. The version that this computer saw is the version
+    /// of the intent, so the first change of a version wins and a change that
+    /// another computer made first is refused with the version that it decided.
+    ///
+    /// A local section is never queued, and neither is a section whose value this
+    /// computer does not hold.
+    ///
+    /// # Errors
+    /// Returns why the queue file cannot be written, and refuses a section above
+    /// [`horizon_core::settings_sync::MAX_SECTION_BYTES`].
+    pub fn enqueue_setting(&self, config: &Config, section: &str) -> Result<(), MachineError> {
+        if !horizon_core::settings_sync::is_shared(section) {
+            return Ok(());
+        }
+        let Some(local) =
+            horizon_core::settings_sync::body_of(config, section).map_err(|error| MachineError::Unavailable {
+                reason: error.to_string(),
+            })?
+        else {
+            return Ok(());
+        };
+        ui_thread::blocking("the queue of the link is written and synced");
+        let mut state = self.lock();
+        let seen = state.settings.get(section).map(|row| row.version);
+        let server = state.settings.get(section).map(|row| &row.body);
+        let merged = horizon_core::settings_sync::merged_for_push(server, &local);
+        let body = horizon_core::settings_sync::SectionBody {
+            format: horizon_core::settings_sync::BODY_FORMAT,
+            config_version: config.version,
+            section: merged,
+        };
+        let value = serde_json::to_value(&body).map_err(|error| MachineError::Unavailable {
+            reason: format!("the section {section} of the settings: {error}"),
+        })?;
+        let encoded = serde_json::to_string(&value).map_err(|error| MachineError::Unavailable {
+            reason: format!("the section {section} of the settings: {error}"),
+        })?;
+        if encoded.len() > horizon_core::settings_sync::MAX_SECTION_BYTES {
+            drop(state);
+            self.push_notice(format!(
+                "The setting {section} is larger than {} KB, so this computer did not send it to the server.",
+                horizon_core::settings_sync::MAX_SECTION_BYTES / 1024
+            ));
+            (self.wake)();
+            return Ok(());
+        }
+        state
+            .client
+            .enqueue(
+                seen,
+                Op::SettingPut {
+                    id: section.to_owned(),
+                    body: value,
+                },
+            )
+            .map_err(|error| queue_error(&error))?;
+        state.settings_generation = state.settings_generation.wrapping_add(1);
+        drop(state);
+        self.notify();
+        Ok(())
     }
 
     /// Queues the value of the secret `id` for the server. The value itself stays
@@ -679,6 +865,9 @@ impl Drop for SyncGuard<'_> {
             if pending.mirror.is_some() {
                 pending.mirror_version = order.next;
             }
+            if pending.settings.is_some() {
+                pending.settings_version = order.next;
+            }
         }
         drop(state);
         if !pending.waits() {
@@ -697,5 +886,24 @@ impl Drop for SyncGuard<'_> {
                 tracing::warn!(%error, "the mirror of the machine list was not written");
             }
         }
+        if let (Some((path, file)), true) = (
+            pending.settings.take(),
+            pending.settings_version > order.written_settings,
+        ) {
+            order.written_settings = pending.settings_version;
+            if let Err(error) = write_settings_mirror(&path, &file) {
+                tracing::warn!(%error, "the mirror of the settings was not written");
+            }
+        }
+    }
+}
+
+/// The mirror file of the settings of this state.
+fn settings_mirror_of(state: &SyncState) -> SettingsMirror {
+    SettingsMirror {
+        format: SETTINGS_MIRROR_FORMAT,
+        seeded: state.settings_seeded,
+        applied: state.settings_applied.clone(),
+        rows: state.settings.clone(),
     }
 }

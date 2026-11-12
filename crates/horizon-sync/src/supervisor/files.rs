@@ -25,6 +25,12 @@ pub(super) const DEVICE_FILE: &str = "server-device";
 pub(super) const QUEUE_FILE: &str = "server-queue.json";
 /// The file of the mirror, in the same directory.
 pub(super) const MIRROR_FILE: &str = "server-mirror.json";
+/// The file of the mirror of the settings, in the same directory. The settings of
+/// a computer have their own file, so a build that reads no setting reads the
+/// machine list of a newer one as it always did.
+pub(super) const SETTINGS_MIRROR_FILE: &str = "server-settings.json";
+/// The format of the settings mirror. A build refuses a file of another format.
+pub(super) const SETTINGS_MIRROR_FORMAT: u32 = 1;
 /// The format of the mirror file. A build refuses a file of another format.
 pub(super) const MIRROR_FORMAT: u32 = 1;
 /// The first characters of a device name that a computer proposes for itself.
@@ -56,6 +62,30 @@ pub(super) struct MirrorFile {
     pub(super) machines: Vec<Machine>,
     /// The key that each machine uses, as the server gave it.
     pub(super) bindings: BTreeMap<String, String>,
+}
+
+/// One section of the settings that the server last gave, and its version.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MirroredSetting {
+    pub(super) version: u64,
+    pub(super) body: serde_json::Value,
+}
+
+/// The mirror of the settings: the section of the server that this computer
+/// applied, the version of the store that it holds, and whether it compared its
+/// own settings with the server once.
+///
+/// `applied` is what makes a restart safe: a section that the store already holds
+/// is not applied again, so a change of this computer that waits for an away
+/// server is not replaced by the older row of the server.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct SettingsMirror {
+    pub(super) format: u32,
+    pub(super) seeded: bool,
+    pub(super) applied: BTreeMap<String, u64>,
+    pub(super) rows: BTreeMap<String, MirroredSetting>,
 }
 
 /// The records of the machine list that this computer kept before it followed a
@@ -170,4 +200,32 @@ pub(super) fn write_mirror(path: &Path, file: &MirrorFile) -> Result<(), SyncErr
     AtomicFile::new(PathBuf::from(path))
         .write(&encoded)
         .map_err(|error| SyncError::Queue(format!("the mirror at {}: {error}", path.display())))
+}
+
+pub(super) fn read_settings_mirror(path: &Path) -> Result<SettingsMirror, SyncError> {
+    let file = AtomicFile::new(PathBuf::from(path));
+    let Some(text) = file
+        .read()
+        .map_err(|error| SyncError::Queue(format!("the settings mirror at {}: {error}", path.display())))?
+    else {
+        return Ok(SettingsMirror::default());
+    };
+    let mirror: SettingsMirror = serde_json::from_str(&text)
+        .map_err(|error| SyncError::Queue(format!("the settings mirror at {}: {error}", path.display())))?;
+    if mirror.format != 0 && mirror.format != SETTINGS_MIRROR_FORMAT {
+        return Err(SyncError::Queue(format!(
+            "the settings mirror at {} has format {}, and this Horizon writes format {SETTINGS_MIRROR_FORMAT}",
+            path.display(),
+            mirror.format
+        )));
+    }
+    Ok(mirror)
+}
+
+pub(super) fn write_settings_mirror(path: &Path, mirror: &SettingsMirror) -> Result<(), SyncError> {
+    let encoded = serde_json::to_vec_pretty(mirror)
+        .map_err(|error| SyncError::Queue(format!("the settings mirror at {}: {error}", path.display())))?;
+    AtomicFile::new(PathBuf::from(path))
+        .write(&encoded)
+        .map_err(|error| SyncError::Queue(format!("the settings mirror at {}: {error}", path.display())))
 }

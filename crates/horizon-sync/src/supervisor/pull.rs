@@ -11,13 +11,14 @@ use horizon_core::Machine;
 use horizon_core::secret::SecretId;
 
 use super::SyncHandle;
-use super::files::{MirrorFile, MirroredMachine};
+use super::files::{MirrorFile, MirroredMachine, MirroredSetting};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
+use super::settings::{apply as apply_settings, refuse_settings};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState};
 use crate::client::PullOutcome;
 use crate::error::SyncError;
-use crate::intent::{KIND_BINDING, KIND_MACHINE, Op, PushReply};
+use crate::intent::{KIND_BINDING, KIND_MACHINE, KIND_SETTING, Op, PushReply};
 use crate::protocol::HelloOk;
 use crate::store::Changes;
 
@@ -25,12 +26,13 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     // The queue loses the refused intent here, so the ids of the secrets that the
     // server refused and the version that a refusal names are read before the
     // queue is settled.
-    let (refused_secrets, rewind): (Vec<String>, Option<u64>) = {
+    let (refused_secrets, refused_settings, rewind): (Vec<String>, Vec<String>, Option<u64>) = {
         let state = handle.lock();
         let mut ids = Vec::new();
+        let mut sections = Vec::new();
         let mut oldest: Option<u64> = None;
         for intent in state.client.pending() {
-            if !intent.op.is_secret() {
+            if !intent.op.is_secret() && intent.op.kind() != crate::intent::KIND_SETTING {
                 continue;
             }
             let Some(crate::intent::Outcome::Refused(refusal)) = reply
@@ -41,12 +43,16 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
             else {
                 continue;
             };
-            ids.push(intent.op.object_id().to_owned());
+            if intent.op.kind() == crate::intent::KIND_SETTING {
+                sections.push(intent.op.object_id().to_owned());
+            } else {
+                ids.push(intent.op.object_id().to_owned());
+            }
             if let Some(version) = refusal.version() {
                 oldest = Some(oldest.map_or(version, |old: u64| old.min(version)));
             }
         }
-        (ids, oldest)
+        (ids, sections, oldest)
     };
     let outcome = {
         let mut state = handle.lock();
@@ -69,6 +75,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
         }
     }
     refuse_secrets(handle, &refused_secrets, rewind);
+    refuse_settings(handle, &refused_settings, rewind);
     handle.refresh_machine_keys();
     let mut state = handle.lock();
     state.generation = state.generation.wrapping_add(1);
@@ -87,6 +94,7 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: 
         let bindings = apply_bindings(&mut state, changes);
         let rows = secret_rows_of(&mut state, changes);
         bindings?;
+        apply_setting_rows(&mut state, changes);
         (applied, rows)
     };
     // A secret is written outside the lock of the state: a file, and above all a
@@ -107,6 +115,9 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: 
         reset = applied.reset,
         "the machine list moved"
     );
+    // The settings of this computer follow the same answer, on this worker thread:
+    // a section of the server becomes the row of the settings store here.
+    apply_settings(handle);
     Ok(applied)
 }
 
@@ -167,6 +178,45 @@ pub(super) fn apply_bindings(state: &mut SyncState, changes: &Changes) -> Result
         state.bindings.insert(row.id.clone(), key.to_owned());
     }
     Ok(())
+}
+
+/// Applies the setting rows of one answer to the mirror of the settings.
+///
+/// A reset clears the mirror and what this computer applied of it, so the store of
+/// this computer takes the sections of the restored server again. A section that
+/// the restored server does not have stays in the store of this computer: no
+/// setting is lost, and a section that this build does not know is kept.
+pub(super) fn apply_setting_rows(state: &mut SyncState, changes: &Changes) {
+    let mut touched = false;
+    if changes.reset {
+        state.settings.clear();
+        state.settings_applied.clear();
+        state.settings_refused.clear();
+        touched = true;
+    }
+    for row in &changes.rows {
+        if row.kind != KIND_SETTING {
+            continue;
+        }
+        if row.deleted {
+            state.settings.remove(&row.id);
+            state.settings_applied.remove(&row.id);
+        } else {
+            state.settings.insert(
+                row.id.clone(),
+                MirroredSetting {
+                    version: row.version,
+                    body: row.body.clone(),
+                },
+            );
+        }
+        touched = true;
+    }
+    if touched {
+        state.settings_generation = state.settings_generation.wrapping_add(1);
+        // The drop of the lock writes the mirror of the settings.
+        state.settings_dirty = true;
+    }
 }
 
 /// Keeps the records, the key bindings and the secrets that this computer had

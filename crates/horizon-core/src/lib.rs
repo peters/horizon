@@ -32,6 +32,7 @@ pub mod secret;
 pub mod secret_store;
 pub mod server_link;
 mod session_store;
+pub mod settings_sync;
 mod shortcuts;
 pub mod speech;
 mod ssh;

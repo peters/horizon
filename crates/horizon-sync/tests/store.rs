@@ -5,7 +5,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use horizon_core::Machine;
 use horizon_sync::{
-    Changes, Intent, KIND_MACHINE, KIND_PROBE, MAX_PROBES, Op, Outcome, Refusal, Store, StoreError, tip,
+    Changes, Intent, KIND_MACHINE, KIND_PROBE, KIND_SETTING, MAX_PROBES, MAX_SETTINGS, Op, Outcome, Refusal, Store,
+    StoreError, tip,
 };
 use serde_json::{Value, json};
 
@@ -57,6 +58,23 @@ fn put_probe(device: &str, id: u64, seen: Option<u64>, probe: &str, body: Value)
             body,
         },
     }
+}
+
+fn put_setting(device: &str, id: u64, seen: Option<u64>, section: &str, body: Value) -> Intent {
+    Intent {
+        device: device.to_owned(),
+        id,
+        seen,
+        op: Op::SettingPut {
+            id: section.to_owned(),
+            body,
+        },
+    }
+}
+
+/// The body of one section of the settings, as one computer sends it.
+fn section_body(theme: &str) -> Value {
+    json!({ "format": 1, "config_version": 12, "section": { "theme": theme } })
 }
 
 /// The index of the one applied result of a push of one intent.
@@ -601,7 +619,7 @@ fn a_file_of_a_newer_horizon_is_refused_and_a_damaged_one_is_reported() {
             panic!("a file of a newer Horizon must be refused");
         }
         Err(refused) => assert!(
-            matches!(refused, StoreError::Newer { found: 99, expected: 5 }),
+            matches!(refused, StoreError::Newer { found: 99, expected: 6 }),
             "{refused}"
         ),
     }
@@ -978,4 +996,180 @@ fn an_upgrade_from_the_older_schema_keeps_the_computers_that_it_already_had() {
         "a computer that the older file held was greeted before this version"
     );
     store.close();
+}
+
+#[test]
+fn a_section_of_the_settings_travels_by_the_version_rule_and_the_server_stores_it_unread() {
+    let (_temp, store) = store();
+    let first = applied(
+        &store,
+        "mbp-7c1",
+        put_setting("mbp-7c1", 1, None, "appearance", section_body("light")),
+    );
+
+    // The body is the JSON that the computer sent, and the server did not read it.
+    let rows = store.all().expect("the rows of the server").rows;
+    let appearance = rows
+        .iter()
+        .find(|row| row.kind == KIND_SETTING && row.id == "appearance")
+        .expect("the section of the server");
+    assert_eq!(appearance.body, section_body("light"));
+    assert_eq!(appearance.version, first);
+
+    // The other computer read that version, so its change is the next one.
+    let second = applied(
+        &store,
+        "other-2a",
+        put_setting("other-2a", 1, Some(first), "appearance", section_body("dark")),
+    );
+    assert!(second > first);
+
+    // The computer that was away sends the change on the version that it saw, and
+    // the first change of that version won.
+    let stale = refused(
+        &store,
+        "third-3b",
+        put_setting("third-3b", 1, Some(first), "appearance", section_body("auto")),
+    );
+    assert_eq!(
+        stale,
+        Refusal::ChangedSinceSeen {
+            seen: first,
+            version: second
+        }
+    );
+    let rows = store.all().expect("the rows of the server").rows;
+    let appearance = rows
+        .iter()
+        .find(|row| row.kind == KIND_SETTING && row.id == "appearance")
+        .expect("the section of the server");
+    assert_eq!(
+        appearance.body,
+        section_body("dark"),
+        "the value of the first change stands"
+    );
+}
+
+#[test]
+fn a_setting_that_breaks_a_rule_of_the_server_is_refused_and_writes_nothing() {
+    let (_temp, store) = store();
+    for (id, name) in [(1, ""), (2, "Appearance"), (3, "appearance/theme"), (4, "a")] {
+        let intent = put_setting("mbp-7c1", id, None, name, section_body("light"));
+        if name == "a" {
+            // One character of `a-z` is a name that a newer Horizon may add.
+            applied(&store, "mbp-7c1", intent);
+            continue;
+        }
+        match refused(&store, "mbp-7c1", intent) {
+            Refusal::InvalidIntent { message } => assert!(message.contains("setting id"), "{message}"),
+            other => panic!("a name that is not one section is refused: {other:?}"),
+        }
+    }
+
+    let long = "a".repeat(41);
+    assert!(matches!(
+        refused(
+            &store,
+            "mbp-7c1",
+            put_setting("mbp-7c1", 9, None, &long, section_body("light"))
+        ),
+        Refusal::InvalidIntent { .. }
+    ));
+
+    // A section above the size of the settings travels as nothing, so an oversize
+    // value costs one refusal and never one over-large frame.
+    let large = json!({
+        "format": 1,
+        "config_version": 12,
+        "section": { "text": "x".repeat(horizon_core::settings_sync::MAX_SECTION_BYTES) }
+    });
+    match refused(&store, "mbp-7c1", put_setting("mbp-7c1", 10, None, "workspaces", large)) {
+        Refusal::InvalidIntent { message } => assert!(message.contains("bytes"), "{message}"),
+        other => panic!("an oversize section is refused: {other:?}"),
+    }
+    assert_eq!(
+        store
+            .all()
+            .expect("the rows of the server")
+            .rows
+            .iter()
+            .filter(|row| row.kind == KIND_SETTING)
+            .count(),
+        1,
+        "a refusal writes no object, so the one name that this build accepts is the only section"
+    );
+}
+
+#[test]
+fn the_server_keeps_at_most_the_sections_of_one_settings_store() {
+    let (_temp, store) = store();
+    for index in 0..MAX_SETTINGS {
+        applied(
+            &store,
+            "mbp-7c1",
+            put_setting(
+                "mbp-7c1",
+                index + 1,
+                None,
+                &format!("section_{index}"),
+                section_body("light"),
+            ),
+        );
+    }
+    let refusal = refused(
+        &store,
+        "mbp-7c1",
+        put_setting("mbp-7c1", MAX_SETTINGS + 1, None, "one_too_many", section_body("light")),
+    );
+    assert_eq!(
+        refusal,
+        Refusal::TooMany {
+            kind: KIND_SETTING.to_owned(),
+            limit: MAX_SETTINGS
+        }
+    );
+}
+
+#[test]
+fn a_store_of_the_previous_schema_keeps_its_rows_and_gains_the_index_of_its_kinds() {
+    let temp = tempfile::tempdir().expect("a directory");
+    let path = temp.path().join("server.sqlite");
+    let store = Store::open(&path).expect("a new store");
+    applied(&store, "mbp-7c1", put_machine("mbp-7c1", 1, "build-1"));
+    store.close();
+    {
+        // The file that the previous Horizon wrote: the same rows, the older
+        // schema number and no index of the live kinds.
+        let connection = rusqlite::Connection::open(&path).expect("the file");
+        connection
+            .execute_batch("DROP INDEX objects_live_by_kind; UPDATE meta SET value = '5' WHERE key = 'schema_version';")
+            .expect("a file of the previous schema");
+    }
+    let store = Store::open(&path).expect("the store of the previous schema");
+    assert_eq!(
+        store
+            .pull(0, "")
+            .expect("the rows of the server")
+            .rows
+            .iter()
+            .filter(|row| row.kind == KIND_MACHINE)
+            .count(),
+        1,
+        "an upgraded store keeps its objects"
+    );
+    assert!(store.all().is_ok(), "the log and the objects read after the upgrade");
+    store.close();
+    let connection = rusqlite::Connection::open(&path).expect("the file");
+    let indexed: Option<String> = connection
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'objects_live_by_kind'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    assert_eq!(
+        indexed.as_deref(),
+        Some("objects_live_by_kind"),
+        "the step added its index"
+    );
 }

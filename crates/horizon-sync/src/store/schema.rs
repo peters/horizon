@@ -19,7 +19,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use crate::error::StoreError;
 
 /// The schema version that this Horizon writes.
-pub(super) const SCHEMA_VERSION: i64 = 5;
+pub(super) const SCHEMA_VERSION: i64 = 6;
 
 /// The mode of the file of the store, which SQLite copies to its `-wal` and
 /// `-shm` files: the server user alone reads or writes the store.
@@ -133,7 +133,20 @@ CREATE TABLE removed (
 CREATE INDEX removed_by_time ON removed (removed_millis);
 ";
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V2_SECRETS, SCHEMA_V3_LINKS, SCHEMA_V4_GREETED, SCHEMA_V5_REMOVED];
+/// Version 6 adds the index that the bound of a kind reads: the number of live
+/// objects of one kind, which the machine list at 64 rows and the settings at 64
+/// sections ask on every push of that kind.
+const SCHEMA_V6_LIVE_KINDS: &str = "
+CREATE INDEX objects_live_by_kind ON objects (kind) WHERE deleted = 0;
+";
+
+const MIGRATIONS: &[&str] = &[
+    SCHEMA_V2_SECRETS,
+    SCHEMA_V3_LINKS,
+    SCHEMA_V4_GREETED,
+    SCHEMA_V5_REMOVED,
+    SCHEMA_V6_LIVE_KINDS,
+];
 
 /// The key of the store id in the meta table.
 const META_STORE_ID: &str = "store_id";

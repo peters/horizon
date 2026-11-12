@@ -17,9 +17,12 @@ pub use crate::store::{Changes, Row};
 /// read the secrets that it holds. Version 3 adds the login over the TCP listener
 /// of a server: the `join` of a computer with the code of an invitation, the
 /// token that a later `hello` carries, and the request that makes an invitation
-/// and lists the computers. A computer of an earlier version reads none of them,
-/// so the two sides of one link speak the same version.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// and lists the computers. Version 4 adds the `setting` object, which carries one
+/// section of the settings of the person: an older server would answer one intent
+/// of that kind with `unknown_kind`, so the two sides of one link speak the same
+/// version and an older server refuses this computer with `protocol_version`
+/// instead of dropping its settings one by one.
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;

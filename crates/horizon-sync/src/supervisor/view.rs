@@ -39,6 +39,7 @@ pub(super) fn merged_records(state: &SyncState) -> Vec<Machine> {
             Op::BindingPut { .. }
             | Op::SecretPut { .. }
             | Op::SecretRemove { .. }
+            | Op::SettingPut { .. }
             | Op::ObjectPut { .. }
             | Op::ObjectRemove { .. } => {}
         }

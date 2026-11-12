@@ -833,7 +833,7 @@ fn a_key_that_the_server_holds_the_same_way_is_no_conflict_copy_and_no_notice() 
         "a key that the server holds the same way keeps no copy"
     );
     assert!(
-        b.handle().take_secret_notices().is_empty(),
+        b.handle().take_notices().is_empty(),
         "the person reads no notice about a key that did not change"
     );
     assert_eq!(

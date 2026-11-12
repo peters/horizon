@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::super::config::Config;
 use crate::error::{Error, Result};
@@ -22,67 +23,56 @@ pub(super) struct Row {
 }
 
 pub(super) fn encode(config: &Config) -> Result<Vec<Row>> {
-    Ok(vec![
-        Row {
-            section: "version",
-            data: json(&config.version)?,
-        },
-        Row {
-            section: "window",
-            data: json(&config.window)?,
-        },
-        Row {
-            section: "appearance",
-            data: json(&config.appearance)?,
-        },
-        Row {
-            section: "shortcuts",
-            data: json(&config.shortcuts)?,
-        },
-        Row {
-            section: "overlays",
-            data: json(&config.overlays)?,
-        },
-        Row {
-            section: "features",
-            data: json(&config.features)?,
-        },
-        Row {
-            section: "browser",
-            data: json(&config.browser)?,
-        },
-        Row {
-            section: "remote_hosts",
-            data: json(&config.remote_hosts)?,
-        },
-        Row {
-            section: "browser_host",
-            data: json(&config.browser_host)?,
-        },
-        Row {
-            section: "server",
-            data: json(&config.server)?,
-        },
-        Row {
-            section: "secrets",
-            data: json(&config.secrets)?,
-        },
-        Row {
-            section: "speech",
-            data: json(&config.speech)?,
-        },
-        Row {
-            section: "presets",
-            data: json(&config.presets)?,
-        },
-        Row {
-            section: "workspaces",
-            data: json(&config.workspaces)?,
-        },
-    ])
+    crate::settings_sync::SECTIONS
+        .iter()
+        .map(|section| {
+            let data = encode_one(config, section.name)?.ok_or_else(|| {
+                Error::Config(format!(
+                    "the section {} of the settings is not one that this build encodes",
+                    section.name
+                ))
+            })?;
+            Ok(Row {
+                section: section.name,
+                data,
+            })
+        })
+        .collect()
 }
 
-pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
+/// The JSON of one section of `config`, or `None` when this build has no such
+/// section.
+pub(crate) fn encode_one(config: &Config, name: &str) -> Result<Option<String>> {
+    match value_of(config, name) {
+        Some(value) => Ok(Some(json(&value?)?)),
+        None => Ok(None),
+    }
+}
+
+/// The JSON value of one section of `config`, or `None` when this build has no
+/// such section.
+pub(crate) fn value_of(config: &Config, name: &str) -> Option<Result<Value>> {
+    let value = match name {
+        "version" => json_value(&config.version),
+        "window" => json_value(&config.window),
+        "appearance" => json_value(&config.appearance),
+        "shortcuts" => json_value(&config.shortcuts),
+        "overlays" => json_value(&config.overlays),
+        "features" => json_value(&config.features),
+        "browser" => json_value(&config.browser),
+        "remote_hosts" => json_value(&config.remote_hosts),
+        "browser_host" => json_value(&config.browser_host),
+        "server" => json_value(&config.server),
+        "secrets" => json_value(&config.secrets),
+        "speech" => json_value(&config.speech),
+        "presets" => json_value(&config.presets),
+        "workspaces" => json_value(&config.workspaces),
+        _ => return None,
+    };
+    Some(value)
+}
+
+pub(crate) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
     let Config {
         version,
         window,
@@ -117,8 +107,12 @@ pub(super) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
     })
 }
 
-fn json<T: Serialize>(value: &T) -> Result<String> {
+fn json(value: &Value) -> Result<String> {
     serde_json::to_string(value).map_err(|error| Error::Config(format!("settings section: {error}")))
+}
+
+fn json_value<T: Serialize>(value: &T) -> Result<Value> {
+    serde_json::to_value(value).map_err(|error| Error::Config(format!("settings section: {error}")))
 }
 
 fn section<T: DeserializeOwned>(rows: &BTreeMap<String, String>, name: &str) -> Result<Option<T>> {

@@ -150,7 +150,7 @@ pub(super) fn write_secrets(handle: &SyncHandle, rows: &[SecretRow]) {
         }
     }
     for line in notices {
-        handle.push_secret_notice(line);
+        handle.push_notice(line);
     }
 }
 

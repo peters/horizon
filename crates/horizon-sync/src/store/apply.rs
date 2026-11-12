@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use crate::error::{Refusal, StoreError};
 use crate::intent::{
-    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, MAX_PROBES, MAX_SECRET_BYTES,
-    MAX_SECRETS, Op, Outcome, PushReply,
+    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, KIND_SETTING, MAX_PROBES,
+    MAX_SECRET_BYTES, MAX_SECRETS, MAX_SETTINGS, Op, Outcome, PushReply,
 };
 use crate::store::rows::to_sql;
 use crate::store::secrets::{self, SecretKey};
@@ -170,6 +170,7 @@ fn decide(
         Op::BindingPut { machine, key } => binding_put(transaction, machine, key.as_deref(), index),
         Op::SecretPut { id, body } => secret_put(transaction, key, intent.seen, id, body.as_ref(), index),
         Op::SecretRemove { id } => secret_remove(transaction, key, id, index),
+        Op::SettingPut { id, body } => setting_put(transaction, intent.seen, id, body, index),
         Op::ObjectPut { kind, id, body } => object_put(transaction, intent.seen, kind, id, body, index),
         Op::ObjectRemove { kind, id } => object_remove(transaction, kind, id, index),
     }
@@ -328,6 +329,60 @@ fn check_secret_id(id: &str) -> Result<SecretId, Refusal> {
     SecretId::parse(id).map_err(|error| Refusal::InvalidIntent {
         message: error.to_string(),
     })
+}
+
+/// Writes one section of the settings by the version rule: the first intent on a
+/// version wins, and a later one is refused with the version that the server has.
+///
+/// The server does not read the body. It checks the id, the size and the number of
+/// sections, and stores the JSON that the computer sent, so a section of a newer
+/// Horizon reaches the computers of the person unchanged.
+fn setting_put(
+    transaction: &Transaction<'_>,
+    seen: Option<u64>,
+    id: &str,
+    body: &Value,
+    index: u64,
+) -> Result<Outcome, StoreError> {
+    if let Err(refusal) = check_setting_id(id) {
+        return Ok(refused(refusal));
+    }
+    let encoded = serde_json::to_string(body)
+        .map_err(|error| StoreError::Damaged(format!("the server could not encode a setting: {error}")))?;
+    if encoded.len() > horizon_core::settings_sync::MAX_SECTION_BYTES {
+        return Ok(refused(Refusal::InvalidIntent {
+            message: format!(
+                "One setting holds at most {} bytes, and this one is larger",
+                horizon_core::settings_sync::MAX_SECTION_BYTES
+            ),
+        }));
+    }
+    match (seen, version_of(transaction, KIND_SETTING, id)?) {
+        (None, None) => {
+            if live_count(transaction, KIND_SETTING)? >= MAX_SETTINGS {
+                return Ok(refused(Refusal::TooMany {
+                    kind: KIND_SETTING.to_owned(),
+                    limit: MAX_SETTINGS,
+                }));
+            }
+            put(transaction, KIND_SETTING, id, body, index, false)?;
+            Ok(Outcome::Applied { index })
+        }
+        (None, Some(version)) => Ok(refused(Refusal::AlreadyAnswered { version })),
+        (Some(seen), Some(version)) if seen == version => {
+            put(transaction, KIND_SETTING, id, body, index, false)?;
+            Ok(Outcome::Applied { index })
+        }
+        (Some(seen), Some(version)) => Ok(refused(Refusal::ChangedSinceSeen { seen, version })),
+        (Some(seen), None) => Ok(refused(Refusal::ChangedSinceSeen { seen, version: 0 })),
+    }
+}
+
+/// A section id: 1 to 40 characters of `a-z`, `0-9` and `_`, which is the name of
+/// one section of the settings store. No id is a path, a command or a name of
+/// another kind.
+fn check_setting_id(id: &str) -> Result<(), Refusal> {
+    horizon_core::settings_sync::check_setting_id(id).map_err(|reason| Refusal::InvalidIntent { message: reason })
 }
 
 /// Writes one versioned object of an internal kind, by the version rule: the

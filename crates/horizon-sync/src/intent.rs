@@ -29,6 +29,15 @@ pub const KIND_BINDING: &str = "binding";
 /// version only.
 pub const KIND_SECRET: &str = "secret";
 
+/// The kind of object that holds one section of the settings of the person, with
+/// the name of the section as its id. The body is the section inside the envelope
+/// of `horizon_core::settings_sync`, and the server stores it without reading it.
+pub const KIND_SETTING: &str = "setting";
+
+/// The most setting objects that the server keeps: the sections of one settings
+/// store, with room for the sections that a newer Horizon adds.
+pub const MAX_SETTINGS: u64 = 64;
+
 /// An object that keeps nothing a person uses. It exists so that the version
 /// rule has an object to prove itself on before the cards of a later slice
 /// arrive, and it is bounded like every other kind.
@@ -81,6 +90,10 @@ pub enum Op {
     SecretPut { id: String, body: Option<SecretBody> },
     /// Removes one secret. A removal is last write wins, as a machine removal is.
     SecretRemove { id: String },
+    /// Writes one versioned section of the settings. `body` is the section inside
+    /// the envelope of `horizon_core::settings_sync`, and the server neither reads
+    /// it nor checks what it means.
+    SettingPut { id: String, body: Value },
     /// Writes one versioned object of an internal kind.
     ObjectPut { kind: String, id: String, body: Value },
     /// Removes one versioned object of an internal kind.
@@ -95,6 +108,7 @@ impl Op {
             Self::MachinePut { .. } | Self::MachineRemove { .. } => KIND_MACHINE,
             Self::BindingPut { .. } => KIND_BINDING,
             Self::SecretPut { .. } | Self::SecretRemove { .. } => KIND_SECRET,
+            Self::SettingPut { .. } => KIND_SETTING,
             Self::ObjectPut { kind, .. } | Self::ObjectRemove { kind, .. } => kind,
         }
     }
@@ -108,6 +122,7 @@ impl Op {
             Self::BindingPut { machine, .. } => machine,
             Self::SecretPut { id, .. }
             | Self::SecretRemove { id }
+            | Self::SettingPut { id, .. }
             | Self::ObjectPut { id, .. }
             | Self::ObjectRemove { id, .. } => id,
         }

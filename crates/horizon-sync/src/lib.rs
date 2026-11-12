@@ -64,8 +64,8 @@ pub use host::{
     serve_with_options, terminate_flag,
 };
 pub use intent::{
-    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, MAX_INTENTS_PER_PUSH, MAX_PROBES,
-    MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, Op, Outcome, PushReply, SecretBody,
+    Intent, IntentResult, KIND_BINDING, KIND_MACHINE, KIND_PROBE, KIND_SECRET, KIND_SETTING, MAX_INTENTS_PER_PUSH,
+    MAX_PROBES, MAX_SECRET_BYTES, MAX_SECRETS, MAX_SECRETS_PER_PUSH, MAX_SETTINGS, Op, Outcome, PushReply, SecretBody,
 };
 pub use invite::{InviteError, SERVER_DEVICE, ask, first_invitation, greet, invitation_text};
 pub use join::{JoinBounds, JoinError, join, join_with};
@@ -85,8 +85,8 @@ pub use store::{
     UNJOINED_GRACE_MILLIS, WRONG_CODE_WINDOW_MILLIS,
 };
 pub use supervisor::{
-    LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, Supervisor, SupervisorConfig, SyncHandle,
-    SyncedMachineStore, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN, proposed_device_name, stored_device_name,
-    write_device_name,
+    LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, SettingsSyncView, Supervisor,
+    SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
+    proposed_device_name, stored_device_name, write_device_name,
 };
 pub use tip::tip;

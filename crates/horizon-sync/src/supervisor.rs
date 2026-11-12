@@ -53,7 +53,7 @@ use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
 use crate::protocol::Frame;
 use connect::{Halt, Opened};
-use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, device_name};
+use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, SETTINGS_MIRROR_FILE, device_name};
 use link::{End, LinkParts, serve_link};
 use pull::{accept_hello, merged_bindings, now_millis};
 use view::records_of;
@@ -63,11 +63,13 @@ mod files;
 mod link;
 mod pull;
 mod secrets;
+mod settings;
 mod state;
 mod view;
 
+pub use settings::SyncedSettings;
 pub(crate) use state::SyncState;
-pub use state::{LinkSnapshot, ServerReply, ServerRequest, SyncHandle};
+pub use state::{LinkSnapshot, ServerReply, ServerRequest, SettingsSyncView, SyncHandle};
 
 /// How long one turn of the supervisor waits for a frame or for local work.
 const LINK_SLICE: Duration = Duration::from_millis(100);
@@ -177,6 +179,12 @@ pub struct SupervisorConfig {
     /// The directory of the machine list that this computer kept before it
     /// followed a server, whose records seed the first link.
     pub machines_dir: PathBuf,
+    /// The settings file of this computer, whose store holds the shared sections
+    /// of the settings. `None` keeps every setting on this computer.
+    pub settings_path: Option<PathBuf>,
+    /// The mirror of the settings that the server gave, in the machine directory
+    /// beside the mirror of the machine list.
+    pub settings_mirror_file: PathBuf,
     /// The places where this computer keeps its secrets: its machine keys and its
     /// credential values. The link writes every value that the server decided
     /// there, reads the value of a local change from there, and never sends a
@@ -238,6 +246,8 @@ impl SupervisorConfig {
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
             machines_dir: directory.to_path_buf(),
+            settings_path: None,
+            settings_mirror_file: directory.join(SETTINGS_MIRROR_FILE),
             secrets,
             bounds: LinkBounds::STANDARD,
         }
@@ -686,13 +696,10 @@ mod tests {
 
         // The worker of the secrets keeps the line for the person, and the frame
         // takes it once: a frame that ran twice shows one line, not two.
-        handle.push_secret_notice("the server kept its value of studio".to_owned());
-        handle.push_secret_notice("the server kept its value of shop".to_owned());
-        assert_eq!(handle.take_secret_notices().len(), 2);
-        assert!(
-            handle.take_secret_notices().is_empty(),
-            "a taken line is not shown twice"
-        );
+        handle.push_notice("the server kept its value of studio".to_owned());
+        handle.push_notice("the server kept its value of shop".to_owned());
+        assert_eq!(handle.take_notices().len(), 2);
+        assert!(handle.take_notices().is_empty(), "a taken line is not shown twice");
     }
 
     #[test]
