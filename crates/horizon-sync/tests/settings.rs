@@ -315,6 +315,30 @@ fn notice(computer: &Computer, needle: &str) -> Vec<String> {
     }
 }
 
+/// The row of one section of the store of a computer.
+fn row_of(computer: &Computer, section: &str) -> Option<String> {
+    horizon_core::config_store::ConfigStore::resolve(&computer.config_path())
+        .section_rows()
+        .expect("the rows of this computer")
+        .remove(section)
+}
+
+/// The row that a computer with no server writes for one section of `config`.
+fn plain_row(config: &Config, section: &str) -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("config.json");
+    Config::save(&path, config).expect("the store of a computer with no server");
+    row_of_path(&path, section).expect("the row of the section")
+}
+
+/// The row of one section of the store at `path`.
+fn row_of_path(path: &Path, section: &str) -> Option<String> {
+    horizon_core::config_store::ConfigStore::resolve(path)
+        .section_rows()
+        .expect("the rows of that store")
+        .remove(section)
+}
+
 fn config_with_theme(theme: AppearanceTheme) -> Config {
     Config {
         appearance: horizon_core::AppearanceConfig { theme },
@@ -571,6 +595,90 @@ fn a_section_of_a_newer_horizon_stays_on_the_server_and_says_why() {
         server.setting("appearance").is_some(),
         "the section stays on the server"
     );
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn six_saves_of_two_computers_keep_the_row_of_a_section_plain() {
+    // A save that goes through the server once merged the envelope of the body of
+    // the server as if it were the section, so every change wrapped the row of the
+    // store one more time. The row of each store must be the bytes that a computer
+    // with no server writes for the same value, after every change.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
+    let mut b = Computer::start(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&a);
+    in_step(&b);
+
+    let themes = [
+        AppearanceTheme::Light,
+        AppearanceTheme::Dark,
+        AppearanceTheme::Auto,
+        AppearanceTheme::Light,
+        AppearanceTheme::Dark,
+        AppearanceTheme::Auto,
+    ];
+    for (turn, theme) in themes.into_iter().enumerate() {
+        let saver = if turn % 2 == 0 { &a } else { &b };
+        let mut config = saver.stored();
+        config.appearance.theme = theme;
+        saver.save(&config);
+        eventually("both computers on the value of this turn", || {
+            let settled = |computer: &Computer| {
+                computer.theme() == theme
+                    && matches!(computer.handle().state(), LinkState::InStep { .. })
+                    && computer.handle().snapshot().settings().pending().is_empty()
+                    && computer.handle().snapshot().settings().in_step()
+            };
+            (settled(&a) && settled(&b)).then_some(())
+        });
+
+        let expected = plain_row(&config, "appearance");
+        for (name, computer) in [("a", &a), ("b", &b)] {
+            assert_eq!(
+                row_of(computer, "appearance").as_deref(),
+                Some(expected.as_str()),
+                "the row of the store of {name} after change {turn}: the plain section of the theme {theme:?}"
+            );
+        }
+
+        let (_, body) = server.setting("appearance").expect("the section of the server");
+        let mut fields: Vec<&str> = body
+            .as_object()
+            .expect("the body of the server is one object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            vec!["config_version", "format", "section"],
+            "the body of the server after change {turn} holds the envelope and nothing else: {body}"
+        );
+        let mut held: Vec<&str> = body["section"]
+            .as_object()
+            .expect("the section of the body is one object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        held.sort_unstable();
+        let mut wanted: Vec<String> = settings_sync::body_of(&config, "appearance")
+            .expect("the section of this build")
+            .expect("a shared section")
+            .as_object()
+            .expect("one object")
+            .keys()
+            .cloned()
+            .collect();
+        wanted.sort_unstable();
+        assert_eq!(
+            held, wanted,
+            "the section of change {turn} has the fields of the setting"
+        );
+    }
+    a.stop();
     b.stop();
     server.stop();
 }

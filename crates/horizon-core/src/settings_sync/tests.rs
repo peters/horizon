@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 
 use super::{
     BODY_FORMAT, SECTIONS, Scope, SectionBody, apply_to_store, arrive, backup_path, body_of, changed_sections, covers,
-    decode_body, encode_body, is_shared, merged_config, merged_for_push, read_store, shared_sections, unknown_fields,
-    with_section, write_backup,
+    decode_body, decode_body_value, encode_body, is_shared, merged_config, merged_for_push, read_store,
+    shared_sections, unknown_fields, with_section, write_backup,
 };
 use crate::config::Config;
 use crate::config_store::ConfigStore;
@@ -41,6 +41,15 @@ fn arriving(name: &str, text: &str) -> BTreeMap<String, Value> {
     let mut map = BTreeMap::new();
     map.insert(name.to_owned(), arrive(name, &body).expect("a section of this build"));
     map
+}
+
+/// The body of the server around one section, as a link keeps it.
+fn server_body(section: Value) -> SectionBody {
+    SectionBody {
+        format: BODY_FORMAT,
+        config_version: crate::config_migration::CURRENT_CONFIG_VERSION,
+        section,
+    }
 }
 
 #[test]
@@ -270,9 +279,10 @@ fn an_unknown_field_of_a_known_section_stays_in_the_store_and_in_the_next_push()
     local.appearance.theme = crate::config::AppearanceTheme::Dark;
     let local_value = body_of_section(&local, "appearance");
     // The mirror of the link holds the body of the server, so the next push of
-    // this computer merges that body and not the typed value of the store.
+    // this computer merges the section of that body and not the body itself.
     let server_value = stored_appearance.clone();
-    let pushed = merged_for_push(Some(&server_value), &local_value);
+    let server_body = server_body(server_value.clone());
+    let pushed = merged_for_push(Some(&server_body), &local_value);
     assert_eq!(pushed, json!({ "theme": "dark", "of_a_newer_horizon": 7 }));
     assert_eq!(
         unknown_fields(&server_value, &local_value),
@@ -286,18 +296,39 @@ fn an_unknown_field_of_a_known_section_stays_in_the_store_and_in_the_next_push()
 }
 
 #[test]
+fn a_merge_reads_the_section_of_the_body_and_never_its_envelope() {
+    let config = Config::default();
+    let local = body_of_section(&config, "appearance");
+    // The body around the section is the argument, and the three fields of the
+    // envelope stay outside the value that this computer sends: a merge that took
+    // the envelope as a section would nest one envelope inside the next body.
+    let body = server_body(local.clone());
+    assert_eq!(merged_for_push(Some(&body), &local), local);
+    let text = serde_json::to_string(&body).expect("one body");
+    let decoded = decode_body_value(&serde_json::from_str(&text).expect("json")).expect("the body of the server");
+    assert_eq!(decoded, body);
+    assert_eq!(
+        merged_for_push(Some(&decoded), &local),
+        local,
+        "a body that arrives as a JSON value is read back as a body"
+    );
+    // A value that is not one body of this build gives no merge at all, so a
+    // caller never treats a bare section as the body of the server.
+    assert!(decode_body_value(&local).is_err(), "a bare section is no body");
+    assert!(decode_body_value(&json!({ "format": 99, "config_version": 12, "section": {} })).is_err());
+}
+
+#[test]
 fn a_server_body_with_the_same_values_covers_this_computer() {
     let config = Config::default();
     let local = body_of_section(&config, "appearance");
     assert!(covers(&local, &local));
-    let with_unknown = merged_for_push(Some(&json!({ "theme": "auto", "later": true })), &local);
-    assert_eq!(with_unknown, json!({ "theme": "auto", "later": true }));
-    assert!(
-        !covers(&with_unknown, &local),
-        "a field of a newer Horizon is a difference"
-    );
+    let with_unknown = server_body(json!({ "theme": "auto", "later": true }));
+    let merged = merged_for_push(Some(&with_unknown), &local);
+    assert_eq!(merged, json!({ "theme": "auto", "later": true }));
+    assert!(!covers(&merged, &local), "a field of a newer Horizon is a difference");
     assert_eq!(
-        merged_for_push(Some(&json!([1, 2])), &local),
+        merged_for_push(Some(&server_body(json!([1, 2]))), &local),
         local,
         "a section that is not an object is sent as this build reads it"
     );

@@ -290,6 +290,20 @@ pub fn decode_body(text: &str) -> std::result::Result<SectionBody, SectionFault>
     Ok(body)
 }
 
+/// One [`SectionBody`] of the JSON value that a server stores.
+///
+/// The mirror of a link keeps the body of the server as a JSON value, so a caller
+/// that merges it reads it back through this function and never treats the value
+/// as a section.
+///
+/// # Errors
+/// Refuses a value that is not one body of this build.
+pub fn decode_body_value(value: &Value) -> std::result::Result<SectionBody, SectionFault> {
+    let text = serde_json::to_string(value)
+        .map_err(|error| SectionFault::Unreadable(format!("it is not one setting: {error}")))?;
+    decode_body(&text)
+}
+
 /// The section of one body, at the configuration version of this build.
 ///
 /// A section of an older configuration version is migrated with the migrations of
@@ -382,16 +396,24 @@ pub fn merged_config(
     Ok(config)
 }
 
-/// The value of `local` that this computer sends: the fields of the server's body
-/// that this build does not know stay under the values of this build.
+/// The value of `local` that this computer sends: the fields of the server's
+/// section that this build does not know stay under the values of this build.
+///
+/// The argument is the body of the server and not its section, so a caller
+/// cannot merge the envelope of a body as if it were a section: the envelope is
+/// `format`, `config_version` and `section`, and a merge of it would put those
+/// three fields inside the section of the next body.
 ///
 /// Only the top level of a section is merged. A section is one value of the
 /// settings, so a field of it that a newer Horizon added is at that level, and a
 /// nested merge would decide which of two lists is the newer one.
 #[must_use]
-pub fn merged_for_push(server: Option<&Value>, local: &Value) -> Value {
-    let (Some(Value::Object(server)), Value::Object(local)) = (server, local) else {
+pub fn merged_for_push(server: Option<&SectionBody>, local: &Value) -> Value {
+    let (Some(SectionBody { section: server, .. }), Value::Object(local)) = (server, local) else {
         return local.clone();
+    };
+    let Value::Object(server) = server else {
+        return Value::Object(local.clone());
     };
     let mut merged = server.clone();
     for (field, value) in local {

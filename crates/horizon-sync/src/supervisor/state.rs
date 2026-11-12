@@ -584,8 +584,14 @@ impl SyncHandle {
         ui_thread::blocking("the queue of the link is written and synced");
         let mut state = self.lock();
         let seen = state.settings.get(section).map(|row| row.version);
-        let server = state.settings.get(section).map(|row| &row.body);
-        let merged = horizon_core::settings_sync::merged_for_push(server, &local);
+        // The mirror keeps the body of the server as it arrived, so it is read
+        // back as one body here: a body that this build cannot read gives no merge,
+        // and the section of this computer is sent as it is.
+        let server = state
+            .settings
+            .get(section)
+            .and_then(|row| horizon_core::settings_sync::decode_body_value(&row.body).ok());
+        let merged = horizon_core::settings_sync::merged_for_push(server.as_ref(), &local);
         let body = horizon_core::settings_sync::SectionBody {
             format: horizon_core::settings_sync::BODY_FORMAT,
             config_version: config.version,
