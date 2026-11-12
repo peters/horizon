@@ -12,9 +12,10 @@ use horizon_core::browser::remote::{
     CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
 };
 use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
+use horizon_core::named_secrets::{NamedSecretVault, NamedSecretWorkbench};
 use horizon_core::remote_browser_credential::{
-    CredentialReadiness, CredentialState, CredentialWorkbench, KeyringImport, KeyringImportPlan, NoticeKind, Platform,
-    RemoteCredentialError, SecretsState, WorkbenchNotice, credential_destination,
+    CredentialReadiness, CredentialState, CredentialWorkbench, ImportLine, KeyringImport, KeyringImportPlan,
+    NoticeKind, Platform, RemoteCredentialError, SecretsState, TailnetLine, WorkbenchNotice, credential_destination,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -235,6 +236,7 @@ pub(super) fn default_portable_profile_path(config_path: &Path) -> String {
         .to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render(
     ui: &mut Ui,
     config: &mut Config,
@@ -243,6 +245,7 @@ pub(super) fn render(
     portable: &mut PortableProfilePanel,
     usage: &mut super::remote_usage::UsagePanels,
     keyring: &mut KeyringImport,
+    named: &mut NamedSecretWorkbench,
 ) -> bool {
     workbench.poll();
     // A store can relock while this tab is idle. The re-probe happens on a read,
@@ -258,7 +261,7 @@ pub(super) fn render(
     inputs.absorb(notices);
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
-    render_keyring_section(ui, config, workbench, keyring);
+    render_keyring_section(ui, config, workbench, keyring, named);
     let mut changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
     usage.retain(|name, _| providers.contains_key(name));
@@ -286,24 +289,27 @@ pub(super) fn render(
     changed
 }
 
-/// The one line and the one button that read the values of an older Horizon out of
-/// the keyring of this system, and the answer of the last click.
+/// The card that reads the values of an older Horizon out of the keyring of this
+/// system: the button of the remote browser rows, one line per network of an older
+/// Horizon with the three names of the recipe, and the answer of the last click.
 ///
 /// Nothing here runs by itself: a click starts one import on a worker thread. The
 /// line stays while a reference of these settings has no value on this computer, so
-/// a person can try again after installing the program that reads the keyring.
+/// a person can try again after installing the program that reads the keyring. A
+/// value of a network is never drawn: the card holds names, and the worker that
+/// creates them keeps the values.
 fn render_keyring_section(
     ui: &mut Ui,
     config: &Config,
     workbench: &mut CredentialWorkbench,
     keyring: &mut KeyringImport,
+    named: &mut NamedSecretWorkbench,
 ) {
     let plan = KeyringImportPlan::of(&config.browser.remote);
     let offered = !plan.is_empty() && workbench.any_reference_without_value(&plan);
     let answer = keyring.line().cloned();
-    if !offered && answer.is_none() {
-        return;
-    }
+    let secrets_answer = keyring.secrets_line().cloned();
+    let offer = keyring.offer().cloned();
     super::section_heading(ui, "Keyring of this system");
     super::section_card(ui, |ui| {
         if offered {
@@ -312,40 +318,113 @@ fn render_keyring_section(
                 "A value that an older version stored in the system keyring can be imported.",
             );
             ui.add_space(6.0);
-            let busy = keyring.is_busy();
-            let button = egui::Button::new(if busy {
-                "Importing…"
-            } else {
-                "Import from the keyring"
-            });
-            // A value of the keyring can be imported only into the secrets file, so
-            // the button waits for that file like the rows of the providers do.
-            let store = workbench.store_handle();
-            let ready = store.is_some();
-            if ui.add_enabled(ready && !busy, button).clicked()
-                && let Some(store) = store
-            {
-                keyring.start(plan.clone(), store, None);
-                ui.ctx().request_repaint();
-            }
-            // The permission of macOS belongs to the Keychain, so the line follows the
-            // keyring that the import reads and not the system that compiles this tab.
-            if keyring.platform() == Platform::Keychain {
-                super::dim_label(
-                    ui,
-                    "macOS can ask for your permission once for each value, because the Keychain belongs to you.",
-                );
-            }
+        }
+        let busy = keyring.is_busy();
+        let button = egui::Button::new(if busy {
+            "Importing…"
+        } else {
+            "Import from the keyring"
+        });
+        // A value of the keyring can be imported only into the secrets file, so the
+        // button waits for that file like the rows of the providers do.
+        let store = workbench.store_handle();
+        let ready = store.is_some();
+        let vault = named.vault();
+        if ui.add_enabled(ready && !busy, button).clicked()
+            && let Some(store) = store
+        {
+            keyring.start(plan.clone(), store, vault.clone());
+            ui.ctx().request_repaint();
+        }
+        // The permission of macOS belongs to the Keychain, so the line follows the
+        // keyring that the import reads and not the system that compiles this tab.
+        if keyring.platform() == Platform::Keychain {
+            super::dim_label(
+                ui,
+                "macOS can ask for your permission once for each value, because the Keychain belongs to you.",
+            );
         }
         if let Some(answer) = answer {
-            let color = if answer.error {
-                theme::PALETTE_RED()
-            } else {
-                theme::PALETTE_GREEN()
-            };
-            ui.add(egui::Label::new(egui::RichText::new(answer.text).color(color).size(11.0)).wrap());
+            answer_line(ui, &answer);
+        }
+        if let Some(offer) = offer {
+            ui.add_space(8.0);
+            super::dim_label(
+                ui,
+                "An older version kept the OAuth client of a network in the keyring. These three names are \
+                 the secrets of the machines recipe, and this computer draws no value.",
+            );
+            for line in offer.lines() {
+                ui.add_space(8.0);
+                render_network_line(ui, line, keyring, vault.as_ref());
+            }
+        }
+        if let Some(answer) = secrets_answer {
+            answer_line(ui, &answer);
         }
     });
+}
+
+/// One line per network of an older Horizon: the three names of the recipe, the
+/// names that this computer already holds a value for, and the button that creates
+/// the missing ones. A name is drawn, a value never is.
+fn render_network_line(
+    ui: &mut Ui,
+    line: &TailnetLine,
+    keyring: &mut KeyringImport,
+    vault: Option<&std::sync::Arc<NamedSecretVault>>,
+) {
+    let names: Vec<&str> = line.names().iter().map(horizon_core::named_secrets::SecretName::as_str).collect();
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(names.join(" · "))
+                .color(theme::FG())
+                .size(12.0)
+                .monospace(),
+        )
+        .wrap(),
+    );
+    super::dim_label(ui, &presence_line(line));
+    let complete = line.complete();
+    let label = if complete {
+        "All three names are here"
+    } else {
+        "Create these secrets"
+    };
+    let ready = !keyring.is_busy() && !complete && vault.is_some();
+    if ui.add_enabled(ready, egui::Button::new(label)).clicked()
+        && let Some(vault) = vault
+    {
+        keyring.start_secrets(Some(line.net().to_string()), std::sync::Arc::clone(vault));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// The line that says which of the three names of a network this computer holds.
+fn presence_line(line: &TailnetLine) -> String {
+    let present: Vec<&str> = line
+        .names()
+        .iter()
+        .zip(line.present())
+        .filter_map(|(name, present)| present.then_some(name.as_str()))
+        .collect();
+    match present.as_slice() {
+        [] => "No value of the three names is on this computer yet.".to_string(),
+        [one] => format!("{one} is already here."),
+        [first, second] => format!("{first} and {second} are already here."),
+        [first, second, third] => format!("{first}, {second} and {third} are already here."),
+        _ => String::new(),
+    }
+}
+
+/// One answer of a click, in the tone of its rule.
+fn answer_line(ui: &mut Ui, answer: &ImportLine) {
+    let color = if answer.error {
+        theme::PALETTE_RED()
+    } else {
+        theme::PALETTE_GREEN()
+    };
+    ui.add(egui::Label::new(egui::RichText::new(&answer.text).color(color).size(11.0)).wrap());
 }
 
 /// A machine-local binding for a reference the imported profile left
@@ -882,14 +961,15 @@ mod tests {
         let folder = tempfile::tempdir().expect("a folder");
         stand_in_keyring(folder.path(), platform, user);
         let (values, mut workbench) = file_workbench();
+        let mut named = horizon_core::named_secrets::NamedSecretWorkbench::new(None, &[]);
         let mut keyring = KeyringImport::with_programs(
             platform,
             ProgramEnvironment::with_path(folder.path()),
             Bound::WholeImport(std::time::Duration::from_secs(10)),
         );
-        let draw = |workbench: &mut CredentialWorkbench, keyring: &mut KeyringImport| {
+        let mut draw = |workbench: &mut CredentialWorkbench, keyring: &mut KeyringImport| {
             let (_changed, texts) = super::super::tests::frame_of(|ui| {
-                super::render_keyring_section(ui, &config, workbench, keyring);
+                super::render_keyring_section(ui, &config, workbench, keyring, &mut named);
                 false
             });
             texts
@@ -965,17 +1045,57 @@ mod tests {
             "a value on this computer takes the offer away: {texts:?}"
         );
         assert!(
-            !super::super::tests::texts_hold(
+            super::super::tests::texts_hold(
                 &texts,
                 "macOS can ask for your permission once for each value, because the Keychain belongs to you."
-            ),
-            "a value on this computer takes the permission of macOS away: {texts:?}"
+            ) == (platform == Platform::Keychain),
+            "the permission of macOS stands beside the button that reads the keyring: {texts:?}"
         );
         assert!(
             super::super::tests::texts_hold(&texts, "Imported 1 value."),
             "the answer of the click stays with the person: {texts:?}"
         );
         drop(values);
+    }
+
+    /// The networks of an older Horizon reach the card as three names each: the
+    /// names that this computer holds, the names that a click creates, and no value.
+    #[test]
+    fn the_card_offers_the_three_names_of_a_network_of_an_older_horizon() {
+        use horizon_core::remote_browser_credential::{Bound, KeyringImport, ProgramEnvironment, TailnetOffer};
+
+        let config = Config::default();
+        let (_values, mut workbench) = file_workbench();
+        let mut named = horizon_core::named_secrets::NamedSecretWorkbench::new(None, &[]);
+        let mut keyring = KeyringImport::with_programs(
+            Platform::SecretService,
+            ProgramEnvironment::with_path(std::env::temp_dir()),
+            Bound::WholeImport(std::time::Duration::from_secs(1)),
+        );
+        let line = TailnetLine::of("HOME".to_string(), [true, false, false]).expect("the three names of the recipe");
+        keyring.adopt_offer(TailnetOffer::of(vec![line]));
+
+        let (_changed, texts) = super::super::tests::frame_of(|ui| {
+            super::render_keyring_section(ui, &config, &mut workbench, &mut keyring, &mut named);
+            false
+        });
+        let holds = |needle: &str| texts.iter().any(|text| text.contains(needle));
+        assert!(
+            holds("TS_HOME_CLIENT_ID · TS_HOME_CLIENT_SECRET · TS_HOME_TAG"),
+            "the card names the three secrets of the recipe: {texts:?}"
+        );
+        assert!(
+            holds("TS_HOME_CLIENT_ID is already here."),
+            "the card says which name this computer holds: {texts:?}"
+        );
+        assert!(
+            holds("Create these secrets"),
+            "the card offers the button of the missing names: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("synthetic")),
+            "the card draws no value: {texts:?}"
+        );
     }
 
     /// The row that an import of the keyring writes is queued for the link to a

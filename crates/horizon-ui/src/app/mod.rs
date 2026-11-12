@@ -480,6 +480,10 @@ impl HorizonApp {
         }
         self.remote_browser_credentials
             .adopt_imported_values(self.keyring_import.take_changes());
+        // The named secrets of a network of an older Horizon take the path of a value
+        // that a person typed: the name enters the settings, and the link sends it.
+        let created = self.keyring_import.take_created();
+        self.adopt_created_secrets(created);
         self.queue_credential_secrets();
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);

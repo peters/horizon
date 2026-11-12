@@ -683,6 +683,7 @@ fn render_tab(
                             portable_profile,
                             provider_usage,
                             keyring,
+                            named_secrets,
                         ),
                         false,
                     )

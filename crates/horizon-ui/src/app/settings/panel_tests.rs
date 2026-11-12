@@ -761,6 +761,15 @@ fn the_panel_holds_the_longest_values_of_every_tab() {
         texts_of("Remote")
     );
     assert!(
+        texts_of("Remote")
+            .iter()
+            .any(|text| text.contains("TS_ABCDEFGHIJKLMNOP_CLIENT_ID")
+                && text.contains("TS_ABCDEFGHIJKLMNOP_CLIENT_SECRET")
+                && text.contains("TS_ABCDEFGHIJKLMNOP_TAG")),
+        "the Remote tab draws the three names of the network: {:?}",
+        texts_of("Remote")
+    );
+    assert!(
         texts_of("Speech")
             .iter()
             .any(|text| text.contains("--rate 16000 {file}") && text.chars().count() > 190),
@@ -913,6 +922,14 @@ fn seed_long_values(app: &mut crate::app::HorizonApp) {
     // One binding of the Keys tab that no key of this computer names, so the row
     // shows its indicator and the card shows the line of its rule.
     editor.config.shortcuts.command_palette = "Ctrl+Alt+Shift+Super+Hyper+Meta+K".to_owned();
+    // The three names of a network of an older Horizon, at the 16 characters that
+    // `<NET>` takes, with one of them on this computer already: the longest line
+    // that the card of the keyring draws.
+    let net = "ABCDEFGHIJKLMNOP".to_string();
+    let line = horizon_core::remote_browser_credential::TailnetLine::of(net, [true, false, false])
+        .expect("the three names of the recipe");
+    app.keyring_import
+        .adopt_offer(horizon_core::remote_browser_credential::TailnetOffer::of(vec![line]));
     // One refused value in every card that shows the line of its rule.
     editor.config.remote_hosts.vnc_port = 0;
     editor.config.browser.quality = 0;

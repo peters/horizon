@@ -15,7 +15,7 @@ use std::sync::Arc;
 use horizon_browser::remote::RemoteBrowserConfig;
 use horizon_core::HorizonHome;
 use horizon_core::machines::{MachineRegistry, MachineStore, Machines};
-use horizon_core::named_secrets::{self, NamedSecretVault};
+use horizon_core::named_secrets::{self, NamedSecretChange, NamedSecretVault};
 use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault};
 use horizon_core::secret_store;
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
@@ -599,6 +599,12 @@ impl HorizonApp {
     /// queue holds the id `named/<NAME>` and never the value.
     pub(super) fn queue_named_secret_changes(&mut self) {
         let changes = self.named_secrets.take_changes();
+        self.queue_named_secret_intents(changes);
+    }
+
+    /// Queues the named secrets that an import of the keyring created, so the other
+    /// computers of the person give them to their agent panels too.
+    pub(super) fn queue_named_secret_intents(&mut self, changes: Vec<NamedSecretChange>) {
         if changes.is_empty() {
             return;
         }
@@ -610,6 +616,20 @@ impl HorizonApp {
             intents.push((id, change.stored));
         }
         self.queue_secret_intents(intents);
+    }
+
+    /// Takes the named secrets that a click on the keyring import created: their
+    /// names enter the `secrets` section as a typed name does, the Secrets tab reads
+    /// the state of every name again, and the link to a server queues each of them by
+    /// id. The values stay in the secrets file.
+    pub(super) fn adopt_created_secrets(&mut self, created: Vec<NamedSecretChange>) {
+        if created.is_empty() {
+            return;
+        }
+        self.adopt_named_secret_names();
+        let names = self.template_config.secrets.secret_names();
+        self.named_secrets.refresh(&names);
+        self.queue_named_secret_intents(created);
     }
 
     /// Keeps the names of the named secrets of the settings in step with the names
@@ -700,7 +720,7 @@ mod tests {
     use egui::Context;
     use horizon_sync::{LinkState, Supervisor, SupervisorConfig};
 
-    use super::{ServerLine, ServerSync};
+    use super::{NamedSecretVault, ServerLine, ServerSync};
     use crate::app::test_support::{run_app_frame, test_app};
 
     #[test]
@@ -813,6 +833,51 @@ mod tests {
             horizon_core::secret_store::SecretStore::in_memory().expect("a store in memory"),
         )));
         Arc::new(horizon_core::secret::SecretVault::new(keys, credentials, named))
+    }
+
+    /// The named secrets that an import of the keyring created take the path of a
+    /// value that a person typed: their names enter the `secrets` section of the
+    /// settings, their values stay in the secrets file, and the link queues each of
+    /// them by id.
+    #[test]
+    fn the_secrets_of_a_network_enter_the_secrets_section_as_a_typed_name_does() {
+        use horizon_core::named_secrets::SecretName;
+
+        horizon_core::ui_thread::use_strict_mode();
+        let (temp, mut app) = test_app();
+        let vault = Arc::new(NamedSecretVault::new(Box::new(
+            horizon_core::secret_store::SecretStore::in_memory().expect("a secrets file in memory"),
+        )));
+        app.adopt_named_secrets(Arc::clone(&vault));
+        let name = SecretName::parse("TS_HOME_TAG").expect("the name of the recipe");
+        let change = vault
+            .put(&name, b"tag:horizon-worker")
+            .expect("the value of the third secret");
+
+        app.adopt_created_secrets(vec![change]);
+
+        assert!(
+            app.template_config.secrets.names.contains(&name.as_str().to_string()),
+            "the name is in the secrets section: {:?}",
+            app.template_config.secrets.names
+        );
+        let settings = serde_json::to_string(&app.template_config).expect("the settings as text");
+        assert!(
+            !settings.contains("tag:horizon-worker"),
+            "no value of a secret enters the settings"
+        );
+        assert_eq!(
+            vault
+                .value(&name)
+                .expect("the value of the secret")
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(&b"tag:horizon-worker"[..]),
+            "the value is in the secrets file"
+        );
+        assert!(app.server_sync.is_none(), "this window follows no server");
+        app.wait_for_settings_io();
+        drop(temp);
     }
 
     #[test]
