@@ -287,7 +287,7 @@ impl Default for AppShortcuts {
             zoom_reset: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0)),
             zoom_in: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus),
             zoom_out: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus),
-            fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
+            fullscreen_panel: default_fullscreen_panel(),
             exit_fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape),
             fullscreen_window: ShortcutBinding::new(ps, ShortcutKey::Function(11)),
             save_editor: ShortcutBinding::new(ps, ShortcutKey::Letter('S')),
@@ -295,6 +295,31 @@ impl Default for AppShortcuts {
             next_attention: ShortcutBinding::new(ps, ShortcutKey::Letter('G')),
         }
     }
+}
+
+/// The default of the panel fullscreen on a system.
+///
+/// `F11` alone shows the desktop on macOS, so the system takes the key before
+/// the window sees it. A Mac gets `Cmd+Shift+Enter` instead, in the family of
+/// the other defaults that use the primary modifier. Linux keeps `F11`.
+#[must_use]
+const fn platform_default_fullscreen_panel(on_mac_os: bool) -> ShortcutBinding {
+    if on_mac_os {
+        ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Enter)
+    } else {
+        ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11))
+    }
+}
+
+fn default_fullscreen_panel() -> ShortcutBinding {
+    platform_default_fullscreen_panel(cfg!(target_os = "macos"))
+}
+
+/// The default of the panel fullscreen, as the settings file writes it. The
+/// value and [`platform_default_fullscreen_panel`] must name one binding.
+#[must_use]
+pub const fn platform_default_fullscreen_panel_config(on_mac_os: bool) -> &'static str {
+    if on_mac_os { "Ctrl+Shift+Enter" } else { "F11" }
 }
 
 fn push_unique_modifier(values: &mut Vec<ShortcutModifiers>, modifier: ShortcutModifiers) {
@@ -480,7 +505,10 @@ fn key_name(key: ShortcutKey) -> std::result::Result<&'static str, fmt::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
+    use super::{
+        AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers, platform_default_fullscreen_panel,
+        platform_default_fullscreen_panel_config,
+    };
 
     #[test]
     fn parses_primary_letter_shortcuts() {
@@ -536,6 +564,14 @@ mod tests {
             ShortcutBinding::new(ps, ShortcutKey::Function(11))
         );
         assert_eq!(
+            shortcuts.fullscreen_panel,
+            if cfg!(target_os = "macos") {
+                ShortcutBinding::new(ps, ShortcutKey::Enter)
+            } else {
+                ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11))
+            }
+        );
+        assert_eq!(
             shortcuts.save_editor,
             ShortcutBinding::new(ps, ShortcutKey::Letter('S'))
         );
@@ -545,6 +581,33 @@ mod tests {
         );
         assert_eq!(shortcuts.zoom_in, ShortcutBinding::new(primary, ShortcutKey::Plus));
         assert_eq!(shortcuts.zoom_out, ShortcutBinding::new(primary, ShortcutKey::Minus));
+    }
+
+    #[test]
+    fn the_panel_fullscreen_default_leaves_the_show_desktop_key_to_the_system() {
+        assert_eq!(
+            platform_default_fullscreen_panel(false),
+            ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
+            "Linux keeps F11"
+        );
+        let mac = platform_default_fullscreen_panel(true);
+        assert_eq!(
+            mac,
+            ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Enter),
+            "macOS uses the family of its other defaults"
+        );
+        assert_ne!(
+            mac,
+            ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
+            "plain F11 is Show Desktop on macOS"
+        );
+        for on_mac_os in [false, true] {
+            assert_eq!(
+                ShortcutBinding::parse(platform_default_fullscreen_panel_config(on_mac_os)).expect("the default"),
+                platform_default_fullscreen_panel(on_mac_os),
+                "the settings string and the binding name one shortcut"
+            );
+        }
     }
 
     #[test]

@@ -221,7 +221,8 @@ starts `/bin/bash`. See [the platform support](platform-support.md).
    Result: The board, the layout and the terminal history are the same.
 
 The README lists all keyboard and mouse shortcuts. A shortcut with Ctrl uses
-Cmd on macOS.
+Cmd on macOS. A panel becomes fullscreen with F11 on Linux and with
+Cmd+Shift+Enter on macOS, because F11 alone shows the desktop on macOS.
 
 ## Open an agent panel
 

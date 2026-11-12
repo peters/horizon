@@ -345,7 +345,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+0** | Reset canvas zoom to 100% |
 | **Ctrl+Plus** | Zoom canvas in |
 | **Ctrl+Minus** | Zoom canvas out |
-| **F11** | Fullscreen the active panel |
+| **F11** (Linux) / **Cmd+Shift+Enter** (macOS) | Fullscreen the active panel |
 | **Escape** | Exit active panel fullscreen |
 | **Ctrl+Shift+F11** | Toggle window fullscreen |
 | **Ctrl+Shift+S** | Save the active Markdown editor |
@@ -372,7 +372,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
 | **Ctrl+double-click** inside a workspace | Open the preset picker to add a panel |
 
-<sub>On macOS, substitute Cmd for Ctrl. Copy and paste use the standard Cmd+C / Cmd+V bindings. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
+<sub>On macOS, substitute Cmd for Ctrl. The default of the panel fullscreen is Cmd+Shift+Enter on macOS, because plain F11 shows the desktop there. Copy and paste use the standard Cmd+C / Cmd+V bindings. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
 
 <sub>Programs in a terminal can copy with the OSC 52 escape sequence: Horizon writes it to the system clipboard (`c`) or, on Linux, the primary selection (`p`). On Linux, selecting text fills the primary selection. Under Wayland it reaches other apps through the compositor's data-control protocol (for example wlroots and KDE) or through XWayland; where neither exists, use Ctrl+Shift+C and Ctrl+Shift+V.</sub>
 
@@ -523,6 +523,8 @@ Workspace templates use `terminals:` (each entry needs a `name`). Unknown keys a
 `features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** (sidebar order, left to right) whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
 `features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features. Like other General feature toggles, the Settings window applies the change immediately as a live preview; save to persist it, or close and revert without saving to restore the previous value.
+
+On macOS the default of `fullscreen_panel` is `Ctrl+Shift+Enter`, which the window reads as Cmd+Shift+Enter, because plain F11 shows the desktop on macOS. This file writes Ctrl for the primary modifier everywhere, as the other entries do.
 
 Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in a shortcut, not punctuation-only components such as `Ctrl++`.
 

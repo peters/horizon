@@ -184,7 +184,8 @@ impl Default for ShortcutsConfig {
             zoom_reset: "Ctrl+0".to_string(),
             zoom_in: "Ctrl+Plus".to_string(),
             zoom_out: "Ctrl+Minus".to_string(),
-            fullscreen_panel: "F11".to_string(),
+            fullscreen_panel: crate::shortcuts::platform_default_fullscreen_panel_config(cfg!(target_os = "macos"))
+                .to_string(),
             exit_fullscreen_panel: "Escape".to_string(),
             fullscreen_window: "Ctrl+Shift+F11".to_string(),
             save_editor: "Ctrl+Shift+S".to_string(),

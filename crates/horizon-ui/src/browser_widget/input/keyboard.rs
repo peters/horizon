@@ -690,7 +690,19 @@ mod tests {
         let shortcuts = AppShortcuts::default();
         let global = crate::app::shortcut_inventory::global_shortcut_bindings(&shortcuts);
         let escape = press(Key::Escape, false);
-        let fullscreen = press(Key::F11, false);
+        let fullscreen = if cfg!(target_os = "macos") {
+            modified_press(
+                Key::Enter,
+                Modifiers {
+                    shift: true,
+                    mac_cmd: true,
+                    command: true,
+                    ..Modifiers::NONE
+                },
+            )
+        } else {
+            press(Key::F11, false)
+        };
         let save_editor = modified_press(
             Key::S,
             Modifiers {
