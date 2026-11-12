@@ -97,6 +97,13 @@ class WorktreeCardPanelTests(unittest.TestCase):
                              'the panel runs the launcher itself')
             script = launcher.read_text()
             self.assertTrue(script.startswith('#!/bin/sh\n'))
+            # The sandbox binds the private home over the home of the person, so the
+            # launcher runs the copy of the card agent in the state folder.
+            program = Path(folder) / 'data' / serve.WORKTREE_CARD_PROGRAM
+            self.assertIn(str(program), script, 'the launcher runs the copy of the card agent')
+            self.assertEqual(program.read_text(),
+                             (serve.FIXTURE_FOLDER / serve.WORKTREE_CARD_PROGRAM).read_text())
+            self.assertFalse(program.is_symlink(), 'a link into the checkout is no program')
             self.assertIn('card_agent.py', script)
             self.assertIn('--scenario worktree', script)
             self.assertIn('--mcp-command', script)

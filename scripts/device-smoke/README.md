@@ -50,8 +50,12 @@ The fixture runs the candidate in a `bwrap` sandbox. The sandbox binds the
 private home over the home of the person, so a checkout under that home does not
 exist inside it, and it binds the state folder at its own path. A program that a
 panel of the fixture runs therefore lies in the state folder or in a path that
-the sandbox binds. The fixture writes a copy of such a program into the state
-folder and never a link into the checkout.
+the sandbox binds. The fixture copies each program of its own folder into the
+state folder and never writes a link into the checkout. The programs are
+`card_agent.py` of `--worktree-card`, `agent_attention_standin.py` of
+`--attention-agent`, and each program of that folder that a `--panels` entry
+names. The fixture replaces the path of the checkout in that entry with the path
+of the copy, so a procedure writes the path of its checkout.
 
 ### Restart the candidate in the same state
 
@@ -265,7 +269,8 @@ not know, but `python3` refuses `--session-id`. `/bin/sh -c` reads the script
 from its first argument and gives every argument of Horizon to the script as
 `"$@"`, and `exec` hands the terminal to the script itself. Put a variable that
 one panel needs, such as `CARD_AGENT_SSH_HOST`, in front of `exec` in the same
-wrapper.
+wrapper. The fixture copies the script into the state folder and gives the
+copy to the panel, so the folder of the checkout needs no bind.
 
 `--scenario` selects the cards: `machine`, `choose`, `browser`, `tall`, `all`
 (the first three), `all+tall` (all four) and `intruder`, which draws no card and

@@ -56,6 +56,15 @@ WORKTREE_CARD_PRESETS = [
 WORKTREE_CARD_FOLDER = 'repo'
 WORKTREE_CARD_PRESET = 'Task shell'
 WORKTREE_CARD_LAUNCHER = 'card-agent-worktree.sh'
+# The programs of this folder that a panel of the fixture runs. The sandbox binds
+# the private home over the home of the person, so a checkout under that home does
+# not exist inside it. The state folder is bound on every run, so a panel names a
+# copy of its program in the state folder and never a file of the checkout.
+FIXTURE_FOLDER = Path(__file__).resolve().parent
+WORKTREE_CARD_PROGRAM = 'card_agent.py'
+ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
+PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM)
+PANEL_PROGRAM_FOLDER = 'programs'
 
 
 def bound_port(process, path, pattern):
@@ -410,15 +419,16 @@ def worktree_card_repository(state):
     return repo
 
 
-def worktree_card_panel(app, repo, state):
+def worktree_card_panel(app, repo, state, program_folder=None):
     """The panel of the scripted card agent, with the scenario of the worktree card.
 
     The panel runs one launcher script that the fixture writes, so Horizon's own
     launch arguments, such as `--session-id` and `--plugin-dir`, reach the script
     as `"$@"` and the card agent ignores what it does not know.
     """
-    script = (Path(__file__).resolve().parent / 'card_agent.py').resolve()
     data = Path(state).resolve() / 'data'
+    script = program_in_state(fixture_program(WORKTREE_CARD_PROGRAM, program_folder),
+                              data / WORKTREE_CARD_PROGRAM, state)
     launcher = data / WORKTREE_CARD_LAUNCHER
     environment = (f'CARD_AGENT_REPO={shlex.quote(str(repo))} '
                    f'CARD_AGENT_STATE={shlex.quote(str(Path(state).resolve()))} '
@@ -459,7 +469,50 @@ def program_in_state(source, destination, state):
     return body_in_state(destination, Path(source).read_text(), state)
 
 
-def attention_agent(state, timer=6.0):
+def fixture_program(name, folder=None):
+    """The file of one program of this fixture, for `program_in_state`.
+
+    `folder` names the folder in place of the folder of this file, so a test builds
+    the panels of the fixture from a checkout under a folder of its own.
+    """
+    return (Path(folder) if folder is not None else FIXTURE_FOLDER) / name
+
+
+def panel_programs_in_state(panels, state, folder=None):
+    """Give each panel that names a program of this fixture the copy in the state folder.
+
+    `--panels` entries come from a procedure, which names the path of the checkout.
+    The sandbox binds the private home over the home of the person, so the checkout
+    is not inside it and the panel would start nothing: the fixture copies the
+    program into the state folder, which every run binds, and names the copy.
+    """
+    state = Path(state).resolve()
+    copies = {}
+
+    def copy_of(name):
+        if name not in copies:
+            copies[name] = program_in_state(
+                fixture_program(name, folder),
+                state / 'data' / PANEL_PROGRAM_FOLDER / name, state)
+        return str(copies[name])
+
+    for panel in panels:
+        texts = [text for text in [panel.get('command')] + list(panel.get('args') or [])
+                 if isinstance(text, str)]
+        for name in PANEL_PROGRAMS:
+            source = str(fixture_program(name, folder).resolve())
+            if not any(source in text for text in texts):
+                continue
+            replacement = copy_of(name)
+            if isinstance(panel.get('command'), str):
+                panel['command'] = panel['command'].replace(source, replacement)
+            if panel.get('args'):
+                panel['args'] = [text.replace(source, replacement) if isinstance(text, str) else text
+                                 for text in panel['args']]
+    return panels
+
+
+def attention_agent(state, timer=6.0, program_folder=None):
     """The panel entry and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
@@ -472,7 +525,7 @@ def attention_agent(state, timer=6.0):
     Answers the panel entry of the fixture config and the folder to put first on
     the `PATH` of the candidate.
     """
-    script = (Path(__file__).resolve().parent / 'agent_attention_standin.py').resolve()
+    script = fixture_program(ATTENTION_STANDIN_PROGRAM, program_folder)
     work = Path(state) / ATTENTION_STANDIN_FOLDER
     bin_dir = work / ATTENTION_BIN_FOLDER
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -955,6 +1008,10 @@ def main():
         config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
+        if extra_panels:
+            # A procedure names the program of its checkout, which the sandbox does
+            # not hold: the panel runs the copy in the state folder instead.
+            extra_panels = panel_programs_in_state(extra_panels, args.state)
         if args.worktree_card:
             # The throwaway repository comes first: the panel of the card agent reads
             # it at start, and the presets are those that its task panel names.
