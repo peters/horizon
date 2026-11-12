@@ -55,7 +55,7 @@ mod supervisor;
 mod test_support;
 mod tip;
 
-pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PullOutcome, PushOutcome};
+pub use client::{Client, Link, LinkState, Mirror, ObjectMirror, PUSH_BUDGET_BYTES, PullOutcome, PushOutcome};
 pub use clock::{Clock, SystemClock};
 pub use error::{Refusal, StoreError, SyncError};
 pub use frame::{FrameError, MAX_FRAME_BYTES, read_frame, write_frame};

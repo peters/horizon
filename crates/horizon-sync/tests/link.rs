@@ -381,6 +381,36 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
     );
     let _ = serving.join();
 
+    // A hello of an older protocol: the server answers it, so a computer of an
+    // older Horizon keeps its machine list while a newer Horizon runs the server.
+    // The other direction is the error above, which a computer of this build reads
+    // from an older server as one typed sentence and not as a lost setting.
+    let (mut computer, server) = UnixStream::pair().expect("a socket pair");
+    let reading = server.try_clone().expect("a second end");
+    let serving_store = store.clone();
+    let serving = thread::spawn(move || serve(reading, server, &serving_store));
+    let mut writer = computer.try_clone().expect("the write end");
+    write_frame(
+        &mut writer,
+        &Frame::Hello(horizon_sync::Hello {
+            protocol: PROTOCOL_VERSION - 1,
+            device: "mbp-7c2".to_owned(),
+            store: None,
+            token: None,
+        }),
+    )
+    .expect("a hello of an older protocol");
+    let answer = read_frame(&mut computer).expect("an answer frame").expect("one frame");
+    let Frame::HelloOk(hello) = answer else {
+        panic!("the server greets an older computer, not {answer:?}");
+    };
+    assert_eq!(hello.protocol, PROTOCOL_VERSION, "the server answers its own version");
+    // Both ends of the link close, so the server of this link ends and the thread
+    // joins. The link of a real computer ends the same way when its child ends.
+    drop(writer);
+    drop(computer);
+    let _ = serving.join();
+
     // A frame before the hello, and a device name that breaks the rule.
     for (first, code) in [
         (Frame::Wait(Wait { since: 0 }), LinkErrorCode::NotHello),

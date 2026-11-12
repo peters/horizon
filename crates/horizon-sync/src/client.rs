@@ -161,6 +161,11 @@ impl Mirror for ObjectMirror {
     }
 }
 
+/// The most bytes of the JSON of the intents of one push. It stays below
+/// [`crate::MAX_FRAME_BYTES`] with room for the frame head, the name of the frame
+/// and the device name of the intents.
+pub const PUSH_BUDGET_BYTES: usize = 192 * 1024;
+
 /// What one call of [`Client::push_pending`] settled.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PushOutcome {
@@ -537,14 +542,19 @@ impl Client {
 
     /// The intents of the next push, or `None` when every intent is decided.
     ///
-    /// One push holds at most [`MAX_INTENTS_PER_PUSH`] intents and at most
-    /// [`MAX_SECRETS_PER_PUSH`] secrets, because a secret body is the largest
-    /// value of the protocol and the frame has its own bound. The order of the
-    /// queue is kept, so a push never skips an intent that waits.
+    /// One push holds at most [`MAX_INTENTS_PER_PUSH`] intents, at most
+    /// [`MAX_SECRETS_PER_PUSH`] secrets and at most [`PUSH_BUDGET_BYTES`] of the
+    /// JSON of its intents, because a secret body and a section of the settings are
+    /// the large values of the protocol and the frame has its own bound. A section
+    /// that changed with many others, such as every shared section after "Reset
+    /// Defaults", therefore travels in more than one push and never ends the link
+    /// with an over-large frame. The order of the queue is kept, so a push never
+    /// skips an intent that waits.
     #[must_use]
     pub fn next_push(&self) -> Option<Vec<Intent>> {
         let mut chunk = Vec::new();
         let mut secrets = 0;
+        let mut bytes: usize = 0;
         for intent in &self.state.pending {
             if chunk.len() >= MAX_INTENTS_PER_PUSH {
                 break;
@@ -555,6 +565,11 @@ impl Client {
                 }
                 secrets += 1;
             }
+            let size = serde_json::to_string(intent).map_or(0, |text| text.len());
+            if !chunk.is_empty() && bytes.saturating_add(size) > PUSH_BUDGET_BYTES {
+                break;
+            }
+            bytes = bytes.saturating_add(size);
             chunk.push(intent.clone());
         }
         (!chunk.is_empty()).then_some(chunk)
@@ -942,7 +957,62 @@ fn frame_name(frame: &Frame) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Client, Frame, HelloOk, LinkState, PROTOCOL_VERSION};
+    use super::{Client, PUSH_BUDGET_BYTES};
+    use crate::intent::Op;
+    use serde_json::json;
+
+    /// A push of many sections of the settings stays below the frame bound, and
+    /// every intent of the queue is in one of its chunks.
+    #[test]
+    fn a_push_of_many_sections_takes_what_one_frame_holds() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let mut client = Client::open(directory.path().join("server-queue.json"), "mbp-7c1").expect("a queue");
+        let body = json!({
+            "format": 1,
+            "config_version": 12,
+            "section": { "text": "x".repeat(40 * 1024) }
+        });
+        for index in 0..12_u32 {
+            client
+                .enqueue(
+                    None,
+                    Op::SettingPut {
+                        id: format!("section_{index}"),
+                        body: body.clone(),
+                    },
+                )
+                .expect("an intent of a section");
+        }
+        let mut chunks = 0;
+        let mut pushed = 0;
+        while let Some(chunk) = client.next_push() {
+            let bytes = serde_json::to_string(&chunk).expect("the frame of the push").len();
+            assert!(
+                bytes <= PUSH_BUDGET_BYTES,
+                "a push of {bytes} bytes stays below the budget"
+            );
+            assert!(chunk.len() > 1 || chunks == 0, "one large section still travels alone");
+            pushed += chunk.len();
+            chunks += 1;
+            // The answer of the server decides what the next chunk holds.
+            let reply = crate::intent::PushReply {
+                results: chunk
+                    .iter()
+                    .map(|intent| crate::intent::IntentResult {
+                        id: intent.id,
+                        outcome: crate::intent::Outcome::Applied { index: intent.id + 1 },
+                    })
+                    .collect(),
+                next_expected: chunk.last().map_or(0, |intent| intent.id + 1),
+            };
+            client.accept_push(&reply).expect("the answer");
+            assert!(chunks < 20, "the queue empties");
+        }
+        assert_eq!(pushed, 12, "every intent of the queue is in one chunk");
+        assert!(chunks > 1, "the sections do not fit one frame");
+    }
+
+    use super::{Frame, HelloOk, LinkState, PROTOCOL_VERSION};
 
     fn client() -> (tempfile::TempDir, Client) {
         let directory = tempfile::tempdir().expect("a directory");
