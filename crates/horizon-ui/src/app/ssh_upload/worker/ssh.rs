@@ -484,8 +484,10 @@ mod tests {
         let (control_tx, control_rx) = mpsc::channel();
         let (progress_tx, _progress_rx) = mpsc::channel();
 
+        // `exec` makes the `sleep` the child of this test, so the cancel kills it
+        // and no process of the test outlives the test.
         let script = format!(
-            "head -c 1048576 > /dev/null && touch '{}' && sleep 20",
+            "head -c 1048576 > /dev/null && touch '{}' && exec sleep 20",
             marker.display()
         );
         let mut command = Command::new("sh");
@@ -538,7 +540,9 @@ mod tests {
     fn a_cancel_ends_the_setup_of_an_upload_that_is_still_connecting() {
         let home = tempfile::tempdir().expect("a directory");
         let marker = home.path().join("the child started");
-        let script = format!("touch '{}' && sleep 20", marker.display());
+        // `exec` makes the `sleep` the child of this test, so the cancel kills it
+        // and no process of the test outlives the test.
+        let script = format!("touch '{}' && exec sleep 20", marker.display());
         let mut command = Command::new("sh");
         command.args(["-c", script.as_str()]);
 
