@@ -4,8 +4,10 @@
 //! instead of a string inside the browser arguments, so a later change can answer
 //! for a proxy that does not answer and can report which egress a page uses.
 
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs as _};
-use std::time::Duration;
+use std::io;
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs as _};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use url::Url;
@@ -151,36 +153,46 @@ impl Egress {
     /// probe answers for the machine and the listener, and a page that the proxy
     /// then cannot reach is what the navigation itself reports.
     ///
+    /// This waits on the network, so it runs on the driver thread that a session
+    /// starts (`browser-driver` in `session.rs`) and never inside a frame.
+    ///
     /// # Errors
     /// The address cannot be read, its name does not resolve, or no address of it
     /// answers within the bound.
     pub fn probe(&self, bound: Duration) -> Result<(), EgressProbeError> {
+        self.probe_with(SystemNetwork, bound)
+    }
+
+    /// [`Egress::probe`] with the clock and the answers of a caller, so that a
+    /// test of this module reads neither the resolver nor the routes of the
+    /// computer.
+    fn probe_with<N: ProbeNetwork + Send + Sync + 'static>(
+        &self,
+        network: N,
+        bound: Duration,
+    ) -> Result<(), EgressProbeError> {
         let Some((host, port)) = self.address() else {
             return Err(EgressProbeError::Address);
         };
-        let started = std::time::Instant::now();
-        let deadline = started + bound;
-        let addresses = resolve(&host, port, bound)?;
+        // One handle, so that a lookup which outlives the bound finishes on its
+        // own thread after this probe has answered.
+        let network = Arc::new(network);
+        // One deadline for the whole probe, so a name with several addresses can
+        // not take several bounds.
+        let deadline = network.now() + bound;
+        let addresses = resolve_within(&network, &host, port, bound)?;
         if addresses.is_empty() {
             return Err(EgressProbeError::Unresolved);
         }
         let mut failure = EgressProbeError::Refused;
         for address in addresses {
-            // One deadline for the whole probe, so a name with several addresses
-            // can not take several bounds.
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let remaining = deadline.saturating_duration_since(network.now());
             if remaining.is_zero() {
-                return Err(EgressProbeError::TimedOut {
-                    millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
-                });
+                return Err(timed_out(bound));
             }
-            match TcpStream::connect_timeout(&address, remaining) {
-                Ok(_) => return Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                    failure = EgressProbeError::TimedOut {
-                        millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
-                    };
-                }
+            match network.connect(address, remaining) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => failure = timed_out(bound),
                 Err(_) => failure = EgressProbeError::Refused,
             }
         }
@@ -208,34 +220,82 @@ impl Egress {
     }
 }
 
+/// What a probe asks of the system: the time that bounds it, the addresses of
+/// the name of the proxy, and one connection to them.
+///
+/// A test answers all three, so no test of this module reads the resolver or the
+/// routes of the computer.
+trait ProbeNetwork {
+    /// The time of this probe, which bounds every attempt of it.
+    fn now(&self) -> Instant;
+
+    /// Every address of `host:port`, or why the name has none.
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
+
+    /// One connection attempt to `address`, waiting at most `bound`.
+    fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()>;
+}
+
+/// The resolver, the routes and the clock of the computer.
+struct SystemNetwork;
+
+impl ProbeNetwork for SystemNetwork {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        (host, port).to_socket_addrs().map(Iterator::collect)
+    }
+
+    fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()> {
+        TcpStream::connect_timeout(&address, bound).map(|_| ())
+    }
+}
+
 /// The socket addresses of one proxy host and port, within `bound`.
 ///
 /// A literal address needs no lookup. A name is looked up on its own thread,
-/// because the resolver has no bound of its own, and the probe reads the answer
-/// with the remaining time; a lookup that outlives it is left to finish alone.
-fn resolve(host: &str, port: u16, bound: Duration) -> Result<Vec<SocketAddr>, EgressProbeError> {
-    if let Ok(address) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+/// because the resolver has no bound of its own: a probe that called it here
+/// would hold this thread for as long as the resolver takes, whatever the bound
+/// says. The probe reads the answer with the remaining time, and a lookup that
+/// outlives it is left to finish alone.
+fn resolve_within<N: ProbeNetwork + Send + Sync + 'static>(
+    network: &Arc<N>,
+    host: &str,
+    port: u16,
+    bound: Duration,
+) -> Result<Vec<SocketAddr>, EgressProbeError> {
+    if let Ok(address) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
         return Ok(vec![SocketAddr::new(address, port)]);
     }
     let (sender, receiver) = std::sync::mpsc::channel();
     let name = host.to_string();
+    let lookup = Arc::clone(network);
     std::thread::Builder::new()
         .name("egress-probe-resolve".into())
         .spawn(move || {
-            let _ = sender.send((name.as_str(), port).to_socket_addrs().map(Iterator::collect::<Vec<_>>));
+            let _ = sender.send(lookup.resolve(&name, port));
         })
         .map_err(|_| EgressProbeError::Unresolved)?;
     match receiver.recv_timeout(bound) {
         Ok(Ok(addresses)) => Ok(addresses),
         Ok(Err(_)) => Err(EgressProbeError::Unresolved),
-        Err(_) => Err(EgressProbeError::TimedOut {
-            millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
-        }),
+        Err(_) => Err(timed_out(bound)),
+    }
+}
+
+/// The timeout of a probe of `bound`, in the milliseconds that a person reads.
+fn timed_out(bound: Duration) -> EgressProbeError {
+    EgressProbeError::TimedOut {
+        millis: u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     #[test]
@@ -408,27 +468,200 @@ mod tests {
         // as an address that nothing routes to.
         let failure = egress.probe(Duration::from_millis(500)).unwrap_err();
         assert!(matches!(failure, EgressProbeError::Refused), "{failure:?}");
-        let unroutable = Egress::parse("socks5://192.0.2.1:1080").unwrap();
-        let failure = unroutable.probe(Duration::from_millis(300)).unwrap_err();
-        assert!(
-            matches!(failure, EgressProbeError::Refused | EgressProbeError::TimedOut { .. }),
-            "{failure:?}"
-        );
-        // The whole probe stays inside its bound, also when the address does not
-        // answer at all, because every attempt reads one deadline.
-        let started = std::time::Instant::now();
-        let unroutable = Egress::parse("socks5://192.0.2.1:1080").unwrap();
-        let _ = unroutable.probe(Duration::from_millis(200));
-        assert!(
-            started.elapsed() < Duration::from_millis(900),
-            "the probe took {:?}",
-            started.elapsed()
-        );
-        let unresolved = Egress::parse("socks5://no-such-host.invalid:1080").unwrap();
+    }
+
+    /// What a lookup of a test answers for the name of a proxy.
+    #[derive(Clone, Copy)]
+    enum Lookup {
+        /// The name answers these addresses.
+        These(&'static [&'static str]),
+        /// The name answers nothing.
+        Nothing,
+        /// The resolver of the test does not answer inside the bound of the probe.
+        Hangs,
+    }
+
+    /// What a connection of a test answers.
+    #[derive(Clone, Copy)]
+    enum Connection {
+        /// A listener accepts the connection.
+        Answers,
+        /// The port refuses it, as a port that nothing holds does.
+        Refused,
+        /// No answer arrives inside the bound.
+        NoAnswer,
+    }
+
+    /// The clock and the answers of a test: the resolver, the routes and the
+    /// clock of the computer are never read.
+    #[derive(Clone)]
+    struct TestNetwork {
+        state: Arc<Mutex<State>>,
+        lookup: Lookup,
+        connection: Connection,
+    }
+
+    struct State {
+        now: Instant,
+        tick: Duration,
+        lookups: usize,
+        attempts: Vec<(SocketAddr, Duration)>,
+    }
+
+    impl TestNetwork {
+        fn new(lookup: Lookup, connection: Connection) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(State {
+                    now: Instant::now(),
+                    tick: Duration::ZERO,
+                    lookups: 0,
+                    attempts: Vec::new(),
+                })),
+                lookup,
+                connection,
+            }
+        }
+
+        /// The time that each connection attempt of this test spends.
+        fn ticking(mut self, tick: Duration) -> Self {
+            let state = Arc::get_mut(&mut self.state).expect("the state of the test");
+            state.get_mut().expect("the clock of the test").tick = tick;
+            self
+        }
+
+        fn lookups(&self) -> usize {
+            self.state.lock().expect("the state of the test").lookups
+        }
+
+        fn attempts(&self) -> Vec<(SocketAddr, Duration)> {
+            self.state.lock().expect("the state of the test").attempts.clone()
+        }
+    }
+
+    impl ProbeNetwork for TestNetwork {
+        fn now(&self) -> Instant {
+            self.state.lock().expect("the state of the test").now
+        }
+
+        fn resolve(&self, _host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+            {
+                let mut state = self.state.lock().expect("the state of the test");
+                state.lookups += 1;
+            }
+            match self.lookup {
+                Lookup::These(addresses) => Ok(addresses
+                    .iter()
+                    .map(|address| SocketAddr::new(address.parse().expect("an address of the test"), port))
+                    .collect()),
+                Lookup::Nothing => Err(io::Error::from(io::ErrorKind::NotFound)),
+                // The probe stops waiting at its bound; this lookup outlives it.
+                Lookup::Hangs => {
+                    std::thread::sleep(Duration::from_secs(5));
+                    Err(io::Error::from(io::ErrorKind::NotFound))
+                }
+            }
+        }
+
+        fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()> {
+            {
+                let mut state = self.state.lock().expect("the state of the test");
+                state.attempts.push((address, bound));
+                let tick = state.tick;
+                state.now += tick;
+            }
+            match self.connection {
+                Connection::Answers => Ok(()),
+                Connection::Refused => Err(io::Error::from(io::ErrorKind::ConnectionRefused)),
+                Connection::NoAnswer => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            }
+        }
+    }
+
+    /// The shortest bound that a test gives the probe.
+    const BOUND: Duration = Duration::from_millis(50);
+
+    fn proxy(host_port: &str) -> Egress {
+        Egress::parse(&format!("socks5://{host_port}")).expect("a proxy of the test")
+    }
+
+    #[test]
+    fn a_name_that_answers_nothing_is_unresolved() {
+        let network = TestNetwork::new(Lookup::Nothing, Connection::Answers);
         assert_eq!(
-            unresolved.probe(Duration::from_millis(300)),
+            proxy("no-such-host.invalid:1080").probe_with(network.clone(), BOUND),
             Err(EgressProbeError::Unresolved)
         );
+        assert_eq!(network.lookups(), 1);
+        assert!(
+            network.attempts().is_empty(),
+            "a name without an address has nothing to attempt"
+        );
+    }
+
+    #[test]
+    fn a_lookup_that_does_not_answer_inside_the_bound_times_out() {
+        let network = TestNetwork::new(Lookup::Hangs, Connection::Answers);
+        let started = Instant::now();
+        assert_eq!(
+            proxy("slow-resolver.example:1080").probe_with(network.clone(), BOUND),
+            Err(EgressProbeError::TimedOut { millis: 50 })
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the probe stops waiting at its bound, and the lookup of the test takes 5 s"
+        );
+    }
+
+    #[test]
+    fn a_connection_that_is_refused_refuses_the_proxy() {
+        let network = TestNetwork::new(Lookup::These(&["127.0.0.1"]), Connection::Refused);
+        assert_eq!(
+            proxy("closed.example:1080").probe_with(network.clone(), BOUND),
+            Err(EgressProbeError::Refused)
+        );
+        assert_eq!(network.attempts().len(), 1);
+    }
+
+    #[test]
+    fn a_connection_that_does_not_answer_times_out_with_the_bound() {
+        let network = TestNetwork::new(Lookup::These(&["192.0.2.1"]), Connection::NoAnswer);
+        assert_eq!(
+            proxy("black-hole.example:1080").probe_with(network.clone(), BOUND),
+            Err(EgressProbeError::TimedOut { millis: 50 })
+        );
+    }
+
+    #[test]
+    fn the_whole_probe_reads_one_deadline_of_the_clock_of_the_test() {
+        // Every attempt spends 200 ms of a 300 ms probe, so the third address of
+        // the name is not attempted at all.
+        let network = TestNetwork::new(
+            Lookup::These(&["127.0.0.1", "127.0.0.2", "127.0.0.3"]),
+            Connection::Refused,
+        )
+        .ticking(Duration::from_millis(200));
+        let bound = Duration::from_millis(300);
+        assert_eq!(
+            proxy("three-addresses.example:1080").probe_with(network.clone(), bound),
+            Err(EgressProbeError::TimedOut { millis: 300 })
+        );
+        let attempts = network.attempts();
+        assert_eq!(attempts.len(), 2, "the bound of the probe cut the third address");
+        assert_eq!(attempts[0].1, bound, "the first attempt gets the whole bound");
+        assert_eq!(
+            attempts[1].1,
+            Duration::from_millis(100),
+            "the second attempt gets what the first one left"
+        );
+        assert!(attempts.iter().all(|(_, remaining)| *remaining <= bound));
+    }
+
+    #[test]
+    fn a_literal_address_asks_no_lookup() {
+        let network = TestNetwork::new(Lookup::Hangs, Connection::Answers);
+        assert_eq!(proxy("127.0.0.1:1080").probe_with(network.clone(), BOUND), Ok(()));
+        assert_eq!(network.lookups(), 0, "an address of the record is no name");
+        assert_eq!(network.attempts(), [(SocketAddr::from(([127, 0, 0, 1], 1080)), BOUND)]);
     }
 
     #[test]

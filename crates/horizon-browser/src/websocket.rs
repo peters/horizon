@@ -168,6 +168,20 @@ fn response_result(method: &str, mut value: Value) -> Result<Value, JsonWsError>
 }
 
 fn loopback_addresses(url: &str) -> Result<Vec<SocketAddr>, JsonWsError> {
+    loopback_addresses_with(url, |authority| {
+        authority
+            .to_socket_addrs()
+            .map(Iterator::collect)
+            .map_err(|error| JsonWsError::InvalidUrl(format!("{authority}: {error}")))
+    })
+}
+
+/// [`loopback_addresses`] with the name lookup of a caller, so that a test of the
+/// loopback rule reads no resolver of the computer.
+fn loopback_addresses_with(
+    url: &str,
+    resolve: impl FnOnce(&str) -> Result<Vec<SocketAddr>, JsonWsError>,
+) -> Result<Vec<SocketAddr>, JsonWsError> {
     let rest = url
         .strip_prefix("ws://")
         .ok_or_else(|| JsonWsError::InvalidUrl(format!("only ws:// is supported: {url}")))?;
@@ -176,10 +190,7 @@ fn loopback_addresses(url: &str) -> Result<Vec<SocketAddr>, JsonWsError> {
         .next()
         .filter(|authority| !authority.is_empty())
         .ok_or_else(|| JsonWsError::InvalidUrl(format!("missing authority: {url}")))?;
-    let addresses = authority
-        .to_socket_addrs()
-        .map_err(|error| JsonWsError::InvalidUrl(format!("{authority}: {error}")))?
-        .collect::<Vec<_>>();
+    let addresses = resolve(authority)?;
     if addresses.is_empty() || addresses.iter().any(|address| !address.ip().is_loopback()) {
         return Err(JsonWsError::InvalidUrl(format!(
             "non-loopback endpoint is not allowed: {authority}"
@@ -190,13 +201,39 @@ fn loopback_addresses(url: &str) -> Result<Vec<SocketAddr>, JsonWsError> {
 
 #[cfg(test)]
 mod tests {
-    use super::loopback_addresses;
+    use std::net::{IpAddr, SocketAddr};
+
+    use super::{JsonWsError, loopback_addresses, loopback_addresses_with};
+
+    /// A lookup that answers `addresses` on port 4444 instead of the resolver of
+    /// the computer.
+    fn resolving(addresses: &'static [&'static str]) -> impl FnOnce(&str) -> Result<Vec<SocketAddr>, JsonWsError> {
+        move |_authority| {
+            Ok(addresses
+                .iter()
+                .map(|address| SocketAddr::new(address.parse::<IpAddr>().expect("an address of the test"), 4444))
+                .collect())
+        }
+    }
 
     #[test]
     fn websocket_endpoint_must_be_loopback() {
+        // The lookup of a test answers every name, so this reads no resolver and
+        // makes no connection; only the literal address goes to the system, which
+        // parses it without a lookup.
         assert!(loopback_addresses("ws://127.0.0.1:4444/session").is_ok());
-        assert!(loopback_addresses("ws://localhost:4444/session").is_ok());
         assert!(loopback_addresses("wss://127.0.0.1:4444/session").is_err());
-        assert!(loopback_addresses("ws://192.0.2.10:4444/session").is_err());
+        assert!(
+            loopback_addresses_with("ws://localhost:4444/session", resolving(&["127.0.0.1", "::1"])).is_ok(),
+            "a name of loopback addresses is an endpoint of this computer"
+        );
+        assert!(
+            loopback_addresses_with("ws://proxy.example:4444/session", resolving(&["127.0.0.1", "10.0.0.1"])).is_err(),
+            "one address outside loopback refuses the whole name"
+        );
+        assert!(
+            loopback_addresses_with("ws://proxy.example:4444/session", resolving(&[])).is_err(),
+            "a name without an address is no endpoint"
+        );
     }
 }
