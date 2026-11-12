@@ -65,6 +65,7 @@ pub(crate) fn value_of(config: &Config, name: &str) -> Option<Result<Value>> {
         "server" => json_value(&config.server),
         "secrets" => json_value(&config.secrets),
         "speech" => json_value(&config.speech),
+        "frame_sources" => json_value(&config.frame_sources),
         "presets" => json_value(&config.presets),
         "workspaces" => json_value(&config.workspaces),
         _ => return None,
@@ -86,6 +87,7 @@ pub(crate) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         server,
         secrets,
         speech,
+        frame_sources,
         presets,
         workspaces,
     } = Config::default();
@@ -102,6 +104,7 @@ pub(crate) fn decode(rows: &BTreeMap<String, String>) -> Result<Config> {
         server: section(rows, "server")?.unwrap_or(server),
         secrets: section(rows, "secrets")?.unwrap_or(secrets),
         speech: section(rows, "speech")?.unwrap_or(speech),
+        frame_sources: section(rows, "frame_sources")?.unwrap_or(frame_sources),
         presets: panel_section(rows, "presets")?.unwrap_or(presets),
         workspaces: panel_section(rows, "workspaces")?.unwrap_or(workspaces),
     })

@@ -603,6 +603,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-fds"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b60b5124979fccd9addd89d8b97a1d6eebb4950694520c75ddd722535ea443f"
+dependencies = [
+ "nix",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "comrak"
 version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1908,6 +1918,19 @@ dependencies = [
  "horizon-device",
  "tokio",
  "vnc-rs",
+]
+
+[[package]]
+name = "horizon-frame-source"
+version = "0.2.7"
+dependencies = [
+ "command-fds",
+ "horizon-vnc",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

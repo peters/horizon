@@ -144,6 +144,10 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::Shared,
     },
     Section {
+        name: "frame_sources",
+        scope: Scope::Shared,
+    },
+    Section {
         name: "presets",
         scope: Scope::Shared,
     },
