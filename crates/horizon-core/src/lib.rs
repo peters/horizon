@@ -59,8 +59,8 @@ pub use block_panel::{
     WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
 };
 pub use board::{
-    Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
-    WorkspaceDockSide, WorkspaceLayout,
+    Board, EditorSave, FRAME_SOURCE_PANEL_SIZE, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress,
+    WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
 };
 pub use bounded_program::ProgramEnvironment;
 pub use config::{
@@ -82,9 +82,9 @@ pub use machines::{
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use panel::{
-    DEFAULT_PANEL_SIZE, FRAME_SOURCE_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout,
-    PanelOptions, PanelResume, PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd,
-    StartRequest, browser_actor, current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
+    DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
+    PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
+    current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
 };
 pub use place::{
     AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,

@@ -2,6 +2,8 @@ mod bar;
 mod browser;
 #[cfg(test)]
 mod footer_tests;
+#[cfg(test)]
+mod frame_source_tests;
 mod frame_sources;
 mod general;
 #[cfg(test)]

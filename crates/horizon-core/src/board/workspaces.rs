@@ -2,6 +2,22 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
+
+/// The default size of a frame source viewer, so the picture of the first `stream`
+/// message of its program is at least 480 points wide, with the chrome of the panel.
+pub const FRAME_SOURCE_PANEL_SIZE: [f32; 2] = [560.0, 560.0];
+
+/// The size of a new panel of this workspace, when the caller names none: the
+/// picture of a frame source viewer gets the room of its first `stream` message.
+fn new_panel_size(options: &PanelOptions) -> [f32; 2] {
+    options.size.unwrap_or_else(|| {
+        if options.frame_source.is_some() {
+            FRAME_SOURCE_PANEL_SIZE
+        } else {
+            DEFAULT_PANEL_SIZE
+        }
+    })
+}
 use crate::runtime_state::WorkspaceState;
 use crate::workspace::{Workspace, WorkspaceId};
 
@@ -214,7 +230,7 @@ impl Board {
             opts.cwd.clone_from(&ws.cwd);
         }
 
-        let layout_size = opts.layout_size();
+        let layout_size = new_panel_size(&opts);
         let layout_position = opts.position.unwrap_or_else(|| {
             let beside = beside
                 .filter(|id| self.panel(*id).is_some_and(|panel| panel.workspace_id == workspace))
