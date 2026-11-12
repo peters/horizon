@@ -19,6 +19,7 @@ mod error;
 mod evaluation;
 mod file_chooser;
 pub mod frames;
+mod here;
 pub use file_chooser::{FileChooserAnswer, FileChooserHandle, FileChooserRequest, FileChooserStatus, accepts_file};
 pub use semantic_files::FileAcceptPolicy;
 mod http_auth;

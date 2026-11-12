@@ -48,34 +48,12 @@ impl WebDriverService {
         control: &ChromeProcessControl,
         cancelled: impl Fn() -> bool,
     ) -> Result<Self, String> {
-        let (command, base_args, label, safari_lease) = match config.backend {
-            BackendKind::FirefoxBidi => (
-                resolve_service(config.geckodriver_command.as_deref(), &["geckodriver"])
-                    .map_err(|error| format!("Firefox requires geckodriver: {error}"))?,
-                Vec::new(),
-                "geckodriver",
-                None,
-            ),
-            BackendKind::SafariWebDriver => {
-                #[cfg(not(target_os = "macos"))]
-                return Err("Safari WebDriver is available only on macOS".to_string());
-                #[cfg(target_os = "macos")]
-                {
-                    let lease = SafariLease::acquire()?;
-                    (
-                        resolve_service(
-                            config.safaridriver_command.as_deref(),
-                            &["/usr/bin/safaridriver", "safaridriver"],
-                        )
-                        .map_err(|error| format!("Safari requires safaridriver: {error}"))?,
-                        Vec::new(),
-                        "safaridriver",
-                        Some(lease),
-                    )
-                }
-            }
-            BackendKind::ChromiumCdp => return Err("Chromium does not use WebDriver service startup".to_string()),
-        };
+        let ServiceOf {
+            command,
+            base_args,
+            label,
+            safari_lease,
+        } = service_of(config)?;
 
         let mut permit_system_access = note_system_access(config);
         for attempt in 1..=STARTUP_ATTEMPTS {
@@ -258,6 +236,56 @@ fn reserve_loopback_listener() -> Result<TcpListener, String> {
         .map_err(|error| format!("failed to reserve browser automation port: {error}"))
 }
 
+/// The program of one `WebDriver` service, its arguments, the name that the log and
+/// the status use, and the Safari lease of a Safari service.
+struct ServiceOf {
+    command: PathBuf,
+    base_args: Vec<String>,
+    label: &'static str,
+    safari_lease: Option<SafariLease>,
+}
+
+/// The service of one backend.
+///
+/// A driver of another computer is read as unset, so this computer uses the driver
+/// that its own `PATH` holds.
+fn service_of(config: &BrowserConfig) -> Result<ServiceOf, String> {
+    match config.backend {
+        BackendKind::FirefoxBidi => {
+            let driver = crate::here::program("browser.geckodriver_command", config.geckodriver_command.as_deref());
+            let command = resolve_service(driver.as_deref(), &["geckodriver"])
+                .map_err(|error| format!("Firefox requires geckodriver: {error}"))?;
+            Ok(ServiceOf {
+                command,
+                base_args: Vec::new(),
+                label: "geckodriver",
+                safari_lease: None,
+            })
+        }
+        BackendKind::SafariWebDriver => safari_service(config),
+        BackendKind::ChromiumCdp => Err("Chromium does not use WebDriver service startup".to_string()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn safari_service(config: &BrowserConfig) -> Result<ServiceOf, String> {
+    let safari_lease = SafariLease::acquire()?;
+    let driver = crate::here::program("browser.safaridriver_command", config.safaridriver_command.as_deref());
+    let command = resolve_service(driver.as_deref(), &["/usr/bin/safaridriver", "safaridriver"])
+        .map_err(|error| format!("Safari requires safaridriver: {error}"))?;
+    Ok(ServiceOf {
+        command,
+        base_args: Vec::new(),
+        label: "safaridriver",
+        safari_lease: Some(safari_lease),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn safari_service(_config: &BrowserConfig) -> Result<ServiceOf, String> {
+    Err("Safari WebDriver is available only on macOS".to_string())
+}
+
 fn resolve_service(explicit: Option<&str>, candidates: &[&str]) -> Result<PathBuf, String> {
     if let Some(command) = explicit {
         return resolve_binary(command).map_err(|error| error.to_string());
@@ -296,6 +324,24 @@ mod tests {
             service_args(BackendKind::SafariWebDriver, 5555, None, Vec::new()),
             ["--port", "5555"]
         );
+    }
+
+    /// A shared section can name the geckodriver or the safaridriver of another
+    /// computer. A program that this computer does not have is read as unset, so
+    /// the session uses the driver that this computer's `PATH` holds.
+    #[test]
+    fn a_driver_of_another_computer_is_read_as_unset() {
+        let of_another = crate::here::program(
+            "browser.geckodriver_command",
+            Some("/nonexistent/a-home-of-another-computer/geckodriver"),
+        );
+        assert_eq!(of_another, None, "the program of another computer is no value here");
+        assert_eq!(
+            super::resolve_service(of_another.as_deref(), &["geckodriver"]).ok(),
+            super::resolve_service(None, &["geckodriver"]).ok(),
+            "the driver of this computer is the driver of that call"
+        );
+        assert!(crate::here::program("browser.safaridriver_command", Some("/nonexistent/safaridriver")).is_none());
     }
 
     #[test]

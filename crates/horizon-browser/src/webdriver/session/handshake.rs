@@ -98,8 +98,10 @@ pub(super) fn new_session_capabilities(
                     "browser.helperApps.neverAsk.saveToDisk": "application/pdf,application/octet-stream,application/zip,application/x-zip-compressed,application/msword,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,text/csv,text/plain,image/png,image/jpeg",
                 }),
             );
-            if let Some(command) = &config.firefox_command {
-                let binary = resolve_binary(command).map_err(|error| error.to_string())?;
+            // A Firefox of another computer is read as unset, so geckodriver
+            // starts the Firefox that this computer has.
+            if let Some(command) = crate::here::program("browser.firefox_command", config.firefox_command.as_deref()) {
+                let binary = resolve_binary(&command).map_err(|error| error.to_string())?;
                 options.insert("binary".to_string(), json!(binary));
             }
             Ok(json!({

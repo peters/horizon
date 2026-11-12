@@ -1190,19 +1190,25 @@ mod tests {
     }
     #[test]
     fn firefox_group_rejects_profile_or_process_configuration_changes() {
+        let profiles = tempfile::tempdir().expect("a folder of this computer");
+        let first = profiles.path().join("profile-a");
+        let second = profiles.path().join("profile-b");
+        for folder in [&first, &second] {
+            std::fs::create_dir_all(folder).expect("a profile folder of this computer");
+        }
         let mut state = GroupState::default();
         let mut config = crate::BrowserConfig {
             backend: crate::BackendKind::FirefoxBidi,
-            profile_root: Some(std::path::PathBuf::from("profile-a")),
+            profile_root: Some(first.clone()),
             ..crate::BrowserConfig::default()
         };
         assert!(state.pin_launch(&config, "group", false).is_ok());
         assert!(state.pin_launch(&config, "group", true).is_err());
         config.quality = 20;
         assert!(state.pin_launch(&config, "group", false).is_ok());
-        config.profile_root = Some(std::path::PathBuf::from("profile-b"));
+        config.profile_root = Some(second.clone());
         assert!(state.pin_launch(&config, "group", false).is_err());
-        config.profile_root = Some(std::path::PathBuf::from("profile-a"));
+        config.profile_root = Some(first.clone());
         config.firefox_system_access = true;
         assert!(state.pin_launch(&config, "group", false).is_err());
         config.firefox_system_access = false;

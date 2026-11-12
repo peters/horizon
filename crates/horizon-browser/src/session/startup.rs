@@ -551,7 +551,10 @@ fn egress_argument(config: &BrowserConfig) -> Option<String> {
 }
 
 fn build_launch(config: &BrowserSessionConfig) -> Result<crate::process::ChromeLaunch, String> {
-    let command = crate::process::resolve_binary_or_default(&config.browser.command)
+    // The section follows the server, so its command can be the Chromium of
+    // another computer: this computer then starts the browser that it finds.
+    let command = crate::here::program("browser.command", config.browser.command.as_deref());
+    let command = crate::process::resolve_binary_or_default(&command)
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| e.to_string())?;
     let profile_dir = profile_dir(&config.browser, &config.panel_local_id);
@@ -691,7 +694,7 @@ mod tests {
     use crate::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::{first_available_page_target_id, profile_dir};
+    use super::{build_launch, first_available_page_target_id, profile_dir};
 
     #[test]
     fn target_selection_skips_attached_pages() {
@@ -709,14 +712,18 @@ mod tests {
 
     #[test]
     fn configured_profile_root_confines_unsafe_panel_ids() {
+        let profiles = tempfile::tempdir().expect("a folder of this computer");
         let config = BrowserConfig {
-            profile_root: Some("/tmp/horizon-browser-profiles".into()),
+            profile_root: Some(profiles.path().to_path_buf()),
             ..BrowserConfig::default()
         };
 
         assert_eq!(
             profile_dir(&config, "../outside/profile"),
-            std::path::PathBuf::from("/tmp/horizon-browser-profiles/%2e2e2f6f7574736964652f70726f66696c65/chromium")
+            profiles
+                .path()
+                .join("%2e2e2f6f7574736964652f70726f66696c65")
+                .join("chromium")
         );
         assert_ne!(profile_dir(&config, "a/b"), profile_dir(&config, "a_b"));
         assert_ne!(profile_dir(&config, "Panel-A"), profile_dir(&config, "panel-a"));
@@ -725,6 +732,42 @@ mod tests {
             ..config.clone()
         };
         assert_ne!(profile_dir(&config, "panel"), profile_dir(&firefox, "panel"));
+    }
+
+    /// A shared section can name the Chromium of another computer. A program that
+    /// this computer does not have is read as unset, so the panel starts the
+    /// browser that this computer would start with no value at all.
+    #[test]
+    fn a_chromium_of_another_computer_starts_the_browser_of_this_one() {
+        let temp = tempfile::tempdir().expect("a folder of this computer");
+        let profiles = temp.path().join("profiles");
+        std::fs::create_dir_all(&profiles).expect("a profile folder");
+        let session = |command: Option<String>| BrowserSessionConfig {
+            attach: None,
+            browser: BrowserConfig {
+                command,
+                profile_root: Some(profiles.clone()),
+                ..BrowserConfig::default()
+            },
+            panel_local_id: "fallback".to_string(),
+            initial_url: None,
+            width: 320,
+            height: 200,
+            frame_slot: std::sync::Arc::new(FrameSlot::new()),
+            coordination: None,
+            capture_directory: None,
+            video: std::sync::Arc::new(crate::VideoCaptureHandle::default()),
+            remote: None,
+        };
+        let of_another = build_launch(&session(Some(
+            "/nonexistent/a-home-of-another-computer/chromium".to_string(),
+        )))
+        .map(|launch| launch.command);
+        let of_this_one = build_launch(&session(None)).map(|launch| launch.command);
+        assert_eq!(
+            of_another, of_this_one,
+            "a Chromium of another computer is read as unset"
+        );
     }
 
     #[test]

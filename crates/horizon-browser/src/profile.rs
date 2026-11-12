@@ -9,14 +9,16 @@ pub const MAX_PROFILE_NAME_CHARS: usize = 40;
 pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<BrowserConfig> {
     let mut resolved = config.clone();
     resolved.quality = resolved.quality.clamp(1, 100);
-    let Some(configured_root) = &config.profile_root else {
+    // A profile folder of another computer is read as unset here as well, so a
+    // launch that resolves its folders once does not keep the path of that home.
+    let Some(root) = crate::here::folder("browser.profile_root", config.profile_root.as_deref()) else {
+        resolved.profile_root = None;
         return Ok(resolved);
     };
-    let expanded_root = paths::expand_tilde(&configured_root.to_string_lossy());
-    resolved.profile_root = Some(if expanded_root.is_absolute() {
-        expanded_root
+    resolved.profile_root = Some(if root.is_absolute() {
+        root
     } else {
-        std::env::current_dir()?.join(expanded_root)
+        std::env::current_dir()?.join(root)
     });
     Ok(resolved)
 }
@@ -40,10 +42,10 @@ pub(crate) fn downloads_dir(config: &BrowserConfig, panel_local_id: &str) -> Pat
 
 #[must_use]
 pub(crate) fn downloads_dir_in(config: &BrowserConfig, panel_local_id: &str, home: &Path) -> PathBuf {
-    let root = config.downloads_root.as_ref().map_or_else(
-        || home.join("Downloads").join("Horizon"),
-        |root| paths::expand_tilde(&root.to_string_lossy()),
-    );
+    // A download folder of another computer is no folder of this one, and the
+    // default folder is where a person of this computer looks for a download.
+    let root = crate::here::folder("browser.downloads_root", config.downloads_root.as_deref())
+        .unwrap_or_else(|| home.join("Downloads").join("Horizon"));
     root.join(paths::readable_id(panel_local_id))
 }
 
@@ -72,8 +74,8 @@ pub(crate) fn panel_profile_dir_with_default_root(
 
 #[must_use]
 pub(crate) fn effective_profile_root(config: &BrowserConfig, default_root: &Path) -> PathBuf {
-    if let Some(root) = &config.profile_root {
-        return paths::expand_tilde(&root.to_string_lossy());
+    if let Some(root) = crate::here::folder("browser.profile_root", config.profile_root.as_deref()) {
+        return root;
     }
     snap_browser_profile_root(config, default_root).unwrap_or_else(|| default_root.to_path_buf())
 }
@@ -312,13 +314,34 @@ mod tests {
 
     #[test]
     fn an_explicit_downloads_root_holds_one_folder_for_each_panel() {
+        let data = tempfile::tempdir().expect("a folder of this computer");
         let config = BrowserConfig {
-            downloads_root: Some(PathBuf::from("/data/downloads")),
+            downloads_root: Some(data.path().join("downloads")),
+            ..BrowserConfig::default()
+        };
+        // The root of the section exists on this computer, so each panel saves into
+        // its own folder under it.
+        std::fs::create_dir_all(config.downloads_root.as_ref().expect("the root")).expect("the folder");
+        assert_eq!(
+            downloads_dir_in(&config, "panel-1", Path::new("/home/alice")),
+            config.downloads_root.as_ref().expect("the root").join("panel-1")
+        );
+    }
+
+    /// A shared section can name the download folder of another computer. A folder
+    /// that this computer does not have is read as unset, so the person of this
+    /// computer finds the download where a download of this computer goes.
+    #[test]
+    fn a_downloads_root_of_another_computer_saves_where_a_download_of_this_one_goes() {
+        let config = BrowserConfig {
+            downloads_root: Some(PathBuf::from(
+                "/nonexistent/a-state-folder-of-another-computer/downloads",
+            )),
             ..BrowserConfig::default()
         };
         assert_eq!(
             downloads_dir_in(&config, "panel-1", Path::new("/home/alice")),
-            PathBuf::from("/data/downloads/panel-1")
+            PathBuf::from("/home/alice/Downloads/Horizon/panel-1")
         );
     }
 
@@ -337,14 +360,37 @@ mod tests {
 
     #[test]
     fn explicit_profile_root_wins_over_the_platform_default() {
+        let profiles = tempfile::tempdir().expect("a folder of this computer");
         let config = BrowserConfig {
-            profile_root: Some(PathBuf::from("/profiles/custom")),
+            profile_root: Some(profiles.path().join("custom")),
             ..BrowserConfig::default()
         };
+        std::fs::create_dir_all(config.profile_root.as_ref().expect("the root")).expect("the folder");
 
         assert_eq!(
             effective_profile_root(&config, Path::new("/profiles/default")),
-            PathBuf::from("/profiles/custom")
+            config.profile_root.as_ref().expect("the root").clone()
+        );
+    }
+
+    /// A shared section can name the profile folder of another computer, and this
+    /// computer starts its panels in its own folder then.
+    #[test]
+    fn a_profile_root_of_another_computer_uses_the_folder_of_this_one() {
+        let config = BrowserConfig {
+            profile_root: Some(PathBuf::from(
+                "/nonexistent/a-state-folder-of-another-computer/profiles",
+            )),
+            ..BrowserConfig::default()
+        };
+        assert_eq!(
+            effective_profile_root(&config, Path::new("/profiles/default")),
+            PathBuf::from("/profiles/default")
+        );
+        let resolved = resolved_for_launch(&config).expect("the folders of this launch");
+        assert_eq!(
+            resolved.profile_root, None,
+            "a profile folder of another computer is no folder of this launch"
         );
     }
 }

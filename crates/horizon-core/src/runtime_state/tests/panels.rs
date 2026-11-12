@@ -4,6 +4,10 @@ use super::*;
 fn from_board_records_each_browser_launch_profile_root() {
     let temp = tempfile::tempdir().expect("temporary profile root");
     let launched_root = temp.path().join("launched-profiles");
+    // A profile folder of this computer holds its panels' folders, so it is here
+    // before the first launch: a folder that this computer does not have reads as
+    // the default folder.
+    std::fs::create_dir_all(&launched_root).expect("the profile folder");
     let mut board = Board::new();
     let workspace = board.create_workspace("browser");
     board

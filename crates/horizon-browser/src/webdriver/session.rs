@@ -1142,6 +1142,28 @@ mod tests {
         assert!(expired.is_none());
     }
 
+    /// A shared section can name the Firefox of another computer. A program that
+    /// this computer does not have is read as unset, so geckodriver starts the
+    /// Firefox of this computer and the session does not fail with that path.
+    #[test]
+    fn a_firefox_of_another_computer_starts_the_firefox_of_this_one() {
+        let Some(profile_root) = tempfile::tempdir().ok() else {
+            panic!("temporary profile root should be available");
+        };
+        let config = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            profile_root: Some(profile_root.path().to_path_buf()),
+            firefox_command: Some("/nonexistent/a-home-of-another-computer/firefox".to_string()),
+            ..BrowserConfig::default()
+        };
+        let capabilities = new_session_capabilities(&config, "panel", true, false).unwrap_or_default();
+        assert_eq!(
+            capabilities["moz:firefoxOptions"].get("binary"),
+            None,
+            "a Firefox of another computer is no binary of this session: {capabilities}"
+        );
+    }
+
     #[test]
     fn managed_firefox_arguments_cannot_be_overridden() {
         assert!(validate_firefox_args(&["--remote-debugging-port=1".to_string()]).is_err());

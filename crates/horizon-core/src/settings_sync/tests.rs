@@ -443,6 +443,55 @@ fn a_credential_reference_without_a_value_here_keeps_the_rule_of_today() {
     );
 }
 
+/// The section `browser` of another computer names its download folder, its profile
+/// folder and its browsers. The section applies as it arrived, so a save of this
+/// computer never drops the values of the other computer, and this computer reads a
+/// path that it does not have as if it were unset: its own folders and its own
+/// programs. The tests of the browser crate hold the folder and the program of each
+/// setting (`crates/horizon-browser/src/here.rs`).
+#[test]
+fn the_browser_section_of_another_computer_keeps_its_paths_and_this_one_uses_its_own() {
+    let (_directory, store) = saved(&Config::default());
+    let missing = std::path::PathBuf::from("/nonexistent/a-state-folder-of-another-computer");
+    let mut other = Config::default();
+    other.browser.downloads_root = Some(missing.join("downloads"));
+    other.browser.profile_root = Some(missing.join("profiles"));
+    other.browser.command = Some(missing.join("chromium").display().to_string());
+    other.browser.firefox_command = Some(missing.join("firefox").display().to_string());
+    other.browser.geckodriver_command = Some(missing.join("geckodriver").display().to_string());
+    other.browser.safaridriver_command = Some(missing.join("safaridriver").display().to_string());
+
+    let arriving = arriving("browser", &envelope(&other, "browser"));
+    apply_to_store(&store, &arriving).expect("the browser section of another computer applies");
+
+    let config = read_store(&store).expect("the settings of this computer");
+    assert_eq!(
+        config.browser.downloads_root, other.browser.downloads_root,
+        "the value of the server stays, so a save of this computer does not drop it"
+    );
+    assert_eq!(config.browser.profile_root, other.browser.profile_root);
+    assert_eq!(config.browser.command, other.browser.command);
+    assert_eq!(config.browser.firefox_command, other.browser.firefox_command);
+    assert_eq!(config.browser.geckodriver_command, other.browser.geckodriver_command);
+    assert_eq!(config.browser.safaridriver_command, other.browser.safaridriver_command);
+
+    // This computer starts its panels in its own folders, exactly as with no value.
+    let default_root = std::path::Path::new("/profiles/this-computer");
+    assert_eq!(
+        config.browser.effective_profile_root(default_root),
+        default_root,
+        "a profile folder of another computer is no folder of this one"
+    );
+    assert_eq!(
+        config.browser.downloads_dir("panel-1"),
+        std::path::Path::new(&std::env::var("HOME").unwrap_or_default())
+            .join("Downloads")
+            .join("Horizon")
+            .join("panel-1"),
+        "a download of this computer goes where a download of this computer goes"
+    );
+}
+
 #[test]
 fn the_settings_of_before_the_first_link_are_kept_beside_the_store() {
     let (directory, store) = saved(&Config::default());
