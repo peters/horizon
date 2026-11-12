@@ -255,7 +255,7 @@ fn the_session_writer_writes_the_lease_of_a_session_in_order() {
     let lease_path = home.session_lease_path(&created.session_id);
     let mut lease = store.new_lease(&created.session_id);
 
-    the_writer_answered(store.queue_lease(lease.clone()), "write of the lease");
+    the_writer_answered(&store.queue_lease(lease.clone()), "write of the lease");
     let first: crate::SessionLease = serde_json::from_str(&std::fs::read_to_string(&lease_path).expect("the lease"))
         .expect("the lease of the session");
     assert_eq!(first.session_id, created.session_id);
@@ -267,7 +267,7 @@ fn the_session_writer_writes_the_lease_of_a_session_in_order() {
         (store.queue_lease(lease), "write of the leased session"),
         (store.queue_lease_release(&created.session_id), "removal of the lease"),
     ] {
-        the_writer_answered(answer, what);
+        the_writer_answered(&answer, what);
     }
     assert!(
         !lease_path.exists(),
@@ -410,7 +410,7 @@ const WRITER_PATIENCE: Duration = Duration::from_secs(120);
 
 /// Wait for the answer of the writer to one queued job, and name the failure of a wait
 /// that does not end that way.
-fn the_writer_answered(answer: std::sync::mpsc::Receiver<Result<(), String>>, what: &str) {
+fn the_writer_answered(answer: &std::sync::mpsc::Receiver<Result<(), String>>, what: &str) {
     match answer.recv_timeout(WRITER_PATIENCE) {
         Ok(Ok(())) => {}
         Ok(Err(reason)) => panic!("the writer answered the {what} with {reason}"),
