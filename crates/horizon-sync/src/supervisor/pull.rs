@@ -294,6 +294,9 @@ pub(super) fn mirror_of(state: &SyncState) -> MirrorFile {
 /// new to that server, so it goes as the first write of a secret.
 pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), String> {
     let mut state = handle.lock();
+    // This attempt reached the server, so the reason of the attempt before it is
+    // no longer the reason of the link.
+    state.last_refusal = None;
     state
         .client
         .accept_hello(answer)

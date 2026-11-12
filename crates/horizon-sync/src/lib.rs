@@ -48,6 +48,7 @@ mod link;
 mod listener;
 mod login;
 mod protocol;
+mod refusal;
 mod server;
 mod store;
 mod supervisor;
@@ -76,6 +77,7 @@ pub use protocol::{
     Changes, DeviceList, DeviceLogin, DeviceRemove, DeviceRemoved, DeviceRow, Devices, Frame, Hello, HelloOk, Invite,
     Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait, check_device_name,
 };
+pub use refusal::{LinkRefusal, of_exit_code, of_ssh_line};
 pub use server::{
     LinkRegistry, LinkTicket, LinkTransport, MAX_OPEN_WAITS, NoTransport, ServerInfo, WAIT_BOUND, WRONG_CODE_DELAY,
     serve, serve_ssh, serve_tcp,

@@ -32,6 +32,7 @@ use super::{SyncError, queue_error};
 use crate::client::{Client, LinkState};
 use crate::intent::Op;
 use crate::protocol::{DeviceRow, Invited};
+use crate::refusal::LinkRefusal;
 
 /// One question that the window or a worker asks the server.
 ///
@@ -87,6 +88,8 @@ pub(super) const NO_LINK_SENTENCE: &str = "This computer has no link to the serv
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinkSnapshot {
     state: LinkState,
+    /// Why the last attempt did not open the link, when one failed.
+    refusal: Option<LinkRefusal>,
     device: String,
     pending: BTreeSet<String>,
     foreign: BTreeSet<String>,
@@ -138,6 +141,14 @@ impl SettingsSyncView {
 }
 
 impl LinkSnapshot {
+    /// Why the last attempt at the link did not open it, when one failed. The
+    /// sidebar line `Server away` carries it as a hover and the Server tab shows it
+    /// under its state.
+    #[must_use]
+    pub fn refusal(&self) -> Option<LinkRefusal> {
+        self.refusal
+    }
+
     /// The state of the link.
     #[must_use]
     pub fn state(&self) -> &LinkState {
@@ -291,6 +302,9 @@ pub(crate) struct SyncState {
     /// link times the bound of that request from this instant, so a reader that
     /// measures the same bound measures it from the same instant.
     pub(crate) request_since: Option<Instant>,
+    /// Why the last attempt at the link did not open it, as the sidebar line and
+    /// the Server tab show it. It is cleared when an attempt opens the link.
+    pub(crate) last_refusal: Option<LinkRefusal>,
     /// The instant of the request that the link that ended last was waiting for,
     /// published with the `Away` state of that link. A reader that measures the
     /// bound of a lost link reads the instant that the link itself timed, and not
@@ -335,6 +349,7 @@ impl SyncState {
             .all(|(section, row)| self.settings_applied.get(section) == Some(&row.version));
         LinkSnapshot {
             state: self.client.state().clone(),
+            refusal: self.last_refusal,
             device: self.client.device().to_owned(),
             pending,
             foreign,
@@ -476,6 +491,7 @@ impl SyncHandle {
                 refused_secrets: BTreeSet::new(),
                 request_since: None,
                 lost_request_since: None,
+                last_refusal: None,
             })),
             view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
             notices: Arc::new(Mutex::new(Vec::new())),

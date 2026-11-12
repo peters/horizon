@@ -52,6 +52,7 @@ use horizon_core::{Machine, MachineError};
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
 use crate::protocol::Frame;
+use crate::refusal::{LinkRefusal, RefusalCell, of_exit_code};
 use connect::{Halt, Opened};
 use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, SETTINGS_MIRROR_FILE, device_name};
 use link::{End, LinkParts, serve_link};
@@ -377,7 +378,11 @@ fn run(
     let mut attempt: u32 = 1;
     while !stop.load(Ordering::SeqCst) {
         let started = Instant::now();
-        let end = match connect(config, handle, stop, halt_slot) {
+        // The reason of this attempt: the words of the child, the error of a
+        // socket and the loop of the link write it, and the window reads it when
+        // the attempt is over.
+        let refusal = RefusalCell::default();
+        let end = match connect(config, handle, stop, halt_slot, &refusal) {
             Ok((mut input, answers)) => serve_link(LinkParts {
                 config,
                 handle,
@@ -387,6 +392,7 @@ fn run(
                 answers: &answers,
                 kicked,
                 asked,
+                refusal: &refusal,
             }),
             Err(failed) => {
                 let reason = &failed.reason;
@@ -395,11 +401,15 @@ fn run(
             }
         };
         halt(halt_slot);
-        reap(halt_slot);
+        let exit_code = reap(halt_slot);
         // A question that the link that just ended did not ask waits for no
         // attempt that may never come: the window reads the same sentence that a
         // question of a link that is away reads.
         answer_unasked(asked);
+        let reason = refusal
+            .get()
+            .or_else(|| exit_code.and_then(of_exit_code))
+            .unwrap_or(LinkRefusal::Other);
         if end == End::LoggedOut {
             // The server removed this computer, or does not know its token. The
             // token is gone and no retry can bring it back, so the link waits for
@@ -415,6 +425,7 @@ fn run(
         {
             let mut state = handle.lock();
             state.client.away();
+            state.last_refusal = Some(reason);
             // The request of the link that ended waits for no answer any more. Its
             // start stays with the `Away` state, so a reader that measures the bound
             // of this lost link measures the instant that this link timed.
@@ -475,6 +486,7 @@ fn connect(
     handle: &SyncHandle,
     stop: &AtomicBool,
     halt_slot: &Arc<Mutex<Option<Halt>>>,
+    refusal: &RefusalCell,
 ) -> Result<(Box<dyn Write + Send>, Receiver<Frame>), FailedLink> {
     // A TCP link reads the token row of this computer, and an `ssh` link leaves
     // the program to the machine terminal of the person. Both run here, on the
@@ -486,10 +498,10 @@ fn connect(
             .into());
     }
     let opened = if let Some(address) = config.tcp_address() {
-        connect::tcp(address)?
+        connect::tcp(address, refusal)?
     } else {
         let mut command = config.command_line();
-        connect::ssh(&mut command, &config.program)?
+        connect::ssh(&mut command, &config.program, refusal)?
     };
     let Opened {
         writer,
@@ -537,6 +549,7 @@ fn connect(
             }
             Ok(_) => return Err("the server answered the hello with another frame".to_owned().into()),
             Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
+                refusal.set(LinkRefusal::Silent);
                 return Err("the server did not answer the hello in time".to_owned().into());
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -626,12 +639,11 @@ fn halt(halt_slot: &Arc<Mutex<Option<Halt>>>) {
     }
 }
 
-/// Waits for the child of the link that ended, so no zombie stays behind.
-fn reap(halt_slot: &Arc<Mutex<Option<Halt>>>) {
+/// Waits for the child of the link that ended, so no zombie stays behind, and
+/// answers the exit status that names a reason of its own.
+fn reap(halt_slot: &Arc<Mutex<Option<Halt>>>) -> Option<i32> {
     let halt = halt_slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-    if let Some(halt) = halt {
-        halt.reap();
-    }
+    halt.and_then(Halt::reap)
 }
 
 fn queue_error(error: &SyncError) -> MachineError {

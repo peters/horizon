@@ -20,26 +20,37 @@ use horizon_core::secret::{CredentialVault, SecretId, SecretTarget, SecretVault}
 use horizon_core::secret_store;
 use horizon_core::{MachineError, MachineKeys, ServerConfig};
 use horizon_sync::{
-    LinkSnapshot, LinkState, ServerRequest, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
+    LinkRefusal, LinkSnapshot, LinkState, ServerRequest, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore,
 };
 
 use super::HorizonApp;
 use super::settings::server::{ServerAction, ServerView};
 
 /// The state line of the machine section, cached by its state.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) struct ServerLine {
     state: &'static str,
     pending: usize,
+    /// Why the last attempt did not open the link, when one failed. A frame reads
+    /// it without building a sentence; only the hover and the Server tab do.
+    refusal: Option<LinkRefusal>,
 }
 
 impl ServerLine {
-    /// The line of one state of the link.
-    pub(in crate::app) fn of(state: &LinkState) -> Self {
+    /// The line of one state of the link, with the reason of its last attempt.
+    pub(in crate::app) fn of(state: &LinkState, refusal: Option<LinkRefusal>) -> Self {
         Self {
             state: state.code(),
             pending: state.pending(),
+            refusal,
         }
+    }
+
+    /// The sentence of the last attempt, for the hover of the line and the Server
+    /// tab. A reason is a fixed sentence of `horizon-sync`, so no address, no name
+    /// of a computer and no secret can reach the window through it.
+    pub(in crate::app) fn refusal(&self) -> Option<&'static str> {
+        self.refusal.map(LinkRefusal::sentence)
     }
 
     /// The line that the sidebar and the top of the Server tab show. A state that
@@ -125,7 +136,8 @@ impl ServerSync {
 
     /// The state line of the sidebar now.
     pub(in crate::app) fn line(&self) -> ServerLine {
-        ServerLine::of(self.snapshot().state())
+        let snapshot = self.snapshot();
+        ServerLine::of(snapshot.state(), snapshot.refusal())
     }
 
     /// The stable code of the state, for the answer of `machines`.
@@ -368,7 +380,8 @@ impl HorizonApp {
         let logged_out = matches!(state, LinkState::Removed | LinkState::NotLoggedIn);
         let settings = snapshot.settings();
         ServerView {
-            line: ServerLine::of(state).text(),
+            line: ServerLine::of(state, snapshot.refusal()).text(),
+            refusal: snapshot.refusal().map(LinkRefusal::sentence).map(str::to_owned),
             settings: settings_line(settings, self.settings_lost.as_deref()),
             device: snapshot.device().to_owned(),
             // A computer that the server removed has no link that could ask for an
@@ -739,7 +752,7 @@ mod tests {
     use std::sync::Arc;
 
     use egui::Context;
-    use horizon_sync::{LinkState, Supervisor, SupervisorConfig};
+    use horizon_sync::{LinkRefusal, LinkState, Supervisor, SupervisorConfig};
 
     use super::{NamedSecretVault, ServerLine, ServerSync};
     use crate::app::test_support::{run_app_frame, test_app};
@@ -762,7 +775,7 @@ mod tests {
         );
         assert_eq!(
             sync.line().text(),
-            ServerLine::of(sync.snapshot().state()).text(),
+            ServerLine::of(sync.snapshot().state(), sync.snapshot().refusal()).text(),
             "the sidebar line is the snapshot of the link"
         );
     }
@@ -933,15 +946,18 @@ mod tests {
         // The state of a link that a start leaves, and of every attempt that a
         // hello did not answer.
         let away = LinkState::Away { pending: 0 };
-        assert_eq!(ServerLine::of(&away).text(), "Server away");
+        assert_eq!(ServerLine::of(&away, None).text(), "Server away");
         assert_eq!(
-            ServerLine::of(&LinkState::Away { pending: 2 }).text(),
+            ServerLine::of(&LinkState::Away { pending: 2 }, None).text(),
             "Server away · 2 pending"
         );
         // Only the first attempt of a link reads `connecting`.
-        assert_eq!(ServerLine::of(&away.clone().started(true)).text(), "Server: connecting");
         assert_eq!(
-            ServerLine::of(&away.started(false)).text(),
+            ServerLine::of(&away.clone().started(true), None).text(),
+            "Server: connecting"
+        );
+        assert_eq!(
+            ServerLine::of(&away.started(false), None).text(),
             "Server away",
             "a second attempt of a hung server does not read connecting"
         );
@@ -949,30 +965,36 @@ mod tests {
 
     #[test]
     fn every_state_of_the_link_has_one_short_line() {
-        assert_eq!(ServerLine::of(&LinkState::Off).text(), "Server: connecting");
-        assert_eq!(ServerLine::of(&LinkState::Connecting).text(), "Server: connecting");
-        assert_eq!(ServerLine::of(&LinkState::Behind).text(), "Server: connecting");
+        assert_eq!(ServerLine::of(&LinkState::Off, None).text(), "Server: connecting");
         assert_eq!(
-            ServerLine::of(&LinkState::InStep { index: 12 }).text(),
+            ServerLine::of(&LinkState::Connecting, None).text(),
+            "Server: connecting"
+        );
+        assert_eq!(ServerLine::of(&LinkState::Behind, None).text(), "Server: connecting");
+        assert_eq!(
+            ServerLine::of(&LinkState::InStep { index: 12 }, None).text(),
             "Server: in step"
         );
-        assert_eq!(ServerLine::of(&LinkState::Away { pending: 0 }).text(), "Server away");
         assert_eq!(
-            ServerLine::of(&LinkState::Away { pending: 1 }).text(),
+            ServerLine::of(&LinkState::Away { pending: 0 }, None).text(),
+            "Server away"
+        );
+        assert_eq!(
+            ServerLine::of(&LinkState::Away { pending: 1 }, None).text(),
             "Server away · 1 pending"
         );
         assert_eq!(
-            ServerLine::of(&LinkState::Away { pending: 4 }).text(),
+            ServerLine::of(&LinkState::Away { pending: 4 }, None).text(),
             "Server away · 4 pending"
         );
         // A link that no attempt can bring back says what happened, and never that
         // it is still connecting.
         assert_eq!(
-            ServerLine::of(&LinkState::Removed).text(),
+            ServerLine::of(&LinkState::Removed, None).text(),
             "This computer was removed from the server."
         );
         assert_eq!(
-            ServerLine::of(&LinkState::NotLoggedIn).text(),
+            ServerLine::of(&LinkState::NotLoggedIn, None).text(),
             "This computer is not logged in to the server."
         );
         for state in [
@@ -982,7 +1004,7 @@ mod tests {
             LinkState::InStep { index: 1 },
         ] {
             assert_ne!(
-                ServerLine::of(&state).text(),
+                ServerLine::of(&state, None).text(),
                 "Server: connecting",
                 "{state:?} is not a link that is still trying"
             );
@@ -991,9 +1013,48 @@ mod tests {
 
     #[test]
     fn the_line_follows_the_queue_of_an_away_server() {
-        let quiet = ServerLine::of(&LinkState::Away { pending: 0 });
-        let waiting = ServerLine::of(&LinkState::Away { pending: 2 });
+        let quiet = ServerLine::of(&LinkState::Away { pending: 0 }, None);
+        let waiting = ServerLine::of(&LinkState::Away { pending: 2 }, None);
         assert_ne!(quiet, waiting, "a change that waits changes the line");
-        assert_eq!(waiting, ServerLine::of(&LinkState::Away { pending: 2 }));
+        assert_eq!(waiting, ServerLine::of(&LinkState::Away { pending: 2 }, None));
+    }
+
+    /// B15: the line of the sidebar carries the reason of the last attempt, so a
+    /// person who reads `Server away` learns whether the address answered, the name
+    /// did not resolve, the key changed or the login was refused.
+    #[test]
+    fn the_away_line_carries_the_reason_of_the_last_attempt() {
+        let away = LinkState::Away { pending: 1 };
+        let line = ServerLine::of(&away, Some(LinkRefusal::HostKey));
+        assert_eq!(line.text(), "Server away · 1 pending", "the short line stays short");
+        assert_eq!(
+            line.refusal(),
+            Some("The key of the server is not the key that this computer knows."),
+            "the hover and the Server tab name the reason"
+        );
+        for refusal in [
+            LinkRefusal::Address,
+            LinkRefusal::Name,
+            LinkRefusal::HostKey,
+            LinkRefusal::Login,
+            LinkRefusal::Command,
+            LinkRefusal::Silent,
+            LinkRefusal::Other,
+        ] {
+            let line = ServerLine::of(&away, Some(refusal));
+            assert_ne!(
+                line.refusal(),
+                ServerLine::of(&away, Some(LinkRefusal::Address))
+                    .refusal()
+                    .filter(|_| refusal != LinkRefusal::Address),
+                "{:?} reads its own sentence",
+                refusal.code()
+            );
+        }
+        assert_eq!(
+            ServerLine::of(&away, None).refusal(),
+            None,
+            "a link that made no failed attempt names no reason"
+        );
     }
 }

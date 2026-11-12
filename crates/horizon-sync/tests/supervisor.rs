@@ -17,7 +17,7 @@ use std::{
 use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
 use horizon_sync::{
-    LinkBounds, LinkState, ServerReply, ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig,
+    LinkBounds, LinkRefusal, LinkState, ServerReply, ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig,
     SyncedMachineStore, run_server_on_unix_socket,
 };
 
@@ -155,6 +155,19 @@ fn silent_stand_in(directory: &Path, starts: &Path) -> String {
     fs::write(&relay, SILENT_RELAY).expect("the silent relay of the stand-in");
     let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), starts.display());
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the silent stand-in ssh");
+    program.to_string_lossy().into_owned()
+}
+
+/// A stand-in `ssh` that writes one line to its standard error, as `ssh` writes
+/// the line of the failure that it met, and ends with `code`.
+fn failing_stand_in(directory: &Path, line: &str, code: i32) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let script = if line.trim().is_empty() {
+        format!("exit {code}")
+    } else {
+        format!("printf '%s\\n' '{line}' >&2\nexit {code}")
+    };
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 
@@ -799,12 +812,77 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         "a silent link is lost by itself and not by a later attempt: {lost:?}"
     );
 
+    // B15: the reason that the window shows. The link was open, so `ssh` answered
+    // its keepalives while the program of the server stayed silent.
+    eventually("the reason of the silent link", || {
+        (supervisor.handle().snapshot().refusal() == Some(LinkRefusal::Silent)).then_some(())
+    });
+
     // The child of the lost link is ended, and the next attempt starts another
     // one: a child that nobody reaped would stay beside the zombie of the last.
     eventually("the second start of the stand-in", || {
         (start_count(&starts_file) >= 2).then_some(())
     });
     supervisor.stop();
+}
+
+/// B15: an attempt that did not open the link leaves the reason that a person
+/// reads, so `Server away` is not the same three words for a refused address, a
+/// name that does not resolve, a key that changed, a refused login and a far side
+/// without the command of the link.
+#[test]
+fn a_link_that_did_not_open_names_the_reason_of_its_last_attempt() {
+    let home = tempfile::tempdir().expect("a directory");
+    for (line, code, expected) in [
+        (
+            "ssh: connect to host 203.0.113.10 port 22: Connection timed out",
+            255,
+            LinkRefusal::Address,
+        ),
+        (
+            "ssh: Could not resolve hostname vps.example: Name or service not known",
+            255,
+            LinkRefusal::Name,
+        ),
+        (
+            "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+            255,
+            LinkRefusal::HostKey,
+        ),
+        (
+            "deploy@203.0.113.10: Permission denied (publickey).",
+            255,
+            LinkRefusal::Login,
+        ),
+        ("", 127, LinkRefusal::Command),
+    ] {
+        let machines_dir = home.path().join(format!("machines-{}", expected.code()));
+        fs::create_dir_all(&machines_dir).expect("the machine directory");
+        let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+        let mut config = SupervisorConfig::for_server(
+            "server-vm",
+            "/opt/horizon --server-link",
+            &machines_dir,
+            keys_only(keys),
+        )
+        .expect("the settings of the link");
+        config.program = failing_stand_in(&home.path().join(format!("stand-in-{}", expected.code())), line, code);
+        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+        let handle = supervisor.handle().clone();
+
+        let reason = eventually("the reason of the failed attempt", || handle.snapshot().refusal());
+        assert_eq!(reason, expected, "the window names the reason of `{line}`");
+        assert!(
+            matches!(handle.state(), LinkState::Away { .. }),
+            "a reason travels with the state that a person reads"
+        );
+        assert_eq!(
+            horizon_sync::of_ssh_line(line),
+            (!line.trim().is_empty()).then_some(expected),
+            "the words of the child are what names the reason"
+        );
+        supervisor.stop();
+    }
 }
 
 /// The state of a computer that is idle when the server goes: it must learn that
