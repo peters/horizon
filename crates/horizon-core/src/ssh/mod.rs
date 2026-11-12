@@ -627,6 +627,83 @@ mod tests {
     /// minutes of the system default. The four kinds are the plain panel, the
     /// terminal that an agent opens for a host outside the machine list, the upload
     /// and the `-W` forward of a device viewer.
+    /// B13: multiplexing is a decision of the person. At a round trip of a third
+    /// of a second a handshake costs seconds, so five panels cost five of them
+    /// unless the person shares one connection. An `ssh` child of Horizon that
+    /// named `ControlMaster`, `ControlPath` or `-S` would decide for all of the
+    /// person's sessions, and `-S none` would switch a master of the person off
+    /// for one panel. This test names the arguments of every child instead, so no
+    /// later option list takes the choice away.
+    #[test]
+    fn no_ssh_child_of_horizon_switches_the_multiplexing_of_the_person_off() {
+        let route = TerminalRoute {
+            host: "lab-1".into(),
+            user: Some("deploy".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, None).expect("the route is accepted");
+        let plain_panel = SshConnection {
+            host: "lab-1".to_string(),
+            remote_command: Some("tmux new -A -s work".to_string()),
+            ..SshConnection::default()
+        };
+        let with_person_options = SshConnection {
+            extra_args: vec![
+                "-o".to_string(),
+                "ControlMaster=auto".to_string(),
+                "-o".to_string(),
+                "ControlPath=~/.ssh/horizon-%C".to_string(),
+            ],
+            ..plain_panel.clone()
+        };
+        let children = [
+            ("the plain SSH panel", plain_panel.to_command_args()),
+            (
+                "the terminal of an agent",
+                SshConnection::for_agent_terminal(&checked).to_command_args(),
+            ),
+            ("the upload", plain_panel.ssh_transport_args()),
+            ("the upload probe", plain_panel.ssh_probe_transport_args(5)),
+            (
+                "the stdio forward of a device",
+                plain_panel.stdio_forward_args("127.0.0.1:5900"),
+            ),
+        ];
+        for (kind, args) in children {
+            for argument in &args {
+                let lower = argument.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("controlmaster")
+                        && !lower.contains("controlpath")
+                        && !lower.contains("controlpersist"),
+                    "{kind} names no multiplexing option of its own: {args:?}"
+                );
+            }
+            assert!(
+                !args.iter().any(|argument| argument == "-S"),
+                "{kind} passes no -S master path: {args:?}"
+            );
+        }
+        // The options of the person come after the options of Horizon, so a panel
+        // uses the master that they set. Every multiplexing word of the line is
+        // theirs and none is Horizon's.
+        let person_options = ["ControlMaster=auto", "ControlPath=~/.ssh/horizon-%C"];
+        let with_person = with_person_options.to_command_args();
+        assert!(
+            with_person.iter().any(|argument| argument == person_options[0]),
+            "an option of the person still reaches the child: {with_person:?}"
+        );
+        for argument in &with_person {
+            let lower = argument.to_ascii_lowercase();
+            if lower.contains("controlmaster") || lower.contains("controlpath") || lower.contains("controlpersist") {
+                assert!(
+                    person_options.contains(&argument.as_str()),
+                    "Horizon adds no multiplexing option of its own: {argument}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_ssh_child_of_horizon_bounds_its_connect() {
         let route = TerminalRoute {
