@@ -170,9 +170,10 @@ fn a_delete_that_fails_keeps_the_newest_board_that_is_not_written() {
     std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
     std::fs::write(&profile, b"not a folder").unwrap();
     let generation = store.queue_runtime_state(&id, board);
-    let wait = std::time::Duration::from_secs(30);
+    // The save of this board fails, and the writer must report that failure inside
+    // its patience: a wait that runs out must not pass for the failure of the disk.
     assert!(matches!(
-        store.wait_runtime_state_durable(&id, generation, wait),
+        store.wait_runtime_state_durable(&id, generation, SAVE_WAIT),
         Err(Some(_))
     ));
     // The writer may try the board again just now; then the delete is refused.
@@ -511,7 +512,7 @@ fn an_index_change_that_fails_is_tried_again() {
         "the change failed and is still queued"
     );
     std::fs::write(home.session_index_path(), saved).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + SAVE_WAIT;
     let index_path = home.session_index_path();
     let index = super::IndexFile::at(&index_path);
     while !index.load().unwrap().names(store.profile_id(), &second.session_id) {
@@ -585,15 +586,24 @@ fn the_worker_of_a_store_that_the_window_let_go_ends_and_closes_its_files() {
     assert!(writer.is_running(), "the save started the worker of the store");
 
     // A window that lets its store go leaves no worker and no open file of the
-    // index behind: the idle wait of the worker is thirty seconds, so only the end
-    // of the last store brings it here.
+    // index behind. The worker waits for the next job with an idle wait of thirty
+    // seconds, so only the end of the last store brings it here: the reason of the
+    // end below tells this end from that idle wait, however long the disk held the
+    // queued board that the worker writes first. A wait of `SAVE_WAIT` therefore
+    // costs nothing to the proof, while a busy disk cannot fail it.
     drop(store);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + SAVE_WAIT;
     while writer.is_running() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(
         !writer.is_running(),
-        "the worker of a store that the window let go ends at once"
+        "the worker of a store that the window let go ends in {} seconds",
+        SAVE_WAIT.as_secs()
+    );
+    assert_eq!(
+        writer.end_reason(),
+        Some(super::writer::EndReason::LastStoreGone),
+        "the worker ends because the last store went away, not because its idle wait ran out"
     );
 }

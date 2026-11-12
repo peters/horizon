@@ -96,6 +96,21 @@ struct State {
     /// The jobs on the recovery notices, in the order the window sent them, with
     /// the answer of each one.
     notices: VecDeque<(NoticeWrite, Sender<NoticeAnswer>)>,
+    /// Why the worker of a test ended. A test that drops the last store proves the
+    /// end that the drop caused with this; the product reads only `running`.
+    #[cfg(test)]
+    ended: Option<EndReason>,
+}
+
+/// Why the worker of a test ended: the last store of a window ends it at once,
+/// while a worker whose idle wait ran out proves nothing about that store.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EndReason {
+    /// The last store of the window went away while no job waited.
+    LastStoreGone,
+    /// The idle wait ran out with no job queued.
+    IdleWaitOut,
 }
 
 /// The answer of one job on the recovery notices: the notices as text for a
@@ -217,6 +232,12 @@ impl Writer {
     #[cfg(test)]
     pub(super) fn is_running(&self) -> bool {
         self.lock().running
+    }
+
+    /// Why the worker of this store ended, for a test that drops the last store.
+    #[cfg(test)]
+    pub(super) fn end_reason(&self) -> Option<EndReason> {
+        self.lock().ended
     }
 
     /// Wakes the worker, so it reads the queue and the marker of its stores again.
@@ -530,6 +551,10 @@ impl Writer {
                 && state.leases.is_empty()
                 && state.notices.is_empty();
             if idle && handles.strong_count() == 0 {
+                #[cfg(test)]
+                {
+                    state.ended = Some(EndReason::LastStoreGone);
+                }
                 state.running = false;
                 return None;
             }
@@ -541,6 +566,10 @@ impl Writer {
                 .unwrap_or_else(PoisonError::into_inner);
             state = next;
             if timeout.timed_out() && state.queued.is_empty() && state.index.is_empty() && state.leases.is_empty() {
+                #[cfg(test)]
+                {
+                    state.ended = Some(EndReason::IdleWaitOut);
+                }
                 state.running = false;
                 return None;
             }

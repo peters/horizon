@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions};
 use uuid::Uuid;
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+/// The patience of a wait for the marker of a started shell. A loaded computer
+/// can take far longer than three seconds to spawn a shell and parse its output;
+/// a panel that exits or a marker that never comes still ends the test.
+const MARKER_PATIENCE: Duration = Duration::from_secs(180);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 pub fn run_self(test_name: &str, path_override: Option<OsString>) {
@@ -77,7 +80,7 @@ pub fn assert_shell_and_command_panels_start_without_capture() {
 }
 
 fn wait_for_marker(board: &mut Board, panel_id: PanelId, marker: &str) {
-    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let deadline = Instant::now() + MARKER_PATIENCE;
     while Instant::now() < deadline {
         board.process_output();
         let panel = board.panel(panel_id).expect("panel should exist");

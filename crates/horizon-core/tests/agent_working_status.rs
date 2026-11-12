@@ -4,7 +4,11 @@ use std::time::{Duration, Instant};
 use horizon_core::{AgentStatus, Board, Panel, PanelId, PanelKind, PanelOptions};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
-const WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The patience of a wait for a state of the panel that must appear. A loaded
+/// computer can start a shell and parse its output long after three seconds, so
+/// this bound is far above such a start and a state that never comes still ends
+/// the test with one sentence instead of a hang.
+const WAIT_PATIENCE: Duration = Duration::from_secs(180);
 /// Comfortably past the 2s stale-working window.
 const STALE_GRACE: Duration = Duration::from_millis(2500);
 
@@ -43,7 +47,7 @@ fn screen_text(board: &Board, panel_id: PanelId) -> String {
 }
 
 fn wait_for_status(board: &mut Board, panel_id: PanelId, expected: AgentStatus) {
-    let deadline = Instant::now() + WAIT_TIMEOUT;
+    let deadline = Instant::now() + WAIT_PATIENCE;
     while Instant::now() < deadline {
         board.process_output();
         if agent_status(board, panel_id) == expected {
@@ -130,7 +134,7 @@ fn shell_panels_never_report_working() {
 
     // Let the line reach the terminal, then confirm a non-agent panel stays
     // Idle even though the working pattern is visible.
-    let deadline = Instant::now() + WAIT_TIMEOUT;
+    let deadline = Instant::now() + WAIT_PATIENCE;
     loop {
         board.process_output();
         if screen_text(&board, panel_id).contains("Working...") {

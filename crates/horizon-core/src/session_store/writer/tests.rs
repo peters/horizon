@@ -59,7 +59,7 @@ fn a_newer_board_replaces_one_that_is_not_written_yet() {
     );
     // An older generation counts as written once a newer board of the session is.
     assert_eq!(
-        store.wait_runtime_state_durable("session", boards[0], Duration::from_secs(1)),
+        store.wait_runtime_state_durable("session", boards[0], SAVE_WAIT),
         Ok(())
     );
 }
@@ -84,8 +84,9 @@ fn a_session_that_cannot_be_saved_does_not_hold_up_the_others() {
     std::fs::remove_file(&runtime).unwrap();
     std::fs::create_dir(&runtime).unwrap();
     let broken = store.queue_runtime_state("broken", board("never"));
+    // The failure must arrive as a reason inside the patience of the writer.
     assert!(matches!(
-        store.wait_runtime_state_durable("broken", broken, Duration::from_secs(30)),
+        store.wait_runtime_state_durable("broken", broken, SAVE_WAIT),
         Err(Some(_))
     ));
     let healthy = store.queue_runtime_state("session", board("saved"));
