@@ -456,7 +456,24 @@ impl HorizonApp {
         let shown_id = ui.make_persistent_id(("sidebar_panel_close_shown", panel.id.0));
         let armed_id = ui.make_persistent_id(("sidebar_panel_close_armed", panel.id.0));
         let shown_before = ui.ctx().data(|data| data.get_temp::<bool>(shown_id)).unwrap_or(false);
-        let (pressed, press_origin) = ui.input(|input| (input.pointer.any_pressed(), input.pointer.press_origin()));
+        // A press and its release can land in one frame: a quick click of a person is
+        // inside one frame of 55 ms, and the pointer clears its press origin on the
+        // release. The press of this frame is read from its events as well, so a
+        // press on the mark arms it at any frame rate.
+        let (pressed, press_origin) = ui.input(|input| {
+            let origin = input.pointer.press_origin().or_else(|| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        ..
+                    } => Some(*pos),
+                    _ => None,
+                })
+            });
+            (input.pointer.any_pressed(), origin)
+        });
         if pressed && press_origin.is_some_and(|origin| close_rect.contains(origin)) {
             ui.ctx().data_mut(|data| data.insert_temp(armed_id, shown_before));
         }

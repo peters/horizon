@@ -834,3 +834,155 @@ pub(super) fn attention_ledger(
 }
 
 mod text_fit;
+
+/// One frame of the sidebar with the events of a person.
+fn sidebar_frame_with(
+    ctx: &egui::Context,
+    app: &mut crate::app::HorizonApp,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    use crate::test_egui::DiscardTextures;
+    let mut input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+    input.events = events;
+    ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures()
+}
+
+/// The center of one drawn text of a frame.
+fn drawn_text_at(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+    output.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos + text.galley.size() * 0.5),
+        _ => None,
+    })
+}
+
+fn click_events(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// Two panels of one workspace, with its first panel focused, and the place of the
+/// close mark of the row of the second panel.
+struct SidebarRows {
+    _temp: tempfile::TempDir,
+    ctx: egui::Context,
+    app: crate::app::HorizonApp,
+    second: horizon_core::PanelId,
+    mark: egui::Pos2,
+    beside: egui::Pos2,
+}
+
+fn sidebar_rows_with_the_close_mark() -> SidebarRows {
+    let (temp, mut app) = crate::app::test_support::test_app();
+    let workspace = app.board.create_workspace("Quiet zone");
+    let first = app
+        .board
+        .create_panel(editor_panel_options("first"), workspace)
+        .expect("panel");
+    let second = app
+        .board
+        .create_panel(editor_panel_options("second"), workspace)
+        .expect("panel");
+    app.board.active_workspace = Some(workspace);
+    app.board.focus(first);
+    let ctx = egui::Context::default();
+    sidebar_frame_with(&ctx, &mut app, Vec::new());
+    let texts = sidebar_frame_with(&ctx, &mut app, Vec::new());
+    let row = drawn_text_at(&texts, "second").expect("the row of the second panel");
+    // A point of the row beside its close mark.
+    let beside = egui::pos2(row.x - 20.0, row.y);
+    sidebar_frame_with(&ctx, &mut app, vec![egui::Event::PointerMoved(beside)]);
+    let output = sidebar_frame_with(&ctx, &mut app, Vec::new());
+    // The focused row draws its mark too, so the mark of the row of `second` is the
+    // one on the line of its title.
+    let mark = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "\u{00D7}" => Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        })
+        .min_by(|left, right| (left.y - row.y).abs().total_cmp(&(right.y - row.y).abs()))
+        .expect("the close mark of the row");
+    SidebarRows {
+        _temp: temp,
+        ctx,
+        app,
+        second,
+        mark,
+        beside,
+    }
+}
+
+#[test]
+fn a_press_and_a_release_in_one_frame_on_the_close_mark_close_the_panel() {
+    let rows = sidebar_rows_with_the_close_mark();
+    let SidebarRows {
+        ctx,
+        mut app,
+        second,
+        mark,
+        ..
+    } = rows;
+    // A person whose pointer arrived and clicked inside one frame of the window: an
+    // instant click of the mouse is often inside one frame of 55 ms.
+    sidebar_frame_with(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(mark),
+            click_events(mark, true),
+            click_events(mark, false),
+        ],
+    );
+    assert!(
+        app.board.panel(second).is_none(),
+        "the close mark of the row closes its panel on a click of one frame"
+    );
+}
+
+#[test]
+fn a_press_and_a_release_in_one_frame_beside_the_close_mark_select_the_row() {
+    let SidebarRows {
+        _temp,
+        ctx,
+        mut app,
+        second,
+        beside,
+        ..
+    } = sidebar_rows_with_the_close_mark();
+    app.board.focus(horizon_core::PanelId(u64::MAX));
+    sidebar_frame_with(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(beside),
+            click_events(beside, true),
+            click_events(beside, false),
+        ],
+    );
+    assert!(app.board.panel(second).is_some(), "the row is a look, not a close");
+    assert_eq!(app.board.focused, Some(second), "and the row takes the focus");
+}
+
+#[test]
+fn a_press_and_a_release_in_two_frames_on_the_close_mark_close_the_panel() {
+    let SidebarRows {
+        _temp,
+        ctx,
+        mut app,
+        second,
+        mark,
+        ..
+    } = sidebar_rows_with_the_close_mark();
+    sidebar_frame_with(&ctx, &mut app, vec![click_events(mark, true)]);
+    assert!(app.board.panel(second).is_some(), "the press alone closes nothing");
+    sidebar_frame_with(&ctx, &mut app, vec![click_events(mark, false)]);
+    assert!(
+        app.board.panel(second).is_none(),
+        "a press that is held closes the panel on its release"
+    );
+}
