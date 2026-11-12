@@ -32,6 +32,14 @@ const STAND_IN: &str = concat!(
 const PANEL: &str = "attention-stand-in";
 const OWNER: &str = "fixture-launch-owner";
 const SESSION: &str = "fixture-session";
+/// The second shape of the panel entry of the fixture: a Claude panel whose preset
+/// has a command of its own, which is this stand-in, and whose work continuation
+/// is off. Horizon gives that launch its arguments too, so the sidebar follows the
+/// ledger of the panel while no resume is offered.
+const PANEL_COMMAND_ENTRY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../scripts/device-smoke/attention_panel_command.json"
+));
 
 fn now_millis() -> i64 {
     let millis = SystemTime::now()
@@ -53,6 +61,95 @@ fn read_line(reader: &mut BufReader<std::process::ChildStdout>) -> String {
     let mut line = String::new();
     reader.read_line(&mut line).expect("answer of the stand-in");
     line.trim_end().to_string()
+}
+
+#[test]
+fn the_events_of_a_panel_with_a_command_of_its_own_reach_the_sidebar() {
+    let entry: serde_json::Value = serde_json::from_str(PANEL_COMMAND_ENTRY).expect("the entry of the fixture");
+    assert_eq!(entry["kind"], serde_json::json!("claude"));
+    assert!(
+        entry["command"].as_str().is_some_and(|command| !command.is_empty()),
+        "the preset of the panel runs a command of its own: {entry}"
+    );
+    assert_eq!(
+        entry["work_resume"]["enabled"],
+        serde_json::json!(false),
+        "the panel continues nothing after a restart"
+    );
+    let Some(python) = python3() else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    let root = tempfile::tempdir().expect("isolated root");
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).expect("home directory");
+    let horizon_home = root.path().join("horizon-home");
+    std::fs::create_dir(&horizon_home).expect("Horizon home");
+    let store = WorkStore::new(&horizon_home);
+    store
+        .register_owner("own-command", PanelKind::Claude, OWNER, Some(SESSION), &home)
+        .expect("registered launch");
+    let mut child = Command::new(&python)
+        .arg(STAND_IN)
+        // The launch of either shape names the conversation of the panel.
+        .arg("--session-id")
+        .arg(SESSION)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", &home)
+        .env("HORIZON_HOME", &horizon_home)
+        .env("HORIZON_AGENT_INTEGRATIONS", "off")
+        .env(WORK_ROOT_ENV, &horizon_home)
+        .env(WORK_PANEL_ENV, "own-command")
+        .env(WORK_OWNER_ENV, OWNER)
+        .env(WORK_KIND_ENV, "claude")
+        .env(WORK_EXECUTABLE_ENV, env!("CARGO_BIN_EXE_horizon"))
+        .current_dir(&home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the stand-in");
+    let mut answers = BufReader::new(child.stdout.take().expect("stdout of the stand-in"));
+    let mut input = child.stdin.take().expect("stdin of the stand-in");
+    let banner = read_line(&mut answers);
+    assert!(banner.contains("type one of"), "the stand-in asks for a word: {banner}");
+
+    let mut board = AttentionBoard::default();
+    // The launch registered its ledger, and no event of it has arrived: the
+    // panel keeps the state of its own screen until the first one does.
+    let quiet = store
+        .read("own-command")
+        .expect("read the ledger")
+        .expect("the launch registered the record");
+    assert!(quiet.ledger.session_id == SESSION);
+    board.observe_ledger("own-command", &quiet.ledger, now_millis());
+    assert!(!board.from_ledger("own-command"), "no event has arrived");
+    board.observe_working("own-command", true, false, now_millis());
+    assert_eq!(board.state("own-command"), Attention::Working);
+
+    for (word, expected, shown) in [
+        ("start", TurnState::Working, Attention::Working),
+        ("stop", TurnState::Finished, Attention::Done),
+    ] {
+        writeln!(input, "{word}").expect("write the word");
+        input.flush().expect("flush the word");
+        let answer = read_line(&mut answers);
+        assert!(!answer.contains("refused"), "the hook entry refused {word}: {answer}");
+        let record = store
+            .read("own-command")
+            .expect("read the ledger")
+            .expect("the launch registered the record");
+        assert_eq!(record.ledger.state, expected, "after {word}: {answer}");
+        board.observe_ledger("own-command", &record.ledger, now_millis());
+        assert!(board.from_ledger("own-command"), "the ledger answers after {word}");
+        assert_eq!(board.state("own-command"), shown, "the sidebar after {word}");
+    }
+    writeln!(input, "quit").expect("write quit");
+    input.flush().expect("flush quit");
+    drop(input);
+    let finished = child.wait().expect("the stand-in ends");
+    assert!(finished.success(), "the stand-in ends after quit: {finished:?}");
 }
 
 #[test]

@@ -144,6 +144,30 @@ impl WorkStore {
         Ok(())
     }
 
+    /// Remove the record and the health markers of a panel that left the board.
+    /// A closed panel continues nothing and reports nothing, so its launch keeps
+    /// no evidence in the home.
+    ///
+    /// # Errors
+    /// Rejects an invalid identity and reports a file that it cannot remove.
+    pub fn forget(&self, panel_local_id: &str) -> io::Result<()> {
+        let _lock = self.lock(panel_local_id)?;
+        let path = self.record_path(panel_local_id)?;
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        #[cfg(unix)]
+        self.sync_parent_directories(&path)?;
+        match fs::remove_dir_all(self.health_directory(panel_local_id)?) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+
     /// Mark a hook in flight before reading input. Abandoned invocations veto
     /// continuation even if the recorder is terminated before its error handler.
     ///

@@ -220,9 +220,14 @@ runs, or give `--attention-agent 0` to wait for the typed words alone. Type
 that the person can give the focus of the desktop to another window before the
 event arrives. `--attention-agent-count N` opens N panels of the stand-in, 1 to
 4, in one row above the panel of the notifications, so that a change of two
-panels at the same time shows the count of a notification. The panel shares its
-workspace with the panels of the default board and covers the first one. The
-procedure is
+panels at the same time shows the count of a notification. `--attention-agent-command`
+adds one panel of the second shape of the entry,
+`scripts/device-smoke/attention_panel_command.json`: a preset whose own command
+is the stand-in and whose work continuation is off. Horizon attaches the ledger
+of that panel too, so the sidebar shows its state, and the panel offers no resume
+and shows no card. Both options open at most four panels together. The panels
+share their workspace with the panels of the default board and cover the first
+one. The procedure is
 [the agent attention procedure](../../docs/testing/procedures/agent-attention.md).
 
 ### A desktop notification that a person can see

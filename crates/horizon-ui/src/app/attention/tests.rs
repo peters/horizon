@@ -247,6 +247,71 @@ fn a_panel_without_a_ledger_keeps_its_working_indicator() {
 }
 
 #[test]
+fn the_record_of_a_closed_panel_leaves_the_home() {
+    let (temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    // The launch of the panel and the close that follows it resolve the home of
+    // the process, so the record of this test lies where Horizon keeps it.
+    let store = horizon_core::agent_work::WorkStore::new(horizon_core::HorizonHome::resolve().root());
+    store
+        .register_owner(&local, PanelKind::Claude, "owner", Some("session"), temp.path())
+        .expect("registered launch");
+    assert!(store.read(&local).expect("read").is_some());
+    // Closing a panel is a frame action, and the record must leave the home
+    // without the frame waiting for the file. The whole suite runs the UI-thread
+    // guard in strict mode, so a read or a delete on the frame panics here.
+    run_app_frame(&ctx, &mut app);
+    app.board.close_panel(panel);
+    run_app_frame(&ctx, &mut app);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.read(&local).expect("read").is_some() {
+        assert!(Instant::now() < deadline, "the record of the closed panel stays");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.panel_attention(&local), Attention::Idle);
+}
+
+#[test]
+fn an_observed_panel_with_the_policy_off_offers_no_continuation() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    let now = horizon_core::current_unix_millis();
+    assert!(!app.board.panel(panel).expect("panel").work_resume.enabled);
+    app.board.focused = None;
+    app.apply_attention_values(
+        vec![(panel, local.clone(), Some(ledger(TurnState::Blocked, now)))],
+        &ctx,
+    );
+    // The sidebar follows the ledger of the panel, and the panel offers no
+    // resume and shows no card of a continuation.
+    assert_eq!(app.panel_attention(&local), Attention::NeedsYou);
+    assert!(
+        app.board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .expect("terminal")
+            .pending_work_resume()
+            .is_none(),
+        "an observed panel with the policy off waits for no continuation"
+    );
+    assert_eq!(app.work_resume_overlay_rect(&ctx), None, "no card is drawn");
+}
+
+#[test]
 fn the_attention_reads_never_run_on_the_frame() {
     let (_temp, ctx, mut app) = test_app_with_config_and_startup(
         &horizon_core::Config::default(),

@@ -25,6 +25,10 @@ TMP_DIR = Path('/tmp')
 # starts a Claude panel of the default command through that name, gives it its
 # own arguments and attaches the work ledger of the panel to it.
 ATTENTION_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel.json'
+# The second shape of the panel entry: a preset whose own command is the stand-in
+# itself, and whose work continuation is off. Horizon gives such a panel its
+# arguments too, so the sidebar still follows its ledger, and no resume is offered.
+ATTENTION_COMMAND_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel_command.json'
 ATTENTION_PROGRAM = 'claude'
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
@@ -545,26 +549,32 @@ def panel_programs_in_state(panels, state, folder=None):
     return panels
 
 
-def attention_agent(state, timer=6.0, program_folder=None, count=1):
+def attention_agent(state, timer=6.0, program_folder=None, count=1, command=False):
     """The panel entries and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
-    launch, and Horizon attaches that ledger to the panel of a Claude agent that
-    starts with the default command and whose work continuation is on. So the
-    panel entry of this fixture names no command, and another `claude` on the
-    `PATH` of the candidate is the stand-in: Horizon resolves the name, inserts
-    its own arguments after it and keeps the ledger of the launch.
+    launch, and Horizon attaches that ledger to a Claude panel that it gives its
+    own arguments to, whether the panel starts the default command or a command
+    of its preset. Two shapes of the panel entry show both: one names no command,
+    so another `claude` on the `PATH` of the candidate is the stand-in, and one
+    names the stand-in itself as the command of its preset with the work
+    continuation off.
 
     `count` panels of the same stand-in show a change of two panels at the same
     time, which the notification of several changes counts. Each panel of a run
     with more than one lies in its own cell of the isolated desktop and owns its
     folder, so a click reaches one of them and the two transcripts stay apart.
 
+    `command` adds one panel of the second shape, so a procedure sees the state
+    of a panel that no policy of its own supports.
+
     Answers the panel entries of the fixture config and the folder to put first on
     the `PATH` of the candidate.
     """
-    if not 1 <= count <= ATTENTION_MAX_AGENTS:
-        raise SystemExit(f'--attention-agent-count takes 1 to {ATTENTION_MAX_AGENTS} panels, not {count}')
+    total = count + (1 if command else 0)
+    if not 1 <= total <= ATTENTION_MAX_AGENTS:
+        raise SystemExit(f'--attention-agent-count and --attention-agent-command take 1 to '
+                         f'{ATTENTION_MAX_AGENTS} panels together, not {total}')
     script = fixture_program(ATTENTION_STANDIN_PROGRAM, program_folder)
     work = Path(state) / ATTENTION_STANDIN_FOLDER
     bin_dir = work / ATTENTION_BIN_FOLDER
@@ -575,13 +585,19 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1):
     (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
     entry = json.loads(ATTENTION_PANEL_ENTRY.read_text())
     panels = []
-    for index in range(count):
-        panel = dict(entry)
-        folder = work if count == 1 else work / f'panel-{index + 1}'
+    for index in range(total):
+        own_command = command and index == count
+        panel = json.loads(ATTENTION_COMMAND_PANEL_ENTRY.read_text()) if own_command else dict(entry)
+        folder = work if total == 1 else work / f'panel-{index + 1}'
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         panel['cwd'] = str(folder)
-        if count > 1:
+        if own_command:
+            # The preset runs the stand-in itself, so Horizon gives it no name to
+            # resolve on the `PATH`; the copy in the state folder is the program.
+            panel['command'] = str(bin_dir / ATTENTION_PROGRAM)
+        elif total > 1:
             panel['name'] = f'{ATTENTION_PANEL_NAME} {index + 1}'
+        if total > 1:
             panel['position'] = [ATTENTION_ROW_LEFT + index * ATTENTION_ROW_STEP, ATTENTION_ROW_TOP]
             panel['size'] = list(ATTENTION_ROW_SIZE)
         panels.append(panel)
@@ -923,6 +939,12 @@ def arguments():
              'makes it report the events in a sequence of its own, every SECONDS (default 6). '
              '0 waits for the typed lines alone')
     parser.add_argument(
+        '--attention-agent-command', action='store_true',
+        help='Open one more panel of the stand-in whose preset has a command of its own: the '
+             'stand-in program itself, with the work continuation off. Horizon attaches the work '
+             'ledger of that panel too, so the sidebar shows its state while no resume is offered. '
+             'Needs --attention-agent, and both flags open at most four panels')
+    parser.add_argument(
         '--attention-agent-count', type=int, default=None, metavar='N',
         help='Open N panels of the stand-in agent, 1 to 4, so that a change of two panels at '
              'the same time shows the count of a notification; needs --attention-agent. Each panel '
@@ -1110,13 +1132,15 @@ def main():
             # The stand-in replaces the default board, so the panels of the
             # procedure are the first ones that the person sees.
             panels, attention_bin = attention_agent(
-                args.state, args.attention_agent, count=args.attention_agent_count or 1)
+                args.state, args.attention_agent, count=args.attention_agent_count or 1,
+                command=args.attention_agent_command)
             extra_panels = panels
             # The children of this run keep this object, so the value is changed
             # here and not by a second dictionary.
             env.update(attention_environment(env, attention_bin))
-        elif args.attention_agent_count is not None:
-            raise SystemExit('--attention-agent-count opens panels of --attention-agent, which this run lacks')
+        elif args.attention_agent_count is not None or args.attention_agent_command:
+            raise SystemExit('--attention-agent-count and --attention-agent-command open panels of '
+                             '--attention-agent, which this run lacks')
         if args.notifications_log:
             notification_bin = notification_standin(args.state)
             env.update(attention_environment(env, notification_bin))

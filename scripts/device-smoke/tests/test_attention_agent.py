@@ -158,6 +158,47 @@ class AttentionAgentTests(unittest.TestCase):
         bottom = min(one['position'][1] + one['size'][1], other['position'][1] + other['size'][1])
         return left < right and top < bottom
 
+    def test_a_panel_of_its_own_command_is_the_second_shape_of_the_entry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, bin_dir = serve.attention_agent(state, 0, count=1, command=True)
+            self.assertEqual(len(panels), 2)
+            default, own = panels
+            # The first shape keeps the shared entry: Horizon resolves the name of
+            # the program on the PATH of the candidate and inserts its arguments.
+            self.assertIsNone(default['command'])
+            self.assertTrue(default['work_resume']['enabled'])
+            # The second shape is a preset with a command of its own, which is the
+            # stand-in itself, and its work continuation is off.
+            shared = json.loads(serve.ATTENTION_COMMAND_PANEL_ENTRY.read_text())
+            for key in ('name', 'kind', 'args', 'work_resume'):
+                self.assertEqual(own[key], shared[key], f'the entry of the second shape keeps {key}')
+            self.assertIsInstance(shared['command'], str, 'the shared entry names a command of its preset')
+            self.assertEqual(own['command'], str(bin_dir / serve.ATTENTION_PROGRAM))
+            self.assertTrue(Path(own['command']).is_file(), 'the command names a program of the run')
+            self.assertFalse(own['work_resume']['enabled'], 'the panel offers no resume')
+            self.assertEqual(own['kind'], 'claude', 'the kind whose hooks Horizon installs')
+            self.assertEqual(own['args'], [])
+            self.assertNotEqual(own['cwd'], default['cwd'], 'each panel writes its own transcript')
+            for panel in panels:
+                left, top = panel['position']
+                width, height = panel['size']
+                self.assertLessEqual(left + width, 1480, f'{panel["name"]} stays inside the window')
+                self.assertLessEqual(top + height, 560, f'{panel["name"]} stays above the notifications')
+
+    def test_the_two_shapes_together_stay_inside_the_bound(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, _bin_dir = serve.attention_agent(state, 0, count=serve.ATTENTION_MAX_AGENTS - 1, command=True)
+            self.assertEqual(len(panels), serve.ATTENTION_MAX_AGENTS)
+            places = [tuple(panel['position']) for panel in panels]
+            self.assertEqual(len(set(places)), len(places), 'no panel covers another')
+            with self.assertRaises(SystemExit) as raised:
+                serve.attention_agent(state, 0, count=serve.ATTENTION_MAX_AGENTS, command=True)
+            self.assertIn('--attention-agent-command', str(raised.exception))
+
     def test_one_panel_keeps_the_entry_of_the_fixture(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'

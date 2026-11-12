@@ -555,3 +555,40 @@ fn failed_publication_leaves_no_staging_file() {
     assert!(fixture.store.write(&record).is_err());
     assert!(staging_files(&fixture.store).is_empty());
 }
+
+#[test]
+fn a_closed_panel_keeps_no_record_and_its_late_hook_writes_nothing() {
+    let directory = tempfile::tempdir().expect("fixture");
+    let store = WorkStore::new(directory.path());
+    store
+        .register_owner("panel", PanelKind::Claude, "owner", Some("session"), directory.path())
+        .expect("owner");
+    let record = directory
+        .path()
+        .join("agent-work")
+        .join(crate::horizon_home::safe_local_id("panel"))
+        .with_extension("json");
+    assert!(record.is_file(), "the launch of the panel is registered");
+    store.forget("panel").expect("forget");
+    assert!(!record.exists(), "the record of the closed panel leaves the home");
+    assert!(store.read("panel").expect("read").is_none());
+    // A hook that arrives after the panel closed finds no launch to report to.
+    let transcript = directory.path().join("transcript.jsonl");
+    std::fs::write(&transcript, "{}\n").expect("transcript");
+    let input: HookInput = serde_json::from_value(serde_json::json!({
+        "session_id": "session", "prompt_id": "prompt", "hook_event_name": "Stop",
+        "cwd": directory.path(), "transcript_path": transcript
+    }))
+    .expect("input");
+    assert!(
+        store
+            .apply_hook("panel", PanelKind::Claude, "owner", &input, 1)
+            .is_err(),
+        "a closed panel accepts no event"
+    );
+    // The identity stays usable: a later launch of the same panel registers.
+    store
+        .register_owner("panel", PanelKind::Claude, "later", Some("session"), directory.path())
+        .expect("a later launch");
+    assert!(record.is_file());
+}

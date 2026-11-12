@@ -29,6 +29,13 @@ const PANEL_ENTRY: &str = include_str!(concat!(
     "/../../scripts/device-smoke/attention_panel.json"
 ));
 
+/// The second shape of the panel entry: a preset with a command of its own,
+/// which is the stand-in, and the work continuation off.
+const PANEL_COMMAND_ENTRY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../scripts/device-smoke/attention_panel_command.json"
+));
+
 const CHILD_ENV: &str = "HORIZON_TEST_ATTENTION_STANDIN_CHILD";
 const SESSION: &str = "fixture-session";
 /// The conversation of the panel of a system that attaches no ledger.
@@ -88,7 +95,7 @@ fn exercise_launch() {
     std::fs::create_dir_all(horizon_home.claude_plugin_dir_for_host(host)).expect("claude plugin");
 
     let options = panel_options(&home);
-    let (program, args, env) = launch(&home, &options);
+    let (program, args, env, _plan) = launch(&home, &options);
 
     let stand_in = home.join("bin").join("claude");
     assert_eq!(program, "/bin/bash", "a Claude panel starts in the default shell");
@@ -107,6 +114,59 @@ fn exercise_launch() {
     } else {
         assert_without_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
     }
+    assert_own_command_launch(&home, &horizon_home, &work_plugin);
+}
+
+/// The launch of the second shape of the fixture entry: a Claude panel whose
+/// preset has a command of its own and whose work continuation is off. The
+/// sidebar follows its state all the same, and no resume or card comes of it.
+fn assert_own_command_launch(home: &Path, horizon_home: &HorizonHome, work_plugin: &Path) {
+    let options = panel_options_of(home, PANEL_COMMAND_ENTRY);
+    let command = options
+        .command
+        .clone()
+        .expect("the entry names the command of its preset");
+    assert_eq!(
+        Path::new(&command).file_name().and_then(std::ffi::OsStr::to_str),
+        Some("claude"),
+        "the command of the entry is the stand-in that the fixture put on the PATH"
+    );
+    assert!(
+        !options.work_resume.enabled,
+        "the entry of the second shape continues no work after a restart"
+    );
+    let (program, args, env, plan) = launch(&home, &options);
+    assert_eq!(
+        program, "/bin/bash",
+        "the command of a preset runs in the default shell"
+    );
+    let after = &args[1][command.len()..];
+    assert!(
+        after.contains("--session-id"),
+        "Horizon gives this launch the identity of its conversation: {after}"
+    );
+    if cfg!(target_os = "linux") {
+        assert!(
+            plan.owner.is_some(),
+            "the launch of a command of its own reports its state through the work ledger"
+        );
+        let session = after.find("--session-id").expect("the conversation of the panel");
+        assert_work_ledger(&options, horizon_home, work_plugin, after, session, &env);
+    } else {
+        assert!(plan.owner.is_none(), "no ledger is attached on this system yet");
+    }
+    // The continuation keeps its own gate: no offer of a resume, and no prompt
+    // that Horizon writes into the launch of a panel that only reports.
+    assert_eq!(
+        plan.state.pending(),
+        None,
+        "a panel that only reports shows no card of a continuation"
+    );
+    assert!(
+        !args[1].contains("Horizon restored this conversation"),
+        "a panel that only reports receives no seed: {}",
+        args[1]
+    );
 }
 
 /// The work ledger that a Linux launch attaches to the panel.
@@ -251,7 +311,11 @@ fn the_assertions_of_a_system_without_the_work_ledger_hold_for_its_command() {
 
 /// The panel options of the entry that the fixture writes.
 fn panel_options(home: &Path) -> PanelOptions {
-    let panel: TerminalConfig = serde_json::from_str(PANEL_ENTRY).expect("the panel entry of the fixture");
+    panel_options_of(home, PANEL_ENTRY)
+}
+
+fn panel_options_of(home: &Path, entry: &str) -> PanelOptions {
+    let panel: TerminalConfig = serde_json::from_str(entry).expect("the panel entry of the fixture");
     let workspace = WorkspaceConfig {
         name: "Attention".to_string(),
         color: None,
@@ -260,19 +324,31 @@ fn panel_options(home: &Path) -> PanelOptions {
         terminals: vec![panel.clone()],
     };
     let state = PanelState::from_config(0, "Attention", 0, &workspace, [0.0, 0.0], &panel);
-    let options = state.to_panel_options(&crate::browser::BrowserConfig::default());
+    let mut options = state.to_panel_options(&crate::browser::BrowserConfig::default());
+    if let Some(command) = options.command.take() {
+        // The fixture names the program of a preset that it copied into its
+        // state folder; this child puts the same stand-in on its own PATH.
+        assert_eq!(command, "agent_attention_standin.py", "the program of the entry");
+        options.command = Some(home.join("bin").join("claude").display().to_string());
+        options.work_resume.enabled = false;
+        return options;
+    }
     assert!(
         options.work_resume.enabled,
         "the entry turns the work ledger of the panel on"
     );
-    assert!(
-        options.command.is_none(),
-        "the launch arguments only stay with the default command"
-    );
     options
 }
 
-fn launch(home: &Path, options: &PanelOptions) -> (String, Vec<String>, HashMap<String, String>) {
+fn launch(
+    home: &Path,
+    options: &PanelOptions,
+) -> (
+    String,
+    Vec<String>,
+    HashMap<String, String>,
+    crate::agent_work::StartupPlan,
+) {
     let policy = options.work_resume.clone();
     let resume = PanelResume::Fresh;
     let (program, mut args) = resolve_launch_command(
@@ -309,5 +385,5 @@ fn launch(home: &Path, options: &PanelOptions) -> (String, Vec<String>, HashMap<
             "the launch attaches no work ledger on this system"
         );
     }
-    (program, args, env)
+    (program, args, env, plan)
 }

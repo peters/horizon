@@ -1,0 +1,9 @@
+{
+  "name": "Attention stand-in with its own command",
+  "kind": "claude",
+  "command": "agent_attention_standin.py",
+  "args": [],
+  "work_resume": {"enabled": false},
+  "position": [40, 60],
+  "size": [640, 420]
+}

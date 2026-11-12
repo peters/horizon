@@ -235,16 +235,11 @@ mod tests {
     use super::*;
     use crate::agents::all_agent_kinds;
 
-    fn launch(kind: PanelKind, enabled: bool, default_command: bool) -> (ResumePolicy, bool) {
+    fn gates(kind: PanelKind, enabled: bool, default_command: bool) -> (bool, bool) {
         let policy = ResumePolicy {
             enabled,
             ..ResumePolicy::default()
         };
-        (policy, default_command)
-    }
-
-    fn gates(kind: PanelKind, enabled: bool, default_command: bool) -> (bool, bool) {
-        let (policy, default_command) = launch(kind, enabled, default_command);
         let launch = WorkLaunch {
             panel: "panel",
             kind,

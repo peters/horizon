@@ -359,6 +359,7 @@ impl Board {
             return Some(browser.close_permanently());
         }
         if panel.kind.is_agent() {
+            crate::agent_work::forget_closed_panel(&panel.local_id);
             panel.request_shutdown();
         }
         None
