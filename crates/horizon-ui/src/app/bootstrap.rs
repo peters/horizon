@@ -50,14 +50,17 @@ impl HorizonApp {
         startup: StartupDecision,
         observed_keyboard_inputs: input::ObservedKeyboardInputs,
     ) -> Self {
-        Self::new_with_egui_context(
+        let mut app = Self::new_with_egui_context(
             &cc.egui_ctx,
             config,
             config_path,
             session_store,
             startup,
             observed_keyboard_inputs,
-        )
+        );
+        // One worker for the run: a frame only writes one value into it.
+        app.notifications.use_desktop_sink();
+        app
     }
 
     pub(super) fn new_with_egui_context(
@@ -161,14 +164,14 @@ impl HorizonApp {
             machine_rows: super::sidebar::machines::MachineRows::default(), notice_clock: NoticeClock::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
-            machine_epoch: 0,
-            machine_load_rx: None, server_sync: None,
+            machine_epoch: 0, machine_load_rx: None, server_sync: None,
             canvas_grid_cache: CanvasGridCache::default(),
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true, sidebar_drag_workspace: None,
             sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
+            notifications: super::notify::Notifications::default(),
             minimap_visible: true, hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),

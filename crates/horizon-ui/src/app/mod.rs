@@ -55,6 +55,7 @@ mod machine_click;
 mod machine_open;
 mod minimap;
 mod navigation_input;
+mod notify;
 mod panel_chrome;
 mod panel_restarts;
 mod panel_starts;
@@ -361,6 +362,8 @@ pub struct HorizonApp {
     /// Which agent panel needs the person, which one finished and which one
     /// works, from the work ledgers of the panels.
     attention: attention::AttentionState,
+    /// The desktop notification of a change that the person did not see.
+    notifications: notify::Notifications,
     minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,

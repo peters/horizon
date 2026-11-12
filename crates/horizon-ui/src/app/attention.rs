@@ -176,10 +176,18 @@ impl HorizonApp {
             .attention
             .read_at
             .is_none_or(|asked| now.duration_since(asked) >= INTERVAL);
-        if (focus_changed || due) && self.observe_agent_indicators() {
-            self.attention.count_change();
-            ctx.request_repaint();
+        if focus_changed || due {
+            let moved = self.observe_agent_indicators();
+            if !moved.is_empty() {
+                self.attention.count_change();
+                ctx.request_repaint();
+                self.note_changed_panels(moved, ctx);
+            }
         }
+        // The focus of the windows is the value that the frame already has, so the
+        // notification of a change waits for no other read.
+        self.notifications
+            .decide(self.board.workspaces.len() > 1, Instant::now(), ctx);
         if !due || self.attention.in_flight {
             return;
         }
@@ -232,11 +240,15 @@ impl HorizonApp {
         let now_millis = current_unix_millis();
         let focused = self.focused_panel_local_id();
         let mut changed = false;
+        let mut moved = Vec::new();
         for (_, local_id, ledger) in read {
             let Some(ledger) = ledger else {
                 continue;
             };
-            changed |= self.attention.states.observe_ledger(&local_id, &ledger, now_millis);
+            if self.attention.states.observe_ledger(&local_id, &ledger, now_millis) {
+                changed = true;
+                moved.push(local_id.clone());
+            }
             if focused.as_deref() == Some(local_id.as_str()) {
                 // The person looks at the panel that the read describes.
                 changed |= self.attention.states.note_look(&local_id, now_millis);
@@ -246,31 +258,51 @@ impl HorizonApp {
             self.attention.count_change();
             ctx.request_repaint();
         }
+        // The state of a change that a look cleared is not a state that waits.
+        self.note_changed_panels(moved, ctx);
         changed
+    }
+
+    /// Queues one desktop notification for each panel of `moved` that now waits
+    /// for the person, while no window of Horizon has the focus.
+    fn note_changed_panels(&mut self, moved: Vec<String>, ctx: &egui::Context) {
+        if moved.is_empty() {
+            return;
+        }
+        let panels: Vec<(String, Attention)> = moved
+            .into_iter()
+            .map(|local_id| {
+                let state = self.attention.state(&local_id);
+                (local_id, state)
+            })
+            .collect();
+        self.note_attention_changes(panels, ctx);
     }
 
     /// Records the working indicator of each agent panel whose launch has no
     /// ledger, and drops the panels that left the board. Answers whether a panel
     /// shows another state now.
-    fn observe_agent_indicators(&mut self) -> bool {
+    fn observe_agent_indicators(&mut self) -> Vec<String> {
         let now_millis = current_unix_millis();
         let focused = self.focused_panel_local_id();
-        let mut changed = false;
+        let mut moved = Vec::new();
         for panel in &self.board.panels {
             if !panel.kind.is_agent() {
                 continue;
             }
             let is_focused = focused.as_deref() == Some(panel.local_id.as_str());
-            changed |= self.attention.states.observe_working(
+            if self.attention.states.observe_working(
                 &panel.local_id,
                 panel.agent_status() == horizon_core::AgentStatus::Working,
                 is_focused,
                 now_millis,
-            );
+            ) {
+                moved.push(panel.local_id.clone());
+            }
         }
         let local_ids: HashSet<&str> = self.board.panels.iter().map(|panel| panel.local_id.as_str()).collect();
         self.attention.retain(|local_id| local_ids.contains(local_id));
-        changed
+        moved
     }
 
     /// The local id of the panel that has the keyboard focus.

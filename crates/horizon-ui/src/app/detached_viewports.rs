@@ -595,7 +595,7 @@ impl HorizonApp {
     }
 }
 
-fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
+pub(in crate::app) fn detached_viewport_id(workspace_local_id: &str) -> ViewportId {
     ViewportId(egui::Id::unique(("detached_workspace", workspace_local_id)))
 }
 

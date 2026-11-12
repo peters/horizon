@@ -8,6 +8,7 @@ use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::config_store::{ConfigStore, StoreFault, StoredSettings};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
+use crate::notify::NotificationSetting;
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
@@ -254,6 +255,10 @@ pub struct FeaturesConfig {
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
     pub sidebar_accordion: bool,
+    /// Which change of an agent panel a desktop notification tells, while no
+    /// window of Horizon has the focus. A store of an older build has no such
+    /// row, and it reads as the default that speaks of both changes.
+    pub notifications: NotificationSetting,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -978,6 +983,7 @@ mod tests {
     use super::{
         Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets, preset_named,
     };
+    use crate::notify::NotificationSetting;
     use crate::panel::PanelKind;
     use crate::ssh::{DiscoveredSshHost, SshConnection};
 
@@ -1147,6 +1153,57 @@ mod tests {
             Config::from_json(r#"{"features": {"speech": {"enabled": false}}}"#).expect("config should deserialize");
 
         assert!(!config.features.sidebar_accordion);
+    }
+
+    /// A store of an older Horizon has no row for desktop notifications, so the
+    /// person who updates Horizon gets the value that speaks of both changes.
+    #[test]
+    fn a_store_without_the_notification_value_reads_the_default() {
+        let config =
+            Config::from_json(r#"{"features": {"sidebar_accordion": true}}"#).expect("config should deserialize");
+
+        assert_eq!(
+            config.features.notifications,
+            NotificationSetting::NeedsYouAndDone,
+            "an older store sends both notifications"
+        );
+        assert!(config.features.sidebar_accordion, "the rest of the section applies");
+    }
+
+    #[test]
+    fn the_notification_value_round_trips() {
+        for setting in NotificationSetting::VALUES {
+            let mut config = Config::default();
+            config.features.notifications = setting;
+            let document = config.to_json().expect("config should serialize");
+            let round_tripped = Config::from_json(&document).expect("serialized config should deserialize");
+            assert_eq!(round_tripped.features.notifications, setting, "{setting:?}");
+        }
+        assert_eq!(
+            Config::from_json(r#"{"features": {"notifications": "off"}}"#)
+                .expect("config should deserialize")
+                .features
+                .notifications,
+            NotificationSetting::Off
+        );
+        assert_eq!(
+            Config::from_json(r#"{"features": {"notifications": "needs_you"}}"#)
+                .expect("config should deserialize")
+                .features
+                .notifications,
+            NotificationSetting::NeedsYou
+        );
+    }
+
+    /// The section follows the person to another computer, because the value
+    /// says which change of an agent asks for a person and not which computer
+    /// shows it.
+    #[test]
+    fn the_notification_value_lives_in_a_shared_section() {
+        assert_eq!(
+            crate::settings_sync::scope("features"),
+            Some(crate::settings_sync::Scope::Shared)
+        );
     }
 
     #[test]
