@@ -150,6 +150,46 @@ fn a_section_that_this_build_does_not_know_survives_a_save() {
 }
 
 #[test]
+fn a_store_with_a_section_of_a_later_build_loads_and_keeps_no_damaged_copy() {
+    // An earlier build of Horizon wrote a section that this build does not know.
+    // The load reads the sections that it knows and treats the other row as a
+    // setting of a later build, so it is no fault and it makes no copy of the store.
+    let root = tempfile::tempdir().expect("temp dir");
+    let store = store_in(root.path());
+    let config = Config::default();
+    store.save(&config).expect("save");
+    let connection = rusqlite::Connection::open(store.path()).expect("open");
+    connection
+        .execute(
+            "INSERT INTO settings (section, format, data, updated_at) \
+             VALUES ('a_section_of_a_later_build', 'json', '{\"one\": [1, 2]}', 1)",
+            [],
+        )
+        .expect("a section of a later build");
+    drop(connection);
+
+    let loaded = store
+        .load()
+        .expect("a section that this build does not know is no fault")
+        .expect("the store holds settings");
+
+    assert_eq!(
+        loaded.config.to_json().expect("json"),
+        config.to_json().expect("json"),
+        "the sections that this build knows read as they were saved"
+    );
+    let names: Vec<String> = std::fs::read_dir(root.path())
+        .expect("read dir")
+        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["settings.sqlite".to_string()],
+        "a load of a store with a section of a later build writes no damaged copy"
+    );
+}
+
+#[test]
 fn the_store_is_one_file_at_rest() {
     let root = tempfile::tempdir().expect("temp dir");
     let store = store_in(root.path());
