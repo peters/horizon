@@ -660,3 +660,28 @@ fn the_chrome_of_a_frame_source_viewer_names_the_program_and_its_source() {
         "the text that the program gives itself is no name of the viewer: {texts:?}"
     );
 }
+
+#[test]
+fn the_counters_of_a_hidden_program_reach_an_inspection() {
+    let (ctx, device, mut state, _sent) = frame_viewer();
+    // What the last `stats` message of the program said: the age of the picture
+    // that it sent last, and the pictures that it dropped.
+    state.stats = Some(horizon_frame_source::Stats {
+        frames_sent: 5,
+        frames_dropped: 2,
+        bytes: 900,
+        width: 160,
+        height: 120,
+        age_ms: 1234,
+    });
+    // A frame that does not draw the viewer keeps the counters of the program.
+    state.begin_frame();
+    state.finish_frame(&ctx);
+    let observation = state.observation("panel".into(), &device, false, "agent");
+    assert_eq!(observation.age_ms, Some(1234), "the age of the program is its own");
+    assert_eq!(observation.frames_dropped, Some(2));
+    assert_eq!(
+        observation.diagnostics.map(|diagnostics| diagnostics.presentation),
+        Some(horizon_core::browser::manifest::device::Presentation::Hidden)
+    );
+}

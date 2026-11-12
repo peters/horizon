@@ -403,6 +403,38 @@ fn each_input_event_reaches_the_program_in_the_pixels_of_the_picture() {
 }
 
 #[test]
+fn the_age_of_the_newest_picture_grows_while_the_viewer_is_hidden() {
+    let mut viewer = Viewer::start(&["--width", "32", "--height", "16", "--report", "{folder}/report.json"]);
+    viewer.wait_for_picture();
+    viewer.session.set_visible(false);
+    // The program sends its counters each second and no picture while the viewer
+    // is hidden, so the age of the picture that it sent last grows.
+    let deadline = Instant::now() + PATIENCE;
+    let mut ages: Vec<u64> = Vec::new();
+    while ages.len() < 2 {
+        // The session keeps the counters of the last message, so only a changed
+        // number is a new counter of the program.
+        if let Some(stats) = viewer.session.take_updates().stats
+            && ages.last() != Some(&stats.age_ms)
+        {
+            ages.push(stats.age_ms);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the counters of a hidden viewer come: {ages:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        ages[1] > ages[0],
+        "the time from the capture of the last picture to now: {ages:?}"
+    );
+    let pid = viewer.child_pid();
+    viewer.children.push(pid);
+    viewer.end();
+}
+
+#[test]
 fn the_program_is_asked_for_the_size_of_the_viewer_once_it_was_stable() {
     let mut viewer = Viewer::start(&[
         "--width",

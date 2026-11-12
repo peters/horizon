@@ -83,8 +83,10 @@ program. Every evidence member means the same for both kinds:
 `connection`, `image_received`, `image_displayed`, `frame_sequence`,
 `received_frame_sequence`, `server.desktop_size` and `diagnostics`. A frame
 source adds `frames_dropped` and `age_ms`, from the program's last `stats`
-message, so a still picture is not a stalled one. `screenshot` and `video` work
-for both kinds.
+message: `age_ms` is the time from the capture of the picture that the program
+sent last to now, so a still picture is not a stalled one and the number grows
+while a hidden viewer receives no picture. `screenshot` and `video` work for
+both kinds.
 
 A frame source sends a picture only while its viewer is drawn. A viewer that is
 hidden, off canvas or behind a fullscreen panel still receives its counters and

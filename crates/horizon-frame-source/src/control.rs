@@ -71,6 +71,9 @@ pub struct Stats {
     pub bytes: u64,
     pub width: u32,
     pub height: u32,
+    /// The time from the capture of the newest picture that the program sent to the
+    /// moment of this message, in milliseconds. A hidden viewer receives no picture,
+    /// so this number grows while it is hidden, and it is no clock of Horizon.
     pub age_ms: u64,
 }
 

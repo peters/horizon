@@ -8,6 +8,7 @@ for the three streams of the contract.
 
 import json
 import os
+import select
 import socket
 import struct
 import sys
@@ -105,6 +106,12 @@ class StandinRun:
 
     def next_message(self):
         return read_message(self.stdout)
+
+    def next_message_within(self, seconds=5.0):
+        ready, _, _ = select.select([self.stdout], [], [], seconds)
+        if not ready:
+            return None
+        return self.next_message()
 
     def pictures(self, count):
         return [read_picture(self.reader) for _ in range(count)]
@@ -270,6 +277,26 @@ class FrameSourceStandinTests(unittest.TestCase):
         self.assertEqual(stats['width'], 32)
         run.send({'type': 'view', 'visible': True})
         self.assertEqual(run.next_message()['phase'], 'live')
+
+    def test_the_age_of_the_newest_picture_grows_while_the_viewer_is_hidden(self):
+        run = self.start('--width', '32', '--height', '16', '--rate', '50')
+        run.next_message()
+        run.next_message()
+        run.pictures(1)
+        run.send({'type': 'view', 'visible': False})
+        self.assertEqual(run.next_message_within()['phase'], 'hidden')
+        ages = []
+        while len(ages) < 2:
+            message_of_run = run.next_message_within()
+            self.assertIsNotNone(message_of_run, 'the counters of a hidden viewer come each second')
+            if message_of_run['type'] == 'stats':
+                ages.append(message_of_run['age_ms'])
+        self.assertGreater(
+            ages[1],
+            ages[0],
+            'no picture comes while the viewer is hidden, so its age grows',
+        )
+        self.assertGreaterEqual(ages[1], 900, 'the second counter is about a second older')
 
     def test_input_messages_are_written_to_the_file_of_the_run(self):
         with tempfile.TemporaryDirectory() as directory:

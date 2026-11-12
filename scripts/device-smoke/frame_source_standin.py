@@ -85,6 +85,10 @@ class State:
         self.frames_sent = 0
         self.frames_dropped = 0
         self.bytes = 0
+        # The time of the capture of the last picture this program sent, in
+        # microseconds since 1970. The `stats` message reports its age, so a viewer
+        # that receives no picture (a hidden one) reads a growing number.
+        self.last_captured_micros = None
         self.visible = True
         self.last_stats = time.monotonic()
         self.lock = threading.Lock()
@@ -119,7 +123,10 @@ def picture(state):
                 if pixel == '1' and x < width and yy < height:
                     y[yy * width + x] = 235
     uv = bytearray([128]) * (width * height // 2)
-    header = MAGIC + struct.pack('<QQII', sequence, time.time_ns() // 1000, width, height)
+    captured_micros = time.time_ns() // 1000
+    with state.lock:
+        state.last_captured_micros = captured_micros
+    header = MAGIC + struct.pack('<QQII', sequence, captured_micros, width, height)
     return header, bytes(y), bytes(uv)
 
 
@@ -158,6 +165,13 @@ def send_stats(state, out):
     state.last_stats = now
     with state.lock:
         width, height = state.width, state.height
+    # The age of the newest picture, from its own capture to now: a viewer that
+    # receives no picture reads a number that grows.
+    with state.lock:
+        last_captured_micros = state.last_captured_micros
+    age_ms = 0
+    if last_captured_micros is not None:
+        age_ms = max(0, (time.time_ns() // 1000 - last_captured_micros) // 1000)
     send_message(out, {
         'type': 'stats',
         'frames_sent': state.frames_sent,
@@ -165,7 +179,7 @@ def send_stats(state, out):
         'bytes': state.bytes,
         'width': width,
         'height': height,
-        'age_ms': 0,
+        'age_ms': age_ms,
     })
 
 
