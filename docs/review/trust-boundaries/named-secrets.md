@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/src/remote_browser_credential/keyring_import/**,crates/horizon-core/src/remote_browser_credential/workbench.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py"
+applyTo: "crates/horizon-core/src/named_secrets/**,crates/horizon-core/src/secret_store/**,crates/horizon-core/src/config/secrets.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/src/remote_browser_credential/keyring_import/**,crates/horizon-core/src/remote_browser_credential/workbench.rs,crates/horizon-ui/src/app/settings/secrets.rs,crates/horizon-ui/src/app/settings/remote_browsers.rs,crates/horizon-ui/src/app/server_sync.rs,crates/horizon-sync/src/supervisor/secrets.rs,scripts/device-smoke/serve.py,assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md,assets/plugins/codex/skills/horizon-machines/references/tailscale.md"
 ---
 
 # Trust boundary of the named secrets
@@ -137,6 +137,65 @@ What the import does not guarantee:
   adds no protection to the programs of the system.
 - **An import writes every row at once.** A refusal of the store in the middle of
   an import keeps the rows that were written before it; it never removes a row.
+
+## An OAuth client of a Tailscale network
+
+A person can store the OAuth client of a Tailscale network as three named
+secrets, and an agent then joins a rented machine to that network. The recipe is
+[`assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md`](../../../assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md),
+and its twin in the other bundle holds the same bytes. The names and the values
+are those of the section above; this part states what the recipe adds.
+
+- **The client secret is used on this computer only.** The agent makes one API
+token from it with `curl` here, and the token lives one hour. The secret and the
+token reach no argument of a process, because a process of the same user reads
+such an argument: the value goes to the standard input of `curl`
+(`--data-urlencode name@-`, `-H @-`), and a `curl` that does not read it there
+stops the recipe.
+- **One auth key leaves this computer, and it leaves for one use.** The key
+travels in the standard input of `ssh` to a file under `/run` of the machine that
+only root reads. `tailscale up --auth-key=file:<path>` reads the file, and the
+same command removes it, also when that call fails. The key is not reusable, it
+is not ephemeral, it is preauthorized, it carries one tag, and it expires in ten
+minutes.
+- **No secret, token or key reaches a card, a log or a file of this computer.**
+The agent reads the token and the key into a shell variable of its own panel, and
+it writes the key into the standard input of the `ssh` that it starts. A refusal
+names the code of the API and the tag, and never a request body or a header.
+- **The person does every step that is not on the rented machine.** A step on a
+home computer of the network or in the access controls is a list on the card with
+a `Done` button, and the agent goes on only after the proof command answers.
+- **A `ProxyJump` line of the person's ssh config reaches a machine-key
+terminal.** Horizon passes no `-F`, so `ssh` reads that file for the destination.
+The file belongs to the person, and this boundary does not cover a value that it
+holds.
+
+What a compromised rented machine can and cannot do:
+
+- **After the key is used, the key is worth nothing.** It is single-use and it
+expires in ten minutes. A machine that reads its own `/run` file after the login
+holds a spent key and cannot make another one, because it never held the client
+secret and never sees the token.
+- **Before the key is used, it admits one device of one tag.** A machine that
+reads the file first can use the key elsewhere, and the key then admits one
+device to the network with the tag of that network. The access controls of the
+tag bound what that device reaches, the person removes the row with the admin
+console or the same API, and the key expires in ten minutes in any case.
+- **It can neither list nor remove a device, and it reads no token.** Those calls
+happen on this computer, with a token that the machine never holds.
+
+What this part does not cover:
+
+- **The agent panel holds the client.** The scopes `auth_keys` and `devices:core`
+of the whole network are in the environment of the panel, so a tool that the
+agent starts can make a key for any device of that tag while the panel runs. Give
+the client the smallest tag that covers the machines, and rotate the secret when
+a panel held one that it should not have had.
+- **A machine that joins takes a tag and not the login of the person.** Every
+device of the tag is one trust group, and the access controls of the network are
+the only rule that bounds it.
+- **The network is outside this boundary.** Tailscale encrypts the wire, approves
+the device and holds the access controls. Horizon states nothing about those.
 
 ## The secrets file of this computer
 

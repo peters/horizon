@@ -4,7 +4,7 @@ feature: horizon-machines skill: rent, show and delete a cloud machine
 platforms: [linux]
 cost: rents compute
 destructive: yes
-secrets: provider login of the person (`hcloud` context, `az login`, `gcloud auth login`, `RUNPOD_API_KEY`, AWS profile)
+secrets: provider login of the person (`hcloud` context, `az login`, `gcloud auth login`, `RUNPOD_API_KEY`, AWS profile), and for the network tasks the OAuth client of a Tailscale network (`TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET`, `TS_<NET>_TAG`)
 owner: peters
 ---
 
@@ -15,7 +15,10 @@ owner: peters
 This procedure tests the bundled `horizon-machines` skill. It proves that an
 agent shows one overview card of every rented machine, rents one machine per
 provider, waits for SSH with the Horizon machine key, checks tmux, shows a
-card, opens a terminal with Connect, and deletes the machine with its key.
+card, opens a terminal with Connect, and deletes the machine with its key. It
+also proves that an agent joins a machine to a Tailscale network of the person,
+changes its record to the network name, closes port 22, and removes the device
+of the network at the delete.
 
 ## 2. Applicability
 
@@ -24,6 +27,9 @@ card, opens a terminal with Connect, and deletes the machine with its key.
 - Each task rents one small machine. Run only the tasks of the providers that
   the person can pay for.
 - The overview task rents two more machines at one provider.
+- A task of a Tailscale network needs one network whose OAuth client is stored as
+  three named secrets of the test Horizon home, and one computer of the person
+  that is a member of that network.
 - This procedure does not test GPU machines, spot machines, prices or a
   provider whose CLI is not signed in. It does not test the `and N more` row of
   an overview with more than 32 machines.
@@ -42,6 +48,16 @@ card, opens a terminal with Connect, and deletes the machine with its key.
 > a name or a tag of a machine that another person owns. Touch no resource
 > without both tags `horizon-managed=true` and `horizon-card=<name>`.
 
+> **CAUTION: THE NETWORK TASK CLOSES PORT 22 OF THE MACHINE TO THE INTERNET.**
+> The login of that machine then answers only over the network, so a broken
+> network leaves no way in. Run the task on a test machine, and prove the login
+> over the network before the port closes.
+
+> **CAUTION: A TAILSCALE DEVICE COUNTS IN THE NETWORK OF THE PERSON.** The
+> machine of the network task takes a name in that network, and the test removes
+> the device at its end. Use a test name, and remove the device also when a step
+> fails.
+
 ## 4. Equipment and preconditions
 
 - A frozen candidate `horizon` binary and its SHA-256.
@@ -53,6 +69,12 @@ card, opens a terminal with Connect, and deletes the machine with its key.
 - A provider account that holds no machine with the tag `horizon-managed=true`
   before M0.
 - A test machine name, for example `build-1`, and the test date.
+- For M6 and M7: one Tailscale network whose OAuth client is stored as the three
+  named secrets `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and
+  `TS_<NET>_TAG` of the test home, and a computer that is a member of that
+  network. Read
+  [the tailscale reference](../../../assets/plugins/codex/skills/horizon-machines/references/tailscale.md)
+  first.
 
 ## 5. Setup
 
@@ -257,6 +279,80 @@ RunPod and AWS. Read the reference of the provider first.
 
    Result: The agent refuses and says that a card shows no credential.
 
+### 6.7 M6 — Join a Tailscale network and close port 22
+
+Read [the tailscale reference](../../../assets/plugins/codex/skills/horizon-machines/references/tailscale.md)
+before this task. Do it on a fresh machine of M1, at Hetzner or at another
+provider whose firewall this run can change.
+
+1. Ask the agent: `Put build-1 on my home network.`
+
+   > **CAUTION: THIS STEP RENTS ONE MACHINE AND BILLS IT UNTIL THE DELETE.**
+   > Continue only when the person accepts the cost, and do the delete task M7
+   > in the same run.
+
+   Result: The card says that the machine joins the network, and it holds a
+   `progress` component while the agent installs the client.
+
+2. Read the card after the join.
+
+   Result: The card holds the rows `Network`, `Network name` and
+   `Internet SSH`. `Network name` is the name of the network, or its `100.x`
+   address when MagicDNS is off. `Internet SSH` reads `open`.
+
+3. Ask the agent: `Which network did the machine join, and how did the key reach
+   it?`
+
+   Result: The answer names the network of the three named secrets, and it says
+   that the key travelled in the standard input of `ssh` to a file under `/run`
+   of the machine, that `tailscale up` read it with `--auth-key=file:<path>`, and
+   that the same command removed the file. The answer holds no key and no client
+   secret.
+
+4. Ask the agent to show the fact that proves the login over the network.
+
+   Result: The agent names the `ssh` command with the machine key and the
+   network name, and its exit code 0.
+
+5. Ask the agent to close the port.
+
+   > **CAUTION: THIS STEP CLOSES PORT 22 OF THE MACHINE TO THE INTERNET.**
+   > Continue only when the proof of step 4 answered, and only on the test
+   > machine.
+
+   Result: `Internet SSH` reads `closed`, and the agent states the command of
+   the provider that removed the rule.
+
+6. Look at the Machines section of the sidebar and press the row of `build-1`.
+
+   Result: A terminal opens on the machine over the network, with the tmux
+   session `build-1`, and its public address is no longer used.
+
+### 6.8 M7 — Delete a machine of a network
+
+Use the machine of M6.
+
+1. Read the card of `build-1`, and its machine name.
+
+   > **CAUTION: THE NEXT STEP DELETES THE MACHINE AND ITS DISK.** Confirm only
+   > when the card names the test machine.
+
+2. Press `Delete`, then press `Delete it`.
+
+   Result: The agent logs the machine out of the network, removes its device
+   through the API of the network with the delete call of the reference, and
+   only then deletes the machine at the provider. The badge is `Deleted`.
+
+3. Ask the agent: `Is the device of build-1 still in my home network?`
+
+   Result: The agent reads the devices of the network of that hostname and tag
+   again, and the answer holds no row. The device list of the network holds no
+   row of `build-1`.
+
+4. Ask the agent: `What is rented?`
+
+   Result: The overview holds no row of `build-1`.
+
 ## 7. Pass criteria
 
 - The skill shows one overview card of every rented machine, with one row for
@@ -272,6 +368,13 @@ RunPod and AWS. Read the reference of the provider first.
   missing. At Hetzner the check answers `/usr/bin/tmux` and no install runs.
 - The delete asks for confirmation, removes the machine and its resources, and
   proves the empty result before it removes the machine key.
+- The network task joins a machine with one auth key that arrives on standard
+  input, and no argument, environment variable, card or log holds that key or the
+  client secret of the network.
+- The login over the network answers before port 22 closes, and the card shows
+  `Internet SSH: closed` after the provider removed the rule.
+- The delete task removes the device from the network, and the device list of
+  that network holds no row of the machine name.
 - No card, log or answer holds a token, a password or the text of a private key.
 
 ## 8. Cleanup
@@ -280,11 +383,17 @@ RunPod and AWS. Read the reference of the provider first.
 
    Result: The find-again command of each provider prints no data row.
 
-2. Ask the agent: `Show my machines.`
+2. Ask the agent whether the device of each machine of a network is still in
+   that network.
+
+   Result: The device list of the network, for that hostname and tag, holds no
+   row.
+
+3. Ask the agent: `Show my machines.`
 
    Result: The overview shows the subtitle `Nothing is rented`.
 
-3. Close each terminal panel and each card of the test, and stop the fixture.
+4. Close each terminal panel and each card of the test, and stop the fixture.
 
    Result: The workspace holds no panel of the test, and the fixture processes
    are gone.
