@@ -100,12 +100,38 @@ impl Take {
         let program = self.script(
             name,
             &format!(
-                "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\ntrap 'exit 0' INT\nwhile :; do sleep 0.02; done\n",
+                "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\ntrap 'exit 0' INT TERM\nwhile :; do sleep 0.02; done\n",
                 prepared.display(),
                 pid.display()
             ),
         );
         CommandLine::parse(&format!("{program} {{file}}")).expect("a recorder line")
+    }
+
+    /// A recorder of `name` that copies the prepared file, writes its own pid, then
+    /// keeps running, and that entered this process with the signals of `ignored` set
+    /// to "ignore".
+    ///
+    /// The ignore is set in a wrapper that [`exec`](std::os::unix::process::CommandExt::exec)s
+    /// the script, so the test states the disposition of a background job of a
+    /// non-interactive shell (`&`, `nohup`, a launcher) itself: a shell that inherits
+    /// an ignored signal cannot trap it, so a script that relies on the disposition
+    /// it inherits says nothing about the same test in the foreground. `trap` of the
+    /// script then holds for the signals that the wrapper left alone.
+    fn ignoring(&self, name: &str, ignored: &str, prepared: &Path, traps: &str) -> CommandLine {
+        let pid = self.pid_file(name);
+        let program = self.script(
+            name,
+            &format!(
+                "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\n{traps}\nwhile :; do sleep 0.02; done\n",
+                prepared.display(),
+                pid.display()
+            ),
+        );
+        CommandLine::parse(&format!(
+            "sh -c 'trap \"\" {ignored}; exec \"$0\" \"$@\"' '{program}' {{file}}"
+        ))
+        .expect("a recorder line")
     }
 
     /// Wait until `ready` answers, and report what the worker said when it does
@@ -380,31 +406,55 @@ fn a_recorder_that_ends_early_answers_its_last_line() {
 }
 
 #[test]
-fn a_recorder_that_ignores_the_signal_is_killed_by_its_own_pid() {
+fn a_recorder_that_ignores_the_interrupt_signal_is_stopped_by_the_termination_signal() {
     let mut take = Take::new(Arc::new(()));
     let bystander = take.bystander();
     let prepared = take.prepared();
-    let pid_file = take.pid_file("stubborn");
-    let program = take.script(
-        "stubborn",
-        &format!(
-            "#!/bin/sh\ncp '{}' \"$1\"\nprintf '%s\\n' \"$$\" > '{}'\ntrap '' INT\nwhile :; do sleep 0.02; done\n",
-            prepared.display(),
-            pid_file.display()
-        ),
-    );
-    let recorder = CommandLine::parse(&format!("{program} {{file}}")).expect("a line");
+    let terminated = take.home.path().join("terminated.txt");
+    let traps = format!("trap 'printf term > \"{}\"; exit 0' TERM", terminated.display());
+    let recorder = take.ignoring("signalled", "INT", &prepared, &traps);
     let (transcriber, _marker) = transcriber_script(&take, "kept");
     take.input
         .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
-    take.wait_for("the stubborn recorder", || pid_file.exists() && take.file_bytes() > 0);
+    take.wait_for_recorder("signalled");
+    let recorder_pid = pid_of(&take, "signalled");
+    take.clock.advance(Duration::from_secs(1));
+    take.input.end();
+    // The recorder cannot trap `SIGINT`, and the stop steps to `SIGTERM` inside its
+    // own bound: the take is transcribed and no kill was needed.
+    let events = take.wait_for_event(&["writing", "text"]);
+    assert!(
+        matches!(events[1], SpeechEventKind::Text(ref text) if text == "kept"),
+        "{events:?}"
+    );
+    take.wait_for("the end of the recorder", || !alive(recorder_pid));
+    assert!(
+        terminated.exists(),
+        "the recorder ended on the termination signal and not on the kill of the bound"
+    );
+    assert!(
+        alive(bystander),
+        "the signal of the stop reached a program of this computer that the take did not start"
+    );
+}
+
+#[test]
+fn a_recorder_that_ignores_both_signals_ends_by_the_kill_of_the_bound() {
+    let mut take = Take::new(Arc::new(()));
+    let bystander = take.bystander();
+    let prepared = take.prepared();
+    let recorder = take.ignoring("stubborn", "INT TERM", &prepared, "");
+    let (transcriber, _marker) = transcriber_script(&take, "kept");
+    take.input
+        .begin(plan(recorder, Transcriber::Command(transcriber)), TARGET);
+    take.wait_for_recorder("stubborn");
     let recorder_pid = pid_of(&take, "stubborn");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
-    // The recorder ignores SIGINT, so the stop of the take waits its bound of two
-    // seconds and kills that one process id. The worker sets the deadline of the stop
-    // from the instant of its own signal, so the test moves the clock in steps and the
-    // worker reads each one.
+    // The recorder ignores both signals, so the stop of the take waits its bound of
+    // two seconds and kills that one process id. The worker sets the deadline of the
+    // stop from the instant of its own signal, so the test moves the clock in steps
+    // and the worker reads each one.
     take.wait_for_event_on(Some(POLL), &["writing", "text"]);
     take.wait_for("the end of the stubborn recorder", || !alive(recorder_pid));
     assert!(
@@ -442,7 +492,7 @@ fn a_recording_above_the_bound_of_the_file_is_refused() {
     );
     let program = take.script(
         "rec",
-        "#!/bin/sh\nhead -c 4096 /dev/zero > \"$1\"\ntrap 'exit 0' INT\nwhile :; do sleep 0.02; done\n",
+        "#!/bin/sh\nhead -c 4096 /dev/zero > \"$1\"\ntrap 'exit 0' INT TERM\nwhile :; do sleep 0.02; done\n",
     );
     let recorder = CommandLine::parse(&format!("{program} {{file}}")).expect("a line");
     let (transcriber, marker) = transcriber_script(&take, "never");
@@ -469,7 +519,7 @@ fn a_take_of_no_byte_is_dropped() {
     let program = take.script(
         "rec",
         &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\ntrap 'exit 0' INT\nwhile :; do sleep 0.02; done\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\ntrap 'exit 0' INT TERM\nwhile :; do sleep 0.02; done\n",
             started.display()
         ),
     );

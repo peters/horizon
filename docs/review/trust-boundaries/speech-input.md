@@ -92,9 +92,17 @@ What the clean does not guarantee:
   no named secret. A value of a named secret is never in the environment of a
   program that Horizon starts for speech input.
 - **The recorder is the exact child.** Horizon starts one program, remembers its
-  process id, sends `SIGINT` to that id, waits up to two seconds, and then sends
+  process id, and sends `SIGINT` to that id. When the child still runs after 0.3
+  seconds Horizon sends `SIGTERM` to that id, and when two seconds pass it sends
   `SIGKILL` to that id. No signal goes to a process group and no name is matched,
   so no other program of this computer can be touched.
+- **The stop does not depend on one signal.** A program that a script, `nohup` or
+  a launcher started in the background inherits `SIGINT` set to "ignore", keeps
+  that across `exec`, and a non-interactive shell cannot trap it. `SIGTERM` is not
+  ignored in that situation, so the second signal in the step reaches a recorder
+  that the first one never reached. Every recorder line of the documents
+  (`pw-record`, `arecord`, `ffmpeg`, `rec`) closes the header of its file on
+  `SIGTERM`, so the take keeps a length and the stop needs no kill.
 
 What the guarantees do not cover:
 

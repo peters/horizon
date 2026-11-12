@@ -15,8 +15,12 @@ that had the focus. The trust boundary is
 
 1. The hotkey goes down. Horizon starts the recorder as its exact child, and the
    recording goes to `<Horizon home>/speech/take-<random>.wav`.
-2. The hotkey comes up. Horizon sends `SIGINT` to that exact child, waits two
-   seconds and then kills it. `Escape` while the key is down drops the take.
+2. The hotkey comes up. Horizon sends `SIGINT` to that exact child. When the
+   child still runs after 0.3 seconds, Horizon sends `SIGTERM` to that id, and it
+   kills the id when two seconds pass. `SIGTERM` is the signal that ends a
+   recorder that inherited "ignore `SIGINT`" from a background shell, `nohup` or a
+   launcher, and every recorder line below closes its file on it. `Escape` while
+   the key is down drops the take.
 3. A take shorter than 0.3 seconds, a file with no byte, a file above 25 MB and a
    take that reaches 120 seconds at the 120th second are handled as the code
    says: a short or empty take is dropped, a large file is refused, and a long
@@ -42,6 +46,13 @@ the program itself and never a shell, so a quoted argument stays one argument.
 | Linux with PipeWire (the default) | `pw-record --rate 16000 --channels 1 --format s16 {file}` |
 | macOS with ffmpeg | `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}` |
 | macOS with sox | `rec -c 1 -r 16000 {file}` |
+
+`pw-record`, `arecord` (`arecord -f S16_LE -c 1 -r 16000 {file}`), `ffmpeg` and
+`rec` write the length of the recording into the header of the file when they
+end, on `SIGINT` and on `SIGTERM`. A take whose recorder had to be killed holds a
+header with the length 0 or `0xFFFFFFFF`: Horizon writes the two length fields of
+that canonical header from the size of the file before it sends the take, so the
+recording still reaches the service.
 
 macOS has no recorder command of the system, so the line is empty there until a
 person installs one and writes it in **Settings** › **Speech**. A program that no

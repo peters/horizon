@@ -1,10 +1,10 @@
 //! The clock of one take.
 //!
 //! Every bound of speech input runs on a clock that a test replaces: a take that
-//! stops by itself after 120 seconds and a recorder that ignores `SIGINT` and is
-//! killed after 2 seconds are then one test that reaches the bound of the code and
-//! no bound of the machine. The code path of the bound is the one that a person
-//! reaches.
+//! stops by itself after 120 seconds and a recorder that ignores `SIGINT` and
+//! `SIGTERM` and is killed after 2 seconds are then one test that reaches the bound
+//! of the code and no bound of the machine. The code path of the bound is the one
+//! that a person reaches.
 //!
 //! The clock of a test never moves by itself: only the test moves it, and the test
 //! moves it only after the real program of the take has shown that it runs. A bound
@@ -64,8 +64,9 @@ impl Clock for SystemClock {
 /// keeps this clock where it is until the real program of the take has shown that it
 /// runs, and then moves the clock by the amount that the test wants. The worker
 /// reads the bound on its own schedule, so a bound that the worker computes from an
-/// instant of its own — the two seconds of a stop — is reached in steps: the test
-/// that [`Clock::sleep`] returns from moves the clock once more.
+/// instant of its own — the two seconds of a stop, or the step of 0.3 seconds before
+/// `SIGTERM` — is reached in steps: the test that [`Clock::sleep`] returns from
+/// moves the clock once more.
 ///
 /// Nothing but a step of a test moves the time of this clock, so a bound of a take
 /// can never be reached before a program of a test has started.

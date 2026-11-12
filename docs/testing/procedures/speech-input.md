@@ -306,12 +306,81 @@ one request header and no file of the run.
    that has the focus there. The panel gains the text of the sentence with no
    line break, and the panel of the main window gains no text.
 
+### 6.12 SI-12 — A recorder that ignores the interrupt signal is stopped
+
+> **CAUTION:** RUN THIS TASK WITH THE STAND-IN RECORDER OF THE SETUP. Do not start
+> a recorder of this computer, because a recorder opens the microphone.
+
+1. Open **Settings** › **Speech**, and set the recorder line to a wrapper that
+   ignores the interrupt signal before it starts the stand-in recorder of the
+   setup:
+
+   ```sh
+   sh -c 'trap "" INT; exec "$0" "$@"' /usr/bin/python3 -B \
+     scripts/device-smoke/speech_standin_recorder.py {file} --source <evidence>/take.wav
+   ```
+
+2. Press and hold `F9` for two seconds, then release it.
+
+   Result: The pill says `Listening 0:01`, then `Writing…`, then it goes. The
+   panel gains the text `<text>` in less than one second after the release: the
+   stop sent `SIGTERM` after 0.3 seconds, so the recorder ended without the two
+   second kill of the bound.
+
+3. Read the record of the stand-in service as in SI-1 step 3.
+
+   Result: The record describes the request of this take, so the take reached the
+   service with the bytes of a closed recording.
+
+### 6.13 SI-13 — The tests of a take pass as a background job
+
+A person starts Horizon from a script with `&`, from `nohup`, or from a
+launcher, and such a program inherits `SIGINT` and `SIGQUIT` set to "ignore". The
+tests below prove that the take of this procedure passes in that situation too.
+
+1. Build the test binary of `horizon-core`, and read its path:
+
+   ```sh
+   cargo test -p horizon-core --lib --no-run --message-format=json \
+     | python3 -c 'import json,sys
+   for line in sys.stdin:
+       event = json.loads(line)
+       if event.get("reason") == "compiler-artifact" and event.get("executable"):
+           print(event["executable"])'
+   ```
+
+   Result: The last line is a path, such as
+   `<target>/debug/deps/horizon_core-<hash>`.
+
+2. Run the module of a take as a background job of a non-interactive shell:
+
+   ```sh
+   sh -c '"$0" speech::take > "$1" 2>&1 & wait' <binary> <evidence>/take-tests.log
+   ```
+
+   Result: The last line of the log says `test result: ok.` and names a count of
+   passed tests with `0 failed`, and the command exits with the code 0. A failed
+   line names the test and the events that the worker gave.
+
+3. Read the log for a failure:
+
+   ```sh
+   rg "test result|^    speech::" <evidence>/take-tests.log
+   ```
+
+   Result: Every test of the module passed, including the two stand-ins that
+   ignore `SIGINT` and the one that ignores `SIGINT` and `SIGTERM`.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
 - Escape, a hotkey with no terminal, a recorder that is not installed and a
   refused key each leave one sentence and one state.
 - No file of a take stays after a success, an error or a cancel.
+- A recorder that ignores the interrupt signal ends on the termination signal, and
+  its take reaches the service.
+- Every test of the module of a take passes as a background job of a
+  non-interactive shell.
 - The marker value is in the secrets file and in no log file, no settings file
   and no file of a take.
 

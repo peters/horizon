@@ -10,9 +10,12 @@
 //!    program that no folder of the environment holds is one sentence for the
 //!    person, and no take starts.
 //! 3. Read the key events and the bound of 120 seconds while the child records.
-//! 4. Stop the child with `SIGINT` to its own process id, wait up to 2 seconds and
-//!    then kill that id. A take shorter than 0.3 seconds, or a file with no byte,
-//!    is dropped and no request runs.
+//! 4. Stop the child with `SIGINT` to its own process id, and with `SIGTERM` to
+//!    that id when it still runs after 0.3 seconds: a recorder that this process
+//!    started from a script with `&`, from `nohup`, or from a launcher that ignores
+//!    the interrupt signal keeps that disposition across `exec`, so `SIGINT` alone
+//!    never reaches it. After 2 seconds the id is killed. A take shorter than 0.3
+//!    seconds, or a file with no byte, is dropped and no request runs.
 //! 5. Transcribe with a bound of 30 seconds, through a service or through one
 //!    command of the settings. The file is deleted after every outcome.
 //!
@@ -53,6 +56,16 @@ pub const TAKE_FOLDER: &str = "speech";
 /// The most time that the stop of a recorder is given before it is killed.
 pub const STOP_WAIT: Duration = Duration::from_secs(2);
 
+/// How long the stop of a recorder waits after `SIGINT` before it sends
+/// `SIGTERM`. The wait runs on the clock of this process, so a test reaches it by
+/// waiting and never by moving its own clock.
+///
+/// A recorder that inherited "ignore `SIGINT`" — the disposition of a background
+/// job of a non-interactive shell, of `nohup`, or of a launcher — cannot trap the
+/// signal, so `SIGINT` is never seen by it. `SIGTERM` is not ignored in that
+/// situation, and every recorder that the settings name closes its file on it.
+pub const STOP_STEP: Duration = Duration::from_millis(300);
+
 /// The most time that one take records.
 pub const MAX_TAKE: Duration = Duration::from_secs(120);
 
@@ -91,6 +104,7 @@ pub struct TakePlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TakeBounds {
     pub stop_wait: Duration,
+    pub stop_step: Duration,
     pub max_take: Duration,
     pub min_take: Duration,
     pub transcribe: Duration,
@@ -102,6 +116,7 @@ impl Default for TakeBounds {
     fn default() -> Self {
         Self {
             stop_wait: STOP_WAIT,
+            stop_step: STOP_STEP,
             max_take: MAX_TAKE,
             min_take: MIN_TAKE,
             transcribe: TRANSCRIBE_BOUND,
@@ -413,21 +428,33 @@ impl Worker {
         }
     }
 
-    /// Stop the recorder: `SIGINT` to its own process id, then `SIGKILL` when its
-    /// bound passes.
+    /// Stop the recorder: `SIGINT` to its own process id, `SIGTERM` to that id
+    /// when it still runs after [`STOP_STEP`], and `SIGKILL` when its bound passes.
+    ///
+    /// Each signal goes to the exact process id of the recorder and to no group. A
+    /// recorder that ignores the interrupt signal ends on the termination signal;
+    /// one that ignores both ends by the kill, so the stop is never longer than
+    /// [`STOP_WAIT`].
+    ///
+    /// The step before the termination signal runs on the clock of this process and
+    /// not on the clock of a take: it is the time that a real recorder is given to
+    /// close its file after `SIGINT`, so a test reaches it by waiting and never by
+    /// moving its own clock. The two bounds of the stop stay on the clock of the
+    /// take.
     fn stop(&self, child: &mut StartedProgram) {
         if child.try_wait().is_some() {
             return;
         }
+        let now = self.settings.clock.now_ms();
+        // A step that is longer than the whole stop would keep the termination
+        // signal out of it, so the step never passes the bound.
+        let step_at = std::time::Instant::now() + self.settings.bounds.stop_step.min(self.settings.bounds.stop_wait);
+        let deadline = now.saturating_add(millis(self.settings.bounds.stop_wait));
         if !child.signal(Signal::INT) {
             child.kill();
             return;
         }
-        let deadline = self
-            .settings
-            .clock
-            .now_ms()
-            .saturating_add(millis(self.settings.bounds.stop_wait));
+        let mut asked_to_terminate = false;
         loop {
             if child.try_wait().is_some() {
                 return;
@@ -435,9 +462,15 @@ impl Worker {
             if self.settings.clock.now_ms() >= deadline {
                 break;
             }
+            if !asked_to_terminate && std::time::Instant::now() >= step_at {
+                asked_to_terminate = true;
+                if !child.signal(Signal::TERM) {
+                    break;
+                }
+            }
             self.settings.clock.sleep(self.settings.bounds.poll);
         }
-        // The recorder ignored the signal, so this id alone is killed and reaped.
+        // The recorder ignored both signals, so this id alone is killed and reaped.
         child.kill();
     }
 

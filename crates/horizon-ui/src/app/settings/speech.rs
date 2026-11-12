@@ -55,7 +55,8 @@ pub(super) fn render(
             ui,
             "Hold the hotkey to record. A take goes to the service of the endpoint, or to the command that prints \
              the text, and no speech engine runs in Horizon. Horizon runs the recorder of this computer and stops \
-             it with SIGINT. Escape cancels a take that records.",
+             it with SIGINT, and with SIGTERM when the recorder does not end on that. Escape cancels a take that \
+             records.",
         );
         ui.add_space(8.0);
         outcome.changed |= render_hotkey(ui, config);
