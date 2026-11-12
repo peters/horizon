@@ -673,6 +673,7 @@ impl MachineStore for SyncedMachineStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::os::unix::fs::PermissionsExt as _;
 
     use crate::client::Client;
@@ -715,6 +716,37 @@ mod tests {
         handle.push_notice("the server kept its value of shop".to_owned());
         assert_eq!(handle.take_notices().len(), 2);
         assert!(handle.take_notices().is_empty(), "a taken line is not shown twice");
+    }
+
+    #[test]
+    fn a_list_that_a_save_keeps_writes_no_intent() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let keys = horizon_core::MachineKeys::new(directory.path().join("keys"));
+        let secrets = keys_of_a_test(keys);
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", directory.path(), secrets)
+                .expect("the settings of the link");
+        config.program = "/bin/true".to_owned();
+        let handle = SyncHandle::open(&config, Arc::new(|| {})).expect("the handle of a link");
+        let store = SyncedMachineStore::new(handle.clone());
+        let records = vec![horizon_core::Machine {
+            name: "build-1".to_owned(),
+            host: "203.0.113.10".to_owned(),
+            added_at_millis: 1,
+            ..horizon_core::Machine::default()
+        }];
+
+        // One change of the sidebar writes one intent, and the next save of the
+        // list that this computer holds writes none: the sidebar writes the whole
+        // list, so a save that keeps it is not a change that waits for a server.
+        store.save(&records).expect("the first change");
+        assert_eq!(handle.pending(), BTreeSet::from(["build-1".to_string()]));
+        store.save(&records).expect("the same list again");
+        assert_eq!(
+            handle.pending(),
+            BTreeSet::from(["build-1".to_string()]),
+            "a save that keeps the list counts no second change"
+        );
     }
 
     #[test]
