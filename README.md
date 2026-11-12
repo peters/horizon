@@ -148,6 +148,8 @@ Group related panels into **color-coded workspaces**. Auto-arrange with rows, co
 ### AI Agent Panels
 First-class **Grok**, **Claude Code**, **Codex**, **OpenCode**, **Gemini CLI**, **KiloCode**, and **Pi** integration. Session persistence and resume work where the CLI supports it. Title bars show a **working** indicator and, when a session is bound, its id.
 
+An agent can open a panel of one of your presets in the folder of its task, so each task runs in its own git worktree beside the agent. The bundled `horizon-worktree` skill draws one card for the worktrees of a repository, with buttons to look at the changes, merge a branch and remove a worktree.
+
 </td>
 <td>
 
