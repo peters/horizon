@@ -29,12 +29,14 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent / 'agent_attention_standin.py'
 MODULE = 'agent_attention_standin'
+MODULE_PREFIX = 'attention-stand-in: '
 WORK_VARIABLES = (
     'HORIZON_WORK_ROOT',
     'HORIZON_WORK_PANEL',
@@ -174,6 +176,37 @@ class StandInTests(unittest.TestCase):
             self.assertIn('work_resume', first, 'the line names the setting of the fixture config')
             self.assertIn('no event is sent', finished.stdout, 'the panel stays alive and answers')
             self.assertEqual(calls(directory), [])
+
+    def test_a_typed_word_is_read_while_the_timer_runs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            values = environment(directory, recorder(directory))
+            child = subprocess.Popen(
+                [sys.executable, str(SCRIPT), '--timer', '60'], text=True, bufsize=1,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=values)
+            try:
+                # The timer of sixty seconds sends its first event and then
+                # waits, so a later event can only come from the person.
+                deadline = time.monotonic() + 15
+                answers = []
+                while time.monotonic() < deadline and len(events(directory)) < 1:
+                    time.sleep(0.05)
+                child.stdin.write('ask\n')
+                child.stdin.flush()
+                while time.monotonic() < deadline and len(events(directory)) < 2:
+                    time.sleep(0.05)
+                child.stdin.write('quit\n')
+                child.stdin.flush()
+                answers = child.communicate(timeout=20)[0].splitlines()
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+            names = [event['hook_event_name'] for event in events(directory)]
+            self.assertEqual(names, ['UserPromptSubmit', 'PermissionRequest'], 'the typed word reaches the hook')
+            self.assertEqual(events(directory)[1]['prompt_id'], 'turn-1', 'the typed event names the open turn')
+            self.assertIn(f'{MODULE_PREFIX}ask: PermissionRequest', answers)
+            self.assertEqual(child.returncode, 0)
 
     def test_the_sequence_of_the_timer_names_only_known_events(self):
         stand_in = load()

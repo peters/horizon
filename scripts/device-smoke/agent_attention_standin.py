@@ -24,8 +24,8 @@ One event for each line that the person types into the panel:
   quit        the script ends
 
 `--timer SECONDS` sends the same events in a sequence of its own, one turn every
-SECONDS, and reads the lines of the person at the same time. The fixture passes
-the timer in the JSON file that the stand-in reads beside itself.
+SECONDS, and the stand-in still reads the lines of the person while it runs. The
+fixture passes the timer in the JSON file that the stand-in reads beside itself.
 
 Standard library only, Python 3.10+, no network.
 """
@@ -35,6 +35,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 PROGRAM = 'attention-stand-in'
@@ -169,16 +170,20 @@ class StandIn:
         self.missing = missing
         self.turns = 0
         self.prompt_id = 'turn-0'
+        # The timer and the lines of the person send at the same time, so the
+        # turn identity follows one event at a time.
+        self.lock = threading.Lock()
 
     def send(self, word):
         if word not in EVENTS:
             return f'unknown event {word!r}; use one of {", ".join(EVENTS)}'
         if self.missing:
             return f'{word}: no event is sent, because Horizon set no work identity'
-        if word == 'start':
-            self.turns += 1
-            self.prompt_id = f'turn-{self.turns}'
-        document = event_document(word, self.prompt_id, self.session_id)
+        with self.lock:
+            if word == 'start':
+                self.turns += 1
+                self.prompt_id = f'turn-{self.turns}'
+            document = event_document(word, self.prompt_id, self.session_id)
         refused = send(document)
         return refused or f'{word}: {EVENTS[word]["hook_event_name"]}'
 
@@ -206,7 +211,9 @@ def main(argv=None):
         print(f'{PROGRAM}: type one of {", ".join(EVENTS)} and press Enter', flush=True)
     timer = options.timer if options.timer is not None else config.get('timer')
     if timer:
-        return run_timer(stand_in, float(timer))
+        # The timer is a second sender of the same events, and the person still
+        # types into the panel while it runs.
+        threading.Thread(target=run_timer, args=(stand_in, float(timer)), daemon=True).start()
     for line in sys.stdin:
         word = line.strip().lower()
         if not word:
