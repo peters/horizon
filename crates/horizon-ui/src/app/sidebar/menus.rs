@@ -329,6 +329,27 @@ impl HorizonApp {
                 self.mark_runtime_dirty();
             }
 
+            if kind.is_agent() {
+                ui.separator();
+                let idle = self
+                    .board
+                    .panel(panel_id)
+                    .is_some_and(|panel| self.panel_attention(&panel.local_id) == horizon_core::Attention::Idle);
+                if ui
+                    .add_enabled(
+                        idle,
+                        Button::new(egui::RichText::new("Mark as unread").size(12.0).color(theme::FG_SOFT()))
+                            .frame(false),
+                    )
+                    .on_disabled_hover_text("This agent works, waits for you or is already unread.")
+                    .on_hover_text("Shows this panel as done in the sidebar until you look at it again.")
+                    .clicked()
+                {
+                    self.mark_panel_unread(panel_id);
+                    ui.close();
+                }
+            }
+
             ui.separator();
             if (kind.is_agent() || kind == horizon_core::PanelKind::Ssh)
                 && ui

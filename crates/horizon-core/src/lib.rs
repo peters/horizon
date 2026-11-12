@@ -81,7 +81,7 @@ pub use machines::{
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
-    finish_restart, prepare_panel_start, prepare_restart,
+    current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
 };
 pub use place::{
     AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,

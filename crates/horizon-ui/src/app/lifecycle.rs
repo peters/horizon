@@ -291,6 +291,7 @@ impl HorizonApp {
     pub(super) fn render_active_view(&mut self, ui: &mut egui::Ui, root_interaction_suppressed: bool) {
         self.process_pending_detached_reattach(ui.ctx());
         self.apply_pending_root_device_reveal(ui.ctx());
+        self.refresh_attention(ui.ctx());
 
         if self.fullscreen_panel.is_some() {
             reset_canvas_scroll(ui.ctx());

@@ -1,65 +1,79 @@
-//! The workspace list: the status dot of each workspace of the sidebar and its one
-//! status line. The UI reads the same rows.
+//! The workspace list: the attention badge of each workspace of the sidebar and
+//! its one status line. The UI reads the same rows.
+use crate::attention::Attention;
 use crate::{Panel, PanelId};
 
-/// The status dot of a row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Dot {
-    /// An agent shows its working indicator.
-    Working,
-    /// Nothing runs that the user waits for.
-    Idle,
+/// How many agent panels of a workspace wait for the person.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Waiting {
+    /// The panels that ask a question or failed a turn.
+    pub needs_you: usize,
+    /// The panels that finished while the person looked elsewhere.
+    pub done: usize,
 }
 
-impl Dot {
-    /// The name of the dot in the CLI and MCP.
+impl Waiting {
+    /// The count at the front of the status line, or `None` when no panel waits.
     #[must_use]
-    pub const fn key(self) -> &'static str {
-        match self {
-            Self::Working => "working",
-            Self::Idle => "idle",
-        }
+    pub fn line(self) -> Option<String> {
+        let parts: Vec<String> = [(self.needs_you, "need you"), (self.done, "done")]
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, words)| format!("{count} {words}"))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" \u{00B7} "))
     }
 }
 
 /// One row of the workspace list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    pub dot: Dot,
+    /// The heaviest attention state of the panels of the workspace.
+    pub attention: Attention,
+    /// How many of its agent panels wait for the person.
+    pub waiting: Waiting,
     pub line: String,
 }
 
 impl Row {
     /// The row of a workspace that runs on this computer.
     #[must_use]
-    pub fn local(working: bool, line: Option<&str>) -> Self {
-        Self::placed(working, line, None)
+    pub fn local(attention: Attention, line: Option<&str>) -> Self {
+        Self::placed(attention, Waiting::default(), line, None)
     }
 
     /// The row of a workspace that runs on this computer or on a machine.
     ///
-    /// Its second line starts with the place, because a terminal of a workspace
-    /// on a machine runs there and not here. The line is the one that the status
-    /// text underscores; an empty status text leaves the place alone on it.
+    /// Its second line starts with the count of the agents that wait for the
+    /// person, then the place, because a terminal of a workspace on a machine
+    /// runs there and not here. The rest is the one line that the status text
+    /// underscores; an empty status text leaves the place alone on it.
     #[must_use]
-    pub fn placed(working: bool, line: Option<&str>, machine: Option<&str>) -> Self {
+    pub fn placed(attention: Attention, waiting: Waiting, line: Option<&str>, machine: Option<&str>) -> Self {
         Self {
-            dot: if working { Dot::Working } else { Dot::Idle },
-            line: second_line(line.unwrap_or_default(), machine),
+            attention,
+            waiting,
+            line: second_line(waiting, line.unwrap_or_default(), machine),
         }
     }
 }
 
-/// What the second line of a row says: `on <machine>` and the status text of a
-/// workspace on a machine, or the status text alone on this computer.
+/// What the second line of a row says: the agents that wait, `on <machine>` and
+/// the status text of a workspace on a machine, or the status text alone on this
+/// computer.
 ///
-/// The place comes first, so a long name cannot cut it off the row.
+/// The count and the place come first, so a long name cannot cut them off the row.
 #[must_use]
-fn second_line(line: &str, machine: Option<&str>) -> String {
-    match machine {
+fn second_line(waiting: Waiting, line: &str, machine: Option<&str>) -> String {
+    let place = match machine {
         Some(machine) if line.is_empty() => format!("on {machine}"),
         Some(machine) => format!("on {machine} \u{00B7} {line}"),
         None => line.to_owned(),
+    };
+    match (waiting.line(), place.is_empty()) {
+        (Some(count), false) => format!("{count} \u{00B7} {place}"),
+        (Some(count), true) => count,
+        (None, _) => place,
     }
 }
 
@@ -204,21 +218,44 @@ mod tests {
 
     #[test]
     fn a_row_of_a_workspace_on_a_machine_starts_with_the_place() {
+        let none = Waiting::default();
         assert_eq!(
-            Row::placed(true, Some("Edit 2 files (+41 -7)"), None).line,
+            Row::placed(Attention::Working, none, Some("Edit 2 files (+41 -7)"), None).line,
             "Edit 2 files (+41 -7)"
         );
         assert_eq!(
-            Row::placed(true, Some("Edit 2 files (+41 -7)"), Some("build-1")).line,
+            Row::placed(Attention::Working, none, Some("Edit 2 files (+41 -7)"), Some("build-1")).line,
             "on build-1 \u{00B7} Edit 2 files (+41 -7)"
         );
         assert_eq!(
-            Row::placed(false, None, Some("build-1")).line,
+            Row::placed(Attention::Idle, none, None, Some("build-1")).line,
             "on build-1",
             "a row without a status text still says where the workspace lives"
         );
-        assert_eq!(Row::placed(false, None, None).line, "");
-        assert_eq!(Row::local(true, Some("a line")).line, "a line");
+        assert_eq!(Row::placed(Attention::Idle, none, None, None).line, "");
+        assert_eq!(Row::local(Attention::Working, Some("a line")).line, "a line");
+    }
+
+    #[test]
+    fn a_row_that_waits_starts_its_line_with_the_count_of_the_agents() {
+        assert_eq!(Waiting { needs_you: 2, done: 0 }.line().as_deref(), Some("2 need you"));
+        assert_eq!(Waiting { needs_you: 1, done: 0 }.line().as_deref(), Some("1 need you"));
+        assert_eq!(Waiting { needs_you: 0, done: 1 }.line().as_deref(), Some("1 done"));
+        assert_eq!(
+            Waiting { needs_you: 1, done: 2 }.line().as_deref(),
+            Some("1 need you \u{00B7} 2 done")
+        );
+        assert_eq!(Waiting::default().line(), None);
+        let waiting = Waiting { needs_you: 2, done: 0 };
+        assert_eq!(
+            Row::placed(Attention::NeedsYou, waiting, Some("Editing"), None).line,
+            "2 need you \u{00B7} Editing"
+        );
+        assert_eq!(
+            Row::placed(Attention::Done, waiting, None, Some("build-1")).line,
+            "2 need you \u{00B7} on build-1",
+            "a count is never cut off, also when the workspace says where it lives"
+        );
     }
 
     #[test]

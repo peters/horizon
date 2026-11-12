@@ -1,5 +1,6 @@
 mod actions;
 mod answer_retries;
+mod attention;
 mod block_clicks;
 mod block_links;
 mod block_machine_keys;
@@ -345,6 +346,9 @@ pub struct HorizonApp {
     sidebar_drag_workspace: Option<WorkspaceId>,
     /// The rows of the sidebar's workspace list, read at most once a second.
     sidebar_list: sidebar::ListCache,
+    /// Which agent panel needs the person, which one finished and which one
+    /// works, from the work ledgers of the panels.
+    attention: attention::AttentionState,
     minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,

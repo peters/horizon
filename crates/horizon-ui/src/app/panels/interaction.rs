@@ -180,6 +180,22 @@ impl HorizonApp {
                 ui.close();
             }
             self.render_work_resume_controls(ui, panel_id);
+            if kind.is_agent() {
+                ui.separator();
+                let idle = self
+                    .board
+                    .panel(panel_id)
+                    .is_some_and(|panel| self.panel_attention(&panel.local_id) == horizon_core::Attention::Idle);
+                if ui
+                    .add_enabled(idle, egui::Button::new("Mark as unread"))
+                    .on_disabled_hover_text("This agent works, waits for you or is already unread.")
+                    .on_hover_text("Shows this panel as done in the sidebar until you look at it again.")
+                    .clicked()
+                {
+                    self.mark_panel_unread(panel_id);
+                    ui.close();
+                }
+            }
             if kind.is_agent() || kind == PanelKind::Ssh {
                 ui.separator();
                 let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };

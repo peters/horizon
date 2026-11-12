@@ -185,6 +185,11 @@ impl AttentionBoard {
         // A read older than the one this panel holds, or an event of another
         // session, describes a turn that this panel does not follow.
         if same_session && ledger.updated_at_millis >= held.observed_at_millis {
+            if held.observed_at_millis == i64::MIN {
+                // A panel that the board reads for the first time is not asked
+                // about a turn that ended before Horizon saw it.
+                held.seen_at_millis = ledger.updated_at_millis;
+            }
             held.session_id.clone_from(&ledger.session_id);
             held.observed_at_millis = ledger.updated_at_millis;
             held.hooked = true;
@@ -242,6 +247,22 @@ impl AttentionBoard {
     /// The panel left the board.
     pub fn forget(&mut self, panel: &str) {
         self.panels.remove(panel);
+    }
+
+    /// Drops every panel that `keep` refuses, so a board that closed a panel
+    /// keeps no state of it.
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.panels.retain(|panel, _| keep(panel));
+    }
+
+    /// When the turn of `panel` reached the state that a row shows, so the
+    /// panel that waited longest comes first.
+    #[must_use]
+    pub fn since_millis(&self, panel: &str) -> i64 {
+        let Some(held) = self.panels.get(panel) else {
+            return 0;
+        };
+        held.ended_at_millis.unwrap_or_else(|| held.observed_at_millis.max(0))
     }
 
     /// The state of `panel`; an agent panel that the board knows nothing about

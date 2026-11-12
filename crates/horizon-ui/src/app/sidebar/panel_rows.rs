@@ -1,6 +1,7 @@
 //! The panel rows under a workspace: a tree guide from the workspace tile, the
-//! kind label, the panel's title and, at the right, a working dot or the close
-//! button while the row is hovered or focused.
+//! kind label, the panel's title, the one word of its attention state and, at
+//! the right, a working dot or the close button while the row is hovered or
+//! focused.
 use egui::{Rect, Stroke, Vec2, pos2};
 
 use crate::app::panels::panel_kind_icon;
@@ -12,6 +13,10 @@ use super::{SidebarPanelEntry, WorkspaceSidebarEntry};
 
 pub(super) const PANEL_ROW_HEIGHT: f32 = 30.0;
 const CLOSE_SIDE: f32 = 20.0;
+/// The room that the one word of a state takes at the right of a panel row.
+pub(super) const STATE_WIDTH: f32 = 120.0;
+/// The gap between the title and the word of its state.
+pub(super) const STATE_GAP: f32 = 6.0;
 
 /// The close button of a panel row, at the right of its card.
 pub(super) fn close_rect(row: Rect) -> Rect {
@@ -27,6 +32,21 @@ pub(super) struct PanelRowState {
     pub close: Option<bool>,
     /// The last row ends the tree guide.
     pub last: bool,
+}
+
+/// Where the title of a panel row ends, where the word of its state starts and
+/// how wide that word may be, from the right edge that the row's text may use.
+/// The word that says whether an agent needs the person keeps its room, and the
+/// title is cut to the rest. An idle row has no word, so its title keeps the
+/// whole width.
+pub(super) fn title_and_state(right: f32, title_left: f32, state_width: f32) -> Option<(f32, f32, f32)> {
+    if state_width <= 0.0 {
+        return None;
+    }
+    let room = (right - title_left).max(0.0);
+    let width = state_width.min(room);
+    let state_left = right - width;
+    Some(((state_left - STATE_GAP).max(title_left), state_left, width))
 }
 
 /// Paints a panel row. Returns whether the title was cut to fit.
@@ -67,11 +87,28 @@ pub(super) fn paint_panel_row(
     } else {
         theme::FG_SOFT()
     };
-    let title = text::line(ui, label, 12.5, text::MEDIUM, color, card.max.x - 26.0 - title_left);
+    let mark = close_rect(row).center();
+    let state = panel.attention.word();
+    // The word of a state, when the row keeps the room for it, ends the title.
+    let state_width = state.map_or(0.0, |word| {
+        let galley = text::line(ui, word, 10.0, text::REGULAR, theme::FG_DIM(), STATE_WIDTH);
+        galley.size().x
+    });
+    let state_room = title_and_state(card.max.x - 26.0, title_left, state_width);
+    let title_right = state_room.map_or(card.max.x - 26.0, |room| room.0);
+    let title = text::line(ui, label, 12.5, text::MEDIUM, color, title_right - title_left);
     let title_elided = title.elided;
     painter.galley(pos2(title_left, center_y - title.size().y / 2.0), title, color);
 
-    let mark = close_rect(row).center();
+    if let (Some(word), Some((_, state_left, room))) = (state, state_room) {
+        let color = match panel.attention {
+            horizon_core::Attention::NeedsYou => theme::PALETTE_YELLOW(),
+            horizon_core::Attention::Done => theme::ACCENT(),
+            _ => theme::FG_DIM(),
+        };
+        let galley = text::line(ui, word, 10.0, text::REGULAR, color, room);
+        painter.galley(pos2(state_left, center_y - galley.size().y / 2.0), galley, color);
+    }
     match close {
         Some(close_hovered) => {
             let color = if close_hovered { theme::FG() } else { theme::FG_DIM() };
@@ -81,7 +118,7 @@ pub(super) fn paint_panel_row(
             let cross = text::line(ui, "\u{00D7}", 15.0, text::REGULAR, color, CLOSE_SIDE);
             painter.galley(mark - cross.size() / 2.0, cross, color);
         }
-        None if panel.working => {
+        None if panel.attention.rank() == horizon_core::Attention::Working.rank() => {
             painter.circle_filled(mark, 3.0, theme::PALETTE_GREEN());
         }
         None => {}

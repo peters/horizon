@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::epaint::text::VariationCoords;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, FontId, Galley, TextFormat};
-use horizon_core::{PanelKind, PresetConfig, agent_definition};
+use horizon_core::{Attention, PanelKind, PresetConfig, agent_definition};
 
 use crate::theme;
 
@@ -147,20 +147,20 @@ pub(super) fn workspace_spoken(name: &str, panels: Option<usize>, detached: bool
     spoken
 }
 
-/// What a screen reader says for a panel row: the kind, the label and, for an
-/// agent that works, that it works.
-pub(super) fn panel_spoken(kind: PanelKind, label: &str, working: bool) -> String {
-    let mut spoken = format!("{}: {label}", kind.display_name());
-    if working {
-        spoken.push_str(", working");
+/// What a screen reader says for a panel row: the kind, the label and the one
+/// word of its attention state.
+pub(super) fn panel_spoken(kind: PanelKind, label: &str, attention: Attention) -> String {
+    match attention.word() {
+        Some(word) => format!("{}: {label}, {}", kind.display_name(), word.to_lowercase()),
+        None => format!("{}: {label}", kind.display_name()),
     }
-    spoken
 }
 
 #[cfg(test)]
 mod tests {
     use horizon_core::PanelKind;
 
+    use horizon_core::Attention;
     use horizon_core::PresetConfig;
 
     use super::{fold_whitespace, initials, name_labels_agent, panel_label, panel_spoken, workspace_spoken};
@@ -253,9 +253,20 @@ mod tests {
         );
         assert_eq!(workspace_spoken("Docs", None, false), "Docs");
         assert_eq!(
-            panel_spoken(PanelKind::Claude, "Fix sync", true),
+            panel_spoken(PanelKind::Claude, "Fix sync", Attention::Working),
             "Claude: Fix sync, working"
         );
-        assert_eq!(panel_spoken(PanelKind::Editor, "notes.md", false), "Editor: notes.md");
+        assert_eq!(
+            panel_spoken(PanelKind::Claude, "Fix sync", Attention::NeedsYou),
+            "Claude: Fix sync, needs you"
+        );
+        assert_eq!(
+            panel_spoken(PanelKind::Claude, "Fix sync", Attention::Background),
+            "Claude: Fix sync, works in the background"
+        );
+        assert_eq!(
+            panel_spoken(PanelKind::Editor, "notes.md", Attention::Idle),
+            "Editor: notes.md"
+        );
     }
 }

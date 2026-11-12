@@ -27,7 +27,9 @@ fn every_turn_state_of_a_ledger_has_its_attention_state() {
     ];
     for (state, expected) in cases {
         let mut board = board();
-        board.observe_ledger("panel", &ledger(state, 20), 10);
+        // The turn ran first, so its end is a change that the person missed.
+        board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+        board.observe_ledger("panel", &ledger(state, 20), 20);
         assert_eq!(board.state("panel"), expected, "{state:?}");
         assert!(board.from_ledger("panel"));
     }
@@ -61,7 +63,8 @@ fn an_open_question_survives_a_look_and_a_look_after_the_answer_clears_it() {
 #[test]
 fn a_failed_turn_waits_for_the_person_and_a_look_clears_it() {
     let mut board = board();
-    board.observe_ledger("panel", &ledger(TurnState::Failed, 20), 10);
+    board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+    board.observe_ledger("panel", &ledger(TurnState::Failed, 20), 20);
     assert_eq!(board.state("panel"), Attention::NeedsYou);
     assert!(board.note_look("panel", 30));
     assert_eq!(board.state("panel"), Attention::Idle);
@@ -149,7 +152,8 @@ fn a_panel_without_hooks_reads_its_working_indicator() {
 #[test]
 fn a_ledger_of_a_panel_wins_over_its_working_indicator() {
     let mut board = board();
-    board.observe_ledger("panel", &ledger(TurnState::Finished, 20), 10);
+    board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+    board.observe_ledger("panel", &ledger(TurnState::Finished, 20), 20);
     assert_eq!(board.state("panel"), Attention::Done);
     board.observe_working("panel", true, false, 30);
     assert_eq!(

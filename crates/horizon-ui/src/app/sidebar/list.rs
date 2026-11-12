@@ -4,8 +4,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use horizon_core::workspace_list::{self, Row};
-use horizon_core::{AgentStatus, WorkspaceId};
+use horizon_core::Attention;
+use horizon_core::WorkspaceId;
+use horizon_core::workspace_list::{self, Row, Waiting};
 
 use super::super::HorizonApp;
 use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
@@ -57,19 +58,31 @@ impl HorizonApp {
         };
     }
 
-    /// The row of each workspace now.
+    /// The row of each workspace now: the heaviest attention state of its
+    /// panels, how many of them wait for the person, and its status line.
     pub(in crate::app) fn read_sidebar_rows(&self) -> HashMap<WorkspaceId, Row> {
         self.board
             .workspaces
             .iter()
             .map(|workspace| {
                 let panels = workspace.panels.iter().filter_map(|id| self.board.panel(*id));
-                let working = panels.clone().any(|panel| panel.agent_status() == AgentStatus::Working);
+                let attention = Attention::heaviest(
+                    panels
+                        .clone()
+                        .filter(|panel| panel.kind.is_agent())
+                        .map(|panel| self.panel_attention(&panel.local_id)),
+                );
+                let waiting = sufficient_waiting(
+                    panels
+                        .clone()
+                        .filter(|panel| panel.kind.is_agent())
+                        .map(|panel| self.panel_attention(&panel.local_id)),
+                );
                 let line =
                     workspace_list::primary_panel(panels, self.board.focused).and_then(workspace_list::panel_line);
                 (
                     workspace.id,
-                    Row::placed(working, line.as_deref(), workspace.place.machine()),
+                    Row::placed(attention, waiting, line.as_deref(), workspace.place.machine()),
                 )
             })
             .collect()
@@ -95,8 +108,21 @@ impl HorizonApp {
             .rows
             .get(&workspace)
             .cloned()
-            .unwrap_or_else(|| Row::local(false, None))
+            .unwrap_or_else(|| Row::local(Attention::Idle, None))
     }
+}
+
+/// How many agent panels of one workspace wait for the person.
+fn sufficient_waiting(states: impl Iterator<Item = Attention>) -> Waiting {
+    let mut waiting = Waiting::default();
+    for state in states {
+        match state {
+            Attention::NeedsYou => waiting.needs_you += 1,
+            Attention::Done => waiting.done += 1,
+            Attention::Idle | Attention::Working | Attention::Background => {}
+        }
+    }
+    waiting
 }
 
 /// Whether a workspace drops on the row `target`: on any docked row. A detached

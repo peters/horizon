@@ -4,7 +4,7 @@
 //! The status line names the place of the workspace first, `on <machine>`, so a
 //! long name cannot cut the machine off the row.
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
-use horizon_core::workspace_list::Dot;
+use horizon_core::Attention;
 
 use crate::theme;
 
@@ -20,6 +20,11 @@ pub(super) const TILE_INSET: f32 = 8.0;
 /// The side of the tile of a row with a status line.
 pub(super) const TILE_SIDE: f32 = 30.0;
 const DOT_RADIUS: f32 = 4.0;
+/// The side of the filled badge that a panel which waits for the person shows.
+const BADGE_SIDE: f32 = 11.0;
+/// The two letter mark of a finished turn: the badge shape differs from a dot
+/// and from the filled badge, so no state is told by its color alone.
+const DONE_MARK: &str = "\u{2713}";
 const CARD_RADIUS: u8 = 12;
 
 /// The card of a row: the row without the sidebar inset.
@@ -27,26 +32,36 @@ pub(super) fn card(row: Rect) -> Rect {
     row.shrink2(vec2(ROW_INSET, 0.0))
 }
 
-/// What the status dot says, for its hover text.
-pub(super) fn dot_meaning(dot: Dot) -> &'static str {
-    match dot {
-        Dot::Working => "An agent is working",
-        Dot::Idle => "Idle",
-    }
+/// What the badge of a row says, for its hover text.
+pub(super) fn dot_meaning(attention: Attention) -> &'static str {
+    attention.sentence()
 }
 
 /// Whether the tile shows a badge: an idle row shows none, so activity stands out.
-const fn has_badge(dot: Dot) -> bool {
-    matches!(dot, Dot::Working)
+const fn has_badge(attention: Attention) -> bool {
+    attention.shows_badge()
 }
 
-pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, dot: Dot) {
-    let filled = |color: Color32| {
-        painter.circle_filled(center, DOT_RADIUS, color);
-    };
-    match dot {
-        Dot::Working => filled(theme::PALETTE_GREEN()),
-        Dot::Idle => filled(theme::FG_DIM()),
+/// Paints the attention badge of a row at `center`: a green dot while an agent
+/// works, a check mark in the accent color for a finished turn, and a filled
+/// badge in the warning color for an agent that asks the person something.
+pub(super) fn paint_dot(painter: &egui::Painter, center: Pos2, attention: Attention, ui: &egui::Ui) {
+    match attention {
+        Attention::Working | Attention::Background => {
+            painter.circle_filled(center, DOT_RADIUS, theme::PALETTE_GREEN());
+        }
+        Attention::Done => {
+            let mark = text::line(ui, DONE_MARK, 11.0, text::BOLD, theme::ACCENT(), BADGE_SIDE);
+            painter.galley(center - mark.size() / 2.0, mark, theme::ACCENT());
+        }
+        Attention::NeedsYou => {
+            painter.circle_filled(center, BADGE_SIDE / 2.0, theme::PALETTE_YELLOW());
+            let mark = text::line(ui, "!", 9.5, text::BOLD, theme::BG(), BADGE_SIDE);
+            painter.galley(center - mark.size() / 2.0, mark, theme::BG());
+        }
+        Attention::Idle => {
+            painter.circle_filled(center, DOT_RADIUS, theme::FG_DIM());
+        }
     }
 }
 
@@ -118,7 +133,7 @@ pub(super) fn paint_workspace_row_contents(
     let tile = paint_tile(ui, card, workspace, surface);
     let text_left = tile.max.x + 10.0;
     let (name_right, badge_shows) = paint_badges(ui, card, workspace, accordion, text_left, first_line_y);
-    let meaning = dot_meaning(workspace.row.dot);
+    let meaning = dot_meaning(workspace.row.attention);
     let mut spoken = meaning.to_owned();
     // A narrow sidebar leaves out the badge, so the tile tells it.
     if workspace.detached && !badge_shows {
@@ -132,7 +147,7 @@ pub(super) fn paint_workspace_row_contents(
     tile_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &spoken));
     let tile_response = tile_response.on_hover_text(spoken);
 
-    let name_color = if workspace.is_active || has_badge(workspace.row.dot) {
+    let name_color = if workspace.is_active || has_badge(workspace.row.attention) {
         theme::FG()
     } else {
         theme::blend(theme::FG(), theme::FG_SOFT(), 0.45)
@@ -188,10 +203,10 @@ fn paint_tile(ui: &egui::Ui, card: Rect, workspace: &WorkspaceSidebarEntry, surf
     let letters = text::line(ui, &text::initials(&workspace.name), 12.0, BOLD, letters_color, side);
     painter.galley(tile.center() - letters.size() / 2.0, letters, letters_color);
 
-    if has_badge(workspace.row.dot) {
+    if has_badge(workspace.row.attention) {
         let center = tile.right_bottom() - vec2(2.0, 2.0);
-        painter.circle_filled(center, DOT_RADIUS + 2.0, surface);
-        paint_dot(painter, center, workspace.row.dot);
+        painter.circle_filled(center, BADGE_SIDE / 2.0 + 2.0, surface);
+        paint_dot(painter, center, workspace.row.attention, ui);
     }
     tile
 }

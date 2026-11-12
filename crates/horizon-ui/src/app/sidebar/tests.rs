@@ -56,7 +56,7 @@ fn sidebar_entry(id: horizon_core::PanelId, is_focused: bool) -> SidebarPanelEnt
         label: "panel".to_string(),
         kind: horizon_core::PanelKind::Editor,
         is_focused,
-        working: false,
+        attention: horizon_core::Attention::Idle,
     }
 }
 
@@ -175,10 +175,10 @@ fn workspace_entry(row: horizon_core::workspace_list::Row, detached: bool) -> su
 #[test]
 fn a_dragged_workspace_drops_only_on_a_docked_row() {
     use horizon_core::workspace_list::Row;
-    let docked = workspace_entry(Row::local(false, None), false);
+    let docked = workspace_entry(Row::local(horizon_core::Attention::Idle, None), false);
     assert!(super::list::accepts_drop(&docked));
     assert!(!super::list::accepts_drop(&workspace_entry(
-        Row::local(false, None),
+        Row::local(horizon_core::Attention::Idle, None),
         true
     )));
 }
@@ -784,4 +784,108 @@ fn a_short_notice_leaves_the_line_about_a_setting_of_another_computer() {
         !texts.iter().any(|drawn| drawn.contains("the terminal did not open")),
         "the short notice ended on its own: {texts:?}"
     );
+}
+
+#[test]
+fn the_word_of_a_panel_state_fits_the_narrowest_sidebar() {
+    use super::panel_rows::{STATE_GAP, title_and_state};
+    // The narrowest sidebar is 168 wide. Its rows start 8 in, the card ends 8
+    // before the edge, the title starts at 68 and the row keeps 26 for a close.
+    let right = 160.0 - 26.0;
+    let title_left = 68.0;
+    // The longest word of a state at 10 pt Inter, and "Needs you".
+    for state_width in [105.0, 46.0, 30.0] {
+        let (title_right, state_left, width) =
+            title_and_state(right, title_left, state_width).expect("a row with a state word");
+        assert!(
+            (state_left + width - right).abs() <= f32::EPSILON,
+            "the word ends at the right edge of the row's text"
+        );
+        assert!(state_left + width <= 168.0, "the word stays inside the sidebar");
+        assert!(width <= state_width, "a word that does not fit is cut, and never grows");
+        assert!(title_right >= title_left, "the title keeps a room to elide in");
+        if state_width < right - title_left {
+            assert!(
+                (title_right - (state_left - STATE_GAP)).abs() <= f32::EPSILON,
+                "the title gives the room of the word away"
+            );
+        }
+    }
+    // Without a state word the title runs to the right edge.
+    assert_eq!(title_and_state(right, title_left, 0.0), None);
+}
+
+#[test]
+fn a_narrow_row_with_a_long_workspace_name_shows_the_agents_that_wait() {
+    use egui::ViewportInfo;
+    let (_temp, ctx, mut app) =
+        crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        });
+    let workspace = app
+        .board
+        .create_workspace("A very long workspace name that cannot fit the sidebar");
+    let now = horizon_core::current_unix_millis();
+    for (name, states) in [
+        (
+            "Fix the sync of the billing service",
+            vec![horizon_core::agent_work::TurnState::Blocked],
+        ),
+        ("Write the docs", vec![horizon_core::agent_work::TurnState::Working]),
+    ] {
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    name: Some(name.to_owned()),
+                    kind: horizon_core::PanelKind::Claude,
+                    command: Some("seed".to_owned()),
+                    ..horizon_core::PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("panel");
+        let local = app.board.panel(panel).expect("panel").local_id.clone();
+        for (index, state) in states.into_iter().enumerate() {
+            let at = now - 2 + i64::try_from(index).expect("index");
+            app.apply_attention_values(
+                vec![(panel, local.clone(), Some(attention_ledger(state, at)))],
+                &egui::Context::default(),
+            );
+        }
+    }
+    app.board.focused = None;
+
+    // The narrowest sidebar: a viewport of 360 makes the sidebar 168 wide.
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(
+        egui::ViewportId::ROOT,
+        ViewportInfo {
+            native_pixels_per_point: Some(1.0),
+            inner_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 720.0))),
+            ..ViewportInfo::default()
+        },
+    );
+    crate::app::test_support::run_app_frame_with_input(&ctx, &mut app, input);
+
+    let rows = app.read_sidebar_rows();
+    let row = rows.get(&workspace).expect("row");
+    assert_eq!(row.attention, horizon_core::Attention::NeedsYou);
+    assert_eq!(
+        row.waiting.line().as_deref(),
+        Some("1 need you"),
+        "the count is the front of the line and survives the cut"
+    );
+}
+
+fn attention_ledger(
+    state: horizon_core::agent_work::TurnState,
+    updated_at_millis: i64,
+) -> horizon_core::agent_work::TurnLedger {
+    let mut ledger = horizon_core::agent_work::TurnLedger::default();
+    ledger.session_id = "session".into();
+    ledger.prompt_id = Some("prompt".into());
+    ledger.state = state;
+    ledger.updated_at_millis = updated_at_millis;
+    ledger
 }

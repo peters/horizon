@@ -51,7 +51,8 @@ struct SidebarPanelEntry {
     label: String,
     kind: PanelKind,
     is_focused: bool,
-    working: bool,
+    /// The one attention state of the panel: which agent waits, finished or works.
+    attention: horizon_core::Attention,
 }
 
 #[derive(Clone, Default)]
@@ -192,7 +193,7 @@ impl HorizonApp {
             label,
             kind: panel.kind,
             is_focused: self.board.focused == Some(panel.id),
-            working: panel.agent_status() == horizon_core::AgentStatus::Working,
+            attention: self.panel_attention(&panel.local_id),
         }
     }
 
@@ -476,14 +477,17 @@ impl HorizonApp {
         let row_click_rect = Rect::from_min_max(row_rect.min, Pos2::new(close_rect.min.x, row_rect.max.y));
         let row_response = ui.interact(row_click_rect, row_id, Sense::click());
         row_response.widget_info(|| {
-            let spoken = text::panel_spoken(panel.kind, label, panel.working);
+            let spoken = text::panel_spoken(panel.kind, label, panel.attention);
             egui::WidgetInfo::labeled(egui::Role::Button, true, spoken)
         });
-        // The whole title, when the row cuts it or shows only the agent's task.
-        let row_response = if title_elided || *label != panel.title {
-            row_response.on_hover_text(&panel.title)
-        } else {
-            row_response
+        // The whole title, when the row cuts it or shows only the agent's task,
+        // and the sentence of the state while the pointer is on the row.
+        let state = (hovered && panel.attention.word().is_some()).then(|| panel.attention.sentence());
+        let row_response = match (title_elided || *label != panel.title, state) {
+            (true, Some(sentence)) => row_response.on_hover_text(format!("{}\n{sentence}", panel.title)),
+            (true, None) => row_response.on_hover_text(&panel.title),
+            (false, Some(sentence)) => row_response.on_hover_text(sentence),
+            (false, None) => row_response,
         };
         if hovered {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -492,6 +496,8 @@ impl HorizonApp {
         if close_clicked {
             actions.close_panel = Some(panel.id);
         } else if row_response.clicked() || blind_tap {
+            // A click on the row is a look at the panel, so its state clears.
+            self.note_panel_attention_look(panel.id);
             actions.focus_panel = Some(panel.id);
             actions.pan_to_panel = Some(panel.id);
         }

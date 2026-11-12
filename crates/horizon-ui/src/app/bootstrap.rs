@@ -164,7 +164,7 @@ impl HorizonApp {
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true,
             sidebar_drag_workspace: None,
-            sidebar_list: super::sidebar::ListCache::default(),
+            sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
             minimap_visible: true, hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),
