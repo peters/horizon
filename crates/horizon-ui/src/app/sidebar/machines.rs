@@ -42,10 +42,9 @@ pub(in crate::app) struct NoticeClock {
 }
 
 /// How the short notice of the sidebar is drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::app) enum SidebarNoticeTone {
     /// A reason that the person has to act on.
-    #[default]
     Error,
     /// A plain answer to a key press, which names nothing to fix.
     Plain,

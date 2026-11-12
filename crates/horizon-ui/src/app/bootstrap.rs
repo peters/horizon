@@ -13,7 +13,11 @@ use horizon_core::{
 use super::ssh_hosts::SshHostsRead;
 use super::{
     BrowserCreateHostState, CanvasGridCache, CanvasPanSpaceKeyState, FrameStats, HorizonApp, PanelRenderCaches,
-    StartupChooserState, file_drop::PendingEditorDrops, resolve_shortcuts, sidebar::machines::NoticeClock, util,
+    StartupChooserState,
+    file_drop::PendingEditorDrops,
+    resolve_shortcuts,
+    sidebar::machines::{NoticeClock, SidebarNoticeTone},
+    util,
 };
 use crate::command_registry::{self, CommandEntry};
 use crate::input;
@@ -151,8 +155,8 @@ impl HorizonApp {
             block_clicks: super::block_clicks::BlockClickState::default(),
             agent_opens: super::AgentOpens::default(),
             machine_list: empty_machine_list(session_store.home()),
-            sidebar_notice: None, sidebar_notice_until: None,
-            sidebar_notice_tone: Default::default(), sidebar_sticky_notice: None,
+            sidebar_notice: None, sidebar_notice_until: None, sidebar_notice_tone: SidebarNoticeTone::Error,
+            sidebar_sticky_notice: None,
             settings_lost: None, person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
             machine_rows: super::sidebar::machines::MachineRows::default(), notice_clock: NoticeClock::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),
@@ -163,8 +167,7 @@ impl HorizonApp {
             frame_stats: FrameStats::default(),
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
-            sidebar_visible: true,
-            sidebar_drag_workspace: None,
+            sidebar_visible: true, sidebar_drag_workspace: None,
             sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
             minimap_visible: true, hud_visible: false,
             renaming_workspace: None,
