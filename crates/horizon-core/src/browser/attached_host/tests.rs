@@ -473,7 +473,7 @@ fn a_connect_that_a_panel_stopped_delivers_no_forward() {
         serve_version(port)
     });
     stop.store(true, std::sync::atomic::Ordering::Release);
-    let outcome = connect(&ssh, &host, &stop);
+    let outcome = connect(&ssh, &host, &stop, true);
     assert!(
         matches!(outcome, super::AttachOutcome::Cancelled),
         "a stopped panel starts no forward"
@@ -569,7 +569,7 @@ fn attached_host_panel_drives_a_real_ssh_target() {
 
     panel.stop();
     let stop = AtomicBool::new(false);
-    match connect(&Ssh::default(), &host, &stop) {
+    match connect(&Ssh::default(), &host, &stop, true) {
         super::AttachOutcome::Connected(_) => {}
         super::AttachOutcome::Failed(failure) => panic!(
             "the remote Chromium must outlive the panel: {} ({})",
@@ -863,6 +863,81 @@ fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
         panel.attached_host_failure(),
         None,
         "the automatic attempt reached the browser of that machine"
+    );
+    panel.stop();
+}
+
+#[test]
+fn an_automatic_attempt_does_not_start_a_browser_that_is_gone() {
+    let _serial = serial();
+    let directory = scratch();
+    let log = directory.path().join("commands.log");
+    let served: Served = Arc::default();
+    let probe_calls = Arc::new(Mutex::new(0_usize));
+    let program = stand_in(
+        directory.path(),
+        &log,
+        &format!(
+            "printf '%s\\n' {running}",
+            running = script_text(&endpoint_text(RUNNING_BROWSER))
+        ),
+    );
+    let probe = {
+        let served = Arc::clone(&served);
+        let probe_calls = Arc::clone(&probe_calls);
+        move |port: u16| {
+            let mut calls = lock(&probe_calls);
+            *calls += 1;
+            if *calls > 1 {
+                // The browser of that machine is gone: the forward is up and
+                // nothing answers on the other side of it.
+                return true;
+            }
+            drop(calls);
+            lock(&served).push(port);
+            serve_version(port)
+        }
+    };
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel(test_ssh(&program, probe), &host);
+
+    wait_for_connect(&mut panel);
+    assert_eq!(panel.attached_host_failure(), None);
+    // The mock endpoint holds no CDP session, so the first session ends the way
+    // a lost link does.
+    wait_until(&mut panel, BrowserPanelState::has_ended);
+
+    // The person had a page of that browser before its link went away.
+    panel.attached_reached_ready();
+    lose_the_link(&mut panel);
+    assert!(panel.attached_retry().is_some(), "the panel waits for its attempt");
+
+    let deadline = Instant::now() + RETRY_DEADLINE;
+    while panel.attached_retry().is_some() {
+        panel.drain_events();
+        assert!(Instant::now() < deadline, "the automatic attempt never finished");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        count_start_snippets(&log),
+        0,
+        "an attempt of its own never starts a browser that nobody asked for"
+    );
+    assert_eq!(
+        panel.attached_host_failure().map(super::AttachedHostFailure::kind),
+        Some(AttachedHostFailureKind::NoEndpoint),
+        "the browser of that machine is gone"
+    );
+    assert!(
+        matches!(panel.status, BrowserStatus::Error { .. }),
+        "the present failure stays with Retry: {:?}",
+        panel.status
+    );
+    assert!(panel.can_retry(), "a person starts that browser with Retry");
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the panel keeps the address for the page of the browser that Retry starts"
     );
     panel.stop();
 }

@@ -130,8 +130,13 @@ enum AttachOutcome {
 }
 
 /// Read the endpoint of the browser of `host`, reuse that browser through a new
-/// forward, and start it when it is gone.
-fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool) -> AttachOutcome {
+/// forward, and start it when it is gone and `may_start_browser` allows it.
+///
+/// An automatic attempt after a lost link never starts a browser: the browser of
+/// that machine kept running behind the link, so a browser that does not answer
+/// is a browser that a person must ask for with Retry. An attempt of its own must
+/// not start one that nobody asked for.
+fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool, may_start_browser: bool) -> AttachOutcome {
     if stop.load(Ordering::Acquire) {
         return AttachOutcome::Cancelled;
     }
@@ -146,12 +151,18 @@ fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool) -> AttachOutcome {
     if let Some(remote_port) = port_of(&endpoint_text) {
         match forward_to(ssh, host, remote_port) {
             Ok(browser) => return AttachOutcome::Connected(browser),
+            Err(failure) if !may_start_browser => return AttachOutcome::Failed(failure),
             Err(failure) => tracing::info!(
                 code = failure.code(),
                 profile = host.profile(),
                 "the endpoint that the browser host wrote names no browser, so this connect starts one"
             ),
         }
+    } else if !may_start_browser {
+        return AttachOutcome::Failed(AttachedHostFailure::no_endpoint(
+            host,
+            "it wrote no DevTools endpoint, so its browser is not running",
+        ));
     }
     let started = match ssh.run_remote(target, &remote_browser_command(host.profile(), false), START_DEADLINE) {
         Ok(text) => text,
@@ -256,7 +267,7 @@ impl AttachedHostSlot {
                 if !wait_before_start(&worker_stop, after) {
                     return;
                 }
-                let outcome = connect(&worker_ssh, &worker_host, &worker_stop);
+                let outcome = connect(&worker_ssh, &worker_host, &worker_stop, attempt == 0);
                 // A panel that stopped drops its receiver first, so this send
                 // fails and its forward dies with the outcome.
                 if sender.send(outcome).is_ok()
