@@ -7,14 +7,12 @@ use horizon_core::agent_work::{HookInput, WORK_KIND_ENV, WORK_OWNER_ENV, WORK_PA
 
 const MAX_HOOK_BYTES: u64 = 1024 * 1024;
 
-/// Runs before tracing, plugin installation, or GUI startup. The command is
-/// inert without the panel-specific environment set by an opted-in launch.
-pub(crate) fn run_if_requested() -> bool {
-    if std::env::args().nth(1).as_deref() != Some("--agent-work-hook") {
-        return false;
-    }
+/// Runs before tracing, plugin installation, or GUI startup, when the arguments
+/// name `--agent-work-hook`. The command is inert without the panel-specific
+/// environment set by an opted-in launch.
+pub(crate) fn run() {
     let Some(context) = HookContext::from_environment() else {
-        return true;
+        return;
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -38,7 +36,6 @@ pub(crate) fn run_if_requested() -> bool {
         eprintln!("agent work hook could not save evidence ({:?})", error.kind());
         std::process::exit(1);
     }
-    true
 }
 
 struct HookContext {

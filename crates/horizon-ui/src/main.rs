@@ -46,48 +46,58 @@ use horizon_core::{
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
-    // The native modes prepare the Horizon home themselves. The agent work hook writes only to
-    // HORIZON_WORK_ROOT and must keep its own exit codes, which steer the agent's turn.
-    if agent_work_hook::run_if_requested() {
-        return Ok(());
-    }
-    init_tracing();
-
-    // The server and its link are the same binary, and they touch one directory
-    // of their own. They come before the Horizon home, the settings and the
-    // agent integration of the desktop, because a server must never read or
-    // write the home of the person. The exit codes steer a service manager, so
-    // they leave here and not through the window.
-    //
-    // The exit is also what ends the link mode: its relay returns when the socket
-    // of the server ends, and the thread that reads its standard input stays in
-    // a read that nothing of this process ends. A return through the window would
-    // wait for that thread, so a stopped server would leave one child of every
-    // idle computer alive for ever.
-    if let Some(mode) = sync_mode() {
-        std::process::exit(run_sync_mode(&mode));
-    }
-
-    let horizon_home = match HorizonHome::prepare() {
-        Ok(home) => home,
-        Err(problem) => {
-            eprintln!("error: {problem}");
-            std::process::exit(2);
-        }
-    };
-    if serves_browser_mcp() {
-        run_browser_mcp_server();
-        return Ok(());
-    }
-
-    let cli_args = match parse_cli_args(std::env::args().skip(1)) {
-        Ok(args) => args,
+    // Every argument of this start is judged before anything of this computer is
+    // touched: no Horizon home, no tracing writer, no plugin, no settings, no
+    // session and no lock. An argument that this build does not know ends the
+    // start with code 2 instead of falling through to the window, so a start by
+    // mistake cannot rewrite the settings or the skills of the person.
+    let start = match parse_start(std::env::args_os().skip(1)) {
+        Ok(start) => start,
         Err(problem) => {
             eprintln!("error: {problem}");
             eprintln!("{CLI_USAGE}");
-            plugin_install::exit_after_releasing_plugins(2);
+            std::process::exit(2);
         }
     };
+    let cli_args = match start {
+        Start::Help => {
+            println!("{CLI_USAGE}");
+            std::process::exit(0);
+        }
+        Start::Version => {
+            println!("{CLI_NAME} {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
+        // The agent work hook writes only to HORIZON_WORK_ROOT and keeps its own
+        // exit codes, which steer the agent's turn.
+        Start::AgentWorkHook => {
+            agent_work_hook::run();
+            return Ok(());
+        }
+        Start::BrowserMcp => {
+            let _home = prepare_home_or_exit();
+            run_browser_mcp_server();
+            return Ok(());
+        }
+        // The server and its link are the same binary, and they touch one
+        // directory of their own. They come before the Horizon home, the settings
+        // and the agent integration of the desktop, because a server must never
+        // read or write the home of the person. The exit codes steer a service
+        // manager, so they leave here and not through the window.
+        //
+        // The exit is also what ends the link mode: its relay returns when the
+        // socket of the server ends, and the thread that reads its standard input
+        // stays in a read that nothing of this process ends. A return through the
+        // window would wait for that thread, so a stopped server would leave one
+        // child of every idle computer alive for ever.
+        Start::Sync(mode) => {
+            init_tracing();
+            std::process::exit(run_sync_mode(&mode));
+        }
+        Start::Desktop(cli_args) => cli_args,
+    };
+    init_tracing();
+    let horizon_home = prepare_home_or_exit();
     let resolved_config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
 
@@ -173,6 +183,76 @@ fn main() -> eframe::Result {
     )
 }
 
+/// The name of this program on a command line, as the usage writes it.
+const CLI_NAME: &str = "horizon";
+
+/// One start of this binary, judged from its arguments alone.
+#[derive(Debug)]
+enum Start {
+    /// `--help` or `-h`: the usage of this build.
+    Help,
+    /// `--version` or `-V`: the name and the version of this build.
+    Version,
+    /// `--agent-work-hook`: one lifecycle answer of an opted-in panel.
+    AgentWorkHook,
+    /// One of the three modes of the server.
+    Sync(SyncMode),
+    /// `--browser-mcp`: the browser MCP server on the standard input and output.
+    BrowserMcp,
+    /// The window of the person, or a command that ends without one.
+    Desktop(CliArgs),
+}
+
+/// Reads every argument of this start and answers its mode.
+///
+/// Each mode takes its own arguments alone, and an argument that this build does
+/// not know is an error: a start that no mode serves never falls through to the
+/// window of the person.
+///
+/// # Errors
+///
+/// Returns the reason that the arguments of this start cannot continue.
+fn parse_start(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Start, String> {
+    let args: Vec<std::ffi::OsString> = args.into_iter().collect();
+    match args.first().and_then(|first| first.to_str()) {
+        Some("--help" | "-h") => alone(&args, Start::Help),
+        Some("--version" | "-V") => alone(&args, Start::Version),
+        Some("--agent-work-hook") => alone(&args, Start::AgentWorkHook),
+        Some("--browser-mcp") => {
+            parse_browser_mcp_args(args.iter().cloned())?;
+            Ok(Start::BrowserMcp)
+        }
+        _ => match parse_sync_mode(args.iter().cloned())? {
+            Some(mode) => Ok(Start::Sync(mode)),
+            None => Ok(Start::Desktop(parse_cli_args(args)?)),
+        },
+    }
+}
+
+/// A mode that takes no other argument.
+fn alone(args: &[std::ffi::OsString], start: Start) -> Result<Start, String> {
+    match args.get(1) {
+        Some(extra) => Err(unknown_argument(extra)),
+        None => Ok(start),
+    }
+}
+
+/// The reason of one argument that this build does not know.
+fn unknown_argument(argument: &std::ffi::OsStr) -> String {
+    format!("unknown argument {}", argument.to_string_lossy())
+}
+
+/// The Horizon home of this start, or the end of the start with code 2.
+fn prepare_home_or_exit() -> HorizonHome {
+    match HorizonHome::prepare() {
+        Ok(home) => home,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            std::process::exit(2);
+        }
+    }
+}
+
 /// One of the three modes of the server, whose work needs no window and no home of
 /// the person.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,19 +266,6 @@ enum SyncMode {
     /// `horizon --server-invite`: asks the server of this home for the first
     /// invitation, and prints the link, the code and its QR code.
     Invite,
-}
-
-/// The mode of this start, when the argument names one. Each mode takes its own
-/// arguments alone, so an entry that names something else never falls through to
-/// the desktop of the person.
-fn sync_mode() -> Option<SyncMode> {
-    match parse_sync_mode(std::env::args_os().skip(1)) {
-        Ok(mode) => mode,
-        Err(problem) => {
-            eprintln!("error: {problem}");
-            std::process::exit(2);
-        }
-    }
 }
 
 /// Whether these arguments ask for the server, for its link or for its first
@@ -297,16 +364,6 @@ fn print_first_invitation(home: &horizon_sync::ServerHome) -> i32 {
         Err(problem) => {
             eprintln!("error: {problem}");
             1
-        }
-    }
-}
-
-fn serves_browser_mcp() -> bool {
-    match parse_browser_mcp_args(std::env::args_os().skip(1)) {
-        Ok(serves) => serves,
-        Err(problem) => {
-            eprintln!("error: {problem}");
-            std::process::exit(2);
         }
     }
 }
@@ -681,6 +738,7 @@ enum RemoteProfileCommand {
     Import(PathBuf),
 }
 
+#[derive(Debug)]
 struct CliArgs {
     config_path: Option<PathBuf>,
     new_session: bool,
@@ -696,10 +754,10 @@ enum Command {
 }
 
 /// Parse the launch flags. The remote-profile commands take exactly one
-/// operand that is not itself a flag, and at most one of them may be given,
-/// so a typo can never fall through to an ordinary launch or run the other
-/// command.
-fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String> {
+/// operand that is not itself a flag, and at most one of them may be given. An
+/// argument that this build does not know is an error, so a typo can never fall
+/// through to an ordinary launch or run another command.
+fn parse_cli_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<CliArgs, String> {
     let mut config_path = None;
     let mut new_session = false;
     let mut ephemeral = false;
@@ -708,14 +766,19 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
 
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
+        let Some(flag) = arg.to_str() else {
+            return Err(unknown_argument(&arg));
+        };
         let mut operand = |flag: &str| -> Result<PathBuf, String> {
             match args.next() {
-                Some(value) if !value.starts_with('-') && !value.is_empty() => Ok(PathBuf::from(value)),
+                Some(value) if !value.is_empty() && !value.to_string_lossy().starts_with('-') => {
+                    Ok(PathBuf::from(value))
+                }
                 _ => Err(format!("{flag} needs a path")),
             }
         };
-        match arg.as_str() {
-            "--config" | "-c" => config_path = Some(operand(&arg)?),
+        match flag {
+            "--config" | "-c" => config_path = Some(operand(flag)?),
             "--export-config" => {
                 return Err(
                     "--export-config is gone: the settings live in settings.sqlite, and the Settings window writes them"
@@ -723,8 +786,8 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
                 );
             }
             "--export-remote-profile" | "--import-remote-profile" => {
-                let path = operand(&arg)?;
-                let profile = if arg == "--export-remote-profile" {
+                let path = operand(flag)?;
+                let profile = if flag == "--export-remote-profile" {
                     RemoteProfileCommand::Export(path)
                 } else {
                     RemoteProfileCommand::Import(path)
@@ -734,7 +797,7 @@ fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, Str
             "--new-session" => new_session = true,
             "--ephemeral" => ephemeral = true,
             "--blank" => blank = true,
-            _ => {}
+            unknown => return Err(unknown_argument(std::ffi::OsStr::new(unknown))),
         }
     }
 
@@ -792,10 +855,66 @@ mod log_filter_tests {
 
 #[cfg(test)]
 mod cli_args_tests {
-    use super::{Command, RemoteProfileCommand, SyncMode, parse_cli_args, parse_sync_mode};
+    use std::ffi::OsString;
+
+    use super::{Command, RemoteProfileCommand, Start, SyncMode, parse_cli_args, parse_start, parse_sync_mode};
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
-        parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
+        parse_cli_args(args.iter().map(|arg| OsString::from(*arg)))
+    }
+
+    fn start(args: &[&str]) -> Result<Start, String> {
+        parse_start(args.iter().map(|arg| OsString::from(*arg)))
+    }
+
+    /// The usage, the version and the hook take no other argument, and an
+    /// argument that this build does not know ends the start instead of opening
+    /// the window of the person.
+    #[test]
+    fn a_mode_takes_its_own_arguments_alone() {
+        for (arguments, help, version, hook) in [
+            (&["--help"][..], true, false, false),
+            (&["-h"][..], true, false, false),
+            (&["--version"][..], false, true, false),
+            (&["-V"][..], false, true, false),
+            (&["--agent-work-hook"][..], false, false, true),
+        ] {
+            let mode = start(arguments).expect("the mode");
+            assert_eq!(matches!(mode, Start::Help), help, "{arguments:?}");
+            assert_eq!(matches!(mode, Start::Version), version, "{arguments:?}");
+            assert_eq!(matches!(mode, Start::AgentWorkHook), hook, "{arguments:?}");
+            let extra = [arguments[0], "--list"];
+            let error = start(&extra).err().expect("a mode takes no other argument");
+            assert_eq!(error, "unknown argument --list", "{extra:?}");
+        }
+        assert!(matches!(
+            start(&["--browser-mcp"]).expect("the browser MCP mode"),
+            Start::BrowserMcp
+        ));
+        assert!(
+            matches!(start(&[]).expect("a start with no argument"), Start::Desktop(_)),
+            "no argument is the window of the person"
+        );
+    }
+
+    #[test]
+    fn an_argument_that_this_build_does_not_know_ends_the_start() {
+        for arguments in [
+            &["--list"][..],
+            &["--nocapture"],
+            &["--test-threads", "4"],
+            &["--config", "c.json", "--list"],
+            &["stray"],
+        ] {
+            let error = start(arguments).err().expect("the argument is refused");
+            assert!(error.starts_with("unknown argument "), "{arguments:?}: {error}");
+            assert!(
+                !error.contains("--blank") && error.len() < 80,
+                "one line names only the argument: {error}"
+            );
+        }
+        let error = start(&["--definitely-unknown"]).err().expect("refused");
+        assert_eq!(error, "unknown argument --definitely-unknown");
     }
 
     #[test]
