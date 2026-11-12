@@ -45,32 +45,55 @@ impl DriverState {
 
     /// Best-effort current title for initial attach and navigation, where a
     /// browser-level target-info change may not have been observed yet.
+    ///
+    /// The question is sent without an answer: on a link of another machine a
+    /// blocking title read held the driver for a whole round trip, and the
+    /// first picture of the new page waited behind it. The reply is consumed
+    /// by the driver pass that reads it.
     pub(super) fn fetch_title(
         &mut self,
         link: &mut CdpLink,
-        event_tx: &BrowserEventSender,
-        frame_slot: &Arc<FrameSlot>,
+        _event_tx: &BrowserEventSender,
+        _frame_slot: &Arc<FrameSlot>,
     ) {
         let Some(target_id) = self.target_id.clone() else {
             return;
         };
-        let Ok(result) = self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
+        if self.title_request_id.is_some() {
+            return;
+        }
+        match link.send_request(
             "Target.getTargetInfo",
             &serde_json::json!({ "targetId": target_id }),
             None,
-        ) else {
-            return;
-        };
-        if self.retain_frame_during_navigation {
-            return;
+        ) {
+            Ok(request_id) => self.title_request_id = Some(request_id),
+            Err(error) => tracing::debug!(target: "browser", "title request failed: {error}"),
         }
-        let Some(title) = result.pointer("/targetInfo/title").and_then(serde_json::Value::as_str) else {
-            return;
+    }
+
+    /// The answer to the title question of this session.
+    pub(super) fn handle_title_response(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        id: u64,
+        result: Option<&serde_json::Value>,
+    ) -> bool {
+        if self.title_request_id != Some(id) {
+            return false;
+        }
+        self.title_request_id = None;
+        if self.retain_frame_during_navigation {
+            return true;
+        }
+        let Some(title) = result
+            .and_then(|result| result.pointer("/targetInfo/title"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            return true;
         };
         self.update_title(event_tx, title);
+        true
     }
 
     #[cfg(test)]
@@ -124,6 +147,9 @@ impl DriverState {
             return;
         }
         if self.handle_native_select_response(id, result.as_ref(), error.as_ref(), event_tx, link) {
+            return;
+        }
+        if self.handle_title_response(event_tx, id, result.as_ref()) {
             return;
         }
         if self.handle_navigate_response(event_tx, id, result.as_ref(), error.as_ref()) {

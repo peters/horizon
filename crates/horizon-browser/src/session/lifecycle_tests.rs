@@ -392,11 +392,10 @@ fn run_attach(outcome_resume: Option<bool>) -> SetupOutcome {
                 _ => json!({}),
             };
             commands.push(command.clone());
-            socket
-                .send(Message::Text(
-                    json!({ "id": command["id"], "result": result }).to_string().into(),
-                ))
-                .expect("respond");
+            // The title question is answered after the test dropped the link.
+            let _ = socket.send(Message::Text(
+                json!({ "id": command["id"], "result": result }).to_string().into(),
+            ));
         }
         commands
     });
@@ -502,4 +501,76 @@ fn a_resumed_page_runs_no_navigation_and_still_sets_every_listener_once() {
         "a resumed page reports that it is ready: {:?}",
         resumed.events
     );
+}
+
+#[test]
+fn the_title_question_never_holds_the_driver_for_a_round_trip() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let address = listener.local_addr().expect("mock address");
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept mock");
+        stream.set_read_timeout(Some(Duration::from_secs(30))).expect("timeout");
+        let mut socket = tungstenite::accept(stream).expect("mock handshake");
+        while let Ok(Message::Text(text)) = socket.read() {
+            let command: Value = serde_json::from_str(&text).expect("command JSON");
+            if command["method"] == "Target.getTargetInfo" {
+                // A far browser that answers its title question slowly.
+                std::thread::sleep(Duration::from_millis(300));
+                let reply = json!({
+                    "id": command["id"],
+                    "result": {"targetInfo": {"targetId": "page", "title": "Inbox"}}
+                });
+                socket.send(Message::Text(reply.to_string().into())).expect("respond");
+            }
+        }
+    });
+    let slot = Arc::new(FrameSlot::default());
+    let config = BrowserSessionConfig {
+        attach: None,
+        resume_target: None,
+        browser: BrowserConfig::default(),
+        panel_local_id: "title".to_string(),
+        initial_url: None,
+        width: 800,
+        height: 600,
+        frame_slot: Arc::clone(&slot),
+        coordination: None,
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    };
+    let url = format!("ws://{address}/");
+    let mut link = CdpLink::connect(&url).expect("connect mock");
+    let (tx, rx) = mpsc::channel();
+    let events = BrowserEventSender {
+        tx,
+        wake: BrowserEventWake::default(),
+        committed_url: CommittedUrl::default(),
+    };
+    let mut state = DriverState::new(&config, &url, None, Arc::new(AtomicBool::new(false)));
+    state.target_id = Some("page".to_string());
+    state.title_fetch_at = Some(Instant::now());
+
+    let asked = Instant::now();
+    state.tick_title_fetch(&mut link, &events, &slot);
+    let asking = asked.elapsed();
+    assert!(
+        asking < Duration::from_millis(100),
+        "the driver asked for the title without waiting for it, and took {asking:?}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut title = None;
+    while title.is_none() && Instant::now() < deadline {
+        if let Ok(Some(message)) = link.read_one() {
+            state.handle_message(&mut link, &events, &slot, message);
+        }
+        title = rx.try_iter().find_map(|event| match event {
+            BrowserEvent::Title(title) => Some(title),
+            _ => None,
+        });
+    }
+    assert_eq!(title.as_deref(), Some("Inbox"), "the answer still arrives");
+    drop(link);
+    let _ = server.join();
 }

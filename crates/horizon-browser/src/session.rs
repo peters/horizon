@@ -616,6 +616,8 @@ struct DriverState {
     navigate_request_id: Option<u64>,
     /// In-flight `Page.startScreencast` request, for the same reason.
     screencast_request_id: Option<u64>,
+    /// In-flight `Target.getTargetInfo` question, which never blocks the loop.
+    title_request_id: Option<u64>,
     clipboard: ClipboardState,
     native_select: NativeSelectState,
     file_chooser: file_chooser::ChooserState,
@@ -720,6 +722,7 @@ impl DriverState {
             top_frame_navigating: false,
             navigate_request_id: None,
             screencast_request_id: None,
+            title_request_id: None,
             clipboard: ClipboardState::default(),
             native_select: NativeSelectState::default(),
             file_chooser: file_chooser::ChooserState::default(),
