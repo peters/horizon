@@ -99,11 +99,16 @@ impl WorkLaunch<'_> {
         args: &mut [String],
         env: &mut std::collections::HashMap<String, String>,
     ) -> StartupPlan {
+        // The owned provider command serves the continuation of work and the
+        // explicit resume of a provider, so an unambiguous launch resolves one.
+        // A launch that is only observed reports its state either way.
         let owned = unambiguous.then(|| self.owned_command(program, args, env)).flatten();
         let mut plan = StartupPlan::prepare(self, is_restore, unambiguous && owned.is_some());
         plan.owner = self.attach(owned.as_deref(), args, env);
         plan.state.own_process(args, owned.as_deref());
-        plan.seed_if_attached(plan.owner.is_some(), args);
+        // The seed is the continuation of work: an observed panel that the
+        // policy leaves out never receives a prompt from Horizon.
+        plan.seed_if_attached(plan.owner.is_some() && self.continues_work(), args);
         plan
     }
 }

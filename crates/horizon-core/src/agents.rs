@@ -115,6 +115,21 @@ impl AgentDefinition {
         )
     }
 
+    /// Whether Horizon gives this kind its own arguments at every launch, with
+    /// the default command or with a command of the preset: the plugin folder
+    /// of its tools, and the session identity of the conversation.
+    #[must_use]
+    pub const fn receives_horizon_arguments(self) -> bool {
+        matches!(self.integration, AgentIntegrationKind::ClaudePluginDir)
+            && matches!(
+                self.resume_mode,
+                AgentResumeMode::ExactFlag {
+                    fresh_session_flag: Some(_),
+                    ..
+                }
+            )
+    }
+
     #[must_use]
     pub const fn requires_exact_session_validation(self) -> bool {
         matches!(self.session_validation, AgentSessionValidationMode::ParentThreadRoots)

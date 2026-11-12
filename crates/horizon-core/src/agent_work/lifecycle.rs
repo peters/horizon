@@ -41,17 +41,38 @@ impl WorkLaunch<'_> {
         super::command::owned_command(program, args, self.cwd, env)
     }
 
+    /// Whether this launch reports its state through a work ledger: a launch of
+    /// an agent kind that Horizon gives its own arguments to. A command of the
+    /// preset and the policy of the panel do not take part in this: the sidebar
+    /// reads the state of every such panel.
+    pub(crate) fn is_observed(&self) -> bool {
+        cfg!(target_os = "linux") && self.kind.receives_horizon_arguments()
+    }
+
+    /// Whether this launch continues the work of its panel after a restart:
+    /// Linux, a Claude panel, its own default command, and the policy of the
+    /// panel. Only this path offers a resume, and only it owns the provider
+    /// process so that a teardown proves the exit before the final transcript
+    /// read.
+    pub(crate) fn continues_work(&self) -> bool {
+        // The empirical teardown/seeded-resume proof currently covers Linux.
+        // Other providers and platforms retain the explicit confirmation path.
+        cfg!(target_os = "linux") && self.policy.enabled && self.kind == PanelKind::Claude && self.default_command
+    }
+
+    /// Give the agent of this panel the work ledger of its launch.
+    ///
+    /// A launch that continues the work of its panel needs the owned provider
+    /// command, because only a joined provider proves its exit. A launch that is
+    /// only observed needs nothing more than the hooks: the record, the plugin
+    /// folder and the five variables.
     pub(crate) fn attach(
         &self,
         owned_command: Option<&str>,
         args: &mut [String],
         env: &mut HashMap<String, String>,
     ) -> Option<Arc<WorkOwner>> {
-        let owned_command = owned_command?;
-        // The empirical teardown/seeded-resume proof currently covers Linux.
-        // Other providers and platforms retain the explicit confirmation path.
-        if !cfg!(target_os = "linux") || !self.policy.enabled || self.kind != PanelKind::Claude || !self.default_command
-        {
+        if !self.is_observed() || (self.continues_work() && owned_command.is_none()) {
             return None;
         }
         if args.len() != 2 || args[0] != "-ic" {
@@ -78,12 +99,14 @@ impl WorkLaunch<'_> {
             .register_owner(self.panel, self.kind, &token, self.session_id, &cwd)
             .is_err()
         {
-            tracing::warn!("work continuation evidence could not be initialized");
+            tracing::warn!("the work ledger of this launch could not be initialized");
             return None;
         }
         // The PTY must own the provider, not an intermediate shell, so joining
         // its teardown proves provider exit before the final transcript read.
-        owned_command.clone_into(&mut args[1]);
+        if let Some(owned_command) = owned_command {
+            owned_command.clone_into(&mut args[1]);
+        }
         args[1].push_str(" --plugin-dir ");
         args[1].push_str(&quote_argument(plugin));
         for (key, value) in [
@@ -210,6 +233,98 @@ pub(super) fn quote_argument(argument: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::all_agent_kinds;
+
+    fn launch(kind: PanelKind, enabled: bool, default_command: bool) -> (ResumePolicy, bool) {
+        let policy = ResumePolicy {
+            enabled,
+            ..ResumePolicy::default()
+        };
+        (policy, default_command)
+    }
+
+    fn gates(kind: PanelKind, enabled: bool, default_command: bool) -> (bool, bool) {
+        let (policy, default_command) = launch(kind, enabled, default_command);
+        let launch = WorkLaunch {
+            panel: "panel",
+            kind,
+            policy: &policy,
+            cwd: None,
+            session_id: Some("session"),
+            default_command,
+        };
+        (launch.is_observed(), launch.continues_work())
+    }
+
+    #[test]
+    fn observation_does_not_depend_on_the_command_or_the_policy_of_the_panel() {
+        // The sidebar reads the state of a Claude panel whatever the preset
+        // runs and whatever the panel's continuation policy is.
+        for (enabled, default_command) in [(false, true), (true, true), (false, false), (true, false)] {
+            let (observed, continues) = gates(PanelKind::Claude, enabled, default_command);
+            assert!(
+                observed,
+                "a Claude launch is observed with {enabled} and {default_command}"
+            );
+            assert_eq!(
+                continues,
+                cfg!(target_os = "linux") && enabled && default_command,
+                "the continuation keeps its own gate"
+            );
+        }
+    }
+
+    #[test]
+    fn observation_follows_the_launch_that_horizon_gives_its_arguments_to() {
+        for kind in all_agent_kinds() {
+            let (observed, _) = gates(*kind, true, true);
+            assert_eq!(
+                observed,
+                cfg!(target_os = "linux") && kind.receives_horizon_arguments(),
+                "{kind:?}"
+            );
+        }
+        for kind in [
+            PanelKind::Shell,
+            PanelKind::Ssh,
+            PanelKind::Command,
+            PanelKind::Browser,
+            PanelKind::Editor,
+            PanelKind::Device,
+            PanelKind::Block,
+        ] {
+            let (observed, continues) = gates(kind, true, true);
+            assert!(!observed && !continues, "{kind:?} runs no agent");
+        }
+    }
+
+    #[test]
+    fn a_launch_that_continues_needs_the_owned_provider_command() {
+        let policy = ResumePolicy {
+            enabled: true,
+            ..ResumePolicy::default()
+        };
+        let launch = WorkLaunch {
+            panel: "panel",
+            kind: PanelKind::Claude,
+            policy: &policy,
+            cwd: None,
+            session_id: Some("session"),
+            default_command: true,
+        };
+        if cfg!(target_os = "linux") {
+            assert!(
+                launch
+                    .attach(
+                        None,
+                        &mut ["-ic".to_string(), "claude".to_string()],
+                        &mut HashMap::new()
+                    )
+                    .is_none(),
+                "a continuation without an owned provider resolves no ledger"
+            );
+        }
+    }
 
     #[test]
     fn explicit_interrupt_remains_a_veto_despite_later_typed_input() {
