@@ -1,5 +1,4 @@
 use super::*;
-#[cfg(target_os = "linux")]
 use std::io::Write as _;
 
 #[test]
@@ -64,14 +63,12 @@ fn seeded_prompt_is_a_single_quoted_argument() {
     assert!(!append_seed(PanelKind::Claude, &mut direct, "brief"));
 }
 
-#[cfg(target_os = "linux")]
 struct Fixture {
     home: tempfile::TempDir,
     store: WorkStore,
     policy: super::super::ResumePolicy,
     input: super::super::HookInput,
 }
-#[cfg(target_os = "linux")]
 impl Fixture {
     fn new() -> Self {
         let home = tempfile::tempdir().expect("home");
@@ -174,7 +171,6 @@ impl Fixture {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_clean_handoff_is_claimed_once_and_never_replayed() {
     let _budget = RestoreBudget::new(1);
     let mut fixture = Fixture::new();
@@ -186,7 +182,6 @@ fn a_clean_handoff_is_claimed_once_and_never_replayed() {
     assert_eq!(fixture.inspect().0, RestartDecision::NotResumable);
 }
 
-#[cfg(target_os = "linux")]
 fn record_later_question(fixture: &mut Fixture) {
     fixture.input.event.prompt_id = Some("later-prompt".into());
     fixture.input.event.source = Some("resume".into());
@@ -209,7 +204,6 @@ fn record_later_question(fixture: &mut Fixture) {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn a_later_question_is_manual_even_when_an_old_handoff_remains() {
     let _budget = RestoreBudget::new(5);
     for consumed in [false, true] {
@@ -248,7 +242,6 @@ fn a_later_question_is_manual_even_when_an_old_handoff_remains() {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn record_later_tool_permission(fixture: &mut Fixture) {
     fixture.input.event.prompt_id = Some("later-tool-prompt".into());
     fixture.input.event.tool_name = Some("Bash".into());
@@ -273,7 +266,6 @@ fn record_later_tool_permission(fixture: &mut Fixture) {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn later_tool_permission_remains_manual_across_repeated_restores() {
     let _budget = RestoreBudget::new(5);
     for consumed in [false, true] {
@@ -314,7 +306,6 @@ fn later_tool_permission_remains_manual_across_repeated_restores() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn changed_consumed_work_does_not_override_terminal_evidence() {
     let _budget = RestoreBudget::new(5);
     let mut fixture = Fixture::new();
@@ -367,7 +358,6 @@ fn changed_consumed_work_does_not_override_terminal_evidence() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn later_questions_do_not_override_completion_exit_or_transcript_interrupts() {
     let _budget = RestoreBudget::new(5);
     let mut fixture = Fixture::new();
@@ -399,7 +389,6 @@ fn later_questions_do_not_override_completion_exit_or_transcript_interrupts() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn budget_and_uncertain_process_identity_do_not_claim_the_handoff() {
     let _budget = RestoreBudget::new(0);
     let mut fixture = Fixture::new();
@@ -416,7 +405,6 @@ fn budget_and_uncertain_process_identity_do_not_claim_the_handoff() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn crash_and_permission_evidence_ask_without_a_handoff() {
     let fixture = Fixture::new();
     std::fs::write(
@@ -436,7 +424,6 @@ fn crash_and_permission_evidence_ask_without_a_handoff() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn uncertain_registry_asks_for_unfinished_work_without_overriding_vetoes() {
     let _budget = RestoreBudget::new(5);
     for registry in ["missing", "malformed", "reused"] {
@@ -493,7 +480,6 @@ fn uncertain_registry_asks_for_unfinished_work_without_overriding_vetoes() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn missing_registry_and_repository_changes_downgrade_clean_work() {
     let _budget = RestoreBudget::new(1);
     let mut fixture = Fixture::new();

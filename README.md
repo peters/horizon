@@ -277,6 +277,7 @@ Horizon runs on Linux and macOS, and some features are Linux-only today:
 |:--|:--|:--|
 | Board, shell, browser and Device panels | ✓ | ✓ |
 | Coding-agent panels | ✓ | ✓ |
+| Continue work after restart (Claude panel) | ✓ | ✓ |
 | Safari browser panels | — | ✓ |
 | Agent-driven desktops | X11 | — |
 | Speech input | ✓ with PipeWire | Needs a recorder program |

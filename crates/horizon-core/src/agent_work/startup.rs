@@ -244,7 +244,7 @@ fn inspect_at(
         now_millis: now,
     };
     let mut decision = evidence.classify(REMAINING.get());
-    if (decision == RestartDecision::Resume && (!cfg!(target_os = "linux") || live.is_none()))
+    if (decision == RestartDecision::Resume && live.is_none())
         || (decision == RestartDecision::Ask(AskReason::UncleanShutdown) && (live.is_none() || changed_handoff_work))
     {
         decision = RestartDecision::Ask(AskReason::MissingEvidence);

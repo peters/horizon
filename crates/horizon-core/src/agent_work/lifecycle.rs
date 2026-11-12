@@ -59,15 +59,18 @@ impl WorkLaunch<'_> {
         cfg!(unix) && crate::agents::receives_horizon_arguments(self.kind)
     }
 
-    /// Whether this launch continues the work of its panel after a restart:
-    /// Linux, a Claude panel, its own default command, and the policy of the
-    /// panel. Only this path offers a resume, and only it owns the provider
-    /// process so that a teardown proves the exit before the final transcript
-    /// read.
+    /// Whether this launch continues the work of its panel after a restart: a
+    /// Claude panel with its own default command, its continuation policy and
+    /// the process reads of its system. Only this path offers a resume, and
+    /// only it owns the provider process so that a teardown proves the exit
+    /// before the final transcript read.
+    ///
+    /// The teardown and the seeded resume need the owned provider command, a
+    /// process presence that signal 0 answers and a start time, and each of
+    /// those answers on every Unix. The platform gate that held back macOS is
+    /// gone with the fallbacks that made a Mac answer a wrong value.
     pub(crate) fn continues_work(&self) -> bool {
-        // The empirical teardown/seeded-resume proof currently covers Linux.
-        // Other providers and platforms retain the explicit confirmation path.
-        cfg!(target_os = "linux") && self.policy.enabled && self.kind == PanelKind::Claude && self.default_command
+        cfg!(unix) && self.policy.enabled && self.kind == PanelKind::Claude && self.default_command
     }
 
     /// Give the agent of this panel the work ledger of its launch.
@@ -282,8 +285,8 @@ mod tests {
             );
             assert_eq!(
                 continues,
-                cfg!(target_os = "linux") && enabled && default_command,
-                "the continuation keeps its own gate"
+                cfg!(unix) && enabled && default_command,
+                "the continuation follows the panel on every Unix system"
             );
         }
     }
@@ -326,18 +329,16 @@ mod tests {
             session_id: Some("session"),
             default_command: true,
         };
-        if cfg!(target_os = "linux") {
-            assert!(
-                launch
-                    .attach(
-                        None,
-                        &mut ["-ic".to_string(), "claude".to_string()],
-                        &mut HashMap::new()
-                    )
-                    .is_none(),
-                "a continuation without an owned provider resolves no ledger"
-            );
-        }
+        assert!(
+            launch
+                .attach(
+                    None,
+                    &mut ["-ic".to_string(), "claude".to_string()],
+                    &mut HashMap::new()
+                )
+                .is_none(),
+            "a continuation without an owned provider resolves no ledger"
+        );
     }
 
     #[test]
@@ -355,8 +356,6 @@ mod tests {
         };
         assert_eq!(launch.is_observed(), cfg!(unix));
         assert!(!launch.continues_work(), "a command of a preset never continues");
-        // The continuation keeps its own system: its teardown proof is Linux.
-        assert!(!launch.continues_work() || cfg!(target_os = "linux"));
     }
 
     #[test]

@@ -39,6 +39,7 @@ function, update this document in the same PR.
 | Board, workspaces, sessions | Yes | Yes |
 | Shell panels | Yes | Yes |
 | Agent panels | Yes | Yes |
+| Continue work after restart (note 6) | Yes | Yes |
 | Browser panels: Chromium and Firefox | Yes | Yes |
 | Browser panels: Safari | No (note 1) | Yes |
 | File drops into local Chromium and Firefox panels | Yes | Not tested |
@@ -70,11 +71,18 @@ function, update this document in the same PR.
    so that lane is "Not tested". Test it with
    [the remote browser tunnel procedure](testing/procedures/remote-browser-tunnel.md).
 5. Horizon shows a notification with `notify-send` on Linux and with `osascript`
-   on macOS (`crates/horizon-core/src/notify/sink.rs`). A Linux computer without
-   `notify-send` sends nothing, and Settings → General says so under the row.
-   The two programs are the only dependencies. No test examines the line of
+   on macOS (`crates/horizon-core/src/notify/sink.rs:67-93`). A Linux computer
+   without `notify-send` sends nothing, and Settings → General says so under the
+   row. The two programs are the only dependencies. No test examines the line of
    macOS, so that lane is "Not tested". Test both systems with
    [the desktop notification procedure](testing/procedures/desktop-notifications.md).
+6. Horizon continues the work of a Claude panel after a restart when the panel
+   allows it and the evidence proves a clean suspension
+   (`crates/horizon-core/src/agent_work/lifecycle.rs:67-76`). The rule is the
+   same on both systems. The handoff and continuation tests run on both, and the
+   process checks that they need answer on both: signal 0 names a process that
+   exists and `ps` or `/proc` names its start time. No run has used a real Mac
+   yet, so the live lane of that path is "Not tested" there.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux
