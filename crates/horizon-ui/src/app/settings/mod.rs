@@ -33,6 +33,10 @@ use crate::theme;
 
 pub(super) const SETTINGS_BAR_ID: &str = "settings_bar";
 pub(super) const SETTINGS_BAR_HEIGHT: f32 = 48.0;
+/// The height of the bar while a value of another computer waits: the sentence of
+/// the question has a row of its own above the two choices, so the bar grows by one
+/// row of text and the spacing beside it.
+pub(super) const SETTINGS_BAR_CONFLICT_HEIGHT: f32 = 72.0;
 pub(super) const SETTINGS_PANEL_ID: &str = "settings_panel";
 
 const TAB_CORNER_RADIUS: f32 = 8.0;

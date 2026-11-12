@@ -24,12 +24,12 @@ fn footer_texts(shapes: &[egui::epaint::ClippedShape], panel: egui::Rect) -> Vec
 }
 
 /// The band that the footer bar covers: the widest shape that ends at the bottom
-/// of the panel content and is as tall as the bar.
+/// of the panel content and is as tall as a bar of one row or of two.
 fn footer_band(shapes: &[egui::epaint::ClippedShape], panel: egui::Rect) -> egui::Rect {
     let mut band = egui::Rect::NOTHING;
     for_each_painted(shapes, &mut |_shape, painted, _clip| {
         let at_the_bottom = painted.max.y <= panel.max.y + 1.0 && panel.max.y - painted.max.y <= 20.0;
-        if at_the_bottom && painted.height() > 40.0 && painted.height() < 56.0 && painted.width() > band.width() {
+        if at_the_bottom && painted.height() > 40.0 && painted.height() < 120.0 && painted.width() > band.width() {
             band = painted;
         }
     });
@@ -204,8 +204,9 @@ fn status_line_width(ctx: &egui::Context, text: &str) -> f32 {
 }
 
 /// The footer gives the person the two choices of a value that another computer
-/// changed while the same section is edited here: the line and both buttons stay
-/// in the panel, and the line keeps the place that the buttons leave.
+/// changed while the same section is edited here: the sentence and both buttons
+/// stay in the panel, the sentence is the whole line of the question, and it has a
+/// row of its own above the buttons.
 #[test]
 fn the_footer_offers_the_two_choices_of_a_value_of_another_computer() {
     let viewport = [1480.0_f32, 900.0];
@@ -221,6 +222,12 @@ fn the_footer_offers_the_two_choices_of_a_value_of_another_computer() {
     for tab in super::SettingsTab::ALL {
         let shapes = settings_frame(&ctx, &mut app, viewport, *tab);
         let panel = panel_background_rect(&shapes, reserved_panel_rect(&app));
+        // The window of 1480 points opens a panel of 444 points, which is the width
+        // where the sentence and both choices no longer share one row.
+        assert!(
+            (panel.width() - 444.0).abs() <= 1.0,
+            "the panel of this window is {panel:?}"
+        );
         let band = footer_band(&shapes, panel);
         let texts = footer_texts(&shapes, panel);
         let buttons: Vec<egui::Rect> = texts
@@ -245,13 +252,25 @@ fn the_footer_offers_the_two_choices_of_a_value_of_another_computer() {
             .filter(|(text, _)| !BUTTON_LABELS.contains(&text.as_str()))
             .collect();
         assert_eq!(lines.len(), 1, "one line: {texts:?}");
-        assert_eq!(lines[0].0, super::CONFLICT_LINE);
+        let (drawn, line) = lines[0];
+        assert_eq!(drawn, super::CONFLICT_LINE);
+        assert!(
+            band.expand(1.0).contains_rect(*line),
+            "the sentence at {line:?} is in the footer bar {band:?}"
+        );
+        // The sentence is above the two choices and not beside them, and the whole
+        // of it is drawn: the row belongs to it alone.
         for button in &buttons {
             assert!(
-                !lines[0].1.intersects(*button) && lines[0].1.max.x + 6.0 <= button.min.x,
-                "the line {:?} stays clear of the button {button:?}",
-                lines[0].1
+                line.max.y <= button.min.y + 1.0,
+                "the sentence at {line:?} has its own row above the choice at {button:?}"
             );
         }
+        let whole = status_line_width(&ctx, super::CONFLICT_LINE);
+        assert!(
+            line.width() + 1.0 >= whole,
+            "the sentence of {whole} points is cut to {} points at the width of this panel: {line:?}",
+            line.width()
+        );
     }
 }
