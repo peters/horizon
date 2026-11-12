@@ -1028,6 +1028,11 @@ fn the_remote_tab_opens_a_frame_source_program_of_this_computer() {
         })
         .expect("the press opened one viewer of the program");
     assert_eq!(panel.kind, horizon_core::PanelKind::Device);
+    assert_eq!(
+        panel.layout.size,
+        horizon_core::FRAME_SOURCE_PANEL_SIZE,
+        "a viewer opens at the size that draws its first picture wide enough to read"
+    );
 }
 
 #[test]

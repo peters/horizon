@@ -95,6 +95,23 @@ fn caption(ui: &mut Ui, text: &str) {
 }
 
 /// The address of the VNC desktop of this viewer, for the row of its connection.
+/// The kind of source that one viewer shows, for the header of the panel.
+fn transport_label(device: &DevicePanelState) -> &'static str {
+    if device.target.is_frame_source() {
+        "Frame source program"
+    } else if device.ssh_tunnel.is_some() {
+        "VNC desktop over SSH"
+    } else {
+        "VNC desktop"
+    }
+}
+
+/// The word for the name or the text that the source reported: a VNC server names
+/// its desktop, and a frame source program names itself.
+fn reported_name_label(frame_source: bool) -> &'static str {
+    if frame_source { "Source name" } else { "VNC name" }
+}
+
 fn endpoint_address(device: &DevicePanelState) -> String {
     device
         .target
@@ -169,7 +186,7 @@ fn connection(
             },
         );
         if let Some(name) = &server.name {
-            row(ui, "VNC name", name);
+            row(ui, reported_name_label(device.target.is_frame_source()), name);
         }
         if let Some([width, height]) = server.desktop_size {
             row(ui, "Resolution", &format!("{width} × {height}"));
@@ -223,13 +240,14 @@ pub(super) fn header(
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(8.0);
         let endpoint = device.endpoint_label();
-        let transport = if device.ssh_tunnel.is_some() {
-            "VNC desktop over SSH"
-        } else {
-            "VNC desktop"
-        };
+        let frame_source = device.target.is_frame_source();
+        let transport = transport_label(device);
+        // A frame source viewer is named by its program in the settings, and the
+        // text that the program gives itself is a row of the connection details.
         let name = if server.native_session.is_some() {
             Some(native_labels.device.as_str())
+        } else if frame_source {
+            device.display_name(None)
         } else {
             device.display_name(server.name.as_deref())
         };
@@ -347,6 +365,33 @@ fn desktop_icon(ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frame_source_device() -> DevicePanelState {
+        DevicePanelState {
+            target: horizon_core::DeviceViewTarget::frame_source(horizon_core::FrameSourceRef {
+                name: "standin".into(),
+                target: None,
+            }),
+            input: horizon_core::DeviceInput::Accepted,
+            identity: None,
+            connect_on_start: false,
+            ssh_tunnel: None,
+        }
+    }
+
+    #[test]
+    fn a_frame_source_is_named_as_a_program_and_not_as_a_vnc_desktop() {
+        assert_eq!(transport_label(&frame_source_device()), "Frame source program");
+        assert_eq!(
+            transport_label(&DevicePanelState {
+                target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+                ..frame_source_device()
+            }),
+            "VNC desktop"
+        );
+        assert_eq!(reported_name_label(true), "Source name");
+        assert_eq!(reported_name_label(false), "VNC name");
+    }
     #[test]
     fn repeated_recipe_ids_show_active_step_then_latest_result() {
         let mut native = super::super::tests::native_metadata();

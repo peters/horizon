@@ -37,6 +37,11 @@ const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
 
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
+
+/// The default size of a frame source viewer: the picture of the first `stream`
+/// message of a program (640 by 360 until the program says otherwise) is drawn at
+/// least 480 points wide, and the chrome of the viewer takes the rest of the panel.
+pub const FRAME_SOURCE_PANEL_SIZE: [f32; 2] = [560.0, 560.0];
 /// Lines of terminal scrollback kept for a shell, SSH, command, or agent panel.
 pub const PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = PANEL_SCROLLBACK_LIMIT;
@@ -264,6 +269,20 @@ pub fn panel_waits_for_its_start(kind: PanelKind) -> bool {
 }
 
 impl PanelOptions {
+    /// The size of a new panel of this kind, when the caller names none: the
+    /// picture of a frame source viewer gets the room of its first `stream`
+    /// message.
+    #[must_use]
+    pub fn layout_size(&self) -> [f32; 2] {
+        self.size.unwrap_or_else(|| {
+            if self.frame_source.is_some() {
+                FRAME_SOURCE_PANEL_SIZE
+            } else {
+                DEFAULT_PANEL_SIZE
+            }
+        })
+    }
+
     /// Whether the process of this panel waits for the preparation of a worker.
     #[must_use]
     pub fn waits_for_its_start(&self) -> bool {

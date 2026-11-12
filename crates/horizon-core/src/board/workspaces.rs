@@ -214,7 +214,7 @@ impl Board {
             opts.cwd.clone_from(&ws.cwd);
         }
 
-        let layout_size = opts.size.unwrap_or(DEFAULT_PANEL_SIZE);
+        let layout_size = opts.layout_size();
         let layout_position = opts.position.unwrap_or_else(|| {
             let beside = beside
                 .filter(|id| self.panel(*id).is_some_and(|panel| panel.workspace_id == workspace))

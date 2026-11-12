@@ -320,7 +320,13 @@ impl DeviceUiState {
                 visible_image(ui, texture, size * scale, interact)
             };
             self.drawn = image_visible;
-            if self.empty_desktop && image_visible && matches!(self.status, Status::Connected) {
+            // A program draws its own pictures: a flat one is its picture, and the
+            // hint of a desktop with nothing open is no sentence about it.
+            if self.empty_desktop
+                && image_visible
+                && matches!(self.status, Status::Connected)
+                && !self.shows_frame_source()
+            {
                 paint_empty_hint(ui, response.rect);
             }
             // The program of a frame source sends the size that it draws at, in
@@ -476,6 +482,11 @@ impl DeviceUiState {
     /// names another source. A VNC viewer holds none and this clears it.
     pub(crate) fn set_frame_plan(&mut self, plan: Option<horizon_core::FrameSourcePlan>) {
         self.frame_plan = plan;
+    }
+
+    /// Whether this viewer shows the pictures of a program of this computer.
+    pub(super) fn shows_frame_source(&self) -> bool {
+        self.session.as_ref().is_some_and(Session::is_frame_source)
     }
 
     /// The run of the frame source of `device`, or the sentence that says why there

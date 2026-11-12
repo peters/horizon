@@ -5,7 +5,7 @@ use horizon_frame_source::{InputEvent, InputHello};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 800.0);
 
-fn frame_device() -> DevicePanelState {
+pub(super) fn frame_device() -> DevicePanelState {
     DevicePanelState {
         target: horizon_core::DeviceViewTarget::frame_source(horizon_core::FrameSourceRef {
             name: "standin".into(),
@@ -24,6 +24,18 @@ fn frame_viewer() -> (
     DeviceUiState,
     horizon_frame_source::SentFrameInput,
 ) {
+    frame_viewer_of([160, 120])
+}
+
+/// A frame source viewer that holds one picture of `picture` pixels.
+fn frame_viewer_of(
+    picture: [usize; 2],
+) -> (
+    egui::Context,
+    DevicePanelState,
+    DeviceUiState,
+    horizon_frame_source::SentFrameInput,
+) {
     let ctx = egui::Context::default();
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let (session, sent) = Session::frame_fixture();
@@ -37,8 +49,8 @@ fn frame_viewer() -> (
         }),
         ..DeviceUiState::default()
     };
-    // One picture of 4:3, so a panel of another shape leaves a letterbox beside it.
-    state.set_source(&ctx, ColorImage::filled([160, 120], egui::Color32::GREEN));
+    // A picture of 4:3 leaves a letterbox beside it in a panel of another shape.
+    state.set_source(&ctx, ColorImage::filled(picture, egui::Color32::GREEN));
     (ctx, frame_device(), state, sent)
 }
 
@@ -48,12 +60,23 @@ fn frame(
     device: &DevicePanelState,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
+    frame_in(ctx, state, device, SCREEN, events)
+}
+
+/// One frame in a body of `screen` points.
+fn frame_in(
+    ctx: &egui::Context,
+    state: &mut DeviceUiState,
+    device: &DevicePanelState,
+    screen: egui::Vec2,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
     state.begin_frame();
     let output = ctx
         .run_ui(
             egui::RawInput {
                 events,
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
                 ..Default::default()
             },
             |ui| {
@@ -585,5 +608,55 @@ fn a_scroll_sideways_is_its_own_step_and_a_wheel_beside_the_picture_is_ignored()
     assert!(
         wheel_events(&sent.drain()).is_empty(),
         "a wheel beside the picture belongs to the canvas"
+    );
+}
+
+#[test]
+fn the_picture_of_a_new_viewer_is_drawn_wide_enough_to_read() {
+    let (ctx, device, mut state, _sent) = frame_viewer_of([640, 360]);
+    // The default size of a frame source panel less its titlebar and its padding:
+    // the body that this widget draws in.
+    let body = egui::vec2(
+        horizon_core::FRAME_SOURCE_PANEL_SIZE[0] - 2.0 * crate::app::PANEL_PADDING,
+        horizon_core::FRAME_SOURCE_PANEL_SIZE[1] - crate::app::PANEL_TITLEBAR_HEIGHT - 2.0 * crate::app::PANEL_PADDING,
+    );
+    let output = frame_in(&ctx, &mut state, &device, body, Vec::new());
+    let image = image_rect(&output);
+    assert!(
+        image.width() >= 480.0,
+        "the first picture of the program is at least 480 points wide: {image:?} in {body:?}"
+    );
+    let shape = image.width() / image.height();
+    assert!(
+        (shape - 640.0 / 360.0).abs() < 0.02,
+        "and it keeps the shape of its own stream message: {shape}"
+    );
+}
+
+#[test]
+fn the_chrome_of_a_frame_source_viewer_names_the_program_and_its_source() {
+    let (ctx, device, mut state, _sent) = frame_viewer();
+    // What the program said of itself in its `hello`.
+    state.server.name = Some("frame_source_standin".to_owned());
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let texts: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "Frame source program"),
+        "the viewer says what kind of source it shows: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text == "frame source standin"),
+        "and the name of the program of the settings: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == "frame_source_standin"),
+        "the text that the program gives itself is no name of the viewer: {texts:?}"
     );
 }
