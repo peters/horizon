@@ -41,15 +41,27 @@ impl Attention {
         }
     }
 
-    /// The one word of a panel row; an idle panel says nothing.
+    /// The one word of a panel row; an idle panel says nothing. The word stays
+    /// short because it shares the row with the name of the panel; the sentence
+    /// of the hover text says the whole state.
     #[must_use]
     pub const fn word(self) -> Option<&'static str> {
         match self {
             Self::Idle => None,
             Self::Working => Some("Working"),
-            Self::Background => Some("Works in the background"),
+            Self::Background => Some("Background"),
             Self::Done => Some("Done"),
             Self::NeedsYou => Some("Needs you"),
+        }
+    }
+
+    /// What a screen reader says for the state: the word of the row, spelled out
+    /// where the row shortens it.
+    #[must_use]
+    pub const fn spoken(self) -> Option<&'static str> {
+        match self {
+            Self::Background => Some("Works in the background"),
+            state => state.word(),
         }
     }
 

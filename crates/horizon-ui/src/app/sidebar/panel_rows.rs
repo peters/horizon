@@ -17,6 +17,12 @@ const CLOSE_SIDE: f32 = 20.0;
 pub(super) const STATE_WIDTH: f32 = 120.0;
 /// The gap between the title and the word of its state.
 pub(super) const STATE_GAP: f32 = 6.0;
+/// The font of the word of a state, the size of the kind icon beside it. The
+/// longest word of a state fits half of a default row at this size.
+const STATE_SIZE: f32 = 9.5;
+/// The largest share of a row that the word of a state takes. The name of the
+/// panel keeps the other share, so the two texts never cover each other.
+const STATE_SHARE: f32 = 0.5;
 
 /// The close button of a panel row, at the right of its card.
 pub(super) fn close_rect(row: Rect) -> Rect {
@@ -36,15 +42,16 @@ pub(super) struct PanelRowState {
 
 /// Where the title of a panel row ends, where the word of its state starts and
 /// how wide that word may be, from the right edge that the row's text may use.
-/// The word that says whether an agent needs the person keeps its room, and the
-/// title is cut to the rest. An idle row has no word, so its title keeps the
-/// whole width.
+///
+/// The word of a state takes at most half of the row and the title keeps the
+/// rest less the gap, so the two texts never cover each other. An idle row has no
+/// word, so its title keeps the whole width.
 pub(super) fn title_and_state(right: f32, title_left: f32, state_width: f32) -> Option<(f32, f32, f32)> {
     if state_width <= 0.0 {
         return None;
     }
     let room = (right - title_left).max(0.0);
-    let width = state_width.min(room);
+    let width = state_width.min(room * STATE_SHARE);
     let state_left = right - width;
     Some(((state_left - STATE_GAP).max(title_left), state_left, width))
 }
@@ -91,7 +98,7 @@ pub(super) fn paint_panel_row(
     let state = panel.attention.word();
     // The word of a state, when the row keeps the room for it, ends the title.
     let state_width = state.map_or(0.0, |word| {
-        let galley = text::line(ui, word, 10.0, text::REGULAR, theme::FG_DIM(), STATE_WIDTH);
+        let galley = text::line(ui, word, STATE_SIZE, text::REGULAR, theme::FG_DIM(), STATE_WIDTH);
         galley.size().x
     });
     let state_room = title_and_state(card.max.x - 26.0, title_left, state_width);
@@ -106,7 +113,7 @@ pub(super) fn paint_panel_row(
             horizon_core::Attention::Done => theme::ACCENT(),
             _ => theme::FG_DIM(),
         };
-        let galley = text::line(ui, word, 10.0, text::REGULAR, color, room);
+        let galley = text::line(ui, word, STATE_SIZE, text::REGULAR, color, room);
         painter.galley(pos2(state_left, center_y - galley.size().y / 2.0), galley, color);
     }
     match close {

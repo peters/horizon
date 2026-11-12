@@ -141,7 +141,7 @@ section 5, and **typed** is the command of step 4.
 
 1. Type `start`, then `background`.
 
-   Result: the panel row says **Works in the background**, and the workspace badge
+   Result: the panel row says **Background**, and the workspace badge
    stays the green working dot.
 
 2. Type `start`, then `failed`.

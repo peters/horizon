@@ -77,7 +77,12 @@ fn background_work_keeps_the_panel_working_after_its_turn_ended() {
     finished.background_tasks = 2;
     board.observe_ledger("panel", &finished, 10);
     assert_eq!(board.state("panel"), Attention::Background);
-    assert_eq!(board.state("panel").word(), Some("Works in the background"));
+    assert_eq!(board.state("panel").word(), Some("Background"));
+    assert_eq!(
+        board.state("panel").spoken(),
+        Some("Works in the background"),
+        "a screen reader hears the whole state"
+    );
     assert_eq!(
         board.state("panel").rank(),
         Attention::Working.rank(),

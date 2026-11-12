@@ -19,7 +19,7 @@ One event for each line that the person types into the panel:
   ask         the agent waits for permission                -> Needs you
   answer      the person answered                           -> Working
   stop        the turn ends                                 -> Done
-  background  the turn ends and background work still runs  -> Works in the background
+  background  the turn ends and background work still runs  -> Background
   failed      the turn failed                               -> Needs you
   quit        the script ends
 

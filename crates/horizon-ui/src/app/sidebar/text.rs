@@ -150,7 +150,7 @@ pub(super) fn workspace_spoken(name: &str, panels: Option<usize>, detached: bool
 /// What a screen reader says for a panel row: the kind, the label and the one
 /// word of its attention state.
 pub(super) fn panel_spoken(kind: PanelKind, label: &str, attention: Attention) -> String {
-    match attention.word() {
+    match attention.spoken() {
         Some(word) => format!("{}: {label}, {}", kind.display_name(), word.to_lowercase()),
         None => format!("{}: {label}", kind.display_name()),
     }

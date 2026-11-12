@@ -197,7 +197,7 @@ panel that needs no model and no login. Horizon starts it as the agent of a
 Claude panel and attaches the work ledger of that panel, and the stand-in sends
 the lifecycle events of a turn through the same entry point that the installed
 hooks use. The sidebar then shows the four attention states: `Needs you`, `Done`,
-`Working` and `Works in the background`.
+`Working` and `Background`.
 
 ```bash
 scripts/device-smoke/serve.py --horizon target/debug/horizon \

@@ -827,8 +827,10 @@ fn the_word_of_a_panel_state_fits_the_narrowest_sidebar() {
     // before the edge, the title starts at 68 and the row keeps 26 for a close.
     let right = 160.0 - 26.0;
     let title_left = 68.0;
-    // The longest word of a state at 10 pt Inter, and "Needs you".
-    for state_width in [105.0, 46.0, 30.0] {
+    let room = right - title_left;
+    // The words of the states at the font of a row: background, needs you,
+    // working and done.
+    for state_width in [54.0, 48.2, 40.5, 22.8] {
         let (title_right, state_left, width) =
             title_and_state(right, title_left, state_width).expect("a row with a state word");
         assert!(
@@ -837,79 +839,204 @@ fn the_word_of_a_panel_state_fits_the_narrowest_sidebar() {
         );
         assert!(state_left + width <= 168.0, "the word stays inside the sidebar");
         assert!(width <= state_width, "a word that does not fit is cut, and never grows");
+        assert!(
+            width <= room / 2.0 + f32::EPSILON,
+            "the word never takes more than half of the row: {width}"
+        );
         assert!(title_right >= title_left, "the title keeps a room to elide in");
-        if state_width < right - title_left {
-            assert!(
-                (title_right - (state_left - STATE_GAP)).abs() <= f32::EPSILON,
-                "the title gives the room of the word away"
-            );
-        }
+        assert!(
+            (title_right + STATE_GAP - state_left).abs() <= f32::EPSILON,
+            "the two texts keep the gap between them, so the one never covers the other"
+        );
     }
     // Without a state word the title runs to the right edge.
     assert_eq!(title_and_state(right, title_left, 0.0), None);
 }
 
 #[test]
-fn a_narrow_row_with_a_long_workspace_name_shows_the_agents_that_wait() {
-    use egui::ViewportInfo;
+fn the_default_sidebar_shows_the_whole_word_of_every_state() {
+    use super::panel_rows::{STATE_GAP, title_and_state};
+    // The default sidebar is 210 wide, with the same insets as the narrowest one.
+    let right = 210.0 - 8.0 - 26.0;
+    let title_left = 68.0;
+    for state_width in [54.0, 48.2, 40.5, 22.8] {
+        let (title_right, state_left, width) =
+            title_and_state(right, title_left, state_width).expect("a row with a state word");
+        assert!(
+            (width - state_width).abs() <= f32::EPSILON,
+            "the whole word of a state fits the default row"
+        );
+        assert!(
+            title_right - title_left > 0.0,
+            "the name of the panel keeps a room of its own"
+        );
+        assert_eq!(title_right + STATE_GAP, state_left);
+        assert!((state_left + width - right).abs() <= f32::EPSILON);
+    }
+}
+
+#[test]
+fn the_name_and_the_state_of_a_panel_row_never_cover_each_other() {
     let (_temp, ctx, mut app) =
         crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
             runtime_state: Box::new(horizon_core::RuntimeState::default()),
         });
-    let workspace = app
+    let workspace = app.board.create_workspace("Lane");
+    let panel = app
         .board
-        .create_workspace("A very long workspace name that cannot fit the sidebar");
+        .create_panel(
+            horizon_core::PanelOptions {
+                name: Some("Zeta sync lane".to_owned()),
+                kind: horizon_core::PanelKind::Claude,
+                command: Some("seed".to_owned()),
+                ..horizon_core::PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("panel");
+    app.board.focused = None;
     let now = horizon_core::current_unix_millis();
-    for (name, states) in [
-        (
-            "Fix the sync of the billing service",
-            vec![horizon_core::agent_work::TurnState::Blocked],
-        ),
-        ("Write the docs", vec![horizon_core::agent_work::TurnState::Working]),
-    ] {
-        let panel = app
-            .board
-            .create_panel(
-                horizon_core::PanelOptions {
-                    name: Some(name.to_owned()),
-                    kind: horizon_core::PanelKind::Claude,
-                    command: Some("seed".to_owned()),
-                    ..horizon_core::PanelOptions::default()
-                },
-                workspace,
-            )
-            .expect("panel");
-        let local = app.board.panel(panel).expect("panel").local_id.clone();
-        for (index, state) in states.into_iter().enumerate() {
-            let at = now - 2 + i64::try_from(index).expect("index");
-            app.apply_attention_values(
-                vec![(panel, local.clone(), Some(attention_ledger(state, at)))],
-                &egui::Context::default(),
+    let local = app.board.panel(panel).expect("panel").local_id.clone();
+    for (index, (state, background_tasks, word)) in [
+        (horizon_core::agent_work::TurnState::Working, 0, "Working"),
+        (horizon_core::agent_work::TurnState::Finished, 1, "Background"),
+        (horizon_core::agent_work::TurnState::Finished, 0, "Done"),
+        (horizon_core::agent_work::TurnState::Blocked, 0, "Needs you"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // The panel saw a turn before the one that ends here, so its end is unseen.
+        let at = now - 4 + i64::try_from(index).expect("index");
+        let mut ledger = attention_ledger(state, at);
+        ledger.background_tasks = background_tasks;
+        app.apply_attention_values(vec![(panel, local.clone(), Some(ledger))], &ctx);
+        assert_eq!(app.panel_attention(&local).word(), Some(word), "the state of the panel");
+        for viewport in [1600.0_f32, 360.0] {
+            let sidebar = crate::app::root_chrome::effective_sidebar_width(viewport);
+            let rects = sidebar_text_rects(&ctx, &mut app, viewport);
+            let name = rects
+                .iter()
+                .find(|drawn| drawn.text.starts_with("Zeta") && drawn.rect.left() < sidebar / 2.0)
+                .unwrap_or_else(|| panic!("the drawn name of the panel: {rects:?}"));
+            let prefix = &word[..2];
+            // The word of the state shares the line of the name and stands to its
+            // right; the toolbar of the sidebar has words of its own.
+            let row = name.rect.top()..=name.rect.bottom();
+            let state = rects
+                .iter()
+                .find(|drawn| {
+                    drawn.text.starts_with(prefix)
+                        && drawn.rect.left() > name.rect.left()
+                        && row.contains(&drawn.rect.center().y)
+                })
+                .unwrap_or_else(|| panic!("the drawn word {word:?} of the state: {rects:?}"));
+            assert!(
+                name.rect.right() + 0.5 <= state.rect.left(),
+                "the name {:?} ends before the word {word:?} begins {:?}",
+                name.text,
+                state.text()
             );
+            assert!(
+                !name.rect.intersects(state.rect),
+                "the two texts never cover each other: {name:?} {state:?}"
+            );
+            assert!(
+                state.rect.left() >= sidebar / 2.0,
+                "the word of the state stays in the right half of the row"
+            );
+            if sidebar >= 200.0 {
+                assert!(
+                    !state.cut,
+                    "the whole word of the state shows at the default width: {:?}",
+                    state.text
+                );
+                assert!(
+                    name.drawn >= 5,
+                    "the name keeps a read of it beside the whole word: {:?}",
+                    name.text
+                );
+            } else {
+                assert!(
+                    state.drawn >= 4,
+                    "the word of the state keeps a read of itself in the narrow row: {:?}",
+                    state.text
+                );
+                assert!(
+                    name.drawn >= 2,
+                    "the name keeps a read of itself in the narrow row: {:?}",
+                    name.text
+                );
+            }
         }
     }
-    app.board.focused = None;
+}
 
-    // The narrowest sidebar: a viewport of 360 makes the sidebar 168 wide.
+/// One text of a frame of the sidebar, with the rectangle it takes.
+#[derive(Clone, Debug)]
+struct DrawnText {
+    text: String,
+    rect: egui::Rect,
+    /// The characters that the row shows, without the mark of a cut.
+    drawn: usize,
+    /// Whether the row cut the text.
+    cut: bool,
+}
+
+impl DrawnText {
+    fn text(&self) -> String {
+        self.text.clone()
+    }
+}
+
+/// The drawn texts of one frame of the sidebar of `viewport` wide.
+fn sidebar_text_rects(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: f32) -> Vec<DrawnText> {
+    use crate::test_egui::DiscardTextures;
     let mut input = egui::RawInput::default();
     input.viewports.insert(
         egui::ViewportId::ROOT,
-        ViewportInfo {
+        egui::ViewportInfo {
             native_pixels_per_point: Some(1.0),
-            inner_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 720.0))),
-            ..ViewportInfo::default()
+            inner_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(viewport, 720.0))),
+            ..egui::ViewportInfo::default()
         },
     );
-    crate::app::test_support::run_app_frame_with_input(&ctx, &mut app, input);
+    let mut rects = Vec::new();
+    // A panel row shows from its second frame on.
+    for _ in 0..2 {
+        let output = ctx
+            .run_ui(input.clone(), |ui| app.render_sidebar(ui.ctx()))
+            .discard_textures();
+        rects.clear();
+        for clipped in &output.shapes {
+            collect_text_rects(&clipped.shape, &mut rects);
+        }
+    }
+    rects
+}
 
-    let rows = app.read_sidebar_rows();
-    let row = rows.get(&workspace).expect("row");
-    assert_eq!(row.attention, horizon_core::Attention::NeedsYou);
-    assert_eq!(
-        row.waiting.line().as_deref(),
-        Some("1 needs you"),
-        "the count is the front of the line and survives the cut"
-    );
+fn collect_text_rects(shape: &egui::Shape, rects: &mut Vec<DrawnText>) {
+    match shape {
+        egui::Shape::Text(text) => {
+            let glyphs = text.galley.rows.first().map_or(0, |row| row.glyphs.len());
+            rects.push(DrawnText {
+                text: text.galley.text().to_owned(),
+                rect: egui::Rect::from_min_size(text.pos, text.galley.size()),
+                drawn: if text.galley.elided {
+                    glyphs.saturating_sub(1)
+                } else {
+                    glyphs
+                },
+                cut: text.galley.elided,
+            });
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_text_rects(shape, rects);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn attention_ledger(
