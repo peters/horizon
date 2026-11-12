@@ -216,6 +216,28 @@ shares its workspace with the panels of the default board and covers the first
 one. The procedure is
 [the agent attention procedure](../../docs/testing/procedures/agent-attention.md).
 
+### A desktop notification that a person can see
+
+The fixture records the desktop notifications of the candidate, so a procedure
+proves the line that a person sees without a notification on the desktop of the
+developer.
+
+```bash
+scripts/device-smoke/serve.py --horizon target/debug/horizon \
+  --state /var/tmp/notifications-1 --native-view --attention-agent 0 \
+  --notifications-log --plain-window
+```
+
+`--notifications-log` puts a stand-in `notify-send` first on the `PATH` of the
+candidate. It appends the arguments of one call as one line of JSON to
+`notifications.log` of the state folder, and it is a copy in that folder: a
+program that a panel of the fixture runs lies in the state folder or in a path
+that the sandbox binds. The panel `Notifications` follows that file with
+`tail -f`. `--plain-window` opens a second window of the isolated desktop, which
+takes the focus of the desktop away from Horizon: `xterm` when this computer has
+it, and `xmessage` or a window of Tk otherwise. The procedure is
+[the desktop notification procedure](../../docs/testing/procedures/desktop-notifications.md).
+
 ### A scripted card agent
 
 A procedure that needs an agent which draws cards, answers the clicks of the

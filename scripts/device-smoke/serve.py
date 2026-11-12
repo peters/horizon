@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import signal
+import importlib.util
 import sqlite3
 import subprocess
 import sys
@@ -28,6 +29,23 @@ ATTENTION_PROGRAM = 'claude'
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
 ATTENTION_TIMER_FILE = 'stand-in.json'
+# The desktop notification: a stand-in program of the system that records one
+# call, the file that it appends to, and the panel that follows that file.
+NOTIFICATIONS_FOLDER = 'notifications'
+NOTIFICATIONS_PROGRAM = 'notify-send'
+NOTIFICATIONS_LOG = 'notifications.log'
+NOTIFICATIONS_PANEL = 'Notifications'
+# The window that takes the focus of the isolated desktop away from the candidate,
+# and the title that both of its programs show.
+PLAIN_WINDOW_TITLE = 'Plain window'
+PLAIN_WINDOW_TK = """
+import tkinter
+window = tkinter.Tk()
+window.title('Plain window')
+tkinter.Label(window, text='A plain window takes the focus of this desktop.').pack(padx=24, pady=24)
+window.geometry('420x140')
+window.mainloop()
+"""
 # The worktree card: one shell preset for the task panel of a worktree, one browser
 # preset that `open_panel` refuses, and the throwaway repository that the card
 # reads, merges and removes.
@@ -415,8 +433,8 @@ def worktree_card_panel(app, repo, state):
             'args': [], 'cwd': str(data)}
 
 
-def program_in_state(source, destination, state):
-    """Write `source` as the program that a panel of this fixture runs.
+def body_in_state(destination, body, state):
+    """Write `body` as the program that a panel of this fixture runs.
 
     The sandbox binds the private home over the home of the person, so a checkout
     under the home of the person does not exist inside the sandbox and a link to
@@ -431,9 +449,14 @@ def program_in_state(source, destination, state):
     if destination.is_symlink() or destination.exists():
         destination.unlink()
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
+    destination.write_text(body)
     destination.chmod(0o700)
     return destination
+
+
+def program_in_state(source, destination, state):
+    """Write a copy of `source` as the program that a panel of this fixture runs."""
+    return body_in_state(destination, Path(source).read_text(), state)
 
 
 def attention_agent(state, timer=6.0):
@@ -467,6 +490,50 @@ def attention_environment(environment, bin_dir):
     environment = dict(environment)
     environment['PATH'] = f'{bin_dir}:' + environment.get('PATH', '')
     return environment
+
+
+def notification_standin(state):
+    """The stand-in `notify-send` of this fixture and the folder to find it in.
+
+    Horizon runs the program of the system that shows a desktop notification, and
+    nobody runs that program for a test: this stand-in appends the arguments of one
+    call as one line of JSON to the log of the state, and the panel "Notifications"
+    follows that file. The program of a panel lies in the state folder, so a shell
+    writes it there.
+    """
+    work = Path(state) / NOTIFICATIONS_FOLDER
+    log = Path(state) / NOTIFICATIONS_LOG
+    body = ('#!/bin/sh\n'
+            'exec /usr/bin/python3 -c \'import json, sys\n'
+            'with open(sys.argv[1], "a", encoding="utf-8") as log:\n'
+            '    log.write(json.dumps(sys.argv[2:]) + "\\n")\' '
+            f'{shlex.quote(str(log.resolve()))} "$@"\n')
+    return body_in_state(work / 'bin' / NOTIFICATIONS_PROGRAM, body, state)
+
+
+def notification_panel(state):
+    """The shell panel that follows the log of the notifications of this run."""
+    log = shlex.quote(str((Path(state) / NOTIFICATIONS_LOG).resolve()))
+    return {'name': NOTIFICATIONS_PANEL, 'kind': 'shell', 'command': '/bin/sh',
+            'args': ['-c', f'touch {log}; exec tail -f -n +1 {log}']}
+
+
+def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None):
+    """The command of a plain window on the isolated desktop.
+
+    A person who works in another window does not see Horizon, so a second plain
+    window of this desktop takes the focus of the desktop away from the candidate.
+    `xterm` is that window when this computer has it, and `xmessage` and a window
+    of Tk are the fallbacks. A computer with none of the three answers the reason.
+    """
+    if which('xterm'):
+        return ['xterm', '-title', PLAIN_WINDOW_TITLE]
+    if which('xmessage'):
+        return ['xmessage', '-title', PLAIN_WINDOW_TITLE, '-buttons', 'OK', 'A plain window takes the focus.']
+    tk = has_tk if has_tk is not None else (importlib.util.find_spec('tkinter') is not None)
+    if tk and python:
+        return [python, '-c', PLAIN_WINDOW_TK]
+    raise SystemExit('Missing prerequisite for --plain-window: xterm, xmessage or a window of Tk')
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
@@ -581,6 +648,7 @@ def application_command(app, config, saved_session, resume_session=False, plain_
 # below, so the sentence that a procedure reads names the option that it typed.
 PLAIN_START_SETTINGS_OPTIONS = (
     ('panels', '--panels'), ('attention_agent', '--attention-agent'),
+    ('notifications_log', '--notifications-log'),
     ('worktree_card', '--worktree-card'),
     ('presets', '--presets'), ('theme', '--theme'),
     ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
@@ -718,6 +786,17 @@ def arguments():
              'the script reports one event for each line that the person types, and SECONDS also '
              'makes it report the events in a sequence of its own, every SECONDS (default 6). '
              '0 waits for the typed lines alone')
+    parser.add_argument(
+        '--notifications-log', action='store_true',
+        help='Put a stand-in notify-send first on the PATH of the candidate, which appends the '
+             'arguments of one call as one line of JSON to notifications.log of the state, and '
+             'follow that file in a panel named Notifications. Use --plain-window to take the '
+             'focus of the desktop away from Horizon')
+    parser.add_argument(
+        '--plain-window', action='store_true',
+        help='Open a plain window of the isolated desktop, so that a person works outside '
+             'Horizon: xterm when this computer has it, and xmessage or a window of Tk '
+             'otherwise')
     parser.add_argument(
         '--worktree-card', action='store_true',
         help='Make the throwaway repository, the presets and the card agent panel of the '
@@ -890,6 +969,12 @@ def main():
             # The children of this run keep this object, so the value is changed
             # here and not by a second dictionary.
             env.update(attention_environment(env, attention_bin))
+        if args.notifications_log:
+            notification_bin = notification_standin(args.state)
+            env.update(attention_environment(env, notification_bin))
+            extra_panels = list(extra_panels or []) + [notification_panel(args.state)]
+        if args.plain_window:
+            spawn('plain-window', plain_window_command())
         # The values of this run, and a value that an earlier run of the same private
         # home wrote, are both rows of the secrets file that the candidate reads,
         # which is the file of the Horizon home below its masked `HOME`.
