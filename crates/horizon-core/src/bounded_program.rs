@@ -53,7 +53,8 @@ pub struct ProgramEnvironment {
     /// names above. A program that a person wrote and named in the settings, such
     /// as a recorder of speech input, reads the session that the person set, and
     /// it reads no value of a named secret: no named secret is a variable of this
-    /// process.
+    /// process. Its `PATH` is still the search path of the person, so a program
+    /// of Homebrew is found after a start from the Finder.
     pub inherit: bool,
 }
 
@@ -63,7 +64,9 @@ impl ProgramEnvironment {
     #[must_use]
     pub fn of_this_process() -> Self {
         Self {
-            path: std::env::var_os("PATH").unwrap_or_default(),
+            // The window of a person can start from the Finder, which gives it
+            // the PATH of launchd and not the PATH of the shell of the person.
+            path: horizon_browser::process::person_search_path(),
             home: std::env::var_os("HOME"),
             session_bus: std::env::var_os("DBUS_SESSION_BUS_ADDRESS"),
             runtime_dir: std::env::var_os("XDG_RUNTIME_DIR"),
@@ -115,6 +118,10 @@ impl ProgramEnvironment {
 
     fn apply(&self, command: &mut Command) {
         if self.inherit {
+            // The variables of the session reach a program that a person named,
+            // and its `PATH` is the search path of the person: a program of
+            // Homebrew must be found after a start from the Finder.
+            command.env("PATH", &self.path);
             return;
         }
         command.env_clear();
@@ -695,4 +702,55 @@ fn read_capped(stream: impl Read) -> Result<Zeroizing<Vec<u8>>, ProgramFailure> 
         return Err(ProgramFailure::Failed);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+    use std::process::Command;
+
+    use super::ProgramEnvironment;
+
+    #[test]
+    fn the_environment_of_this_process_uses_the_search_path_of_the_person() {
+        assert_eq!(
+            ProgramEnvironment::of_this_process().path,
+            horizon_browser::process::person_search_path()
+        );
+        assert_eq!(
+            ProgramEnvironment::inherited().path,
+            horizon_browser::process::person_search_path()
+        );
+    }
+
+    #[test]
+    fn a_named_program_keeps_every_variable_and_still_gets_the_search_path() {
+        let environment = ProgramEnvironment {
+            inherit: true,
+            ..ProgramEnvironment::with_path("/private/folder")
+        };
+        let mut command = Command::new("/bin/true");
+        environment.apply(&mut command);
+        let path = command
+            .get_envs()
+            .find(|(name, _)| *name == OsStr::new("PATH"))
+            .and_then(|(_, value)| value);
+        assert_eq!(path, Some(OsStr::new("/private/folder")));
+        assert!(
+            command.get_envs().all(|(name, _)| name != OsStr::new("HOME")),
+            "this value holds no HOME, so the child inherits the HOME of this process"
+        );
+    }
+
+    #[test]
+    fn a_reader_of_this_process_gets_the_search_path_and_no_session() {
+        let environment = ProgramEnvironment::with_path("/private/folder");
+        let mut command = Command::new("/bin/true");
+        environment.apply(&mut command);
+        let path = command
+            .get_envs()
+            .find(|(name, _)| *name == OsStr::new("PATH"))
+            .and_then(|(_, value)| value);
+        assert_eq!(path, Some(OsStr::new("/private/folder")));
+    }
 }

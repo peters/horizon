@@ -301,7 +301,13 @@ struct TailscaleNode {
 
 fn discover_tailscale_nodes() -> Result<Vec<TailscaleNode>> {
     crate::ui_thread::blocking("`tailscale status` runs for the host catalog");
-    let output = match Command::new("tailscale").args(["status", "--json"]).output() {
+    let output = match Command::new("tailscale")
+        .args(["status", "--json"])
+        // A start from the Finder gives this process the PATH of launchd, and
+        // a Homebrew `tailscale` lives in /opt/homebrew/bin.
+        .env("PATH", horizon_browser::process::person_search_path())
+        .output()
+    {
         Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),

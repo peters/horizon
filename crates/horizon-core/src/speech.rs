@@ -67,7 +67,7 @@ impl SpeechPlatform {
     /// format that every transcription service reads. macOS has no recorder that
     /// is a part of the system, so the line stays empty and the documents give two
     /// recipes that a person installs: `ffmpeg` with the `avfoundation` input, or
-    /// `rec` of SoX.
+    /// `rec` of `SoX`.
     #[must_use]
     pub const fn default_recorder(self) -> &'static str {
         match self {

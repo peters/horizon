@@ -438,16 +438,61 @@ pub fn resolve_binary(command: &str) -> Result<PathBuf> {
     if path.is_file() {
         return Ok(path.to_path_buf());
     }
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return Err(ChromeError::NoBinary);
-    };
-    for dir in std::env::split_paths(&path_var) {
+    for dir in std::env::split_paths(&person_search_path()) {
         let candidate = dir.join(command);
         if is_executable_file(&candidate) {
             return Ok(candidate);
         }
     }
     Err(ChromeError::NoBinary)
+}
+
+/// The folders that hold the programs of a person.
+///
+/// A window that a person starts from the Finder or the Dock inherits the
+/// `PATH` of launchd, `/usr/bin:/bin:/usr/sbin:/sbin`, and not the `PATH` of
+/// the shell that a terminal starts. A program of Homebrew in
+/// `/opt/homebrew/bin`, a package in `/usr/local/bin`, or a program of a person
+/// in `~/.local/bin` or `~/.cargo/bin` is then invisible, while the same start
+/// from a terminal finds it.
+///
+/// The answer starts with the `PATH` of this process. macOS then adds those
+/// four folders, in that order, when a folder exists and is not already in the
+/// list. Linux keeps the `PATH` that it has.
+#[must_use]
+pub fn person_search_path() -> std::ffi::OsString {
+    let path = std::env::var_os("PATH");
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        return search_path_for(path.as_deref(), home.as_deref(), |folder| folder.is_dir());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        path.unwrap_or_default()
+    }
+}
+
+/// [`person_search_path`] with the folders and their existence given as values,
+/// so a test reads the order of the macOS answer on any system.
+#[cfg(any(target_os = "macos", test))]
+fn search_path_for(
+    path: Option<&std::ffi::OsStr>,
+    home: Option<&Path>,
+    exists: impl Fn(&Path) -> bool,
+) -> std::ffi::OsString {
+    let mut folders: Vec<PathBuf> = path.map(std::env::split_paths).into_iter().flatten().collect();
+    let mut candidates = vec![PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")];
+    if let Some(home) = home {
+        candidates.push(home.join(".local/bin"));
+        candidates.push(home.join(".cargo/bin"));
+    }
+    for candidate in candidates {
+        if exists(&candidate) && !folders.contains(&candidate) {
+            folders.push(candidate);
+        }
+    }
+    std::env::join_paths(folders).unwrap_or_else(|_| path.unwrap_or_default().to_os_string())
 }
 
 /// Resolve using an explicit command or the standard candidate list.
@@ -460,13 +505,11 @@ pub fn resolve_binary_or_default(command: &Option<String>) -> Result<PathBuf> {
     {
         return resolve_binary(command);
     }
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for name in BINARY_CANDIDATES {
-            for dir in std::env::split_paths(&path_var) {
-                let candidate = dir.join(name);
-                if is_executable_file(&candidate) {
-                    return Ok(candidate);
-                }
+    for name in BINARY_CANDIDATES {
+        for dir in std::env::split_paths(&person_search_path()) {
+            let candidate = dir.join(name);
+            if is_executable_file(&candidate) {
+                return Ok(candidate);
             }
         }
     }
@@ -524,6 +567,49 @@ mod tests {
             resolve_binary("/definitely/not/a/real/binary"),
             Err(ChromeError::NoBinary)
         ));
+    }
+
+    #[test]
+    fn a_mac_puts_the_folders_of_a_person_after_its_own_path() {
+        let home = Path::new("/Users/someone");
+        let path = std::ffi::OsStr::new("/usr/bin:/bin:/opt/homebrew/bin");
+        let exists = |folder: &Path| {
+            matches!(
+                folder.to_str(),
+                Some(
+                    "/opt/homebrew/bin" | "/usr/local/bin" | "/Users/someone/.local/bin" | "/Users/someone/.cargo/bin"
+                )
+            )
+        };
+        let search = search_path_for(Some(path), Some(home), exists);
+        let folders: Vec<_> = std::env::split_paths(&search).collect();
+        assert_eq!(
+            folders,
+            [
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
+                PathBuf::from("/Users/someone/.local/bin"),
+                PathBuf::from("/Users/someone/.cargo/bin"),
+            ],
+            "the path of the process stays first, and a folder in it is not repeated"
+        );
+    }
+
+    #[test]
+    fn a_folder_of_a_person_that_does_not_exist_is_not_added() {
+        let home = Path::new("/Users/someone");
+        let exists = |folder: &Path| folder == Path::new("/opt/homebrew/bin");
+        let search = search_path_for(Some(std::ffi::OsStr::new("/usr/bin")), Some(home), exists);
+        let folders: Vec<_> = std::env::split_paths(&search).collect();
+        assert_eq!(folders, [PathBuf::from("/usr/bin"), PathBuf::from("/opt/homebrew/bin")]);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn linux_keeps_the_path_that_it_has() {
+        assert_eq!(person_search_path(), std::env::var_os("PATH").unwrap_or_default());
     }
 
     #[cfg(unix)]
