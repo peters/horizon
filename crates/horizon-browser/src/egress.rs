@@ -19,7 +19,14 @@ pub const MAX_PROXY_BYTES: usize = 512;
 
 /// Longest time that a dispatch waits for the listening port of the proxy before
 /// it reports that the egress does not answer.
-pub const MAX_PROBE: Duration = Duration::from_secs(2);
+///
+/// The proxy belongs to the settings and can run on another computer of the same
+/// mesh network, so this bound holds one name lookup and one TCP handshake
+/// across a link of 200 to 350 ms of round trip with loss. The two seconds of a
+/// loopback proxy read such a proxy as an egress that is gone; the sentence of a
+/// timeout names the time that Horizon waited, which is this bound or what an
+/// action had left of its own.
+pub const MAX_PROBE: Duration = Duration::from_secs(10);
 
 /// The proxy schemes that a browser profile accepts. Chromium reads these three.
 /// `socks5h` is not one of them: Chromium drops a proxy it does not know, and
@@ -35,6 +42,9 @@ pub enum EgressProbeError {
     Unresolved,
     #[error("refuses the connection")]
     Refused,
+    /// The port answered nothing in the time that Horizon waited: `millis` is
+    /// that wait, in milliseconds, so that a person judges the number instead of
+    /// guessing it.
     #[error("did not answer within {millis} ms")]
     TimedOut { millis: u64 },
 }
@@ -449,7 +459,7 @@ mod tests {
     }
 
     /// What a connection of a test answers.
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     enum Connection {
         /// A listener accepts the connection.
         Answers,
@@ -457,6 +467,9 @@ mod tests {
         Refused,
         /// No answer arrives inside the bound.
         NoAnswer,
+        /// The port is on another computer of a slow link and answers after
+        /// `delay`, when the bound of the attempt still holds it.
+        AnswersAfter(Duration),
     }
 
     /// The clock and the answers of a test: the resolver, the routes and the
@@ -538,10 +551,14 @@ mod tests {
                 let tick = state.tick;
                 state.now += tick;
             }
-            match self.connection {
+            match &self.connection {
                 Connection::Answers => Ok(()),
+                // A far port that answers inside its bound took the connection.
+                Connection::AnswersAfter(delay) if *delay <= bound => Ok(()),
                 Connection::Refused => Err(io::Error::from(io::ErrorKind::ConnectionRefused)),
-                Connection::NoAnswer => Err(io::Error::from(io::ErrorKind::TimedOut)),
+                Connection::NoAnswer | Connection::AnswersAfter(_) => {
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
+                }
             }
         }
     }
@@ -581,6 +598,37 @@ mod tests {
         assert_eq!(
             proxy("slow-resolver.example:1080").probe_with(network.clone(), BOUND),
             Err(EgressProbeError::TimedOut { millis: 50 })
+        );
+    }
+
+    #[test]
+    fn a_proxy_on_another_computer_has_time_to_answer() {
+        // A proxy of a mesh network answers after about six seconds at 300 ms of
+        // round trip with loss and one retransmit. The bound of a loopback proxy
+        // read that as an egress that is gone.
+        let slow = Duration::from_secs(6);
+        let network = TestNetwork::new(Lookup::These(&["192.0.2.1"]), Connection::AnswersAfter(slow)).ticking(slow);
+        assert_eq!(
+            proxy("far-proxy.example:1080").probe_with(network.clone(), MAX_PROBE),
+            Ok(()),
+            "the proxy of a far link answered inside the bound of the probe"
+        );
+        assert_eq!(
+            network.attempts(),
+            [(SocketAddr::from(([192, 0, 2, 1], 1080)), MAX_PROBE)],
+            "the one attempt holds the whole bound"
+        );
+        assert!(
+            MAX_PROBE > slow,
+            "the bound of a far proxy is wider than the answer of its link"
+        );
+
+        // The same answer does not fit the bound of a loopback proxy.
+        let loopback = TestNetwork::new(Lookup::These(&["192.0.2.1"]), Connection::AnswersAfter(slow)).ticking(slow);
+        assert_eq!(
+            proxy("far-proxy.example:1080").probe_with(loopback, Duration::from_secs(2)),
+            Err(EgressProbeError::TimedOut { millis: 2_000 }),
+            "two seconds report the egress of a far link as gone"
         );
     }
 
