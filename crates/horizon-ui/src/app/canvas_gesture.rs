@@ -8,6 +8,18 @@ use egui::{Event, InputOptions, PointerButton, Pos2, RawInput, ViewportId};
 
 use super::HorizonApp;
 
+/// Whether `modifiers` hold the modifier that the primary shortcuts of this
+/// system use: Cmd on macOS and Ctrl on Linux.
+///
+/// egui reports Cmd as `command` on macOS and Ctrl as `command` on Linux, so
+/// [`egui::Modifiers::COMMAND`] names the key of the system, as the shortcuts of
+/// the app read it. macOS reports its Control key as `ctrl` alone, and a Control
+/// click there is the secondary click of the system: the system takes that event
+/// before the canvas, so a Mac must not take the gesture from it.
+fn primary_modifier_held(modifiers: egui::Modifiers) -> bool {
+    modifiers.matches_logically(egui::Modifiers::COMMAND)
+}
+
 pub(super) struct CanvasGesture {
     clock: Instant,
     session_id: Option<String>,
@@ -190,7 +202,7 @@ impl CanvasGesture {
             && !raw.events.iter().any(|event| {
                 matches!(event,
                 Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers }
-                    if (modifiers.ctrl || modifiers.command) && eligible(*pos))
+                    if primary_modifier_held(*modifiers) && eligible(*pos))
             })
     }
 
@@ -228,7 +240,7 @@ impl CanvasGesture {
                 pressed: true,
                 modifiers,
             } => {
-                !(modifiers.ctrl || modifiers.command)
+                !primary_modifier_held(*modifiers)
                     || !eligible(*pos)
                     || now - released >= options.max_double_click_delay
                     || pending.origin.distance(*pos) >= options.max_click_dist
@@ -277,7 +289,7 @@ impl CanvasGesture {
                     return;
                 }
                 if *pressed
-                    && (modifiers.ctrl || modifiers.command)
+                    && primary_modifier_held(*modifiers)
                     && eligible(*pos)
                     && !self.other_buttons.iter().any(|down| *down)
                 {

@@ -53,9 +53,9 @@ Horizon has five nouns. Everything else is a shortcut, a preset, or a panel kind
 | Noun | What it is | How you use it |
 |:-----|:-----------|:---------------|
 | **Canvas** | The infinite 2D surface | Drag empty canvas or swipe with two fingers to pan. Pinch or Ctrl+scroll to zoom. Minimap to jump. |
-| **Workspace** | A color-coded cluster with a shared working directory | Ctrl+double-click the canvas and pick a preset, or click **New** in the sidebar. Arrange with **Default** (free), **Rows**, **Cols**, or **Grid**. Detach it to its own window. |
+| **Workspace** | A color-coded cluster with a shared working directory | Ctrl/Cmd+double-click the canvas and pick a preset, or click **New** in the sidebar. Arrange with **Default** (free), **Rows**, **Cols**, or **Grid**. Detach it to its own window. |
 | **Panel** | One live surface inside a workspace | Shell, SSH, coding agent, browser, markdown, or card. |
-| **Preset** | A named template for a new panel | Command palette, Ctrl+double-click, or **Ctrl+Shift+N** (first preset). |
+| **Preset** | A named template for a new panel | Command palette, Ctrl/Cmd+double-click, or **Ctrl+Shift+N** (first preset). |
 | **Session** | A saved board | Close Horizon and come back. **Ctrl+Shift+J** switches between saved boards. |
 
 A typical board looks like this:
@@ -92,7 +92,7 @@ Workspaces stay visible. There are no hidden tabs. If something is off-screen, p
 
 You do not need a config file to start. Launch Horizon, then:
 
-1. **Ctrl+double-click** empty canvas. A preset list appears. Pick **Shell** (or **Grok**, **Claude**, **Browser**, …). Shell and agent presets then ask for a working directory — that becomes the workspace cwd, and the first panel lands there.
+1. **Ctrl/Cmd+double-click** empty canvas. A preset list appears. Pick **Shell** (or **Grok**, **Claude**, **Browser**, …). Shell and agent presets then ask for a working directory — that becomes the workspace cwd, and the first panel lands there.
 2. Press **Ctrl+Shift+N** for another panel of the first preset (Shell by default), or **Ctrl+Shift+K** and type a preset alias (`gb`, `cc`, `web`, `gc`).
 3. On the workspace header, click **Rows**, **Cols**, or **Grid** when you want structure, or **Default** to drag freely.
 4. Press **Ctrl+Shift+9** to fit the workspace into view. Press **Ctrl+Shift+W** to jump back to it without changing zoom.
@@ -369,8 +369,8 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Middle-click** a terminal (Linux) | Paste the primary selection |
 | **Click** an OSC 8 hyperlink | Open the link in the default handler |
 | **Ctrl+Click** | Open URL, file path, or hyperlink under cursor |
-| **Ctrl+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
-| **Ctrl+double-click** inside a workspace | Open the preset picker to add a panel |
+| **Ctrl/Cmd+double-click** canvas | Open the preset picker (creates a workspace and its first panel) |
+| **Ctrl/Cmd+double-click** inside a workspace | Open the preset picker to add a panel |
 
 <sub>On macOS, substitute Cmd for Ctrl. The default of the panel fullscreen is Cmd+Shift+Enter on macOS, because plain F11 shows the desktop there. Copy and paste use the standard Cmd+C / Cmd+V bindings. The SSH reconnect shortcut is contextual and is disabled if another global shortcut overlaps with Ctrl+Shift+R.</sub>
 
@@ -611,7 +611,7 @@ A Browser panel is a real browser drawn on the canvas. Type an address and the p
 
 ### On this computer
 
-1. **Ctrl+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
+1. **Ctrl/Cmd+double-click** empty canvas and pick **Browser**, or press **Ctrl+Shift+K** and type `web`.
 2. Click the address bar, type any site (`https://example.com`, a docs page, or `http://127.0.0.1:3000`), and press Enter.
 3. Use the backend menu on that bar to run the page in **Chromium**, **Firefox**, or, on macOS, **Safari**. On Linux, Horizon searches `PATH` for Chrome, Chromium, Edge, and Brave. macOS searches `PATH` and the usual browser `.app` bundles under `/Applications`, including Brave. Firefox also needs `geckodriver` on `PATH`, or `browser.geckodriver_command` pointing at it. Safari is disabled in that menu on Linux. On macOS, enable `safaridriver` with Apple's one-time steps; Horizon never runs `safaridriver --enable` for you.
 4. Back, forward, and reload sit on the same bar. **Record** writes a private WebM of the live page.
@@ -937,7 +937,7 @@ You start each copy, on its own display, with a VNC server for that display list
 ```
 
 1. Start copy A so a VNC server accepts connections on `127.0.0.1:5900`, and copy B on `127.0.0.1:5901`. The address is a numeric loopback IP and a nonzero port: `127.0.0.1` or `[::1]`. Use a server that accepts a shared connection and does not ask for a VNC password. Horizon has no password field. On another machine, SSH is the access check.
-2. **Ctrl+double-click** empty canvas and pick **App A**. That creates a workspace with the first copy. **Ctrl+double-click inside that workspace** and pick **App B**, so both panels belong to it. **Ctrl+Shift+K** and `va` or `vb` adds a panel to the workspace you are in.
+2. **Ctrl/Cmd+double-click** empty canvas and pick **App A**. That creates a workspace with the first copy. **Ctrl/Cmd+double-click inside that workspace** and pick **App B**, so both panels belong to it. **Ctrl+Shift+K** and `va` or `vb` adds a panel to the workspace you are in.
 3. Each panel connects and shows that desktop. Drag the panels apart, or use **Rows**, **Cols**, or **Grid** on that workspace. **Ctrl+Shift+9** fits them on screen.
 4. The picture starts read-only. Turn **Interact** on in the panel you want to drive, then click the image. Your mouse and keyboard go to that desktop until you click outside the image or turn **Interact** off. The other panels stay viewers. **Interact** is a switch on the panel; agents leave it off.
 5. **View controls** on the panel choose **Fit** or **1:1**, a crop, and local frame-rate and image-size limits. Those settings change the image in this panel. The desktop stays at the size the VNC server reports.

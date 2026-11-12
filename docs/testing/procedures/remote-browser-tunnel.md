@@ -114,7 +114,8 @@ A report uses the ID of each task to give a result.
 
 ### 6.1 RBT-1 — a person creates a panel on the host
 
-1. Hold Ctrl and double-click empty canvas space inside a workspace.
+1. Hold Ctrl on Linux, or Cmd on macOS, and double-click empty canvas space
+   inside a workspace.
 
    Result: the preset picker opens.
 

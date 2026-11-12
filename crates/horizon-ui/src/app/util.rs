@@ -48,6 +48,15 @@ pub(super) fn primary_shortcut_label() -> &'static str {
     if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
 }
 
+/// The line of the empty board that names the gesture which creates a workspace
+/// and adds a panel to one, with the primary key of this system.
+pub(super) fn canvas_gesture_hint(primary_label: &str) -> String {
+    format!(
+        "You can still {primary_label}+double-click to create a workspace and \
+         {primary_label}+double-click inside one to add a terminal."
+    )
+}
+
 pub(super) fn short_session_id(session_id: &str) -> &str {
     session_id.get(..8).unwrap_or(session_id)
 }
@@ -254,5 +263,24 @@ mod tests {
         let expected = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
 
         assert_eq!(primary_shortcut_label(), expected);
+    }
+
+    #[test]
+    fn canvas_gesture_hint_names_the_key_that_it_is_given() {
+        assert_eq!(
+            super::canvas_gesture_hint("Cmd"),
+            "You can still Cmd+double-click to create a workspace and Cmd+double-click inside \
+             one to add a terminal."
+        );
+        assert_eq!(
+            super::canvas_gesture_hint("Ctrl"),
+            "You can still Ctrl+double-click to create a workspace and Ctrl+double-click inside \
+             one to add a terminal."
+        );
+        assert_eq!(
+            super::canvas_gesture_hint(primary_shortcut_label()),
+            super::canvas_gesture_hint(if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }),
+            "the card names the key of the system that draws it"
+        );
     }
 }

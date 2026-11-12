@@ -74,12 +74,62 @@ fn viewport_stabilization_blocks_recognition_and_discards_reserved_input() {
 }
 
 fn button(pos: Pos2, pressed: bool) -> Event {
+    modified_button(pos, pressed, gesture_modifiers())
+}
+
+fn modified_button(pos: Pos2, pressed: bool, modifiers: egui::Modifiers) -> Event {
     Event::PointerButton {
         pos,
         button: PointerButton::Primary,
         pressed,
-        modifiers: egui::Modifiers::CTRL,
+        modifiers,
     }
+}
+
+/// The modifier that the canvas gesture takes on this system.
+fn gesture_modifiers() -> egui::Modifiers {
+    crate::app::test_support::primary_modifier_press()
+}
+
+/// The key of the *other* system that a canvas gesture needs, as this system
+/// reports it. On macOS that key is Control, which is also the secondary click
+/// there; on Linux it is the Super key of a Mac.
+fn the_other_system_key() -> egui::Modifiers {
+    if cfg!(target_os = "macos") {
+        egui::Modifiers::CTRL
+    } else {
+        egui::Modifiers::MAC_CMD
+    }
+}
+
+#[test]
+fn the_canvas_gesture_takes_the_modifier_of_this_system_alone() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app};
+    use eframe::App as _;
+    let (_temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    let pos = Pos2::new(500.0, 400.0);
+    let double_click = |app: &mut HorizonApp, modifiers: egui::Modifiers, start: f64| {
+        for (time, pressed) in [(0.0, true), (0.05, false), (0.15, true), (0.20, false)] {
+            let mut raw = raw_input([1400.0, 900.0], None);
+            raw.time = Some(start + time);
+            raw.events.push(Event::PointerMoved(pos));
+            raw.events.push(modified_button(pos, pressed, modifiers));
+            app.raw_input_hook(&ctx, &mut raw);
+            run_app_frame_with_input(&ctx, &mut *app, raw);
+        }
+    };
+    double_click(&mut app, the_other_system_key(), 1.0);
+    assert!(
+        app.pending_preset_pick.is_none(),
+        "the key of the other system must not open the picker; on a Mac it is the secondary click there"
+    );
+    double_click(&mut app, gesture_modifiers(), 3.0);
+    assert!(
+        app.pending_preset_pick.is_some(),
+        "the key of this system opens the preset picker, which makes the workspace"
+    );
 }
 
 #[test]
@@ -277,7 +327,7 @@ fn raw_hook_prevents_panel_focus_and_title_rename_before_opening_the_menu() {
         let mut raw = raw_input([1400.0, 900.0], None);
         raw.time = Some(time);
         if index == 0 {
-            raw.events.push(Event::ModifiersChanged(egui::Modifiers::CTRL));
+            raw.events.push(Event::ModifiersChanged(gesture_modifiers()));
         }
         raw.events.extend([Event::PointerMoved(pos), button(pos, pressed)]);
         app.raw_input_hook(&ctx, &mut raw);
@@ -309,7 +359,7 @@ fn delayed_single_clicks_do_not_compress_into_an_egui_double_click() {
     for (time, events) in [
         (
             1.0,
-            vec![Event::ModifiersChanged(egui::Modifiers::CTRL), button(pos, true)],
+            vec![Event::ModifiersChanged(gesture_modifiers()), button(pos, true)],
         ),
         (1.05, vec![button(pos, false)]),
         (1.36, vec![]),
@@ -353,7 +403,7 @@ fn a_deferred_click_does_not_turn_the_next_plain_click_into_a_double() {
     for (time, events, expected_double) in [
         (
             1.0,
-            vec![Event::ModifiersChanged(egui::Modifiers::CTRL), button(pos, true)],
+            vec![Event::ModifiersChanged(gesture_modifiers()), button(pos, true)],
             false,
         ),
         (1.05, vec![button(pos, false)], false),
@@ -394,7 +444,7 @@ fn replay_preserves_queued_motion_modifiers_and_text_order() {
     for (time, events) in [
         (
             1.0,
-            vec![Event::ModifiersChanged(egui::Modifiers::CTRL), button(origin, true)],
+            vec![Event::ModifiersChanged(gesture_modifiers()), button(origin, true)],
         ),
         (1.05, vec![button(origin, false)]),
         (
@@ -547,7 +597,7 @@ fn repeated_native_modifier_snapshots_do_not_release_reserved_clicks() {
     let mut gesture = CanvasGesture::default();
     let pos = Pos2::new(300.0, 300.0);
     for time in [1.0, 1.1] {
-        let unchanged = Event::ModifiersChanged(egui::Modifiers::CTRL);
+        let unchanged = Event::ModifiersChanged(gesture_modifiers());
         let output = feed(
             &mut gesture,
             time,
@@ -717,7 +767,7 @@ fn later_secondary_click_replays_completed_primary_first() {
         pos,
         button: PointerButton::Secondary,
         pressed: true,
-        modifiers: egui::Modifiers::CTRL,
+        modifiers: gesture_modifiers(),
     };
     assert_eq!(
         feed(&mut gesture, 1.1, vec![secondary.clone()]).events,

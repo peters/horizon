@@ -109,6 +109,21 @@ pub(super) fn raw_input(size: [f32; 2], position: Option<[f32; 2]>) -> RawInput 
     input
 }
 
+/// The modifiers of a primary shortcut press on this system, as a real press
+/// reports them: Cmd on macOS, Ctrl on Linux.
+///
+/// A test that feeds a modified canvas click from `egui::Modifiers::CTRL` names
+/// a press that no system sends: macOS reports Cmd as `command` and its Control
+/// key as `ctrl` alone.
+pub(super) fn primary_modifier_press() -> egui::Modifiers {
+    egui::Modifiers {
+        ctrl: !cfg!(target_os = "macos"),
+        mac_cmd: cfg!(target_os = "macos"),
+        command: true,
+        ..egui::Modifiers::NONE
+    }
+}
+
 pub(super) fn editor_panel_state(local_id: &str, position: [f32; 2]) -> PanelState {
     PanelState {
         local_id: local_id.to_string(),

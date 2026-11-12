@@ -197,7 +197,8 @@ panel uses the shell in the `SHELL` variable. If `SHELL` is not set, Horizon
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux. See
 [the platform support](platform-support.md).
 
-1. Hold Ctrl and double-click an empty area of the board.
+1. Hold Ctrl on Linux, or Cmd on macOS, and double-click an empty area of the
+   board.
 
    Result: A list of presets opens.
 
@@ -234,7 +235,8 @@ Cmd+Shift+Enter on macOS, because F11 alone shows the desktop on macOS.
 ## Open an agent panel
 
 1. Install the CLI of the agent, for example Claude Code or Codex.
-2. Hold Ctrl and double-click an empty area of the board.
+2. Hold Ctrl on Linux, or Cmd on macOS, and double-click an empty area of the
+   board.
 3. Select the preset of the agent.
 
    Result: The agent starts in a new panel.
@@ -256,7 +258,8 @@ Browser panels need a source build from `main`. The **Browser** preset uses a
 Chromium browser. A usual macOS installation has only Safari.
 
 1. Install Google Chrome, Chromium or Microsoft Edge.
-2. Hold Ctrl and double-click an empty area of the board.
+2. Hold Ctrl on Linux, or Cmd on macOS, and double-click an empty area of the
+   board.
 3. Select **Browser**.
 
    Result: A browser panel opens.

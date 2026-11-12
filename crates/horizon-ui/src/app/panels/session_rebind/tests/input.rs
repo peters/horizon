@@ -109,13 +109,13 @@ fn picker_pointer_input_bypasses_canvas_gesture_reservation() {
             pos,
             button: PointerButton::Primary,
             pressed: true,
-            modifiers: Modifiers::CTRL,
+            modifiers: primary_modifier_press(),
         },
         Event::PointerButton {
             pos,
             button: PointerButton::Primary,
             pressed: false,
-            modifiers: Modifiers::CTRL,
+            modifiers: primary_modifier_press(),
         },
     ];
     let mut raw = RawInput {

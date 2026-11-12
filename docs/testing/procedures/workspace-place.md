@@ -121,20 +121,20 @@ reported.
    `Agents` header one dim line says `Agents start on this computer. Terminals
    start on build-1.`
 
-2. Close the picker. Double-click empty canvas that fits a new panel, and choose
-   a shell.
+2. Close the picker. Hold Ctrl and double-click empty canvas that fits a new
+   panel, and choose a shell.
 
    Result: The new panel stands exactly at the point that was clicked.
 
 3. Close that panel. Place the pointer on the lower-left corner of an existing
-   panel of the workspace, so that a new panel at that point would cover it, and
-   double-click there. Choose a shell.
+   panel of the workspace, so that a new panel at that point would cover it, hold
+   Ctrl, and double-click there. Choose a shell.
 
    Result: The new panel covers no panel: Horizon gives it the nearest free place
    instead of the point of the click.
 
-4. Double-click the canvas inside the workspace on this computer, whose place is
-   `This computer`.
+4. Hold Ctrl and double-click the canvas inside the workspace on this computer,
+   whose place is `This computer`.
 
    Result: No line about a machine stands above the `Agents` header of that
    picker.

@@ -75,8 +75,9 @@ python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(*(c.execut
 
    Result: A Device panel shows a live view with frames that advance.
 
-3. Make six editor panels. Hold Ctrl and double-click an empty part of the
-   board six times, and select **Editor** each time.
+3. Make six editor panels. Hold Ctrl on Linux, or Cmd on macOS, and
+   double-click an empty part of the board six times, and select **Editor** each
+   time.
 
    Result: The board has one workspace with six editor panels.
 

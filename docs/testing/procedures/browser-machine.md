@@ -130,8 +130,8 @@ a panel after the container stops.
 
 ### 6.1 BM-1 — a browser panel drives the Chromium of the machine
 
-1. Hold Ctrl and double-click empty canvas space inside a workspace, then pick
-   **Browser**.
+1. Hold Ctrl on Linux, or Cmd on macOS, and double-click empty canvas space
+   inside a workspace, then pick **Browser**.
 
    Result: a browser panel opens, its chrome shows the SSH target `bvm-1` where
    the engine menu was, and its body paints a page. The panel connects in less

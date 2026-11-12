@@ -125,14 +125,10 @@ impl HorizonApp {
             return;
         }
 
-        let quick_nav_shortcut = self
-            .shortcuts
-            .command_palette
-            .display_label(super::util::primary_shortcut_label());
-        let fit_shortcut = self
-            .shortcuts
-            .fit_active_workspace
-            .display_label(super::util::primary_shortcut_label());
+        let primary_label = super::util::primary_shortcut_label();
+        let quick_nav_shortcut = self.shortcuts.command_palette.display_label(primary_label);
+        let canvas_gesture_hint = super::util::canvas_gesture_hint(primary_label);
+        let fit_shortcut = self.shortcuts.fit_active_workspace.display_label(primary_label);
         let has_attached_workspace = self
             .board
             .workspaces
@@ -208,11 +204,9 @@ impl HorizonApp {
                             );
                             ui.add_space(6.0);
                             ui.label(
-                                egui::RichText::new(
-                                    "You can still Ctrl+double-click to create a workspace and Ctrl+double-click inside one to add a terminal.",
-                                )
-                                .color(theme::FG_DIM())
-                                .size(10.5),
+                                egui::RichText::new(canvas_gesture_hint)
+                                    .color(theme::FG_DIM())
+                                    .size(10.5),
                             );
                         });
                     });

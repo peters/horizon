@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::test_support::primary_modifier_press;
 use crate::test_egui::DiscardTextures;
 use egui::{Context, Event, FullOutput, Id, Key, Modifiers, PointerButton, Pos2, RawInput, Rect};
 use horizon_core::PanelKind;
