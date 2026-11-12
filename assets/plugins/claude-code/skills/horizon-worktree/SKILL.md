@@ -164,6 +164,10 @@ A remove deletes files, so ask before you remove.
 6. Never remove the main worktree of the repository. Never remove a worktree
    that the card did not list.
 7. Run `Refresh` after a remove.
+8. Say on the card that the panel of the task is still open, in this line:
+   `The panel of <task> is still open; its folder is removed. Close it yourself.`
+   An agent cannot close a panel that it opened for the person, so the person
+   closes it.
 
 ## The listen loop
 

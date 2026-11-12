@@ -1243,7 +1243,9 @@ class WorktreeCard(Card):
                 kept = f' Branch {worktree.branch} was merged, so it is deleted.'
             else:
                 kept = f' Branch {worktree.branch} is not merged, so it stays.'
-        self.note = f'Removed {worktree.name}.{kept}'
+        self.note = (f'Removed {worktree.name}.{kept}\n'
+                     f'The panel of {worktree.name} is still open; '
+                     'its folder is removed. Close it yourself.')
         self.view = 'worktrees'
         self.files, self.file = [], None
         self.refresh()

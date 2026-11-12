@@ -390,6 +390,10 @@ class WorktreeCardTest(unittest.TestCase):
         self.assertFalse(dirty.path.exists(), 'the second press removes the folder')
         self.assertIn('Removed dirty', card.note)
         self.assertIn('merged, so it is deleted', card.note)
+        # The agent opened the panel of the task for the person and does not close
+        # it, so the card says where the panel stands after the remove.
+        self.assertIn(f'The panel of {dirty.name} is still open; its folder is removed. '
+                      'Close it yourself.', card.note)
         self.assertEqual(git(fixture.repo, 'branch', '--list', 'task/dirty').strip(), '',
                          'a branch that is merged goes away with its worktree')
 

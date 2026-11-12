@@ -387,7 +387,9 @@ section does not replace them.
    Result: the folder is gone from `git worktree list`. The branch is merged into
    `main`, so the card says that it is deleted, and
    `git -C /var/tmp/worktree-card-2/data/repo branch --list task/first-change`
-   answers nothing.
+   answers nothing. The card also says
+   `The panel of first-change is still open; its folder is removed. Close it yourself.`
+   The panel of the task stays open, and the person closes it.
 
 4. Select the row `conflict`, press `Remove`, and press `Remove conflict`.
 
@@ -410,8 +412,8 @@ section does not replace them.
 - `Refresh` and `Show changes` read git again and show the cut diff.
 - A merge needs two presses, refuses a dirty worktree and a branch that is not
   ahead, aborts a conflict and pushes nothing.
-- A remove needs two presses, deletes a branch only when it is merged, and
-  refuses the main worktree.
+- A remove needs two presses, deletes a branch only when it is merged, refuses
+  the main worktree, and says that the panel of the task is still open.
 
 ## 8. Pass criteria
 
@@ -421,8 +423,9 @@ section does not replace them.
   the bounds of the card.
 - W4 merges only after the second press, reports a conflict, aborts it, and
   pushes nothing.
-- W5 removes only after the second press, keeps the main worktree, and deletes a
-  branch only when it is merged.
+- W5 removes only after the second press, keeps the main worktree, deletes a
+  branch only when it is merged, and says that the panel of the task is still
+  open.
 - W6 leaves the card with disabled buttons after its owner ends.
 - W7 answers each refusal with its own code, and the `unknown_preset` message
   holds names only.
