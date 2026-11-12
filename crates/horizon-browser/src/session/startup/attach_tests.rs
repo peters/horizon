@@ -97,6 +97,8 @@ fn an_attached_session_drives_its_own_page_and_never_stops_the_browser() {
     assert_eq!(connection.target_id, "ours");
     assert_eq!(connection.session_id, "ours-session");
 
+    let downloads_note = connection.downloads_note.clone();
+    assert!(connection.downloads_reporting == false);
     connection
         .chrome
         .close_page(&mut connection.link, &connection.target_id);
@@ -152,14 +154,57 @@ fn an_attached_session_drives_its_own_page_and_never_stops_the_browser() {
 
     let seen: Vec<BrowserEvent> = events.try_iter().collect();
     assert!(
-        seen.iter()
-            .any(|event| matches!(event, BrowserEvent::Warning(note) if note == crate::ATTACHED_DOWNLOADS_GAP)),
-        "the panel states that it reports no download: {seen:?}"
+        !seen.iter().any(|event| matches!(event, BrowserEvent::Warning(_))),
+        "a downloads setting that does not apply is no failure of the session: {seen:?}"
     );
     assert!(
         !seen.iter().any(|event| matches!(event, BrowserEvent::Stopped { .. })),
         "the session of a borrowed browser starts without an exit: {seen:?}"
     );
+    assert_eq!(
+        downloads_note.as_deref(),
+        Some(crate::ATTACHED_DOWNLOADS_GAP),
+        "the reason belongs to the downloads answer of this panel"
+    );
+}
+
+#[test]
+fn a_downloads_refusal_is_an_answer_to_the_downloads_question_and_not_a_ready_page_error() {
+    // The order that showed a fatal error for a page that was fine: the
+    // session reached Ready, and a downloads warning arrived after it (a second
+    // panel of the same browser host). The warning replaced Ready with Error,
+    // so the body showed the downloads sentence with Retry instead of the page.
+    let (endpoint, server) = borrowed_browser();
+    let frame_slot = Arc::new(FrameSlot::new());
+    let config = attached_config(endpoint, &frame_slot);
+    let (event_tx, events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+    let mut connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a driver on the borrowed browser");
+
+    let mut downloads = crate::downloads::DownloadState::new("/tmp/panel-downloads", false);
+    if let Some(note) = connection.downloads_note.take() {
+        downloads = downloads.with_note(note);
+    }
+    let list = downloads.list();
+    assert!(!list.reporting, "the answer says that it reports nothing");
+    assert_eq!(
+        list.note.as_deref(),
+        Some(crate::ATTACHED_DOWNLOADS_GAP),
+        "the downloads answer carries the reason, and no event does"
+    );
+    let seen: Vec<BrowserEvent> = events.try_iter().collect();
+    assert!(
+        !seen.iter().any(|event| matches!(event, BrowserEvent::Warning(_))),
+        "the page of that browser is fine, so nothing reports a failure: {seen:?}"
+    );
+
+    connection
+        .chrome
+        .close_page(&mut connection.link, &connection.target_id);
+    drop(connection);
+    let _ = server.join();
 }
 
 #[test]

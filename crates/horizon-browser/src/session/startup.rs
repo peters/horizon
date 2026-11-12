@@ -82,6 +82,9 @@ struct DriverConnection {
     /// Whether this browser accepted the panel download folder and reports
     /// the downloads it saves there.
     downloads_reporting: bool,
+    /// Why this session reports no downloads, when it knows. The downloads
+    /// answer states it; it is no reason to stop the page.
+    downloads_note: Option<String>,
 }
 
 fn initialize_driver(
@@ -356,11 +359,17 @@ fn initialize_target(
     if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
-    let downloads_reporting = if let Some(directory) = downloads_dir {
-        configure_downloads(&mut link, event_tx, stop_requested, directory)
+    let (downloads_reporting, downloads_note) = if let Some(directory) = downloads_dir {
+        (
+            configure_downloads(&mut link, event_tx, stop_requested, directory),
+            None,
+        )
     } else {
-        let _ = event_tx.send(BrowserEvent::Warning(crate::ATTACHED_DOWNLOADS_GAP.to_string()));
-        false
+        // A refusal or an inapplicable setting is the answer to the downloads
+        // question of this panel, not the failure of the session: the page of
+        // that browser is fine, and a warning here used to replace a ready
+        // page with a fatal error.
+        (false, Some(crate::ATTACHED_DOWNLOADS_GAP.to_string()))
     };
     Some(DriverConnection {
         chrome,
@@ -371,6 +380,7 @@ fn initialize_target(
         resumed_page,
         native_user_agent_metadata,
         downloads_reporting,
+        downloads_note,
     })
 }
 
@@ -489,10 +499,15 @@ pub(super) fn run_driver(
                 SharedBrowserSession::profile_id(&reservation.session)
             }),
     );
-    state.set_downloads(crate::downloads::DownloadState::new(
+    let downloads = crate::downloads::DownloadState::new(
         downloads_directory.to_string_lossy().to_string(),
         connection.downloads_reporting,
-    ));
+    );
+    let downloads = match connection.downloads_note.take() {
+        Some(note) => downloads.with_note(note),
+        None => downloads,
+    };
+    state.set_downloads(downloads);
     state.initialize_manifest();
     if !state.attach_setup(
         &mut connection.link,

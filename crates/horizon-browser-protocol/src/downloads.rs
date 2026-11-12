@@ -61,6 +61,10 @@ pub struct BrowserDownloadList {
     /// the engine saved the page's downloads without reporting them, so an
     /// empty list is not proof that nothing was downloaded.
     pub reporting: bool,
+    /// Why this session does not report downloads, when it knows. This is the
+    /// answer to the downloads question, never a reason to end the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     #[serde(default)]
     pub downloads: Vec<BrowserDownload>,
     /// Reports this session forgot out of its bounded retention.
