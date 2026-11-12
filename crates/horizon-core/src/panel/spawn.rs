@@ -1250,6 +1250,8 @@ mod tests {
                 "-p".to_string(),
                 "2222".to_string(),
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
