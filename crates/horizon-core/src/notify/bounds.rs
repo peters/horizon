@@ -97,11 +97,14 @@ impl Bounds {
     }
 
     /// The person is in front of a window of Horizon again: the changes that
-    /// waited are seen in the sidebar, so they go, and the silence ends.
+    /// waited are seen in the sidebar, so they go, and the silence ends. The
+    /// share of the window starts again with the person, because the share
+    /// protects a person who is away from a flood of notifications.
     pub fn note_front(&mut self) {
         self.pending.clear();
         self.held_since = None;
         self.silenced = false;
+        self.window = None;
     }
 
     /// Counts the notification that is due now in the window, and answers whether

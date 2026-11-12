@@ -104,13 +104,15 @@ fn the_share_of_one_window_is_twenty_and_ends_with_one_line() {
     bounds.note(change("another"), now + GROUP);
     assert!(bounds.due(false, now + GROUP + GROUP).is_none(), "the silence holds");
 
-    // A window of Horizon gets the focus, and the next change speaks again.
+    // A window of Horizon gets the focus, and the next change speaks again,
+    // also inside the window of ten minutes that the person spent away.
     bounds.note_front();
     assert!(!bounds.silenced());
-    let later = now + WINDOW;
+    let later = now + GROUP;
     bounds.note(change("after the silence"), later);
-    let notice = bounds.due(false, later + GROUP).expect("the change of the next share");
+    let notice = bounds.due(false, later + GROUP).expect("the change after the pause");
     assert_eq!(notice.body, "after the silence needs you");
+    assert!(!bounds.silenced());
 }
 
 #[test]
