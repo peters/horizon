@@ -4,9 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{BOUND, DesktopSink, Sink, System, arguments, find_program_in, markup_escaped, missing_sentence};
+use super::{
+    BOUND, DesktopSink, NotShown, Sink, System, Told, arguments, find_program_in, markup_escaped, missing_sentence,
+};
 use crate::ProgramEnvironment;
-use crate::bounded_program::ProgramFailure;
 use crate::notify::{Notice, TITLE};
 
 /// A folder of stand-in programs that no test of the person touches.
@@ -183,7 +184,7 @@ fn a_program_that_hangs_is_ended_at_the_bound() {
     );
     assert_eq!(
         result,
-        Err(ProgramFailure::TimedOut),
+        Err(NotShown::TimedOut),
         "the bound ended the program by its own pid"
     );
     let elapsed = start.elapsed();
@@ -191,6 +192,54 @@ fn a_program_that_hangs_is_ended_at_the_bound() {
     // `bounded_program::run` waits for the program that it ended, so no child of
     // this process stays behind.
     assert!(std::path::Path::new(&program).exists());
+}
+
+/// A program that shows nothing and answers the status of `notify-send` on a
+/// session bus without a notification server.
+#[test]
+fn a_program_that_ends_with_a_failure_tells_the_code_of_its_end() {
+    let folder = folder();
+    let program = crate::util::stand_in_program_in(folder.path(), "fails", "#!/bin/sh\nexit 1\n")
+        .expect("a stand-in that shows nothing");
+    assert_eq!(
+        super::show(&program, System::Linux, &notice("Fix the sync needs you"), BOUND),
+        Err(NotShown::Ended(Some(1))),
+        "a program that answers 1 showed no notification"
+    );
+}
+
+/// A program of a notification tells a failure by its status: a warning on the
+/// standard error with the status 0 is a notification that the server showed.
+#[test]
+fn a_program_that_writes_to_the_standard_error_and_shows_the_notification_is_no_failure() {
+    let folder = folder();
+    let program = crate::util::stand_in_program_in(
+        folder.path(),
+        "warns",
+        "#!/bin/sh\nprintf 'a warning of the stand-in\\n' >&2\nexit 0\n",
+    )
+    .expect("a stand-in that shows the notification");
+    assert_eq!(
+        super::show(&program, System::Linux, &notice("Fix the sync needs you"), BOUND),
+        Ok(()),
+        "the status of the program decides, and not its streams"
+    );
+}
+
+/// The first failure of a run is the one that the log holds, and the next ones
+/// say nothing: a computer without a notification server answers every call with
+/// the same failure.
+#[test]
+fn the_first_failure_of_a_run_is_the_one_that_is_told() {
+    let mut told = Told::default();
+    assert_eq!(
+        told.first(NotShown::Ended(Some(1))),
+        Some(NotShown::Ended(Some(1))),
+        "the first failure is the reason of the line"
+    );
+    for later in [NotShown::Ended(Some(1)), NotShown::TimedOut, NotShown::Failed] {
+        assert_eq!(told.first(later), None, "one line for the run");
+    }
 }
 
 #[test]
