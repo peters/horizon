@@ -285,7 +285,7 @@ impl SpeechUi {
     /// shortcut of that retry, and the Settings tab offers the same with a button.
     fn fail_kept(&mut self, message: &str) {
         self.phase = Phase::Idle;
-        let shortcut = RETRY_SHORTCUT.display_label(primary_modifier_label());
+        let shortcut = retry_shortcut_label();
         self.kept = Some(format!(
             "The take is kept and can be sent again. {shortcut} sends it again."
         ));
@@ -381,6 +381,12 @@ fn keys_reader(keys: Option<Arc<NamedSecretVault>>) -> Arc<dyn horizon_core::spe
 /// mark show it in a shortcut.
 fn primary_modifier_label() -> &'static str {
     if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
+}
+
+/// The shortcut that sends a kept take again, as a person reads it. The mark and
+/// the Settings tab name the same keys.
+pub(in crate::app) fn retry_shortcut_label() -> String {
+    RETRY_SHORTCUT.display_label(primary_modifier_label())
 }
 
 /// `elapsed` as the minutes and seconds of the mark, such as `0:03`.

@@ -26,9 +26,13 @@ pub(super) const LANGUAGE_EXAMPLES: &str = "no, en";
 /// The line under the language field: what an empty hint means.
 pub(super) const EMPTY_LANGUAGE: &str = "An empty language lets the service detect the language of each take.";
 
-/// What the tab says about the shortcut of a retry, and about the keeps.
-pub(super) const KEPT_TAKE_LINE: &str = "A take that the service did not answer stays on this computer for one retry: at most the last three takes, for \
-     one day, private to this account. Shift and the hotkey send the last kept take again.";
+/// What the tab says about the keeps, with the shortcut that sends one again.
+pub(super) fn kept_take_line(shortcut: &str) -> String {
+    format!(
+        "A take that the service did not answer stays on this computer for one retry: at most the last three takes, for \
+         one day, private to this account. {shortcut} sends the last kept take again."
+    )
+}
 
 /// What the tab asks of the window after it drew.
 #[derive(Clone, Copy, Default)]
@@ -113,7 +117,7 @@ pub(super) fn render(
                         outcome.retry_take = true;
                     }
                 } else {
-                    super::dim_label(ui, KEPT_TAKE_LINE);
+                    super::dim_label(ui, &kept_take_line(&super::super::speech::retry_shortcut_label()));
                 }
             }
             Some(reason) => super::dim_label(ui, &format!("{NOT_SET} {reason}")),

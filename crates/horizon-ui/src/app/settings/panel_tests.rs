@@ -659,6 +659,12 @@ fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() 
             .any(|text| text.contains("goes to the service of the endpoint")),
         "the tab says where a take goes: {texts:?}"
     );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("Shift+R sends the last kept take again")),
+        "the tab names the shortcut that sends a kept take again: {texts:?}"
+    );
 }
 
 #[test]
