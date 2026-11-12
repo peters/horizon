@@ -234,6 +234,18 @@ before that link; they are no proof of who wrote a value.
   row of this computer exactly as it was. A section of a local one, `window`,
   `server` or `version`, is never applied. A section that this build does not know
   is kept as it arrived, and it changes no behaviour of this build.
+- **A save of this computer merges the section of the server's body and never the
+  envelope.** The three fields of the envelope, `format`, `config_version` and
+  `section`, stay outside the section, so no save nests one envelope inside the
+  next and the row of the store stays the section that a computer without a server
+  writes. Only the top level of the section is merged: a field of a newer Horizon
+  survives the save of an older one, and a nested merge decides nothing.
+- **A path of the `browser` section is a value of this computer, not a command.**
+  The section can name the download folder, the profile folder, a browser and a
+  driver of another computer. This computer reads a folder or a program that it
+  does not have as if the value were unset, and one line at the level INFO names
+  the setting and no path: a shared section never makes this computer run or write
+  in a program or a folder of another home.
 - **A restored or malicious server can change the machine records, the key
   bindings, the values of the secrets and the shared settings.** That is what the person asked for,
   and it is bounded: an id is never a path and a body of the wrong kind is
