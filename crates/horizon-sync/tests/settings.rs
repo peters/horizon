@@ -361,6 +361,13 @@ fn a_theme_change_of_one_computer_reaches_the_other_and_is_applied() {
     eventually("the theme of the other computer", || {
         (b.theme() == AppearanceTheme::Light).then_some(())
     });
+    // The other computer read the value, and the computer that changed it ends its
+    // own attempt on the answer of the server. That answer arrives after the read
+    // of the other computer, so this state is waited for as well.
+    eventually("the settings of the first computer in step", || {
+        let settings = a.handle().snapshot().settings().clone();
+        (settings.is_seeded() && settings.in_step() && settings.pending().is_empty()).then_some(())
+    });
     assert_eq!(
         a.theme(),
         AppearanceTheme::Light,
