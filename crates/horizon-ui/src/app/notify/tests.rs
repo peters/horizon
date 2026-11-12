@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use egui::Context;
 use horizon_core::agent_work::{TurnLedger, TurnState};
-use horizon_core::notify::{GROUP, Notice, Sink};
+use horizon_core::notify::{GROUP, Notice, Sink, System};
 use horizon_core::{Attention, Config, NotificationSetting, PanelId, PanelKind, PanelOptions, StartupDecision};
 
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_config_and_startup};
@@ -335,9 +335,21 @@ fn the_sentence_of_a_computer_without_the_program_is_the_line_of_the_setting() {
         ..Recorder::default()
     };
     app.notifications = Notifications::with_sink(Box::new(absent));
+    // The sentence names the program of this system, so the test states the
+    // program of each system instead of the one of Linux.
+    let program = if cfg!(target_os = "macos") {
+        "osascript"
+    } else {
+        "notify-send"
+    };
+    assert_eq!(
+        horizon_core::notify::program_name(System::of_this_computer()),
+        program,
+        "the program that shows a notification on this system"
+    );
     assert_eq!(
         app.notifications.missing_program_sentence().as_deref(),
-        Some("notify-send is not installed")
+        Some(format!("{program} is not installed").as_str())
     );
 }
 
