@@ -16,12 +16,12 @@ mod user_skills;
 mod work_hooks;
 use skill_files::{
     BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-    MACHINES_SKILL_FILES, SPEECH_SKILL_FILES,
+    MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, SPEECH_SKILL_FILES,
 };
 use user_skills::{
-    HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_MACHINES_SKILL, HORIZON_SPEECH_SKILL,
-    RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck, SkillRootLease,
-    bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL,
+    HORIZON_SPEECH_SKILL, RETIRED_MCP_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillOwnershipCheck,
+    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
 
 fn validate_block_skill(dir: &Path) -> io::Result<()> {
@@ -55,6 +55,22 @@ fn install_machines_skill(dir: &Path) -> io::Result<()> {
         .prefix(".horizon-machines-")
         .tempdir_in(parent)?;
     sync_plugin_files(staging.path(), MACHINES_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
+
+fn validate_mobile_skill(dir: &Path) -> io::Result<()> {
+    owned_skills::validate_files(dir, MOBILE_SKILL_FILES)
+}
+
+fn install_mobile_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new().prefix(".horizon-mobile-").tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), MOBILE_SKILL_FILES)?;
     std::fs::rename(staging.path(), dir)
 }
 
@@ -218,6 +234,16 @@ impl AgentPluginHostLease {
         );
     }
 
+    fn bind_grok_mobile_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        self.bind_grok_skill(
+            grok_root,
+            browser_bound,
+            HORIZON_MOBILE_SKILL,
+            validate_mobile_skill,
+            install_mobile_skill,
+        );
+    }
+
     fn bind_grok_speech_skill(&mut self, grok_root: &Path, browser_bound: bool) {
         self.bind_grok_skill(
             grok_root,
@@ -310,6 +336,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
                 lease.bind_grok_device_skill(&root, true);
                 lease.bind_grok_block_skill(&root, true);
                 lease.bind_grok_machines_skill(&root, true);
+                lease.bind_grok_mobile_skill(&root, true);
                 lease.bind_grok_speech_skill(&root, true);
             }
             Err(error) => {
@@ -317,6 +344,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
                 lease.bind_grok_device_skill(&root, false);
                 lease.bind_grok_block_skill(&root, false);
                 lease.bind_grok_machines_skill(&root, false);
+                lease.bind_grok_mobile_skill(&root, false);
                 lease.bind_grok_speech_skill(&root, false);
             }
         }
@@ -487,6 +515,10 @@ fn install_agent_plugins_impl(
         MACHINES_SKILL_FILES,
     )?;
     updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_MOBILE_SKILL),
+        MOBILE_SKILL_FILES,
+    )?;
+    updated_files += sync_plugin_files(
         &horizon_home.codex_integrations_dir().join(HORIZON_SPEECH_SKILL),
         SPEECH_SKILL_FILES,
     )?;
@@ -496,6 +528,7 @@ fn install_agent_plugins_impl(
         let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
         let block_dir = grok_root.join("skills").join(HORIZON_BLOCK_SKILL);
         let machines_dir = grok_root.join("skills").join(HORIZON_MACHINES_SKILL);
+        let mobile_dir = grok_root.join("skills").join(HORIZON_MOBILE_SKILL);
         let speech_dir = grok_root.join("skills").join(HORIZON_SPEECH_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             match grok_mcp::register(&grok_root) {
@@ -510,6 +543,9 @@ fn install_agent_plugins_impl(
                     }
                     if skill_dir_is_leased(lease, &machines_dir) {
                         updated_files += sync_plugin_files(&machines_dir, MACHINES_SKILL_FILES)?;
+                    }
+                    if skill_dir_is_leased(lease, &mobile_dir) {
+                        updated_files += sync_plugin_files(&mobile_dir, MOBILE_SKILL_FILES)?;
                     }
                     if skill_dir_is_leased(lease, &speech_dir) {
                         updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
@@ -526,6 +562,7 @@ fn install_agent_plugins_impl(
         let device_dir = codex_root.join("skills").join(HORIZON_DEVICE_SKILL);
         let block_dir = codex_root.join("skills").join(HORIZON_BLOCK_SKILL);
         let machines_dir = codex_root.join("skills").join(HORIZON_MACHINES_SKILL);
+        let mobile_dir = codex_root.join("skills").join(HORIZON_MOBILE_SKILL);
         let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
@@ -538,6 +575,9 @@ fn install_agent_plugins_impl(
         }
         if skill_dir_is_leased(lease, &machines_dir) {
             updated_files += sync_plugin_files(&machines_dir, MACHINES_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &mobile_dir) {
+            updated_files += sync_plugin_files(&mobile_dir, MOBILE_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &speech_dir) {
             updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
@@ -557,6 +597,7 @@ fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) ->
         dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_BLOCK_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_MACHINES_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_MOBILE_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
     }
     dirs
@@ -672,14 +713,14 @@ mod tests {
 
     use super::skill_files::{
         BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-        MACHINES_SKILL_FILES, SPEECH_SKILL_FILES,
+        MACHINES_SKILL_FILES, MOBILE_SKILL_FILES, SPEECH_SKILL_FILES,
     };
     use super::{
         AgentMcpEntry, AgentPluginHostLease, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
-        HORIZON_MACHINES_SKILL, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
-        agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl, open_lock_file,
-        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills, sync_plugin_files,
-        user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
+        HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
+        abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl,
+        open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills,
+        sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -880,6 +921,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mobile_skill_ships_its_body_its_references_and_the_script_of_the_tool() {
+        let files: Vec<&str> = MOBILE_SKILL_FILES.iter().map(|file| file.relative_path).collect();
+        assert_eq!(
+            files,
+            vec![
+                "SKILL.md",
+                "references/android.md",
+                "references/ios.md",
+                "references/provider.md",
+                "scripts/mobile_session.py",
+            ],
+            "the body, the three references and the tool"
+        );
+        let body = MOBILE_SKILL_FILES[0].content;
+        assert!(
+            body.contains("block_panel"),
+            "the skill draws the card with the card tool"
+        );
+        assert!(
+            body.contains("BROWSERSTACK_ACCESS_KEY"),
+            "the skill names the named secret"
+        );
+        for file in &MOBILE_SKILL_FILES[1..4] {
+            let reference = file.relative_path.trim_start_matches("references/");
+            assert!(
+                body.contains(&format!("](references/{reference})")),
+                "the body links {reference}"
+            );
+            assert!(file.content.starts_with("# "), "{reference} starts with a heading");
+        }
+        let tool = MOBILE_SKILL_FILES[4].content;
+        assert!(
+            tool.starts_with("#!/usr/bin/env python3"),
+            "the tool is one Python script"
+        );
+        assert!(tool.contains("def main("), "the tool has one entry point");
+        assert!(
+            tool.contains("HORIZON_MOBILE_HUB"),
+            "a test points the tool at a fake cloud"
+        );
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path().join(HORIZON_MOBILE_SKILL);
+        super::sync_plugin_files(&dir, MOBILE_SKILL_FILES).expect("install the skill");
+        super::validate_mobile_skill(&dir).expect("the installed tree is the bundled tree");
+        assert!(dir.join("scripts/mobile_session.py").is_file());
+        std::fs::write(dir.join("scripts/mobile_session.py"), "changed").expect("change the tool");
+        assert!(
+            super::validate_mobile_skill(&dir).is_err(),
+            "a changed tool is user content and is not taken over"
+        );
+    }
+
     /// The machines skill and its references, in the homes that receive it.
     /// The speech skill of this build lands in both provider roots and in the
     /// plugin of the agent, as the other skills do.
@@ -918,6 +1012,27 @@ mod tests {
         );
         assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-machines/SKILL.md");
         assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-machines/references/aws.md");
+    }
+
+    fn assert_mobile_skill_installed(user_home: &Path, claude_plugin_dir: &Path) {
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-mobile/SKILL.md"),
+            MOBILE_SKILL_FILES[0].content,
+        );
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-mobile/SKILL.md"),
+            MOBILE_SKILL_FILES[0].content,
+        );
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-mobile/scripts/mobile_session.py"),
+            MOBILE_SKILL_FILES[4].content,
+        );
+        assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-mobile/SKILL.md");
+        assert_claude_plugin_skill(claude_plugin_dir, "skills/horizon-mobile/scripts/mobile_session.py");
+        assert!(
+            !user_home.join(".agents/skills/horizon-mobile").exists(),
+            "the mobile skill must not broadcast through ~/.agents/skills"
+        );
     }
 
     fn assert_browser_and_device_skill_split() {
@@ -994,6 +1109,7 @@ mod tests {
             BLOCK_SKILL_FILES[0].content,
         );
         assert_machines_skill_installed(&user_home, &claude_plugin_dir);
+        assert_mobile_skill_installed(&user_home, &claude_plugin_dir);
         assert_speech_skill_installed(&user_home, &claude_plugin_dir);
         assert_skill_absent(
             &user_home.join(".agents/skills/horizon-browser/SKILL.md"),

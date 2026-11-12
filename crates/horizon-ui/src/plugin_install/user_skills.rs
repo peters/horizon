@@ -14,6 +14,7 @@ pub(super) const HORIZON_BLOCK_SKILL: &str = "horizon-block";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
 pub(super) const HORIZON_MACHINES_SKILL: &str = "horizon-machines";
+pub(super) const HORIZON_MOBILE_SKILL: &str = "horizon-mobile";
 pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
 pub(super) const RETIRED_NOTIFY_SKILL: &str = "horizon-notify";

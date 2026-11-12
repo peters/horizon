@@ -159,6 +159,46 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
     },
 ];
 
+/// The skill that owns a tool of its own: the body, the three references and the
+/// script that drives one phone.
+pub(super) const MOBILE_SKILL_FILES: &[EmbeddedFile] = &[
+    EmbeddedFile {
+        relative_path: "SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-mobile/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/android.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-mobile/references/android.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/ios.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-mobile/references/ios.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/provider.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-mobile/references/provider.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "scripts/mobile_session.py",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-mobile/scripts/mobile_session.py"
+        )),
+    },
+];
+
 pub(super) const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
     content: include_str!(concat!(
