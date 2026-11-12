@@ -96,6 +96,14 @@ fn main() -> eframe::Result {
         }
         Start::Desktop(cli_args) => cli_args,
     };
+    // The copy of this binary that cargo keeps in `deps` sits beside the test
+    // binaries, and a start of it cannot tell a person from a test runner. Every
+    // mode that ends early has already left, so this refuses only a start that
+    // would open the window, and it refuses it before the home is prepared.
+    if starts_from_a_build_folder() {
+        eprintln!("error: this file is a build artifact; start target/<profile>/horizon");
+        std::process::exit(2);
+    }
     init_tracing();
     let horizon_home = prepare_home_or_exit();
     let resolved_config_path =
@@ -235,6 +243,19 @@ fn alone(args: &[std::ffi::OsString], start: Start) -> Result<Start, String> {
         Some(extra) => Err(unknown_argument(extra)),
         None => Ok(start),
     }
+}
+
+/// Whether this file is the copy that cargo keeps in `deps` beside its test
+/// binaries, where a start rewrites the home of the person without a person
+/// asking for it.
+fn starts_from_a_build_folder() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|file| {
+            file.parent()
+                .map(|folder| folder.file_name() == Some(std::ffi::OsStr::new("deps")))
+        })
+        .unwrap_or(false)
 }
 
 /// The reason of one argument that this build does not know.

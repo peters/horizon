@@ -7,10 +7,16 @@
 //! exact child after ten seconds and the test fails.
 #![forbid(unsafe_code)]
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const BOUND: Duration = Duration::from_secs(10);
+
+/// Starts the binary of this crate with `arguments`.
+fn start(arguments: &[&str]) -> Outcome {
+    start_binary(Path::new(env!("CARGO_BIN_EXE_horizon")), arguments)
+}
 
 /// The first line of the usage, which `--help` writes and every refusal repeats.
 const USAGE_FIRST_LINE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]";
@@ -35,14 +41,14 @@ impl Outcome {
     }
 }
 
-/// Starts the binary with `arguments`, a private home and no display.
-fn start(arguments: &[&str]) -> Outcome {
+/// Starts `binary` with `arguments`, a private home and no display.
+fn start_binary(binary: &Path, arguments: &[&str]) -> Outcome {
     let home = tempfile::tempdir().expect("the private home of the start");
     let output = tempfile::tempdir().expect("the folder of the output");
     let written = |name: &str| {
         std::fs::File::create(output.path().join(name)).unwrap_or_else(|error| panic!("create {name}: {error}"))
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon"))
+    let mut child = Command::new(binary)
         .args(arguments)
         .env_clear()
         .env("HOME", home.path())
@@ -51,7 +57,7 @@ fn start(arguments: &[&str]) -> Outcome {
         .stdout(Stdio::from(written("stdout")))
         .stderr(Stdio::from(written("stderr")))
         .spawn()
-        .expect("start the binary of the UI crate");
+        .unwrap_or_else(|error| panic!("start `{}`: {error}", binary.display()));
     let deadline = Instant::now() + BOUND;
     let status = loop {
         if let Some(status) = child.try_wait().expect("ask the start") {
@@ -137,4 +143,32 @@ fn a_refusal_writes_the_usage_below_its_error() {
     let lines: Vec<&str> = outcome.stderr.lines().collect();
     assert_eq!(lines.first().copied(), Some("error: unknown argument --list"));
     assert_eq!(lines.get(1).copied(), Some(USAGE_FIRST_LINE));
+}
+
+/// The copy of the binary that cargo keeps in `deps` is refused before the home
+/// is prepared, while a mode that ends early still works from it.
+#[test]
+fn the_application_refuses_to_start_from_a_build_folder() {
+    let folder = tempfile::tempdir().expect("the folder of the copy");
+    let deps = folder.path().join("deps");
+    std::fs::create_dir(&deps).expect("the folder that cargo keeps the binaries in");
+    let copied = deps.join("horizon");
+    std::fs::copy(env!("CARGO_BIN_EXE_horizon"), &copied).expect("copy the binary");
+
+    let refused = start_binary(&copied, &[]);
+    assert_eq!(refused.code, 2, "the copy started the window: {:?}", refused.stderr);
+    assert_eq!(
+        refused.first_stderr_line(),
+        "error: this file is a build artifact; start target/<profile>/horizon"
+    );
+    assert_eq!(refused.entries_in_home, 0, "the copy prepared the home");
+
+    let usage = start_binary(&copied, &["--help"]);
+    assert_eq!(usage.code, 0, "{:?}", usage.stderr);
+    assert_eq!(usage.first_stdout_line(), USAGE_FIRST_LINE);
+    assert_eq!(usage.entries_in_home, 0);
+
+    let unknown = start_binary(&copied, &["--list"]);
+    assert_eq!(unknown.code, 2);
+    assert_eq!(unknown.first_stderr_line(), "error: unknown argument --list");
 }
