@@ -251,3 +251,120 @@ fn native_window_confirmation_accepts_an_asynchronous_state_change() {
         2
     );
 }
+
+/// A mock CDP browser that answers a read only on its second request, and never
+/// answers a key press, so a test reads the one more send of a far browser and
+/// the refusal of a second send of a change.
+struct ReadRetry {
+    result: Result<i64, String>,
+    read_requests: usize,
+    key_requests: usize,
+}
+
+fn run_read_retry(attach: bool) -> ReadRetry {
+    use crate::DevtoolsEndpoint;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let address = listener.local_addr().expect("mock address");
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept mock");
+        stream.set_read_timeout(Some(Duration::from_secs(30))).expect("timeout");
+        let mut socket = tungstenite::accept(stream).expect("mock handshake");
+        let (mut read_requests, mut key_requests) = (0, 0);
+        while let Ok(Message::Text(text)) = socket.read() {
+            let command: Value = serde_json::from_str(&text).expect("command JSON");
+            let method = command["method"].as_str().unwrap_or_default();
+            if method == "Runtime.evaluate" {
+                read_requests += 1;
+                if read_requests == 1 {
+                    // A far browser that is busy enough to miss the first bound.
+                    continue;
+                }
+            }
+            if method == "Input.dispatchKeyEvent" {
+                key_requests += 1;
+                continue;
+            }
+            let result = if method == "Runtime.evaluate" {
+                json!({ "result": { "value": 7 } })
+            } else {
+                json!({})
+            };
+            socket
+                .send(Message::Text(
+                    json!({ "id": command["id"], "result": result }).to_string().into(),
+                ))
+                .expect("respond");
+        }
+        (read_requests, key_requests)
+    });
+    let config = BrowserSessionConfig {
+        attach: attach.then(|| {
+            DevtoolsEndpoint::from_active_port_file("9222\n/devtools/browser/6a0c1f4e", 40000)
+                .expect("a forwarded endpoint")
+        }),
+        browser: BrowserConfig::default(),
+        panel_local_id: "read-retry".into(),
+        initial_url: None,
+        width: 800,
+        height: 600,
+        frame_slot: Arc::default(),
+        coordination: None,
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    };
+    let url = format!("ws://{address}/");
+    let mut link = CdpLink::connect(&url).expect("connect mock");
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut state = DriverState::new(&config, &url, None, Arc::clone(&stop));
+    state.session_id = Some("session".to_string());
+    let (tx, _rx) = mpsc::channel();
+    let events = BrowserEventSender {
+        tx,
+        wake: BrowserEventWake::default(),
+        committed_url: CommittedUrl::default(),
+    };
+    let slot = Arc::new(FrameSlot::default());
+    let bound = Duration::from_millis(150);
+    let result = state
+        .evaluate_json_within(&mut link, &events, &slot, "1 + 6", bound)
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+        .and_then(|value| value.as_i64().ok_or_else(|| format!("no number in {value}")));
+    // A key press changes the page, so a timeout must never send it twice.
+    let key = state.send_page_command_within(
+        &mut link,
+        &events,
+        &slot,
+        "Input.dispatchKeyEvent",
+        &json!({ "type": "keyDown" }),
+        bound,
+    );
+    assert!(key.is_err(), "a key press with no answer is a failure: {key:?}");
+    drop(link);
+    let (read_requests, key_requests) = server.join().expect("mock server");
+    ReadRetry {
+        result,
+        read_requests,
+        key_requests,
+    }
+}
+
+#[test]
+fn a_read_of_a_far_browser_is_sent_once_more_but_a_key_press_is_not() {
+    let far = run_read_retry(true);
+    assert_eq!(far.result, Ok(7), "the second send of the read answered");
+    assert_eq!(
+        far.read_requests, 2,
+        "a far browser that misses the bound answers the same read once more"
+    );
+    assert_eq!(far.key_requests, 1, "a call that changes the page is never sent twice");
+
+    let local = run_read_retry(false);
+    assert!(local.result.is_err(), "a loopback read keeps its bound");
+    assert_eq!(
+        local.read_requests, 1,
+        "a loopback browser that misses its bound has a real problem"
+    );
+    assert_eq!(local.key_requests, 1);
+}

@@ -24,6 +24,7 @@
 //! - the screencast is implicitly terminated by navigation, so it is
 //!   restarted on every top-level `Page.frameNavigated`.
 
+mod call;
 mod clipboard;
 mod command_queue;
 mod commands;
@@ -178,7 +179,9 @@ pub struct BrowserSession {
 }
 
 const WS_URL_TIMEOUT: Duration = Duration::from_secs(15);
-const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// The budget of one call to a loopback browser; [`call::Call::budget`] holds
+/// the larger one of a browser that answers across a link.
+const CALL_TIMEOUT: Duration = call::CALL_TIMEOUT;
 const RESTART_BACKOFF: Duration = Duration::from_millis(250);
 const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
@@ -744,13 +747,39 @@ impl DriverState {
         session: Option<&str>,
     ) -> Result<serde_json::Value, crate::cdp::CdpError> {
         let stop_requested = Arc::clone(&self.stop_requested);
-        let outcome = link.call_and_drain_until(CALL_TIMEOUT, method, params, session, || {
+        let outcome = link.call_and_drain_until(self.call_budget(), method, params, session, || {
             stop_requested.load(Ordering::Acquire)
         });
         for message in outcome.drained {
             self.handle_message(link, event_tx, frame_slot, message);
         }
         outcome.result
+    }
+
+    /// Whether the browser of this session answers across a link, because another
+    /// process or another computer runs it.
+    fn far_browser(&self) -> bool {
+        self.config.attach.is_some() || self.config.remote.is_some()
+    }
+
+    /// The budget of one protocol call of this session: the loopback budget, or
+    /// the larger one of a browser that another process or another computer
+    /// runs.
+    pub(super) fn call_budget(&self) -> Duration {
+        call::Call {
+            kind: call::Kind::Change,
+            far: self.far_browser(),
+        }
+        .budget()
+    }
+
+    /// One read of this session: it holds the budget of this browser, and a
+    /// timeout of a far browser is sent once more.
+    pub(super) fn read_call(&self) -> call::Call {
+        call::Call {
+            kind: call::Kind::Read,
+            far: self.far_browser(),
+        }
     }
 
     /// Freeze an in-flight navigation, route every event received while that
@@ -807,7 +836,8 @@ impl DriverState {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, CdpError> {
-        self.send_page_command_within(link, event_tx, frame_slot, method, params, CALL_TIMEOUT)
+        let budget = self.call_budget();
+        self.send_page_command_within(link, event_tx, frame_slot, method, params, budget)
     }
 
     /// A page-session command that may block the driver for at most `timeout`.

@@ -28,7 +28,8 @@ impl DriverState {
         selector: Option<&str>,
         max_nodes: u32,
     ) -> Result<Value, BrowserControlFailure> {
-        self.frame_scan_within(link, events, slot, selector, max_nodes, super::super::CALL_TIMEOUT)
+        let budget = self.read_call().budget();
+        self.frame_scan_within(link, events, slot, selector, max_nodes, budget)
     }
 
     pub(in crate::session) fn frame_scan_within(
