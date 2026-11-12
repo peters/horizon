@@ -3,9 +3,9 @@
 //! Every recorder of the documents writes the length of the recording into the
 //! header of its file when the file ends: `pw-record`, `arecord`, `ffmpeg` and
 //! `rec` all do that on `SIGINT` and on `SIGTERM`. A recorder that Horizon had to
-//! kill writes no length: it leaves the two fields of a canonical `RIFF`/`WAVE`
-//! header (the `RIFF` chunk size at the eighth byte and the `data` chunk size at
-//! the 40th) at zero or at `0xFFFFFFFF`.
+//! kill writes no length: it leaves the two length fields of a canonical
+//! `RIFF`/`WAVE` header (the `RIFF` chunk size at byte 4 and the `data` chunk size
+//! at byte 40) at zero or at `0xFFFFFFFF`.
 //!
 //! A service reads such a header as a recording of no data, so the take would be
 //! refused for a property of its container and not of its audio. [`close`] writes
@@ -14,7 +14,7 @@
 //! business of its recorder, and Horizon sends it as it is.
 
 /// The length of the canonical `RIFF`/`WAVE` header of PCM audio that this module
-/// repairs, and the offset of its data chunk.
+/// repairs, which is also the offset of its audio.
 pub const CANONICAL_HEADER: usize = 44;
 
 /// The value of a length field that a recorder never wrote.
@@ -26,8 +26,7 @@ const CANONICAL_FMT_SIZE: u16 = 16;
 /// The audio format of linear PCM.
 const PCM_FORMAT: u16 = 1;
 
-/// The two length fields of a canonical header, and the bytes that decide the
-/// shape of the header.
+/// Where the two length fields of a canonical header start.
 struct Fields {
     riff_size: usize,
     data_size: usize,
