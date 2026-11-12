@@ -36,10 +36,7 @@ impl Recorder {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .map(|notice| {
-                assert_eq!(notice.title, horizon_core::notify::TITLE);
-                notice.body.clone()
-            })
+            .map(|notice| notice.body.clone())
             .collect()
     }
 }

@@ -70,15 +70,13 @@ impl Bounds {
         Some(notice)
     }
 
-    /// Whether the pending changes wait for the group or for the spacing.
-    #[must_use]
-    pub fn waiting(&self) -> bool {
-        self.held_since.is_some()
-    }
-
-    /// When the next notification is due, for a frame that has to wake for it.
+    /// When the next notification is due, for a frame that has to wake for it, or
+    /// `None` while no change waits and while the silence holds.
     #[must_use]
     pub fn due_at(&self) -> Option<Instant> {
+        if self.silenced {
+            return None;
+        }
         self.due_instant()
     }
 

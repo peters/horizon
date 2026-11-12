@@ -85,10 +85,10 @@ fn a_name_that_looks_like_an_option_stays_a_name() {
 }
 
 #[test]
-fn the_notification_takes_the_title_of_horizon() {
+fn the_notification_takes_the_body_that_the_changes_make() {
     let notice = super::Notice::new("Fix the sync needs you");
-    assert_eq!(notice.title, TITLE);
     assert_eq!(notice.body, "Fix the sync needs you");
+    assert_eq!(TITLE, "Horizon", "the title of every notification");
 }
 
 #[test]

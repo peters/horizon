@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::ProgramEnvironment;
 use crate::bounded_program::{self, ProgramFailure};
 
-use super::Notice;
+use super::{Notice, TITLE};
 
 /// How long the program of one notification may run.
 pub const BOUND: Duration = Duration::from_secs(5);
@@ -69,7 +69,7 @@ pub fn arguments(system: System, notice: &Notice) -> Vec<OsString> {
         System::Linux => vec![
             OsString::from("--app-name=Horizon"),
             OsString::from("--"),
-            OsString::from(&notice.title),
+            OsString::from(TITLE),
             OsString::from(markup_escaped(&notice.body)),
         ],
         System::MacOs => [
@@ -83,7 +83,7 @@ pub fn arguments(system: System, notice: &Notice) -> Vec<OsString> {
         ]
         .into_iter()
         .map(OsString::from)
-        .chain([OsString::from(&notice.title), OsString::from(&notice.body)])
+        .chain([OsString::from(TITLE), OsString::from(&notice.body)])
         .collect(),
     }
 }
@@ -187,8 +187,15 @@ fn work(
     };
     let mut told = false;
     for notice in notices {
-        if let Err(failure) = show(&program, system, &notice, BOUND) {
-            tell(&mut told, program.display(), failure);
+        if let Err(failure) = show(&program, system, &notice, BOUND)
+            && !std::mem::replace(&mut told, true)
+        {
+            // One line for the first program that did not show a notification.
+            tracing::info!(
+                program = %program.display(),
+                failure = ?failure,
+                "the program of a desktop notification did not show it"
+            );
         }
     }
 }
@@ -200,20 +207,6 @@ fn work(
 fn show(program: &std::path::Path, system: System, notice: &Notice, bound: Duration) -> Result<(), ProgramFailure> {
     let args = arguments(system, notice);
     bounded_program::run(program, &args, &ProgramEnvironment::of_this_process(), bound).map(|_output| ())
-}
-
-/// One line for the first program that did not show a notification, and nothing
-/// after it: a person who reads the log sees one failure, not one for each change.
-fn tell(told: &mut bool, program: impl std::fmt::Display, failure: ProgramFailure) {
-    if *told {
-        return;
-    }
-    *told = true;
-    tracing::info!(
-        %program,
-        failure = ?failure,
-        "the program of a desktop notification did not show it"
-    );
 }
 
 #[cfg(test)]

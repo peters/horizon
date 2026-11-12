@@ -22,7 +22,7 @@ fn a_change_leaves_at_the_end_of_its_group() {
     let start = Instant::now();
     let mut bounds = Bounds::default();
     bounds.note(change("Fix the sync"), start);
-    assert!(bounds.waiting());
+    assert!(bounds.due_at().is_some());
     assert_eq!(bounds.due_at(), Some(start + GROUP));
     assert!(
         bounds.due(false, start + GROUP / 2).is_none(),
@@ -30,7 +30,7 @@ fn a_change_leaves_at_the_end_of_its_group() {
     );
     let notice = bounds.due(false, start + GROUP);
     assert_eq!(body(notice.as_ref()), "Fix the sync needs you");
-    assert!(!bounds.waiting(), "the change left once");
+    assert!(bounds.due_at().is_none(), "the change left once");
     assert!(bounds.due(false, start + GROUP + Duration::from_secs(60)).is_none());
 }
 
@@ -76,7 +76,7 @@ fn a_person_who_is_in_front_again_clears_the_changes_that_wait() {
     bounds.note(change("Fix the sync"), start);
     // The person came back inside the two seconds.
     bounds.note_front();
-    assert!(!bounds.waiting());
+    assert!(bounds.due_at().is_none());
     assert!(
         bounds.due(false, start + GROUP).is_none(),
         "a cleared change sends nothing"

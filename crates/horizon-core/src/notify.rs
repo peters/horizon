@@ -15,8 +15,6 @@
 //!
 //! [`docs/review/trust-boundaries/desktop-notifications.md`]: ../../../docs/review/trust-boundaries/desktop-notifications.md
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 use crate::util::truncate_chars;
@@ -101,12 +99,6 @@ impl ChangeKind {
     }
 }
 
-impl fmt::Display for ChangeKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.words())
-    }
-}
-
 /// One change of an agent panel that the person did not see.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
@@ -117,21 +109,17 @@ pub struct Change {
     pub kind: ChangeKind,
 }
 
-/// What one notification says, after the names are clean.
+/// What one notification says, after the names are clean. The title of every
+/// notification is [`TITLE`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {
-    pub title: String,
     pub body: String,
 }
 
 impl Notice {
-    /// The notification of `body`, with the title of Horizon.
     #[must_use]
     pub fn new(body: impl Into<String>) -> Self {
-        Self {
-            title: TITLE.to_owned(),
-            body: body.into(),
-        }
+        Self { body: body.into() }
     }
 }
 

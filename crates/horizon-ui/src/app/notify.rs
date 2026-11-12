@@ -77,21 +77,20 @@ impl Notifications {
         let Some(sink) = &self.sink else {
             return;
         };
-        if !self.bounds.waiting() {
+        let Some(due) = self.bounds.due_at() else {
             return;
-        }
+        };
         if let Some(notice) = self.bounds.due(several_workspaces, now) {
             sink.send(notice);
+            return;
         }
-        if let Some(due) = self.bounds.due_at() {
-            ctx.request_repaint_after(due.saturating_duration_since(now));
-        }
+        ctx.request_repaint_after(due.saturating_duration_since(now));
     }
 
     /// Whether a change waits for its notification.
     #[cfg(test)]
     pub(in crate::app) fn waiting(&self) -> bool {
-        self.bounds.waiting()
+        self.bounds.due_at().is_some()
     }
 }
 
