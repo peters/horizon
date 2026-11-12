@@ -96,10 +96,19 @@ impl DeviceUiState {
                 y: u32::from(point.y),
             })
         };
+        // An event belongs to this viewer only where this layer is the one on top,
+        // so a popup, a dialog or another panel above the picture takes its own
+        // events, as it does for the VNC viewer.
+        let this_layer = ui.layer_id();
+        let on_top_at =
+            |global: egui::Pos2| ui.ctx().layer_id_at(global).unwrap_or_else(egui::LayerId::background) == this_layer;
         let mut events = Vec::new();
         for event in pointer_events {
             match event {
-                egui::Event::PointerMoved(pos) => events.extend(self.frame_state.pointer(mapped(pos))),
+                egui::Event::PointerMoved(pos) => {
+                    let inside = mapped(pos).filter(|_| on_top_at(pos));
+                    events.extend(self.frame_state.pointer(inside));
+                }
                 egui::Event::PointerButton {
                     pos, button, pressed, ..
                 } => {
@@ -107,7 +116,14 @@ impl DeviceUiState {
                     else {
                         continue;
                     };
-                    events.extend(self.frame_state.button(button, pressed, mapped(pos)));
+                    // A press starts in the picture and only under this layer; a
+                    // release ends the press that this program was given.
+                    let inside = if pressed {
+                        mapped(pos).filter(|_| on_top_at(pos))
+                    } else {
+                        mapped(pos)
+                    };
+                    events.extend(self.frame_state.button(button, pressed, inside));
                 }
                 egui::Event::PointerGone => {
                     events.extend(self.frame_state.button(horizon_frame_source::Button::Left, false, None));

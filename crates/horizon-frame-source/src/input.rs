@@ -119,21 +119,39 @@ impl InputState {
         vec![InputEvent::Pointer { at }]
     }
 
-    /// A button of the pointer, with the mask of the buttons that are still down.
+    /// A button of the pointer. A press is only one that the viewer sent at a point
+    /// of the picture, so a click that starts beside the picture is no press at all.
+    /// A release follows only a press that was sent, and it is at the point of the
+    /// picture that the program saw last: a point is never invented or moved to an
+    /// edge.
     pub fn button(&mut self, button: Button, down: bool, at: Option<Point>) -> Vec<InputEvent> {
         let bit = mask_of(button);
-        let before = self.buttons;
-        self.buttons = if down { self.buttons | bit } else { self.buttons & !bit };
-        if before == self.buttons {
+        if down {
+            let Some(at) = at else {
+                return Vec::new();
+            };
+            if self.buttons & bit != 0 {
+                return Vec::new();
+            }
+            self.buttons |= bit;
+            self.position = Some(at);
+            return vec![InputEvent::Button {
+                button,
+                down: true,
+                at: Some(at),
+            }];
+        }
+        if self.buttons & bit == 0 {
             return Vec::new();
         }
-        if let Some(at) = at {
-            self.position = Some(at);
+        self.buttons &= !bit;
+        if at.is_some() {
+            self.position = at;
         }
         vec![InputEvent::Button {
             button,
-            down,
-            at: Some(self.position.unwrap_or(Point { x: 0, y: 0 })),
+            down: false,
+            at: self.position,
         }]
     }
 
@@ -205,13 +223,20 @@ impl InputState {
             .collect();
         if self.buttons != 0 {
             let at = self.position;
-            self.buttons = 0;
-            for button in [Button::Left, Button::Middle, Button::Right] {
-                events.push(InputEvent::Button {
-                    button,
-                    down: false,
-                    at,
-                });
+            let down = std::mem::take(&mut self.buttons);
+            for (bit, button) in [
+                (horizon_vnc::BUTTON_LEFT, Button::Left),
+                (horizon_vnc::BUTTON_MIDDLE, Button::Middle),
+                (horizon_vnc::BUTTON_RIGHT, Button::Right),
+            ] {
+                // Only the buttons that this program was told about are released.
+                if down & bit != 0 {
+                    events.push(InputEvent::Button {
+                        button,
+                        down: false,
+                        at,
+                    });
+                }
             }
         }
         events
@@ -324,15 +349,46 @@ mod tests {
     }
 
     #[test]
+    fn a_press_beside_the_picture_never_reaches_the_program() {
+        let mut state = InputState::default();
+        assert!(
+            state.button(Button::Left, true, None).is_empty(),
+            "a press that the viewer did not place in the picture is no press"
+        );
+        assert_eq!(state.buttons(), 0);
+        assert!(
+            state.button(Button::Left, false, Some(Point { x: 3, y: 4 })).is_empty(),
+            "a release without a press is no message"
+        );
+        assert_eq!(state.position(), None, "no point of the picture is invented");
+    }
+
+    #[test]
+    fn a_release_is_at_the_last_point_the_program_saw_and_never_at_an_edge() {
+        let mut state = InputState::default();
+        state.button(Button::Left, true, Some(Point { x: 7, y: 9 }));
+        let released = state.button(Button::Left, false, None);
+        assert_eq!(
+            released,
+            [InputEvent::Button {
+                button: Button::Left,
+                down: false,
+                at: Some(Point { x: 7, y: 9 })
+            }],
+            "the release is where the program last saw the pointer"
+        );
+    }
+
+    #[test]
     fn a_lost_image_lets_go_of_every_key_and_button_it_held() {
         let mut state = InputState::default();
         state.pointer(Some(Point { x: 2, y: 3 }));
-        state.button(Button::Right, true, None);
+        state.button(Button::Right, true, Some(Point { x: 2, y: 3 }));
         state.key(Key::Named(crate::keys::NamedKey::Ctrl), true);
         state.key(Key::Character('a'), true);
         assert!(state.is_held(Key::Character('a')));
         let events = state.release_all();
-        assert_eq!(events.len(), 5, "two keys and three buttons: {events:?}");
+        assert_eq!(events.len(), 3, "two keys and the one button that was down: {events:?}");
         assert!(
             events[..2]
                 .iter()
