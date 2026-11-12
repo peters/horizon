@@ -250,6 +250,7 @@ fn placeholder(
     available: Rect,
     interactive: bool,
 ) -> bool {
+    let mut waiting = None;
     let message = match &browser.status {
         BrowserStatus::Starting => "Starting browser…".to_string(),
         BrowserStatus::Ready => "Waiting for frames…".to_string(),
@@ -258,7 +259,24 @@ fn placeholder(
             "Browser stopped{}",
             code.map(|c| format!(" (exit {c})")).unwrap_or_default()
         ),
+        BrowserStatus::Reconnecting { attempt, retry_at } => {
+            // The panel is trying again by itself, so it says when.
+            let remaining = retry_at.saturating_duration_since(std::time::Instant::now());
+            waiting = Some(remaining);
+            let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
+            if seconds == 0 {
+                format!("The link is lost. The panel connects again now (attempt {attempt}).")
+            } else {
+                format!("The link is lost. The panel connects again in {seconds} s (attempt {attempt}).")
+            }
+        }
     };
+    if let Some(remaining) = waiting {
+        // The countdown is the only thing that changes while the panel waits, so
+        // it is the only reason to draw again.
+        ui.ctx()
+            .request_repaint_after(remaining.min(std::time::Duration::from_secs(1)));
+    }
     let mut retry_clicked = false;
     ui.vertical_centered(|ui| {
         ui.add_space(((available.height() - 90.0).max(0.0)) / 2.0);

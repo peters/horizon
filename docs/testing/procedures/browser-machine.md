@@ -181,7 +181,7 @@ a panel after the container stops.
    and `docker ps` shows `127.0.0.1:<m>->9222/tcp` with a port `<m>` that can
    differ from `<n>`. The endpoint file holds `<m>` on line 1.
 
-### 6.4 BM-4 — a lost browser keeps the panel and says why
+### 6.4 BM-4 — a lost browser keeps the panel, says why, and comes back
 
 1. With a browser panel open on a page, stop the browser of the container:
 
@@ -192,21 +192,30 @@ a panel after the container stops.
    ```
 
    Result: the panel does not go away. It keeps its place and its last address,
-   and its body states `Browser error: the browser of bvm-1 in the profile work
-   lost its connection, so this panel keeps its last page; Retry connects
-   again`. The body holds no word of the browser engine.
+   and its body states `The link is lost. The panel connects again in N s
+   (attempt 1).`, where N counts down from 3. The body holds no word of the
+   browser engine.
 
 2. Read the state of the panel as an agent, with `browser_panel`.
 
    Result: `failure.code` is `attached_host_connection_lost`, and
-   `failure.message` holds the sentence of step 1 and then the words of the engine
-   in parentheses, such as `(CDP connection lost: ...)`. `browser_list` still
-   shows the panel.
+   `failure.message` names the machine, the profile and the lost connection,
+   then the words of the engine in parentheses, such as
+   `(CDP connection lost: ...)`. `browser_list` still shows the panel.
 
-3. Click **Retry**.
+3. Do not press a control. Wait 30 seconds.
 
-   Result: the container restarts, the panel paints one new page at the address of
-   step 1, and the panel stays in the same place on the canvas.
+   Result: the panel connects again by itself. Horizon starts the browser of
+   that machine again, and the panel paints one new page at the address of
+   step 1. The panel stays in the same place on the canvas. The line above the
+   page states `The link was lost, so this page is new: text that you had typed
+   into it, its scroll position and its session are gone.`
+
+4. Type text into a field of the page, stop the browser again, and wait 30
+   seconds.
+
+   Result: the panel comes back at the same address, and the field is empty.
+   The line of step 3 is there again.
 
 ### 6.5 BM-5 — a machine without the wrapper names that reason
 
@@ -288,7 +297,8 @@ a panel after the container stops.
 - A second panel reuses the running container, and a stopped container restarts
   at the next panel on a port that the wrapper reads again.
 - A lost browser keeps the panel, says why, reports
-  `attached_host_connection_lost` to an agent, and Retry paints the page again.
+  `attached_host_connection_lost` to an agent, and comes back by itself at the
+  same address in a new page that says its state is gone.
 - A machine without the wrapper reports `attached_host_no_browser`.
 - No step of the run leaves a machine, a container or a process.
 

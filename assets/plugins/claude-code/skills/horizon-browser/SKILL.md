@@ -407,11 +407,16 @@ computer.
   its place and its last address, and it reports `attached_host_connection_lost`
   in `failure.code` of `browser_panel`, with the words of the lost connection in
   `failure.message`. A panel that never showed a page does not stay, and its
-  `browser_create` answers that code instead. Read `failure` before you act:
-  the panel has no driver, so every control call fails with
-  `browser_unavailable` until the person presses **Retry** there or starts the
-  panel again. Tell the person the code and the words of the failure; do not
-  create a second panel to replace a panel they can retry.
+  `browser_create` answers that code instead. The panel then connects again by
+  itself, with waits of 3, 6, 12, 24 and then 30 seconds, and it says how long
+  it waits; the browser and the profile of that machine are unchanged, so the
+  next attempt reaches the same browser. An attempt that cannot reach the host
+  continues the waits, and a host key that ssh refuses ends them. A new link
+  opens a new page at the last address: what the person had typed into the old
+  page, its scroll position and its session are gone, and the panel says so.
+  While the panel waits, its `status` is `reconnecting`, and every control call
+  fails with `browser_unavailable`. Do not create a second panel to replace it,
+  and do not press **Retry** for it: the person may press that to skip a wait.
 - Every local account of that machine can reach the loopback `DevTools` port of
   that browser and use its sign-ins. Never claim that the browser is isolated
   from the other users of that machine.

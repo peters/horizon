@@ -15,6 +15,9 @@ use super::super::{BrowserConfig, BrowserDrainOutput, BrowserPanelState, Browser
 use super::{AttachedHost, AttachedHostFailureKind, attached_host_backend_refusal, connect};
 
 const DEADLINE: Duration = Duration::from_secs(10);
+/// A lost link waits three seconds before its first automatic attempt, so a
+/// test that waits for that attempt needs a wider bound than a plain connect.
+const RETRY_DEADLINE: Duration = Duration::from_secs(60);
 
 /// One test at a time. A child that another thread of this process forked holds
 /// the open script of this test, and Linux then refuses to execute it
@@ -673,4 +676,193 @@ fn a_browser_that_never_showed_a_page_ends_the_panel_of_the_host() {
         "a panel that showed no page keeps no reason of a lost page"
     );
     assert!(panel.has_ended(), "the create reports why no page opened");
+}
+
+#[test]
+fn the_delays_of_a_lost_link_grow_and_a_long_connection_starts_them_again() {
+    use super::next_attempt;
+    assert_eq!(next_attempt(0, None).0, 1);
+    assert_eq!(next_attempt(0, None).1, Duration::from_secs(3));
+    assert_eq!(next_attempt(3, None), (4, Duration::from_secs(24)));
+    assert_eq!(next_attempt(4, None), (5, Duration::from_secs(30)));
+    assert_eq!(next_attempt(9, None), (10, Duration::from_secs(30)));
+    let long_connection = Instant::now()
+        .checked_sub(crate::RECONNECT_RESET_AFTER)
+        .expect("the test machine has been up for ten seconds");
+    assert_eq!(
+        next_attempt(4, Some(long_connection)),
+        (1, Duration::from_secs(3)),
+        "a connection that lasted ten seconds starts the delays again"
+    );
+    assert_eq!(
+        next_attempt(4, Some(Instant::now())),
+        (5, Duration::from_secs(30)),
+        "a link that drops again waits longer"
+    );
+}
+
+/// The events of a session that showed a page and then lost its WebSocket.
+fn lose_the_link(panel: &mut BrowserPanelState) {
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::UrlChanged("https://example.test/inbox".to_string()),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Ready, &mut output);
+    panel.apply_event(
+        BrowserEvent::Warning(
+            "CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"
+                .to_string(),
+        ),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Stopped { code: None }, &mut output);
+}
+
+#[test]
+fn a_lost_link_waits_for_the_next_attempt_and_keeps_the_address() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+
+    lose_the_link(&mut panel);
+
+    let (attempt, retry_at) = panel.attached_retry().expect("an automatic attempt");
+    assert_eq!(attempt, 1, "the first attempt after the first loss");
+    assert!(
+        retry_at > Instant::now() && retry_at <= Instant::now() + Duration::from_secs(3),
+        "the attempt starts after the first delay of the link"
+    );
+    assert!(
+        !panel.has_ended(),
+        "a panel that waits for its own attempt has not ended"
+    );
+    assert!(!panel.status.is_alive(), "nothing is connected while it waits");
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the person keeps the address of the page"
+    );
+    assert_eq!(
+        panel.attached_host_failure().map(super::AttachedHostFailure::kind),
+        Some(AttachedHostFailureKind::ConnectionLost),
+        "the reason of the loss stays for the log and for an agent"
+    );
+    assert!(panel.can_retry(), "a person can still ask for the connect now");
+}
+
+#[test]
+fn an_unreachable_attempt_continues_but_a_missing_browser_needs_a_person() {
+    use horizon_browser_control::ssh_forward::SshForwardError;
+
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+    lose_the_link(&mut panel);
+    let (first, _) = panel.attached_retry().expect("an automatic attempt");
+
+    // A cut ends the attempt of an unchanged route, so the next one follows.
+    panel.attached_failed(super::AttachedHostFailure::unreachable(
+        &host,
+        "ssh: connect to host browser-vm port 22: Connection timed out",
+    ));
+    let (next, retry_at) = panel.attached_retry().expect("the next attempt");
+    assert_eq!(next, first + 1);
+    assert!(retry_at > Instant::now(), "the next delay starts after the attempt");
+
+    // A machine without Chromium will not heal by itself.
+    panel.attached_failed(super::AttachedHostFailure::from_ssh(
+        &host,
+        &SshForwardError::RemoteCommandFailed {
+            target: "browser-vm".to_string(),
+            code: Some(3),
+            reason: "no chromium".to_string(),
+        },
+    ));
+    assert_eq!(panel.attached_retry(), None, "a person must install that browser");
+    assert!(
+        matches!(panel.status, BrowserStatus::Error { .. }),
+        "the panel keeps the present failure: {:?}",
+        panel.status
+    );
+    assert!(panel.attached_host_failure().is_some());
+}
+
+#[test]
+fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
+    let _serial = serial();
+    let directory = scratch();
+    let log = directory.path().join("commands.log");
+    let served: Served = Arc::default();
+    let program = stand_in(
+        directory.path(),
+        &log,
+        &format!(
+            "printf '%s\\n' {running}",
+            running = script_text(&endpoint_text(RUNNING_BROWSER))
+        ),
+    );
+    let probe = {
+        let served = Arc::clone(&served);
+        move |port: u16| {
+            lock(&served).push(port);
+            serve_version(port)
+        }
+    };
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel(test_ssh(&program, probe), &host);
+
+    wait_for_connect(&mut panel);
+    assert_eq!(panel.attached_host_failure(), None);
+    // The mock endpoint answers no CDP handshake, so the first session ends as
+    // it would on a lost link, before a page.
+    wait_until(&mut panel, BrowserPanelState::has_ended);
+    assert_eq!(count_port_reads(&log), 1);
+
+    // The person had a page of that browser before the link went away.
+    panel.attached_reached_ready();
+    lose_the_link(&mut panel);
+    let (attempt, retry_at) = panel.attached_retry().expect("an automatic attempt");
+    assert_eq!(attempt, 1);
+    assert!(retry_at > Instant::now());
+    let waiting = Instant::now();
+
+    // No person presses Retry: the panel connects again by itself.
+    let deadline = waiting + RETRY_DEADLINE;
+    while panel.session.is_none() {
+        panel.drain_events();
+        assert!(Instant::now() < deadline, "the automatic attempt never connected");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        waiting.elapsed() >= Duration::from_secs(3),
+        "the attempt waited the first delay of the link"
+    );
+    assert_eq!(
+        count_port_reads(&log),
+        2,
+        "the attempt read the endpoint of that browser again"
+    );
+    assert_eq!(lock(&served).len(), 2, "the attempt opened one fresh forward");
+    assert_eq!(
+        count_start_snippets(&log),
+        0,
+        "the browser of that machine keeps running"
+    );
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the new page opens the address of the one the person had"
+    );
+    assert_eq!(
+        panel.navigation_error.as_deref(),
+        Some(super::PAGE_STATE_LOST),
+        "the panel says that the page is new and that what it held is gone"
+    );
+    assert_eq!(
+        panel.attached_host_failure(),
+        None,
+        "the automatic attempt reached the browser of that machine"
+    );
+    panel.stop();
 }

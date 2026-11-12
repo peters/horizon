@@ -80,7 +80,10 @@ pub(in crate::app) fn engine_failure_reason(status: &BrowserStatus) -> Option<St
         BrowserStatus::Stopped { code: Some(code) } if *code != 0 => {
             Some(format!("the browser engine exited with code {code}"))
         }
-        BrowserStatus::Starting | BrowserStatus::Ready | BrowserStatus::Stopped { .. } => None,
+        BrowserStatus::Starting
+        | BrowserStatus::Ready
+        | BrowserStatus::Stopped { .. }
+        | BrowserStatus::Reconnecting { .. } => None,
     }
 }
 

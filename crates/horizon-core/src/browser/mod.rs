@@ -143,6 +143,7 @@ impl BrowserPanelState {
     pub fn has_ended(&self) -> bool {
         !self.attached_kept_after()
             && !self.status.is_alive()
+            && !self.status.is_reconnecting()
             && self.session.is_none()
             && self.pending_relaunch.is_none()
     }
