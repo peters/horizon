@@ -208,6 +208,54 @@ class StandInTests(unittest.TestCase):
             self.assertIn(f'{MODULE_PREFIX}ask: PermissionRequest', answers)
             self.assertEqual(child.returncode, 0)
 
+    def test_the_delay_of_a_line_is_read_and_bounded(self):
+        stand_in = load()
+        self.assertEqual(stand_in.parse_delay('ask'), None, 'a plain word is no delay')
+        self.assertEqual(stand_in.parse_delay('start'), None)
+        self.assertEqual(stand_in.parse_delay('after 6 ask'), (6.0, 'ask'))
+        self.assertEqual(stand_in.parse_delay('after 0 stop'), (0.0, 'stop'))
+        self.assertEqual(stand_in.parse_delay(f'after {stand_in.MAX_AFTER_SECONDS} answer'),
+                         (float(stand_in.MAX_AFTER_SECONDS), 'answer'))
+        for refused, reason in [
+            (f'after {stand_in.MAX_AFTER_SECONDS + 1} ask', 'outside'),
+            ('after -1 ask', 'outside'),
+            ('after 6 sing', 'unknown event'),
+            ('after 6', 'after SECONDS WORD'),
+            ('after six ask', 'no number'),
+        ]:
+            with self.assertRaises(ValueError) as raised:
+                stand_in.parse_delay(refused)
+            self.assertIn(reason, str(raised.exception), refused)
+
+    def test_a_delayed_word_arrives_after_its_delay(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            finished = subprocess.run(
+                [sys.executable, str(SCRIPT), *HORIZON_ARGUMENTS], input='start\nafter 1 ask\n',
+                text=True, capture_output=True, check=False,
+                env=environment(directory, recorder(directory)), timeout=120)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            # The line of the delay ends the input, so the event of the delay must
+            # still arrive: the panel does not end before it sends.
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and len(events(directory)) < 2:
+                time.sleep(0.05)
+            self.assertEqual([event['hook_event_name'] for event in events(directory)],
+                             ['UserPromptSubmit', 'PermissionRequest'], 'the delayed word arrives')
+            self.assertEqual(events(directory)[1]['prompt_id'], 'turn-1')
+            self.assertIn(f'{MODULE_PREFIX}ask in 1 s', finished.stdout)
+            self.assertIn(f'{MODULE_PREFIX}ask: PermissionRequest', finished.stdout)
+
+    def test_a_delay_that_the_stand_in_refuses_sends_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            finished = subprocess.run(
+                [sys.executable, str(SCRIPT)], input='after 61 ask\nquit\n', text=True,
+                capture_output=True, check=False, env=environment(directory, recorder(directory)), timeout=120)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            self.assertIn('outside 0 to 60 s', finished.stdout)
+            self.assertEqual(calls(directory), [])
+
     def test_the_sequence_of_the_timer_names_only_known_events(self):
         stand_in = load()
         self.assertEqual(stand_in.TIMER_SEQUENCE[0], 'start')

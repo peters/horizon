@@ -20,7 +20,8 @@ bounds and the setting.
 ## 2. Applicability
 
 - Candidate: a Linux build with the desktop notification and the fixture options
-  `--notifications-log` and `--plain-window`.
+  `--attention-agent`, `--attention-agent-count`, `--notifications-log` and
+  `--plain-window`.
 - Platforms: Linux. macOS uses another program of the system, and this
   procedure does not test it.
 - This procedure does not test: the attention states of the sidebar, which
@@ -43,17 +44,18 @@ bounds and the setting.
 
 ## 5. Setup
 
-1. Start the fixture with the stand-in agent, the notification log and the plain
-   window.
+1. Start the fixture with the stand-in agent, two stand-in panels, the
+   notification log and the plain window.
 
    ```bash
    python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
      --state /var/tmp/notifications-1 --native-view --attention-agent 0 \
-     --notifications-log --plain-window
+     --attention-agent-count 2 --notifications-log --plain-window
    ```
 
    Result: the isolated desktop holds a Horizon window, a plain window and a
-   panel named Notifications. The terminal prints the VNC address.
+   panel named Notifications. The Horizon window holds the panels `Attention
+   stand-in 1` and `Attention stand-in 2`. The terminal prints the VNC address.
 
 2. Open the VNC address in a Horizon native Device panel.
 
@@ -64,16 +66,28 @@ bounds and the setting.
 
 Give each task the ID that follows. A report gives one result for each ID.
 
+A notification arrives only while no window of Horizon has the focus, and a
+keypress gives Horizon the focus again. So a task types into a panel first and
+gives the focus to the plain window after that. The word `after SECONDS WORD`
+of the stand-in sends `WORD` after that delay, which makes this order possible;
+the delay is at most 60 seconds. Each step names the window that it types into,
+and that window has the focus when the step starts.
+
 ### 6.1 N1 — A change that a person in another window receives
 
-1. Click the plain window, so that it has the focus of the desktop.
+1. Click the panel `Attention stand-in 1`, so that it has the focus of the
+   desktop.
 
-2. In the Attention stand-in panel, type `ask` and press Enter.
+2. Type `after 6 ask` and press Enter.
 
-   Result: the notification line names the panel and says `needs you`. Wait two
-   seconds for the group of the changes.
+   Result: the panel says `ask in 6 s`. The stand-in sends the question six
+   seconds later.
 
-3. Read the bottom line of the Notifications panel.
+3. Within those six seconds, click the plain window, so that no window of
+   Horizon has the focus. Do not click into a window of Horizon again.
+
+4. Wait eight seconds for the delay and the group of the changes, then read the
+   bottom line of the Notifications panel.
 
    Result: one line of JSON holds `--app-name=Horizon`, then `--`, then
    `Horizon`, then the name of the panel and `needs you`. The file holds one
@@ -81,24 +95,34 @@ Give each task the ID that follows. A report gives one result for each ID.
 
 ### 6.2 N2 — A change that a person in Horizon does not receive
 
-1. Click the Horizon window, so that it has the focus of the desktop.
+1. Click the panel `Attention stand-in 1`, so that it has the focus of the
+   desktop, and keep that focus. This task clicks no other window.
 
-2. In the Attention stand-in panel, click the row of the panel in the sidebar,
-   then type `stop` and press Enter. Type `start`, then `stop`, to end a turn.
+2. Type `start` and press Enter. Then type `stop` and press Enter, to end a
+   turn.
 
    Result: the sidebar says `Done`, and the Notifications panel shows no new
-   line after two seconds. The sidebar is the only place that shows the change.
+   line after eight seconds. The sidebar is the only place that shows the
+   change.
 
 ### 6.3 N3 — Several changes become one line
 
-1. Click the plain window.
+1. Click the panel `Attention stand-in 1` and type `after 10 ask`.
 
-2. Type `start`, then `ask`. Then add a second agent panel of the same stand-in,
-   and type `ask` in it.
+2. Click the panel `Attention stand-in 2` and type `after 6 ask`.
 
-   Result: the Notifications panel shows one line for the changes that arrived
-   within two seconds of each other, and its body is a count such as
-   `2 agents need you`. Horizon sends no line for each change alone.
+   Result: each panel says that it sends `ask` later. Type the second line at
+   about four seconds after the first one, so that both questions arrive within
+   the two seconds of one group.
+
+3. Click the plain window, so that no window of Horizon has the focus.
+
+4. Wait twelve seconds.
+
+   Result: the Notifications panel shows one line, and its body is a count such
+   as `2 agents need you`. A line for each change alone is no pass: repeat the
+   task with `after 12 ask` in the first panel when the second line was typed
+   later.
 
 ### 6.4 N4 — The setting
 
@@ -106,21 +130,34 @@ Give each task the ID that follows. A report gives one result for each ID.
 
    Result: the value is saved.
 
-2. Click the plain window, and type `answer`, then `ask`, in the stand-in panel.
+2. Click the panel `Attention stand-in 1`, type `after 6 ask`. Click the plain
+   window within six seconds and wait eight seconds.
 
    Result: the Notifications panel shows no new line.
 
-3. Choose `When an agent needs me`, and repeat step 2 with a turn that ends.
+3. Choose `When an agent needs me`. Click the panel `Attention stand-in 1`, type
+   `start`, press Enter, type `after 6 stop` and press Enter. Click the plain
+   window and wait eight seconds.
 
-   Result: no line arrives for the end of a turn, and a line arrives for a
-   question.
+   Result: no line arrives for the end of a turn.
+
+4. Click the panel `Attention stand-in 1`, type `after 6 ask`. Click the plain
+   window and wait eight seconds.
+
+   Result: a line arrives for the question.
 
 ### 6.5 N5 — A name with markup and a long name
 
 1. Choose `When an agent needs me or is done` in the settings again.
 
-2. Set the terminal title of the stand-in panel to `<b>Fix</b> & more than sixty
-   characters of a name that an agent writes`.
+2. Double-click the title bar of the panel `Attention stand-in 1`, type
+   `<b>Fix</b> & more than sixty characters of a name that an agent writes` and
+   press Enter.
+
+   Result: the title bar holds the new name.
+
+3. Click the panel `Attention stand-in 1`, type `after 6 ask`. Click the plain
+   window and wait eight seconds.
 
    Result: the next notification holds the escaped text `&lt;b&gt;Fix&lt;/b&gt;
    &amp; more`, one line, and at most sixty characters of the name.
@@ -128,7 +165,8 @@ Give each task the ID that follows. A report gives one result for each ID.
 ## 7. Pass criteria
 
 - Each task holds its result.
-- No notification arrives while the Horizon window has the focus.
+- No notification arrives while the Horizon window has the focus. Every task that
+  types into a panel gives the focus to the plain window before the change.
 - Each line of `notifications.log` holds the arguments of one call, and the text
   stands after `--`.
 - No line of the log holds a prompt, a tool argument or a path.

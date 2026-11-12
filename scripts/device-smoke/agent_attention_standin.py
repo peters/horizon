@@ -23,6 +23,11 @@ One event for each line that the person types into the panel:
   failed      the turn failed                               -> Needs you
   quit        the script ends
 
+A notification arrives only while no window of Horizon has the focus, and a
+keypress gives Horizon the focus again. `after SECONDS WORD` therefore sends
+`WORD` after that delay, so the person can type the line, give the focus to
+another window, and still receive the event. The delay is at most 60 seconds.
+
 `--timer SECONDS` sends the same events in a sequence of its own, one turn every
 SECONDS, and the stand-in still reads the lines of the person while it runs. The
 fixture passes the timer in the JSON file that the stand-in reads beside itself.
@@ -68,6 +73,9 @@ EVENTS = {
 # The sequence of `--timer`, in the order that shows every state.
 TIMER_SEQUENCE = ('start', 'stop', 'start', 'background', 'start', 'failed', 'start', 'ask', 'answer', 'stop')
 MIN_TIMER_SECONDS = 0.2
+# The longest delay of `after`, in seconds: a person waits for an event and not
+# for minutes.
+MAX_AFTER_SECONDS = 60
 
 
 class Options:
@@ -197,6 +205,35 @@ def run_timer(stand_in, seconds):
             time.sleep(interval)
 
 
+def parse_delay(text):
+    """The delay and the word of `after SECONDS WORD`, or `None` for another line.
+
+    Raises `ValueError` with a sentence for the panel when the line is a delay that
+    this stand-in cannot send.
+    """
+    parts = text.split()
+    if not parts or parts[0] != 'after':
+        return None
+    if len(parts) != 3:
+        raise ValueError(f'{text!r}: write "after SECONDS WORD"')
+    try:
+        seconds = float(parts[1])
+    except ValueError:
+        raise ValueError(f'{parts[1]!r} is no number of seconds') from None
+    if not 0 <= seconds <= MAX_AFTER_SECONDS:
+        raise ValueError(f'{seconds:g} s is outside 0 to {MAX_AFTER_SECONDS} s')
+    if parts[2] not in EVENTS:
+        raise ValueError(f'unknown event {parts[2]!r}; use one of {", ".join(EVENTS)}')
+    return seconds, parts[2]
+
+
+def send_later(stand_in, seconds, word):
+    """Sends `word` after `seconds`, so the person can move the focus away first."""
+    print(f'{PROGRAM}: {word} after {seconds:g} s', flush=True)
+    time.sleep(seconds)
+    print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     options = parse_arguments(argv)
@@ -208,19 +245,38 @@ def main(argv=None):
               f'in scripts/device-smoke/attention_panel.json, so Horizon attaches the work ledger of this panel',
               flush=True)
     else:
-        print(f'{PROGRAM}: type one of {", ".join(EVENTS)} and press Enter', flush=True)
+        print(f'{PROGRAM}: type one of {", ".join(EVENTS)}, or "after SECONDS WORD", and press Enter', flush=True)
     timer = options.timer if options.timer is not None else config.get('timer')
     if timer:
         # The timer is a second sender of the same events, and the person still
         # types into the panel while it runs.
         threading.Thread(target=run_timer, args=(stand_in, float(timer)), daemon=True).start()
+    pending = []
     for line in sys.stdin:
-        word = line.strip().lower()
-        if not word:
+        text = line.strip().lower()
+        if not text:
             continue
-        if word == 'quit':
+        if text == 'quit':
             return 0
-        print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
+        try:
+            delay = parse_delay(text)
+        except ValueError as error:
+            print(f'{PROGRAM}: {error}', flush=True)
+            continue
+        if delay is None:
+            print(f'{PROGRAM}: {stand_in.send(text)}', flush=True)
+            continue
+        seconds, word = delay
+        later = threading.Timer(seconds, send_later, args=(stand_in, seconds, word))
+        # A delay must not hold the panel after `quit`, so the thread ends with this
+        # process.
+        later.daemon = True
+        later.start()
+        pending.append(later)
+        print(f'{PROGRAM}: {word} in {seconds:g} s', flush=True)
+    # A delay outlives the typed lines: the panel ends after the last one sends.
+    for later in pending:
+        later.join(MAX_AFTER_SECONDS + 1)
     return 0
 
 

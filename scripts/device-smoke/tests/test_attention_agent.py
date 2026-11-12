@@ -22,8 +22,8 @@ class AttentionAgentTests(unittest.TestCase):
     def prepare(self, folder, timer=6.0):
         state = Path(folder) / 'state'
         state.mkdir()
-        panel, bin_dir = serve.attention_agent(state, timer)
-        return state, panel, bin_dir
+        panels, bin_dir = serve.attention_agent(state, timer)
+        return state, panels[0], bin_dir
 
     def test_the_panel_entry_is_a_claude_panel_of_the_default_command(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -105,6 +105,49 @@ class AttentionAgentTests(unittest.TestCase):
 
     def test_a_plain_start_refuses_the_stand_in(self):
         self.assertIn('--attention-agent', [flag for _name, flag in serve.PLAIN_START_SETTINGS_OPTIONS])
+
+    def test_several_panels_lie_in_their_own_cells_and_keep_their_own_folders(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, bin_dir = serve.attention_agent(state, 0, count=3)
+            self.assertEqual(len(panels), 3)
+            self.assertEqual([panel['name'] for panel in panels],
+                             ['Attention stand-in 1', 'Attention stand-in 2', 'Attention stand-in 3'])
+            folders = [Path(panel['cwd']) for panel in panels]
+            self.assertEqual(len(set(folders)), 3, 'each stand-in writes its own transcript')
+            for panel, folder in zip(panels, folders):
+                self.assertTrue(folder.is_dir(), 'the working folder of a panel exists')
+                self.assertEqual(folder.parent, state / serve.ATTENTION_STANDIN_FOLDER)
+                self.assertIsNone(panel['command'], 'the panel still starts the stand-in by its name')
+                self.assertTrue(panel['work_resume']['enabled'])
+                # No two panels share a place, so a task types into the panel that
+                # it names.
+                for other in panels:
+                    if other is not panel:
+                        self.assertNotEqual(other['position'], panel['position'])
+            self.assertEqual(panels[0]['size'], list(serve.ATTENTION_SIZE))
+            self.assertTrue((bin_dir / serve.ATTENTION_PROGRAM).is_file(),
+                            'one program serves every panel of the run')
+
+    def test_one_panel_keeps_the_entry_of_the_fixture(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, _bin_dir = serve.attention_agent(state, 0, count=1)
+            self.assertEqual(len(panels), 1)
+            shared = json.loads(serve.ATTENTION_PANEL_ENTRY.read_text())
+            self.assertEqual({key: value for key, value in panels[0].items() if key != 'cwd'}, shared)
+            self.assertEqual(panels[0]['cwd'], str(state / serve.ATTENTION_STANDIN_FOLDER))
+
+    def test_a_count_outside_the_bound_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            for count in (0, serve.ATTENTION_MAX_AGENTS + 1):
+                with self.assertRaises(SystemExit) as raised:
+                    serve.attention_agent(state, 0, count=count)
+                self.assertIn('--attention-agent-count', str(raised.exception))
 
 
 if __name__ == '__main__':

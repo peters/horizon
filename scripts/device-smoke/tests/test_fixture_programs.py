@@ -61,7 +61,7 @@ class FixtureProgramTests(unittest.TestCase):
             panels = {
                 '--worktree-card': [serve.worktree_card_panel(Path('/opt/horizon'), repo, state,
                                                               checkout)],
-                '--attention-agent': [serve.attention_agent(state, 6.0, checkout)[0]],
+                '--attention-agent': serve.attention_agent(state, 6.0, checkout)[0],
                 '--panels': serve.panel_programs_in_state(
                     self.panels_entry(Path(folder), checkout, state), state, checkout),
             }
@@ -79,7 +79,7 @@ class FixtureProgramTests(unittest.TestCase):
             _home, checkout, state = self.prepare(folder)
             repo = serve.worktree_card_repository(state)
             serve.worktree_card_panel(Path('/opt/horizon'), repo, state, checkout)
-            _panel, bin_dir = serve.attention_agent(state, 6.0, checkout)
+            _panels, bin_dir = serve.attention_agent(state, 6.0, checkout)
             for name, copied in (
                 (serve.WORKTREE_CARD_PROGRAM, state / 'data' / serve.WORKTREE_CARD_PROGRAM),
                 (serve.ATTENTION_STANDIN_PROGRAM, bin_dir / serve.ATTENTION_PROGRAM),

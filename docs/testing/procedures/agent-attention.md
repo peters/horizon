@@ -60,7 +60,7 @@ the sidebar reads them.
    the other two, and it prints:
 
    ```
-   attention-stand-in: type one of start, ask, answer, stop, background, failed and press Enter
+   attention-stand-in: type one of start, ask, answer, stop, background, failed, or "after SECONDS WORD", and press Enter
    ```
 
    Type `quit` and press Enter to end the script without a restart of the

@@ -29,6 +29,14 @@ ATTENTION_PROGRAM = 'claude'
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
 ATTENTION_TIMER_FILE = 'stand-in.json'
+ATTENTION_PANEL_NAME = 'Attention stand-in'
+# The most stand-in panels of one run, and where they lie: two columns and two rows
+# of the isolated desktop, so a click reaches one panel and not its neighbour.
+ATTENTION_MAX_AGENTS = 4
+ATTENTION_FIRST_POSITION = (40, 60)
+ATTENTION_STEP = (660, 440)
+ATTENTION_SIZE = (620, 380)
+ATTENTION_GRID = ((0, 0), (1, 0), (0, 1), (1, 1))
 # The desktop notification: a stand-in program of the system that records one
 # call, the file that it appends to, and the panel that follows that file.
 NOTIFICATIONS_FOLDER = 'notifications'
@@ -512,8 +520,8 @@ def panel_programs_in_state(panels, state, folder=None):
     return panels
 
 
-def attention_agent(state, timer=6.0, program_folder=None):
-    """The panel entry and the program folder of the stand-in agent.
+def attention_agent(state, timer=6.0, program_folder=None, count=1):
+    """The panel entries and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
     launch, and Horizon attaches that ledger to the panel of a Claude agent that
@@ -522,9 +530,16 @@ def attention_agent(state, timer=6.0, program_folder=None):
     `PATH` of the candidate is the stand-in: Horizon resolves the name, inserts
     its own arguments after it and keeps the ledger of the launch.
 
-    Answers the panel entry of the fixture config and the folder to put first on
+    `count` panels of the same stand-in show a change of two panels at the same
+    time, which the notification of several changes counts. Each panel of a run
+    with more than one lies in its own cell of the isolated desktop and owns its
+    folder, so a click reaches one of them and the two transcripts stay apart.
+
+    Answers the panel entries of the fixture config and the folder to put first on
     the `PATH` of the candidate.
     """
+    if not 1 <= count <= ATTENTION_MAX_AGENTS:
+        raise SystemExit(f'--attention-agent-count takes 1 to {ATTENTION_MAX_AGENTS} panels, not {count}')
     script = fixture_program(ATTENTION_STANDIN_PROGRAM, program_folder)
     work = Path(state) / ATTENTION_STANDIN_FOLDER
     bin_dir = work / ATTENTION_BIN_FOLDER
@@ -533,9 +548,21 @@ def attention_agent(state, timer=6.0, program_folder=None):
     # mode of the file that the repository keeps.
     program_in_state(script, bin_dir / ATTENTION_PROGRAM, state)
     (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
-    panel = json.loads(ATTENTION_PANEL_ENTRY.read_text())
-    panel['cwd'] = str(work)
-    return panel, bin_dir
+    entry = json.loads(ATTENTION_PANEL_ENTRY.read_text())
+    panels = []
+    for index in range(count):
+        panel = dict(entry)
+        folder = work if count == 1 else work / f'panel-{index + 1}'
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        panel['cwd'] = str(folder)
+        if count > 1:
+            column, row = ATTENTION_GRID[index]
+            panel['name'] = f'{ATTENTION_PANEL_NAME} {index + 1}'
+            panel['position'] = [ATTENTION_FIRST_POSITION[0] + column * ATTENTION_STEP[0],
+                                 ATTENTION_FIRST_POSITION[1] + row * ATTENTION_STEP[1]]
+            panel['size'] = list(ATTENTION_SIZE)
+        panels.append(panel)
+    return panels, bin_dir
 
 
 def path_with_first(environment, folder):
@@ -855,6 +882,11 @@ def arguments():
              'makes it report the events in a sequence of its own, every SECONDS (default 6). '
              '0 waits for the typed lines alone')
     parser.add_argument(
+        '--attention-agent-count', type=int, default=None, metavar='N',
+        help='Open N panels of the stand-in agent, 1 to 4, so that a change of two panels at '
+             'the same time shows the count of a notification; needs --attention-agent. Each panel '
+             'of a run with more than one lies in its own cell of the isolated desktop')
+    parser.add_argument(
         '--notifications-log', action='store_true',
         help='Put a stand-in notify-send first on the PATH of the candidate, which appends the '
              'arguments of one call as one line of JSON to notifications.log of the state, and '
@@ -1034,13 +1066,16 @@ def main():
             presets = WORKTREE_CARD_PRESETS
             extra_panels = list(extra_panels or []) + [worktree_card_panel(app, repo, args.state)]
         if args.attention_agent is not None:
-            # The stand-in replaces the default board, so the panel of the
-            # procedure is the first one that the person sees.
-            panel, attention_bin = attention_agent(args.state, args.attention_agent)
-            extra_panels = [panel]
+            # The stand-in replaces the default board, so the panels of the
+            # procedure are the first ones that the person sees.
+            panels, attention_bin = attention_agent(
+                args.state, args.attention_agent, count=args.attention_agent_count or 1)
+            extra_panels = panels
             # The children of this run keep this object, so the value is changed
             # here and not by a second dictionary.
             env.update(attention_environment(env, attention_bin))
+        elif args.attention_agent_count is not None:
+            raise SystemExit('--attention-agent-count opens panels of --attention-agent, which this run lacks')
         if args.notifications_log:
             notification_bin = notification_standin(args.state)
             env.update(attention_environment(env, notification_bin))

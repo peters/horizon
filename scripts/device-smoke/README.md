@@ -215,9 +215,14 @@ continuation, which is what makes Horizon attach the ledger of the panel. The
 stand-in sends the events of its sequence every SECONDS, which is six seconds
 when the option names none. Type `start`, `ask`, `answer`, `stop`, `background` or
 `failed` in the panel and press Enter to send one event, also while the timer
-runs, or give `--attention-agent 0` to wait for the typed words alone. The panel
-shares its workspace with the panels of the default board and covers the first
-one. The procedure is
+runs, or give `--attention-agent 0` to wait for the typed words alone. Type
+`after SECONDS WORD` to send one event after that delay, at most 60 seconds, so
+that the person can give the focus of the desktop to another window before the
+event arrives. `--attention-agent-count N` opens N panels of the stand-in, 1 to
+4, each in its own cell of the isolated desktop, so that a change of two panels
+at the same time shows the count of a notification. The panel shares its
+workspace with the panels of the default board and covers the first one. The
+procedure is
 [the agent attention procedure](../../docs/testing/procedures/agent-attention.md).
 
 ### A desktop notification that a person can see
