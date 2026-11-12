@@ -71,15 +71,6 @@ impl PanelKind {
         agent_definition(self).is_some()
     }
 
-    /// Whether Horizon gives this kind its own arguments at every launch, with
-    /// the default command or with a command of the preset. Such a launch is
-    /// the one that Horizon can attach the lifecycle hooks of to, so the panel
-    /// reports its state instead of leaving it to the screen.
-    #[must_use]
-    pub fn receives_horizon_arguments(self) -> bool {
-        agent_definition(self).is_some_and(crate::AgentDefinition::receives_horizon_arguments)
-    }
-
     /// Whether this panel owns a text-input surface that can receive typed
     /// or dictated text. Terminal-backed panels write to their PTY; editor
     /// panels insert at the caret; browser panels dispatch through CDP.

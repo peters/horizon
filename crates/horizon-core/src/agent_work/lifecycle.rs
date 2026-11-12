@@ -52,7 +52,7 @@ impl WorkLaunch<'_> {
     /// inherit the state of an older process. The liveness probe of the session
     /// registry in [`super::discovery`] stays with the continuation of work.
     pub(crate) fn is_observed(&self) -> bool {
-        cfg!(unix) && self.kind.receives_horizon_arguments()
+        cfg!(unix) && crate::agents::receives_horizon_arguments(self.kind)
     }
 
     /// Whether this launch continues the work of its panel after a restart:
@@ -279,7 +279,11 @@ mod tests {
     fn observation_follows_the_launch_that_horizon_gives_its_arguments_to() {
         for kind in all_agent_kinds() {
             let (observed, _) = gates(*kind, true, true);
-            assert_eq!(observed, cfg!(unix) && kind.receives_horizon_arguments(), "{kind:?}");
+            assert_eq!(
+                observed,
+                cfg!(unix) && crate::agents::receives_horizon_arguments(*kind),
+                "{kind:?}"
+            );
         }
         for kind in [
             PanelKind::Shell,

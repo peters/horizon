@@ -251,6 +251,15 @@ pub const fn all_agent_kinds() -> &'static [PanelKind] {
     &BUILTIN_AGENT_KINDS
 }
 
+/// Whether Horizon gives this agent kind its own arguments at every launch, with
+/// the default command of the preset or with a command of its own: the plugin
+/// folder of its tools, and the session identity of the conversation. Such a
+/// launch is the one whose lifecycle hooks report the state of the panel.
+#[must_use]
+pub fn receives_horizon_arguments(kind: PanelKind) -> bool {
+    agent_definition(kind).is_some_and(AgentDefinition::receives_horizon_arguments)
+}
+
 #[must_use]
 pub const fn agent_definition(kind: PanelKind) -> Option<AgentDefinition> {
     match kind {
