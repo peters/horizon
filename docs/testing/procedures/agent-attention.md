@@ -82,8 +82,9 @@ the sidebar reads them.
    the panel and not from its program, so a real agent panel shows the same card
    in this situation, and the events of the stand-in never change it. One
    keystroke in the panel clears the card, and so does the button **Resume work**,
-   which restarts the panel. The tasks of section 6 type into the panel, which
-   clears the card.
+   which restarts the panel. The typed tasks of section 6 clear it. A task that
+   only watches the timer types nothing, so the card stays there until the person
+   types into the panel.
 
 2. Make a Device panel in your own Horizon workspace for that `vnc_address`, as
    [the fixture guide](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel)
