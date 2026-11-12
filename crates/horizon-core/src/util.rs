@@ -185,10 +185,14 @@ mod tests {
     }
 
     /// A test thread of this process writes a script while another thread forks, and the
-    /// child of that fork then holds the script open for writing: the kernel refuses to
+    /// child of that fork then holds the script open for writing: Linux refuses to
     /// execute it with `ETXTBSY` until the child ends its own `exec`. This test holds the
-    /// descriptor itself, which is the same refusal, and proves that the helper starts
-    /// the program once the window closes.
+    /// descriptor itself, which is the same refusal on Linux, and proves that the helper
+    /// starts the program on both systems.
+    ///
+    /// macOS runs a program that a descriptor still writes, so the refusal below is a
+    /// rule of Linux and the program of this test starts under the held descriptor there.
+    /// The helper starts the program on both systems, which is the part that both prove.
     #[test]
     fn spawn_stand_in_starts_a_program_that_a_fork_still_holds_open() {
         let folder = tempfile::tempdir().expect("folder of a stand-in program");
@@ -198,15 +202,18 @@ mod tests {
             .write(true)
             .open(&program)
             .expect("an open descriptor of the script");
-        let refused = std::process::Command::new(&program)
-            .env_clear()
-            .output()
-            .expect_err("the kernel refuses a program that a descriptor still writes");
-        assert_eq!(
-            refused.kind(),
-            std::io::ErrorKind::ExecutableFileBusy,
-            "the refusal of this test is the refusal of a fork: {refused}"
-        );
+        #[cfg(target_os = "linux")]
+        {
+            let refused = std::process::Command::new(&program)
+                .env_clear()
+                .output()
+                .expect_err("the kernel of Linux refuses a program that a descriptor still writes");
+            assert_eq!(
+                refused.kind(),
+                std::io::ErrorKind::ExecutableFileBusy,
+                "the refusal of this test is the refusal of a fork: {refused}"
+            );
+        }
 
         let release = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
