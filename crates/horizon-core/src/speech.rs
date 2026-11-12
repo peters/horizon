@@ -76,6 +76,18 @@ impl SpeechPlatform {
         }
     }
 
+    /// The sentence of the Settings row that names the default recorder of this
+    /// platform. A platform without one says so, instead of an empty value.
+    #[must_use]
+    pub fn default_recorder_sentence(self) -> String {
+        let line = self.default_recorder();
+        if line.is_empty() {
+            format!("{} has no default recorder.", self.name())
+        } else {
+            format!("The default of {} is {line}.", self.name())
+        }
+    }
+
     /// The name of this platform, for a document and the Settings tab.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -114,6 +126,11 @@ mod tests {
         assert_eq!(
             SpeechPlatform::current().name(),
             if cfg!(target_os = "macos") { "macOS" } else { "Linux" }
+        );
+        assert!(SpeechPlatform::Linux.default_recorder_sentence().contains("pw-record"));
+        assert_eq!(
+            SpeechPlatform::MacOs.default_recorder_sentence(),
+            "macOS has no default recorder."
         );
     }
 }

@@ -151,10 +151,7 @@ fn render_recorder(ui: &mut Ui, config: &mut Config) -> bool {
              never a shell. {recipe}"
         ),
     );
-    super::dim_label(
-        ui,
-        &format!("The default of {} is {}.", platform.name(), platform.default_recorder()),
-    );
+    super::dim_label(ui, &platform.default_recorder_sentence());
     changed
 }
 
