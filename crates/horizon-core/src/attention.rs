@@ -102,9 +102,11 @@ pub struct AttentionBoard {
 
 #[derive(Clone, Debug)]
 struct Panel {
-    /// The session whose events the state follows. An event of another session
-    /// does not change anything.
+    /// The session whose events the state follows.
     session_id: String,
+    /// The launch whose ledger the state follows. A relaunch of the panel is a
+    /// new turn timeline, and its record is read from its own start.
+    generation: u64,
     /// The latest moment of a ledger observation, so an older read is dropped.
     observed_at_millis: i64,
     /// Whether the launch of this panel registered a work ledger.
@@ -128,6 +130,7 @@ impl Panel {
     fn new(now_millis: i64) -> Self {
         Self {
             session_id: String::new(),
+            generation: 0,
             observed_at_millis: i64::MIN,
             hooked: false,
             state: TurnState::Unknown,
@@ -181,16 +184,19 @@ impl AttentionBoard {
             .panels
             .entry(panel.to_owned())
             .or_insert_with(|| Panel::new(now_millis));
-        let same_session = held.session_id.is_empty() || held.session_id == ledger.session_id;
-        // A read older than the one this panel holds, or an event of another
-        // session, describes a turn that this panel does not follow.
-        if same_session && ledger.updated_at_millis >= held.observed_at_millis {
-            if held.observed_at_millis == i64::MIN {
-                // A panel that the board reads for the first time is not asked
-                // about a turn that ended before Horizon saw it.
+        // A record of another session or of another launch of the panel starts
+        // a timeline of its own. A read of the same launch that is older than
+        // the one this panel holds describes a turn that is already behind it.
+        let first = held.observed_at_millis == i64::MIN;
+        let relaunched = held.hooked && (ledger.session_id != held.session_id || ledger.generation != held.generation);
+        if first || relaunched || ledger.updated_at_millis >= held.observed_at_millis {
+            if first || relaunched {
+                // A panel that the board reads for the first time, or after a
+                // relaunch, is not asked about a turn that ended before that.
                 held.seen_at_millis = ledger.updated_at_millis;
             }
             held.session_id.clone_from(&ledger.session_id);
+            held.generation = ledger.generation;
             held.observed_at_millis = ledger.updated_at_millis;
             held.hooked = true;
             let (state, ended_at) = ledger_outcome(ledger);

@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use horizon_core::agent_work::{TurnLedger, WorkStore};
@@ -46,6 +46,9 @@ pub(in crate::app) struct AttentionState {
     /// The context that a change of a state wakes, so a changed row repaints
     /// once and an unchanged one repaints nothing.
     wake: Option<egui::Context>,
+    /// Counts the changes of a state, so a cached sidebar row knows that its
+    /// badge is old.
+    version: u64,
 }
 
 impl AttentionState {
@@ -72,6 +75,16 @@ impl AttentionState {
     /// Drops the panels that are no longer on the board.
     fn retain(&mut self, keep: impl Fn(&str) -> bool) {
         self.states.retain(keep);
+    }
+
+    /// The number of changes of the states so far.
+    pub(in crate::app) fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Counts one change of a state.
+    fn count_change(&mut self) {
+        self.version = self.version.wrapping_add(1);
     }
 }
 
@@ -101,20 +114,26 @@ impl AttentionWorker {
         }
     }
 
-    fn ask(&self, panels: Vec<(PanelId, String)>) {
-        let _ = self.jobs.send(panels);
+    /// Asks for one read. Answers whether the worker took the job.
+    fn ask(&self, panels: Vec<(PanelId, String)>) -> bool {
+        self.jobs.send(panels).is_ok()
     }
 
-    fn take(&self) -> Option<AttentionRead> {
-        // No read yet, and a worker that ended, both leave the state as it is.
-        self.reads.try_recv().ok()
+    /// The answer of a read, or `None` while the worker still reads. A worker
+    /// that ended answers `Err`, so the state stops asking it.
+    fn take(&self) -> Result<Option<AttentionRead>, ()> {
+        match self.reads.try_recv() {
+            Ok(read) => Ok(Some(read)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => Err(()),
+        }
     }
 }
 
-/// Reads the ledger of each panel, in the order the frame asked for it, and
-/// wakes the window only when an answer differs from the one before it.
+/// Reads the ledger of each panel, in the order the frame asked for it. The
+/// answer wakes no frame of its own: the frame that asked reads it, and asks for
+/// one repaint only when a state changed.
 fn read_ledgers(store: &WorkStore, received: Receiver<Vec<(PanelId, String)>>, reads: &Sender<AttentionRead>) {
-    let mut last: Option<AttentionRead> = None;
     for panels in received {
         let read: AttentionRead = panels
             .into_iter()
@@ -124,10 +143,6 @@ fn read_ledgers(store: &WorkStore, received: Receiver<Vec<(PanelId, String)>>, r
                 (panel, local_id, ledger)
             })
             .collect();
-        if last.as_ref() == Some(&read) {
-            continue;
-        }
-        last = Some(read.clone());
         if reads.send(read).is_err() {
             return;
         }
@@ -153,6 +168,7 @@ impl HorizonApp {
             if let Some(local_id) = self.focused_panel_local_id()
                 && self.attention.states.note_look(&local_id, current_unix_millis())
             {
+                self.attention.count_change();
                 ctx.request_repaint();
             }
         }
@@ -160,21 +176,22 @@ impl HorizonApp {
             .attention
             .read_at
             .is_none_or(|asked| now.duration_since(asked) >= INTERVAL);
-        if focus_changed || due {
-            self.observe_agent_indicators();
+        if (focus_changed || due) && self.observe_agent_indicators() {
+            self.attention.count_change();
+            ctx.request_repaint();
         }
         if !due || self.attention.in_flight {
             return;
         }
-        let panels = self.agent_panel_ids();
-        if panels.is_empty() {
+        let Some(worker) = &self.attention.worker else {
+            return;
+        };
+        if !self.board.panels.iter().any(|panel| panel.kind.is_agent()) {
             return;
         }
+        let panels = self.agent_panel_ids();
         self.attention.read_at = Some(now);
-        self.attention.in_flight = true;
-        if let Some(worker) = &self.attention.worker {
-            worker.ask(panels);
-        }
+        self.attention.in_flight = worker.ask(panels);
     }
 
     /// The agent panels of the board, with the local id of the work ledger that
@@ -188,13 +205,21 @@ impl HorizonApp {
             .collect()
     }
 
-    /// Applies the read of the worker that came back.
+    /// Applies the read of the worker that came back. A worker that ended can
+    /// answer no later read, so the state stops asking it.
     fn apply_attention_reads(&mut self, ctx: &egui::Context) {
         let Some(worker) = &self.attention.worker else {
             return;
         };
-        let Some(read) = worker.take() else {
-            return;
+        let read = match worker.take() {
+            Ok(Some(read)) => read,
+            Ok(None) => return,
+            Err(()) => {
+                tracing::warn!("the attention worker ended; the agent panels keep the state they have");
+                self.attention.worker = None;
+                self.attention.in_flight = false;
+                return;
+            }
         };
         self.attention.in_flight = false;
         let _ = self.apply_attention_values(read, ctx);
@@ -218,22 +243,25 @@ impl HorizonApp {
             }
         }
         if changed {
+            self.attention.count_change();
             ctx.request_repaint();
         }
         changed
     }
 
     /// Records the working indicator of each agent panel whose launch has no
-    /// ledger, and drops the panels that left the board.
-    fn observe_agent_indicators(&mut self) {
+    /// ledger, and drops the panels that left the board. Answers whether a panel
+    /// shows another state now.
+    fn observe_agent_indicators(&mut self) -> bool {
         let now_millis = current_unix_millis();
         let focused = self.focused_panel_local_id();
+        let mut changed = false;
         for panel in &self.board.panels {
             if !panel.kind.is_agent() {
                 continue;
             }
             let is_focused = focused.as_deref() == Some(panel.local_id.as_str());
-            self.attention.states.observe_working(
+            changed |= self.attention.states.observe_working(
                 &panel.local_id,
                 panel.agent_status() == horizon_core::AgentStatus::Working,
                 is_focused,
@@ -242,6 +270,7 @@ impl HorizonApp {
         }
         let local_ids: HashSet<&str> = self.board.panels.iter().map(|panel| panel.local_id.as_str()).collect();
         self.attention.retain(|local_id| local_ids.contains(local_id));
+        changed
     }
 
     /// The local id of the panel that has the keyboard focus.
@@ -256,8 +285,11 @@ impl HorizonApp {
     /// or clicked its row. Answers whether the panel shows another state now.
     pub(in crate::app) fn note_attention_look(&mut self, local_id: &str) -> bool {
         let changed = self.attention.states.note_look(local_id, current_unix_millis());
-        if changed && let Some(ctx) = &self.attention.wake {
-            ctx.request_repaint();
+        if changed {
+            self.attention.count_change();
+            if let Some(ctx) = &self.attention.wake {
+                ctx.request_repaint();
+            }
         }
         changed
     }
@@ -281,9 +313,11 @@ impl HorizonApp {
     }
 
     fn mark_local_id_unread(&mut self, local_id: &str) {
-        if self.attention.states.mark_unread(local_id)
-            && let Some(ctx) = &self.attention.wake
-        {
+        if !self.attention.states.mark_unread(local_id) {
+            return;
+        }
+        self.attention.count_change();
+        if let Some(ctx) = &self.attention.wake {
             ctx.request_repaint();
         }
     }

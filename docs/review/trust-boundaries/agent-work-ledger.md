@@ -43,6 +43,9 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
 - **An older read is dropped.** A read of a record that is older than the one
   the state already holds changes nothing, so two reads that arrive out of order
   cannot move the state backwards.
+- **A relaunch starts its own timeline.** A record of another session or of
+  another launch of the panel is read from its own start, and it does not show
+  the turn that ended before it as unread.
 
 ## Horizon guarantees: metadata only, and one panel at a time
 

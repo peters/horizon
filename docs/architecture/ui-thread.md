@@ -202,9 +202,11 @@ which is a file of the Horizon home. A frame must not read it.
   frame asks for a read of the ledgers of the agent panels at most every 500 ms,
   and only while no read runs. The thread reads each record and sends the
   ledgers back.
-- The thread wakes the window only when its answer differs from the one before
-  it. A quiet agent therefore costs one file read per interval and no frame, and
-  a changed state asks for exactly one repaint.
+- The frame reads the answer with `try_recv` and asks for one repaint only when
+  a state changed. A quiet agent therefore costs one file read per interval and
+  no repaint, and a changed state asks for exactly one. The frame already runs
+  at least once a second while a panel is open, so an answer never waits for
+  input.
 - The frame applies the answer in memory, and the sidebar reads that value. A
   read that fails keeps the state that the last good read published.
 

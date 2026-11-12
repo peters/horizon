@@ -92,22 +92,35 @@ fn background_work_keeps_the_panel_working_after_its_turn_ended() {
 }
 
 #[test]
-fn a_stale_read_and_an_event_of_another_session_change_nothing() {
+fn a_read_that_is_older_than_the_one_the_panel_holds_changes_nothing() {
     let mut board = board();
     board.observe_ledger("panel", &ledger(TurnState::Working, 40), 10);
-    let mut older = ledger(TurnState::Finished, 20);
+    let older = ledger(TurnState::Finished, 20);
     assert!(
         !board.observe_ledger("panel", &older, 50),
         "an older read cannot rewrite the state"
     );
     assert_eq!(board.state("panel"), Attention::Working);
-    older.updated_at_millis = 60;
-    older.session_id = "another session".into();
     assert!(
-        !board.observe_ledger("panel", &older, 70),
-        "a ledger of another session is not this panel's turn"
+        !board.observe_ledger("panel", &older, 60),
+        "the same older read stays behind the state the panel holds"
     );
     assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn a_relaunch_of_the_panel_shows_from_its_own_start() {
+    let mut board = board();
+    board.observe_ledger("panel", &ledger(TurnState::Working, 40), 10);
+    board.observe_ledger("panel", &ledger(TurnState::Finished, 50), 50);
+    assert_eq!(board.state("panel"), Attention::Done);
+    // A new session of the same panel: its record starts before the turn that
+    // the person saw end, and that turn is not shown as unread again.
+    let mut relaunched = ledger(TurnState::Unknown, 0);
+    relaunched.session_id = "a fresh session".into();
+    relaunched.generation = 1;
+    assert!(board.observe_ledger("panel", &relaunched, 60));
+    assert_eq!(board.state("panel"), Attention::Idle);
 }
 
 #[test]

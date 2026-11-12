@@ -21,6 +21,9 @@ pub(in crate::app) struct ListCache {
     /// 1 in a replaced session, so the id alone does not tell the workspaces
     /// apart, and a workspace that moves to a machine says so on the next frame.
     workspaces: Vec<(WorkspaceId, String, Option<String>)>,
+    /// The version of the attention states that the rows came from, so a changed
+    /// badge shows on the frame that changed it and not a second later.
+    attention_version: u64,
     rows: HashMap<WorkspaceId, Row>,
 }
 
@@ -37,11 +40,16 @@ impl HorizonApp {
                 .workspaces
                 .iter()
                 .map(|workspace| (workspace.id, workspace.local_id.as_str(), workspace.place.machine())));
-        if unchanged && cache.refreshed.is_some_and(|at| now.duration_since(at) < REFRESH) {
+        let attention_version = self.attention.version();
+        if unchanged
+            && cache.attention_version == attention_version
+            && cache.refreshed.is_some_and(|at| now.duration_since(at) < REFRESH)
+        {
             return;
         }
         self.sidebar_list = ListCache {
             refreshed: Some(now),
+            attention_version,
             workspaces: self
                 .board
                 .workspaces
@@ -155,6 +163,49 @@ mod tests {
         }
         app.refresh_sidebar_rows(soon);
         assert_eq!(app.sidebar_list.refreshed, Some(soon));
+    }
+
+    #[test]
+    fn a_changed_attention_state_reads_the_rows_again_at_once() {
+        use horizon_core::Attention;
+
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        let workspace = app.board.create_workspace("a");
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    name: Some("Fix the sync".to_owned()),
+                    kind: horizon_core::PanelKind::Claude,
+                    command: Some("seed".to_owned()),
+                    ..horizon_core::PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("panel");
+        let local = app.board.panel(panel).expect("panel").local_id.clone();
+        let start = std::time::Instant::now();
+        app.refresh_sidebar_rows(start);
+        assert_eq!(app.sidebar_row(workspace).attention, Attention::Idle);
+
+        // A question opens in the ledger while the person looks elsewhere.
+        app.board.focused = None;
+        let mut ledger = horizon_core::agent_work::TurnLedger::default();
+        ledger.session_id = "session".into();
+        ledger.prompt_id = Some("prompt".into());
+        ledger.state = horizon_core::agent_work::TurnState::Blocked;
+        ledger.updated_at_millis = horizon_core::current_unix_millis() - 1;
+        app.apply_attention_values(vec![(panel, local, Some(ledger))], &egui::Context::default());
+
+        let soon = start + std::time::Duration::from_millis(100);
+        app.refresh_sidebar_rows(soon);
+        assert_eq!(
+            app.sidebar_list.refreshed,
+            Some(soon),
+            "the row of a workspace whose badge changed is read again at once"
+        );
+        assert_eq!(app.sidebar_row(workspace).attention, Attention::NeedsYou);
+        assert_eq!(app.sidebar_row(workspace).waiting.needs_you, 1);
     }
 
     #[test]

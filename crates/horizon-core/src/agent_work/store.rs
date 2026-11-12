@@ -66,6 +66,7 @@ impl WorkStore {
     }
 
     fn read_raw(&self, panel_local_id: &str) -> io::Result<Option<StoredWork>> {
+        crate::ui_thread::blocking("a work ledger of the home is read");
         let path = self.record_path(panel_local_id)?;
         let file = match File::open(path) {
             Ok(file) => file,
@@ -346,6 +347,7 @@ impl WorkStore {
     }
 
     fn check_health(&self, panel: &str, owner: &str) -> io::Result<()> {
+        crate::ui_thread::blocking("the health markers of a work ledger are read");
         self.check_health_marker(panel, owner)?;
         let prefix = format!("{owner}.pending.");
         for (index, entry) in fs::read_dir(self.health_directory(panel)?)?.enumerate() {
@@ -416,6 +418,7 @@ impl WorkStore {
     }
 
     fn lock(&self, panel: &str) -> io::Result<File> {
+        crate::ui_thread::blocking("the lock of a work ledger is taken");
         let path = self.record_path(panel)?.with_extension("lock");
         private_directory(path.parent().ok_or_else(|| invalid("missing record directory"))?)?;
         let file = private_options()
@@ -440,6 +443,7 @@ impl WorkStore {
     }
 
     fn write(&self, record: &StoredWork) -> io::Result<()> {
+        crate::ui_thread::blocking("a work ledger of the home is written");
         let bytes = serde_json::to_vec(record).map_err(|_| invalid("cannot serialize work record"))?;
         if bytes.len() as u64 > MAX_RECORD_BYTES {
             return Err(invalid("work record exceeds size limit"));
