@@ -7,6 +7,10 @@
 //! environment, types the four words of a turn and reads the ledger of the panel
 //! the way the sidebar reads it, so the stand-in and the store must agree on the
 //! record, the session and the event shape.
+//!
+//! The whole test binary is Linux only: the panel of this fixture gets the work
+//! environment from a launch that attaches the ledger on Linux only, so a system
+//! where the launch attaches none has no environment to start the stand-in with.
 #![cfg(target_os = "linux")]
 #![forbid(unsafe_code)]
 

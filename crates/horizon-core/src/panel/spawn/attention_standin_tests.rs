@@ -5,9 +5,10 @@
 //! file, so the two sides cannot drift apart. The entry names no command: the
 //! launch resolves the agent program on the `PATH` of the panel, which is the
 //! stand-in itself, and Horizon inserts its own arguments after that program.
-//! The entry also asks for work continuation, which is what attaches the work
+//! The entry also asks for work continuation. On Linux that attaches the work
 //! ledger and gives the panel the five `HORIZON_WORK_*` variables that the
-//! stand-in sends its events with.
+//! stand-in sends its events with; the launch attaches the ledger on Linux only,
+//! so this test states the rule of each system.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -99,14 +100,53 @@ fn exercise_launch() {
     );
     let after = &command[launch.len()..];
     let session = after.find("--session-id").expect("the panel names its conversation");
+    if cfg!(target_os = "linux") {
+        assert_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
+    } else {
+        // `WorkLaunch::attach` answers `None` before it touches the launch on
+        // this system, so the program and Horizon's arguments are the whole
+        // command: no ledger plugin, no work environment and no record. The
+        // empirical teardown proof covers Linux only.
+        assert!(
+            !after.contains("--plugin-dir"),
+            "a panel of this system starts without the work ledger plugin: {command}"
+        );
+        for key in [
+            crate::agent_work::WORK_ROOT_ENV,
+            crate::agent_work::WORK_PANEL_ENV,
+            crate::agent_work::WORK_OWNER_ENV,
+            crate::agent_work::WORK_KIND_ENV,
+            crate::agent_work::WORK_EXECUTABLE_ENV,
+        ] {
+            assert_eq!(
+                env.get(key),
+                None,
+                "a panel of this system starts without the work environment"
+            );
+        }
+        let record = WorkStore::new(horizon_home.root())
+            .read(options.local_id.as_deref().unwrap_or_default())
+            .expect("read");
+        assert!(record.is_none(), "a panel of this system registers no work record");
+    }
+}
+
+/// The work ledger that a Linux launch attaches to the panel.
+fn assert_work_ledger(
+    options: &PanelOptions,
+    horizon_home: &HorizonHome,
+    work_plugin: &Path,
+    after: &str,
+    session: usize,
+    env: &HashMap<String, String>,
+) {
     let ledger = after
         .find(&format!("--plugin-dir '{}'", work_plugin.display()))
         .expect("the work ledger plugin follows the program");
     assert!(
         session < ledger,
-        "Horizon puts its arguments between the program and the last one: {command}"
+        "Horizon puts its arguments between the program and the last one: {after}"
     );
-
     assert_eq!(
         env.get(crate::agent_work::WORK_ROOT_ENV),
         Some(&horizon_home.root().display().to_string())
