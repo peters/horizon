@@ -46,6 +46,13 @@ The isolated desktop is 1600 by 1000 pixels. `--screen WIDTHxHEIGHT`, such as
 `--screen 2800x1000`, gives it another size, for a procedure that needs a wide
 or a tall screen.
 
+The fixture runs the candidate in a `bwrap` sandbox. The sandbox binds the
+private home over the home of the person, so a checkout under that home does not
+exist inside it, and it binds the state folder at its own path. A program that a
+panel of the fixture runs therefore lies in the state folder or in a path that
+the sandbox binds. The fixture writes a copy of such a program into the state
+folder and never a link into the checkout.
+
 ### Restart the candidate in the same state
 
 A procedure that quits the candidate and starts it again needs `--reuse-state`

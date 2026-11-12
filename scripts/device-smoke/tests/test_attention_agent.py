@@ -47,12 +47,38 @@ class AttentionAgentTests(unittest.TestCase):
 
     def test_the_stand_in_is_the_program_that_the_name_resolves_to(self):
         with tempfile.TemporaryDirectory() as folder:
-            _state, _panel, bin_dir = self.prepare(folder)
+            state, _panel, bin_dir = self.prepare(folder)
             program = bin_dir / serve.ATTENTION_PROGRAM
-            self.assertTrue(program.is_symlink(), 'the name of the agent program is the stand-in itself')
-            self.assertEqual(program.resolve(), SCRIPT)
+            # The sandbox binds the private home over the home of the person, so a
+            # link into a checkout under that home points nowhere inside it. The
+            # program of a panel is a copy in the state folder, which is bound.
+            self.assertFalse(program.is_symlink(), 'a link into the checkout is no program inside the sandbox')
+            self.assertIn(state.resolve(), program.resolve().parents, 'the program lies in the state folder')
+            self.assertEqual(program.read_text(), SCRIPT.read_text(), 'the program is the stand-in itself')
             self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
             self.assertTrue(SCRIPT.read_text().startswith('#!'), 'the program names its interpreter')
+
+    def test_a_program_outside_the_state_folder_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            outside = Path(folder) / 'checkout' / 'standin.py'
+            outside.parent.mkdir()
+            outside.write_text('#!/bin/sh\nexit 0\n')
+            with self.assertRaises(RuntimeError):
+                serve.program_in_state(outside, Path(folder) / 'bin' / 'standin', state)
+            self.assertFalse((Path(folder) / 'bin' / 'standin').exists(), 'a refused program is not written')
+
+    def test_a_program_of_the_state_folder_replaces_the_file_that_is_there(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            destination = state / 'bin' / 'standin'
+            destination.parent.mkdir()
+            destination.symlink_to(SCRIPT)
+            serve.program_in_state(SCRIPT, destination, state)
+            self.assertFalse(destination.is_symlink(), 'the run does not keep the link of an older run')
+            self.assertEqual(destination.read_text(), SCRIPT.read_text())
 
     def test_the_timer_of_the_run_is_the_document_beside_the_stand_in(self):
         with tempfile.TemporaryDirectory() as folder:

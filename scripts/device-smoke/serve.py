@@ -415,6 +415,27 @@ def worktree_card_panel(app, repo, state):
             'args': [], 'cwd': str(data)}
 
 
+def program_in_state(source, destination, state):
+    """Write `source` as the program that a panel of this fixture runs.
+
+    The sandbox binds the private home over the home of the person, so a checkout
+    under the home of the person does not exist inside the sandbox and a link to
+    it points nowhere. The state folder is bound on every run, so the program of a
+    panel is a copy inside it and never a link into the checkout.
+    """
+    state = Path(state).resolve()
+    destination = Path(destination)
+    folder = destination.parent.resolve()
+    if folder != state and state not in folder.parents:
+        raise RuntimeError(f'A program of a panel lies outside the state folder: {destination}')
+    if destination.is_symlink() or destination.exists():
+        destination.unlink()
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    destination.chmod(0o700)
+    return destination
+
+
 def attention_agent(state, timer=6.0):
     """The panel entry and the program folder of the stand-in agent.
 
@@ -432,12 +453,9 @@ def attention_agent(state, timer=6.0):
     work = Path(state) / ATTENTION_STANDIN_FOLDER
     bin_dir = work / ATTENTION_BIN_FOLDER
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    program = bin_dir / ATTENTION_PROGRAM
-    if program.is_symlink() or program.exists():
-        program.unlink()
     # The stand-in is the program itself: it has a `#!` line and the executable
     # mode of the file that the repository keeps.
-    program.symlink_to(script)
+    program_in_state(script, bin_dir / ATTENTION_PROGRAM, state)
     (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
     panel = json.loads(ATTENTION_PANEL_ENTRY.read_text())
     panel['cwd'] = str(work)
