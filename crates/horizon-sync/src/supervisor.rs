@@ -396,6 +396,10 @@ fn run(
         };
         halt(halt_slot);
         reap(halt_slot);
+        // A question that the link that just ended did not ask waits for no
+        // attempt that may never come: the window reads the same sentence that a
+        // question of a link that is away reads.
+        answer_unasked(asked);
         if end == End::LoggedOut {
             // The server removed this computer, or does not know its token. The
             // token is gone and no retry can bring it back, so the link waits for
@@ -604,6 +608,14 @@ fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) -> bool {
         }
     }
     false
+}
+
+/// Answers every question that no link asked, so the Server tab ends its wait at
+/// once instead of at the truth of a channel that only an open link reads.
+fn answer_unasked(asked: &Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>) {
+    while let Ok((_, reply)) = asked.try_recv() {
+        let _ = reply.send(ServerReply::Failed(state::NO_LINK_SENTENCE.to_owned()));
+    }
 }
 
 /// Ends the transport of the link, so a read that waits returns.

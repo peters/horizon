@@ -17,8 +17,8 @@ use std::{
 use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
 use horizon_sync::{
-    LinkBounds, LinkState, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore,
-    run_server_on_unix_socket,
+    LinkBounds, LinkState, ServerReply, ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig,
+    SyncedMachineStore, run_server_on_unix_socket,
 };
 
 /// The time a test gives a change to travel through a link and a store.
@@ -860,5 +860,41 @@ fn a_computer_that_is_idle_learns_that_the_server_is_gone_and_catches_up() {
     assert!(a.pending().is_empty(), "the change that waited is settled");
     a.stop();
     b.stop();
+    server.stop();
+}
+
+/// B4: a question of the Server tab answers at once while the link is away. The
+/// window reads one only inside an open link, so a question asked during a cut
+/// waited for an attempt that the delays of a lost link decide: the sentence of
+/// `Add a computer` stood there and its button stayed disabled.
+#[test]
+fn a_question_of_the_window_answers_at_once_when_the_server_is_away() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    in_step(&a);
+
+    server.stop();
+    eventually("the link that learns that the server is away", || {
+        matches!(a.state(), LinkState::Away { .. }).then_some(())
+    });
+
+    for request in [
+        ServerRequest::Invite,
+        ServerRequest::Devices,
+        ServerRequest::Remove("mbp-7c1".to_owned()),
+    ] {
+        let asked = a.handle().ask(request.clone());
+        let answer = asked
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_else(|error| panic!("{request:?} answered no sentence: {error}"));
+        assert_eq!(
+            answer,
+            ServerReply::Failed("This computer has no link to the server now.".to_owned()),
+            "{request:?} answers the sentence of the Server tab at once"
+        );
+    }
+
+    a.stop();
     server.stop();
 }

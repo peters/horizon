@@ -80,6 +80,18 @@ impl LinkState {
         }
     }
 
+    /// Whether a question of the window can travel on this link now.
+    ///
+    /// A link that is away reads no question: the supervisor reads one only
+    /// inside an open link, so a question asked then would wait for an attempt
+    /// that the delays of a lost link decide and that a person may never see. An
+    /// attempt whose hello is in flight carries a question up to the bound of
+    /// that hello.
+    #[must_use]
+    pub const fn carries_questions(&self) -> bool {
+        matches!(self, Self::Connecting | Self::InStep { .. } | Self::Behind)
+    }
+
     /// The intents that wait for the server, which is none for a link that
     /// answers.
     #[must_use]

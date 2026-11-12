@@ -157,9 +157,7 @@ impl Link<'_> {
                 true
             }
             Err(reply) => {
-                let _ = reply.send(ServerReply::Failed(
-                    "This computer has no link to the server now.".to_owned(),
-                ));
+                let _ = reply.send(ServerReply::Failed(super::state::NO_LINK_SENTENCE.to_owned()));
                 true
             }
         }

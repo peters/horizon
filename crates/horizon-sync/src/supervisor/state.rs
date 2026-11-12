@@ -72,6 +72,11 @@ pub enum ServerReply {
     Failed(String),
 }
 
+/// The one sentence of a question that this computer cannot send, because its
+/// link to the server is not there. The window reads it at once, so a button of
+/// the Server tab never waits for a link that is away.
+pub(super) const NO_LINK_SENTENCE: &str = "This computer has no link to the server now.";
+
 /// What a frame of the window reads about the link: the state, the names that
 /// wait for the server, the records that only the server gave, the key names of
 /// this computer and the generation of the records.
@@ -816,6 +821,15 @@ impl SyncHandle {
     #[must_use]
     pub fn ask(&self, request: ServerRequest) -> mpsc::Receiver<ServerReply> {
         let (reply, answers) = mpsc::channel();
+        // A question travels on the link that the supervisor holds. The
+        // supervisor reads one only while its link is open, so a link that is
+        // away answers here at once instead of leaving the button of the Server
+        // tab disabled until an attempt happens to succeed.
+        if !self.snapshot().state().carries_questions() {
+            tracing::debug!("a question of the window was refused: this computer has no open link");
+            let _ = reply.send(ServerReply::Failed(NO_LINK_SENTENCE.to_owned()));
+            return answers;
+        }
         if self.requests.send((request, reply)).is_err() {
             tracing::debug!("the link ended before a question reached it");
         }
