@@ -1,5 +1,6 @@
 use super::{Config, HorizonHome, RuntimeState, SessionOpenDisposition, SessionStore, StartupDecision};
 use crate::{BrowserProfileState, PanelKind, PanelState, WorkspaceState};
+use std::time::Duration;
 
 #[test]
 fn empty_store_creates_new_session() {
@@ -254,13 +255,7 @@ fn the_session_writer_writes_the_lease_of_a_session_in_order() {
     let lease_path = home.session_lease_path(&created.session_id);
     let mut lease = store.new_lease(&created.session_id);
 
-    let written = store.queue_lease(lease.clone());
-    assert!(
-        written
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .is_ok_and(|answer| answer.is_ok()),
-        "the writer answered the write of the lease"
-    );
+    the_writer_answered(store.queue_lease(lease.clone()), "write of the lease");
     let first: crate::SessionLease = serde_json::from_str(&std::fs::read_to_string(&lease_path).expect("the lease"))
         .expect("the lease of the session");
     assert_eq!(first.session_id, created.session_id);
@@ -268,14 +263,11 @@ fn the_session_writer_writes_the_lease_of_a_session_in_order() {
     // The removal is queued after the write, so it lands after it, and the
     // session holds no lease at the end.
     lease.heartbeat();
-    let order = [store.queue_lease(lease), store.queue_lease_release(&created.session_id)];
-    for answer in order {
-        assert!(
-            answer
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .is_ok_and(|answer| answer.is_ok()),
-            "the writer answered the write and the removal of the lease"
-        );
+    for (answer, what) in [
+        (store.queue_lease(lease), "write of the leased session"),
+        (store.queue_lease_release(&created.session_id), "removal of the lease"),
+    ] {
+        the_writer_answered(answer, what);
     }
     assert!(
         !lease_path.exists(),
@@ -406,6 +398,32 @@ fn duplicated_sessions_regenerate_browser_artifact_ids() {
 
 /// The returned guard removes the directory when the test ends; bind it for
 /// the whole test rather than letting it drop at the end of the statement.
+/// The most time that the writer of these tests is given for one answer.
+///
+/// The worker writes the index of a session with a real `sync_all` before it reaches the
+/// first lease of a test, so a wait here is the wait of a disk. A loaded computer can
+/// hold one `fsync` for many seconds, and a short period then fails this test for the
+/// load of the machine and not for the order of the writes that it proves. This valve is
+/// far above a stall of a disk, and a worker that never answers still ends the test with
+/// one sentence instead of a hang.
+const WRITER_PATIENCE: Duration = Duration::from_secs(120);
+
+/// Wait for the answer of the writer to one queued job, and name the failure of a wait
+/// that does not end that way.
+fn the_writer_answered(answer: std::sync::mpsc::Receiver<Result<(), String>>, what: &str) {
+    match answer.recv_timeout(WRITER_PATIENCE) {
+        Ok(Ok(())) => {}
+        Ok(Err(reason)) => panic!("the writer answered the {what} with {reason}"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+            "the writer did not answer the {what} in {} seconds, which is a stall of the writer",
+            WRITER_PATIENCE.as_secs()
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the writer ended without an answer to the {what}")
+        }
+    }
+}
+
 fn test_root(label: &str) -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(&format!("horizon-session-store-{label}-"))
