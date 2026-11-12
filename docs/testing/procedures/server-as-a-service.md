@@ -185,8 +185,10 @@ line, and that a removal of the service leaves no server process.
 3. Close the candidate window, and start the candidate again with the same
    private home, as step 4 of the setup says.
 
-   Result: the window opens with the same board, and the link of the settings
-   starts.
+   Result: the window opens with the same board, and the link starts with this
+   start. The **Server** tab says that a change of the two fields applies at the
+   next start, so this restart is the step that starts the link. Only a join
+   starts a link at once, without a restart.
 
 4. Read the **Machines** section of the sidebar.
 
@@ -234,8 +236,12 @@ line, and that a removal of the service leaves no server process.
    ls -l "$STATE/home"
    ```
 
-   Result: `server.sqlite` and `secret.key` are there with the times that they had
-   before the restart. `server.sock` and `server.lock` are there again.
+   Result: `secret.key` and `server.lock` are there with the times that they had
+   before the restart. `server.sqlite`, `server.sqlite-shm` and `server.sqlite-wal`
+   have the time of the restart, because the server opens its store at each start
+   and closes it at each stop. `server.sock` is there again and is new. S6 is the
+   proof that the store was kept: the machine `service-test-1` of S4 is in the list
+   again, and that list comes from the store.
 
 ### 6.6 S6 — The computer is in step again
 
@@ -279,8 +285,9 @@ line, and that a removal of the service leaves no server process.
 
 3. On the client computer, read the **Machines** section of the sidebar.
 
-   Result: the line is `Server: away`, and the machine list of the client computer
-   stays.
+   Result: the line is `Server away`, and the machine list of the client computer
+   stays. A change that waits for the server adds its number, as in
+   `Server away · 1 pending`.
 
 ### 6.8 S8 — Remove the service
 
@@ -328,10 +335,12 @@ line, and that a removal of the service leaves no server process.
   is 0.
 - S3: the client computer joins over SSH, and the sidebar reads `Server: in step`.
 - S4: a machine of the client computer settles on the server.
-- S5: a restart of the service keeps `server.sqlite` and `secret.key`.
+- S5: a restart of the service keeps the store and the key. `secret.key` and
+  `server.lock` keep their times, and the store file takes the time of the
+  restart.
 - S6: the client computer is in step again, and a second machine settles.
 - S7: the stopped service answers one line, the exit code is 1, and the client
-  computer reads `Server: away`.
+  computer reads `Server away`.
 - S8: no agent and no unit of the run is left on the server computer.
 
 ## 8. Cleanup
