@@ -4,15 +4,23 @@ applyTo: "crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attentio
 
 # Trust boundary of the agent work ledger and of the attention state
 
-Horizon installs lifecycle hooks in an opted-in agent panel. Each hook event
-reaches Horizon as one line of JSON on the standard input of
+Horizon installs lifecycle hooks in the Claude panel that it launches on Linux or
+on macOS, with the default command of the preset or with a command of its own.
+Each hook event reaches Horizon as one line of JSON on the standard input of
 `<candidate> --agent-work-hook`, with the panel identity in the environment of
 the launch. The hook writes one **work ledger** per panel in the Horizon home.
 The sidebar reads that ledger to say which agent panel needs the person, which
 one finished while the person looked elsewhere, and which one works.
 
+The **report** of a panel is separate from the **continuation** of its work. The
+report covers every Claude launch on Linux and macOS. The continuation covers
+Linux, the default command of the preset, and the per-panel policy `Continue work
+after restart`; only that path offers a resume, writes a handoff and seeds a
+prompt.
+
 The module comment of
-[`agent_work/ledger.rs`](../../../crates/horizon-core/src/agent_work/ledger.rs)
+[`agent_work/lifecycle.rs`](../../../crates/horizon-core/src/agent_work/lifecycle.rs),
+of [`agent_work/ledger.rs`](../../../crates/horizon-core/src/agent_work/ledger.rs)
 and of [`store.rs`](../../../crates/horizon-core/src/agent_work/store.rs) state
 the same rules for the record. [`attention.rs`](../../../crates/horizon-core/src/attention.rs)
 holds the only code that turns a record into a state.
@@ -34,6 +42,13 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
 - **An event of another panel changes nothing.** The panel and the launch token
   come from the environment that Horizon set at the launch, not from the event.
   One panel therefore cannot write the state of another panel.
+- **The first event must arrive.** A record of a launch that has heard no event
+  changes no state: the panel keeps the rule of its terminal screen. An agent
+  that runs no hooks, and a preset command that is a wrapper and drops Horizon's
+  arguments, therefore keep the signal of the screen instead of a silent ledger.
+- **A later launch is not the earlier one.** A read of a launch whose generation
+  is older than the one the sidebar holds changes nothing, so a delayed read of a
+  panel process that is gone cannot decide the panel that replaced it.
 - **A clock that goes back is not a turn.** An event whose time is before the
   record leaves the ledger `unknown`, and an unknown turn is idle.
 - **The event is bounded and checked.** The input is at most 1 MiB, the session
@@ -44,8 +59,9 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   the state already holds changes nothing, so two reads that arrive out of order
   cannot move the state backwards.
 - **A relaunch starts its own timeline.** A record of another session or of
-  another launch of the panel is read from its own start, and it does not show
-  the turn that ended before it as unread.
+  another launch of the panel is read from its own start. It shows the screen
+  rule again until its first event, and it does not show the turn that ended
+  before it as unread.
 
 ## Horizon guarantees: metadata only, and one panel at a time
 
@@ -53,15 +69,26 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   turn, the event name, the tool identity, the working directory, the transcript
   path and, for a stop, the count of the background work. A prompt, an answer,
   the arguments of a tool and the text of the transcript are not part of it. The
-  attention state reads the record and nothing else.
+  attention state reads the record and nothing else. The wider set of panels
+  stores no field that a continuing panel does not store.
+- **The owner is the launch, while the panel lives.** No process table is read to
+  decide the report on either system. The token that Horizon registered at the
+  launch is the owner: a new launch of the panel replaces it, and a closed panel
+  removes its record from the home. The liveness probe of the session registry
+  stays with the continuation of work, and it remains Linux.
 - **The state is not a claim about the work.** `Needs you` says that a hook
   reported an open question or a failed turn. It does not say that the question is
   still open in the agent, and it is not a permission. A permission that the
   person grants in the agent panel is not granted to any other panel.
-- **The screen is the fallback, not a second rule.** An agent kind whose launch
-  registered no ledger takes its state from the working indicator of its own
-  terminal. A panel that has a ledger never falls back to the screen, so two
-  rules never decide one panel.
+- **The screen is the rule until the first event, and the only rule after it.**
+  An agent panel whose launch registered no ledger, or whose ledger has heard no
+  event, takes its state from the working indicator of its own terminal. Two
+  rules never decide one panel at the same time.
+- **A report is not a continuation.** A panel without the policy shows no
+  `Review work before continuing` card, starts no resume, writes no handoff and
+  receives no prompt from Horizon. What an agent process can make the sidebar say
+  is one of four states of its own row. It cannot make Horizon continue work, and
+  it cannot reach the row of another panel.
 - **The unread mark is memory.** Whether the person has looked at a finished
   turn lives in the process and is not saved. A restart shows the state of the
   ledger, and every panel starts as looked at.
@@ -69,7 +96,8 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   and a health marker are written `0600` through a temporary file and a rename.
 - **No frame waits.** A frame reads a value that the attention worker published.
   The worker reads the records of the home, and it wakes the window only when its
-  answer differs from the one before it.
+  answer differs from the one before it. A record leaves the home on a worker
+  thread when its panel closes.
 
 ## Does not guarantee
 
@@ -84,3 +112,7 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
 - **The statement of an adapter.** Only the Claude plugin ships with Horizon.
   The stand-in of the fixture and an adapter that a person adds send their own
   events, and Horizon cannot tell how such an adapter counted its work.
+- **A panel with no event keeps the weaker signal.** A wrapper that drops the
+  arguments of Horizon gives its panel the state of the screen, which is the same
+  state as a panel without hooks. Horizon cannot tell that the wrapper dropped
+  them.

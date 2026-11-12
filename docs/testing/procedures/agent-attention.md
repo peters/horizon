@@ -20,12 +20,15 @@ clears a finished turn, and that the states come back after a restart.
 ## 2. Applicability
 
 - Candidate: a Linux build that has the attention state of the agent panels, the
-  jump shortcut `Ctrl+Shift+G` and the fixture option `--attention-agent`.
-- Platforms: Linux. The candidate attaches the work ledger of an agent panel on
-  Linux only, so this procedure runs on Linux. macOS uses the same sidebar code,
-  and the shortcut has the same logical binding there.
+  jump shortcut `Ctrl+Shift+G` and the fixture options `--attention-agent` and
+  `--attention-agent-command`.
+- Platforms: Linux, because the fixture needs an isolated X11 desktop. The report
+  of a panel runs on Linux and on macOS, and the automated tests of the candidate
+  prove the macOS lane; a live macOS run needs a real agent and is not part of
+  this procedure.
 - This procedure does not test: a real coding agent. The fixture runs a stand-in
-  program that sends the lifecycle events itself.
+  program that sends the lifecycle events itself, and a stand-in panel whose
+  preset has a command of its own.
 
 ## 3. Safety
 
@@ -38,8 +41,8 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   [the fixture guide](../../../scripts/device-smoke/README.md).
 - A debug build of the candidate: `cargo build`.
 - A free TCP port for the loopback VNC server, which the fixture chooses itself.
-- Two new evidence folders below `/var/tmp`: `/var/tmp/attention-timer` and
-  `/var/tmp/attention-typed`.
+- Three new evidence folders below `/var/tmp`: `/var/tmp/attention-timer`,
+  `/var/tmp/attention-typed` and `/var/tmp/attention-command`.
 
 ## 5. Setup
 
@@ -105,6 +108,23 @@ the sidebar reads them.
 
    Result: the stand-in prints its line and sends nothing. Its row shows no state
    until the person types a word.
+
+5. For the tasks that use a command of its own, stop the fixture with `Ctrl-C`,
+   then start it with the second shape of the panel entry:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/attention-command --native-view --attention-agent 0 \
+     --attention-agent-command
+   ```
+
+   Result: the board shows two stand-in panels. The second one is **Attention
+   stand-in with its own command**: the preset of that panel runs the stand-in
+   itself, and **Continue work after restart** is not ticked in its row menu. It
+   shows no card of a continuation, because the panel continues nothing.
+
+   Result: its row shows no state until its agent reports its first event, because
+   the screen of the stand-in prints no working indicator.
 
 ## 6. Tasks
 
@@ -207,6 +227,30 @@ section 5, and **typed** is the command of step 4.
    the window and is not saved. The panel of this run is a new panel with its own
    work ledger, so the row starts empty.
 
+### 6.8 A8 — A panel with a command of its own reports its state (command)
+
+1. Look at the sidebar row of **Attention stand-in with its own command** and
+   press Enter in that panel without a word.
+
+   Result: the row shows no state. The panel has a work ledger, and no event of
+   its launch has arrived yet, so the screen of the panel decides, and its screen
+   shows no working indicator.
+
+2. Type `start` in that panel.
+
+   Result: the row says **Working**, and it comes from the ledger of the panel.
+   The card **Review work before continuing** is not there, and no prompt of
+   Horizon is in the panel.
+
+3. Type `stop`.
+
+   Result: the row says **Done** when the panel did not have the focus, and the
+   workspace row counts it in its second line.
+
+4. Close the panel with the close button of its titlebar.
+
+   Result: the row is gone, and the state of the closed panel does not come back.
+
 ## 7. Pass criteria
 
 - Each of the four states appears in the panel row and in the workspace badge as
@@ -217,6 +261,9 @@ section 5, and **typed** is the command of step 4.
 - `Ctrl+Shift+G` goes to an agent that waits, across workspaces, and says one line
   when no agent waits. That line is not drawn as an error.
 - **Mark as unread** is in both menus and sets **Done** on an idle agent panel.
+- A panel whose preset has a command of its own and whose continuation is off
+  shows its state, shows no card of a continuation, and keeps the screen rule
+  until its first event.
 - No step needs a login of an agent.
 
 ## 8. Cleanup

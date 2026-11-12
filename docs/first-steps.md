@@ -231,6 +231,15 @@ Cmd on macOS.
 
    Result: The agent starts in a new panel.
 
+## Read the state of an agent panel
+
+The sidebar says **Needs you**, **Done**, **Working** or **Background** for an
+agent panel. A Claude Code panel tells Horizon that state itself, on Linux and
+on macOS, with the default command or with a command of its own, and whether
+**Continue work after restart** is on or off. Every other agent panel takes the
+state from the text on its screen, and it keeps that signal until its agent
+reports its first event.
+
 ## Open a browser panel
 
 Browser panels need a source build from `main`. The **Browser** preset uses a
