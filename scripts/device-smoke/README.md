@@ -163,6 +163,16 @@ option that writes the settings or the session of the fixture, such as
 `--named-secret` and `--saved-session`, because the home of the fixture holds its
 own settings and its own session in that run.
 
+`--worktree-card` makes one throwaway repository at `<state>/data/repo`, writes
+the presets `Task shell` (a shell) and `Page` (a browser page), and starts the
+scripted card agent with the scenario `worktree`. The agent makes one task
+worktree beside the repository, opens the preset panel there with `open_panel`,
+and draws one card for the worktrees of that repository: a row for each worktree,
+the changes of the selected one, and the buttons `Refresh`, `Show changes`,
+`Merge` and `Remove`. A merge and a remove need a second press, and they work on
+real git and need no model and no login. A plain start refuses it. The procedure
+is [the worktree card procedure](../../docs/testing/procedures/worktree-card.md).
+
 `--panels FILE` opens extra workspace panels at start from a JSON list of
 terminal entries, so a procedure that needs an agent panel, a scripted client or
 another command keeps the same viewer and needs no click. An entry without a
@@ -230,7 +240,12 @@ wrapper.
 
 `--scenario` selects the cards: `machine`, `choose`, `browser`, `tall`, `all`
 (the first three), `all+tall` (all four) and `intruder`, which draws no card and
-tries to change the cards of another agent. `--listen continuous` keeps one wait
+tries to change the cards of another agent. The scenario `worktree` reads
+`CARD_AGENT_REPO`, `CARD_AGENT_STATE` and `CARD_AGENT_PRESET`, starts one task
+worktree in that repository, opens the preset panel there, prints the three
+refusals of `open_panel`, and draws the card of the worktrees. Every git command
+of that scenario runs with `-C` and an argument list, never through a shell, and
+it removes only a folder under `CARD_AGENT_STATE`. `--listen continuous` keeps one wait
 on every card; `--listen once` reads the wake line first. `--click-timeout` sets
 the seconds of one wait. The Connect button of the machine card opens an SSH
 terminal for the host in `CARD_AGENT_SSH_HOST` and the one line in
