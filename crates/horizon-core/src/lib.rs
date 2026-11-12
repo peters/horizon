@@ -20,6 +20,7 @@ mod layout;
 mod local_store;
 pub mod machines;
 pub mod named_secrets;
+pub mod notify;
 mod opencode_paths;
 mod panel;
 pub mod place;
@@ -78,6 +79,7 @@ pub use machines::{
     CheckedMachine, MAX_MACHINES, MAX_PROVIDER_CHARS, MAX_SESSION_CHARS, Machine, MachineBindings, MachineError,
     MachineRegistry, MachineStore, Machines, check_record,
 };
+pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use panel::{
     DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
