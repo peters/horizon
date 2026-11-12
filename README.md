@@ -197,6 +197,8 @@ The QR code holds an address on your private overlay network. Horizon encrypts n
 <td>
 
 ### Session Persistence
+The sidebar says what each agent is doing: **Needs you** when an agent waits for an answer or its turn failed, **Done** when a turn ended while you looked elsewhere, and **Working** while one runs. **Ctrl+Shift+G** goes to the next agent that needs you, and **Mark as unread** in a panel menu keeps a finished one in your list.
+
 Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row in sidebar order after restore.
 
 </td>
@@ -334,6 +336,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row in sidebar order |
 | **Ctrl+Shift+,** | Open settings editor |
 | **Ctrl+Shift+F** | Focus the terminal search bar |
+| **Ctrl+Shift+G** | Go to the next agent panel that needs you |
 | **Ctrl+0** | Reset canvas zoom to 100% |
 | **Ctrl+Plus** | Zoom canvas in |
 | **Ctrl+Minus** | Zoom canvas out |

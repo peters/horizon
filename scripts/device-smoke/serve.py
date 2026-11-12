@@ -387,6 +387,7 @@ def attention_agent(private_home, app, state, timer=6.0):
     command = f'exec {shlex.quote(sys.executable)} -u {shlex.quote(str(script))} --config {shlex.quote(str(config))}'
     if timer:
         command += f' --timer {timer}'
+    # A timer of zero waits for the words that the person types alone.
     panel = {'name': 'Attention stand-in', 'kind': 'claude', 'command': '/bin/sh',
              'args': ['-c', f'{command} "$@"', 'attention-stand-in'],
              'cwd': str(work), 'position': [40, 60], 'size': [640, 420]}

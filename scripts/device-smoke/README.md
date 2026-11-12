@@ -173,6 +173,26 @@ panel needs a string `name`, a `kind` from the panel kinds, string `command`,
 `cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
 value Horizon reads. Any other value stops the fixture with an error.
 
+### An agent that shows the attention states
+
+`scripts/device-smoke/agent_attention_standin.py` is an agent-kind panel that
+needs no model and no login. It sends the lifecycle events of a turn through the
+same entry point that the installed hooks use, so the sidebar shows the four
+attention states: `Needs you`, `Done`, `Working` and `Works in the background`.
+
+```bash
+scripts/device-smoke/serve.py --horizon target/debug/horizon \
+  --state /var/tmp/attention-1 --native-view --attention-agent
+```
+
+`--attention-agent [SECONDS]` writes the work record of the launch in the private
+Horizon home, opens the stand-in as the only panel of the board, and starts it
+with `--timer SECONDS`, which is six seconds when the option names none. Type
+`start`, `ask`, `answer`, `stop`, `background` or `failed` in the panel and press
+Enter to send one event, or give `--attention-agent 0` to wait for the typed
+words alone. The procedure is
+[the agent attention procedure](../../docs/testing/procedures/agent-attention.md).
+
 ### A scripted card agent
 
 A procedure that needs an agent which draws cards, answers the clicks of the

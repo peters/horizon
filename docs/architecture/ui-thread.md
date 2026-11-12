@@ -192,6 +192,22 @@ a frame must not start them.
   The saved board records the directory that the panel keeps, not a read of the
   frame: a directory that a person changed is a moment old at most.
 
+### A value of a file that a worker reads and the frame shows
+
+The attention state of an agent panel comes from the work ledger of its launch,
+which is a file of the Horizon home. A frame must not read it.
+
+- `AttentionState` ([`app/attention.rs`](../../crates/horizon-ui/src/app/attention.rs))
+  keeps one named thread, `agent-attention`, and a job and a result channel. The
+  frame asks for a read of the ledgers of the agent panels at most every 500 ms,
+  and only while no read runs. The thread reads each record and sends the
+  ledgers back.
+- The thread wakes the window only when its answer differs from the one before
+  it. A quiet agent therefore costs one file read per interval and no frame, and
+  a changed state asks for exactly one repaint.
+- The frame applies the answer in memory, and the sidebar reads that value. A
+  read that fails keeps the state that the last good read published.
+
 ### A worker that owns the desktop clipboard
 
 `crate::clipboard`
