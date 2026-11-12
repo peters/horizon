@@ -275,9 +275,10 @@ mod tests {
         // runs and whatever the panel's continuation policy is.
         for (enabled, default_command) in [(false, true), (true, true), (false, false), (true, false)] {
             let (observed, continues) = gates(PanelKind::Claude, enabled, default_command);
-            assert!(
+            assert_eq!(
                 observed,
-                "a Claude launch is observed with {enabled} and {default_command}"
+                cfg!(unix),
+                "a Claude launch is observed on every Unix system, with {enabled} and {default_command}"
             );
             assert_eq!(
                 continues,
