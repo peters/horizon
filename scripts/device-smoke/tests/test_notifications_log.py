@@ -20,7 +20,8 @@ class NotificationStandinTests(unittest.TestCase):
     def prepare(self, folder):
         state = Path(folder) / 'state'
         state.mkdir()
-        program = serve.notification_standin(state)
+        bin_dir = serve.notification_standin(state)
+        program = bin_dir / serve.NOTIFICATIONS_PROGRAM
         return state, program
 
     def test_the_program_lies_in_the_state_folder_and_runs(self):
@@ -67,9 +68,33 @@ class NotificationStandinTests(unittest.TestCase):
 
     def test_the_folder_of_the_stand_in_comes_first_on_the_path(self):
         with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            bin_dir = serve.notification_standin(state)
+            environment = serve.attention_environment({'PATH': '/usr/bin:/bin'}, bin_dir)
+            first = environment['PATH'].split(':')[0]
+            self.assertTrue(Path(first).is_dir(), 'the entry is a folder and not a file')
+            program = Path(first) / serve.NOTIFICATIONS_PROGRAM
+            self.assertTrue(program.is_file(), 'the folder holds the program of a notification')
+            self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
+            self.assertEqual(environment['PATH'], f'{bin_dir}:/usr/bin:/bin')
+
+    def test_every_entry_that_the_fixture_adds_to_the_path_is_a_folder(self):
+        with tempfile.TemporaryDirectory() as folder:
             _state, program = self.prepare(folder)
             environment = serve.attention_environment({'PATH': '/usr/bin:/bin'}, program.parent)
-            self.assertEqual(environment['PATH'], f'{program.parent}:/usr/bin:/bin')
+            added = [entry for entry in environment['PATH'].split(':') if entry != '/usr/bin']
+            added = [entry for entry in added if entry != '/bin']
+            self.assertEqual(len(added), 1, 'the fixture adds one entry for the notifications')
+            for entry in added:
+                self.assertTrue(Path(entry).is_dir(), f'the fixture put a file on the PATH: {entry}')
+
+    def test_an_entry_that_is_a_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _state, program = self.prepare(folder)
+            with self.assertRaises(RuntimeError) as raised:
+                serve.attention_environment({'PATH': '/usr/bin:/bin'}, program)
+            self.assertIn('not a folder', str(raised.exception))
 
     def test_the_panel_follows_the_log_of_the_notifications(self):
         with tempfile.TemporaryDirectory() as folder:

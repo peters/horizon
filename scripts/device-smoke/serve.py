@@ -538,11 +538,25 @@ def attention_agent(state, timer=6.0, program_folder=None):
     return panel, bin_dir
 
 
+def path_with_first(environment, folder):
+    """`environment`, with `folder` as the first folder of its `PATH`.
+
+    Horizon finds the program of the system by the folders of the `PATH`, so only a
+    folder can come first. A caller that names a file writes the path of that file
+    into the `PATH`, where no program answers it: the lookup then falls through to
+    the program of the computer of the person.
+    """
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise RuntimeError(f'The first entry of the PATH is not a folder: {folder}')
+    environment = dict(environment)
+    environment['PATH'] = f'{folder}:' + environment.get('PATH', '')
+    return environment
+
+
 def attention_environment(environment, bin_dir):
     """The environment of the candidate, with the stand-in first on its `PATH`."""
-    environment = dict(environment)
-    environment['PATH'] = f'{bin_dir}:' + environment.get('PATH', '')
-    return environment
+    return path_with_first(environment, bin_dir)
 
 
 def notification_standin(state):
@@ -551,8 +565,8 @@ def notification_standin(state):
     Horizon runs the program of the system that shows a desktop notification, and
     nobody runs that program for a test: this stand-in appends the arguments of one
     call as one line of JSON to the log of the state, and the panel "Notifications"
-    follows that file. The program of a panel lies in the state folder, so a shell
-    writes it there.
+    follows that file. Horizon looks the program up in the folders of the `PATH`, so
+    this answers the folder that holds the program and not the path of the program.
     """
     work = Path(state) / NOTIFICATIONS_FOLDER
     log = Path(state) / NOTIFICATIONS_LOG
@@ -561,7 +575,8 @@ def notification_standin(state):
             'with open(sys.argv[1], "a", encoding="utf-8") as log:\n'
             '    log.write(json.dumps(sys.argv[2:]) + "\\n")\' '
             f'{shlex.quote(str(log.resolve()))} "$@"\n')
-    return body_in_state(work / 'bin' / NOTIFICATIONS_PROGRAM, body, state)
+    program = body_in_state(work / 'bin' / NOTIFICATIONS_PROGRAM, body, state)
+    return program.parent
 
 
 def notification_panel(state):
