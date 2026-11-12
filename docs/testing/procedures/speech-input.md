@@ -279,6 +279,33 @@ one request header and no file of the run.
    Result: The pill counts the seconds, then the panel gains the text of the
    sentence with no line break. This step needs a microphone on the test machine.
 
+### 6.10 SI-10 — The language hint of the service
+
+1. Open **Settings** › **Speech** and select the transcriber `Service`.
+
+   Result: The `Language` box is empty. Its hint reads `no, en`, and the line
+   under the fields reads `An empty language lets the service detect the
+   language of each take.`
+
+2. Type `no` in the `Language` box and run one take. Then clear the box and run
+   one more take.
+
+   Result: Both takes answer their text. The request of the second take has no
+   `language` field, so the service detects the language of that take.
+
+### 6.11 SI-11 — The hotkey of a detached window
+
+1. Detach the workspace of the test panel with the workspace menu.
+
+   Result: The workspace opens in a window of its own, and the panel is in it.
+
+2. Click the panel of the detached window, then press and hold the speech
+   hotkey and speak one short sentence.
+
+   Result: The state mark of the take is in the detached window, on the panel
+   that has the focus there. The panel gains the text of the sentence with no
+   line break, and the panel of the main window gains no text.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
