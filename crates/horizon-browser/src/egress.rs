@@ -556,9 +556,7 @@ mod tests {
                 // A far port that answers inside its bound took the connection.
                 Connection::AnswersAfter(delay) if *delay <= bound => Ok(()),
                 Connection::Refused => Err(io::Error::from(io::ErrorKind::ConnectionRefused)),
-                Connection::NoAnswer | Connection::AnswersAfter(_) => {
-                    Err(io::Error::from(io::ErrorKind::TimedOut))
-                }
+                Connection::NoAnswer | Connection::AnswersAfter(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
             }
         }
     }
