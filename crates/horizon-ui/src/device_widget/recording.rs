@@ -442,23 +442,30 @@ mod tests {
                 let path = state.capture.path;
                 let bytes = std::fs::read(&path).expect("webm");
                 assert_eq!(&bytes[..4], &[0x1a, 0x45, 0xdf, 0xa3]);
-                drop(recording);
-                // The drop queues the recursive delete of the folder for the
-                // coordination worker, which the exit flushes.
-                let queued = crate::app::take_queued_recording_directories();
-                let folder = std::path::Path::new(&path).parent().expect("the folder of the video");
                 // The encoder reports the resolved folder of the video, and macOS
                 // spells one folder below `/var` two ways: the folder that the
                 // recording made and the folder that its video names are the same
-                // folder, so compare the folders and not their spelling.
+                // folder, so compare the folders and not their spelling. The
+                // folder is read before the drop, because the drop queues it for
+                // the coordination worker, which may remove it at once.
+                let folder = std::path::Path::new(&path).parent().expect("the folder of the video");
                 let folder = std::fs::canonicalize(folder).expect("the folder of the video exists");
-                assert!(
+                drop(recording);
+                // The drop queues the recursive delete of the folder for the
+                // coordination worker, which the exit flushes. The queue is read
+                // while it is held, so a frame of another test cannot take the
+                // entry of this drop before this test reads it.
+                let queued_ours = crate::app::with_queued_recording_directories(|queued| {
                     queued
                         .iter()
-                        .any(|candidate| std::fs::canonicalize(candidate).is_ok_and(|made| made == folder)),
-                    "the drop queues the folder of the video: {queued:?}"
+                        .any(|candidate| std::fs::canonicalize(candidate).is_ok_and(|made| made == folder))
+                });
+                assert!(
+                    queued_ours,
+                    "the drop queues the folder of the video: {}",
+                    folder.display()
                 );
-                for queued in queued {
+                for queued in crate::app::take_queued_recording_directories() {
                     let _ = std::fs::remove_dir_all(queued);
                 }
                 assert!(!std::path::Path::new(&path).exists());
@@ -488,10 +495,14 @@ mod tests {
         assert!(directory.exists());
         drop(recording);
         // The drop does not wait for the source: the sampler still holds the
-        // folder, so it is not queued, and the sampler removes it when it ends.
+        // folder, so this drop queues nothing. The queue is read while it is
+        // held, so only the entry of this drop is judged and not one that a
+        // frame of another test queued.
+        let queued_ours = crate::app::with_queued_recording_directories(|queued| queued.contains(&directory));
         assert!(
-            crate::app::take_queued_recording_directories().is_empty(),
-            "a folder that the sampler still holds is not deleted beside it"
+            !queued_ours,
+            "a folder that the sampler still holds is not deleted beside it: {}",
+            directory.display()
         );
         let _ = release_tx.send(());
         let deadline = Instant::now() + Duration::from_secs(10);

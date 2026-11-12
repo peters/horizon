@@ -36,6 +36,15 @@ pub(crate) fn take_queued_recording_directories() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Reads the folders that wait for the coordination worker with its queue held,
+/// so a frame of another test cannot take the entry that a test judges before
+/// the test reads it.
+#[cfg(test)]
+pub(crate) fn with_queued_recording_directories<R>(visit: impl FnOnce(&[PathBuf]) -> R) -> R {
+    let queued = RECORDING_DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner);
+    visit(&queued)
+}
+
 impl HorizonApp {
     /// Queues the start of every recording whose control asked for it.
     pub(in crate::app) fn queue_device_video_starts(&mut self) {
