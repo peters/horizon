@@ -400,6 +400,8 @@ When cutting a new release, generate concise release notes from the commits sinc
 - Follow [the STE rules](docs/style/ste-rules.md) and [the technical names](docs/style/technical-names.md). Put a `CAUTION` before each step that rents compute, deletes data, sends a secret or changes access.
 - Procedures are permanent. Record each run as a report under `docs/testing/reports/` from [the report template](docs/testing/reports/TEMPLATE.md) when the run must be kept; otherwise put the results in the PR. Do not delete a procedure after validation. Move a procedure for a removed feature to `docs/archive/`.
 - Older plans directly under `docs/testing/` are not yet STE. Convert a plan to a procedure when you change its feature. [Issue #1265](https://github.com/peters/horizon/issues/1265) tracks the remaining gaps.
+- Every test binary runs through `scripts/cargo-test-runner.sh` (`.cargo/config.toml`), with a private `HOME` in a temporary folder. `HORIZON_FORBID_REAL_HOME` names the home of the person: `horizon_browser_control::paths::refuse_real_home` ends a test that resolves it.
+- `horizon --help`, `-h`, `--version` and `-V` print and exit 0 before the home is prepared; an argument that the build does not know ends the start with code 2.
 
 ### Isolated UI Testing Through Horizon Native VNC
 

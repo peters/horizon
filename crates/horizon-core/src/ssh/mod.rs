@@ -219,7 +219,9 @@ fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME")
     {
-        return std::path::PathBuf::from(home).join(rest).display().to_string();
+        let home = std::path::PathBuf::from(home);
+        horizon_browser_control::paths::refuse_real_home(&home);
+        return home.join(rest).display().to_string();
     }
 
     path.to_string()

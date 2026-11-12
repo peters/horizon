@@ -78,6 +78,7 @@ fn rows_of(paths: Vec<PathBuf>) -> Vec<DirRow> {
 
 fn home_dir() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
+        horizon_browser_control::paths::refuse_real_home(std::path::Path::new(&home));
         return PathBuf::from(home);
     }
     // Without HOME, use the standard profile directory.
@@ -91,10 +92,15 @@ fn home_dir() -> PathBuf {
 /// path-taking config fields (workspace `cwd`, ssh `identity_file`) do.
 #[must_use]
 pub fn expand_tilde(input: &str) -> PathBuf {
+    expand_tilde_with(input, home_dir)
+}
+
+/// Expand a leading `~` against the home that `home` answers.
+fn expand_tilde_with(input: &str, home: impl FnOnce() -> PathBuf) -> PathBuf {
     if input == "~" {
-        home_dir()
+        home()
     } else if let Some(rest) = input.strip_prefix("~/") {
-        home_dir().join(rest)
+        home().join(rest)
     } else {
         PathBuf::from(input)
     }
@@ -332,12 +338,13 @@ mod tests {
 
     #[test]
     fn tilde_expansion_works() {
-        let home = home_dir();
-        assert_eq!(expand_tilde("~"), home);
-        assert_eq!(expand_tilde("~/foo"), home.join("foo"));
-        assert_eq!(expand_tilde("/etc"), PathBuf::from("/etc"));
-        assert_eq!(expand_tilde("~cache/model.gguf"), PathBuf::from("~cache/model.gguf"));
-        assert_eq!(expand_tilde("~alice/model.gguf"), PathBuf::from("~alice/model.gguf"));
+        let private = PathBuf::from("/private/home");
+        let expand = |input: &str| expand_tilde_with(input, || private.clone());
+        assert_eq!(expand("~"), private);
+        assert_eq!(expand("~/foo"), private.join("foo"));
+        assert_eq!(expand("/etc"), PathBuf::from("/etc"));
+        assert_eq!(expand("~cache/model.gguf"), PathBuf::from("~cache/model.gguf"));
+        assert_eq!(expand("~alice/model.gguf"), PathBuf::from("~alice/model.gguf"));
     }
 
     #[test]

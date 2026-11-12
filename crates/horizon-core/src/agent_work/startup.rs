@@ -161,6 +161,7 @@ fn inspect(launch: &WorkLaunch<'_>) -> Option<(RestartDecision, Option<String>)>
     }
     let session = launch.session_id?;
     let home = std::env::var_os("HOME")?;
+    horizon_browser_control::paths::refuse_real_home(Path::new(&home));
     inspect_at(
         launch,
         session,

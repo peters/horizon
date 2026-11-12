@@ -12,7 +12,11 @@ pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
 
 #[must_use]
 pub fn user_home_dir() -> Option<PathBuf> {
-    user_home_dir_from_env(env_path("HOME"), env_path("USERPROFILE"))
+    let home = env_path("HOME");
+    if let Some(home) = home.as_deref() {
+        horizon_browser_control::paths::refuse_real_home(home);
+    }
+    user_home_dir_from_env(home, env_path("USERPROFILE"))
 }
 
 #[must_use]

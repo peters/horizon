@@ -1,0 +1,5 @@
+# Every binary that cargo runs goes through this runner: a test binary of
+# `cargo test` or `cargo nextest` gets HORIZON_FORBID_REAL_HOME, and the
+# application of `cargo run` does not. See `scripts/cargo-test-runner.sh`.
+[target.'cfg(unix)']
+runner = "./scripts/cargo-test-runner.sh"

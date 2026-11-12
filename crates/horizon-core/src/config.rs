@@ -875,10 +875,17 @@ fn normalized_ssh_target(connection: &SshConnection) -> String {
 }
 
 fn config_candidates() -> Vec<PathBuf> {
+    let configured_home = horizon_browser_control::paths::configured_home();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if configured_home.is_none()
+        && let Some(home) = home.as_deref()
+    {
+        horizon_browser_control::paths::refuse_real_home(home);
+    }
     config_candidates_with_env(
-        horizon_browser_control::paths::configured_home(),
+        configured_home,
         std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
+        home,
     )
 }
 

@@ -299,6 +299,7 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Ok(Vec::new());
     };
+    horizon_browser_control::paths::refuse_real_home(&home);
     let projects_dir = home.join(".claude/projects");
     load_claude_sessions_from_dir(&projects_dir)
 }
@@ -567,6 +568,7 @@ fn load_pi_sessions() -> Vec<AgentSessionRecord> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
+    horizon_browser_control::paths::refuse_real_home(&home);
     let sessions_dir = home.join(".pi/agent/sessions");
     if !sessions_dir.exists() {
         return Vec::new();

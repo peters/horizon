@@ -22,6 +22,7 @@ pub fn live_claude_session_ids() -> HashSet<String> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return HashSet::new();
     };
+    horizon_browser_control::paths::refuse_real_home(&home);
     collect_live_session_ids(&home.join(".claude/sessions"), process_is_alive)
 }
 
@@ -164,6 +165,7 @@ pub fn claude_session_transcript_exists(session_id: &str) -> bool {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return false;
     };
+    horizon_browser_control::paths::refuse_real_home(&home);
     claude_session_transcript_exists_in(&home.join(".claude/projects"), session_id)
 }
 

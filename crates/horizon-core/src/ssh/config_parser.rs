@@ -32,7 +32,11 @@ pub fn discover_ssh_hosts(home_dir: Option<&Path>) -> Result<Vec<DiscoveredSshHo
 fn ssh_config_path(home_dir: Option<&Path>) -> Option<PathBuf> {
     home_dir
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .or_else(|| {
+            let home = std::env::var_os("HOME").map(PathBuf::from)?;
+            horizon_browser_control::paths::refuse_real_home(&home);
+            Some(home)
+        })
         .map(|home| home.join(".ssh").join("config"))
 }
 

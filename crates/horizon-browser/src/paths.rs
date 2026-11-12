@@ -2,12 +2,45 @@ use std::path::PathBuf;
 
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
+/// The variable that marks a test process, as `horizon-browser-control` names it:
+/// a test may not resolve the home of the person.
+const FORBID_REAL_HOME_ENV: &str = "HORIZON_FORBID_REAL_HOME";
+
+/// The profile root that this crate keeps in the home of the person.
 #[must_use]
 pub(crate) fn default_root() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).map_or_else(
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(home) = home.as_deref() {
+        refuse_real_home(home);
+    }
+    home.map_or_else(
         || PathBuf::from(".horizon-browser"),
         |home| home.join(".horizon-browser"),
     )
+}
+
+/// Stops a test process that resolved the home of the person. This crate has no
+/// dependency on `horizon-browser-control`, so the guard is written out here; the
+/// runner of `.cargo/config.toml` sets the variable for every test binary.
+///
+/// # Panics
+///
+/// Panics when `home` is the home of the person that runs the suite.
+#[track_caller]
+fn refuse_real_home(home: &std::path::Path) {
+    let Some(forbidden) = std::env::var_os(FORBID_REAL_HOME_ENV) else {
+        return;
+    };
+    let forbidden = std::path::PathBuf::from(forbidden);
+    if !forbidden.as_os_str().is_empty() && forbidden != home {
+        return;
+    }
+    let caller = std::panic::Location::caller();
+    panic!(
+        "a test process resolved the home of the person ({}), from {caller}; give the test a private HOME or \
+         HORIZON_HOME",
+        home.display()
+    );
 }
 
 #[must_use]
@@ -22,7 +55,11 @@ pub(crate) fn expand_tilde(input: &str) -> PathBuf {
 }
 
 pub(crate) fn home_dir() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if let Some(home) = home.as_deref() {
+        refuse_real_home(home);
+    }
+    home.unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// A folder name a person can read: the identifier keeps the characters a

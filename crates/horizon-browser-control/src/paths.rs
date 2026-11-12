@@ -6,6 +6,11 @@ use std::sync::OnceLock;
 pub const RUNTIME_ROOT_ENV: &str = "HORIZON_BROWSER_ROOT";
 /// Names the application home in place of `.horizon` in the user's home directory.
 pub const HOME_ENV: &str = "HORIZON_HOME";
+/// The home of the person that runs a test suite: a test process may not resolve
+/// it. The runner of `.cargo/config.toml` sets it for every test binary of
+/// `cargo test` and `cargo nextest`, and the application of `cargo run` never
+/// gets it.
+pub const FORBID_REAL_HOME_ENV: &str = "HORIZON_FORBID_REAL_HOME";
 static RUNTIME_PATHS: OnceLock<Option<BrowserRuntimePaths>> = OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
@@ -27,7 +32,42 @@ pub enum RuntimePathError {
 /// a relative value with [`home_override`] before they use it.
 #[must_use]
 pub fn default_horizon_root() -> PathBuf {
-    horizon_root_from(std::env::var_os(HOME_ENV), std::env::var_os("HOME"))
+    let horizon_home = std::env::var_os(HOME_ENV);
+    let home = std::env::var_os("HOME");
+    if non_empty_path(horizon_home.clone()).is_none()
+        && let Some(home) = home.as_ref().map(PathBuf::from)
+    {
+        refuse_real_home(&home);
+    }
+    horizon_root_from(horizon_home, home)
+}
+
+/// Stops a test process that resolved the home of the person.
+///
+/// A test gives its own home, so every path that it resolves differs from the
+/// value of [`FORBID_REAL_HOME_ENV`]. The runner of `.cargo/config.toml` sets that
+/// value for every test binary, so the panic names the line that reached the home
+/// of the person and the test cannot write or read it by mistake.
+///
+/// # Panics
+///
+/// Panics when `home` is the home of the person that runs the suite, or when the
+/// variable is set to an empty value.
+#[track_caller]
+pub fn refuse_real_home(home: &Path) {
+    let Some(forbidden) = std::env::var_os(FORBID_REAL_HOME_ENV) else {
+        return;
+    };
+    let forbidden = PathBuf::from(forbidden);
+    if !forbidden.as_os_str().is_empty() && forbidden != home {
+        return;
+    }
+    let caller = std::panic::Location::caller();
+    panic!(
+        "a test process resolved the home of the person ({}), from {caller}; give the test a private HOME or \
+         HORIZON_HOME",
+        home.display()
+    );
 }
 
 fn horizon_root_from(horizon_home: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> PathBuf {
@@ -146,6 +186,9 @@ impl BrowserRuntimePaths {
     pub fn browser_attachments_dir(&self) -> PathBuf {
         let root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone());
         let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(home) = home.as_deref() {
+            refuse_real_home(home);
+        }
         browser_visible_attachments_dir(&root, home.as_deref())
             .unwrap_or_else(|| root.join("runtime").join("browser-attachments"))
     }
@@ -240,6 +283,24 @@ mod home_tests {
             root(Some("relative"), Some("user")),
             PathBuf::from("relative"),
             "a set override never falls back to the user home"
+        );
+    }
+
+    /// The guard of the suite: a private home passes, and the home of the person
+    /// that runs the suite ends the test process here.
+    #[test]
+    fn the_guard_refuses_the_home_of_the_person_and_accepts_a_private_one() {
+        let Some(person) = std::env::var_os(super::FORBID_REAL_HOME_ENV) else {
+            // A direct start of this test binary, without the runner of the
+            // workspace: the guard is not active.
+            return;
+        };
+        let private = tempfile::tempdir().expect("a private home");
+        super::refuse_real_home(private.path());
+        assert!(
+            std::panic::catch_unwind(|| super::refuse_real_home(std::path::Path::new(&person))).is_err(),
+            "a test process that reached {} ends here",
+            person.display()
         );
     }
 
