@@ -97,12 +97,20 @@ pub struct LinkSnapshot {
 /// computer did not apply with the sentence that says why.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettingsSyncView {
+    seeded: bool,
     in_step: bool,
     pending: BTreeSet<String>,
     refused: Option<String>,
 }
 
 impl SettingsSyncView {
+    /// Whether this computer compared its own settings with the server once, so
+    /// the sections that the server does not have are on their way.
+    #[must_use]
+    pub fn is_seeded(&self) -> bool {
+        self.seeded
+    }
+
     /// Whether the store of this computer holds every section that the server gave
     /// and this build accepts.
     #[must_use]
@@ -322,6 +330,7 @@ impl SyncState {
             machine_keys: self.machine_keys.clone(),
             generation: self.generation,
             settings: SettingsSyncView {
+                seeded: self.settings_seeded,
                 in_step,
                 pending: settings_pending,
                 refused: self.settings_refusal.clone(),

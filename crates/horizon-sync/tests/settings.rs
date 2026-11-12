@@ -289,9 +289,11 @@ fn eventually<T>(what: &str, mut answer: impl FnMut() -> Option<T>) -> T {
 /// test writes a section on a value that the computer has read.
 fn in_step(computer: &Computer) {
     eventually("the link of a computer", || {
+        let settings = computer.handle().snapshot().settings().clone();
         (matches!(computer.handle().state(), LinkState::InStep { .. })
-            && computer.handle().snapshot().settings().in_step()
-            && computer.handle().snapshot().settings().pending().is_empty())
+            && settings.is_seeded()
+            && settings.in_step()
+            && settings.pending().is_empty())
         .then_some(())
     });
 }
