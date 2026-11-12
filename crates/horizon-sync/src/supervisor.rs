@@ -422,7 +422,13 @@ fn run(
         if stop.load(Ordering::SeqCst) {
             break;
         }
-        sleep(horizon_core::reconnect_delay(attempt), stop, kicked);
+        if sleep(horizon_core::reconnect_delay(attempt), stop, kicked) {
+            // A person saved a setting or a secret during the wait, and the attempt
+            // that it started counts as a new start: the wait after it counts from
+            // the first delay again, as a key press on a machine terminal forgets
+            // the attempts of that terminal.
+            attempt = 1;
+        }
     }
 }
 
@@ -575,30 +581,29 @@ fn read_answers(mut output: impl std::io::Read, answers: &Sender<Frame>) {
     }
 }
 
-/// Waits for the delay of the next attempt, and returns at once when the
-/// supervisor is stopped or a local change arrives.
+/// Waits for the delay of the next attempt, and answers whether a local change
+/// ended the wait. A stopped supervisor and a link without a kick answer `false`.
 ///
 /// A local change is a person who saved a setting or a secret while the server
 /// was away, so it starts one attempt at once instead of waiting for the rest of
-/// the delay: the person who saves a setting expects it to travel. The attempt
-/// counter keeps counting through such an attempt, so a server that stays away
-/// still reaches the longer delays.
-fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) {
+/// the delay: the person who saves a setting expects it to travel.
+fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) -> bool {
     let deadline = Instant::now() + delay;
     while !stop.load(Ordering::SeqCst) {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return;
+            return false;
         }
         match kicked.recv_timeout(remaining.min(LINK_SLICE)) {
             Ok(()) => {
                 tracing::debug!("a local change ended the wait of the next attempt of the link");
-                return;
+                return true;
             }
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Disconnected) => return false,
         }
     }
+    false
 }
 
 /// Ends the transport of the link, so a read that waits returns.
