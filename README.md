@@ -199,7 +199,9 @@ The QR code holds an address on your private overlay network. Horizon encrypts n
 <td>
 
 ### Session Persistence
-The sidebar says what each agent is doing: **Needs you** when an agent waits for an answer or its turn failed, **Done** when a turn ended while you looked elsewhere, and **Working** while one runs. **Ctrl+Shift+G** goes to the next agent that needs you, and **Mark as unread** in a panel menu keeps a finished one in your list.
+The sidebar says what each agent is doing: **Needs you** when an agent waits for an answer or its turn failed, **Done** when a turn ended while you looked elsewhere, **Background** when the turn ended and the agent still works, and **Working** while one runs. **Ctrl+Shift+G** goes to the next agent that needs you, and **Mark as unread** in a panel menu keeps a finished one in your list.
+
+When you work in another window, Horizon shows one desktop notification for an agent that needs you or is done, and the sidebar keeps the state for later. Desktop notifications are one row in Settings → General, and Linux needs `notify-send` for them.
 
 Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row in sidebar order after restore.
 

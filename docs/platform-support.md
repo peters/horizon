@@ -50,6 +50,7 @@ function, update this document in the same PR.
 | Browser panel of a browser on another machine | Yes (note 4) | Yes (note 4) |
 | Native image paste into a terminal | Yes | Partial (note 3) |
 | Panel screenshot and image copy | Yes | Yes |
+| Desktop notification of an agent | Partial (note 5) | Yes (note 5) |
 
 1. Safari WebDriver is available only on macOS
    (`crates/horizon-browser/src/webdriver/service.rs:60-62`).
@@ -68,6 +69,12 @@ function, update this document in the same PR.
    The live lane of this path used a macOS host. No run examined a Linux host,
    so that lane is "Not tested". Test it with
    [the remote browser tunnel procedure](testing/procedures/remote-browser-tunnel.md).
+5. Horizon shows a notification with `notify-send` on Linux and with `osascript`
+   on macOS (`crates/horizon-core/src/notify/sink.rs`). A Linux computer without
+   `notify-send` sends nothing, and Settings → General says so under the row.
+   The two programs are the only dependencies. No test examines the line of
+   macOS, so that lane is "Not tested". Test both systems with
+   [the desktop notification procedure](testing/procedures/desktop-notifications.md).
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux
