@@ -244,13 +244,20 @@ fn assert_row_of_the_server_computer(shapes: &[egui::epaint::ClippedShape], text
 fn assert_no_word_lies_under_a_button(shapes: &[egui::epaint::ClippedShape]) {
     let mut words = Vec::new();
     let mut buttons = Vec::new();
-    for_each_painted(shapes, &mut |shape, painted, _clip| {
+    for_each_painted(shapes, &mut |shape, painted, clip| {
         if let egui::Shape::Text(drawn) = shape {
             let text = drawn.galley.text();
+            // A tab that is taller than its panel scrolls, and the part that the
+            // scroll area cut away is not where the person reads it: the check
+            // compares the part that the clip leaves.
+            let visible = painted.intersect(clip);
+            if visible.width() <= 0.0 || visible.height() <= 0.0 {
+                return;
+            }
             if BUTTON_LABELS.contains(&text) {
-                buttons.push(painted);
+                buttons.push(visible);
             } else {
-                words.push((text.to_owned(), painted));
+                words.push((text.to_owned(), visible));
             }
         }
     });
