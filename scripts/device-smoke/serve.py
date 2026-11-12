@@ -4,10 +4,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import signal
 import sqlite3
-import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -17,6 +19,10 @@ import sandbox
 
 # The directory the host X server keeps its socket and keymap files in.
 TMP_DIR = Path('/tmp')
+# The attention stand-in: the id of its panel, the owner of its launch, and the
+# folder of its work record inside the private Horizon home.
+ATTENTION_PANEL_ID = 'attention-stand-in'
+ATTENTION_OWNER = 'attention-stand-in-owner'
 
 
 def bound_port(process, path, pattern):
@@ -349,6 +355,44 @@ def speech_section(recorder=None, transcriber_command=None, service=None):
     return section
 
 
+def attention_agent(private_home, app, state, timer=6.0):
+    """The panel of the stand-in agent that shows the four attention states.
+
+    The sidebar takes the state of an agent panel from the work ledger of its
+    launch. A real agent gets that ledger from the lifecycle hooks that Horizon
+    installs; this stand-in has the same ledger, and it sends the same events
+    through the same entry point, `<candidate> --agent-work-hook`. The fixture
+    registers the launch before the candidate starts, because the store refuses
+    an event of a panel that no launch registered, and the script then reports
+    each event that the person types.
+
+    Answers the panel entry of the fixture config and the log file of the script.
+    """
+    script = Path(__file__).resolve().parent / 'agent_attention_standin.py'
+    home = Path(private_home) / HORIZON_HOME_FOLDER
+    work = state / 'attention-agent'
+    work.mkdir(mode=0o700, exist_ok=True)
+    document = {
+        'root': str(home), 'panel': ATTENTION_PANEL_ID, 'owner': ATTENTION_OWNER,
+        'kind': 'claude', 'cwd': str(work),
+        'transcript_path': '', 'config': str(work / 'stand-in.json'),
+        'exe': str(app),
+    }
+    config = work / 'stand-in.json'
+    config.write_text(json.dumps(document))
+    finished = subprocess.run([sys.executable, str(script), '--config', str(config), '--register'],
+                              capture_output=True, text=True, check=False)
+    if finished.returncode != 0:
+        raise RuntimeError(f'the attention stand-in could not register its ledger: {finished.stderr.strip()}')
+    command = f'exec {shlex.quote(sys.executable)} -u {shlex.quote(str(script))} --config {shlex.quote(str(config))}'
+    if timer:
+        command += f' --timer {timer}'
+    panel = {'name': 'Attention stand-in', 'kind': 'claude', 'command': '/bin/sh',
+             'args': ['-c', f'{command} "$@"', 'attention-stand-in'],
+             'cwd': str(work), 'position': [40, 60], 'size': [640, 420]}
+    return panel
+
+
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
                          server_command=None, server_address=None, secret_names=None, speech=None):
@@ -460,7 +504,8 @@ def application_command(app, config, saved_session, resume_session=False, plain_
 # release made keeps its own settings and sessions. The flag comes from the parser
 # below, so the sentence that a procedure reads names the option that it typed.
 PLAIN_START_SETTINGS_OPTIONS = (
-    ('panels', '--panels'), ('presets', '--presets'), ('theme', '--theme'),
+    ('panels', '--panels'), ('attention_agent', '--attention-agent'),
+    ('presets', '--presets'), ('theme', '--theme'),
     ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
     ('server_target', '--server-target'), ('server_command', '--server-command'),
     ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
@@ -588,6 +633,12 @@ def arguments():
         help='Set appearance.theme in the fixture config, default dark. The first start at a '
              'state path imports the value; a run with --reuse-state keeps the theme that the '
              'stored settings of that private home hold')
+    parser.add_argument(
+        '--attention-agent', type=float, nargs='?', const=6.0, default=None, metavar='SECONDS',
+        help='Open an agent panel whose program is scripts/device-smoke/agent_attention_standin.py, '
+             'so the four attention states of the sidebar show without a real agent. The script '
+             'reports one event for each line that the person types; SECONDS also makes it report '
+             'the events in a sequence of its own, every SECONDS (default 6)')
     parser.add_argument(
         '--panels',
         type=Path,
@@ -738,6 +789,10 @@ def main():
         config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
+        if args.attention_agent is not None:
+            # The stand-in replaces the default board, so the panel of the
+            # procedure is the first one that the person sees.
+            extra_panels = [attention_agent(box.private_home, app, args.state, args.attention_agent)]
         # The values of this run, and a value that an earlier run of the same private
         # home wrote, are both rows of the secrets file that the candidate reads,
         # which is the file of the Horizon home below its masked `HOME`.
