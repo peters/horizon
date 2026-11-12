@@ -172,9 +172,10 @@ computer, and the rule of the address.
 
 4. On the server computer, start the server again with the command of step 5.1.
 
-   Result: both client computers say `Server: in step` within a few seconds.
-   Client computer B shows `build-2`, and the `pending` mark of client computer A
-   goes away.
+   Result: both client computers say `Server: in step` within one minute. A change
+   that a person saves in this window during the wait starts one attempt at once, so
+   the line changes sooner then. Client computer B shows `build-2`, and the
+   `pending` mark of client computer A goes away.
 
 ### 6.3 S3 — a restart of one computer while the server is away
 
@@ -257,7 +258,7 @@ gone, and that it catches up when the server returns.
 
 5. On the server computer, start the server again with the command of step 5.1.
 
-   Result: both client computers say `Server: in step` within a few seconds.
+   Result: both client computers say `Server: in step` within one minute.
    Client computer B shows `build-2`, its list is the list of the server, and the
    `pending` mark of client computer A goes away.
 
@@ -280,7 +281,7 @@ gone, and that it catches up when the server returns.
 
 8. Undo the rule, and start no server: the link of client computer B still reads
    `Server away`. Start the server again with the command of step 5.1, and the
-   line reads `Server: in step` within a few seconds.
+   line reads `Server: in step` within one minute.
 
    ```bash
    sudo nft delete rule inet filter input tcp dport 22 drop
@@ -667,15 +668,40 @@ gone, and that it catches up when the server returns.
 
 4. On the server computer, start the server again with the command of step 5.1.
 
-   Result: both client computers say `Server: in step` within a few seconds. Both
-   computers show the theme of the change that the server decided first: the
-   window of the computer that lost reads one line that says that the server kept
-   the value of another computer, and its theme becomes the theme of the winner.
-   No computer keeps its own losing theme.
+   Result: both client computers say `Server: in step` within one minute, or at
+   once after the next save. The wait of a lost link grows with each attempt: 3, 6,
+   12, 24 and 30 seconds. Both computers show the theme of the change that the
+   server decided first: the window of the computer that lost reads one line that
+   says that the server kept the value of another computer, and its theme becomes
+   the theme of the winner. No computer keeps its own losing theme.
 
-5. Open the tab `General` on both computers.
+5. Read the line of the computer that lost.
+
+   Result: the line stands in the Machines section under the state line of the
+   server, and the tab `Server` shows it too. The line stays after ten seconds, and
+   it goes away only after a press on its close control. The log of that computer
+   holds one line at the level INFO that names the section, and no value of the
+   section.
+
+6. Open the tab `General` on both computers.
 
    Result: the field `Theme` shows the same value on both computers.
+
+7. On the server computer, stop the server with Ctrl-C. Wait until the state line of
+   one computer reads `Server away`, then start the server again with the command of
+   step 5.1. Save `Theme` on that computer while its line still reads `Server away`.
+
+   Result: both computers say `Server: in step` within two seconds of the save, and
+   the field `Theme` shows the same value on both computers.
+
+8. On client computer B, open the Settings window and the tab `General`, and change
+   `Theme` without a press on `Save`. On client computer A, change `Theme` to
+   another value and press `Save`. Look at the footer of client computer B.
+
+   Result: the footer of client computer B shows the whole sentence `This setting
+   changed on another computer.` on a row of its own, and the buttons `Keep editing`
+   and `Take it` are under it. A press on `Take it` shows the theme of client
+   computer A.
 
 ### 6.17 S17 — the first link keeps the value of this computer in a backup file
 
@@ -780,7 +806,10 @@ gone, and that it catches up when the server returns.
 - With the server away, a change of one shared section on each computer waits in
   its queue, and one of them decides the section when the server returns: both
   computers show the value that the server decided first, and the computer that
-  lost reads one line about it.
+  lost reads one line about it, which stays until the person closes it.
+- A save of a setting while the server is away starts one attempt of the link at
+  once, so the computers reach the state of the server before the wait of the lost
+  link ends.
 - The first link of a computer keeps the value of this computer for a section that
   the server has in `settings.before-server.<time>.json` beside the store, at mode
   0600, writes that file one time, and the value of the server wins.
