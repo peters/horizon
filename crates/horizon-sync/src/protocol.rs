@@ -4,6 +4,13 @@
 //! the answer is a [`HelloOk`]; after that the computer pushes intents and pulls
 //! changes, and it may wait for one. A version is one integer: the server refuses
 //! a computer that speaks a higher one and answers the one that it speaks.
+//!
+//! The two numbers of a link are not the same one. [`PROTOCOL_VERSION`] is the
+//! frames that a computer sends, and [`SERVER_PROTOCOL_VERSION`] is what a server
+//! of this Horizon answers: version 5 changes no frame, only the time that a
+//! server holds an idle wait. A computer reads the answer of the greeting and keeps
+//! its own longer bound for a server of an older version, so the two sides of a
+//! link may be of different versions without a frame that either cannot read.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +30,15 @@ pub use crate::store::{Changes, Row};
 /// version and an older server refuses this computer with `protocol_version`
 /// instead of dropping its settings one by one.
 pub const PROTOCOL_VERSION: u32 = 4;
+
+/// The version that a server of this Horizon answers in its greeting.
+///
+/// Version 5 adds no frame. A server that answers 5 holds an idle wait open for
+/// fifteen seconds instead of fifty, so a computer that reads 5 proves that its
+/// link is alive within about twenty seconds. A computer of version 4 reads the
+/// same answer at its own bound of sixty-five seconds and is unaffected, and a
+/// computer of this build keeps that longer bound for a server that answers 4.
+pub const SERVER_PROTOCOL_VERSION: u32 = 5;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;

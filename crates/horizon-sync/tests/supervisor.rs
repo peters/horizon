@@ -140,7 +140,7 @@ def read_frame():
 hello = read_frame()
 if hello is None:
     sys.exit(0)
-body = json.dumps({'hello_ok': {'protocol': 1, 'store': 'silent-store', 'now_millis': 0}}).encode()
+body = json.dumps({'hello_ok': {'protocol': int(sys.argv[2]), 'store': 'silent-store', 'now_millis': 0}}).encode()
 sys.stdout.buffer.write(struct.pack('>I', len(body)) + body)
 sys.stdout.buffer.flush()
 while True:
@@ -153,7 +153,12 @@ fn silent_stand_in(directory: &Path, starts: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("silent.py");
     fs::write(&relay, SILENT_RELAY).expect("the silent relay of the stand-in");
-    let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), starts.display());
+    let script = format!(
+        "exec /usr/bin/env python3 '{}' '{}' '{}'",
+        relay.display(),
+        starts.display(),
+        horizon_sync::SERVER_PROTOCOL_VERSION
+    );
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the silent stand-in ssh");
     program.to_string_lossy().into_owned()
 }

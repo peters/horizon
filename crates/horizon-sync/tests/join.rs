@@ -642,7 +642,11 @@ fn two_computers_share_the_machine_list_and_a_named_secret() {
     let hello = client
         .hello_with_token(&mut link, Some(&joined.token))
         .expect("B is logged in with the token of its join");
-    assert_eq!(hello.protocol, PROTOCOL_VERSION);
+    assert_eq!(
+        hello.protocol,
+        horizon_sync::SERVER_PROTOCOL_VERSION,
+        "the server answers the version in which it proves an idle link alive"
+    );
     let mut mirror = ObjectMirror::default();
     let pulled = client.pull(&mut link, &mut mirror).expect("the changes of the server");
     assert!(pulled.rows >= 2, "the machine and the secret came: {pulled:?}");

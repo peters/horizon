@@ -41,7 +41,7 @@ use crate::listener::ListenerInfo;
 use crate::login;
 use crate::protocol::{
     DeviceList, DeviceRemoved, Frame, Hello, HelloOk, Invited, Join, Joined, LinkError, LinkErrorCode,
-    PROTOCOL_VERSION, check_device_name,
+    SERVER_PROTOCOL_VERSION, check_device_name,
 };
 use crate::store::{JoinAnswer, Store, TokenLogin};
 
@@ -49,7 +49,13 @@ use crate::store::{JoinAnswer, Store, TokenLogin};
 pub const MAX_OPEN_WAITS: usize = 32;
 
 /// How long a wait stays open without a change.
-pub const WAIT_BOUND: Duration = Duration::from_secs(50);
+///
+/// The answer of a wait that no change reached is the proof that the link is alive,
+/// so this bound is also how long an idle computer may believe in a server program
+/// that stopped answering. Fifteen seconds let a computer that reads the version of
+/// this server (`SERVER_PROTOCOL_VERSION`) prove its link within about twenty
+/// seconds, and cost two small frames for every fifteen seconds of an idle link.
+pub const WAIT_BOUND: Duration = Duration::from_secs(15);
 
 /// How long a wrong code waits before the server answers it, so a computer that
 /// guesses codes spends a second on each one.
@@ -667,13 +673,13 @@ fn accept_hello(
     hello: &Hello,
     login: Login,
 ) -> Option<String> {
-    if hello.protocol > PROTOCOL_VERSION {
+    if hello.protocol > SERVER_PROTOCOL_VERSION {
         post(
             frames,
             error_frame(
                 LinkErrorCode::ProtocolVersion,
                 &format!(
-                    "the computer speaks protocol {}, and this server speaks protocol {PROTOCOL_VERSION}",
+                    "the computer speaks protocol {}, and this server speaks protocol {SERVER_PROTOCOL_VERSION}",
                     hello.protocol
                 ),
             ),
@@ -726,7 +732,7 @@ fn accept_hello(
         }
     }
     let answer = HelloOk {
-        protocol: PROTOCOL_VERSION,
+        protocol: SERVER_PROTOCOL_VERSION,
         store: store.store_id().to_owned(),
         now_millis: u64::try_from(info.now_millis()).unwrap_or(0),
         secrets_lost: store.secrets_lost(),

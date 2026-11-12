@@ -16,7 +16,8 @@ use std::{
 use horizon_core::Machine;
 use horizon_sync::{
     Client, Frame, FrameError, Intent, KIND_MACHINE, Link, LinkErrorCode, LinkState, MAX_FRAME_BYTES, MAX_OPEN_WAITS,
-    ObjectMirror, Op, PROTOCOL_VERSION, Refusal, Store, SyncError, Wait, read_frame, serve, tip, write_frame,
+    ObjectMirror, Op, PROTOCOL_VERSION, Refusal, SERVER_PROTOCOL_VERSION, Store, SyncError, Wait, read_frame, serve,
+    tip, write_frame,
 };
 
 /// One computer with a link to a server store, and the thread of that link.
@@ -195,9 +196,13 @@ fn a_wait_answers_on_a_change_of_another_computer_and_at_its_bound() {
         "the wait woke before its bound"
     );
 
-    // The bound of a wait is 50 seconds, and a test does not hold a link for it:
+    // The bound of a wait is 15 seconds, and a test does not hold a link for it:
     // the store test holds that bound with a short one.
-    assert_eq!(horizon_sync::WAIT_BOUND, Duration::from_secs(50), "the bound of a wait");
+    assert_eq!(
+        horizon_sync::WAIT_BOUND,
+        Duration::from_secs(15),
+        "the bound of a wait, which proves an idle link alive"
+    );
     assert_eq!(horizon_sync::MAX_OPEN_WAITS, 32, "the waits of one link");
 }
 
@@ -360,7 +365,7 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
     write_frame(
         &mut writer,
         &Frame::Hello(horizon_sync::Hello {
-            protocol: PROTOCOL_VERSION + 1,
+            protocol: SERVER_PROTOCOL_VERSION + 1,
             device: "mbp-7c1".to_owned(),
             store: None,
             token: None,
@@ -372,8 +377,8 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
         panic!("the server answers an error frame, not {answer:?}");
     };
     assert_eq!(error.code, LinkErrorCode::ProtocolVersion);
-    let spoken = PROTOCOL_VERSION;
-    let asked = PROTOCOL_VERSION + 1;
+    let spoken = SERVER_PROTOCOL_VERSION;
+    let asked = SERVER_PROTOCOL_VERSION + 1;
     assert!(
         error.message.contains(&asked.to_string()) && error.message.contains(&spoken.to_string()),
         "the message names both versions: {}",
@@ -404,7 +409,15 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
     let Frame::HelloOk(hello) = answer else {
         panic!("the server greets an older computer, not {answer:?}");
     };
-    assert_eq!(hello.protocol, PROTOCOL_VERSION, "the server answers its own version");
+    assert_eq!(
+        hello.protocol, SERVER_PROTOCOL_VERSION,
+        "the server answers its own version, which is the version of its idle wait"
+    );
+    assert!(
+        hello.protocol > PROTOCOL_VERSION,
+        "a computer of this build speaks the frames of version {PROTOCOL_VERSION}, and the \
+         server answers {SERVER_PROTOCOL_VERSION}: it proves an idle link alive at its short bound"
+    );
     // Both ends of the link close, so the server of this link ends and the thread
     // joins. The link of a real computer ends the same way when its child ends.
     drop(writer);

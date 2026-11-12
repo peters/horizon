@@ -77,7 +77,8 @@ pub use login::{hash_code, hash_token, new_code, new_token};
 pub use lookup::LinkLookup;
 pub use protocol::{
     Changes, DeviceList, DeviceLogin, DeviceRemove, DeviceRemoved, DeviceRow, Devices, Frame, Hello, HelloOk, Invite,
-    Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, Wait, check_device_name,
+    Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, SERVER_PROTOCOL_VERSION, Wait,
+    check_device_name,
 };
 pub use refusal::{LinkRefusal, of_exit_code, of_ssh_line};
 pub use server::{
@@ -89,8 +90,8 @@ pub use store::{
     UNJOINED_GRACE_MILLIS, WRONG_CODE_WINDOW_MILLIS,
 };
 pub use supervisor::{
-    LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, SettingsSyncView, Supervisor,
-    SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings, WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN,
-    proposed_device_name, stored_device_name, write_device_name,
+    LEGACY_WAIT_ANSWER_BOUND, LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, SettingsSyncView,
+    Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings, WAIT_ANSWER_BOUND,
+    WAIT_ANSWER_MARGIN, proposed_device_name, stored_device_name, write_device_name,
 };
 pub use tip::tip;
