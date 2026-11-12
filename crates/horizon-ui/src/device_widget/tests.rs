@@ -128,7 +128,7 @@ fn disconnected_viewer() -> (egui::Context, DevicePanelState, DeviceUiState) {
     ctx.all_styles_mut(|style| style.animation_time = 0.0);
     let state = DeviceUiState {
         initialized: true,
-        status: Status::disconnected("The VNC client isn't started. Or it is already closed"),
+        status: Status::disconnected("The desktop closed the connection; ssh: Connection reset by peer"),
         ..Default::default()
     };
     (ctx, fixture_device(), state)

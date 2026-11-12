@@ -28,6 +28,9 @@ pub enum Error {
     },
     #[error("connection timed out")]
     Timeout,
+    /// The server, or the stream that carried it, ended the connection.
+    #[error("The desktop closed the connection")]
+    Closed,
 }
 
 impl Error {
@@ -43,6 +46,15 @@ impl Error {
 
 impl From<vnc::VncError> for Error {
     fn from(error: vnc::VncError) -> Self {
-        Self::Protocol(error.to_string())
+        // The library text of a stopped client says nothing to a person, so it
+        // stays in the log; a viewer reads one plain sentence for the cause.
+        match error {
+            vnc::VncError::ClientNotRunning => Self::Closed,
+            vnc::VncError::IoError(error) => match error.kind() {
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Self::Timeout,
+                _ => Self::Io(error),
+            },
+            other => Self::Protocol(other.to_string()),
+        }
     }
 }
