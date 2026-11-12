@@ -1,0 +1,7 @@
+{"event": "pointer", "type": "input", "x": 5, "y": 6}
+{"button": "left", "down": true, "event": "button", "type": "input", "x": 5, "y": 6}
+{"dx": 0, "dy": 1, "event": "wheel", "type": "input", "x": 5, "y": 6}
+{"down": true, "event": "key", "key": "enter", "type": "input"}
+{"down": false, "event": "key", "key": "a", "type": "input"}
+{"event": "text", "text": "hei", "type": "input"}
+{"button": "left", "down": false, "event": "button", "type": "input", "x": 5, "y": 6}
