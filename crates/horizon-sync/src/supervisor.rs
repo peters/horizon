@@ -63,14 +63,16 @@ mod connect;
 mod files;
 mod link;
 mod pull;
+mod questions;
 mod secrets;
 mod settings;
 mod state;
 mod view;
 
+pub use questions::{ServerReply, ServerRequest};
 pub use settings::SyncedSettings;
 pub(crate) use state::SyncState;
-pub use state::{LinkSnapshot, ServerReply, ServerRequest, SettingsSyncView, SyncHandle};
+pub use state::{LinkSnapshot, SettingsSyncView, SyncHandle};
 
 /// How long one turn of the supervisor waits for a frame or for local work.
 const LINK_SLICE: Duration = Duration::from_millis(100);
@@ -682,7 +684,7 @@ fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) -> bool {
 /// once instead of at the truth of a channel that only an open link reads.
 fn answer_unasked(asked: &Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>) {
     while let Ok((_, reply)) = asked.try_recv() {
-        let _ = reply.send(ServerReply::Failed(state::NO_LINK_SENTENCE.to_owned()));
+        let _ = reply.send(ServerReply::Failed(questions::NO_LINK_SENTENCE.to_owned()));
     }
 }
 

@@ -20,8 +20,8 @@ use std::{
 use crate::refusal::{LinkRefusal, RefusalCell};
 
 use super::pull::{accept_pushed, apply_changes};
+use super::questions::{ServerReply, ServerRequest};
 use super::secrets::fill_secrets;
-use super::state::{ServerReply, ServerRequest};
 use super::{LINK_SLICE, LinkBounds, SupervisorConfig, SyncHandle, logged_out};
 use crate::frame::write_frame;
 use crate::protocol::Frame;
@@ -162,7 +162,7 @@ impl Link<'_> {
                 true
             }
             Err(reply) => {
-                let _ = reply.send(ServerReply::Failed(super::state::NO_LINK_SENTENCE.to_owned()));
+                let _ = reply.send(ServerReply::Failed(super::questions::NO_LINK_SENTENCE.to_owned()));
                 true
             }
         }
