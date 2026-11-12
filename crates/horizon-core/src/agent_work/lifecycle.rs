@@ -328,7 +328,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_panel_with_a_command_of_its_own_is_observed_on_every_unix_system() {
         // No process-table read takes part in the report, so its gate names no
         // single system: Linux and macOS give the same answer.

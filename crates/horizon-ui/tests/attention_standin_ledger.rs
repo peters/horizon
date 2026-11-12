@@ -124,7 +124,7 @@ fn the_events_of_a_panel_with_a_command_of_its_own_reach_the_sidebar() {
         .read("own-command")
         .expect("read the ledger")
         .expect("the launch registered the record");
-    assert!(quiet.ledger.session_id == SESSION);
+    assert_eq!(quiet.ledger.session_id, SESSION);
     board.observe_ledger("own-command", &quiet.ledger, now_millis());
     assert!(!board.from_ledger("own-command"), "no event has arrived");
     board.observe_working("own-command", true, false, now_millis());

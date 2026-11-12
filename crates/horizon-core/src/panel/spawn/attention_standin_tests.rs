@@ -136,7 +136,7 @@ fn assert_own_command_launch(home: &Path, horizon_home: &HorizonHome, work_plugi
         !options.work_resume.enabled,
         "the entry of the second shape continues no work after a restart"
     );
-    let (program, args, env, plan) = launch(&home, &options);
+    let (program, args, env, plan) = launch(home, &options);
     assert_eq!(
         program, "/bin/bash",
         "the command of a preset runs in the default shell"
