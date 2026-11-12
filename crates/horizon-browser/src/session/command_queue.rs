@@ -44,6 +44,9 @@ pub(super) fn channel(frame_slot: Arc<FrameSlot>) -> (CommandSender, CommandRece
 
 impl CommandSender {
     pub(super) fn send(&self, command: BrowserCommand) -> bool {
+        if matches!(command, BrowserCommand::Input(_)) {
+            self.frame_slot.note_action_queued();
+        }
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.receiver_open || !state.sender_open {
             return false;

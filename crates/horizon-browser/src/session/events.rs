@@ -535,10 +535,15 @@ impl DriverState {
         let Some(data) = event.params.get("data").and_then(|d| d.as_str()) else {
             return;
         };
+        let received_at = Instant::now();
+        let bytes = data.len();
         if self.retain_frame_during_navigation {
             return;
         }
         if let Some(seq) = frame_slot.store_base64_jpeg(data) {
+            let decoded_at = Instant::now();
+            let size = frame_slot.latest().map_or((0, 0), |frame| (frame.width, frame.height));
+            frame_slot.note_frame_handed(seq, bytes, size, received_at, decoded_at, true);
             self.record_interaction_frame(frame_slot);
             publish_frame(event_tx, frame_slot, seq);
         } else {

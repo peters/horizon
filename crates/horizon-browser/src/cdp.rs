@@ -152,6 +152,9 @@ impl CdpMsg {
 /// (browser driver thread, or an external agent) alternates `read_one` with
 /// `send_*` calls, mirroring how terminal panels pump their event loops.
 pub struct CdpLink {
+    /// The last blocking call of this link and what it cost, for the driver's
+    /// stall line. A pass that blocks takes it, so one wait is reported once.
+    last_blocking_call: Option<(String, Duration)>,
     ws: WebSocket<TcpStream>,
     next_id: u64,
 }
@@ -182,7 +185,11 @@ impl CdpLink {
         let (mut ws, _response) =
             tungstenite::client::client(request, tcp).map_err(|e| CdpError::Handshake(e.to_string()))?;
         ws.get_mut().set_read_timeout(Some(read_timeout))?;
-        Ok(Self { ws, next_id: 1 })
+        Ok(Self {
+            last_blocking_call: None,
+            ws,
+            next_id: 1,
+        })
     }
 
     /// Read at most one message, waiting up to the configured read timeout.
@@ -320,6 +327,24 @@ impl CdpLink {
                 };
             }
         };
+        let started = Instant::now();
+        let outcome = self.await_response(id, timeout, method, &mut is_cancelled);
+        self.last_blocking_call = Some((method.to_string(), started.elapsed()));
+        outcome
+    }
+
+    /// Take the last blocking call of this link and what it cost.
+    pub(crate) fn take_blocking_call(&mut self) -> Option<(String, Duration)> {
+        self.last_blocking_call.take()
+    }
+
+    fn await_response(
+        &mut self,
+        id: u64,
+        timeout: Duration,
+        method: &str,
+        is_cancelled: &mut impl FnMut() -> bool,
+    ) -> CdpCallOutcome {
         let started = Instant::now();
         let mut drained = Vec::new();
         loop {

@@ -137,6 +137,8 @@ pub struct FrameSlotInner {
 /// Lock-guarded handoff of the newest decoded frame.
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlot {
+    /// Opt-in timings that follow one input action to the painted picture.
+    latency: Arc<std::sync::Mutex<crate::latency::Probe>>,
     file_chooser: crate::FileChooserHandle,
     viewport_override: Arc<std::sync::Mutex<Option<[u32; 2]>>>,
     inner: Arc<std::sync::Mutex<FrameSlotInner>>,
@@ -431,6 +433,54 @@ impl FrameSlot {
     #[cfg(test)]
     pub(crate) fn store_test_rgb(&self, width: u32, height: u32, rgb: Vec<u8>) -> u64 {
         self.publish_rgb(width, height, rgb)
+    }
+
+    /// The UI queued one input of a person, for the latency lines.
+    pub fn note_action_queued(&self) {
+        self.latency
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .queued();
+    }
+
+    /// The driver took the newest queued input.
+    pub(crate) fn take_action(&self) -> Option<crate::latency::Action> {
+        self.latency
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .taken()
+    }
+
+    /// The driver wrote that input to the socket.
+    pub(crate) fn note_action_written(&self, action: crate::latency::Action, method: &'static str) {
+        self.latency
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .written(action, method);
+    }
+
+    /// One decoded picture is handed to the UI.
+    pub(crate) fn note_frame_handed(
+        &self,
+        frame_seq: u64,
+        bytes: usize,
+        size: (u32, u32),
+        received_at: std::time::Instant,
+        decoded_at: std::time::Instant,
+        ack_before_decode: bool,
+    ) {
+        self.latency
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .frame_handed(frame_seq, bytes, size, received_at, decoded_at, ack_before_decode);
+    }
+
+    /// The UI applied that picture to its texture in this egui frame.
+    pub fn note_painted(&self, frame_seq: u64) {
+        self.latency
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .painted(frame_seq, std::time::Instant::now());
     }
 
     /// Clone the newest frame handle, if any. Pixel conversion and texture

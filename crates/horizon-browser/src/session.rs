@@ -431,6 +431,7 @@ fn run_loop(
     event_tx: &BrowserEventSender,
 ) {
     loop {
+        let pass_started = Instant::now();
         // 1. Commands from the UI.
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
             state.flush_http_response_bodies(link, event_tx, frame_slot);
@@ -524,9 +525,22 @@ fn run_loop(
             break;
         }
 
+        report_blocked_pass(link, pass_started);
         std::thread::sleep(Duration::from_millis(5));
     }
     state.finish_pending_resize("browser_unavailable", "browser session stopped");
+}
+
+/// A pass that blocked on the protocol says so, with the command it waited for.
+fn report_blocked_pass(link: &mut CdpLink, pass_started: Instant) {
+    if !crate::latency::enabled() {
+        return;
+    }
+    let waited = link.take_blocking_call();
+    crate::latency::stall(
+        pass_started.elapsed(),
+        waited.as_ref().map(|(method, waited)| (method.as_str(), *waited)),
+    );
 }
 
 fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut DriverProcess, event_tx: &BrowserEventSender) -> bool {

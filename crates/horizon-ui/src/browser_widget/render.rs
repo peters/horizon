@@ -105,6 +105,7 @@ pub fn show_body(
             handle.set(image, options);
         }
         state.seq = data.seq;
+        browser.frame_slot.note_painted(data.seq);
     }
     let Some(texture) = &state.texture else {
         return BodyOutput {

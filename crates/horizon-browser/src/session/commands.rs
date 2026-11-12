@@ -246,6 +246,7 @@ impl DriverState {
         let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
         let probe_input = input.clone();
         let (method, params) = input.cdp();
+        let traced = frame_slot.take_action();
         let session = self.session_id.clone().ok_or_else(|| {
             BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
         })?;
@@ -254,6 +255,9 @@ impl DriverState {
                 frame_slot.store_teach_failure("input_failed", &error.to_string(), frame_slot.teach_generation());
             }
             return Err(BrowserControlFailure::new("input_failed", error.to_string()));
+        }
+        if let Some(action) = traced {
+            frame_slot.note_action_written(action, method);
         }
         self.note_native_select_input(link, event_tx, frame_slot, &probe_input);
         if let Some(capture) = teach_capture
