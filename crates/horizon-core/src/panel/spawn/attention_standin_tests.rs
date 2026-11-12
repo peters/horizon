@@ -31,6 +31,8 @@ const PANEL_ENTRY: &str = include_str!(concat!(
 
 const CHILD_ENV: &str = "HORIZON_TEST_ATTENTION_STANDIN_CHILD";
 const SESSION: &str = "fixture-session";
+/// The conversation of the panel of a system that attaches no ledger.
+const SESSION_ID: &str = "6f1d0f9a-2b7c-4a1e-9a58-1c0f7f4a2d31";
 /// The program that the `PATH` of the fixture gives the name `claude`. It takes
 /// the launch arguments without an answer, as the stand-in does.
 const STAND_IN: &str = "#!/bin/sh\nexit 0\n";
@@ -199,6 +201,52 @@ fn assert_without_work_ledger(
         .read(options.local_id.as_deref().unwrap_or_default())
         .expect("read");
     assert!(record.is_none(), "a panel of this system registers no work record");
+}
+
+/// The assertions of a system that attaches no work ledger are the same on
+/// every platform, but a Linux run never takes that branch of the launch. This
+/// test gives the helper the command and the environment of such a system, so
+/// the branch itself is checked here and not on a Mac only.
+#[test]
+fn the_assertions_of_a_system_without_the_work_ledger_hold_for_its_command() {
+    let horizon_home = HorizonHome::resolve();
+    let host = manifest::host_instance();
+    let work_plugin = horizon_home.agent_work_plugin_dir_for_host(host);
+    let browser_plugin = horizon_home.claude_plugin_dir_for_host(host);
+    let options = PanelOptions {
+        local_id: Some("panel-without-a-ledger".to_string()),
+        ..PanelOptions::default()
+    };
+    let after = format!(" --plugin-dir {} --session-id {SESSION_ID}", browser_plugin.display());
+    let mut env = HashMap::new();
+    for key in crate::agent_work::WORK_ENV_KEYS {
+        env.insert(key.to_string(), String::new());
+    }
+    let session = after.find("--session-id").expect("the flag of the conversation");
+    assert_without_work_ledger(&options, &horizon_home, &work_plugin, &after, session, &env);
+
+    // The helper answers no silence: a ledger plugin, a token or a record of
+    // the panel is a launch that attaches the ledger, and it is refused.
+    let named_ledger = format!(
+        " --plugin-dir {} --plugin-dir '{}' --session-id {SESSION_ID}",
+        browser_plugin.display(),
+        work_plugin.display()
+    );
+    let mut carried = env.clone();
+    carried.insert(crate::agent_work::WORK_OWNER_ENV.to_string(), "a-token".to_string());
+    for (command, environment) in [(&named_ledger, &env), (&after, &carried)] {
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_without_work_ledger(
+                &options,
+                &horizon_home,
+                &work_plugin,
+                command,
+                command.find("--session-id").expect("the flag of the conversation"),
+                environment,
+            );
+        }));
+        assert!(refused.is_err(), "the helper refuses a launch that attaches the ledger");
+    }
 }
 
 /// The panel options of the entry that the fixture writes.
