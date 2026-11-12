@@ -25,9 +25,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use horizon_core::Config;
 use horizon_core::config_store::ConfigStore;
 use horizon_core::settings_sync::{self, SectionFault};
+use horizon_core::{Config, MachineError};
 use serde_json::Value;
 
 use super::SyncHandle;
@@ -35,7 +35,6 @@ use super::files::MirroredSetting;
 use super::pull::now_millis;
 use super::state::{SettingsSyncView, SyncGuard};
 use crate::intent::Op;
-use horizon_core::MachineError;
 
 /// The settings of one computer that follows a server, beside the machine store
 /// of the same link.
