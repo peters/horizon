@@ -70,8 +70,11 @@ paths use an opaque UUID, never the user-provided name.
 ~/.horizon/browser-jobs/<run-uuid>/          # unchanged #324 job tree
 ```
 
-`<existing browser profile root>` is the engine's current profile root
-(`~/.horizon-browser/profiles` by default, or a configured `profile_root`).
+`<existing browser profile root>` is the engine's current profile root. A
+configured `profile_root` names it. Without that setting, a run that names a
+Horizon home in `HORIZON_HOME` keeps it under that home, in
+`<HORIZON_HOME>/browser-profiles`, and a run without one keeps
+`~/.horizon-browser/profiles`, so the signed-in sites of the person do not move.
 Routine profiles live under a `routines/` prefix so they cannot collide with
 panel-local profile directories.
 

@@ -948,6 +948,33 @@ mod tests {
         assert!(config.command.is_none());
     }
 
+    /// A run with a Horizon home of its own keeps every folder that a browser
+    /// panel makes when it starts under that home, so a second Horizon never
+    /// writes into the profiles of the first one.
+    #[test]
+    fn a_private_horizon_home_holds_the_folders_of_a_browser_panel() {
+        let private = std::path::PathBuf::from("/private/horizon-home");
+        let home = crate::horizon_home::HorizonHome::from_root(private.clone());
+        let config = BrowserConfig::default();
+        let profile = profile_dir_for_home(&config, &home, "panel-1");
+
+        assert_eq!(
+            profile,
+            private
+                .join("browser-profiles")
+                .join(horizon_browser_control::paths::safe_local_id("panel-1")),
+            "the folder of a panel is under the home of its run"
+        );
+        assert!(
+            profile.join("captures").starts_with(&private),
+            "the folder of a capture is under the same home"
+        );
+        // The profile of the engine is the folder of the panel and the folder of
+        // its backend, which is what a launch creates.
+        let launched = config.panel_profile_dir_with_default_root("panel-1", &private.join("browser-profiles"));
+        assert_eq!(launched, profile, "the engine and the panel name one folder");
+    }
+
     #[test]
     fn resolved_profile_root_is_retained_for_persistence_and_cleanup() {
         let mut config = BrowserConfig::default();

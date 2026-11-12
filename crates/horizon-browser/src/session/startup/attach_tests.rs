@@ -243,7 +243,7 @@ fn attach_drives_a_real_local_chromium() {
         command: Some(binary.to_string_lossy().into_owned()),
         ..BrowserConfig::default()
     };
-    let root = crate::profile::effective_profile_root(&command, &crate::paths::default_root().join("profiles"));
+    let root = crate::profile::effective_profile_root(&command, &crate::paths::profile_root());
     let profile = root.join(format!("horizon-attach-live-{}", std::process::id()));
     std::fs::create_dir_all(&profile).expect("create the temporary profile");
     let browser = std::process::Command::new(&binary)

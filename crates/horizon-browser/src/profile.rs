@@ -25,8 +25,7 @@ pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<Bro
 
 #[must_use]
 pub(crate) fn profile_dir(config: &BrowserConfig, panel_local_id: &str) -> PathBuf {
-    let default_root = paths::default_root().join("profiles");
-    profile_dir_with_default_root(config, panel_local_id, &default_root)
+    profile_dir_with_default_root(config, panel_local_id, &paths::profile_root())
 }
 
 /// The folder one panel saves its page's downloads into.

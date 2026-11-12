@@ -21,6 +21,20 @@ A second configuration in one folder keeps its own store. A run that names
 `--config` or `HORIZON_HOME` therefore never reads or writes the store of the
 user. See [the Horizon home procedure](../testing/procedures/horizon-home.md).
 
+The stores of a browser panel follow the same rule. A run that names
+`HORIZON_HOME` keeps every browser profile under that home, in
+`<HORIZON_HOME>/browser-profiles`, and its audit and staging folders under the
+same home. A run without one keeps `~/.horizon-browser/profiles`, so a person who
+updates Horizon stays signed in to their sites. A `browser.profile_root` setting
+still names the profile root itself. Two folders of the person stay visible to
+them with an override: the attachments of a file dialog, in
+`~/Horizon/browser-attachments`, and the downloads of a page, in
+`~/Downloads/Horizon`, because a person opens those files by hand. A
+Snap-confined Chromium of Linux keeps its profile in `~/Horizon/browser-profiles`
+even with an override, because the confinement cannot write a hidden folder below
+the home directory of the person. See
+[the browser routines page](browser-routines.md#private-layout).
+
 Every secret value of the home is one file beside these: `secrets.sqlite`. The
 home is `0700`, the file is `0600` from the first byte, and it holds the values of
 the credential references of the remote browser providers and of the named

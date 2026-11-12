@@ -14,13 +14,16 @@ owner: peters
 
 This procedure makes sure that `HORIZON_HOME` moves all Horizon state out of
 `~/.horizon`. It also makes sure that Horizon rejects a value that cannot hold
-private state, and that `HOME` does not change for the terminals.
+private state, that `HOME` does not change for the terminals, and that the
+profile of a browser panel is under the override.
 
 ## 2. Applicability
 
 - Candidate: a build that reads `HORIZON_HOME`.
 - Platforms: Linux. On macOS, tasks H01 to H04 apply.
 - This procedure does not test these functions:
+  - A browser panel of a remote browser host. Task H07 uses the browser of this
+    computer only.
   - The browser tools of an agent in a Codex panel. The unit tests examine
     that Codex passes `HORIZON_HOME` to the browser MCP server.
   - The browser tools of an agent in a Grok or Claude Code panel. These agents
@@ -35,6 +38,10 @@ private state, and that `HOME` does not change for the terminals.
 
 > **CAUTION:** STOP ONLY THE FIXTURE OF THIS RUN. Other Horizon processes can
 > hold your work.
+
+> **CAUTION:** TASK H07 STARTS A BROWSER OF THIS COMPUTER. Use a private home for
+> this run, as the tasks say, so the browser opens a profile of the run and not a
+> profile of your work.
 
 ## 4. Equipment and preconditions
 
@@ -246,6 +253,42 @@ These names apply in the steps:
    > **CAUTION:** KEEP `--all` IN THE SEARCH. Without it, xdotool finds every
    > window with the name Horizon, and alt+F4 can close the fixture.
 
+### 6.7 H07: A browser panel keeps its profile under the override
+
+1. Start the candidate of H06 again, with the same private home, and open a
+   command palette in its window.
+
+   ```sh
+   env -u DBUS_SESSION_BUS_ADDRESS -u WAYLAND_DISPLAY DISPLAY=<display> HOME=<home> \
+     HORIZON_HOME=<run>/gui-home <bin>/horizon --ephemeral > <run>/gui-browser.log 2>&1 &
+   DISPLAY=<display> xdotool search --all --pid $! --name Horizon windowactivate --sync key ctrl+shift+k
+   ```
+
+   Result: the command palette of the second window is open.
+
+2. Type `web` and push Enter.
+
+   Result: a browser panel opens on the board of the second window.
+
+3. Read the folders of the override and of the test home directory.
+
+   ```sh
+   find <run>/gui-home -maxdepth 4 \( -name chromium -o -name firefox \) | head -5
+   ls -A <home>
+   ```
+
+   Result: the profile folder of the panel is under
+   `<run>/gui-home/browser-profiles`, and `<home>` holds no `.horizon-browser`
+   folder.
+
+4. Close the window with the window manager.
+
+   ```sh
+   DISPLAY=<display> xdotool search --all --pid $! --name Horizon windowactivate --sync key alt+F4
+   ```
+
+   Result: the second candidate stops, and the browser of its panel stops with it.
+
 ## 7. Pass criteria
 
 - H01 and H02 stop with exit code 2 and the given message.
@@ -254,6 +297,8 @@ These names apply in the steps:
 - H04 reads the config only from the override folder.
 - In H05, the fixture child has the frozen hash and no `HORIZON_HOME`.
 - In H06, the window shows and the second candidate keeps the given `HOME`.
+- In H07, the profile of the browser panel is under the override, and `<home>`
+  holds no `.horizon-browser` folder.
 
 ## 8. Cleanup
 
