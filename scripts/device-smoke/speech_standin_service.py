@@ -14,8 +14,9 @@ name its URL in the settings:
     /usr/bin/python3 -B scripts/device-smoke/speech_standin_service.py \\
         --record /tmp/received.json --text hei
 
-It prints the address that it listens on, such as `127.0.0.1:40913`, and it ends
-after `--requests` requests, so no process stays behind.
+It prints the address that it listens on, such as `127.0.0.1:40913`, and it answers
+every request until it is stopped, so a second take of one run reaches it. Give
+`--requests N` to answer N requests and end, so that a run leaves no process behind.
 """
 from __future__ import annotations
 
@@ -113,25 +114,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Say nothing: the record of the request is the evidence of a run."""
 
 
-def serve(address, text, record, requests=1, status=200, error=''):
-    """Serve `requests` requests on `address`, and answer the address that it took.
+def serve(address, text, record, requests=None, status=200, error=''):
+    """Serve on `address`, and answer the address that it took.
 
     The server runs on a thread, so a caller of a test keeps its own frame. An
     address with port 0 takes a free port of this computer, and the answer names it.
+
+    `requests` answers that many requests and then ends. `None` answers every
+    request until the server is stopped, so a second take of one run reaches it.
+    The record holds the last request that the service answered.
     """
+    if requests is not None and requests < 1:
+        raise ValueError('a count of requests is at least one, or None for no end')
     handler = type('RecordedHandler', (Handler,), {
         'text': text, 'record': record, 'status': status, 'error': error})
     server = http.server.HTTPServer(address, handler)
-    served = []
 
     def run():
-        for _ in range(max(1, requests)):
+        if requests is None:
+            server.serve_forever(poll_interval=0.05)
+            return
+        for _ in range(requests):
             server.handle_request()
         server.server_close()
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    served.append(thread)
     return server.server_address, thread
 
 
@@ -143,9 +151,13 @@ def parse_arguments(argv):
     parser.add_argument('--status', type=int, default=200,
                         help='The status of the answer, such as 401 for a refused key')
     parser.add_argument('--error', default='', help='The message of a refused answer')
-    parser.add_argument('--record', type=Path, help='The file that holds what one request carried')
-    parser.add_argument('--requests', type=int, default=1, help='The number of requests before the end')
-    return parser.parse_args(argv)
+    parser.add_argument('--record', type=Path, help='The file that holds what the last request carried')
+    parser.add_argument('--requests', type=int, default=None,
+                        help='The number of requests before the end, or no option to answer until it is stopped')
+    args = parser.parse_args(argv)
+    if args.requests is not None and args.requests < 1:
+        parser.error('--requests takes a count of at least 1, or no option to answer until the service is stopped')
+    return args
 
 
 def main(argv):

@@ -27,7 +27,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | secrets file | The one SQLite file of a Horizon home that holds every secret value of that home: `<Horizon home>/secrets.sqlite`. | keyring, Keychain, credential store |
 | scripted agent | An HTTP agent in a test that answers each request from a list of expected requests and answers. It sends nothing to a network. | mock server |
 | stand-in recorder | The script `scripts/device-smoke/speech_standin_recorder.py`. It copies one prepared recording to the file of a take and waits for `SIGINT`. It opens no audio device. | fake microphone |
-| stand-in service | The script `scripts/device-smoke/speech_standin_service.py`. It answers one transcription request on a loopback address and records what it received, without the key. | mock service |
+| stand-in service | The script `scripts/device-smoke/speech_standin_service.py`. It answers transcription requests on a loopback address, until the run stops it or its count of requests is done, and it records what it received last, without the key. | mock service |
 
 ## Horizon objects
 

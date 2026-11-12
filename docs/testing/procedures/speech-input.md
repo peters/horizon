@@ -74,7 +74,7 @@ one request header and no file of the run.
 ## 5. Setup
 
 1. Start the stand-in transcription service, and keep the file that holds what
-   it received:
+   it received last:
 
    ```sh
    python3 -B scripts/device-smoke/speech_standin_service.py \
@@ -82,7 +82,10 @@ one request header and no file of the run.
    ```
 
    Result: It prints one address, such as `127.0.0.1:40913`. This is
-   `<stand-in>` in the steps that follow.
+   `<stand-in>` in the steps that follow. It answers every request until step 2
+   of Cleanup stops it, so every take of this run reaches it. Its record holds the
+   last request that it answered. A service of one request needs the option
+   `--requests N`, and the tasks of this procedure do not use it.
 
 2. Start the fixture with the stand-in recorder, the stand-in service, and the
    named secret of the key:
@@ -480,7 +483,7 @@ tests below prove that the take of this procedure passes in that situation too.
 
    Result: The Device panel goes, and the fixture keeps running.
 
-2. Stop the fixture and the stand-in service of this run.
+2. Stop the fixture and every stand-in service of this run.
 
    Result: No process of this run stays.
 

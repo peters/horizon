@@ -150,6 +150,61 @@ class StandInServiceTests(unittest.TestCase):
         self.assertEqual(speech_standin_service.boundary_of('multipart/form-data; boundary="b"'), b'b')
         self.assertIsNone(speech_standin_service.boundary_of('application/json'))
 
+    def start(self, folder, *arguments):
+        """Start the stand-in service as the exact child of this test, and read its address."""
+        process = subprocess.Popen(
+            [sys.executable, '-B', str(Path(speech_standin_service.__file__)),
+             '--record', str(Path(folder) / 'received.json'), *arguments],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.addCleanup(self.stop, process)
+        self.process = process
+        line = process.stdout.readline().strip()
+        self.assertRegex(line, r'^127\.0\.0\.1:\d+$', 'the service prints the address that it listens on')
+        return int(line.split(':')[1])
+
+    def stop(self, process):
+        """End the exact child of this test, and keep no process of it."""
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+    def test_the_default_answers_every_request_until_it_is_stopped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            port = self.start(folder)
+            for _ in range(2):
+                self.assertEqual(self.post(('127.0.0.1', port)), {'text': 'hei'},
+                                 'a second take of one run reaches the same service')
+            self.assertIsNone(self.process.poll(), 'the service of a run does not end by itself')
+            kept = json.loads((Path(folder) / 'received.json').read_text())
+            self.assertEqual(kept['path'], speech_standin_service.TRANSCRIPTION_PATH)
+
+    def test_a_count_of_requests_ends_the_service(self):
+        with tempfile.TemporaryDirectory() as folder:
+            port = self.start(folder, '--requests', '1')
+            self.assertEqual(self.post(('127.0.0.1', port)), {'text': 'hei'})
+            # One request is the whole of this service, so its child ends by itself.
+            self.assertEqual(self.process.wait(timeout=20), 0)
+
+    def test_a_count_of_zero_requests_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            done = subprocess.run(
+                [sys.executable, '-B', str(Path(speech_standin_service.__file__)),
+                 '--record', str(Path(folder) / 'received.json'), '--requests', '0'],
+                capture_output=True, text=True, timeout=30)
+            self.assertEqual(done.returncode, 2)
+            self.assertIn('at least 1', done.stderr)
+
+    def test_a_serve_of_no_request_is_refused(self):
+        with self.assertRaises(ValueError):
+            speech_standin_service.serve(('127.0.0.1', 0), 'hei', None, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
