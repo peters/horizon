@@ -88,9 +88,7 @@ fn stand_in(directory: &Path, socket: &Path) -> String {
 /// How many times the stand-in of the computer at `home` started, which is one
 /// attempt of its link for each start.
 fn attempts_of(home: &Path) -> usize {
-    fs::read_to_string(home.join("stand-in").join(STARTS))
-        .map(|text| text.lines().count())
-        .unwrap_or(0)
+    fs::read_to_string(home.join("stand-in").join(STARTS)).map_or(0, |text| text.lines().count())
 }
 
 /// One server of a temporary home, which a test can stop and start again over the
