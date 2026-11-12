@@ -1,16 +1,25 @@
 use egui::Ui;
+use horizon_core::notify::NotificationSetting;
 use horizon_core::{AppearanceTheme, Config};
 
 use crate::theme;
 
+/// What the General tab reads of this run beside the values of the settings.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct GeneralView<'a> {
+    /// The sentence of the row of desktop notifications while this computer has
+    /// no program that shows one, and `None` while it has that program.
+    pub(super) missing_notification_program: Option<&'a str>,
+}
+
 /// Render the General settings tab: window dimensions, feature toggles,
 /// the machine entries and overlay sizes.  Returns `true` when any value was
 /// modified.
-pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
+pub(super) fn render(ui: &mut Ui, config: &mut Config, view: GeneralView<'_>) -> bool {
     let mut changed = false;
     changed |= render_window_section(ui, config);
     changed |= render_appearance_section(ui, config);
-    changed |= render_features_section(ui, config);
+    changed |= render_features_section(ui, config, view);
     changed |= render_machines_section(ui, config);
     changed |= render_remote_hosts_section(ui, config);
     changed |= render_overlays_section(ui, config);
@@ -293,7 +302,7 @@ fn render_appearance_section(ui: &mut Ui, config: &mut Config) -> bool {
     changed
 }
 
-fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
+fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'_>) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Features");
     super::section_card(ui, |ui| {
@@ -321,7 +330,39 @@ fn render_features_section(ui: &mut Ui, config: &mut Config) -> bool {
             ui,
             "Only the active workspace lists panels in the sidebar. Other workspaces collapse to a name and count.",
         );
+
+        ui.add_space(10.0);
+        changed |= render_notification_row(ui, config, view);
     });
+    changed
+}
+
+/// The row of desktop notifications: the three values of the setting, and the
+/// sentence of a computer that cannot show a notification.
+fn render_notification_row(ui: &mut Ui, config: &mut Config, view: GeneralView<'_>) -> bool {
+    let mut changed = false;
+    ui.label(
+        egui::RichText::new("Desktop notifications")
+            .color(theme::FG_SOFT())
+            .size(12.0),
+    );
+    for setting in NotificationSetting::VALUES {
+        changed |= ui
+            .radio_value(
+                &mut config.features.notifications,
+                setting,
+                egui::RichText::new(setting.label()).color(theme::FG()).size(12.0),
+            )
+            .changed();
+    }
+    super::dim_label(
+        ui,
+        "One notification when an agent needs you or is done, while no Horizon window has the focus. \
+         The sidebar still shows every state.",
+    );
+    if let Some(sentence) = view.missing_notification_program {
+        super::dim_label(ui, sentence);
+    }
     changed
 }
 

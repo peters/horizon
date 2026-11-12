@@ -92,7 +92,8 @@ pub(super) fn collect_texts(shape: &egui::Shape, texts: &mut Vec<String>) {
 #[test]
 fn the_general_tab_draws_a_field_for_every_remote_host_setting() {
     let mut config = Config::default();
-    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    let (changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
 
     assert!(!changed, "a frame that a person did not edit changes nothing");
     for expected in ["Remote hosts", "Workspace", "VNC port", "Remote Sessions"] {
@@ -104,7 +105,8 @@ fn the_general_tab_draws_a_field_for_every_remote_host_setting() {
 
     // A host with a port of its own is one row, with the button that removes it.
     config.remote_hosts.vnc_ports.insert("smoke-node".to_owned(), 5997);
-    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    let (changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
     assert!(!changed);
     assert!(texts_hold(&texts, "smoke-node"), "{texts:?}");
     assert!(texts_hold(&texts, "Remove"), "{texts:?}");
@@ -113,7 +115,8 @@ fn the_general_tab_draws_a_field_for_every_remote_host_setting() {
 #[test]
 fn a_port_row_gives_the_host_box_a_useful_width_and_a_hint() {
     let mut config = Config::default();
-    let (_changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    let (_changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
     assert!(
         texts_hold(&texts, "Host label or SSH host name"),
         "the empty host box says what belongs in it: {texts:?}"
@@ -131,7 +134,8 @@ fn the_remote_hosts_section_shows_the_rule_of_a_refused_entry() {
     let mut config = Config::default();
     config.remote_hosts.default_workspace = "  ".to_string();
     config.remote_hosts.vnc_ports.insert("  ".to_string(), 5900);
-    let (changed, texts) = frame_of(|ui| super::general::render(ui, &mut config));
+    let (changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
 
     assert!(!changed);
     assert!(
@@ -223,7 +227,7 @@ fn render_general_tab(config: &mut Config) -> egui::FullOutput {
     let ctx = egui::Context::default();
     ctx.run_ui(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            super::general::render(ui, config);
+            super::general::render(ui, config, super::general::GeneralView::default());
         });
     })
 }
@@ -418,4 +422,66 @@ fn the_frame_that_applies_another_theme_draws_its_fields_with_it() {
         visuals.dark_mode,
         "the fields of the frame that applies the theme are drawn in it"
     );
+}
+
+#[test]
+fn the_general_tab_draws_the_three_choices_of_a_desktop_notification() {
+    use horizon_core::NotificationSetting;
+
+    let mut config = Config::default();
+    let (_changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
+    assert!(
+        texts_hold(&texts, "Desktop notifications"),
+        "the row names the setting: {texts:?}"
+    );
+    for setting in NotificationSetting::VALUES {
+        assert!(
+            texts_hold(&texts, setting.label()),
+            "the row offers {setting:?}: {texts:?}"
+        );
+    }
+    assert!(
+        texts
+            .iter()
+            .any(|drawn| drawn.contains("while no Horizon window has the focus")),
+        "the help says when a notification comes: {texts:?}"
+    );
+}
+
+#[test]
+fn the_row_of_desktop_notifications_says_when_this_computer_cannot_show_one() {
+    let mut config = Config::default();
+    let view = super::general::GeneralView {
+        missing_notification_program: Some("notify-send is not installed"),
+    };
+    let (_changed, texts) = frame_of(|ui| super::general::render(ui, &mut config, view));
+    assert!(
+        texts.iter().any(|text| text.contains("notify-send is not installed")),
+        "the row says that the program is absent: {texts:?}"
+    );
+
+    // A computer that has the program draws no such line.
+    let (_changed, texts) =
+        frame_of(|ui| super::general::render(ui, &mut config, super::general::GeneralView::default()));
+    assert!(!texts.iter().any(|text| text.contains("is not installed")), "{texts:?}");
+}
+
+#[test]
+fn a_chosen_desktop_notification_reaches_the_draft() {
+    use horizon_core::NotificationSetting;
+
+    let mut config = Config::default();
+    assert_eq!(
+        config.features.notifications,
+        NotificationSetting::NeedsYouAndDone,
+        "a fresh configuration speaks of both changes"
+    );
+    // The value is part of the section that a computer sends to its server, so a
+    // save of the draft carries it.
+    config.features.notifications = NotificationSetting::Off;
+    let document = config.to_json().expect("the settings of the draft");
+    assert!(document.contains("\"notifications\": \"off\""), "{document}");
+    let read = Config::from_json(&document).expect("the settings of the draft");
+    assert_eq!(read.features.notifications, NotificationSetting::Off);
 }

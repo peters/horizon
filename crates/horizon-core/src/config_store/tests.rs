@@ -65,6 +65,7 @@ fn every_field_of_the_settings_window_round_trips() {
     config.window.height = 900.0;
     config.appearance.theme = crate::AppearanceTheme::Light;
     config.features.sidebar_accordion = true;
+    config.features.notifications = crate::notify::NotificationSetting::NeedsYou;
     config.overlays.minimap_width = 400.0;
     config.browser_host.ssh_target = Some("browser-vm".to_string());
     config.browser_host.profile = Some("work".to_string());
@@ -94,6 +95,11 @@ fn every_field_of_the_settings_window_round_trips() {
     store.save(&config).expect("save");
     let stored = store.load().expect("load").expect("the store exists").config;
 
+    assert_eq!(
+        stored.features.notifications,
+        crate::notify::NotificationSetting::NeedsYou,
+        "the value of a desktop notification"
+    );
     assert_eq!(stored.remote_hosts, config.remote_hosts, "every remote host entry");
     assert_eq!(stored.secrets, config.secrets, "the names of the named secrets");
     assert_eq!(stored.browser.quality, 42, "the picture quality");

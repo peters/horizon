@@ -214,6 +214,10 @@ impl HorizonApp {
         // The canvas takes this rectangle from the editor, so it ends at the panel
         // whatever the active tab asked for.
         editor.panel_rect = Some(panel_rect(ui));
+        let missing_notification_program = self.notifications.missing_program_sentence();
+        let general_view = general::GeneralView {
+            missing_notification_program: missing_notification_program.as_deref(),
+        };
         let speech_view = speech::SpeechView {
             answer: self.speech.try_answer(),
             running: self.speech.try_running(),
@@ -233,6 +237,7 @@ impl HorizonApp {
                 speech: &speech_view,
             },
             &view,
+            general_view,
         );
         if try_take {
             self.try_speech(ui.ctx());
@@ -585,6 +590,7 @@ fn render_settings_panel(
     editor: &mut SettingsEditor,
     workbenches: &mut TabWorkbenches<'_>,
     view: &server::ServerView,
+    general_view: general::GeneralView<'_>,
 ) -> (SettingsAction, bool, bool) {
     let rect = panel_rect(ui);
     egui::Panel::right(SETTINGS_PANEL_ID)
@@ -621,7 +627,7 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let (changed, try_take) = render_tab(ui, editor, workbenches, available, view);
+            let (changed, try_take) = render_tab(ui, editor, workbenches, available, view, general_view);
             (action, changed, try_take)
         })
         .inner
@@ -643,6 +649,7 @@ fn render_tab(
     workbenches: &mut TabWorkbenches<'_>,
     available: Vec2,
     view: &server::ServerView,
+    general_view: general::GeneralView<'_>,
 ) -> (bool, bool) {
     let TabWorkbenches {
         credentials,
@@ -672,7 +679,7 @@ fn render_tab(
             // take the width of its widest tab.
             ui.set_width(ui.available_width());
             match active_tab {
-                SettingsTab::General => (general::render(ui, config), false),
+                SettingsTab::General => (general::render(ui, config, general_view), false),
                 SettingsTab::Shortcuts => (shortcuts::render(ui, config), false),
                 SettingsTab::Presets => (presets::render(ui, config), false),
                 SettingsTab::Browser => (browser::render(ui, config), false),
