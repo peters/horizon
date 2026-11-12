@@ -42,9 +42,17 @@ the repository names none.
 ## Start a task in a new worktree
 
 1. Find the root of the repository: `git rev-parse --show-toplevel`.
-2. Find the default branch: `git symbolic-ref --short refs/remotes/origin/HEAD`.
-   When it answers nothing, ask the person for the base branch.
-3. Run `git fetch` in the root.
+2. Read the remote: `git remote`.
+   - When it answers nothing, the repository has no remote. Skip the fetch in
+     step 3, and take the base from the main worktree: the first entry of
+     `git worktree list --porcelain` is the main worktree, and its branch is
+     `git -C <main worktree> branch --show-current`. Do not ask the person
+     which base to use. Say the base in one line on the card, for example
+     `This repository has no remote; the base is main.`
+   - When it answers with a remote, find the default branch:
+     `git symbolic-ref --short refs/remotes/origin/HEAD`. When it answers
+     nothing, ask the person once for the base branch.
+3. Run `git fetch` in the root, unless the repository has no remote.
 4. Make the slug of the task: letters, digits and `-`, at most 40 characters,
    for example `fix-login-redirect`.
 5. Examine that the branch name is free: `git rev-parse --verify <branch>`
