@@ -386,10 +386,43 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
     );
     let _ = serving.join();
 
-    // A hello of an older protocol: the server answers it, so a computer of an
-    // older Horizon keeps its machine list while a newer Horizon runs the server.
-    // The other direction is the error above, which a computer of this build reads
-    // from an older server as one typed sentence and not as a lost setting.
+    // A frame before the hello, and a device name that breaks the rule.
+    for (first, code) in [
+        (Frame::Wait(Wait { since: 0 }), LinkErrorCode::NotHello),
+        (
+            Frame::Hello(horizon_sync::Hello {
+                protocol: PROTOCOL_VERSION,
+                device: "MBP-7c1".to_owned(),
+                store: None,
+                token: None,
+            }),
+            LinkErrorCode::BadDevice,
+        ),
+    ] {
+        let (mut computer, server) = UnixStream::pair().expect("a socket pair");
+        let reading = server.try_clone().expect("a second end");
+        let serving_store = store.clone();
+        let serving = thread::spawn(move || serve(reading, server, &serving_store));
+        let mut writer = computer.try_clone().expect("the write end");
+        write_frame(&mut writer, &first).expect("the first frame");
+        let answer = read_frame(&mut computer).expect("an answer frame").expect("one frame");
+        let Frame::Error(error) = answer else {
+            panic!("the server answers an error frame, not {answer:?}");
+        };
+        assert_eq!(error.code, code);
+        let _ = serving.join();
+    }
+}
+
+/// A hello of an older protocol is greeted, so a computer of an older Horizon
+/// keeps its machine list while a newer Horizon runs the server. The other
+/// direction is the typed error above, which a computer of this build reads from
+/// an older server as one sentence and not as a lost setting.
+#[test]
+fn a_hello_of_an_older_protocol_is_greeted_with_the_version_of_the_server() {
+    let temp = tempfile::tempdir().expect("a directory");
+    let store = new_store(&temp);
+
     let (mut computer, server) = UnixStream::pair().expect("a socket pair");
     let reading = server.try_clone().expect("a second end");
     let serving_store = store.clone();
@@ -423,33 +456,7 @@ fn an_oversize_frame_and_a_newer_protocol_are_refused_with_a_typed_error() {
     drop(writer);
     drop(computer);
     let _ = serving.join();
-
-    // A frame before the hello, and a device name that breaks the rule.
-    for (first, code) in [
-        (Frame::Wait(Wait { since: 0 }), LinkErrorCode::NotHello),
-        (
-            Frame::Hello(horizon_sync::Hello {
-                protocol: PROTOCOL_VERSION,
-                device: "MBP-7c1".to_owned(),
-                store: None,
-                token: None,
-            }),
-            LinkErrorCode::BadDevice,
-        ),
-    ] {
-        let (mut computer, server) = UnixStream::pair().expect("a socket pair");
-        let reading = server.try_clone().expect("a second end");
-        let serving_store = store.clone();
-        let serving = thread::spawn(move || serve(reading, server, &serving_store));
-        let mut writer = computer.try_clone().expect("the write end");
-        write_frame(&mut writer, &first).expect("the first frame");
-        let answer = read_frame(&mut computer).expect("an answer frame").expect("one frame");
-        let Frame::Error(error) = answer else {
-            panic!("the server answers an error frame, not {answer:?}");
-        };
-        assert_eq!(error.code, code);
-        let _ = serving.join();
-    }
+    store.close();
 }
 
 #[test]

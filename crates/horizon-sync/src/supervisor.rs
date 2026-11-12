@@ -416,7 +416,12 @@ fn run(
         // the attempt is over.
         let refusal = RefusalCell::default();
         let end = match connect(config, handle, stop, halt_slot, &refusal) {
-            Ok((mut input, answers, server_protocol)) => {
+            Ok(greeted) => {
+                let Greeted {
+                    mut input,
+                    answers,
+                    server_protocol,
+                } = greeted;
                 // An idle wait is proven alive at the bound of the server that
                 // answered the greeting, and that bound is shorter from version 5.
                 let bounds = config.bounds.of_server(server_protocol);
@@ -517,6 +522,14 @@ impl FailedLink {
     }
 }
 
+/// The halves of a link that the server greeted: the side that this computer
+/// writes, the answers that it reads, and the protocol version of that server.
+struct Greeted {
+    input: Box<dyn Write + Send>,
+    answers: Receiver<Frame>,
+    server_protocol: u32,
+}
+
 /// Starts one transport and its reader, sends the hello, and answers the two
 /// halves of the link once the server greeted this computer.
 fn connect(
@@ -525,7 +538,7 @@ fn connect(
     stop: &AtomicBool,
     halt_slot: &Arc<Mutex<Option<Halt>>>,
     refusal: &RefusalCell,
-) -> Result<(Box<dyn Write + Send>, Receiver<Frame>, u32), FailedLink> {
+) -> Result<Greeted, FailedLink> {
     // A TCP link reads the token row of this computer, and an `ssh` link leaves
     // the program to the machine terminal of the person. Both run here, on the
     // worker thread of the link.
@@ -568,7 +581,11 @@ fn connect(
         match incoming.recv_timeout(LINK_SLICE) {
             Ok(Frame::HelloOk(answer)) => {
                 accept_hello(handle, &answer)?;
-                return Ok((input, incoming, answer.protocol));
+                return Ok(Greeted {
+                    input,
+                    answers: incoming,
+                    server_protocol: answer.protocol,
+                });
             }
             Ok(Frame::Error(error)) => {
                 let code = error.code;
