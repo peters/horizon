@@ -170,7 +170,15 @@ computer, and the rule of the address.
    Result: client computer B still shows its last list. It does not show
    `build-2`.
 
-4. On the server computer, start the server again with the command of step 5.1.
+4. On client computer B, open the Settings window and select **Server**. Click
+   **Add a computer**.
+
+   Result: within one second the tab shows `This computer has no link to the
+   server now.`, and the button **Add a computer** is enabled again. Click
+   **Remove** for one computer of the list and read the same sentence: the
+   question of the tab answers at once and waits for no link.
+
+5. On the server computer, start the server again with the command of step 5.1.
 
    Result: both client computers say `Server: in step` within one minute. A change
    that a person saves in this window during the wait starts one attempt at once, so
@@ -239,10 +247,19 @@ gone, and that it catches up when the server returns.
 
    Result: the section of client computer B says `Server away`. Its link ends at
    once when the socket of the server closes, and at the bound of its open wait at
-   the latest: the server answers a wait at 50 seconds, and the link of a computer
-   ends at 65 seconds. Write down which of the two you saw, and how long it took.
+   the latest: the server answers a wait at 15 seconds, and the link of a computer
+   ends at 21 seconds. Write down which of the two you saw, and how long it took.
+   A server of an older version keeps the 50 seconds of its own wait, and such a
+   link ends at 65 seconds.
 
-3. On client computer B, look for a child of the link that lives on:
+3. Point at the line `Server away` of client computer B.
+
+   Result: the hover names the reason of the last attempt in one sentence, for
+   example `The server program did not answer.` Open the Server tab and read the
+   same sentence under the state of the link. The sentence holds no address, no
+   name of a computer and no part of a secret.
+
+4. On client computer B, look for a child of the link that lives on:
 
    ```bash
    pgrep -fl -- '--server-link'
@@ -251,12 +268,12 @@ gone, and that it catches up when the server returns.
    Result: no process of `--server-link` stays. The attempt of a link whose
    server answers nothing ends at once, and its child ends with it.
 
-4. On client computer A, add a machine `build-2` with the request of step 6.1.
+5. On client computer A, add a machine `build-2` with the request of step 6.1.
 
    Result: client computer A says `Server away · 1 pending`, and client computer
    B still shows its last list without `build-2`.
 
-5. On the server computer, start the server again with the command of step 5.1.
+6. On the server computer, start the server again with the command of step 5.1.
 
    Result: both client computers say `Server: in step` within one minute.
    Client computer B shows `build-2`, its list is the list of the server, and the

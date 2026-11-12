@@ -96,18 +96,26 @@ Every request has a bound, because a link over `ssh` does not always end: a
 server that dies can leave the socket of the child open while the child stays
 alive. A push and a pull are due at once, and the answer of either one after 20
 seconds is a link that is lost. A wait stays open at the bound of the server,
-which is 50 seconds, so its answer is due after 65 seconds: the bound of the
-server and a margin of 15 seconds. A link that reaches a bound is ended and
-started again at once: the supervisor kills and reaps the child, reports `away`
-and starts the delay of the next attempt. The bounds are the constants of
+which is 15 seconds, so its answer is due after 21 seconds: the bound of the
+server and a margin of 6 seconds. An idle computer therefore proves its link
+alive within about 20 seconds, and a server program that went silent is read as
+`away` then. A server of an older version holds an idle wait for 50 seconds, and
+this computer cannot hurry it, so such a link keeps the older bound of 65
+seconds: the greeting names the version, and the link takes its bounds from that
+version. A link that reaches a bound is ended and started again at once: the
+supervisor kills and reaps the child, reports `away` and starts the delay of the
+next attempt. The bounds are the constants of
 `crates/horizon-sync/src/supervisor.rs`, and a test gives its link shorter ones.
 
 A question of the window travels on the same link, one at a time: `invite`,
 `devices` and `device_remove` reach the server over `ssh` as well as over the
-listener, and the answer comes back on a channel that the frame polls. A link
-that the server ends with `removed` or `not_logged_in` is the one end that does
-not retry: the supervisor forgets the token row of this computer and stops until
-a person joins it again.
+listener, and the answer comes back on a channel that the frame polls. A state
+that carries no question answers the button at once with `This computer has no
+link to the server now.`, so `Add a computer`, the list and `Remove` never leave
+a button disabled until a link happens to return. A link that the server ends
+with `removed` or `not_logged_in` is the one end that does not retry: the
+supervisor forgets the token row of this computer and stops until a person joins
+it again.
 
 The thread publishes one state for the UI: `off`, `connecting`, `in_step`,
 `behind`, `away` with the number of intents that wait, `removed`, or
@@ -117,6 +125,15 @@ link alone: an attempt that follows a link that failed keeps `away` with the
 number of intents that wait, until a hello answers. A server that does not answer
 therefore reads `Server away`, and not `Server: connecting`, while the link waits
 for it.
+
+That line carries the reason of its last attempt: the same state holds one fixed
+sentence of `crates/horizon-sync/src/refusal.rs`, and the hover of the line and
+the Server tab show it. The sentences are `The server did not answer at its
+address.`, `The name of the server did not resolve.`, `The key of the server is
+not the key that this computer knows.`, `The server refused the login of this
+computer.`, `The server has no such command for the link.` and `The server
+program did not answer.` A reason names no address, no device name and no part
+of a secret, so it can leave the log; the words of the child stay in the log.
 
 ## The machine list of a computer
 
@@ -418,7 +435,7 @@ one frame.
 | `pull` | computer | The index and the tip of the computer. |
 | `changes` (row) | server | One machine, one key binding, or one secret: `{"kind":"secret","id":"machine-key/build-1","body":"<the value>","version":9,"deleted":false}`. |
 | `changes` | server | The index of the server, whether the computer must reset, and the rows. |
-| `wait` | computer | One pull that stays open until a change after the index, or 50 seconds. |
+| `wait` | computer | One pull that stays open until a change after the index, or 15 seconds (50 seconds for a server of an older version). |
 | `join` | computer | One code of an invitation and the name that this computer takes. |
 | `joined` | server | The name and the token of that computer. The link ends after this frame. |
 | `invite` | computer | A request for one invitation. |
