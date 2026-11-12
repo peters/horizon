@@ -12,7 +12,8 @@ operation on the child's standard input, and proves:
   * the initialize handshake and notifications/initialized;
   * one `device_panel` call for each word, with the arguments of the operation, and
     no `panel_id` of a viewer that the run did not create;
-  * `create <name> [target]` passes a name and a target and answers the panel id;
+  * `create <name> [target]` passes a name and a target and keeps the id of the
+    viewer, which the real answer holds inside `panels[0]`;
   * `watch n` inspects the viewer n times, one second apart;
   * `hide` and `show` change the visibility of the last viewer, and `close` ends it;
   * a refusal of the host is one line with its code and its message;
@@ -65,6 +66,14 @@ class FakeHost:
         self.log.write(json.dumps(entry, sort_keys=True) + '\n')
 
     def answer(self, arguments: dict) -> dict:
+        """One answer of `device_panel`, with the shape that Horizon sends.
+
+        The shapes are the ones of crates/horizon-browser-control/src/manifest/
+        device.rs: `Outcome` is tagged by `status`, the operations that name a
+        viewer answer `Outcome::Panels { panels: Vec<PanelState> }`, `close`
+        answers `Outcome::Closed { panel_id }`, and a refusal answers
+        `Outcome::Failed { code, message }`.
+        """
         operation = arguments.get('operation')
         self.record({'operation': operation, 'arguments': arguments})
         if self.mode == 'refuse' and operation == 'close':
@@ -73,27 +82,47 @@ class FakeHost:
         if operation == 'create':
             request = arguments.get('frame_source') or {}
             self.panel_id = 'd1'
-            return {'status': 'panels', 'panel_id': self.panel_id,
-                    'kind': 'frame_source', 'connection': 'connecting',
-                    'source': request.get('name'), 'target': request.get('target')}
+            return {'status': 'panels', 'panels': [self.panel(
+                connection='connecting', visible=True, image_received=False,
+                image_displayed=False, frame_sequence=0, source=request.get('name'),
+                target=request.get('target'))]}
         if operation == 'list':
-            return {'status': 'panels', 'panels': [{'panel_id': self.panel_id,
-                                                    'kind': 'frame_source'}]}
+            return {'status': 'panels', 'panels': [self.panel(connection='connected')]}
         if arguments.get('panel_id') != self.panel_id:
             return {'status': 'failed', 'code': 'panel_unavailable',
                     'message': 'Device panel is unavailable in this workspace'}
         if operation == 'inspect':
             self.inspections += 1
-            return {'status': 'panels', 'panel_id': self.panel_id, 'kind': 'frame_source',
-                    'connection': 'connected', 'image_received': True,
-                    'image_displayed': True, 'frame_sequence': self.inspections,
-                    'received_frame_sequence': self.inspections, 'frames_dropped': 0,
-                    'age_ms': 40, 'server': {'desktop_size': [640, 360]}}
+            return {'status': 'panels', 'panels': [self.panel(
+                connection='connected', image_received=True, image_displayed=True,
+                frame_sequence=self.inspections)]}
         if operation == 'visibility':
-            return {'status': 'panels', 'panel_id': self.panel_id, 'visible': arguments.get('visible')}
+            return {'status': 'panels', 'panels': [self.panel(
+                connection='connected', visible=arguments.get('visible'))]}
         if operation == 'close':
-            return {'status': 'closed'}
+            return {'status': 'closed', 'panel_id': self.panel_id}
         return {'status': 'failed', 'code': 'invalid_operation', 'message': operation}
+
+    def panel(self, connection='connected', visible=True, image_received=True,
+              image_displayed=True, frame_sequence=1, source=None, target=None) -> dict:
+        """One `PanelState` of the real answer.
+
+        Its members are the fields of `PanelState` in
+        crates/horizon-browser-control/src/manifest/device.rs, flattened with the
+        `ImageEvidence` members and no optional member that the candidate omits.
+        """
+        panel = {'panel_id': self.panel_id, 'kind': 'frame_source',
+                 'endpoint': source or 'standin',
+                 'server': {'name': source, 'desktop_size': [640, 360]},
+                 'visible': visible, 'owned_by_caller': True,
+                 'connection': connection, 'connection_error': None,
+                 'image_received': image_received, 'image_displayed': image_displayed,
+                 'frame_sequence': frame_sequence,
+                 'received_frame_sequence': frame_sequence,
+                 'frames_dropped': 0, 'age_ms': 40}
+        if target is not None:
+            panel['target'] = target
+        return panel
 
     def serve(self) -> int:
         for raw in sys.stdin.buffer:
@@ -215,6 +244,21 @@ class FrameSourceAgentTests(unittest.TestCase):
         line = self.type('inspect')
         self.assertIn('needs a viewer', line)
         self.assertEqual(self.operations(), [], 'no viewer, no operation of the tool')
+
+    def test_the_id_of_the_viewer_is_the_one_inside_panels(self):
+        # The real answer of a create names its viewer in `panels[0].panel_id`
+        # (crates/horizon-browser-control/src/manifest/device.rs), so the client
+        # must keep that member and every later word must name it.
+        self.start()
+        created = self.type('create standin')
+        self.assertIn('"panel_id": "d1"', created)
+        self.assertIn('"status": "panels"', created)
+        self.assertIn('"connection": "connecting"', created)
+        self.assertIn('"desktop_size": [640, 360]', created)
+        inspected = self.type('inspect')
+        self.assertNotIn('needs a viewer', inspected)
+        self.assertIn('"image_displayed": true', inspected)
+        self.assertEqual(self.operations()[-1]['arguments']['panel_id'], 'd1')
 
     def test_a_refusal_of_the_host_is_one_line_with_its_code(self):
         self.start(mode='refuse')

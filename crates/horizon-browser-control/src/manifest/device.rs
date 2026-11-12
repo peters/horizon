@@ -966,6 +966,34 @@ mod tests {
     }
 
     #[test]
+    fn a_viewer_of_an_answer_is_the_first_member_of_panels() {
+        // The scripted client of the device smoke fixture
+        // (scripts/device-smoke/frame_source_agent.py) reads the viewer of a create,
+        // inspect or visibility answer at `panels[0]`, and its self test sends this
+        // shape. A change of this shape without that client breaks every word of
+        // the procedure after `create`.
+        let viewer = r#"{"panel_id":"d1","endpoint":"standin","visible":true,"owned_by_caller":true,"connection":"connecting","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
+        let answer = serde_json::to_value(Outcome::Panels {
+            panels: vec![serde_json::from_str(viewer).unwrap()],
+        })
+        .unwrap();
+        assert_eq!(answer["status"], "panels");
+        assert_eq!(answer["panels"][0]["panel_id"], "d1");
+        assert_eq!(answer["panels"][0]["connection"], "connecting");
+        assert!(
+            answer.get("panel_id").is_none(),
+            "the id of the viewer is inside panels, not a member of the answer: {answer}"
+        );
+
+        let closed = serde_json::to_value(Outcome::Closed {
+            panel_id: "d1".into(),
+        })
+        .unwrap();
+        assert_eq!(closed["status"], "closed");
+        assert_eq!(closed["panel_id"], "d1");
+    }
+
+    #[test]
     fn reception_evidence_is_additive_and_round_trips_without_display() {
         let legacy = r#"{"panel_id":"viewer","endpoint":"127.0.0.1:5900","visible":false,"owned_by_caller":true,"connection":"connected","connection_error":null,"image_received":false,"image_displayed":false,"frame_sequence":0}"#;
         let mut panel: PanelState = serde_json::from_str(legacy).unwrap();

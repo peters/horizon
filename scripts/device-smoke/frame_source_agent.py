@@ -18,7 +18,10 @@ A person types one word on its standard input, one operation per line:
     close                   close the viewer
     list                    list the viewers of this workspace
 
-Each answer is one line: the word, and the evidence members of the answer. Every line
+Each answer is one line: the word, and the evidence members of the viewer that the
+answer names. An operation that names a viewer answers `panels`, and the members of
+that viewer are inside `panels[0]`, so the line shows those members and the id of the
+viewer that the client keeps for the next word. Every line
 starts with `frame-source-agent: ` and holds none of the words that Horizon reads as a
 working agent (crates/horizon-core/src/agents.rs), so the panel shows the state of a
 scripted client and not a spinner.
@@ -48,9 +51,9 @@ MCP_READ_TIMEOUT_SECONDS = 30.0
 # The members of an answer that the procedure reads: the kind of the source, the
 # evidence of the transport and of the screen, and the counters of the program.
 EVIDENCE_FIELDS = (
-    'status', 'panel_id', 'kind', 'connection', 'connection_error', 'image_received',
-    'image_displayed', 'frame_sequence', 'received_frame_sequence', 'frames_dropped',
-    'age_ms', 'code', 'message',
+    'status', 'panel_id', 'kind', 'endpoint', 'visible', 'owned_by_caller', 'connection',
+    'connection_error', 'image_received', 'image_displayed', 'frame_sequence',
+    'received_frame_sequence', 'frames_dropped', 'age_ms', 'code', 'message',
 )
 DEFAULT_WATCH_COUNT = 3
 WATCH_INTERVAL_SECONDS = 1.0
@@ -164,10 +167,30 @@ class StdioMcpClient:
             self.proc.terminate()
 
 
+def viewer_of(answer: dict) -> dict:
+    """The viewer that one answer names.
+
+    An answer of `device_panel` is one `Outcome` of
+    crates/horizon-browser-control/src/manifest/device.rs, and the operations that
+    name a viewer answer `{"status": "panels", "panels": [<viewer>, ...]}`: the id
+    of the viewer and its evidence are the members of `panels[0]`, never members
+    of the top of the answer. An answer that holds no list, such as `close`, names
+    the viewer itself.
+    """
+    panels = answer.get('panels')
+    if isinstance(panels, list) and panels and isinstance(panels[0], dict):
+        return panels[0]
+    return answer
+
+
 def evidence(answer: dict) -> dict:
     """The members of one answer that the procedure reads, and no other."""
-    kept = {name: answer[name] for name in EVIDENCE_FIELDS if name in answer}
-    server = answer.get('server')
+    viewer = viewer_of(answer)
+    # The status of an answer is a member of the answer itself, and the members of
+    # the viewer that it names are the evidence of the viewer.
+    kept = {'status': answer['status']} if 'status' in answer else {}
+    kept.update({name: viewer[name] for name in EVIDENCE_FIELDS if name in viewer})
+    server = viewer.get('server')
     if isinstance(server, dict) and 'desktop_size' in server:
         kept['desktop_size'] = server['desktop_size']
     if isinstance(answer.get('panels'), list):
@@ -193,8 +216,9 @@ class Session:
             if len(arguments) > 1:
                 request['frame_source']['target'] = arguments[1]
             answer = self.call(request)
-            if isinstance(answer.get('panel_id'), str):
-                self.panel_id = answer['panel_id']
+            viewer = viewer_of(answer)
+            if isinstance(viewer.get('panel_id'), str):
+                self.panel_id = viewer['panel_id']
             return answer
         if word == 'list':
             return self.call({'operation': 'list'})
