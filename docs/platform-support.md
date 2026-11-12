@@ -148,9 +148,11 @@ opens no audio device, so a test needs no microphone on either platform. See
 
 ## Agent skills
 
-Horizon installs the `horizon-browser`, `horizon-device` and `horizon-speech`
-skills on both platforms. The `horizon-speech` skill says what a take needs on
-each platform, the recorder recipes, the named secret of the key, and what leaves
-the computer. The `horizon-device` skill tells agents to drive an
+Horizon installs the `horizon-browser`, `horizon-device`, `horizon-mobile` and
+`horizon-speech` skills on both platforms. The `horizon-speech` skill says what a
+take needs on each platform, the recorder recipes, the named secret of the key,
+and what leaves the computer. The `horizon-mobile` skill drives an app on a real
+phone of a device cloud, and its tool is one Python script that runs on both
+platforms. The `horizon-device` skill tells agents to drive an
 isolated desktop. This part works on Linux with X11 only (note 2 under
 "Panels and the board").
