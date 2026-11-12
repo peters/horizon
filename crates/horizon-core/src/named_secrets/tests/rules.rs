@@ -58,6 +58,20 @@ fn a_name_is_an_environment_variable_name_of_upper_case_letters() {
 }
 
 #[test]
+fn the_two_names_of_the_mobile_device_cloud_are_names_of_the_person() {
+    // `horizon-mobile` reads both values from the environment of its agent panel as
+    // `BROWSERSTACK_USERNAME` and `BROWSERSTACK_ACCESS_KEY`, so both names must pass
+    // the rule of a name. Neither name shares a reserved prefix.
+    for accepted in ["BROWSERSTACK_USERNAME", "BROWSERSTACK_ACCESS_KEY"] {
+        assert_eq!(
+            name(accepted).as_str(),
+            accepted,
+            "{accepted} is a name that a person stores in Settings, Secrets"
+        );
+    }
+}
+
+#[test]
 fn every_name_of_horizon_the_agents_and_the_system_is_refused() {
     let reserved = [
         "PATH",
