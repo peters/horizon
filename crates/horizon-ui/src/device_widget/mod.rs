@@ -68,6 +68,9 @@ pub(crate) struct DeviceUiState {
 
 #[derive(Default)]
 struct ImageDisplay {
+    /// The rect the picture was drawn into in the last pass, which a test reads
+    /// to measure the body that the header rows leave.
+    body_rect: Option<egui::Rect>,
     sequence: u64,
     received_sequence: u64,
     displayed: bool,
@@ -277,6 +280,7 @@ impl DeviceUiState {
         ui.add_enabled_ui(interactive, |ui| self.interact_toggle(ui, device.input));
         self.refresh_presentation(ui.ctx());
         ui.separator();
+        self.image.body_rect = Some(ui.available_rect_before_wrap());
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
             let interact = self.interact && interactive;

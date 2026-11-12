@@ -37,6 +37,14 @@ const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
 
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
+
+/// A new viewer panel of a desktop. Its rows above the picture (controls,
+/// connection header, view options and the interact toggle) took about 194
+/// points, so the generic size left a body of about 20 points and a picture
+/// that a person could not use. This size keeps a 16:10 picture of at least
+/// 480 points wide beside those rows; a growing row fails the widget test that
+/// measures the body.
+pub const DEFAULT_DEVICE_PANEL_SIZE: [f32; 2] = [560.0, 540.0];
 /// Lines of terminal scrollback kept for a shell, SSH, command, or agent panel.
 pub const PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = PANEL_SCROLLBACK_LIMIT;
