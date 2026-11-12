@@ -218,11 +218,12 @@ mod tests {
         let file = temp.path().join("notes.md");
         std::fs::write(&file, "the saved text\n").expect("the file of the editor");
         let _panel = dirty_editor(&mut app, &file, "the text of the person\n");
-        // The worker is held before the frame that closes the window, because a
-        // write of a few bytes finishes faster than the assertion that the exit
-        // waits for it on a quiet disk.
-        let releasing = hold_the_worker(&mut app);
-        app.settle_browser_host_io();
+        // The worker is held until the assertion ran: a write of a few bytes
+        // finishes faster than the two calls of the assertion on a loaded machine.
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        app.browser_create_host.io.write(move || {
+            let _ = released.recv();
+        });
 
         {
             let _frame = horizon_core::ui_thread::FrameScope::enter();
@@ -232,13 +233,14 @@ mod tests {
                 "the frames of the exit have the write of the editor to wait for"
             );
         }
+        // The write is queued behind the held job, so the exit waits for it.
+        let _ = release.send(());
         app.settle_browser_host_io();
         assert_eq!(
             std::fs::read_to_string(&file).expect("the file of the editor"),
             "the text of the person\n",
             "the write that the frames of the exit waited for reached the file"
         );
-        releasing.join().expect("the releasing thread ends");
     }
 
     #[test]
