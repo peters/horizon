@@ -17,8 +17,8 @@ use std::{
 use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
 use horizon_sync::{
-    LinkBounds, LinkRefusal, LinkState, ServerReply, ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig,
-    SyncedMachineStore, run_server_on_unix_socket,
+    Client, IntentResult, LinkBounds, LinkRefusal, LinkState, MAX_INTENTS_PER_PUSH, Outcome, PushReply, ServerReply,
+    ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore, run_server_on_unix_socket,
 };
 
 /// The time a test gives a change to travel through a link and a store.
@@ -980,4 +980,113 @@ fn a_question_of_the_window_answers_at_once_when_the_server_is_away() {
 
     a.stop();
     server.stop();
+}
+
+/// A stand-in `ssh` that never greets: the far side is a program that says
+/// nothing, so the link of the test is away for as long as the test runs.
+fn sleeping_stand_in(directory: &Path) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let program = horizon_core::stand_in_program_in(directory, "ssh", "sleep 600").expect("the stand-in ssh");
+    program.to_string_lossy().into_owned()
+}
+
+/// B16: the queue of a computer that is away for hours. The audit found no cap and
+/// asked for the numbers that a cap would be chosen from, so this test holds ten
+/// thousand intents and measures the file, the read of a start and the drain.
+///
+/// The numbers say that no cap is needed at this volume. The file stays at a few
+/// megabytes, a start reads it in a moment, and the drain leaves in pushes of at
+/// most [`MAX_INTENTS_PER_PUSH`] intents, so one push never grows past its frame.
+/// A cap would refuse a change that a person made while the server was away, and
+/// that loses the change instead of holding it. The count of what waits is already
+/// in the sidebar (`Server away · N pending`) and on each row of the machine list,
+/// so the person sees the queue grow without a second line.
+#[test]
+fn the_queue_of_a_computer_that_is_away_for_hours_needs_no_cap() {
+    const INTENTS: usize = 10_000;
+
+    let home = tempfile::tempdir().expect("a directory");
+    let machines_dir = home.path().join("machines");
+    fs::create_dir_all(&machines_dir).expect("the machine directory");
+    let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+    let mut config = SupervisorConfig::for_server(
+        "server-vm",
+        "/opt/horizon --server-link",
+        &machines_dir,
+        keys_only(keys),
+    )
+    .expect("the settings of the link");
+    config.program = sleeping_stand_in(&home.path().join("stand-in"));
+    let queue_file = config.queue_file.clone();
+    let device = config.device.clone();
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+    let store = SyncedMachineStore::new(supervisor.handle().clone());
+
+    // One save of the whole machine list, as the sidebar and an agent's operation
+    // write it: ten thousand records that the server does not hold yet.
+    let records: Vec<Machine> = (0..INTENTS)
+        .map(|index| machine(&format!("build-{index:05}"), "203.0.113.10"))
+        .collect();
+    let saved_at = Instant::now();
+    store.save(&records).expect("the intents of one save");
+    let saved = saved_at.elapsed();
+
+    // The link of the test never greets, so this computer stops with its queue
+    // whole. A start then reads the file with no second writer on it.
+    supervisor.stop();
+
+    let bytes = fs::metadata(&queue_file).expect("the queue file").len();
+    let started = Instant::now();
+    let mut client = Client::open(queue_file, &device).expect("the queue of a start");
+    let loaded = started.elapsed();
+    assert_eq!(
+        client.pending().len(),
+        INTENTS,
+        "every change that waits for an away server is held whole"
+    );
+
+    let mut chunks = 0;
+    let mut drained = 0;
+    let drain_at = Instant::now();
+    while let Some(chunk) = client.next_push() {
+        assert!(
+            chunk.len() <= MAX_INTENTS_PER_PUSH,
+            "one push holds at most {MAX_INTENTS_PER_PUSH} intents"
+        );
+        let last = chunk.last().expect("a push of at least one intent").id;
+        let reply = PushReply {
+            results: chunk
+                .iter()
+                .map(|intent| IntentResult {
+                    id: intent.id,
+                    outcome: Outcome::Applied { index: intent.id },
+                })
+                .collect(),
+            next_expected: last.saturating_add(1),
+        };
+        client.accept_push(&reply).expect("the answer of a push");
+        drained += chunk.len();
+        chunks += 1;
+        assert!(chunks <= INTENTS, "the drain ends in one push for each chunk");
+    }
+    let drain = drain_at.elapsed();
+
+    assert_eq!(drained, INTENTS, "the drain leaves no change behind");
+    assert_eq!(
+        chunks,
+        INTENTS.div_ceil(MAX_INTENTS_PER_PUSH),
+        "the drain is chunked by the bound of one push"
+    );
+    assert!(
+        bytes < 8 * 1024 * 1024,
+        "{INTENTS} intents are {bytes} bytes, and a start reads them"
+    );
+    // The bound is generous on purpose: this is a measurement of a queue at ten
+    // thousand intents, and a computer that does other work at the same time
+    // writes and syncs the file at a slower pace. The finding would be a drain
+    // that takes minutes, because that is when a person would see a stuck queue.
+    assert!(
+        saved < Duration::from_secs(120) && loaded < Duration::from_secs(5) && drain < Duration::from_secs(120),
+        "the save took {saved:?}, a start read {bytes} bytes in {loaded:?} and the drain took {drain:?}"
+    );
 }
