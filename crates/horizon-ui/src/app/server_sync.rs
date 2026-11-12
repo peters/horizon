@@ -770,7 +770,10 @@ mod tests {
 
         let queue = app.machine_registry().root().join("server-queue.json");
         assert!(!queue.exists(), "a computer without a server has no queue of intents");
-        assert!(!queue.with_file_name("server-settings.json").exists(), "and no mirror of settings");
+        assert!(
+            !queue.with_file_name("server-settings.json").exists(),
+            "and no mirror of settings"
+        );
         assert!(app.server_sync.is_none(), "no link started");
         assert_eq!(
             app.template_config.appearance.theme,
