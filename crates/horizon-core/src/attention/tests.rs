@@ -221,8 +221,16 @@ fn the_jump_takes_the_oldest_panel_that_needs_the_person_then_the_oldest_done() 
         target(5, Attention::Done, 2),
     ];
     assert_eq!(next_attention_target(&targets, None), Some(PanelId(4)));
-    // The next press leaves out the panel that the person just went to.
+    // The next presses go on to the panel after the one that the person just
+    // went to, so they reach the panels that finished unseen and come round.
     assert_eq!(next_attention_target(&targets, Some(PanelId(4))), Some(PanelId(2)));
+    assert_eq!(next_attention_target(&targets, Some(PanelId(2))), Some(PanelId(5)));
+    assert_eq!(next_attention_target(&targets, Some(PanelId(5))), Some(PanelId(1)));
+    assert_eq!(
+        next_attention_target(&targets, Some(PanelId(1))),
+        Some(PanelId(4)),
+        "after the last panel that waits, the panel that waited longest comes round again"
+    );
     let done_only = [
         target(1, Attention::Done, 5),
         target(5, Attention::Done, 2),

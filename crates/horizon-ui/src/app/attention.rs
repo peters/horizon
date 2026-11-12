@@ -17,12 +17,15 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use horizon_core::agent_work::{TurnLedger, WorkStore};
-use horizon_core::{Attention, AttentionBoard, PanelId, current_unix_millis};
+use horizon_core::{Attention, AttentionBoard, AttentionTarget, PanelId, current_unix_millis};
 
 use super::HorizonApp;
 
 /// How often the work ledgers of the agent panels are read at most.
 const INTERVAL: Duration = Duration::from_millis(500);
+
+/// What the jump says when no agent panel waits for the person.
+pub(in crate::app) const NOBODY_WAITS: &str = "No agent needs you.";
 
 /// The ledgers of one read: the panel, its local id and the ledger of its
 /// launch, when that launch registered one.
@@ -58,6 +61,12 @@ impl AttentionState {
     /// The state of the agent panel whose local id is `panel`.
     pub(in crate::app) fn state(&self, panel: &str) -> Attention {
         self.states.state(panel)
+    }
+
+    /// When the turn of `panel` reached its state, so the panel that waited
+    /// longest comes first.
+    pub(in crate::app) fn since_millis(&self, panel: &str) -> i64 {
+        self.states.since_millis(panel)
     }
 
     /// Drops the panels that are no longer on the board.
@@ -282,6 +291,34 @@ impl HorizonApp {
     /// The state of the agent panel whose local id is `local_id`.
     pub(in crate::app) fn panel_attention(&self, local_id: &str) -> Attention {
         self.attention.state(local_id)
+    }
+
+    /// The agent panels that a jump goes to: the panels that need the person,
+    /// with the moment their turn reached that state.
+    pub(in crate::app) fn attention_targets(&self) -> Vec<AttentionTarget> {
+        self.board
+            .panels
+            .iter()
+            .filter(|panel| panel.kind.is_agent())
+            .filter_map(|panel| {
+                let attention = self.attention.state(&panel.local_id);
+                attention.waits().then_some(AttentionTarget {
+                    panel: panel.id,
+                    attention,
+                    since_millis: self.attention.since_millis(&panel.local_id),
+                })
+            })
+            .collect()
+    }
+
+    /// Goes to the agent panel that waits longest for the person: it switches
+    /// the workspace, reveals the panel and gives it the focus, in the path of a
+    /// click on its row. With no panel waiting it says so in one line.
+    pub(in crate::app) fn go_to_next_attention(&mut self, ctx: &egui::Context) {
+        match horizon_core::next_attention_target(&self.attention_targets(), self.board.focused) {
+            Some(panel) => self.reveal_selected_panel(ctx, panel),
+            None => self.set_sidebar_notice(NOBODY_WAITS.to_owned()),
+        }
     }
 }
 

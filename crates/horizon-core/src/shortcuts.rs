@@ -234,6 +234,8 @@ pub struct AppShortcuts {
     pub fullscreen_window: ShortcutBinding,
     pub save_editor: ShortcutBinding,
     pub search: ShortcutBinding,
+    /// Go to the next agent panel that waits for the person.
+    pub next_attention: ShortcutBinding,
 }
 
 impl AppShortcuts {
@@ -241,7 +243,7 @@ impl AppShortcuts {
     /// an overlap names the shortcut and a second list cannot drift from the
     /// fields.
     #[must_use]
-    pub fn named_bindings(&self) -> [(&'static str, ShortcutBinding); 19] {
+    pub fn named_bindings(&self) -> [(&'static str, ShortcutBinding); 20] {
         [
             ("command_palette", self.command_palette),
             ("new_terminal", self.new_terminal),
@@ -262,6 +264,7 @@ impl AppShortcuts {
             ("fullscreen_window", self.fullscreen_window),
             ("save_editor", self.save_editor),
             ("search", self.search),
+            ("next_attention", self.next_attention),
         ]
     }
 }
@@ -289,6 +292,7 @@ impl Default for AppShortcuts {
             fullscreen_window: ShortcutBinding::new(ps, ShortcutKey::Function(11)),
             save_editor: ShortcutBinding::new(ps, ShortcutKey::Letter('S')),
             search: ShortcutBinding::new(ps, ShortcutKey::Letter('F')),
+            next_attention: ShortcutBinding::new(ps, ShortcutKey::Letter('G')),
         }
     }
 }

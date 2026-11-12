@@ -78,6 +78,7 @@ impl HorizonApp {
             CommandId::FitActiveWorkspace => {
                 let _ = self.fit_active_workspace(ctx);
             }
+            CommandId::GoToNextAttention => self.go_to_next_attention(ctx),
             CommandId::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             CommandId::ToggleHud => self.hud_visible = !self.hud_visible,
             CommandId::ToggleMinimap => self.minimap_visible = !self.minimap_visible,
@@ -154,6 +155,7 @@ impl HorizonApp {
             (self.shortcuts.zoom_out, CommandId::ZoomOut),
             (self.shortcuts.focus_active_workspace, CommandId::FocusActiveWorkspace),
             (self.shortcuts.fit_active_workspace, CommandId::FitActiveWorkspace),
+            (self.shortcuts.next_attention, CommandId::GoToNextAttention),
             (
                 self.shortcuts.align_workspaces_horizontally,
                 CommandId::AlignWorkspacesHorizontally,

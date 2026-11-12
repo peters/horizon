@@ -2,7 +2,7 @@ use horizon_core::{AppShortcuts, ShortcutBinding};
 
 use crate::terminal_widget::SSH_RECONNECT_SHORTCUT;
 
-const GLOBAL_SHORTCUT_COUNT: usize = 19;
+const GLOBAL_SHORTCUT_COUNT: usize = 20;
 
 pub(crate) fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBinding; GLOBAL_SHORTCUT_COUNT] {
     [
@@ -25,6 +25,7 @@ pub(crate) fn global_shortcut_bindings(shortcuts: &AppShortcuts) -> [ShortcutBin
         shortcuts.fullscreen_window,
         shortcuts.save_editor,
         shortcuts.search,
+        shortcuts.next_attention,
     ]
 }
 
@@ -58,6 +59,37 @@ mod tests {
         copy_selection_shortcut_label, global_shortcut_bindings, paste_shortcut_label, ssh_reconnect_shortcut_conflicts,
     };
     use crate::terminal_widget::SSH_RECONNECT_SHORTCUT;
+
+    #[test]
+    fn the_next_attention_shortcut_is_in_the_inventory_and_clashes_with_nothing() {
+        let shortcuts = horizon_core::AppShortcuts::default();
+        let bindings = global_shortcut_bindings(&shortcuts);
+        assert!(
+            bindings.contains(&shortcuts.next_attention),
+            "the jump is one of the global shortcuts"
+        );
+        for (index, left) in bindings.iter().enumerate() {
+            for right in &bindings[index + 1..] {
+                assert!(
+                    !left.overlaps(*right),
+                    "{left} and {right} are one key on this system or the other"
+                );
+            }
+        }
+        assert!(!shortcuts.next_attention.overlaps(SSH_RECONNECT_SHORTCUT));
+        // One logical binding, so the settings of both systems hold the same value.
+        assert_eq!(
+            shortcuts.next_attention,
+            ShortcutBinding::parse("Ctrl+Shift+G").expect("the default binding parses")
+        );
+        assert_eq!(
+            horizon_core::ShortcutsConfig::default()
+                .resolve()
+                .expect("the defaults")
+                .next_attention,
+            shortcuts.next_attention
+        );
+    }
 
     #[test]
     fn default_global_shortcuts_leave_local_ssh_reconnect_available() {

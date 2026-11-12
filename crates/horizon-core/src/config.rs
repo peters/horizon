@@ -161,6 +161,8 @@ pub struct ShortcutsConfig {
     pub fullscreen_window: String,
     pub save_editor: String,
     pub search: String,
+    /// Go to the next agent panel that waits for the person.
+    pub next_attention: String,
 }
 
 impl Default for ShortcutsConfig {
@@ -185,6 +187,7 @@ impl Default for ShortcutsConfig {
             fullscreen_window: "Ctrl+Shift+F11".to_string(),
             save_editor: "Ctrl+Shift+S".to_string(),
             search: "Ctrl+Shift+F".to_string(),
+            next_attention: "Ctrl+Shift+G".to_string(),
         }
     }
 }
@@ -219,6 +222,7 @@ impl ShortcutsConfig {
             fullscreen_window: parse_shortcut("fullscreen_window", &self.fullscreen_window)?,
             save_editor: parse_shortcut("save_editor", &self.save_editor)?,
             search: parse_shortcut("search", &self.search)?,
+            next_attention: parse_shortcut("next_attention", &self.next_attention)?,
         };
 
         validate_distinct_shortcuts(shortcuts.named_bindings())?;

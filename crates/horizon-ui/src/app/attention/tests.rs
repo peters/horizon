@@ -223,3 +223,61 @@ fn the_attention_worker_reads_a_ledger_of_the_home_off_the_frame() {
     assert_eq!(read[0].1, "panel-1");
     assert_eq!(read[0].2.as_ref().expect("a registered ledger").session_id, "session");
 }
+
+#[test]
+fn the_jump_goes_to_the_oldest_agent_that_waits_across_workspaces() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let first_workspace = app.board.create_workspace("first");
+    let second_workspace = app.board.create_workspace("second");
+    let done = agent_panel(&mut app, first_workspace, "Write the docs");
+    let asking = agent_panel(&mut app, second_workspace, "Fix the sync");
+    let now = horizon_core::current_unix_millis();
+    app.board.focused = None;
+    for (panel, states) in [
+        (done, vec![TurnState::Working, TurnState::Finished]),
+        (asking, vec![TurnState::Blocked]),
+    ] {
+        let local = local_id(&app, panel);
+        let count = i64::try_from(states.len()).expect("states");
+        for (index, state) in states.into_iter().enumerate() {
+            let at = now - count + i64::try_from(index).expect("index");
+            app.apply_attention_values(vec![(panel, local.clone(), Some(ledger(state, at)))], &wake());
+        }
+    }
+    assert_eq!(app.panel_attention(&local_id(&app, asking)), Attention::NeedsYou);
+    assert_eq!(app.panel_attention(&local_id(&app, done)), Attention::Done);
+    assert_eq!(app.attention_targets().len(), 2);
+
+    // The panel that needs the person comes first, also from another workspace.
+    app.go_to_next_attention(&ctx);
+    assert_eq!(app.board.focused, Some(asking));
+    assert_eq!(app.board.active_workspace, Some(second_workspace));
+    // The next press leaves that panel out and reaches the finished one.
+    app.go_to_next_attention(&ctx);
+    assert_eq!(app.board.focused, Some(done));
+    assert_eq!(app.board.active_workspace, Some(first_workspace));
+}
+
+#[test]
+fn the_jump_says_one_line_when_no_agent_waits() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Run the tests");
+    let local = local_id(&app, panel);
+    let now = horizon_core::current_unix_millis();
+    app.apply_attention_values(vec![(panel, local, Some(ledger(TurnState::Working, now - 1)))], &wake());
+    app.board.focused = None;
+    app.go_to_next_attention(&ctx);
+    assert_eq!(app.sidebar_notice.as_deref(), Some(super::NOBODY_WAITS));
+    assert_eq!(app.board.focused, None, "nothing took the focus");
+}

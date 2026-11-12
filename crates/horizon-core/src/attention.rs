@@ -299,20 +299,26 @@ pub struct AttentionTarget {
     pub since_millis: i64,
 }
 
-/// The panel that the next jump goes to: a panel that waits for the person
-/// first, the oldest one of them, then a panel that finished unseen. The panel
-/// of the current focus is left out while another one waits, so a second press
-/// reaches the next agent.
+/// The panel that the next jump goes to: the panels that need the person first,
+/// the oldest one of them, then the panels that finished unseen, oldest first.
+/// A press goes on to the panel after the one that has the focus, so each press
+/// reaches the next agent and the last one comes round to the first.
 #[must_use]
 pub fn next_attention_target(targets: &[AttentionTarget], focused: Option<PanelId>) -> Option<PanelId> {
-    let waiting = targets.iter().filter(|target| target.attention.waits());
-    let heaviest = waiting.clone().map(|target| target.attention.rank()).max()?;
-    let mut candidates: Vec<&AttentionTarget> = waiting.filter(|target| target.attention.rank() == heaviest).collect();
-    candidates.sort_by_key(|target| (target.since_millis, target.panel.0));
-    candidates
-        .iter()
-        .find(|target| Some(target.panel) != focused)
-        .or_else(|| candidates.first())
+    let mut waiting: Vec<&AttentionTarget> = targets.iter().filter(|target| target.attention.waits()).collect();
+    waiting.sort_by_key(|target| {
+        (
+            std::cmp::Reverse(target.attention.rank()),
+            target.since_millis,
+            target.panel.0,
+        )
+    });
+    let after = focused
+        .and_then(|panel| waiting.iter().position(|target| target.panel == panel))
+        .map_or(0, |position| (position + 1) % waiting.len().max(1));
+    waiting
+        .get(after)
+        .or_else(|| waiting.first())
         .map(|target| target.panel)
 }
 

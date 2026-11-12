@@ -8,6 +8,7 @@ pub enum CommandId {
     FocusPanel(PanelId),
     FocusActiveWorkspace,
     FitActiveWorkspace,
+    GoToNextAttention,
 
     // View
     ToggleSidebar,
@@ -110,6 +111,12 @@ fn workspace_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Comm
             "Sessions",
             shortcuts.toggle_sessions.display_label(primary_label),
             &["session", "switch", "resume", "restore"],
+        ),
+        command_entry(
+            CommandId::GoToNextAttention,
+            "Next Agent That Needs You",
+            shortcuts.next_attention.display_label(primary_label),
+            &["agent", "attention", "needs", "done", "unread", "jump"],
         ),
         command_entry(
             CommandId::AlignWorkspacesHorizontally,

@@ -32,10 +32,11 @@ enum EditableShortcut {
     FullscreenWindow,
     SaveEditor,
     SearchTerminals,
+    NextAttention,
 }
 
 impl EditableShortcut {
-    const ALL: [Self; 19] = [
+    const ALL: [Self; 20] = [
         Self::CommandPalette,
         Self::NewTerminal,
         Self::FocusWorkspace,
@@ -55,6 +56,7 @@ impl EditableShortcut {
         Self::FullscreenWindow,
         Self::SaveEditor,
         Self::SearchTerminals,
+        Self::NextAttention,
     ];
 
     fn label(self) -> &'static str {
@@ -78,6 +80,7 @@ impl EditableShortcut {
             Self::FullscreenWindow => "Fullscreen Window",
             Self::SaveEditor => "Save Editor",
             Self::SearchTerminals => "Search Terminals",
+            Self::NextAttention => "Next Agent That Needs You",
         }
     }
 
@@ -102,6 +105,7 @@ impl EditableShortcut {
             Self::FullscreenWindow => &mut shortcuts.fullscreen_window,
             Self::SaveEditor => &mut shortcuts.save_editor,
             Self::SearchTerminals => &mut shortcuts.search,
+            Self::NextAttention => &mut shortcuts.next_attention,
         }
     }
 }
