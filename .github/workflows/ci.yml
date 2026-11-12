@@ -79,6 +79,8 @@ jobs:
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - name: Horizon MCP skill coverage
         run: python3 -B scripts/check-horizon-mcp-skills.py
+      - name: Verify the mobile session tool of the horizon-mobile skill
+        run: python3 -B scripts/test_mobile_session.py -v
       - name: Verify the Horizon skill coverage check
         run: python3 -B scripts/test_check_horizon_mcp_skills.py -v
       - name: Maintainability
