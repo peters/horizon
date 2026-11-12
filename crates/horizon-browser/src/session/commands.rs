@@ -1032,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn screencast_activity_refreshes_cached_layout_metrics() {
+    fn screencast_activity_updates_the_scroll_offset_without_a_request() {
         let mut state = driver_state();
         let events = test_events();
         let frame_slot = Arc::clone(&state.config.frame_slot);
@@ -1041,7 +1041,11 @@ mod tests {
 
         state.note_screencast_scroll_offset(Some(80.0), &frame_slot, &events);
 
-        assert!(state.scrollbar_layout.refresh_at.is_some());
+        assert!(
+            state.scrollbar_layout.refresh_at.is_none(),
+            "a picture is not a reason to ask for the geometry again"
+        );
+        assert!(state.scrollbar_layout.painted_since_refresh);
         let layout = state.scrollbar_layout.layout.expect("cached layout");
         assert!((layout.scroll_y - 80.0).abs() < f32::EPSILON);
     }
