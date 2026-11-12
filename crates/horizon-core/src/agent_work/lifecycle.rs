@@ -42,11 +42,17 @@ impl WorkLaunch<'_> {
     }
 
     /// Whether this launch reports its state through a work ledger: a launch of
-    /// an agent kind that Horizon gives its own arguments to. A command of the
-    /// preset and the policy of the panel do not take part in this: the sidebar
-    /// reads the state of every such panel.
+    /// an agent kind that Horizon gives its own arguments to, on Linux or on
+    /// macOS. A command of the preset and the policy of the panel do not take
+    /// part in this: the sidebar reads the state of every such panel.
+    ///
+    /// The report needs no read of a process table. The launch token that
+    /// Horizon registers is the owner of the panel while that panel lives: a new
+    /// launch replaces it, and a closed panel removes it, so a live panel cannot
+    /// inherit the state of an older process. The liveness probe of the session
+    /// registry in [`super::discovery`] stays with the continuation of work.
     pub(crate) fn is_observed(&self) -> bool {
-        cfg!(target_os = "linux") && self.kind.receives_horizon_arguments()
+        cfg!(unix) && self.kind.receives_horizon_arguments()
     }
 
     /// Whether this launch continues the work of its panel after a restart:
@@ -273,11 +279,7 @@ mod tests {
     fn observation_follows_the_launch_that_horizon_gives_its_arguments_to() {
         for kind in all_agent_kinds() {
             let (observed, _) = gates(*kind, true, true);
-            assert_eq!(
-                observed,
-                cfg!(target_os = "linux") && kind.receives_horizon_arguments(),
-                "{kind:?}"
-            );
+            assert_eq!(observed, cfg!(unix) && kind.receives_horizon_arguments(), "{kind:?}");
         }
         for kind in [
             PanelKind::Shell,
@@ -319,6 +321,26 @@ mod tests {
                 "a continuation without an owned provider resolves no ledger"
             );
         }
+    }
+
+    #[test]
+    #[test]
+    fn a_panel_with_a_command_of_its_own_is_observed_on_every_unix_system() {
+        // No process-table read takes part in the report, so its gate names no
+        // single system: Linux and macOS give the same answer.
+        let policy = ResumePolicy::default();
+        let launch = WorkLaunch {
+            panel: "panel",
+            kind: PanelKind::Claude,
+            policy: &policy,
+            cwd: None,
+            session_id: Some("session"),
+            default_command: false,
+        };
+        assert_eq!(launch.is_observed(), cfg!(unix));
+        assert!(!launch.continues_work(), "a command of a preset never continues");
+        // The continuation keeps its own system: its teardown proof is Linux.
+        assert!(!launch.continues_work() || cfg!(target_os = "linux"));
     }
 
     #[test]

@@ -8,10 +8,12 @@
 //! the way the sidebar reads it, so the stand-in and the store must agree on the
 //! record, the session and the event shape.
 //!
-//! The whole test binary is Linux only: the panel of this fixture gets the work
-//! environment from a launch that attaches the ledger on Linux only, so a system
-//! where the launch attaches none has no environment to start the stand-in with.
-#![cfg(target_os = "linux")]
+//! A panel reports its state on every Unix system, so this binary runs on Linux
+//! and on macOS. It asserts the same four lines on both: the banner of the
+//! stand-in, the record of the launch, the state of the ledger after each word,
+//! and the state that the sidebar shows for it. A system that is no Unix
+//! attaches no ledger, and the test binary has no environment to start on.
+#![cfg(unix)]
 #![forbid(unsafe_code)]
 
 use std::io::{BufRead, BufReader, Write};

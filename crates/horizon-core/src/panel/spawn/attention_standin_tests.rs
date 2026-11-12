@@ -5,10 +5,11 @@
 //! file, so the two sides cannot drift apart. The entry names no command: the
 //! launch resolves the agent program on the `PATH` of the panel, which is the
 //! stand-in itself, and Horizon inserts its own arguments after that program.
-//! The entry also asks for work continuation. On Linux that attaches the work
-//! ledger and gives the panel the five `HORIZON_WORK_*` variables that the
-//! stand-in sends its events with; the launch attaches the ledger on Linux only,
-//! so this test states the rule of each system.
+//! The entry also asks for work continuation. That attaches the work ledger of
+//! the launch and gives the panel the five `HORIZON_WORK_*` variables that the
+//! stand-in sends its events with. The report of a panel needs no single system,
+//! so this test states the rule of each Unix system; a system that is no Unix
+//! attaches nothing.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +110,7 @@ fn exercise_launch() {
     );
     let after = &command[launch.len()..];
     let session = after.find("--session-id").expect("the panel names its conversation");
-    if cfg!(target_os = "linux") {
+    if cfg!(unix) {
         assert_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
     } else {
         assert_without_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
@@ -145,7 +146,7 @@ fn assert_own_command_launch(home: &Path, horizon_home: &HorizonHome, work_plugi
         after.contains("--session-id"),
         "Horizon gives this launch the identity of its conversation: {after}"
     );
-    if cfg!(target_os = "linux") {
+    if cfg!(unix) {
         assert!(
             plan.owner.is_some(),
             "the launch of a command of its own reports its state through the work ledger"
@@ -153,7 +154,7 @@ fn assert_own_command_launch(home: &Path, horizon_home: &HorizonHome, work_plugi
         let session = after.find("--session-id").expect("the conversation of the panel");
         assert_work_ledger(&options, horizon_home, work_plugin, after, session, &env);
     } else {
-        assert!(plan.owner.is_none(), "no ledger is attached on this system yet");
+        assert!(plan.owner.is_none(), "this system attaches no ledger");
     }
     // The continuation keeps its own gate: no offer of a resume, and no prompt
     // that Horizon writes into the launch of a panel that only reports.
@@ -169,7 +170,7 @@ fn assert_own_command_launch(home: &Path, horizon_home: &HorizonHome, work_plugi
     );
 }
 
-/// The work ledger that a Linux launch attaches to the panel.
+/// The work ledger that a Unix launch attaches to the panel.
 fn assert_work_ledger(
     options: &PanelOptions,
     horizon_home: &HorizonHome,
@@ -212,9 +213,8 @@ fn assert_work_ledger(
     assert_eq!(record.ledger.session_id, SESSION);
 }
 
-/// The launch of a system where `WorkLaunch::attach` answers `None` before it
-/// touches the launch: the empirical teardown proof covers Linux only, so every
-/// other system keeps the explicit confirmation path.
+/// The launch of a system that attaches no ledger, and of a panel kind that
+/// Horizon gives no arguments of its own.
 fn assert_without_work_ledger(
     options: &PanelOptions,
     horizon_home: &HorizonHome,
@@ -264,9 +264,9 @@ fn assert_without_work_ledger(
 }
 
 /// The assertions of a system that attaches no work ledger are the same on
-/// every platform, but a Linux run never takes that branch of the launch. This
-/// test gives the helper the command and the environment of such a system, so
-/// the branch itself is checked here and not on a Mac only.
+/// every platform, but no Unix run takes that branch of the launch. This test
+/// gives the helper the command and the environment of such a system, so the
+/// branch itself is checked here and not on a system that is no Unix only.
 #[test]
 fn the_assertions_of_a_system_without_the_work_ledger_hold_for_its_command() {
     let horizon_home = HorizonHome::resolve();
@@ -377,13 +377,10 @@ fn launch(
         default_command: options.command.is_none(),
     }
     .start(&program, false, true, &mut args, &mut env);
-    if cfg!(target_os = "linux") {
+    if cfg!(unix) {
         assert!(plan.owner.is_some(), "the launch attaches the work ledger of the panel");
     } else {
-        assert!(
-            plan.owner.is_none(),
-            "the launch attaches no work ledger on this system"
-        );
+        assert!(plan.owner.is_none(), "a system that is no Unix attaches no work ledger");
     }
     (program, args, env, plan)
 }
