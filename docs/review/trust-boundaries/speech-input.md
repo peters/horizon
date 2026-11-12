@@ -158,6 +158,19 @@ What the guarantees do not cover:
 - **The answer is JSON with `text`.** An answer of another shape is one error
   line. The status is one line, and the message of the service is cut at 200
   characters and never holds the key.
+- **One sentence names the host and no path.** Every failure of one call has its
+  own sentence: a name that does not resolve, a connection that is refused or a
+  host that cannot be reached, a TLS handshake that fails, a call that outlives
+  its bound, an answer that ended early or has another shape, and a status with
+  its message. Each sentence names the host of the endpoint with its port, and no
+  sentence holds the path of the endpoint, the file of the take or the value of
+  the key. The bound of 30 seconds is the only sentence that names the seconds,
+  so a service that refused the connection is never reported as a time-out.
+- **The lookup of a name is one bounded seam.** The name of the host is looked up
+  on its own thread, within the bound of the call, and a lookup that outlives the
+  bound is left to finish alone. This is the seam of the egress probe of
+  [`horizon-browser`](../../../crates/horizon-browser/src/lookup.rs), so a test of
+  a name reads no resolver of this computer.
 
 ## What Horizon guarantees about one take
 

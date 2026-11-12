@@ -11,6 +11,12 @@
 //! The answer is read with a bound of [`MAX_ANSWER_BYTES`], so a service cannot
 //! fill the memory of this process, and the whole call is bounded by the time that
 //! the caller gives.
+//!
+//! Every failure of one call has its own sentence, and each sentence names the
+//! host of the endpoint and no path and no key: a name that does not resolve, a
+//! connection that is refused or cannot be reached, a TLS handshake that fails, a
+//! call that outlives its bound, and an answer that ended early or has another
+//! shape are told apart. Only the bound names the seconds.
 
 use std::fmt;
 use std::time::Duration;
@@ -18,6 +24,7 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 use crate::speech::endpoint::Endpoint;
+use crate::speech::resolver::{self, SeamResolver};
 use crate::speech::text::clean_text;
 
 /// The most bytes of one answer of a service.
@@ -73,16 +80,30 @@ impl fmt::Debug for ServiceRequest<'_> {
 }
 
 /// Why one call of a transcription service answered no text.
+///
+/// `host` is the host of the endpoint with its port, when the endpoint names one.
+/// It is never the path of the endpoint and never the value of the key.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ServiceError {
-    #[error("the transcription service did not answer in {seconds} seconds")]
-    NoAnswer { seconds: u64 },
-    #[error("the transcription service answered {status}: {message}")]
-    Refused { status: u16, message: String },
-    #[error("the answer of the transcription service could not be read")]
-    Unreadable,
-    #[error("the transcription service answered no text")]
-    NoText,
+    #[error("Could not find the host {host}: the name does not resolve")]
+    Unresolved { host: String },
+    #[error("Could not connect to {host}: the connection was refused or the host cannot be reached")]
+    Unreachable { host: String },
+    #[error("Could not start TLS with {host}: {reason}")]
+    Tls { host: String, reason: String },
+    #[error("The transcription service at {host} did not answer in {seconds} {}", seconds_unit(*seconds))]
+    NoAnswer { host: String, seconds: u64 },
+    #[error("The answer of the transcription service at {host} ended early or was not the expected shape")]
+    EndedEarly { host: String },
+    #[error("The transcription service at {host} answered {status}: {message}")]
+    Refused { host: String, status: u16, message: String },
+    #[error("The transcription service at {host} answered no text")]
+    NoText { host: String },
+}
+
+/// The unit of the seconds of one bound: `1 second` reads as one second.
+fn seconds_unit(seconds: u64) -> &'static str {
+    if seconds == 1 { "second" } else { "seconds" }
 }
 
 /// One answer of one transcription service.
@@ -105,9 +126,17 @@ struct ErrorMessage {
 /// The text of one take, as `request` answered it.
 ///
 /// # Errors
-/// Reports a transport that did not answer inside the bound, a status other than
-/// 200, an answer that cannot be read, and an answer with no `text`.
+/// Reports a name that does not resolve, a connection that is refused or cannot
+/// be reached, a TLS handshake that fails, a call that outlives its bound, an
+/// answer that ended early or cannot be read, a status other than 200, and an
+/// answer with no `text`.
 pub fn transcribe(request: &ServiceRequest<'_>) -> Result<String, ServiceError> {
+    transcribe_with(SeamResolver::system(), request)
+}
+
+/// [`transcribe`] with the name lookup of a caller, so that a test of a name reads
+/// no resolver of this computer.
+fn transcribe_with(resolver: SeamResolver, request: &ServiceRequest<'_>) -> Result<String, ServiceError> {
     crate::ui_thread::blocking("one take is transcribed by a service");
     let boundary = boundary_for(request.file);
     let body = multipart_body(
@@ -126,10 +155,11 @@ pub fn transcribe(request: &ServiceRequest<'_>) -> Result<String, ServiceError> 
         .http_status_as_error(false)
         .timeout_global(Some(request.bound))
         .build();
-    let agent = ureq::Agent::new_with_config(config);
+    let agent = resolver::agent(config, resolver);
     // The value of the key travels in this header and in no other byte, and the
     // line is wiped when the request ends.
     let authorization = Zeroizing::new(format!("Bearer {}", request.key));
+    let host = request.endpoint.host_and_port();
     let url = request.endpoint.request_url();
     let mut response = agent
         .post(url.as_str())
@@ -137,24 +167,84 @@ pub fn transcribe(request: &ServiceRequest<'_>) -> Result<String, ServiceError> 
         .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
         .header("Accept", "application/json")
         .send(body.as_slice())
-        .map_err(|_| ServiceError::NoAnswer {
-            seconds: request.bound.as_secs(),
-        })?;
+        .map_err(|error| transport_error(&error, &host, request.bound))?;
     let status = response.status().as_u16();
     let answer = response
         .body_mut()
         .with_config()
         .limit(MAX_ANSWER_BYTES)
         .read_to_vec()
-        .map_err(|_| ServiceError::Unreadable)?;
+        .map_err(|error| answer_error(&error, &host, request.bound))?;
     if status != 200 {
         return Err(ServiceError::Refused {
+            host,
             status,
             message: message_of(&answer, request.key),
         });
     }
-    let answer: Answer = serde_json::from_slice(&answer).map_err(|_| ServiceError::Unreadable)?;
-    answer.text.filter(|text| !text.is_empty()).ok_or(ServiceError::NoText)
+    let Ok(answer) = serde_json::from_slice::<Answer>(&answer) else {
+        return Err(ServiceError::EndedEarly { host });
+    };
+    answer
+        .text
+        .filter(|text| !text.is_empty())
+        .ok_or(ServiceError::NoText { host })
+}
+
+/// The sentence of a request that reached no answer of a service.
+fn transport_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceError {
+    let host = host.to_owned();
+    match error {
+        ureq::Error::HostNotFound => ServiceError::Unresolved { host },
+        ureq::Error::Tls(reason) => ServiceError::Tls {
+            host,
+            reason: (*reason).to_owned(),
+        },
+        ureq::Error::Rustls(error) => ServiceError::Tls {
+            host,
+            reason: error.to_string(),
+        },
+        ureq::Error::TlsRequired => ServiceError::Tls {
+            host,
+            reason: "the endpoint needs TLS and this call made a plain connection".to_owned(),
+        },
+        // rustls reports every failure of one handshake — a certificate that this
+        // computer does not trust, and a protocol that the peer does not speak — as
+        // an invalid byte of io, and no other step of one request does.
+        ureq::Error::Io(error) if error.kind() == std::io::ErrorKind::InvalidData => ServiceError::Tls {
+            host,
+            reason: error.to_string(),
+        },
+        ureq::Error::Timeout(_) => no_answer(host, bound),
+        // The bytes of an answer arrived and their shape was not the one of HTTP:
+        // this call reached the host, so it is no failure of a connection.
+        ureq::Error::Protocol(_) => ServiceError::EndedEarly { host },
+        ureq::Error::Io(_) | ureq::Error::ConnectionFailed | ureq::Error::ConnectProxyFailed(_) => {
+            ServiceError::Unreachable { host }
+        }
+        // The shape of the request and not the reach of the host: the endpoint is
+        // checked before this call, so this arm answers for an error that no
+        // endpoint of the settings can produce.
+        _ => ServiceError::Unreachable { host },
+    }
+}
+
+/// The sentence of an answer that ended before its body, or of a body that the
+/// bound of the call cut.
+fn answer_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceError {
+    let host = host.to_owned();
+    match error {
+        ureq::Error::Timeout(_) => no_answer(host, bound),
+        _ => ServiceError::EndedEarly { host },
+    }
+}
+
+/// The sentence of a call that outlived its bound.
+fn no_answer(host: String, bound: Duration) -> ServiceError {
+    ServiceError::NoAnswer {
+        host,
+        seconds: bound.as_secs(),
+    }
 }
 
 /// The parts of one multipart body.
@@ -240,337 +330,4 @@ fn redact(text: &str, key: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::{TcpListener, TcpStream};
-    use std::time::Duration;
-
-    use super::{
-        BoundaryFields, MAX_ANSWER_BYTES, ServiceError, ServiceRequest, boundary_for, multipart_body, transcribe,
-    };
-
-    use crate::speech::endpoint::Endpoint;
-
-    const KEY: &str = "sk-the-value-of-the-key";
-
-    /// The expected body of one take, byte for byte. It is the shape that the
-    /// service of a transcription reaches: the model, the format, the language and
-    /// the file, in that order, with no other part.
-    fn expected_body(boundary: &str) -> Vec<u8> {
-        let mut expected = Vec::new();
-        expected.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ngpt-transcribe\r\n")
-                .as_bytes(),
-        );
-        expected.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"response_format\"\r\n\r\njson\r\n")
-                .as_bytes(),
-        );
-        expected.extend_from_slice(
-            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\nno\r\n").as_bytes(),
-        );
-        expected.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"take-1.wav\"\r\n\
-                 Content-Type: audio/wav\r\n\r\n"
-            )
-            .as_bytes(),
-        );
-        expected.extend_from_slice(b"RIFF....WAVE");
-        expected.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-        expected
-    }
-
-    #[test]
-    fn the_multipart_body_of_one_take_is_the_expected_bytes() {
-        let body = multipart_body(
-            "a-boundary",
-            &BoundaryFields {
-                model: "gpt-transcribe",
-                language: Some("no"),
-                file_name: "take-1.wav",
-                file: b"RIFF....WAVE",
-            },
-        );
-        assert_eq!(body, expected_body("a-boundary"));
-    }
-
-    #[test]
-    fn a_take_without_a_language_leaves_that_part_out() {
-        let body = multipart_body(
-            "b",
-            &BoundaryFields {
-                model: "m",
-                language: None,
-                file_name: "take.wav",
-                file: b"x",
-            },
-        );
-        let text = String::from_utf8(body).expect("a text body");
-        assert!(!text.contains("name=\"language\""), "{text}");
-        assert!(text.starts_with("--b\r\nContent-Disposition: form-data; name=\"model\""));
-        assert_eq!(text.matches("--b").count(), 4, "{text}");
-    }
-
-    #[test]
-    fn a_file_name_of_a_take_cannot_break_the_header() {
-        let body = multipart_body(
-            "c",
-            &BoundaryFields {
-                model: "m",
-                language: None,
-                file_name: "a\"b\\c\r\nd.wav",
-                file: b"x",
-            },
-        );
-        let text = String::from_utf8(body).expect("a text body");
-        assert!(text.contains("filename=\"abcd.wav\""), "{text}");
-        assert_eq!(
-            text.lines().filter(|line| line.starts_with("--c")).count(),
-            4,
-            "one boundary line for each of the three parts and one for the end"
-        );
-    }
-
-    #[test]
-    fn a_boundary_never_appears_in_the_file() {
-        let file = b"RIFF horizon-0123456789abcdef0123456789abcdef WAVE";
-        let boundary = boundary_for(file);
-        assert!(
-            !file.windows(boundary.len()).any(|window| window == boundary.as_bytes()),
-            "the boundary {boundary} is in the file"
-        );
-    }
-
-    /// One answer of a stand-in service: the status, the body and how long the
-    /// service waits before it answers.
-    fn answer_once(
-        status: &str,
-        body: &[u8],
-        delay: Duration,
-        echo_authorization: bool,
-    ) -> (String, std::thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stand-in service");
-        let address = listener.local_addr().expect("the address of the stand-in").to_string();
-        let status = status.to_owned();
-        let body = body.to_vec();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept one request");
-            let request = read_request(&mut stream);
-            std::thread::sleep(delay);
-            let mut response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .into_bytes();
-            response.extend_from_slice(&body);
-            let _ = std::io::Write::write_all(&mut stream, &response);
-            let _ = std::io::Write::flush(&mut stream);
-            if echo_authorization { request } else { String::new() }
-        });
-        (format!("http://{address}/v1/audio/transcriptions"), server)
-    }
-
-    fn read_request(stream: &mut TcpStream) -> String {
-        use std::io::Read as _;
-        let mut request = Vec::new();
-        let mut buffer = [0u8; 4096];
-        // The headers, and then the content length of the body.
-        let mut expected = None;
-        loop {
-            match stream.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => request.extend_from_slice(&buffer[..read]),
-            }
-            if expected.is_none()
-                && let Some(head) = request.windows(4).position(|window| window == b"\r\n\r\n")
-            {
-                let headers = String::from_utf8_lossy(&request[..head]).to_lowercase();
-                let length = headers
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length:"))
-                    .and_then(|value| value.trim().parse::<usize>().ok())
-                    .unwrap_or(0);
-                expected = Some(head + 4 + length);
-            }
-            if expected.is_some_and(|expected| request.len() >= expected) {
-                break;
-            }
-        }
-        String::from_utf8_lossy(&request).into_owned()
-    }
-
-    fn request<'a>(endpoint: &'a Endpoint, language: Option<&'a str>) -> ServiceRequest<'a> {
-        ServiceRequest {
-            endpoint,
-            model: "gpt-transcribe",
-            language,
-            file_name: "take-1.wav",
-            file: b"RIFF....WAVE",
-            key: KEY,
-            bound: Duration::from_secs(5),
-        }
-    }
-
-    #[test]
-    fn a_service_that_answers_json_with_text_answers_the_text() {
-        let (endpoint, server) = answer_once("200 OK", br#"{"text":"heis"}"#, Duration::ZERO, true);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let text = transcribe(&request(&endpoint, Some("no"))).expect("the text of the answer");
-        assert_eq!(text, "heis");
-        let received = server.join().expect("the request of the stand-in");
-        assert!(
-            received.starts_with("POST /v1/audio/transcriptions HTTP/1.1\r\n"),
-            "{received}"
-        );
-    }
-
-    #[test]
-    fn the_request_carries_the_model_the_format_the_language_the_file_and_the_key() {
-        let (endpoint, server) = answer_once("200 OK", br#"{"text":"x"}"#, Duration::ZERO, true);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        transcribe(&request(&endpoint, Some("no"))).expect("the text of the answer");
-        let received = server.join().expect("the request of the stand-in");
-        assert!(
-            received.starts_with("POST /v1/audio/transcriptions HTTP/1.1\r\n"),
-            "{received}"
-        );
-        assert!(
-            received.contains("authorization: Bearer sk-the-value-of-the-key"),
-            "{received}"
-        );
-        assert!(
-            received.contains("content-type: multipart/form-data; boundary=horizon-"),
-            "{received}"
-        );
-        assert!(received.contains("name=\"model\"\r\n\r\ngpt-transcribe"), "{received}");
-        assert!(received.contains("name=\"response_format\"\r\n\r\njson"), "{received}");
-        assert!(received.contains("name=\"language\"\r\n\r\nno"), "{received}");
-        assert!(
-            received.contains("name=\"file\"; filename=\"take-1.wav\""),
-            "{received}"
-        );
-        assert!(received.contains("RIFF....WAVE\r\n--horizon-"), "{received}");
-    }
-
-    #[test]
-    fn a_refused_key_is_one_line_with_the_status_and_the_message() {
-        let (endpoint, server) = answer_once(
-            "401 Unauthorized",
-            br#"{"error":{"message":"Incorrect API key provided"}}"#,
-            Duration::ZERO,
-            false,
-        );
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("a refusal");
-        server.join().expect("the request of the stand-in");
-        assert_eq!(
-            error,
-            ServiceError::Refused {
-                status: 401,
-                message: "Incorrect API key provided".to_owned()
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            "the transcription service answered 401: Incorrect API key provided"
-        );
-    }
-
-    #[test]
-    fn a_service_that_echoes_the_key_writes_no_value_of_it() {
-        // A service that answers the header that it received, in its message and in
-        // a text that is not JSON.
-        let echo = format!(r#"{{"error":{{"message":"you sent {KEY}"}}}}"#);
-        let (endpoint, server) = answer_once("400 Bad Request", echo.as_bytes(), Duration::ZERO, false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("a refusal");
-        server.join().expect("the request of the stand-in");
-        for text in [error.to_string(), format!("{error:?}")] {
-            assert!(!text.contains(KEY), "the key reached a text: {text}");
-            assert!(!text.contains("sk-the-value"), "part of the key reached a text: {text}");
-        }
-
-        let plain = format!("the key {KEY} is not one of ours");
-        let (endpoint, server) = answer_once("500 Server Error", plain.as_bytes(), Duration::ZERO, false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("a refusal");
-        server.join().expect("the request of the stand-in");
-        assert!(!error.to_string().contains(KEY), "{error}");
-        assert!(error.to_string().contains("[redacted]"), "{error}");
-    }
-
-    #[test]
-    fn a_message_of_a_service_is_one_line_of_two_hundred_characters() {
-        let long = format!(r#"{{"error":{{"message":"{}"}}}}"#, "a\nb\tc".repeat(200));
-        let (endpoint, server) = answer_once("400 Bad Request", long.as_bytes(), Duration::ZERO, false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("a refusal");
-        server.join().expect("the request of the stand-in");
-        let ServiceError::Refused { message, .. } = &error else {
-            panic!("a refusal is a refusal: {error}");
-        };
-        assert_eq!(message.chars().count(), 200);
-        assert!(!message.contains('\n') && !message.contains('\t'), "{message:?}");
-    }
-
-    #[test]
-    fn a_slow_service_hits_the_bound_that_the_caller_gave() {
-        let (endpoint, server) = answer_once("200 OK", br#"{"text":"late"}"#, Duration::from_millis(900), false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let mut request = request(&endpoint, None);
-        request.bound = Duration::from_millis(150);
-        let error = transcribe(&request).expect_err("the bound of the call passed");
-        assert_eq!(error, ServiceError::NoAnswer { seconds: 0 });
-        assert!(error.to_string().contains("did not answer"), "{error}");
-        // The stand-in of this answer writes to a socket that is closed, which is
-        // one answer that this test does not read.
-        drop(server);
-    }
-
-    #[test]
-    fn an_answer_without_text_is_no_text() {
-        for body in [&b"{}"[..], br#"{"text":""}"#, br#"{"text":null}"#] {
-            let (endpoint, server) = answer_once("200 OK", body, Duration::ZERO, false);
-            let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-            let error = transcribe(&request(&endpoint, None)).expect_err("an answer without a text");
-            server.join().expect("the request of the stand-in");
-            assert_eq!(error, ServiceError::NoText, "{error}");
-        }
-    }
-
-    #[test]
-    fn a_ten_megabyte_answer_is_cut_at_the_limit_of_the_read() {
-        // One answer far above the bound of the read: the call stops at the bound
-        // and the memory of the process does not grow by it.
-        let body = vec![b'a'; 10 * 1024 * 1024];
-        let (endpoint, server) = answer_once("200 OK", &body, Duration::ZERO, false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("an answer above the bound");
-        assert_eq!(error, ServiceError::Unreadable, "{error}");
-        let _ = server.join();
-        assert_eq!(MAX_ANSWER_BYTES, 1024 * 1024);
-    }
-
-    #[test]
-    fn a_service_that_answers_no_json_is_unreadable() {
-        let (endpoint, server) = answer_once("200 OK", b"not json", Duration::ZERO, false);
-        let endpoint = Endpoint::parse(&endpoint).expect("the endpoint of the stand-in");
-        let error = transcribe(&request(&endpoint, None)).expect_err("an answer that is not JSON");
-        server.join().expect("the request of the stand-in");
-        assert_eq!(error, ServiceError::Unreadable);
-    }
-
-    #[test]
-    fn a_service_that_answers_nothing_is_no_answer() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a stand-in");
-        let address = listener.local_addr().expect("the address of the stand-in").to_string();
-        let server = std::thread::spawn(move || drop(listener));
-        let endpoint = Endpoint::parse(&format!("http://{address}/v1")).expect("the endpoint");
-        let error = transcribe(&request(&endpoint, None)).expect_err("a closed port");
-        let _ = server.join();
-        assert!(
-            matches!(error, ServiceError::NoAnswer { .. } | ServiceError::Unreadable),
-            "{error}"
-        );
-    }
-}
+mod tests;

@@ -74,6 +74,20 @@ impl Endpoint {
     pub fn host(&self) -> String {
         self.url.host_str().unwrap_or_default().to_owned()
     }
+
+    /// The host of the endpoint and the port that it names, such as
+    /// `127.0.0.1:40913`, for the sentence of a failure.
+    ///
+    /// It is the host and no path: a sentence names where a take went and never
+    /// the file of the take or the value of the key.
+    #[must_use]
+    pub fn host_and_port(&self) -> String {
+        let host = self.host();
+        match self.url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host,
+        }
+    }
 }
 
 impl fmt::Display for Endpoint {
@@ -157,5 +171,20 @@ mod tests {
     fn the_fragment_never_reaches_the_request() {
         let endpoint = Endpoint::parse("https://api.openai.com/v1#section").expect("an endpoint");
         assert_eq!(endpoint.request_url(), "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn a_sentence_names_the_host_and_the_port_that_the_endpoint_names() {
+        for (text, expected) in [
+            ("https://api.openai.com/v1/audio/transcriptions", "api.openai.com"),
+            ("https://api.openai.com:8443/v1", "api.openai.com:8443"),
+            ("http://127.0.0.1:40913/v1/audio/transcriptions", "127.0.0.1:40913"),
+            ("http://localhost:8080/v1", "localhost:8080"),
+            ("http://[::1]:8080/v1", "[::1]:8080"),
+        ] {
+            let endpoint = Endpoint::parse(text).expect("an endpoint");
+            assert_eq!(endpoint.host_and_port(), expected, "{text}");
+            assert!(!endpoint.host_and_port().contains('/'), "{text}");
+        }
     }
 }

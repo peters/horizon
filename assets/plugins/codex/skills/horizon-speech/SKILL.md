@@ -100,8 +100,25 @@ The state mark of a take is a small pill at the bottom of the panel: the seconds
 while it records, then one line of a transcription, then six seconds of a
 sentence of a failure. The sentences are one of: the recorder is not installed;
 the recorder ended early, with its last line of standard error; no secret of that
-name is on this computer; the service did not answer in 30 seconds; the service
-answered a status, with its message cut at 200 characters.
+name is on this computer.
+
+One call of a service has one sentence for each of its failures, and the tab
+**Try** shows the same sentence as the pill:
+
+- `Could not find the host <host>: the name does not resolve`
+- `Could not connect to <host>: the connection was refused or the host cannot be
+  reached`
+- `Could not start TLS with <host>: <reason>`
+- `The transcription service at <host> did not answer in 30 seconds`
+- `The answer of the transcription service at <host> ended early or was not the
+  expected shape`
+- `The transcription service at <host> answered <status>: <message>`, with the
+  message cut at 200 characters
+
+`<host>` is the host of the endpoint with its port, such as `127.0.0.1:40913`.
+No sentence holds the path of the endpoint or the value of the key, and the bound
+of 30 seconds is the only sentence that names the seconds: a refused connection
+is never reported as a time-out.
 
 ## What leaves the computer
 

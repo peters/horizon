@@ -73,8 +73,8 @@ one request header and no file of the run.
 
 ## 5. Setup
 
-1. Start the stand-in transcription service, and keep the file that holds what it
-   received:
+1. Start the stand-in transcription service, and keep the file that holds what
+   it received:
 
    ```sh
    python3 -B scripts/device-smoke/speech_standin_service.py \
@@ -209,8 +209,8 @@ one request header and no file of the run.
 
 2. Press and hold `F9` for two seconds, and release it.
 
-   Result: A pill says `the transcription service answered 401: Incorrect API
-   key provided`. It holds no value of the key.
+   Result: A pill says `The transcription service at <stand-in> answered 401:
+   Incorrect API key provided`. It holds no value of the key.
 
 3. Read the record:
 
@@ -423,11 +423,46 @@ tests below prove that the take of this procedure passes in that situation too.
    Result: The folder is empty. The file of the take is deleted after the take,
    repaired or not.
 
+### 6.15 SI-15 — A service that cannot be reached says so at once
+
+1. Read one free port of this computer, and keep the number:
+
+   ```sh
+   python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+   ```
+
+   Result: It prints one number, such as `40913`. This is `<free>`. No listener
+   holds it, so a connection to it is refused at once.
+
+2. Open **Settings** › **Speech**, select `Service`, and set the endpoint to
+   `http://127.0.0.1:<free>/v1/audio/transcriptions`. Press **Save**.
+
+   Result: The status line shows `Saved`.
+
+3. Press **Record two seconds**.
+
+   Result: The line under the button says `Could not connect to
+   127.0.0.1:<free>: the connection was refused or the host cannot be reached`.
+   It names the host and no path, and it says nothing of 30 seconds.
+
+4. Press and hold `F9` for two seconds, and release it.
+
+   Result: The pill says the same sentence. The sentence of a take and the
+   sentence of **Try** are one sentence.
+
+5. Set the endpoint back to `http://<stand-in>/v1/audio/transcriptions`, and
+   press **Save**.
+
+   Result: The status line shows `Saved`. The next take reaches the stand-in
+   service of the setup again.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
 - Escape, a hotkey with no terminal, a recorder that is not installed and a
   refused key each leave one sentence and one state.
+- A service that cannot be reached is one sentence that names the host and no
+  seconds, and the tab **Try** shows that same sentence.
 - No file of a take stays after a success, an error or a cancel.
 - A recorder that ignores the interrupt signal ends on the termination signal, and
   its take reaches the service.

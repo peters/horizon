@@ -217,13 +217,23 @@ fn the_text_of_the_try_button_stays_in_the_settings_tab() {
     assert_eq!(routed, None, "no panel receives the text of the Try button");
     assert_eq!(speech.try_answer(), Some(&Ok("hei".to_owned())));
 
+    // The sentence of a failure is the sentence of the take, and it names the host
+    // of the endpoint of the settings.
+    let sentence = horizon_core::speech::service::ServiceError::Unreachable {
+        host: "127.0.0.1:40913".to_owned(),
+    }
+    .to_string();
+    assert!(
+        sentence.starts_with("Could not connect to 127.0.0.1:40913: "),
+        "{sentence}"
+    );
     speech.phase = super::Phase::Listening;
     let routed = speech.apply(horizon_core::speech::SpeechEvent {
         target: SETTINGS_TRY,
-        kind: horizon_core::speech::SpeechEventKind::Failed("no answer".to_owned()),
+        kind: horizon_core::speech::SpeechEventKind::Failed(sentence.clone()),
     });
     assert_eq!(routed, None);
-    assert_eq!(speech.try_answer(), Some(&Err("no answer".to_owned())));
+    assert_eq!(speech.try_answer(), Some(&Err(sentence)));
 }
 
 #[test]

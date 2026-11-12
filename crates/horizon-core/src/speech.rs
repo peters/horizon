@@ -13,6 +13,8 @@
 //! - [`endpoint`] checks the endpoint of a service: `https`, or `http` on a loopback
 //!   address.
 //! - [`service`] builds the multipart body of one request and reads one answer.
+//! - [`resolver`] answers the name lookup of one request, over the seam that a test
+//!   replaces.
 //! - [`text`] cleans the text of an answer: no line break, no tab and no other
 //!   control character, trimmed, cut at 8 KiB.
 //! - [`take`] runs one take on a worker thread: the recorder child, the bounds, the
@@ -25,6 +27,7 @@
 pub mod clock;
 pub mod command;
 pub mod endpoint;
+pub mod resolver;
 pub mod service;
 pub mod take;
 pub mod text;

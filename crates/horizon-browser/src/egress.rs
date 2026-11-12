@@ -5,12 +5,14 @@
 //! for a proxy that does not answer and can report which egress a page uses.
 
 use std::io;
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs as _};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use url::Url;
+
+use crate::lookup::{LookupFailure, NameLookup, SystemLookup, resolve_within};
 
 /// Longest proxy address, in bytes.
 pub const MAX_PROXY_BYTES: usize = 512;
@@ -166,11 +168,7 @@ impl Egress {
     /// [`Egress::probe`] with the clock and the answers of a caller, so that a
     /// test of this module reads neither the resolver nor the routes of the
     /// computer.
-    fn probe_with<N: ProbeNetwork + Send + Sync + 'static>(
-        &self,
-        network: N,
-        bound: Duration,
-    ) -> Result<(), EgressProbeError> {
+    fn probe_with<N: ProbeNetwork>(&self, network: N, bound: Duration) -> Result<(), EgressProbeError> {
         let Some((host, port)) = self.address() else {
             return Err(EgressProbeError::Address);
         };
@@ -180,10 +178,10 @@ impl Egress {
         // One deadline for the whole probe, so a name with several addresses can
         // not take several bounds.
         let deadline = network.now() + bound;
-        let addresses = resolve_within(&network, &host, port, bound)?;
-        if addresses.is_empty() {
-            return Err(EgressProbeError::Unresolved);
-        }
+        let addresses = resolve_within(&network, &host, port, bound).map_err(|failure| match failure {
+            LookupFailure::Unresolved => EgressProbeError::Unresolved,
+            LookupFailure::TimedOut => timed_out(bound),
+        })?;
         let mut failure = EgressProbeError::Refused;
         for address in addresses {
             let remaining = deadline.saturating_duration_since(network.now());
@@ -225,12 +223,9 @@ impl Egress {
 ///
 /// A test answers all three, so no test of this module reads the resolver or the
 /// routes of the computer.
-trait ProbeNetwork {
+trait ProbeNetwork: NameLookup {
     /// The time of this probe, which bounds every attempt of it.
     fn now(&self) -> Instant;
-
-    /// Every address of `host:port`, or why the name has none.
-    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>>;
 
     /// One connection attempt to `address`, waiting at most `bound`.
     fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()>;
@@ -239,49 +234,19 @@ trait ProbeNetwork {
 /// The resolver, the routes and the clock of the computer.
 struct SystemNetwork;
 
+impl NameLookup for SystemNetwork {
+    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        SystemLookup.resolve(host, port)
+    }
+}
+
 impl ProbeNetwork for SystemNetwork {
     fn now(&self) -> Instant {
         Instant::now()
     }
 
-    fn resolve(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-        (host, port).to_socket_addrs().map(Iterator::collect)
-    }
-
     fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()> {
         TcpStream::connect_timeout(&address, bound).map(|_| ())
-    }
-}
-
-/// The socket addresses of one proxy host and port, within `bound`.
-///
-/// A literal address needs no lookup. A name is looked up on its own thread,
-/// because the resolver has no bound of its own: a probe that called it here
-/// would hold this thread for as long as the resolver takes, whatever the bound
-/// says. The probe reads the answer with the remaining time, and a lookup that
-/// outlives it is left to finish alone.
-fn resolve_within<N: ProbeNetwork + Send + Sync + 'static>(
-    network: &Arc<N>,
-    host: &str,
-    port: u16,
-    bound: Duration,
-) -> Result<Vec<SocketAddr>, EgressProbeError> {
-    if let Ok(address) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
-        return Ok(vec![SocketAddr::new(address, port)]);
-    }
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let name = host.to_string();
-    let lookup = Arc::clone(network);
-    std::thread::Builder::new()
-        .name("egress-probe-resolve".into())
-        .spawn(move || {
-            let _ = sender.send(lookup.resolve(&name, port));
-        })
-        .map_err(|_| EgressProbeError::Unresolved)?;
-    match receiver.recv_timeout(bound) {
-        Ok(Ok(addresses)) => Ok(addresses),
-        Ok(Err(_)) => Err(EgressProbeError::Unresolved),
-        Err(_) => Err(timed_out(bound)),
     }
 }
 
@@ -538,11 +503,7 @@ mod tests {
         }
     }
 
-    impl ProbeNetwork for TestNetwork {
-        fn now(&self) -> Instant {
-            self.state.lock().expect("the state of the test").now
-        }
-
+    impl NameLookup for TestNetwork {
         fn resolve(&self, _host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
             {
                 let mut state = self.state.lock().expect("the state of the test");
@@ -560,6 +521,12 @@ mod tests {
                     Err(io::Error::from(io::ErrorKind::NotFound))
                 }
             }
+        }
+    }
+
+    impl ProbeNetwork for TestNetwork {
+        fn now(&self) -> Instant {
+            self.state.lock().expect("the state of the test").now
         }
 
         fn connect(&self, address: SocketAddr, bound: Duration) -> io::Result<()> {
