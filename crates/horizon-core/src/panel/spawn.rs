@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod attention_standin_tests;
 mod block;
 mod device;
 mod start;

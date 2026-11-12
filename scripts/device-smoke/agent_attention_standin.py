@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""A stand-in agent that sends lifecycle events, so the attention states show.
+"""A stand-in agent that sends the lifecycle events of a turn, so the attention states show.
 
 The sidebar says which agent panel needs the person, which one finished while
-the person looked elsewhere and which one works. A panel whose launch registered
-a work ledger takes that state from the ledger, and the lifecycle hooks of the
+the person looked elsewhere and which one works. A panel whose launch attached a
+work ledger takes that state from the ledger, and the lifecycle hooks of the
 agent keep the ledger current. This script is the program of such a panel
 without any real agent: it sends the same events through the same entry point
-that the installed hooks use, `<candidate> --agent-work-hook`, with the
-environment that a hooking launch sets.
+that the installed hooks use, `<HORIZON_WORK_EXECUTABLE> --agent-work-hook`, and
+it takes the identity of its launch from the environment that Horizon set.
+
+Horizon is the only source of that identity, so this program registers nothing.
+It ignores every argument that Horizon gives the panel of an agent, and it uses
+the session identity that the launch names.
 
 One event for each line that the person types into the panel:
 
@@ -19,21 +23,14 @@ One event for each line that the person types into the panel:
   failed      the turn failed                               -> Needs you
   quit        the script ends
 
-`--timer SECONDS` sends the same events in a sequence of its own, one every
-SECONDS, so a procedure can watch the states of the sidebar without typing.
-
-The fixture starts the script. `--register` writes the work record and the
-health marker of the launch, in the shape that
-`crates/horizon-core/src/agent_work/store.rs` reads, and ends. It writes no
-prompt and no tool content: an event carries the session, the turn, the event
-name, a tool identity and, for a stop, how much work still runs in the
-background.
+`--timer SECONDS` sends the same events in a sequence of its own, one turn every
+SECONDS, and reads the lines of the person at the same time. The fixture passes
+the timer in the JSON file that the stand-in reads beside itself.
 
 Standard library only, Python 3.10+, no network.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import subprocess
@@ -41,9 +38,22 @@ import sys
 import time
 
 PROGRAM = 'attention-stand-in'
-
-# `SCHEMA_VERSION` of crates/horizon-core/src/agent_work/store.rs.
-RECORD_VERSION = 1
+# The document that the fixture writes beside the stand-in: the timer of this
+# run, and nothing that Horizon owns.
+CONFIG_NAME = 'stand-in.json'
+# The environment of the launch. Horizon sets all five when it attaches the work
+# ledger of an agent panel, and the hook entry reads them back.
+WORK_VARIABLES = (
+    'HORIZON_WORK_ROOT',
+    'HORIZON_WORK_PANEL',
+    'HORIZON_WORK_OWNER',
+    'HORIZON_WORK_KIND',
+    'HORIZON_WORK_EXECUTABLE',
+)
+# The arguments of a Claude panel that name the conversation of this launch.
+SESSION_ARGUMENTS = ('--session-id', '--resume')
+DEFAULT_SESSION = 'stand-in-session'
+TRANSCRIPT_NAME = 'stand-in-transcript.jsonl'
 # The words of the script that name one lifecycle event, and the event each one
 # sends. The turn identity is the one of the last `start`.
 EVENTS = {
@@ -56,130 +66,121 @@ EVENTS = {
 }
 # The sequence of `--timer`, in the order that shows every state.
 TIMER_SEQUENCE = ('start', 'stop', 'start', 'background', 'start', 'failed', 'start', 'ask', 'answer', 'stop')
-SESSION_ID = 'stand-in-session'
 MIN_TIMER_SECONDS = 0.2
 
 
-def safe_local_id(local_id):
-    """The path component of a panel id: `%` and the hex of every byte.
+class Options:
+    """What this run was asked for: the document beside the stand-in, and the timer."""
 
-    `horizon_browser_control::paths::safe_local_id` writes the same string, so a
-    record written here is the record that a launch of the panel would write.
+    def __init__(self, config=None, timer=None):
+        self.config = config
+        self.timer = timer
+
+
+def parse_arguments(argv):
+    """Read the two arguments of this stand-in, and ignore every argument of Horizon.
+
+    Horizon starts the panel of an agent with its own arguments: `--plugin-dir`
+    any number of times, `--session-id` or `--resume`, `--continue`, and others.
+    An argument that this program does not know is not an error, so a launch of
+    Horizon never ends because of one.
     """
-    return '%' + ''.join(f'{byte:02x}' for byte in local_id.encode('utf-8'))
+    options = Options()
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        value = argv[index + 1] if index + 1 < len(argv) else None
+        if argument == '--config' and value is not None:
+            options.config = value
+            index += 2
+        elif argument.startswith('--config='):
+            options.config = argument.split('=', 1)[1]
+            index += 1
+        elif argument == '--timer' and value is not None:
+            options.timer = value
+            index += 2
+        elif argument.startswith('--timer='):
+            options.timer = argument.split('=', 1)[1]
+            index += 1
+        else:
+            index += 1
+    return options
 
 
-def record_document(config):
-    """The `StoredWork` of an agent launch, with a ledger that no event touched yet."""
-    return {
-        'version': RECORD_VERSION,
-        'panel_local_id': config['panel'],
-        'kind': config['kind'],
-        'owner_token': config['owner'],
-        'cwd': config['cwd'],
-        'transcript_path': '',
-        'ledger': {},
-        'handoff': None,
-        'consumed': False,
-    }
+def config_path(options):
+    """The document of this run: the one it names, else the one beside the stand-in."""
+    if options.config:
+        return options.config
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_NAME)
 
 
-def register(config):
-    """Write the work record and the health marker of this launch.
-
-    The store reads a record that this home registered, and it takes no event of
-    a launch whose health marker is missing or was invalidated.
-    """
-    work = os.path.join(config['root'], 'agent-work')
-    panel = safe_local_id(config['panel'])
-    record = os.path.join(work, f'{panel}.json')
-    health = os.path.join(work, 'health', panel, config['owner'])
-    for path in (work, os.path.dirname(record), os.path.dirname(health)):
-        os.makedirs(path, mode=0o700, exist_ok=True)
-    with open(health, 'w', encoding='utf-8') as marker:
-        marker.write('1')
-    os.chmod(health, 0o600)
-    with open(record, 'w', encoding='utf-8') as document:
-        json.dump(record_document(config), document)
-    os.chmod(record, 0o600)
-    return record
+def read_config(options):
+    """The document of this run, or an empty one when the fixture wrote none."""
+    try:
+        with open(config_path(options), encoding='utf-8') as document:
+            value = json.load(document)
+    except FileNotFoundError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
-def event_document(config, word, prompt_id):
+def missing_variables():
+    """The work variables that Horizon did not set for this launch."""
+    return [name for name in WORK_VARIABLES if not os.environ.get(name)]
+
+
+def launch_session(argv):
+    """The conversation that this launch names, from `--session-id` or `--resume`."""
+    session = DEFAULT_SESSION
+    for index, argument in enumerate(argv[:-1]):
+        if argument in SESSION_ARGUMENTS and argv[index + 1]:
+            session = argv[index + 1]
+    return session
+
+
+def event_document(word, prompt_id, session_id):
     """One normalized lifecycle event, without a prompt or a tool content."""
-    event = {'session_id': SESSION_ID, 'prompt_id': prompt_id, 'cwd': config['cwd'],
-             'transcript_path': config['config']}
+    cwd = os.getcwd()
+    event = {'session_id': session_id, 'prompt_id': prompt_id, 'cwd': cwd,
+             'transcript_path': os.path.join(cwd, TRANSCRIPT_NAME)}
     event.update(EVENTS[word])
     return event
 
 
-def hook_command(config):
-    """The entry point that takes one event: the real one, or a test's own."""
-    return config.get('hook') or [config['exe'], '--agent-work-hook']
-
-
-def send(config, document):
-    """Give one event to the entry point of the installed hooks."""
-    environment = dict(os.environ)
-    environment.update({
-        'HORIZON_WORK_ROOT': config['root'],
-        'HORIZON_WORK_PANEL': config['panel'],
-        'HORIZON_WORK_OWNER': config['owner'],
-        'HORIZON_WORK_KIND': config['kind'],
-        'HORIZON_WORK_EXECUTABLE': config['exe'],
-    })
+def send(document):
+    """Give one event to the entry point of the installed hooks, in this environment."""
+    command = [os.environ['HORIZON_WORK_EXECUTABLE'], '--agent-work-hook']
     finished = subprocess.run(
-        hook_command(config),
+        command,
         input=json.dumps(document).encode('utf-8'),
-        env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if finished.returncode != 0:
-        return f'event refused ({finished.returncode})'
+        detail = finished.stderr.decode('utf-8', 'replace').strip().splitlines()
+        reason = f': {detail[-1]}' if detail else ''
+        return f'event refused ({finished.returncode}){reason}'
     return None
 
 
 class StandIn:
     """The turn identity that one event of the script needs."""
 
-    def __init__(self, config):
-        self.config = config
+    def __init__(self, session_id, missing):
+        self.session_id = session_id
+        self.missing = missing
         self.turns = 0
         self.prompt_id = 'turn-0'
 
     def send(self, word):
         if word not in EVENTS:
             return f'unknown event {word!r}; use one of {", ".join(EVENTS)}'
+        if self.missing:
+            return f'{word}: no event is sent, because Horizon set no work identity'
         if word == 'start':
             self.turns += 1
             self.prompt_id = f'turn-{self.turns}'
-        refused = send(self.config, event_document(self.config, word, self.prompt_id))
+        document = event_document(word, self.prompt_id, self.session_id)
+        refused = send(document)
         return refused or f'{word}: {EVENTS[word]["hook_event_name"]}'
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--config', required=True, help='JSON document of this stand-in panel')
-    parser.add_argument('--register', action='store_true', help='Write the work record and health marker, then end')
-    parser.add_argument('--timer', type=float, default=None,
-                        help='Send the events in a sequence, one every SECONDS, instead of waiting for lines')
-    arguments, _unknown = parser.parse_known_args()
-    with open(arguments.config, encoding='utf-8') as document:
-        config = json.load(document)
-    if arguments.register:
-        register(config)
-        print(f'{PROGRAM}: registered the work ledger of {config["panel"]}', flush=True)
-        return 0
-    stand_in = StandIn(config)
-    if arguments.timer is not None:
-        return run_timer(stand_in, arguments.timer)
-    print(f'{PROGRAM}: type one of {", ".join(EVENTS)} and press Enter', flush=True)
-    for line in sys.stdin:
-        word = line.strip().lower()
-        if not word:
-            continue
-        if word == 'quit':
-            return 0
-        print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
-    return 0
 
 
 def run_timer(stand_in, seconds):
@@ -189,6 +190,31 @@ def run_timer(stand_in, seconds):
         for word in TIMER_SEQUENCE:
             print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
             time.sleep(interval)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    options = parse_arguments(argv)
+    config = read_config(options)
+    missing = missing_variables()
+    stand_in = StandIn(launch_session(argv), missing)
+    if missing:
+        print(f'{PROGRAM}: {", ".join(missing)} is not set: set "work_resume": {{"enabled": true}} '
+              f'in scripts/device-smoke/attention_panel.json, so Horizon attaches the work ledger of this panel',
+              flush=True)
+    else:
+        print(f'{PROGRAM}: type one of {", ".join(EVENTS)} and press Enter', flush=True)
+    timer = options.timer if options.timer is not None else config.get('timer')
+    if timer:
+        return run_timer(stand_in, float(timer))
+    for line in sys.stdin:
+        word = line.strip().lower()
+        if not word:
+            continue
+        if word == 'quit':
+            return 0
+        print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
+    return 0
 
 
 if __name__ == '__main__':

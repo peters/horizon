@@ -239,7 +239,7 @@ impl PanelState {
             rows: panel.rows,
             cols: panel.cols,
             resume: panel.resume.clone(),
-            work_resume: crate::agent_work::ResumePolicy::default(),
+            work_resume: panel.work_resume.clone(),
             position,
             size: panel.size,
             session_binding: None,

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -11,52 +13,69 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import serve  # noqa: E402
 
+HERE = Path(__file__).resolve().parent
+SCRIPT = HERE.parent / 'agent_attention_standin.py'
+
 
 class AttentionAgentTests(unittest.TestCase):
 
     def prepare(self, folder, timer=6.0):
         state = Path(folder) / 'state'
         state.mkdir()
-        home = Path(folder) / 'home'
-        home.mkdir()
-        panel = serve.attention_agent(home, Path('/usr/bin/candidate'), state, timer)
-        return state, home, panel
+        panel, bin_dir = serve.attention_agent(state, timer)
+        return state, panel, bin_dir
 
-    def test_the_fixture_registers_the_launch_of_the_panel_before_it_starts(self):
+    def test_the_panel_entry_is_a_claude_panel_of_the_default_command(self):
         with tempfile.TemporaryDirectory() as folder:
-            state, home, panel = self.prepare(folder)
-            self.assertEqual(panel['kind'], 'claude', 'the panel kind that the hooks of Horizon know')
-            panel_id = serve.ATTENTION_PANEL_ID
-            encoded = '%' + ''.join(f'{byte:02x}' for byte in panel_id.encode())
-            record = home / '.horizon' / 'agent-work' / f'{encoded}.json'
-            self.assertTrue(record.is_file(), 'the work record of the launch')
-            document = json.loads(record.read_text())
-            self.assertEqual(document['panel_local_id'], panel_id)
-            self.assertEqual(document['owner_token'], serve.ATTENTION_OWNER)
-            self.assertEqual(document['kind'], 'claude')
-            marker = home / '.horizon' / 'agent-work' / 'health' / encoded / serve.ATTENTION_OWNER
-            self.assertEqual(marker.read_text(), '1', 'the health marker of the launch')
-            # The script reads the same document that the fixture wrote.
-            config = json.loads(Path(panel['args'][1].split('--config ')[1].split(' ')[0]).read_text())
-            self.assertEqual(config['root'], str(home / '.horizon'))
-            self.assertEqual(config['panel'], panel_id)
-            self.assertEqual(config['exe'], '/usr/bin/candidate')
+            _state, panel, _bin_dir = self.prepare(folder)
+            # Horizon inserts its own arguments between the program of a panel and
+            # the arguments of the panel entry, and it attaches the work ledger of
+            # a Claude panel only when the entry names no command. The entry that
+            # the Rust test of the command line builder reads is the same file.
+            self.assertIsNone(panel['command'], 'a command of the entry would take the launch arguments')
+            self.assertEqual(panel['args'], [])
+            self.assertEqual(panel['kind'], 'claude', 'the panel kind whose hooks Horizon installs')
+            self.assertTrue(panel['work_resume']['enabled'], 'the policy that attaches the work ledger')
+            self.assertEqual(panel['name'], 'Attention stand-in')
 
-    def test_the_panel_runs_the_stand_in_through_a_shell_that_passes_the_launch_arguments(self):
+    def test_the_shared_entry_is_the_file_that_the_command_line_test_reads(self):
         with tempfile.TemporaryDirectory() as folder:
-            _state, _home, panel = self.prepare(folder)
-            self.assertEqual(panel['command'], '/bin/sh')
-            self.assertEqual(panel['args'][0], '-c')
-            command = panel['args'][1]
-            self.assertIn('agent_attention_standin.py', command)
-            self.assertIn('--timer 6.0', command)
-            self.assertTrue(command.endswith('"$@"'), 'Horizon adds its own launch arguments')
-            self.assertEqual(panel['args'][2], 'attention-stand-in')
+            state, panel, _bin_dir = self.prepare(folder)
+            shared = json.loads(serve.ATTENTION_PANEL_ENTRY.read_text())
+            self.assertEqual({key: value for key, value in panel.items() if key != 'cwd'}, shared)
+            self.assertEqual(panel['cwd'], str(state / serve.ATTENTION_STANDIN_FOLDER))
+
+    def test_the_stand_in_is_the_program_that_the_name_resolves_to(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _state, _panel, bin_dir = self.prepare(folder)
+            program = bin_dir / serve.ATTENTION_PROGRAM
+            self.assertTrue(program.is_symlink(), 'the name of the agent program is the stand-in itself')
+            self.assertEqual(program.resolve(), SCRIPT)
+            self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
+            self.assertTrue(SCRIPT.read_text().startswith('#!'), 'the program names its interpreter')
+
+    def test_the_timer_of_the_run_is_the_document_beside_the_stand_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _state, _panel, bin_dir = self.prepare(folder, timer=6.0)
+            document = json.loads((bin_dir / serve.ATTENTION_TIMER_FILE).read_text())
+            self.assertEqual(document, {'timer': 6.0})
 
     def test_a_run_without_a_timer_waits_for_the_lines_of_the_person(self):
         with tempfile.TemporaryDirectory() as folder:
-            _state, _home, panel = self.prepare(folder, timer=None)
-            self.assertNotIn('--timer', panel['args'][1])
+            _state, _panel, bin_dir = self.prepare(folder, timer=None)
+            document = json.loads((bin_dir / serve.ATTENTION_TIMER_FILE).read_text())
+            self.assertEqual(document, {'timer': 0}, 'zero sends no event of its own')
+
+    def test_the_stand_in_comes_first_on_the_path_of_the_candidate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _state, _panel, bin_dir = self.prepare(folder)
+            environment = serve.attention_environment({'PATH': '/usr/bin:/bin', 'HOME': folder}, bin_dir)
+            self.assertEqual(environment['PATH'], f'{bin_dir}:/usr/bin:/bin')
+            self.assertEqual(environment['HOME'], folder)
+            original = {'PATH': '/usr/bin'}
+            serve.attention_environment(original, bin_dir)
+            self.assertEqual(original['PATH'], '/usr/bin', 'the environment of the caller is unchanged')
+            self.assertTrue(os.path.isdir(bin_dir))
 
     def test_a_plain_start_refuses_the_stand_in(self):
         self.assertIn('--attention-agent', [flag for _name, flag in serve.PLAIN_START_SETTINGS_OPTIONS])

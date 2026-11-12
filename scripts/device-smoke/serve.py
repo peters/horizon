@@ -19,10 +19,15 @@ import sandbox
 
 # The directory the host X server keeps its socket and keymap files in.
 TMP_DIR = Path('/tmp')
-# The attention stand-in: the id of its panel, the owner of its launch, and the
-# folder of its work record inside the private Horizon home.
-ATTENTION_PANEL_ID = 'attention-stand-in'
-ATTENTION_OWNER = 'attention-stand-in-owner'
+# The attention stand-in: the panel entry of this fixture, and the name of the
+# program that a Claude panel of the fixture resolves on its `PATH`. Horizon
+# starts a Claude panel of the default command through that name, gives it its
+# own arguments and attaches the work ledger of the panel to it.
+ATTENTION_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel.json'
+ATTENTION_PROGRAM = 'claude'
+ATTENTION_BIN_FOLDER = 'bin'
+ATTENTION_STANDIN_FOLDER = 'attention-agent'
+ATTENTION_TIMER_FILE = 'stand-in.json'
 
 
 def bound_port(process, path, pattern):
@@ -355,43 +360,40 @@ def speech_section(recorder=None, transcriber_command=None, service=None):
     return section
 
 
-def attention_agent(private_home, app, state, timer=6.0):
-    """The panel of the stand-in agent that shows the four attention states.
+def attention_agent(state, timer=6.0):
+    """The panel entry and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
-    launch. A real agent gets that ledger from the lifecycle hooks that Horizon
-    installs; this stand-in has the same ledger, and it sends the same events
-    through the same entry point, `<candidate> --agent-work-hook`. The fixture
-    registers the launch before the candidate starts, because the store refuses
-    an event of a panel that no launch registered, and the script then reports
-    each event that the person types.
+    launch, and Horizon attaches that ledger to the panel of a Claude agent that
+    starts with the default command and whose work continuation is on. So the
+    panel entry of this fixture names no command, and another `claude` on the
+    `PATH` of the candidate is the stand-in: Horizon resolves the name, inserts
+    its own arguments after it and keeps the ledger of the launch.
 
-    Answers the panel entry of the fixture config and the log file of the script.
+    Answers the panel entry of the fixture config and the folder to put first on
+    the `PATH` of the candidate.
     """
-    script = Path(__file__).resolve().parent / 'agent_attention_standin.py'
-    home = Path(private_home) / HORIZON_HOME_FOLDER
-    work = state / 'attention-agent'
-    work.mkdir(mode=0o700, exist_ok=True)
-    document = {
-        'root': str(home), 'panel': ATTENTION_PANEL_ID, 'owner': ATTENTION_OWNER,
-        'kind': 'claude', 'cwd': str(work),
-        'transcript_path': '', 'config': str(work / 'stand-in.json'),
-        'exe': str(app),
-    }
-    config = work / 'stand-in.json'
-    config.write_text(json.dumps(document))
-    finished = subprocess.run([sys.executable, str(script), '--config', str(config), '--register'],
-                              capture_output=True, text=True, check=False)
-    if finished.returncode != 0:
-        raise RuntimeError(f'the attention stand-in could not register its ledger: {finished.stderr.strip()}')
-    command = f'exec {shlex.quote(sys.executable)} -u {shlex.quote(str(script))} --config {shlex.quote(str(config))}'
-    if timer:
-        command += f' --timer {timer}'
-    # A timer of zero waits for the words that the person types alone.
-    panel = {'name': 'Attention stand-in', 'kind': 'claude', 'command': '/bin/sh',
-             'args': ['-c', f'{command} "$@"', 'attention-stand-in'],
-             'cwd': str(work), 'position': [40, 60], 'size': [640, 420]}
-    return panel
+    script = (Path(__file__).resolve().parent / 'agent_attention_standin.py').resolve()
+    work = Path(state) / ATTENTION_STANDIN_FOLDER
+    bin_dir = work / ATTENTION_BIN_FOLDER
+    bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    program = bin_dir / ATTENTION_PROGRAM
+    if program.is_symlink() or program.exists():
+        program.unlink()
+    # The stand-in is the program itself: it has a `#!` line and the executable
+    # mode of the file that the repository keeps.
+    program.symlink_to(script)
+    (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
+    panel = json.loads(ATTENTION_PANEL_ENTRY.read_text())
+    panel['cwd'] = str(work)
+    return panel, bin_dir
+
+
+def attention_environment(environment, bin_dir):
+    """The environment of the candidate, with the stand-in first on its `PATH`."""
+    environment = dict(environment)
+    environment['PATH'] = f'{bin_dir}:' + environment.get('PATH', '')
+    return environment
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
@@ -637,9 +639,11 @@ def arguments():
     parser.add_argument(
         '--attention-agent', type=float, nargs='?', const=6.0, default=None, metavar='SECONDS',
         help='Open an agent panel whose program is scripts/device-smoke/agent_attention_standin.py, '
-             'so the four attention states of the sidebar show without a real agent. The script '
-             'reports one event for each line that the person types; SECONDS also makes it report '
-             'the events in a sequence of its own, every SECONDS (default 6)')
+             'so the four attention states of the sidebar show without a real agent. The panel '
+             'starts as a Claude agent with work continuation, so Horizon attaches its work ledger; '
+             'the script reports one event for each line that the person types, and SECONDS also '
+             'makes it report the events in a sequence of its own, every SECONDS (default 6). '
+             '0 waits for the typed lines alone')
     parser.add_argument(
         '--panels',
         type=Path,
@@ -793,7 +797,11 @@ def main():
         if args.attention_agent is not None:
             # The stand-in replaces the default board, so the panel of the
             # procedure is the first one that the person sees.
-            extra_panels = [attention_agent(box.private_home, app, args.state, args.attention_agent)]
+            panel, attention_bin = attention_agent(args.state, args.attention_agent)
+            extra_panels = [panel]
+            # The children of this run keep this object, so the value is changed
+            # here and not by a second dictionary.
+            env.update(attention_environment(env, attention_bin))
         # The values of this run, and a value that an earlier run of the same private
         # home wrote, are both rows of the secrets file that the candidate reads,
         # which is the file of the Horizon home below its masked `HOME`.

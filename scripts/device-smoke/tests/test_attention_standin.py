@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Self test for agent_attention_standin.py, with a fake hook entry in this file.
+"""Self test for agent_attention_standin.py, with a recorder as the hook entry.
 
 The repository runs it with the other device smoke tests:
 
     python3 -B -m unittest discover -s scripts/device-smoke/tests -v
 
-The fake entry records each event that the stand-in sends, so the test proves:
+Horizon gives the panel of an agent the identity of its launch, so the test
+gives that environment to the stand-in and proves:
 
-  * the work record and the health marker follow the shape that
-    crates/horizon-core/src/agent_work/store.rs reads, at the encoded panel path;
-  * each typed word sends one normalized event through the configured entry;
+  * every argument of a Claude panel is accepted and ignored, and the session
+    identity of `--session-id` or `--resume` reaches the events;
+  * each typed word sends one normalized event to
+    `<HORIZON_WORK_EXECUTABLE> --agent-work-hook` on standard input, in the
+    environment of the launch;
   * a prompt and a tool content never reach an event, and only a stop that says
     that background work runs carries the count;
   * the turn identity follows `start`, so a stop names the turn that started;
-  * a line that names no event says so and sends nothing.
+  * a line that names no event says so and sends nothing;
+  * without the work variables it prints one line and still answers `quit`.
 
-Standard library only. Nothing is written outside the folder of this file.
+Standard library only. Nothing is written outside the folder of a test.
 """
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +35,27 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent / 'agent_attention_standin.py'
 MODULE = 'agent_attention_standin'
+WORK_VARIABLES = (
+    'HORIZON_WORK_ROOT',
+    'HORIZON_WORK_PANEL',
+    'HORIZON_WORK_OWNER',
+    'HORIZON_WORK_KIND',
+    'HORIZON_WORK_EXECUTABLE',
+)
+# The arguments that Horizon inserts between the program of a Claude panel and the
+# arguments of the panel entry, with an argument that no release knows.
+HORIZON_ARGUMENTS = ['--plugin-dir', 'X', '--session-id', 'Y', '--plugin-dir', 'Z', '--unknown', 'W']
+# The recorder takes the place of `<candidate> --agent-work-hook`: it keeps the
+# arguments, the environment and the event that the stand-in sent it.
+RECORDER = '''#!/usr/bin/env python3
+import json, os, sys
+folder = os.path.dirname(os.path.abspath(__file__))
+record = {'arguments': sys.argv[1:],
+          'environment': {name: os.environ.get(name) for name in NAMES},
+          'input': sys.stdin.read()}
+with open(os.path.join(folder, 'calls.jsonl'), 'a', encoding='utf-8') as calls:
+    calls.write(json.dumps(record) + '\\n')
+'''
 
 
 def load():
@@ -41,117 +68,130 @@ def load():
     return sys.modules[MODULE]
 
 
-def document(directory):
-    """The stand-in config of one test, with this file as the hook entry."""
-    return {
-        'root': str(directory / 'home'),
-        'panel': 'panel-2',
-        'owner': 'stand-in-owner',
-        'kind': 'claude',
-        'cwd': str(directory),
-        'transcript_path': '',
-        'config': str(directory / 'stand-in.json'),
-        'exe': 'the-candidate',
-        'hook': [sys.executable, str(Path(__file__).resolve()), '--record-hook', str(directory / 'events.jsonl')],
-    }
-
-
-def write_config(directory, config):
-    path = directory / 'stand-in.json'
-    path.write_text(json.dumps(config))
+def recorder(directory):
+    """A small program that records one hook invocation of the stand-in."""
+    path = directory / 'recorder'
+    path.write_text(RECORDER.replace('NAMES', repr(list(WORK_VARIABLES))))
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
 
 
-def recorded(directory):
-    path = directory / 'events.jsonl'
+def environment(directory, executable):
+    """The environment of one launch of the panel, and the recorder as its hook entry."""
+    values = dict(os.environ)
+    values.update({
+        'HORIZON_WORK_ROOT': str(directory / 'home'),
+        'HORIZON_WORK_PANEL': 'panel-2',
+        'HORIZON_WORK_OWNER': 'launch-owner',
+        'HORIZON_WORK_KIND': 'claude',
+        'HORIZON_WORK_EXECUTABLE': str(executable),
+    })
+    return values
+
+
+def calls(directory):
+    path = directory / 'calls.jsonl'
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def events(directory):
+    return [json.loads(call['input']) for call in calls(directory)]
+
+
 class StandInTests(unittest.TestCase):
 
-    def test_the_record_and_the_health_marker_are_what_the_store_reads(self):
-        stand_in = load()
+    def test_each_typed_word_sends_its_event_to_the_installed_hook_entry(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
-            path = Path(stand_in.register(document(directory)))
-            panel = '%' + ''.join(f'{byte:02x}' for byte in b'panel-2')
-            self.assertEqual(path, directory / 'home' / 'agent-work' / f'{panel}.json')
-            record = json.loads(path.read_text())
-            self.assertEqual(record['version'], 1)
-            self.assertEqual(record['panel_local_id'], 'panel-2')
-            self.assertEqual(record['kind'], 'claude')
-            self.assertEqual(record['owner_token'], 'stand-in-owner')
-            self.assertEqual(record['ledger'], {}, 'no event touched the ledger yet')
-            self.assertIsNone(record['handoff'])
-            self.assertFalse(record['consumed'])
-            marker = directory / 'home' / 'agent-work' / 'health' / panel / 'stand-in-owner'
-            self.assertEqual(marker.read_text(), '1')
-            self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
-    def test_each_typed_word_sends_the_event_of_its_line(self):
-        with tempfile.TemporaryDirectory() as folder:
-            directory = Path(folder)
-            path = write_config(directory, document(directory))
+            executable = recorder(directory)
             lines = ['start', 'ask', 'answer', 'stop', 'background', 'start', 'failed', 'stop', 'quit']
             finished = subprocess.run(
-                [sys.executable, str(SCRIPT), '--config', str(path)],
+                [sys.executable, str(SCRIPT), *HORIZON_ARGUMENTS],
                 input=''.join(f'{line}\n' for line in lines), text=True, capture_output=True, check=False,
-                timeout=120)
+                env=environment(directory, executable), timeout=120)
             self.assertEqual(finished.returncode, 0, finished.stderr)
-            events = recorded(directory)
-            self.assertEqual(
-                [event['hook_event_name'] for event in events],
-                ['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'Stop', 'UserPromptSubmit',
-                 'StopFailure', 'Stop'])
-            self.assertEqual([event['session_id'] for event in events], ['stand-in-session'] * 8)
-            # The turn identity follows `start`, and the first stop is the turn
-            # that the second start leaves behind.
-            self.assertEqual([event['prompt_id'] for event in events],
+            self.assertEqual([event['hook_event_name'] for event in events(directory)],
+                             ['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop', 'Stop',
+                              'UserPromptSubmit', 'StopFailure', 'Stop'])
+            # The launch names the conversation, and every event keeps it.
+            self.assertEqual([event['session_id'] for event in events(directory)], ['Y'] * 8)
+            self.assertEqual([event['prompt_id'] for event in events(directory)],
                              ['turn-1'] * 4 + ['turn-1'] + ['turn-2', 'turn-2', 'turn-2'])
+            for call in calls(directory):
+                self.assertEqual(call['arguments'], ['--agent-work-hook'])
+                self.assertEqual(call['environment'], {
+                    name: environment(directory, executable)[name] for name in WORK_VARIABLES})
+
+    def test_the_event_paths_of_the_launch_are_absolute(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            finished = subprocess.run(
+                [sys.executable, str(SCRIPT), '--resume', 'old-session'],
+                input='start\nquit\n', text=True, capture_output=True, check=False,
+                env=environment(directory, recorder(directory)), timeout=120)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            event = events(directory)[0]
+            self.assertTrue(os.path.isabs(event['cwd']))
+            self.assertTrue(os.path.isabs(event['transcript_path']))
+            self.assertEqual(event['session_id'], 'old-session', 'a resumed conversation is the same field')
 
     def test_an_event_carries_no_prompt_and_no_tool_content(self):
         stand_in = load()
-        with tempfile.TemporaryDirectory() as folder:
-            directory = Path(folder)
-            config = document(directory)
-            for word in stand_in.EVENTS:
-                event = stand_in.event_document(config, word, 'turn-1')
-                self.assertNotIn('prompt', event)
-                self.assertNotIn('content', event)
-                self.assertNotIn('tool_input', event)
-                self.assertLessEqual(len(json.dumps(event)), 512, 'an event stays small')
-                if word == 'background':
-                    self.assertEqual(event['background_tasks'], 2)
-                else:
-                    self.assertNotIn('background_tasks', event)
+        for word in stand_in.EVENTS:
+            event = stand_in.event_document(word, 'turn-1', 'session')
+            self.assertNotIn('prompt', event)
+            self.assertNotIn('content', event)
+            self.assertNotIn('tool_input', event)
+            self.assertLessEqual(len(json.dumps(event)), 512, 'an event stays small')
+            if word == 'background':
+                self.assertEqual(event['background_tasks'], 2)
+            else:
+                self.assertNotIn('background_tasks', event)
 
     def test_a_line_that_names_no_event_says_so_and_sends_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
-            path = write_config(directory, document(directory))
             finished = subprocess.run(
-                [sys.executable, str(SCRIPT), '--config', str(path)], input='sing\nquit\n', text=True,
-                capture_output=True, check=False, timeout=120)
+                [sys.executable, str(SCRIPT)], input='sing\nquit\n', text=True, capture_output=True,
+                check=False, env=environment(directory, recorder(directory)), timeout=120)
             self.assertEqual(finished.returncode, 0, finished.stderr)
             self.assertIn('unknown event', finished.stdout)
-            self.assertEqual(recorded(directory), [])
+            self.assertEqual(calls(directory), [])
 
-    def test_a_cycle_of_the_timer_sends_the_sequence_without_a_line(self):
+    def test_without_the_work_variables_it_says_one_line_and_still_answers_quit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            values = {name: value for name, value in os.environ.items() if name not in WORK_VARIABLES}
+            values['HORIZON_WORK_EXECUTABLE'] = ''
+            finished = subprocess.run(
+                [sys.executable, str(SCRIPT), *HORIZON_ARGUMENTS], input='start\nquit\n', text=True,
+                capture_output=True, check=False, env=values, timeout=120)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+            first = finished.stdout.splitlines()[0]
+            self.assertIn('HORIZON_WORK_ROOT', first, 'the line names the setting that is missing')
+            self.assertIn('work_resume', first, 'the line names the setting of the fixture config')
+            self.assertIn('no event is sent', finished.stdout, 'the panel stays alive and answers')
+            self.assertEqual(calls(directory), [])
+
+    def test_the_sequence_of_the_timer_names_only_known_events(self):
         stand_in = load()
         self.assertEqual(stand_in.TIMER_SEQUENCE[0], 'start')
         self.assertIn('ask', stand_in.TIMER_SEQUENCE)
         self.assertIn('background', stand_in.TIMER_SEQUENCE)
         self.assertEqual(set(stand_in.TIMER_SEQUENCE) - set(stand_in.EVENTS), set())
 
+    def test_the_arguments_of_horizon_are_ignored_and_the_two_of_the_stand_in_are_read(self):
+        stand_in = load()
+        options = stand_in.parse_arguments([*HORIZON_ARGUMENTS, '--continue', '-c', 'text'])
+        self.assertIsNone(options.config)
+        self.assertIsNone(options.timer)
+        options = stand_in.parse_arguments([*HORIZON_ARGUMENTS, '--timer', '3', '--config', '/tmp/a.json'])
+        self.assertEqual(options.timer, '3')
+        self.assertEqual(options.config, '/tmp/a.json')
+        self.assertEqual(stand_in.parse_arguments(['--timer=2']).timer, '2')
+
 
 if __name__ == '__main__':
-    if '--record-hook' in sys.argv:
-        # The fake entry point: append the event that the stand-in sent.
-        index = sys.argv.index('--record-hook')
-        with open(sys.argv[index + 1], 'a', encoding='utf-8') as events:
-            events.write(sys.stdin.read().strip() + '\n')
-        sys.exit(0)
     unittest.main()

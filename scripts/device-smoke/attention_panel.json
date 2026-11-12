@@ -1,0 +1,9 @@
+{
+  "name": "Attention stand-in",
+  "kind": "claude",
+  "command": null,
+  "args": [],
+  "work_resume": {"enabled": true},
+  "position": [40, 60],
+  "size": [640, 420]
+}

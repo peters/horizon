@@ -22,6 +22,15 @@ impl Default for ResumePolicy {
     }
 }
 
+impl ResumePolicy {
+    /// Whether a panel keeps the policy of one that never opted in, which a
+    /// config file leaves out instead of writing it.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SuspendRecord {
     pub kind: PanelKind,

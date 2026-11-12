@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent_work::ResumePolicy;
 use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::config_store::{ConfigStore, StoreFault, StoredSettings};
 use crate::error::{Error, Result};
@@ -285,6 +286,10 @@ pub struct TerminalConfig {
     pub kind: PanelKind,
     #[serde(default)]
     pub resume: PanelResume,
+    /// Whether this panel continues its work after a restart. A panel of a
+    /// config file opts in here instead of in its panel menu.
+    #[serde(default, skip_serializing_if = "ResumePolicy::is_default")]
+    pub work_resume: ResumePolicy,
     #[serde(default)]
     pub position: Option<[f32; 2]>,
     #[serde(default)]
@@ -304,6 +309,7 @@ impl Default for TerminalConfig {
             cols: default_cols(),
             kind: PanelKind::default(),
             resume: PanelResume::default(),
+            work_resume: ResumePolicy::default(),
             position: None,
             size: None,
             ssh_connection: None,
