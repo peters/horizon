@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -27,6 +28,16 @@ ATTENTION_PROGRAM = 'claude'
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
 ATTENTION_TIMER_FILE = 'stand-in.json'
+# The worktree card: one shell preset for the task panel of a worktree, one browser
+# preset that `open_panel` refuses, and the throwaway repository that the card
+# reads, merges and removes.
+WORKTREE_CARD_PRESETS = [
+    {'name': 'Task shell', 'alias': 'ts', 'kind': 'shell', 'command': '/bin/sh'},
+    {'name': 'Page', 'kind': 'browser'},
+]
+WORKTREE_CARD_FOLDER = 'repo'
+WORKTREE_CARD_PRESET = 'Task shell'
+WORKTREE_CARD_LAUNCHER = 'card-agent-worktree.sh'
 
 
 def bound_port(process, path, pattern):
@@ -359,6 +370,51 @@ def speech_section(recorder=None, transcriber_command=None, service=None):
     return section
 
 
+def worktree_card_repository(state):
+    """The throwaway repository of the worktree card, with one commit and no remote.
+
+    The run makes it under its own state folder, and the card agent works only
+    inside it: a merge and a remove of a procedure touch no repository of the
+    person.
+    """
+    repo = Path(state).resolve() / 'data' / WORKTREE_CARD_FOLDER
+    if (repo / '.git').is_dir():
+        return repo
+    if not shutil.which('git'):
+        raise SystemExit('Missing prerequisite: git')
+    repo.mkdir(parents=True)
+    (repo / 'app.txt').write_text('one\n')
+    for arguments in (['init', '-b', 'main'], ['config', 'user.name', 'Horizon fixture'],
+                      ['config', 'user.email', 'fixture@example.invalid'],
+                      ['add', 'app.txt'], ['commit', '-m', 'first commit']):
+        subprocess.run(['git', '-C', str(repo), *arguments], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return repo
+
+
+def worktree_card_panel(app, repo, state):
+    """The panel of the scripted card agent, with the scenario of the worktree card.
+
+    The panel runs one launcher script that the fixture writes, so Horizon's own
+    launch arguments, such as `--session-id` and `--plugin-dir`, reach the script
+    as `"$@"` and the card agent ignores what it does not know.
+    """
+    script = (Path(__file__).resolve().parent / 'card_agent.py').resolve()
+    data = Path(state).resolve() / 'data'
+    launcher = data / WORKTREE_CARD_LAUNCHER
+    environment = (f'CARD_AGENT_REPO={shlex.quote(str(repo))} '
+                   f'CARD_AGENT_STATE={shlex.quote(str(Path(state).resolve()))} '
+                   f'CARD_AGENT_PRESET={shlex.quote(WORKTREE_CARD_PRESET)}')
+    launcher.write_text(
+        '#!/bin/sh\n'
+        f'{environment} exec /usr/bin/python3 -u {shlex.quote(str(script))} '
+        f'--mcp-command {shlex.quote(str(app) + " --browser-mcp")} '
+        '--scenario worktree "$@"\n')
+    launcher.chmod(0o700)
+    return {'name': 'Worktree card agent', 'kind': 'claude', 'command': str(launcher),
+            'args': [], 'cwd': str(data)}
+
+
 def attention_agent(state, timer=6.0):
     """The panel entry and the program folder of the stand-in agent.
 
@@ -507,6 +563,7 @@ def application_command(app, config, saved_session, resume_session=False, plain_
 # below, so the sentence that a procedure reads names the option that it typed.
 PLAIN_START_SETTINGS_OPTIONS = (
     ('panels', '--panels'), ('attention_agent', '--attention-agent'),
+    ('worktree_card', '--worktree-card'),
     ('presets', '--presets'), ('theme', '--theme'),
     ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
     ('server_target', '--server-target'), ('server_command', '--server-command'),
@@ -644,6 +701,11 @@ def arguments():
              'makes it report the events in a sequence of its own, every SECONDS (default 6). '
              '0 waits for the typed lines alone')
     parser.add_argument(
+        '--worktree-card', action='store_true',
+        help='Make the throwaway repository, the presets and the card agent panel of the '
+             'worktree card procedure: one task worktree, the card of the worktrees of that '
+             'repository, and its merge and remove buttons, with real git and no login')
+    parser.add_argument(
         '--panels',
         type=Path,
         help='JSON list of extra workspace panels the fixture opens at start, such as an '
@@ -671,6 +733,9 @@ def main():
         parser.error(str(problem))
     if args.browser_host_profile and not args.browser_host:
         parser.error('--browser-host-profile needs --browser-host')
+    if args.worktree_card and args.presets:
+        parser.error('--worktree-card writes the presets of the worktree card; do not give '
+                     '--presets as well')
     if args.server_command and not args.server_target:
         parser.error('--server-command needs --server-target')
     if args.speech_service and args.speech_transcriber_command:
@@ -793,6 +858,12 @@ def main():
         config = data / 'horizon.json'
         presets = load_presets(args.presets) if args.presets else None
         extra_panels = load_panels(args.panels) if args.panels else None
+        if args.worktree_card:
+            # The throwaway repository comes first: the panel of the card agent reads
+            # it at start, and the presets are those that its task panel names.
+            repo = worktree_card_repository(args.state)
+            presets = WORKTREE_CARD_PRESETS
+            extra_panels = list(extra_panels or []) + [worktree_card_panel(app, repo, args.state)]
         if args.attention_agent is not None:
             # The stand-in replaces the default board, so the panel of the
             # procedure is the first one that the person sees.

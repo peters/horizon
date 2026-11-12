@@ -15,6 +15,15 @@ host that refuses a wait without a card gets one wait per card instead.
 CARD_AGENT_SSH_HOST_2, with `machine_key` and `machine_set`, prints each record
 and the list that `machines` answers, and stays open until its stdin closes.
 
+`--scenario worktree` reads CARD_AGENT_REPO, CARD_AGENT_STATE and
+CARD_AGENT_PRESET. It starts one task worktree with real git in the repository
+that the fixture owns, opens the preset panel there with `open_panel`, prints the
+three refusals of that operation, and draws one card for the worktrees of the
+repository: a row for each worktree, the changes of the selected one, and the
+buttons Refresh, Show changes, Merge and Remove. Every git command runs with
+`-C` and an argument list and never through a shell, and the card removes only a
+folder under CARD_AGENT_STATE.
+
 The Connect button of the machine card opens a terminal panel for the person
 with `open_terminal`; the SSH host comes from `CARD_AGENT_SSH_HOST` and the
 one-line command from `CARD_AGENT_SSH_COMMAND`. `--scenario intruder` creates
@@ -51,6 +60,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 PROGRAM = 'card-agent'
 
@@ -158,6 +168,21 @@ def answer_code(payload: dict) -> str:
     if status == 'failed':
         return payload.get('code') or 'failed'
     return status or 'unknown'
+
+
+def one_line(text) -> str:
+    """One log line of a text that may hold a line break."""
+    return ' '.join(str(text).split())
+
+
+def answer_words(payload: dict) -> str:
+    """The panel and the message of an answer, in one line for the log."""
+    parts = []
+    if payload.get('panel_id'):
+        parts.append(f'panel {payload["panel_id"]}')
+    if payload.get('message'):
+        parts.append(one_line(payload['message']))
+    return f' ({"; ".join(parts)})' if parts else ''
 
 
 # --------------------------------------------------------------------------
@@ -698,6 +723,533 @@ class TallCard(Card):
         return tall_document(self.pressed_at, rich)
 
 
+# --------------------------------------------------------------------------
+# The `worktree` scenario: one card for the worktrees of a real repository, and
+# the task panel that `open_panel` starts in one of them
+# (assets/plugins/claude-code/skills/horizon-worktree/SKILL.md).
+#
+# Every git command runs with `-C` and an argument list, never through a shell,
+# and every path that a command removes is checked to be under the state folder
+# of the fixture first.
+# --------------------------------------------------------------------------
+
+WORKTREE_REPO_ENV = 'CARD_AGENT_REPO'
+WORKTREE_STATE_ENV = 'CARD_AGENT_STATE'
+WORKTREE_PRESET_ENV = 'CARD_AGENT_PRESET'
+DEFAULT_WORKTREE_PRESET = 'Task shell'
+WORKTREE_BROWSER_PRESET = 'Page'
+WORKTREE_TASK = 'first change'
+WORKTREE_BRANCH_PREFIX = 'task/'
+MAX_SLUG_CHARS = 40
+WORKTREE_TEXT_CHARS = 512
+WORKTREE_SUBJECTS = 3
+WORKTREE_MAX_ROWS = 32
+
+
+def is_under(root, path) -> bool:
+    """Whether `path` is `root` or a child of it, after both are resolved."""
+    root = Path(os.path.realpath(root))
+    path = Path(os.path.realpath(path))
+    return path == root or root in path.parents
+
+
+def slug_of(text: str) -> str:
+    """The slug of one task name: letters, digits and `-`, at most 40 characters."""
+    slug = ''
+    for character in text.strip().lower():
+        if 'a' <= character <= 'z' or '0' <= character <= '9':
+            slug += character
+        elif slug and not slug.endswith('-'):
+            slug += '-'
+    return slug.strip('-')[:MAX_SLUG_CHARS].strip('-') or 'task'
+
+
+def run_git(repo, arguments) -> subprocess.CompletedProcess:
+    """One git command in `repo`: `-C`, an argument list, and no shell."""
+    command = ['git', '-C', str(repo), *arguments]
+    try:
+        return subprocess.run(command, capture_output=True, text=True,
+                              encoding='utf-8', errors='replace', check=False)
+    except OSError as error:
+        raise Fatal(f'cannot run {command[0]}: {error}') from error
+
+
+def git_text(repo, arguments) -> str:
+    """The standard output of one git command that must succeed."""
+    result = run_git(repo, arguments)
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip().splitlines()
+        first = one_line(reason[0]) if reason else f'exit {result.returncode}'
+        raise Fatal(f'git {arguments[0]} in {repo} failed: {first}')
+    return result.stdout
+
+
+def git_succeeds(repo, arguments) -> bool:
+    """Whether one git command that may fail answered success."""
+    return run_git(repo, arguments).returncode == 0
+
+
+def git_text_or(repo, arguments, fallback: str = '') -> str:
+    """The standard output of one git command, or `fallback` when it fails.
+
+    A card reads the state of a worktree that another program may change under it,
+    so a folder that went away costs one line of the card and not the card.
+    """
+    result = run_git(repo, arguments)
+    return result.stdout if result.returncode == 0 else fallback
+
+
+def count_lines(text: str) -> int:
+    """The number of the lines of `text` that hold something."""
+    return len([line for line in text.splitlines() if line.strip()])
+
+
+def base_branch(repo) -> str:
+    """The branch that a task starts from: the remote default, else this branch."""
+    for arguments in (('symbolic-ref', '--short', 'refs/remotes/origin/HEAD'),
+                      ('symbolic-ref', '--short', 'HEAD')):
+        result = run_git(repo, arguments)
+        name = result.stdout.strip() if result.returncode == 0 else ''
+        if not name:
+            continue
+        return name.split('/', 1)[1] if name.startswith('origin/') else name
+    return 'main'
+
+
+def free_slug(repo, task: str) -> str:
+    """The slug of the task under a branch name that this repository does not use."""
+    stem = slug_of(task)
+    candidate = stem
+    number = 2
+    while git_succeeds(repo, ('rev-parse', '--verify', '--quiet',
+                              f'refs/heads/{WORKTREE_BRANCH_PREFIX}{candidate}')):
+        suffix = f'-{number}'
+        candidate = f'{stem[:MAX_SLUG_CHARS - len(suffix)].strip("-")}{suffix}'
+        number += 1
+    return candidate
+
+
+def age_of(seconds: float) -> str:
+    """The words of the age of one commit, such as `4 hours ago`."""
+    for size, name in ((86400, 'day'), (3600, 'hour'), (60, 'minute')):
+        if seconds >= size:
+            count = int(seconds // size)
+            return f'{count} {name}{"" if count == 1 else "s"} ago'
+    return f'{int(seconds)} seconds ago'
+
+
+def parse_worktrees(text: str) -> list[dict]:
+    """The worktrees of `git worktree list --porcelain`, in its own order."""
+    worktrees, current = [], None
+    for line in text.splitlines():
+        if line.startswith('worktree '):
+            current = {'path': line[len('worktree '):], 'head': '', 'branch': None,
+                       'detached': False}
+            worktrees.append(current)
+        elif current is None or not line:
+            continue
+        elif line.startswith('HEAD '):
+            current['head'] = line[len('HEAD '):]
+        elif line.startswith('branch '):
+            reference = line[len('branch '):]
+            current['branch'] = (reference[len('refs/heads/'):]
+                                 if reference.startswith('refs/heads/') else reference)
+        elif line == 'detached':
+            current['detached'] = True
+    return worktrees
+
+
+class Worktree:
+    """One worktree of the repository, with the numbers that its row shows."""
+
+    def __init__(self, path, branch, main: bool):
+        self.path = Path(path)
+        self.branch = branch
+        self.main = main
+        self.ahead = 0
+        self.files_changed = 0
+        self.age = 'just now'
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def row_id(self) -> str:
+        return f'worktree.{slug_of(self.name)}'
+
+    def reference(self) -> str:
+        return self.branch or 'HEAD'
+
+    def subtitle(self) -> str:
+        parts = [self.branch or 'detached HEAD']
+        if self.main:
+            parts.append('main worktree')
+        parts.extend([
+            f'ahead {self.ahead}',
+            f'{self.files_changed} file{"" if self.files_changed == 1 else "s"} changed',
+            f'last commit {self.age}',
+        ])
+        return ' \u00b7 '.join(parts)
+
+
+def read_worktrees(repo, base: str) -> list[Worktree]:
+    """The worktrees of `repo`, each with its branch, its count ahead of `base`, its
+    changed files and the age of its last commit. The first one is the main worktree."""
+    entries = parse_worktrees(git_text(repo, ('worktree', 'list', '--porcelain')))
+    now = time.time()
+    worktrees = []
+    for index, entry in enumerate(entries):
+        worktree = Worktree(entry['path'], entry['branch'], index == 0)
+        if worktree.branch:
+            counted = git_text_or(worktree.path,
+                                  ('rev-list', '--count', f'{base}..{worktree.branch}')).strip()
+            worktree.ahead = int(counted or 0)
+        worktree.files_changed = count_lines(
+            git_text_or(worktree.path, ('status', '--porcelain')))
+        committed = int(git_text_or(worktree.path, ('log', '-1', '--format=%ct')).strip() or 0)
+        worktree.age = age_of(max(0.0, now - committed))
+        worktrees.append(worktree)
+    return worktrees
+
+
+def make_task_worktree(repo, state, base: str) -> Worktree:
+    """The worktree of one task, on a branch that does not exist yet."""
+    slug = free_slug(repo, WORKTREE_TASK)
+    branch = f'{WORKTREE_BRANCH_PREFIX}{slug}'
+    folder = Path(f'{repo}-wt') / slug
+    if not is_under(state, folder):
+        raise Fatal(f'the worktree folder {folder} is not under {WORKTREE_STATE_ENV} {state}')
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    git_text(repo, ('worktree', 'add', '-b', branch, str(folder), base))
+    return Worktree(folder, branch, False)
+
+
+def worktree_environment() -> tuple[Path, Path, str]:
+    """The repository, its state folder and the preset of the task panel, checked."""
+    repo = os.environ.get(WORKTREE_REPO_ENV, '').strip()
+    state = os.environ.get(WORKTREE_STATE_ENV, '').strip()
+    preset = os.environ.get(WORKTREE_PRESET_ENV, '').strip() or DEFAULT_WORKTREE_PRESET
+    if not repo:
+        raise Fatal(f'the worktree scenario needs {WORKTREE_REPO_ENV}')
+    if not state:
+        raise Fatal(f'the worktree scenario needs {WORKTREE_STATE_ENV}')
+    if not os.path.isabs(repo) or not os.path.isabs(state):
+        raise Fatal(f'{WORKTREE_REPO_ENV} and {WORKTREE_STATE_ENV} name absolute paths')
+    state = Path(os.path.realpath(state))
+    repo = Path(os.path.realpath(repo))
+    if not is_under(state, repo):
+        raise Fatal(f'{WORKTREE_REPO_ENV} {repo} is not under {WORKTREE_STATE_ENV} {state}')
+    if not repo.is_dir():
+        raise Fatal(f'{WORKTREE_REPO_ENV} {repo} is not a folder')
+    root = Path(os.path.realpath(git_text(repo, ('rev-parse', '--show-toplevel')).strip()))
+    if root != repo:
+        raise Fatal(f'{WORKTREE_REPO_ENV} {repo} is not the root of its repository ({root})')
+    return repo, state, preset
+
+
+def cut_text(text: str, limit: int = WORKTREE_TEXT_CHARS) -> str:
+    """`text` cut to the bounds of a card, with one line that says that it was cut."""
+    text = text.strip('\n')
+    if len(text) <= limit:
+        return text
+    marker = '\n... the text is cut here'
+    return text[:limit - len(marker)].rstrip() + marker
+
+
+def changed_files(worktree: Worktree, base: str) -> list[str]:
+    """The files that the worktree changed against `base`."""
+    text = git_text_or(worktree.path, ('diff', '--name-only', f'{base}...{worktree.reference()}'))
+    return [line for line in text.splitlines() if line.strip()]
+
+
+def diff_stat(worktree: Worktree, base: str) -> str:
+    """The cut `git diff --stat` of one worktree against `base`."""
+    return git_text_or(worktree.path,
+                       ('diff', '--stat', f'{base}...{worktree.reference()}')).strip()
+
+
+def last_subjects(worktree: Worktree) -> str:
+    """The subjects of the last commits of one branch."""
+    text = git_text_or(worktree.path,
+                       ('log', f'-n{WORKTREE_SUBJECTS}', '--format=%s', worktree.reference()))
+    return text.strip()
+
+
+def commits_ahead(repo, worktree: Worktree, base: str) -> str:
+    """The commits that a merge of `worktree` brings into `base`."""
+    if not worktree.branch:
+        return ''
+    return git_text_or(repo, ('log', '--oneline', f'{base}..{worktree.branch}')).strip()
+
+
+def conflicted_files(path) -> list[str]:
+    """The files of one merge that did not apply."""
+    result = run_git(path, ('diff', '--name-only', '--diff-filter=U'))
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+class WorktreeCard(Card):
+    """One card for the worktrees of a real repository (SKILL.md, `horizon-worktree`).
+
+    The rows select a worktree, the buttons read git again, list the changed files,
+    ask before a merge and ask before a remove. A second button that the person does
+    not press goes away at the next other click.
+    """
+
+    def __init__(self, repo, state, preset: str, base: str, worktrees, task: Worktree):
+        super().__init__('worktree', f'Worktrees of {Path(repo).name}')
+        self.repo = Path(repo)
+        self.state = Path(state)
+        self.preset = preset
+        self.base = base
+        self.task = task
+        self.worktrees = worktrees
+        self.view = 'worktrees'
+        self.selected = task.row_id
+        self.files: list[str] = []
+        self.file: str | None = None
+        self.pending: str | None = None
+        self.pending_label: str | None = None
+        self.pending_worktree: Worktree | None = None
+        self.details: str | None = None
+        self.note: str | None = None
+
+    # -- what the card shows ----------------------------------------------
+
+    def selected_worktree(self) -> Worktree | None:
+        for worktree in self.worktrees:
+            if worktree.row_id == self.selected:
+                return worktree
+        return None
+
+    def main_worktree(self) -> Worktree | None:
+        for worktree in self.worktrees:
+            if worktree.main:
+                return worktree
+        return None
+
+    def worktree_row_ids(self) -> set[str]:
+        return {worktree.row_id for worktree in self.worktrees}
+
+    def rows(self, rich: bool) -> list[dict]:
+        if self.view == 'changes':
+            rows = []
+            for index, path in enumerate(self.files):
+                row = {'id': f'file.{index}', 'title': cut_text(path, 120)}
+                if rich and path == self.file:
+                    row['selected'] = True
+                rows.append(row)
+            return rows
+        rows = []
+        for worktree in self.worktrees[:WORKTREE_MAX_ROWS]:
+            row = {'id': worktree.row_id, 'title': worktree.name,
+                   'subtitle': worktree.subtitle()}
+            if rich and worktree.row_id == self.selected:
+                row['selected'] = True
+            rows.append(row)
+        return rows
+
+    def shown_text(self) -> str:
+        """The text under the list: a question that waits, a diff or the state."""
+        if self.details is not None:
+            return cut_text(self.details)
+        worktree = self.selected_worktree()
+        if worktree is None:
+            return 'Select one worktree to see its changes.'
+        if self.view == 'changes':
+            if not self.file:
+                return 'This worktree has no changed file.'
+            diff = git_text_or(worktree.path,
+                               ('diff', f'{self.base}...{worktree.reference()}', '--', self.file))
+            return cut_text(diff or 'The file holds no change against the base.')
+        stat = diff_stat(worktree, self.base)
+        subjects = last_subjects(worktree)
+        text = stat or f'No change from {self.base}.'
+        return cut_text(f'{text}\n\nLast commits:\n{subjects or "no commit yet"}')
+
+    def buttons(self) -> list[dict]:
+        items = []
+        if self.pending_label:
+            items.append({
+                'id': 'merge.confirm' if self.pending == 'merge' else 'remove.confirm',
+                'label': self.pending_label,
+                'tone': 'primary' if self.pending == 'merge' else 'danger',
+            })
+        items.extend([
+            {'id': 'refresh', 'label': 'Refresh'},
+            {'id': 'changes', 'label': 'Show changes'},
+        ])
+        if self.view == 'changes':
+            items.append({'id': 'worktrees', 'label': 'Worktrees'})
+        items.extend([
+            {'id': 'merge', 'label': 'Merge', 'tone': 'primary'},
+            {'id': 'remove', 'label': 'Remove', 'tone': 'danger'},
+        ])
+        return items
+
+    def document(self, rich: bool) -> dict:
+        count = len(self.worktrees)
+        subtitle = (f'{count} worktree{"" if count == 1 else "s"} '
+                    f'\u00b7 base {self.base}')
+        components = heading(f'Worktrees of {self.repo.name}', subtitle, None, rich)
+        components.append({'type': 'list', 'selection': 'single', 'rows': self.rows(rich)})
+        components.append({'type': 'text', 'text': self.shown_text()})
+        if self.view != 'changes' and count > WORKTREE_MAX_ROWS:
+            components.append({'type': 'text',
+                               'text': f'{count - WORKTREE_MAX_ROWS} more worktree(s) are not shown.'})
+        if self.note:
+            components.append({'type': 'text', 'text': cut_text(self.note)})
+        components.append({'type': 'buttons', 'items': self.buttons()})
+        return {'components': components}
+
+    # -- the actions of the buttons ---------------------------------------
+
+    def clear_prompt(self) -> None:
+        """Drops a second button that the person did not press."""
+        self.pending = None
+        self.pending_label = None
+        self.pending_worktree = None
+        self.details = None
+
+    def refresh(self) -> None:
+        """Reads git again, and keeps the selection that still exists."""
+        self.worktrees = read_worktrees(self.repo, self.base)
+        if self.selected not in self.worktree_row_ids():
+            self.selected = self.worktrees[0].row_id if self.worktrees else None
+        if self.view == 'changes':
+            worktree = self.selected_worktree()
+            self.files = changed_files(worktree, self.base) if worktree else []
+            if self.file not in self.files:
+                self.file = self.files[0] if self.files else None
+        else:
+            self.files, self.file = [], None
+
+    def select(self, row_id: str) -> None:
+        self.view = 'worktrees'
+        self.files, self.file = [], None
+        self.selected = row_id
+
+    def show_changes(self) -> None:
+        worktree = self.selected_worktree()
+        if worktree is None:
+            self.note = 'Select one worktree first.'
+            return
+        self.files = changed_files(worktree, self.base)
+        if not self.files:
+            self.note = f'{worktree.name} has no changed file against {self.base}.'
+            return
+        self.view = 'changes'
+        if self.file not in self.files:
+            self.file = self.files[0]
+        self.note = f'{len(self.files)} changed file(s) of {worktree.name}.'
+
+    def merge_refusal(self, worktree: Worktree | None) -> str | None:
+        if worktree is None:
+            return 'Select one worktree first.'
+        if worktree.main:
+            return (f'{worktree.name} is the main worktree, and a merge arrives there: '
+                    f'select the worktree of the task.')
+        if not worktree.branch:
+            return 'A worktree without a branch has nothing to merge.'
+        if worktree.files_changed:
+            return (f'{worktree.name} has {worktree.files_changed} item(s) that are not committed, '
+                    f'so no merge runs. Commit or remove them first.')
+        if worktree.ahead == 0:
+            return f'{worktree.branch} is not ahead of {self.base}, so there is nothing to merge.'
+        return None
+
+    def ask_merge(self) -> None:
+        worktree = self.selected_worktree()
+        refusal = self.merge_refusal(worktree)
+        if refusal:
+            self.note = refusal
+            return
+        self.details = f'Commits that arrive in {self.base}:\n{commits_ahead(self.repo, worktree, self.base)}'
+        self.pending = 'merge'
+        self.pending_label = f'Merge {worktree.branch} into {self.base}'
+        self.pending_worktree = worktree
+        self.note = None
+
+    def confirm_merge(self) -> None:
+        worktree = self.pending_worktree
+        self.clear_prompt()
+        if worktree is None:
+            self.note = 'Select one worktree first.'
+            return
+        base_worktree = self.main_worktree()
+        if base_worktree is None:
+            self.note = 'This repository has no main worktree, so no merge runs.'
+            return
+        result = run_git(base_worktree.path, ('merge', '--no-ff', worktree.branch))
+        if result.returncode == 0:
+            self.note = f'Merged {worktree.branch} into {self.base}. Nothing was pushed.'
+        else:
+            conflicted = conflicted_files(base_worktree.path)
+            aborted = run_git(base_worktree.path, ('merge', '--abort'))
+            named = ', '.join(conflicted) if conflicted else 'no reported file'
+            outcome = 'aborted' if aborted.returncode == 0 else 'not aborted'
+            self.note = f'The merge conflicted in {named}, so the merge was {outcome}. Nothing was pushed.'
+        self.refresh()
+
+    def remove_refusal(self, worktree: Worktree | None) -> str | None:
+        if worktree is None:
+            return 'Select one worktree first.'
+        if worktree.main:
+            return f'{worktree.name} is the main worktree, so it stays.'
+        if not is_under(self.state, worktree.path):
+            return (f'{worktree.path} is not under {WORKTREE_STATE_ENV} ({self.state}), '
+                    f'so this card removes nothing.')
+        return None
+
+    def ask_remove(self) -> None:
+        worktree = self.selected_worktree()
+        refusal = self.remove_refusal(worktree)
+        if refusal:
+            self.note = refusal
+            return
+        uncommitted = git_text_or(worktree.path, ('status', '--porcelain')).strip()
+        commits = commits_ahead(self.repo, worktree, self.base)
+        self.details = (f'Files that are not committed in {worktree.name}:\n'
+                        f'{uncommitted or "none"}\n\n'
+                        f'Commits that are on no other branch:\n{commits or "none"}')
+        self.pending = 'remove'
+        self.pending_label = f'Remove {worktree.name}'
+        self.pending_worktree = worktree
+        self.note = None
+
+    def confirm_remove(self) -> None:
+        worktree = self.pending_worktree
+        self.clear_prompt()
+        if worktree is None:
+            self.note = 'Select one worktree first.'
+            return
+        # The path is checked again before the command that removes it.
+        refusal = self.remove_refusal(worktree)
+        if refusal:
+            self.note = refusal
+            return
+        dirty = count_lines(git_text_or(worktree.path, ('status', '--porcelain'))) > 0
+        arguments = ['worktree', 'remove', str(worktree.path)]
+        if dirty:
+            arguments.append('--force')
+        git_text(self.repo, tuple(arguments))
+        kept = ''
+        if worktree.branch:
+            if git_succeeds(self.repo, ('merge-base', '--is-ancestor', worktree.branch, self.base)):
+                git_text(self.repo, ('branch', '-d', worktree.branch))
+                kept = f' Branch {worktree.branch} was merged, so it is deleted.'
+            else:
+                kept = f' Branch {worktree.branch} is not merged, so it stays.'
+        self.note = f'Removed {worktree.name}.{kept}'
+        self.view = 'worktrees'
+        self.files, self.file = [], None
+        self.refresh()
+
+
+
 SCENARIOS = {
     'machine': lambda: MachineCard('machine', MACHINE_TITLE),
     'choose': lambda: ChooseCard('choose', CHOOSE_TITLE,
@@ -718,7 +1270,7 @@ def machine_names(second_host: str) -> tuple[str, ...]:
 
 def scenario_keys(scenario: str) -> tuple[str, ...]:
     """The cards one `--scenario` name creates, in creation order."""
-    if scenario in ('intruder', 'machines'):
+    if scenario in ('intruder', 'machines', 'worktree'):
         return ()
     if scenario == 'all+tall':
         return SCENARIO_ORDER + ('tall',)
@@ -900,6 +1452,8 @@ class CardAgent:
         return self.handle_any(payload, timeout_line)
 
     def react(self, card: Card, component: str | None, click: dict) -> str:
+        if card.key == 'worktree':
+            return self.react_worktree(card, component)
         selected = [row_id for row_id in (click.get('selected') or []) if isinstance(row_id, str)]
         closes = (component == 'cancel'
                   or (card.key == 'machine' and component == 'delete')
@@ -1058,8 +1612,12 @@ class CardAgent:
             return self.run_intruder()
         if scenario == 'machines':
             return self.run_machines()
-        for key in scenario_keys(scenario):
-            self.create(SCENARIOS[key]())
+        if scenario == 'worktree':
+            self.create(self.prepare_worktree())
+            self.refuse_open_panel_requests(self.cards[0])
+        else:
+            for key in scenario_keys(scenario):
+                self.create(SCENARIOS[key]())
         model = 'rich' if self.rich else 'plain'
         log(f'documents use the {model} model of the card document')
         form = 'every card' if self.any_card_wait else 'one card'
@@ -1118,6 +1676,70 @@ class CardAgent:
         log('intruder check done')
         self.idle_until_eof()
         return 0
+
+    # -- the worktree card -----------------------------------------------
+
+    def prepare_worktree(self) -> WorktreeCard:
+        """The task worktree, its panel, and the card of the repository."""
+        repo, state, preset = worktree_environment()
+        base = base_branch(repo)
+        task = make_task_worktree(repo, state, base)
+        log(f'worktree: branch {task.branch} in {task.path} from {base}')
+        answer = self.client.call_tool('block_panel', {
+            'operation': 'open_panel', 'preset': preset,
+            'directory': str(task.path), 'title': WORKTREE_TASK})
+        log(f'worktree: open_panel with {preset!r} answered {answer_code(answer)}{answer_words(answer)}')
+        return WorktreeCard(repo, state, preset, base, read_worktrees(repo, base), task)
+
+    def refuse_open_panel_requests(self, card: WorktreeCard) -> None:
+        """Prints the three refusals of `open_panel` once, and draws no card for them."""
+        folder = str(card.task.path)
+        for label, arguments in (
+            ('an unknown preset', {'preset': 'No such preset', 'directory': folder}),
+            ('a folder that is not there', {'preset': card.preset,
+                                            'directory': str(card.state / 'gone')}),
+            (f'the browser preset {WORKTREE_BROWSER_PRESET!r}',
+             {'preset': WORKTREE_BROWSER_PRESET, 'directory': folder}),
+        ):
+            answer = self.client.call_tool('block_panel', {'operation': 'open_panel', **arguments})
+            log(f'worktree: open_panel with {label} answered {answer_code(answer)}{answer_words(answer)}')
+
+    def react_worktree(self, card: WorktreeCard, component: str | None) -> str:
+        """Act on one press of the worktree card, and draw the result."""
+        confirm = {'merge': 'merge.confirm', 'remove': 'remove.confirm'}.get(card.pending)
+        if component != confirm:
+            # A second button that the person did not press goes away here.
+            card.clear_prompt()
+        file_row = component and component.startswith('file.')
+        if component in card.worktree_row_ids():
+            card.select(component)
+            card.note = None
+        elif file_row:
+            index = int(component.split('.', 1)[1])
+            if 0 <= index < len(card.files):
+                card.file = card.files[index]
+        elif component == 'refresh':
+            card.refresh()
+            card.note = f'Read {len(card.worktrees)} worktree(s) again.'
+        elif component == 'changes':
+            card.show_changes()
+        elif component == 'worktrees':
+            card.view = 'worktrees'
+            card.files, card.file = [], None
+        elif component == 'merge':
+            card.ask_merge()
+        elif component == 'merge.confirm':
+            card.confirm_merge()
+            log(f'worktree: {one_line(card.note)}')
+        elif component == 'remove':
+            card.ask_remove()
+        elif component == 'remove.confirm':
+            card.confirm_remove()
+            log(f'worktree: {one_line(card.note)}')
+        else:
+            card.note = f'No action for {component!r}; the card stays as it is.'
+        self.update(card)
+        return 'keep'
 
     # -- the machine list ------------------------------------------------
 
@@ -1186,14 +1808,18 @@ def parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
              f'Defaults to the {MCP_COMMAND_ENV} environment variable.')
     parser.add_argument(
         '--scenario',
-        choices=('machine', 'choose', 'browser', 'tall', 'all', 'all+tall', 'intruder', 'machines'),
+        choices=('machine', 'choose', 'browser', 'tall', 'all', 'all+tall', 'intruder', 'machines',
+                 'worktree'),
         default='all',
         help='Which cards to create and drive; default all three. all+tall adds the tall '
              'card, whose body scrolls; tall alone creates only that card. intruder creates '
              'no card: it reads the cards of the other agents and tries to change one, '
              'then stays open until stdin closes. machines creates no card: it registers one '
              'or two machines of this Horizon from CARD_AGENT_SSH_HOST and '
-             'CARD_AGENT_SSH_HOST_2, prints the records, then stays open until stdin closes.')
+             'CARD_AGENT_SSH_HOST_2, prints the records, then stays open until stdin closes. '
+             'worktree starts a task worktree in CARD_AGENT_REPO, opens its panel with '
+             'CARD_AGENT_PRESET, prints the three refusals of open_panel, and draws one card '
+             'for the worktrees of that repository.')
     parser.add_argument(
         '--listen', choices=('continuous', 'once'), default='continuous',
         help='continuous: keep one next_click wait on every card the agent owns. once: '
