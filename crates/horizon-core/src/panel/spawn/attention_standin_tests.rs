@@ -103,31 +103,7 @@ fn exercise_launch() {
     if cfg!(target_os = "linux") {
         assert_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
     } else {
-        // `WorkLaunch::attach` answers `None` before it touches the launch on
-        // this system, so the program and Horizon's arguments are the whole
-        // command: no ledger plugin, no work environment and no record. The
-        // empirical teardown proof covers Linux only.
-        assert!(
-            !after.contains("--plugin-dir"),
-            "a panel of this system starts without the work ledger plugin: {command}"
-        );
-        for key in [
-            crate::agent_work::WORK_ROOT_ENV,
-            crate::agent_work::WORK_PANEL_ENV,
-            crate::agent_work::WORK_OWNER_ENV,
-            crate::agent_work::WORK_KIND_ENV,
-            crate::agent_work::WORK_EXECUTABLE_ENV,
-        ] {
-            assert_eq!(
-                env.get(key),
-                None,
-                "a panel of this system starts without the work environment"
-            );
-        }
-        let record = WorkStore::new(horizon_home.root())
-            .read(options.local_id.as_deref().unwrap_or_default())
-            .expect("read");
-        assert!(record.is_none(), "a panel of this system registers no work record");
+        assert_without_work_ledger(&options, &horizon_home, &work_plugin, after, session, &env);
     }
 }
 
@@ -172,6 +148,57 @@ fn assert_work_ledger(
         .expect("read")
         .expect("the launch registered the work record of the panel");
     assert_eq!(record.ledger.session_id, SESSION);
+}
+
+/// The launch of a system where `WorkLaunch::attach` answers `None` before it
+/// touches the launch: the empirical teardown proof covers Linux only, so every
+/// other system keeps the explicit confirmation path.
+fn assert_without_work_ledger(
+    options: &PanelOptions,
+    horizon_home: &HorizonHome,
+    work_plugin: &Path,
+    after: &str,
+    session: usize,
+    env: &HashMap<String, String>,
+) {
+    // The plugin of Horizon's browser tools stays on every system, so the
+    // command names one plugin folder and never the work ledger.
+    assert!(
+        !after.contains(&work_plugin.display().to_string()),
+        "a panel of this system starts without the work ledger plugin: {after}"
+    );
+    let named = &after[session..];
+    assert_eq!(
+        named.split(' ').next(),
+        Some("--session-id"),
+        "the panel keeps the conversation that Horizon names: {after}"
+    );
+    assert!(
+        named
+            .split(' ')
+            .nth(1)
+            .is_some_and(|id| id.len() == 36 && id.matches('-').count() == 4),
+        "the conversation follows its flag: {after}"
+    );
+    // The work environment of a nested agent is cleared before the launch, so
+    // the five variables reach the panel empty and never carry a token.
+    for key in [
+        crate::agent_work::WORK_ROOT_ENV,
+        crate::agent_work::WORK_PANEL_ENV,
+        crate::agent_work::WORK_OWNER_ENV,
+        crate::agent_work::WORK_KIND_ENV,
+        crate::agent_work::WORK_EXECUTABLE_ENV,
+    ] {
+        assert_eq!(
+            env.get(key).map(String::as_str),
+            Some(""),
+            "a panel of this system starts without the work environment"
+        );
+    }
+    let record = WorkStore::new(horizon_home.root())
+        .read(options.local_id.as_deref().unwrap_or_default())
+        .expect("read");
+    assert!(record.is_none(), "a panel of this system registers no work record");
 }
 
 /// The panel options of the entry that the fixture writes.
@@ -226,6 +253,13 @@ fn launch(home: &Path, options: &PanelOptions) -> (String, Vec<String>, HashMap<
         default_command: options.command.is_none(),
     }
     .start(&program, false, true, &mut args, &mut env);
-    assert!(plan.owner.is_some(), "the launch attaches the work ledger of the panel");
+    if cfg!(target_os = "linux") {
+        assert!(plan.owner.is_some(), "the launch attaches the work ledger of the panel");
+    } else {
+        assert!(
+            plan.owner.is_none(),
+            "the launch attaches no work ledger on this system"
+        );
+    }
     (program, args, env)
 }
