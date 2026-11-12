@@ -374,7 +374,11 @@ fn render_network_line(
     keyring: &mut KeyringImport,
     vault: Option<&std::sync::Arc<NamedSecretVault>>,
 ) {
-    let names: Vec<&str> = line.names().iter().map(horizon_core::named_secrets::SecretName::as_str).collect();
+    let names: Vec<&str> = line
+        .names()
+        .iter()
+        .map(horizon_core::named_secrets::SecretName::as_str)
+        .collect();
     ui.add(
         egui::Label::new(
             egui::RichText::new(names.join(" · "))

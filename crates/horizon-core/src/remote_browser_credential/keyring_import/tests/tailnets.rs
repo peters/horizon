@@ -246,7 +246,11 @@ fn two_networks(platform: Platform) {
     let outcome = scan(platform, &stand_ins, &cloud, Arc::clone(&vault), &shared).expect("the offer of both networks");
     let offer = outcome.offer.as_ref().expect("the offer of the scan");
     assert_eq!(
-        offer.lines().iter().map(super::super::TailnetLine::net).collect::<Vec<_>>(),
+        offer
+            .lines()
+            .iter()
+            .map(super::super::TailnetLine::net)
+            .collect::<Vec<_>>(),
         ["HOME", "WORK"],
         "{platform:?}"
     );
@@ -297,7 +301,11 @@ fn two_names_that_become_one_net_take_a_number() {
         scan(Platform::SecretService, &stand_ins, &cloud, Arc::clone(&vault), &shared).expect("the offer of the names");
     let offer = outcome.offer.as_ref().expect("the offer of the scan");
     assert_eq!(
-        offer.lines().iter().map(super::super::TailnetLine::net).collect::<Vec<_>>(),
+        offer
+            .lines()
+            .iter()
+            .map(super::super::TailnetLine::net)
+            .collect::<Vec<_>>(),
         ["HOME", "HOME_2"]
     );
     assert_eq!(
