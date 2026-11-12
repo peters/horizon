@@ -574,3 +574,56 @@ fn the_title_question_never_holds_the_driver_for_a_round_trip() {
     drop(link);
     let _ = server.join();
 }
+
+#[test]
+fn a_picture_asks_for_scroll_geometry_only_when_its_size_changed() {
+    let config = BrowserSessionConfig {
+        attach: None,
+        resume_target: None,
+        browser: BrowserConfig::default(),
+        panel_local_id: "scrollbar-layout".to_string(),
+        initial_url: None,
+        width: 800,
+        height: 600,
+        frame_slot: Arc::default(),
+        coordination: None,
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    };
+    let mut state = DriverState::new(&config, "ws://127.0.0.1/test", None, Arc::new(AtomicBool::new(false)));
+
+    state.note_frame_size_for_layout((800, 600));
+    assert!(
+        state.scrollbar_layout.refresh_at.is_some(),
+        "the first picture of a session asks for the geometry once"
+    );
+    state.scrollbar_layout.refresh_at = None;
+    state.note_frame_size_for_layout((800, 600));
+    assert!(
+        state.scrollbar_layout.refresh_at.is_none(),
+        "a picture of an unchanged size asks nothing: the request would share the link with every frame"
+    );
+    state.note_frame_size_for_layout((900, 600));
+    assert!(
+        state.scrollbar_layout.refresh_at.is_some(),
+        "a reflow asks again at once"
+    );
+
+    state.scrollbar_layout.painted_since_refresh = true;
+    state.scrollbar_layout.refresh_at = None;
+    state.note_scrollbar_layout_answer();
+    let due = state.scrollbar_layout.refresh_at.expect("a painting page re-reads");
+    assert!(
+        due >= Instant::now() + Duration::from_millis(240),
+        "the slow cadence, not one read per picture"
+    );
+    assert!(!state.scrollbar_layout.painted_since_refresh);
+
+    state.scrollbar_layout.refresh_at = None;
+    state.note_scrollbar_layout_answer();
+    assert!(
+        state.scrollbar_layout.refresh_at.is_none(),
+        "a still page costs nothing"
+    );
+}

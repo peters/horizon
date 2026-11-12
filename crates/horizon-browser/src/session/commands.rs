@@ -15,8 +15,8 @@ use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailur
 use crate::navigation::AgentActionExecution;
 
 use super::{
-    BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
-    VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
+    BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_REFRESH_INTERVAL,
+    SCROLLBAR_LAYOUT_RETRY_DELAY, VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
 };
 
 impl DriverState {
@@ -454,6 +454,16 @@ impl DriverState {
         }
     }
 
+    /// The answer arrived: a page that painted since the last read is still
+    /// moving, so the next slow read is due; a still page costs nothing.
+    pub(super) fn note_scrollbar_layout_answer(&mut self) {
+        if !self.scrollbar_layout.painted_since_refresh {
+            return;
+        }
+        self.scrollbar_layout.painted_since_refresh = false;
+        self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_REFRESH_INTERVAL);
+    }
+
     pub(super) fn handle_scrollbar_layout_response(
         &mut self,
         id: u64,
@@ -480,6 +490,7 @@ impl DriverState {
         if frame_slot.publish_page_scroll_state(layout) {
             event_tx.wake_ui();
         }
+        self.note_scrollbar_layout_answer();
         true
     }
 
@@ -497,9 +508,20 @@ impl DriverState {
                 event_tx.wake_ui();
             }
         }
-        // Screencast frames arrive when the page paints, including DOM-driven
-        // height changes that leave scrollY unchanged. Refresh layout metrics
-        // on that cadence so the overlay and hit box follow content size.
+        // A picture is not a reason to ask the browser for its geometry: on a
+        // far link that request shares the socket with the pictures and its
+        // answer wakes the UI again. The slow cadence below keeps a painting
+        // page current, and a size change or a scroll command asks at once.
+        self.scrollbar_layout.painted_since_refresh = true;
+    }
+
+    /// One decoded picture of `size`: a new size means the page reflowed, so
+    /// its scroll geometry must be read again.
+    pub(super) fn note_frame_size_for_layout(&mut self, size: (u32, u32)) {
+        if self.scrollbar_layout.frame_size == Some(size) {
+            return;
+        }
+        self.scrollbar_layout.frame_size = Some(size);
         self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
     }
 

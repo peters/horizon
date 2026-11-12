@@ -214,6 +214,10 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
+/// How often a painting page re-reads its scroll geometry: four times a second
+/// is enough for an overlay, and a request per picture would put a message pair
+/// on the same link as every frame.
+const SCROLLBAR_LAYOUT_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -557,6 +561,12 @@ struct ScrollbarLayoutCache {
     layout: Option<PageScrollState>,
     request_id: Option<u64>,
     refresh_at: Option<Instant>,
+    /// Size of the picture that the last layout read described, so a resize is
+    /// a reason to read again and an unchanged picture is not.
+    frame_size: Option<(u32, u32)>,
+    /// A picture arrived since the last layout answer, so the page still paints
+    /// and the next slow read is due.
+    painted_since_refresh: bool,
 }
 
 impl ScrollbarLayoutCache {
@@ -565,6 +575,8 @@ impl ScrollbarLayoutCache {
             layout: None,
             request_id: None,
             refresh_at: Some(Instant::now()),
+            frame_size: None,
+            painted_since_refresh: false,
         }
     }
 }

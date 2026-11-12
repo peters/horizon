@@ -570,6 +570,7 @@ impl DriverState {
             let decoded_at = Instant::now();
             let size = frame_slot.latest().map_or((0, 0), |frame| (frame.width, frame.height));
             frame_slot.note_frame_handed(seq, bytes, size, received_at, decoded_at, true);
+            self.note_frame_size_for_layout(size);
             self.record_interaction_frame(frame_slot);
             publish_frame(event_tx, frame_slot, seq);
         } else {
