@@ -427,6 +427,113 @@ A change that a computer made while the server was away stays in its queue and
 settles when the server returns. An in-flight push is sent again with the same
 identifier, so it changes the store one time.
 
+## Move the server to another computer
+
+A person who replaces the computer that runs the server, or who moves the server
+from one operating system to another, moves one folder: the server home. The
+machines, the keys, the values, the settings and the computers that joined stay
+the same, because every one of them is in that folder.
+
+1. Stop the old server, with the stop step of [Run the server at login](#run-the-server-at-login)
+   for its system, and read its log until it holds this line:
+
+   ```text
+   the Horizon server stopped
+   ```
+
+   Result: the process has ended, its socket is gone, and its store is closed.
+
+   Do not copy from a server that runs, and do not start the old server again
+   after the move: two servers with one store id and two contents decide the
+   machine list twice.
+
+2. On the old computer, copy the files of the store to the server home of the new
+   computer. The user that the copy names owns the files, so start the server of
+   the new computer as that user:
+
+   ```sh
+   ssh CHANGE-ME@server-computer 'mkdir -p ~/.horizon-server && chmod 700 ~/.horizon-server'
+   scp -p ~/.horizon-server/server.sqlite ~/.horizon-server/secret.key \
+     CHANGE-ME@server-computer:.horizon-server/
+   ```
+
+   ```sh
+   ssh CHANGE-ME@server-computer 'chmod 600 ~/.horizon-server/server.sqlite ~/.horizon-server/secret.key'
+   ```
+
+   Result: the server home of the new computer holds `server.sqlite` and
+   `secret.key`, each at mode 600, in a folder of mode 700.
+
+   Use the path of your own server home when `HORIZON_SERVER_HOME` names one.
+
+3. Copy `server.sqlite-wal` and `server.sqlite-shm` too when the folder of a
+   stopped server still holds them and they are not empty. A clean stop ends the
+   write-ahead log, so `server.sqlite` alone is the whole store, and the two files
+   are usually gone. A killed server leaves them, and they belong with their
+   `server.sqlite`: a copy of the database without them loses the last changes.
+
+4. Do not copy `server.lock` and `server.sock`, and do not copy the `log` folder.
+   The lock says that a server of that home runs, and it is the open file of that
+   process: a copied file blocks nothing and a new server takes it. The socket
+   belongs to one run of a server, and a start removes a socket file that no
+   process listens on. The log is the history of the old computer.
+
+5. Start the server on the new computer, with the service steps of its system and
+   the same flags as the old one: `--listen` and `--name` when the computers of
+   the listener reach it. Read its log:
+
+   ```text
+   the Horizon server answers
+   ```
+
+   Result: the line names the new home, its socket and its listener. The server
+   runs with the machine list, the keys and the values of the old computer, and
+   its store id is the same as the one of the old computer.
+
+6. On each computer that follows this server, open **Settings** (**Ctrl+Shift+,**),
+   select the **Server** tab, and set the fields of **This computer** again:
+
+   - **SSH target**: the SSH name of the new computer.
+   - **Command**: the path of the binary on the new computer and `--server-link`,
+     when the `PATH` of the login does not hold it.
+   - **Address**: the listener of the new computer, such as
+     `server-computer:7000`, on a computer that joined with a code. Its token still
+     works, because the row of that computer and the hash of its token are in the
+     moved store.
+
+   Press **Save**, and start Horizon again.
+
+   Result: the sidebar reads `Server: in step`. The machine list is the one of the
+   moved store, a change that waited while the server was away settles by itself,
+   and a new change settles too.
+
+7. A computer that was new, or that never reached this server, joins as [Join a
+   computer with a QR code](#join-a-computer-with-a-qr-code) says. It reads every
+   machine and every named secret of the moved store, and a machine key that the
+   moved `secret.key` sealed opens there.
+
+### What the computers do around a move
+
+- **Another store id gives one line.** The server names the id of its store in
+  its first frame. A computer that reaches a store id that it did not see last
+  takes the machine list and the settings of that store, and the sidebar shows
+  one line about it. A move keeps the id, because it copies one store, so a move
+  shows no such line. A computer that a person points at another server does.
+- **A computer that holds more than the copy takes the copy.** The index of a
+  computer is its mark in the log of the store. A computer whose index is above
+  the index of the store that it reached takes the whole state of that store, so
+  a person copies the newest `server.sqlite`. A change that only the newer store
+  held is gone from every computer that reads an older copy.
+- **The tokens of a join still work.** A token is a row of the moved store, and
+  `secret.key` reads it. The name of the computer is its own file
+  `machines/server-device` of its Horizon home: a token under another device name
+  is not logged in. The **Address** field of each of those computers must reach
+  the listener of the new computer, so its service needs `--listen` and the
+  `--name` that the links held.
+- **The server entry is the one setting that a move changes.** The `server`
+  section stays with one computer and is not shared, so no computer learns the
+  new place by itself, and each one keeps its old target until a person sets it.
+
 ## A continuous copy of the store
 
 The store is one SQLite database, so a tool that copies its write-ahead log

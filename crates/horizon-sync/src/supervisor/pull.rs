@@ -292,8 +292,14 @@ pub(super) fn mirror_of(state: &SyncState) -> MirrorFile {
 /// A server that cannot read the secrets that it holds says so here, and every
 /// computer that still holds a value sends it again: the value of this computer is
 /// new to that server, so it goes as the first write of a secret.
+///
+/// A server that answers with another store than the one this computer saw last
+/// replaces the mirror of this computer at the next pull, which is a machine list
+/// and a set of settings that the person did not change on this computer. The
+/// person reads one line about it.
 pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), String> {
     let mut state = handle.lock();
+    let seen = state.client.store().map(str::to_owned);
     state
         .client
         .accept_hello(answer)
@@ -304,6 +310,14 @@ pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), 
     }
     state.generation = state.generation.wrapping_add(1);
     drop(state);
+    if seen.as_deref().is_some_and(|seen| seen != answer.store) {
+        tracing::warn!(seen = ?seen, store = %answer.store, "the server answered with another store");
+        handle.push_notice(
+            "This computer reached another store at its server, so the machine list and the settings of this \
+             computer are now the ones of that store."
+                .to_owned(),
+        );
+    }
     (handle.wake)();
     Ok(())
 }

@@ -699,6 +699,48 @@ mod tests {
         );
     }
 
+    /// A server that answers with another store than the one this computer saw
+    /// last replaces the machine list and the settings of this computer at the next
+    /// pull, so the person reads one line about it. The first link of a computer is
+    /// no such change, and a line is not repeated for one store.
+    #[test]
+    fn a_server_with_another_store_tells_the_person() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let keys = horizon_core::MachineKeys::new(directory.path().join("keys"));
+        let secrets = keys_of_a_test(keys);
+        let mut config =
+            SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", directory.path(), secrets)
+                .expect("the settings of the link");
+        config.program = "/bin/true".to_owned();
+        let handle = SyncHandle::open(&config, Arc::new(|| {})).expect("the handle of a link");
+        let hello = |store: &str| crate::protocol::HelloOk {
+            protocol: crate::protocol::PROTOCOL_VERSION,
+            store: store.to_owned(),
+            now_millis: 1_760_000_000_000,
+            secrets_lost: false,
+        };
+
+        super::pull::accept_hello(&handle, &hello("one")).expect("the first hello of the link");
+        assert!(
+            handle.take_notices().is_empty(),
+            "the first link of a computer says nothing about the store"
+        );
+
+        super::pull::accept_hello(&handle, &hello("two")).expect("the hello of another store");
+        let notices = handle.take_notices();
+        assert_eq!(notices.len(), 1, "another store is one line: {notices:?}");
+        assert!(
+            notices[0].contains("another store") && notices[0].contains("machine list"),
+            "the line names what the person lost and what replaced it: {notices:?}"
+        );
+
+        super::pull::accept_hello(&handle, &hello("two")).expect("the same store again");
+        assert!(
+            handle.take_notices().is_empty(),
+            "a store that this computer already took says nothing"
+        );
+    }
+
     #[test]
     fn a_secret_notice_of_the_link_is_shown_once() {
         let directory = tempfile::tempdir().expect("a directory");

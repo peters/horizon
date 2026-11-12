@@ -265,6 +265,14 @@ impl Client {
         self.state.index
     }
 
+    /// The store that this computer saw at its last hello, or `None` when it saw
+    /// none. A store that differs from the one of a hello is another server store,
+    /// and the next pull replaces the mirror of this computer with its rows.
+    #[must_use]
+    pub fn store(&self) -> Option<&str> {
+        self.state.store.as_deref()
+    }
+
     /// The tip of the log that this computer holds.
     #[must_use]
     pub fn mark(&self) -> &str {

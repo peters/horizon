@@ -41,6 +41,12 @@ with its `-wal` and `-shm` files, and SQLite recovers them at the next start. A
 start removes a socket file that no process listens on, takes the free lock and
 opens the store, so a home of a killed server starts again without a hand edit.
 
+The store id and the machines of a home stay the same when a person copies it to
+another computer, and the lock file and the socket are the two files of the home
+that do not move with it.
+[The server guide](../../packaging/horizon-server/README.md#move-the-server-to-another-computer)
+gives the steps of that move, and what a computer does around it.
+
 ## The setting of a computer
 
 The settings entry `server` names the computer that runs the server:
