@@ -390,7 +390,9 @@ pub struct DeviceServerDetails {
 pub struct PanelState {
     pub panel_id: String,
     /// Which kind of source this viewer shows: a VNC desktop of another program, or
-    /// a frame source program of this computer.
+    /// a frame source program of this computer. A viewer of an older host shows a
+    /// VNC desktop and sends no kind.
+    #[serde(default)]
     pub kind: ViewerKind,
     /// The address of the VNC desktop, or the name of the frame source program.
     pub endpoint: String,
@@ -423,10 +425,11 @@ pub struct PanelState {
 }
 
 /// The kind of source that one native Device viewer shows.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewerKind {
     /// A VNC desktop, on this machine or reached through an SSH tunnel.
+    #[default]
     Vnc,
     /// A frame source program of this computer, named in the settings.
     FrameSource,

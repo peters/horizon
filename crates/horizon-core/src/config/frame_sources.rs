@@ -353,8 +353,10 @@ mod tests {
 
     #[test]
     fn the_section_round_trips_through_the_settings_json() {
-        let mut config = Config::default();
-        config.frame_sources = section(&[("bench", "frame-tool {target}")]);
+        let config = Config {
+            frame_sources: section(&[("bench", "frame-tool {target}")]),
+            ..Config::default()
+        };
         let json = config.to_json().expect("the settings as JSON");
         assert!(json.contains("\"frame_sources\""), "{json}");
         let loaded = Config::from_json(&json).expect("the settings from JSON");
