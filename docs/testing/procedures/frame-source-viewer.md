@@ -77,8 +77,9 @@ line that starts with `frame-source-agent: `.
 
 1. Type `create standin`.
 
-   Result: the answer holds `"panel_id": "d1"`, `"kind": "frame_source"` and
-   `"status": "panels"`, and a panel `Frame source standin` opens in the active
+   Result: the answer holds `"status": "panels"`, `"panels": 1`,
+   `"kind": "frame_source"`, `"connection": "connecting"` and the `"panel_id"` of
+   the new viewer. The panel `Frame source standin` opens in the active
    workspace.
 
 2. Type `inspect`.
@@ -160,13 +161,17 @@ line that starts with `frame-source-agent: `.
    picture.
 
    Result: the line under the toggle changes from `Click the image to type into it`
-   to `Keyboard captured, Escape included; click outside the image to release it`.
+   to `Keyboard captured, Escape included; click outside the image to release it`,
+   and the mode line of the header says `Interactive: your mouse and keyboard go
+   to the program`.
 
 2. Type `hi`, then press the keys `Up`, `Enter` and `Control+C`.
 
-   Result: the input file of the run holds one `text` event with `hi`, one `key`
-   event `up` down and one up, one `key` event `enter` down and one up, and the
-   four `key` events of the chord `ctrl`, `c`, `c`, `ctrl`.
+   Result: the `text` events together hold `hi`, in that order. Each character can
+   arrive in its own frame and is then its own `text` event, so read the text
+   events in the order of the file. The file also holds one `key` event `up` down
+   and one up, one `key` event `enter` down and one up, and the four `key` events
+   of the chord `ctrl`, `c`, `c`, `ctrl`.
 
 3. Read the input file:
 
