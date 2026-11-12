@@ -24,25 +24,47 @@ pub(crate) fn queue_recording_directory_delete(path: PathBuf) {
         .push(path);
 }
 
-/// The folders that wait for the coordination worker, for a test that judges a
-/// drop. The exit flushes that worker, so a queued folder is removed before
-/// Horizon ends.
+/// The gate of the drain of [`RECORDING_DIRECTORIES`], which is a lock of the
+/// process. A frame of any test drains the queue, so a test that judges what one
+/// drop queued holds this gate from that drop until it read the queue.
 #[cfg(test)]
-pub(crate) fn take_queued_recording_directories() -> Vec<PathBuf> {
+static DRAIN_GATE: Mutex<()> = Mutex::new(());
+
+/// The folders that `drop_it` queues for the coordination worker and that are the
+/// folder at `folder`, which is the folder of the video that the drop removes.
+///
+/// The drop runs inside the gate of the drain, so the frame of another test cannot
+/// take the entry of this drop between the drop and the read. The entries are taken
+/// out of the queue, so the test removes the folder of its own recording.
+#[cfg(test)]
+pub(crate) fn folders_that_the_drop_queues(folder: &std::path::Path, drop_it: impl FnOnce()) -> Vec<PathBuf> {
+    let _held = DRAIN_GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    drop_it();
+    let Ok(folder) = std::fs::canonicalize(folder) else {
+        return Vec::new();
+    };
+    let mut queued = RECORDING_DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut taken = Vec::new();
+    let mut index = 0;
+    while index < queued.len() {
+        if std::fs::canonicalize(&queued[index]).is_ok_and(|made| made == folder) {
+            taken.push(queued.remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    taken
+}
+
+/// The drain of the queue, after the gate that a test may hold.
+fn drain_recording_directories() -> Vec<PathBuf> {
+    #[cfg(test)]
+    let _held = DRAIN_GATE.lock().unwrap_or_else(PoisonError::into_inner);
     RECORDING_DIRECTORIES
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .drain(..)
         .collect()
-}
-
-/// Reads the folders that wait for the coordination worker with its queue held,
-/// so a frame of another test cannot take the entry that a test judges before
-/// the test reads it.
-#[cfg(test)]
-pub(crate) fn with_queued_recording_directories<R>(visit: impl FnOnce(&[PathBuf]) -> R) -> R {
-    let queued = RECORDING_DIRECTORIES.lock().unwrap_or_else(PoisonError::into_inner);
-    visit(&queued)
 }
 
 impl HorizonApp {
@@ -54,11 +76,7 @@ impl HorizonApp {
             .iter_mut()
             .filter_map(|(id, state)| state.take_video_start().map(|start| (*id, start)))
             .collect();
-        let directories: Vec<PathBuf> = RECORDING_DIRECTORIES
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .drain(..)
-            .collect();
+        let directories = drain_recording_directories();
         for path in directories {
             self.browser_create_host.io.write(move || {
                 horizon_core::ui_thread::blocking("a folder of a recording is removed");
