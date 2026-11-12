@@ -38,11 +38,20 @@ pub(super) fn session_presence(home: &Path, session: &str) -> io::Result<Presenc
             .and_then(serde_json::Value::as_u64)
             .filter(|pid| *pid > 0)
             .ok_or_else(|| io::Error::other("missing process identity"))?;
-        if !cfg!(target_os = "linux") {
-            return Err(io::Error::other("process liveness is not verified on this platform"));
+        // Signal 0 answers on every Unix. A Mac therefore reads a stale entry
+        // as stale, where it used to answer that liveness is unverified.
+        if !u32::try_from(pid).is_ok_and(crate::process::is_alive) {
+            result = Presence::Stale;
+            continue;
         }
-        let process = Path::new("/proc").join(pid.to_string());
-        if process.try_exists()? {
+        #[cfg(target_os = "linux")]
+        {
+            let process = Path::new("/proc").join(pid.to_string());
+            if !process.try_exists()? {
+                // The process ended between the two reads.
+                result = Presence::Stale;
+                continue;
+            }
             if let Some(matches) = matches_process_instance(&process, &value)? {
                 return if matches {
                     Ok(Presence::Live)
@@ -61,11 +70,15 @@ pub(super) fn session_presence(home: &Path, session: &str) -> io::Result<Presenc
             }
             return Ok(Presence::Live);
         }
-        result = Presence::Stale;
+        // This system keeps no `/proc` entry, so the id is the whole answer:
+        // the registry entry names a process that lives.
+        #[cfg(not(target_os = "linux"))]
+        return Ok(Presence::Live);
     }
     Ok(result)
 }
 
+#[cfg(target_os = "linux")]
 fn matches_process_instance(process: &Path, entry: &serde_json::Value) -> io::Result<Option<bool>> {
     if entry.get("procStart").is_none() && entry.get("pidDomain").is_none() {
         return Ok(None);
@@ -89,6 +102,7 @@ fn matches_process_instance(process: &Path, entry: &serde_json::Value) -> io::Re
     Ok(Some(actual_start == Some(started) && actual_domain == domain))
 }
 
+#[cfg(target_os = "linux")]
 fn matches_session_command(command: &[u8], session: &str) -> bool {
     let Ok(command) = std::str::from_utf8(command) else {
         return false;
@@ -148,23 +162,25 @@ mod tests {
             Presence::Absent
         );
         std::fs::write(dir.join("stale.json"), r#"{"sessionId":"session","pid":4294967295}"#).expect("entry");
-        if cfg!(target_os = "linux") {
-            assert_eq!(
-                session_presence(temp.path(), "session").expect("stale"),
-                Presence::Stale
-            );
-        }
+        assert_eq!(
+            session_presence(temp.path(), "session").expect("stale"),
+            Presence::Stale
+        );
         std::fs::write(
             dir.join("live.json"),
             format!(r#"{{"sessionId":"session","pid":{}}}"#, std::process::id()),
         )
         .expect("entry");
+        #[cfg(target_os = "linux")]
         assert!(session_presence(temp.path(), "session").is_err());
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(session_presence(temp.path(), "session").expect("live"), Presence::Live);
         std::fs::remove_file(dir.join("live.json")).expect("remove");
         std::fs::write(dir.join("bad.json"), "broken").expect("entry");
         assert!(session_presence(temp.path(), "session").is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn live_identity_requires_both_provider_and_exact_session_arguments() {
         assert!(matches_session_command(b"/bin/claude\0--resume\0session\0", "session"));

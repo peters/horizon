@@ -769,22 +769,6 @@ fn hostname() -> String {
         .unwrap_or_else(|| "localhost".to_string())
 }
 
-fn process_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/proc").join(pid.to_string()).exists()
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        true
-    }
-}
-
 pub(crate) fn require_directory_durability() -> std::io::Result<()> {
     if cfg!(unix) {
         Ok(())

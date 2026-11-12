@@ -15,8 +15,8 @@ const MAX_REGISTRY_ENTRY_BYTES: u64 = 64 * 1024;
 /// resuming one of them would attach two UIs to the same conversation.
 ///
 /// Entries whose process is no longer alive (stale files left by crashed
-/// processes) are ignored on Linux. On other platforms every entry is treated
-/// as live, which errs on the side of starting a fresh session.
+/// processes) are ignored. The answer comes from signal 0 on every Unix, so a
+/// Mac gives the same answer as Linux.
 #[must_use]
 pub fn live_claude_session_ids() -> HashSet<String> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
@@ -141,14 +141,8 @@ fn live_session_id(registry_entry: &str, process_is_alive: &impl Fn(u64) -> bool
     process_is_alive(pid).then(|| session_id.to_string())
 }
 
-#[cfg(target_os = "linux")]
 fn process_is_alive(pid: u64) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn process_is_alive(_pid: u64) -> bool {
-    true
+    u32::try_from(pid).is_ok_and(crate::process::is_alive)
 }
 
 /// Returns true if a Claude Code transcript exists on disk for `session_id`.
@@ -205,6 +199,33 @@ mod tests {
         );
 
         let ids = collect_live_session_ids(dir.path(), |pid| pid == 101);
+
+        assert_eq!(ids, HashSet::from(["session-live".to_string()]));
+    }
+
+    #[test]
+    fn a_process_that_ended_and_was_reaped_is_not_a_live_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut child = std::process::Command::new(crate::util::stand_in_program())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("a stand-in program");
+        let ended = child.id();
+        child.wait().expect("the child ends");
+        write_entry(
+            dir.path(),
+            &format!("{ended}.json"),
+            &format!(r#"{{"pid":{ended},"sessionId":"session-dead"}}"#),
+        );
+        write_entry(
+            dir.path(),
+            &format!("{}.json", std::process::id()),
+            &format!(r#"{{"pid":{},"sessionId":"session-live"}}"#, std::process::id()),
+        );
+
+        let ids = collect_live_session_ids(dir.path(), super::process_is_alive);
 
         assert_eq!(ids, HashSet::from(["session-live".to_string()]));
     }

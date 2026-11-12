@@ -189,7 +189,7 @@ impl SessionLease {
     pub fn is_live(&self) -> bool {
         let now = super::current_unix_millis();
         now.saturating_sub(self.last_heartbeat_at) <= super::LEASE_STALE_AFTER_MILLIS
-            && super::process_is_alive(self.pid)
+            && crate::process::is_alive(self.pid)
     }
 }
 

@@ -24,6 +24,7 @@ pub mod notify;
 mod opencode_paths;
 mod panel;
 pub mod place;
+mod process;
 pub mod qr;
 pub mod remote_browser_credential;
 mod remote_hosts;
