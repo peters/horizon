@@ -73,6 +73,18 @@ the sidebar reads them.
    Result: the stand-in sends the events of a turn every six seconds, and the
    panel row of the sidebar shows the states of section 6.1.
 
+   The canvas also shows the card **Review work before continuing (1)** with the
+   line `Automatic continuation is not verified for this session.` and the button
+   **Resume work**. The card is expected and it is no defect of the stand-in. A
+   panel of the fixture comes from the config of the run, so Horizon restores it,
+   and this private home holds no saved work for the conversation of the panel,
+   so Horizon asks before it continues. That decision comes from the launch of
+   the panel and not from its program, so a real agent panel shows the same card
+   in this situation, and the events of the stand-in never change it. One
+   keystroke in the panel clears the card, and so does the button **Resume work**,
+   which restarts the panel. The tasks of section 6 type into the panel, which
+   clears the card.
+
 2. Make a Device panel in your own Horizon workspace for that `vnc_address`, as
    [the fixture guide](../../../scripts/device-smoke/README.md#horizon-inside-a-native-vnc-device-panel)
    shows.

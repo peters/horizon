@@ -57,6 +57,16 @@ bounds and the setting.
    panel named Notifications. The Horizon window holds the panels `Attention
    stand-in 1` and `Attention stand-in 2`. The terminal prints the VNC address.
 
+   The canvas also shows the card `Review work before continuing (1)`, with the
+   line `Attention stand-in 1 Automatic continuation is not verified for this
+   session.` and the button `Resume work`. The card is expected. A panel of the
+   fixture comes from the config of the run, so Horizon restores it, and this
+   private home holds no saved work for the conversation of the panel, so
+   Horizon asks before it continues. The panel's program starts after that
+   decision, so no event of the stand-in changes it: one keystroke in the panel
+   clears the card. The tasks of section 6 type into the panel, which clears it.
+   Do not click `Resume work`, because that restarts the panel.
+
 2. Open the VNC address in a Horizon native Device panel.
 
    Result: the image of the isolated desktop shows. The panel advances its frame
