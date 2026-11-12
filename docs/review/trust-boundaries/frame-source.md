@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-frame-source/src/**,crates/horizon-core/src/config/frame_sources.rs,crates/horizon-ui/src/device_widget/session.rs,crates/horizon-ui/src/device_widget/frame_input.rs,crates/horizon-ui/src/app/settings/frame_sources.rs,scripts/device-smoke/frame_source_standin.py"
+applyTo: "crates/horizon-frame-source/src/**,crates/horizon-core/src/config/frame_sources.rs,crates/horizon-ui/src/device_widget/session.rs,crates/horizon-ui/src/device_widget/frame_input.rs,crates/horizon-ui/src/device_widget/frame_wheel.rs,crates/horizon-ui/src/app/settings/frame_sources.rs,scripts/device-smoke/frame_source_standin.py"
 ---
 
 # Trust boundary of a frame source viewer
@@ -122,6 +122,21 @@ What the guarantee does not cover:
 - **Input reaches the program only after the person turned Interact on.** No
   operation of an agent can turn it on, and a source whose `hello.input` is false
   or absent is view only.
+- **A pointer event of the picture is the pointer event that the program gets.**
+  A press is one only inside the drawn picture and only under the layer of this
+  panel, so the press on a control of Horizon and a press on a popup above the
+  picture reach no program. A release follows only a press that was sent, a
+  release beside the picture is at the last point that the program saw, and no
+  point is invented or moved to an edge.
+- **A key and a text come from the picture that has the keyboard.** A press
+  inside the picture takes the keyboard, and a press outside it, a turn of
+  Interact off, a covered or hidden viewer and a window that lost the focus
+  release every key that the program holds. A release without a press that was
+  sent is no message, so a chord that Horizon handled as its own shortcut never
+  reaches the program.
+- **The wheel of the contract is steps and not pixels.** Horizon adds the travel
+  of the wheel up, sends the whole notches of the picture, keeps the rest for the
+  next frame, and holds at most ten steps in one event.
 - **A new picture asks for one repaint.** There is no repaint loop, and the upload
   to the GPU happens at most once for each frame of the UI and at most 60 times
   each second.
