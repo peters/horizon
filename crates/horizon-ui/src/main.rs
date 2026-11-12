@@ -109,7 +109,11 @@ fn main() -> eframe::Result {
         std::process::exit(2);
     }
     init_tracing();
-    let horizon_home = prepare_home_or_exit();
+    run_window(&prepare_home_or_exit(), &cli_args)
+}
+
+/// The window of the person, or the command that ends without one.
+fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> eframe::Result {
     let resolved_config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
 
@@ -119,7 +123,7 @@ fn main() -> eframe::Result {
     // The machine list of this start follows one server, or stays on this
     // computer. The entry travels to the app beside the browser host.
     horizon_core::configure_server(plugin_install::server_setting(&resolved_config_path));
-    let _agent_plugin_host = agent_integrations.install_plugins(&horizon_home);
+    let _agent_plugin_host = agent_integrations.install_plugins(horizon_home);
     if let Some(command) = cli_args.command.as_ref() {
         run_command(command, &resolved_config_path);
     }
@@ -127,7 +131,7 @@ fn main() -> eframe::Result {
     agent_integrations.install_desktop_entry();
     let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
-    let startup = prepare_startup(&session_store, &config, &cli_args);
+    let startup = prepare_startup(&session_store, &config, cli_args);
 
     let window = startup_window_config(&startup, &config.window);
     // Clamp to reasonable bounds so we don't open larger than the screen.

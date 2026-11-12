@@ -294,7 +294,7 @@ mod tests {
             assert_eq!(matches!(mode, Start::Version), version, "{arguments:?}");
             assert_eq!(matches!(mode, Start::AgentWorkHook), hook, "{arguments:?}");
             let extra = [arguments[0], "--list"];
-            let error = start(&extra).err().expect("a mode takes no other argument");
+            let error = start(&extra).expect_err("a mode takes no other argument");
             assert_eq!(error, "unknown argument --list", "{extra:?}");
         }
         assert!(matches!(
@@ -316,14 +316,14 @@ mod tests {
             &["--config", "c.json", "--list"],
             &["stray"],
         ] {
-            let error = start(arguments).err().expect("the argument is refused");
+            let error = start(arguments).expect_err("the argument is refused");
             assert!(error.starts_with("unknown argument "), "{arguments:?}: {error}");
             assert!(
                 !error.contains("--blank") && error.len() < 80,
                 "one line names only the argument: {error}"
             );
         }
-        let error = start(&["--definitely-unknown"]).err().expect("refused");
+        let error = start(&["--definitely-unknown"]).expect_err("refused");
         assert_eq!(error, "unknown argument --definitely-unknown");
     }
 
@@ -452,9 +452,7 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad:?}");
         }
-        let error = parse(&["--export-config"])
-            .err()
-            .expect("the removed export is refused");
+        let error = parse(&["--export-config"]).expect_err("the removed export is refused");
         assert!(error.contains("settings.sqlite"), "{error}");
     }
 }
