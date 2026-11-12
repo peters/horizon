@@ -176,11 +176,15 @@ fn disconnected_ssh_reconnect_requested(
         // A panel that waits for its next attempt has no shell to type into, so
         // any key asks for the connection now instead of waiting.
         Some(SshConnectionStatus::Reconnecting) => pressed_keys(events).next().is_some(),
-        // An attempt of a machine terminal that reaches no machine has nothing to
-        // type into either: any key ends that attempt and starts a new one at
-        // once. A network that drops packets keeps the connect open for minutes,
-        // so the person must be able to hurry the panel.
-        Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).next().is_some(),
+        // An attempt of a machine terminal runs its own `ssh`, so the text that a
+        // person types during `Connecting...` goes into that attempt and reaches
+        // the shell when the link is up. Only the two keys that ask for something
+        // end the attempt: `Esc` stops it and `Enter` says "do it now". A letter
+        // never ends it, because a person who types ahead on a link of 300 ms
+        // would otherwise keep cancelling a connect that is only slow.
+        Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).any(|input_event| {
+            matches!(&input_event.event, egui::Event::Key { key: Key::Enter | Key::Escape, .. })
+        }),
         Some(SshConnectionStatus::Connecting | SshConnectionStatus::Connected) | None => false,
     }
 }
@@ -505,11 +509,12 @@ mod tests {
     }
 
     #[test]
-    fn a_key_ends_the_attempt_of_a_machine_terminal_that_is_in_flight() {
-        // The connect of a machine terminal hangs in a network that drops its
-        // packets, so the panel is `connecting` and the key of the person has
-        // nothing to type into.
-        assert!(disconnected_ssh_reconnect_requested(
+    fn typing_in_a_machine_terminal_that_connects_keeps_the_attempt() {
+        // A letter of a person who types ahead goes into the attempt that runs, so
+        // it reaches the shell when the link is up. At a round trip of 300 ms a
+        // connect takes seconds, and a person who types during it must not cancel
+        // it again and again.
+        assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Connecting),
             true,
@@ -520,16 +525,44 @@ mod tests {
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 true,
-                &[key_event(Key::A, Some(Key::A), Some("a"), true, true, Modifiers::NONE)],
+                &[key_event(Key::Space, Some(Key::Space), Some(" "), true, false, Modifiers::NONE)],
             ),
-            "a held key starts one attempt, not one for each repeat"
+            "a space is text too"
         );
+    }
+
+    #[test]
+    fn escape_or_enter_ends_the_attempt_of_a_machine_terminal_that_is_in_flight() {
+        // `Esc` and `Enter` are the two keys that ask for something, so they also
+        // end an attempt that a person does not want to wait for. The rule cannot
+        // depend on the time, because the same key would then do different things
+        // under the hands of the person.
+        for key in [Key::Escape, Key::Enter] {
+            assert!(
+                disconnected_ssh_reconnect_requested(
+                    PanelKind::Ssh,
+                    Some(SshConnectionStatus::Connecting),
+                    true,
+                    &[key_event(key, Some(key), None, true, false, Modifiers::NONE)],
+                ),
+                "{key:?} asks for the attempt now"
+            );
+            assert!(
+                !disconnected_ssh_reconnect_requested(
+                    PanelKind::Ssh,
+                    Some(SshConnectionStatus::Connecting),
+                    true,
+                    &[key_event(key, Some(key), None, true, true, Modifiers::NONE)],
+                ),
+                "a held {key:?} starts one attempt, not one for each repeat"
+            );
+        }
         assert!(
             !disconnected_ssh_reconnect_requested(
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 false,
-                &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
+                &[key_event(Key::Escape, Some(Key::Escape), None, true, false, Modifiers::NONE)],
             ),
             "a plain ssh panel that runs a silent command keeps its attempt"
         );
