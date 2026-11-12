@@ -82,8 +82,17 @@ WORKTREE_CARD_LAUNCHER = 'card-agent-worktree.sh'
 FIXTURE_FOLDER = Path(__file__).resolve().parent
 WORKTREE_CARD_PROGRAM = 'card_agent.py'
 ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
-PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM)
+# The scripted client of the `device_panel` tool, and the stand-in frame source
+# program that `--frame-source` runs through the placeholder `{standin}`.
+FRAME_SOURCE_AGENT_PROGRAM = 'frame_source_agent.py'
+FRAME_SOURCE_STANDIN_PROGRAM = 'frame_source_standin.py'
+FRAME_SOURCE_AGENT_LAUNCHER = 'frame-source-agent.sh'
+PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM, FRAME_SOURCE_AGENT_PROGRAM,
+                  FRAME_SOURCE_STANDIN_PROGRAM)
 PANEL_PROGRAM_FOLDER = 'programs'
+# The placeholder of a `--frame-source` line, which becomes the path of the copy of
+# the stand-in in the state folder.
+STANDIN_PLACEHOLDER = '{standin}'
 
 
 def bound_port(process, path, pattern):
@@ -397,21 +406,43 @@ def extra_column(placed):
     return right + 40
 
 
-def frame_sources_section(entries):
+def standin_in_state(state, folder=None):
+    """The copy of the stand-in frame source program in the state folder.
+
+    The sandbox binds the private home over the home of the person, so a checkout
+    under that home does not exist inside it. A `--frame-source` line names the
+    placeholder `{standin}`, which becomes the path of this copy.
+    """
+    state = Path(state).resolve()
+    return program_in_state(
+        fixture_program(FRAME_SOURCE_STANDIN_PROGRAM, folder),
+        state / 'data' / PANEL_PROGRAM_FOLDER / FRAME_SOURCE_STANDIN_PROGRAM, state)
+
+
+def frame_sources_section(entries, state=None, folder=None):
     """The `frame_sources` section of the fixture config, or `None` while a run names none.
 
     Each entry is one `name=command line` of a frame source program of the fixture, so
     a smoke run opens a viewer of the stand-in without a hand edit of the private
-    settings.
+    settings. A line that holds `{standin}` runs the copy of the stand-in script in
+    the state folder, so the settings of the sandbox never name a file of a checkout.
     """
     if not entries:
         return None
+    standin = None
     sources = []
     for entry in entries:
         name, separator, command = entry.partition('=')
         if not separator or not name.strip() or not command.strip():
-            raise SystemExit('--frame-source needs <name>=<command line>, such as standin={python} {script}')
-        sources.append({'name': name.strip(), 'command': command.strip()})
+            raise SystemExit('--frame-source needs <name>=<command line>, such as standin={python} {standin}')
+        command = command.strip()
+        if STANDIN_PLACEHOLDER in command:
+            if state is None:
+                raise SystemExit('a --frame-source line that holds {standin} needs the state folder')
+            if standin is None:
+                standin = str(standin_in_state(state, folder))
+            command = command.replace(STANDIN_PLACEHOLDER, standin)
+        sources.append({'name': name.strip(), 'command': command})
     return {'sources': sources}
 
 
@@ -454,6 +485,30 @@ def worktree_card_repository(state):
         subprocess.run(['git', '-C', str(repo), *arguments], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return repo
+
+
+def frame_source_agent_panel(app, state, program_folder=None):
+    """The panel of the scripted client of the `device_panel` tool.
+
+    The public tool belongs to the Horizon of the person who runs the test, not to
+    the candidate inside the fixture, so the viewer of a frame source program of a
+    procedure is created by this panel: it starts the MCP server of the candidate as
+    a child and calls the one tool `device_panel`, and a person types one word for
+    each operation on its terminal. The panel runs one launcher so Horizon's own
+    launch arguments reach the script as `"$@"`.
+    """
+    data = Path(state).resolve() / 'data'
+    script = program_in_state(
+        fixture_program(FRAME_SOURCE_AGENT_PROGRAM, program_folder),
+        data / FRAME_SOURCE_AGENT_PROGRAM, state)
+    launcher = data / FRAME_SOURCE_AGENT_LAUNCHER
+    launcher.write_text(
+        '#!/bin/sh\n'
+        f'exec /usr/bin/python3 -u {shlex.quote(str(script))} '
+        f'--mcp-command {shlex.quote(str(app) + " --browser-mcp")} "$@"\n')
+    launcher.chmod(0o700)
+    return {'name': 'Frame source agent', 'kind': 'claude', 'command': str(launcher),
+            'args': [], 'cwd': str(data)}
 
 
 def worktree_card_panel(app, repo, state, program_folder=None):
@@ -801,6 +856,7 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
     ('speech_recorder', '--speech-recorder'), ('speech_transcriber_command', '--speech-transcriber-command'),
     ('speech_service', '--speech-service'), ('frame_source', '--frame-source'),
+    ('frame_source_agent', '--frame-source-agent'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
 )
 
@@ -894,8 +950,16 @@ def arguments():
         default=None,
         metavar='NAME=COMMAND',
         help='Write one program of the frame_sources section of the fixture config, so a native Device '
-             'viewer can show it, such as standin=/usr/bin/python3 <script> --frame-source writes the '
-             'settings section and never starts the program; give it more than once for several sources.')
+             'viewer can show it, such as "standin=/usr/bin/python3 {standin} --width 640 --height 360". '
+             '--frame-source writes the settings section and never starts the program; the placeholder '
+             '{standin} becomes the copy of the stand-in script in the state folder, which the sandbox '
+             'holds; give it more than once for several sources.')
+    parser.add_argument(
+        '--frame-source-agent',
+        action='store_true',
+        help='Open the panel of the scripted client of the device_panel tool, so a procedure opens a '
+             'viewer of a --frame-source program of the fixture without the tool of the computer of the '
+             'person who runs the test')
     parser.add_argument(
         '--speech-service',
         metavar='ENDPOINT',
@@ -1122,6 +1186,11 @@ def main():
             # A procedure names the program of its checkout, which the sandbox does
             # not hold: the panel runs the copy in the state folder instead.
             extra_panels = panel_programs_in_state(extra_panels, args.state)
+        if args.frame_source_agent:
+            if not args.frame_source:
+                raise SystemExit('--frame-source-agent opens a viewer of a program of --frame-source, '
+                                 'which this run lacks')
+            extra_panels = list(extra_panels or []) + [frame_source_agent_panel(app, args.state)]
         if args.worktree_card:
             # The throwaway repository comes first: the panel of the card agent reads
             # it at start, and the presets are those that its task panel names.
@@ -1155,7 +1224,7 @@ def main():
             seed_secret_rows(secrets_file, named_secrets, secret_rows)
         held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
         speech = speech_section(args.speech_recorder, args.speech_transcriber_command, args.speech_service)
-        frame_sources = frame_sources_section(args.frame_source)
+        frame_sources = frame_sources_section(args.frame_source, args.state)
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.theme, args.server_target,
