@@ -50,17 +50,22 @@ function, update this document in the same PR.
 | Remote Hosts: SSH and Tailscale | Yes | Yes |
 | Browser panel of a browser on another machine | Yes (note 4) | Yes (note 4) |
 | Native image paste into a terminal | Yes | Partial (note 3) |
+| Two-finger pinch to zoom the canvas | Partial (note 7) | No (note 7) |
+| Middle-click paste of the primary selection | Yes (note 8) | No (note 8) |
 | Panel screenshot and image copy | Yes | Yes |
 | Desktop notification of an agent | Partial (note 5) | Yes (note 5) |
+| Desktop entry and app icon | Yes (note 9) | Partial (note 9) |
 
 1. Safari WebDriver is available only on macOS
-   (`crates/horizon-browser/src/webdriver/service.rs:60-62`).
+   (`crates/horizon-browser/src/webdriver/service.rs:270-286`).
 2. The `horizon-device` CLI and MCP tools send input to a local X11 display only.
    They do not work on Wayland without X11. On other platforms they return
-   `only local X11 is implemented` (`crates/horizon-device/src/lib.rs:97`).
+   `only local X11 is implemented` (`crates/horizon-device/src/lib.rs:95-98`).
    The Device panel viewer works on both platforms.
 3. A file drop uses the usual window file drop. The native positioned image
-   paste is a Linux function (`crates/horizon-ui/src/app/file_drop.rs`).
+   paste is a Linux function (`crates/horizon-ui/src/native_window.rs:293-320`,
+   `crates/horizon-ui/src/input/native_files.rs`). On macOS Cmd+V pastes text
+   and no image.
 4. The client needs the OpenSSH client. The host machine needs an `sshd` that
    answers without a prompt, Chrome or Chromium, and a graphical login session,
    because Horizon starts that browser headed with no window of its own
@@ -83,17 +88,36 @@ function, update this document in the same PR.
    process checks that they need answer on both: signal 0 names a process that
    exists and `ps` or `/proc` names its start time. No run has used a real Mac
    yet, so the live lane of that path is "Not tested" there.
+7. The two-finger pinch turns the canvas only on Linux Wayland, through the
+   `libwayland` bridge of this workspace (`crates/horizon-wayland/src/lib.rs`).
+   Linux X11 has no pinch, and macOS has none: its toolkit sends no magnify
+   event (`crates/horizon-ui/src/native_window.rs:150-160`). Ctrl/Cmd+scroll
+   zooms, and **Ctrl+0** resets the zoom on both.
+8. A middle click pastes the primary selection on Linux, from the X11 or the
+   Wayland selection (`crates/horizon-ui/src/terminal_widget/input.rs:745-751`,
+   `crates/horizon-ui/src/primary_selection.rs`). macOS has no primary
+   selection, so a middle click does nothing.
+9. On Linux a tarball or a `cargo run` window installs
+   `~/.local/share/applications/horizon.desktop` and the icons, so the launcher
+   shows the name and the icon
+   (`crates/horizon-ui/src/agent_integrations.rs:36-41`). macOS uses a bundle:
+   `packaging/macos/make_app_bundle.sh` writes `Horizon.app` with the icon and
+   the `Info.plist`, and `--install` copies it to the applications folder. The
+   release asset is a bare binary, so a downloaded copy shows a generic icon in
+   the Dock until the person makes the bundle (note 3 under "Install and
+   update").
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux
-(`crates/horizon-core/src/panel/spawn.rs:647-651`). Horizon starts each agent
-through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
+(`crates/horizon-core/src/panel/spawn.rs:764-777`). Horizon starts each agent
+through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:738-742`).
 
 ## Install and update
 
 | Function | Linux | macOS |
 |---|---|---|
 | Release binary (note 1) | x64 | arm64 and x64 |
+| App bundle with the Dock icon (note 3) | n/a | Partial |
 | Homebrew | x64 | Yes |
 | Code signing and notarization in the release | n/a | No (note 2) |
 
@@ -101,6 +125,21 @@ through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:616`).
    [the release flow](release-flow.md).
 2. The release workflow and the packaging scripts have no signing or
    notarization step.
+3. The macOS asset is a bare binary. `packaging/macos/make_app_bundle.sh` makes
+   `Horizon.app` from a release build with the icon, the bundle name and the
+   `Info.plist`, and `--install` copies it to the applications folder. The
+   `Info.plist` holds `NSMicrophoneUsageDescription`, the reason that macOS
+   shows for the microphone that speech input uses, and the check
+   `scripts/test_make_app_bundle.py` fails when that key is absent.
+4. A window that a person starts from the Finder inherits the `PATH` of
+   launchd, `/usr/bin:/bin:/usr/sbin:/sbin`, and not the `PATH` of a terminal
+   shell. Horizon adds `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and
+   `~/.cargo/bin` after the `PATH` of this process on macOS, when a folder exists
+   and is not there yet, for the programs that it resolves itself
+   (`crates/horizon-browser/src/process.rs:463-496`). A shell panel and an agent
+   panel start through the shell of the person, so they already find those
+   programs. A command panel still starts its program with the `PATH` of the
+   process.
 
 ## Secret values
 

@@ -108,7 +108,7 @@ Once that loop is familiar, the rest is optional: **New** in the sidebar for an 
 New here? [First steps](docs/first-steps.md) walks you from install to your first board, agent and browser.
 
 - **Remote Hosts**. Open a terminal or a desktop on another machine, over SSH or from your Tailscale devices. See [Remote Hosts](#remote-hosts).
-- **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. Linux only. See [Watch an app over VNC](#watch-an-app-over-vnc).
+- **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. The input works on Linux with X11 only; the Device panel view works on Linux and macOS. See [Watch an app over VNC](#watch-an-app-over-vnc).
 - **Speech input** — hold **F9**, speak, and the text of the take waits at the prompt of your panel. Horizon runs a recorder program of your computer and one transcription service or command, with no speech engine in the build. See [Speech input](#speech-input).
 
 ## Highlights
@@ -201,7 +201,7 @@ The QR code holds an address on your private overlay network. Horizon encrypts n
 ### Session Persistence
 The sidebar says what each agent is doing: **Needs you** when an agent waits for an answer or its turn failed, **Done** when a turn ended while you looked elsewhere, **Background** when the turn ended and the agent still works, and **Working** while one runs. **Ctrl+Shift+G** goes to the next agent that needs you, and **Mark as unread** in a panel menu keeps a finished one in your list.
 
-When you work in another window, Horizon shows one desktop notification for an agent that needs you or is done, and the sidebar keeps the state for later. Desktop notifications are one row in Settings → General, and Linux needs `notify-send` for them.
+When you work in another window, Horizon shows one desktop notification for an agent that needs you or is done, and the sidebar keeps the state for later. Desktop notifications are one row in Settings → General. Linux needs `notify-send` for them; macOS uses `osascript`, which is a part of the system.
 
 Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row in sidebar order after restore.
 

@@ -106,6 +106,12 @@ Release builds use the default features. All release routes install v0.2.7.
 
 A raw binary does not update itself. Download a new release to update it.
 
+On macOS the release file is a bare binary, so the Dock shows a generic icon.
+The script `packaging/macos/make_app_bundle.sh` makes `Horizon.app` from a
+release build, with the icon, the name and the `Info.plist` that gives the
+microphone reason of speech input. Its `--install` copies the bundle to the
+applications folder.
+
 ## Install with a package manager
 
 On macOS or Linux x64, install Horizon with Homebrew:
@@ -188,7 +194,8 @@ If the build stops with a missing font, do step 6 again. On Linux, a
 
 On macOS, use Cmd instead of Ctrl in each step of this procedure. A shell
 panel uses the shell in the `SHELL` variable. If `SHELL` is not set, Horizon
-starts `/bin/bash`. See [the platform support](platform-support.md).
+starts `/bin/zsh` on macOS and `/bin/bash` on Linux. See
+[the platform support](platform-support.md).
 
 1. Hold Ctrl and double-click an empty area of the board.
 
