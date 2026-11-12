@@ -686,7 +686,7 @@ mod retry_tests {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -695,6 +695,43 @@ mod tests {
 
     use super::super::{BrowserSessionConfig, start_session};
     use super::{build_launch, first_available_page_target_id, profile_dir};
+
+    /// Write `body` as the program `name` of `folder`, with the permissions of a
+    /// program, so the session under test starts a program that this test wrote.
+    ///
+    /// A `/bin/sh` child writes the file. A write from this process keeps a descriptor
+    /// of the program open for a few microseconds, and a fork of another test thread in
+    /// that window copies it: the child then holds the program open for writing until
+    /// its own `exec`, and the kernel refuses the start with `ETXTBSY` (`Text file
+    /// busy`). The descriptor of a child belongs to that child.
+    ///
+    /// This crate has no dependency on `horizon-core`, so the helper of the tests of
+    /// the workspace is not reachable from here.
+    fn stand_in_program(folder: &Path, name: &str, body: &str) -> PathBuf {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+
+        let path = folder.join(name);
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|error| panic!("start the shell that writes {name}: {error}"));
+        let mut stdin = child
+            .stdin
+            .take()
+            .unwrap_or_else(|| panic!("the shell that writes {name} holds its input"));
+        stdin
+            .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .unwrap_or_else(|error| panic!("write {name}: {error}"));
+        drop(stdin);
+        let status = child
+            .wait()
+            .unwrap_or_else(|error| panic!("wait for the shell that writes {name}: {error}"));
+        assert!(status.success(), "the shell wrote {name}: {status}");
+        path
+    }
 
     #[test]
     fn target_selection_skips_attached_pages() {
@@ -776,19 +813,12 @@ mod tests {
         // of the test that starts and never answers, not a browser of this
         // computer.
         let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
-        let browser = temp.path().join("delayed-browser");
         let started = temp.path().join("started");
-        std::fs::write(
-            &browser,
-            format!("#!/bin/sh\nprintf started > '{}'\nexec sleep 30\n", started.display()),
-        )
-        .unwrap_or_else(|error| panic!("write delayed browser: {error}"));
-        let mut permissions = std::fs::metadata(&browser)
-            .unwrap_or_else(|error| panic!("read delayed browser metadata: {error}"))
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&browser, permissions)
-            .unwrap_or_else(|error| panic!("make delayed browser executable: {error}"));
+        let browser = stand_in_program(
+            temp.path(),
+            "delayed-browser",
+            &format!("printf started > '{}'\nexec sleep 30", started.display()),
+        );
 
         let session = start_session(BrowserSessionConfig {
             attach: None,
