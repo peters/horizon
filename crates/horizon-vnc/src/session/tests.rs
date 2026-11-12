@@ -118,12 +118,19 @@ fn session_with_options(
     listener.set_nonblocking(true)?;
     let session = Session::start(direct(listener.local_addr()?, options), wake)?;
     session.set_visible(visible);
+    let stream = accept_and_serve(&listener, name)?;
+    Ok((session, stream))
+}
+
+/// Accept the connection of a viewer that is about to hand it the desktop
+/// `name`, and answer the VNC handshake of a 2x2 true-color desktop.
+fn accept_and_serve(listener: &std::net::TcpListener, name: &str) -> Result<std::net::TcpStream, Error> {
     let started = std::time::Instant::now();
     let (mut stream, _) = loop {
         match listener.accept() {
             Ok(connection) => break connection,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(started.elapsed() < Duration::from_secs(2), "viewer did not connect");
+                assert!(started.elapsed() < Duration::from_secs(30), "viewer did not connect");
                 std::thread::sleep(Duration::from_millis(5));
             }
             Err(error) => return Err(error.into()),
@@ -159,7 +166,7 @@ fn session_with_options(
     let mut refresh = [0; 10];
     stream.read_exact(&mut refresh)?;
     assert_eq!(refresh[0], 3, "handshake completed before cancellation");
-    Ok((session, stream))
+    Ok(stream)
 }
 
 fn refresh_until(stream: &mut std::net::TcpStream, expected: [u8; 10]) -> Result<(), Error> {
@@ -632,4 +639,154 @@ fn a_detached_session_releases_its_tunnel_process() -> Result<(), Error> {
     assert!(waits_for_gone(pid), "the tunnel program outlived the session");
     let _ = std::fs::remove_dir_all(&home);
     Ok(())
+}
+
+/// The delays of a test: short enough for a test, in the shape that the
+/// machine terminals use.
+fn reconnect_policy() -> Reconnect {
+    Reconnect {
+        delays: vec![Duration::from_millis(50)],
+        repeat: Duration::from_millis(50),
+        reset_after: Duration::from_secs(10),
+    }
+}
+
+fn session_with_policy(policy: Reconnect) -> Result<(Session, std::net::TcpListener), Error> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let config = Config {
+        reconnect: policy,
+        ..Config::new(Route::Direct(listener.local_addr()?))
+    };
+    let session = Session::start(config, |_| {})?;
+    Ok((session, listener))
+}
+
+/// Take statuses until one satisfies `matches`, which this returns.
+fn wait_for_status(session: &Session, matches: impl Fn(&Status) -> bool) -> Status {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = session.observation().status
+            && matches(&status)
+        {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "the viewer never reported the status");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The statuses that arrive inside `window`.
+fn statuses_within(session: &Session, window: Duration) -> Vec<Status> {
+    let deadline = Instant::now() + window;
+    let mut seen = Vec::new();
+    while Instant::now() < deadline {
+        if let Some(status) = session.observation().status {
+            seen.push(status);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    seen
+}
+
+#[test]
+fn a_lost_link_comes_back_by_itself_as_the_next_attempt() -> Result<(), Error> {
+    let (session, listener) = session_with_policy(reconnect_policy())?;
+    let first = accept_and_serve(&listener, "")?;
+    wait_for_status(&session, |status| matches!(status, Status::Connected));
+    // The link is cut: the worker ends one connection.
+    drop(first);
+    let Status::Reconnecting {
+        attempt,
+        retry_at,
+        message,
+    } = wait_for_status(&session, |status| matches!(status, Status::Reconnecting { .. }))
+    else {
+        unreachable!("the wait returns a reconnecting status")
+    };
+    assert_eq!(attempt, 1, "the first attempt after the first loss");
+    assert!(retry_at > Instant::now(), "the state names the next attempt");
+    assert!(!message.is_empty(), "the state keeps why the link ended");
+
+    // No person pressed anything: the viewer connects again on its own.
+    let mut second = accept_and_serve(&listener, "")?;
+    wait_for_status(&session, |status| matches!(status, Status::Connected));
+    send_pixel(&mut second)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    Ok(())
+}
+
+#[test]
+fn a_host_key_refusal_ends_the_session_and_is_not_tried_again() -> Result<(), Error> {
+    let script = "echo 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!' >&2; \
+        echo 'Host key verification failed.' >&2; exit 255";
+    let config = Config {
+        reconnect: reconnect_policy(),
+        ..Config::new(Route::Tunnel {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            host: "lab".into(),
+            port: Some(22),
+        })
+    };
+    let session = Session::start(config, |_| {})?;
+    let status = wait_for_status(&session, |status| matches!(status, Status::Disconnected { .. }));
+    assert!(
+        matches!(&status, Status::Disconnected { host_key: Some(failure), .. } if failure.refusal == HostKeyRefusal::Changed),
+        "{status:?}"
+    );
+    // A refusal needs a person: no attempt follows, though the policy would
+    // start one after 50 ms.
+    let quiet = statuses_within(&session, Duration::from_millis(600));
+    assert!(quiet.is_empty(), "a refused host key was retried: {quiet:?}");
+    Ok(())
+}
+
+#[test]
+fn a_person_who_stops_the_viewer_stops_the_attempts() -> Result<(), Error> {
+    let (mut session, listener) = session_with_policy(Reconnect {
+        delays: vec![Duration::from_secs(5)],
+        repeat: Duration::from_secs(5),
+        reset_after: Duration::from_secs(10),
+    })?;
+    let first = accept_and_serve(&listener, "")?;
+    wait_for_status(&session, |status| matches!(status, Status::Connected));
+    drop(first);
+    wait_for_status(&session, |status| matches!(status, Status::Reconnecting { .. }));
+    session.stop();
+    wait_for_status(&session, |status| matches!(status, Status::Stopped));
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "a stopped viewer connected again"
+    );
+    Ok(())
+}
+
+use super::worker::{Write as WriteEnd, classify_write};
+
+#[test]
+fn a_write_that_times_out_is_a_stall_and_a_sent_write_is_not() {
+    assert!(matches!(classify_write(Ok(Ok(()))), WriteEnd::Sent));
+    assert!(
+        matches!(
+            classify_write(Ok(Err(vnc::VncError::ClientNotRunning))),
+            WriteEnd::Failed(_)
+        ),
+        "a failed write ends the connection"
+    );
+    let stalled = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(async {
+            tokio::time::timeout(
+                Duration::from_millis(1),
+                std::future::pending::<Result<(), vnc::VncError>>(),
+            )
+            .await
+        });
+    assert!(
+        matches!(classify_write(stalled), WriteEnd::Stalled),
+        "a written request that timed out is a stall, not the end of the session"
+    );
 }

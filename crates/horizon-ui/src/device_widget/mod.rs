@@ -242,7 +242,7 @@ impl DeviceUiState {
         {
             self.desktop = Some(source.size);
         }
-        if details::header(
+        match details::header(
             ui,
             device,
             &self.server,
@@ -251,7 +251,15 @@ impl DeviceUiState {
             interactive,
             self.interact,
         ) {
-            self.reconnect(ui.ctx(), device);
+            details::HeaderAction::None => {}
+            details::HeaderAction::Reconnect => self.reconnect(ui.ctx(), device),
+            details::HeaderAction::Stop => self.stop(),
+        }
+        // A viewer that waits for its next attempt counts that wait down, one
+        // repaint per second, and nothing else repaints it while it waits.
+        if let Status::Reconnecting { retry_at, .. } = self.status {
+            let remaining = retry_at.saturating_duration_since(std::time::Instant::now());
+            ui.ctx().request_repaint_after(remaining.min(Duration::from_secs(1)));
         }
         ui.add_enabled_ui(interactive, |ui| {
             details::show(ui, device, &self.server, matches!(self.status, Status::Connected));
@@ -385,6 +393,15 @@ impl DeviceUiState {
         if let Some(session) = self.session.take() {
             session.detach();
         }
+    }
+
+    /// End the connection and its automatic attempts, and keep the last image.
+    /// A person's `Stop` reaches this, and `Reconnect` starts a new session.
+    fn stop(&mut self) {
+        if let Some(session) = &mut self.session {
+            session.stop();
+        }
+        self.status = Status::Stopped;
     }
 
     fn upload_displayed(&mut self, ctx: &Context, image: ColorImage) -> bool {

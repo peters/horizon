@@ -55,7 +55,7 @@ pub use input::{
 #[cfg(any(test, feature = "test-support"))]
 pub use session::SentInput;
 pub use session::{
-    Config, HostKeyFailure, HostKeyRefusal, Image, Observation, ObservedHostKey, Route, ServerDetails, Session, Status,
-    StreamEvidence, UnobservedReason, Updates, Wake,
+    Config, HostKeyFailure, HostKeyRefusal, Image, Observation, ObservedHostKey, Reconnect, Route, ServerDetails,
+    Session, Status, StreamEvidence, UnobservedReason, Updates, Wake,
 };
 pub use view::{ImageLayout, LayoutError, Region, ViewOptions};

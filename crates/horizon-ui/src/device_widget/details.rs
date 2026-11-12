@@ -170,7 +170,20 @@ fn row(ui: &mut Ui, label: &str, value: &str) {
     ui.add_space(3.0);
 }
 
-/// Collect the reconnect action without mutating the connection during rendering.
+/// What the person asked of the connection while the header was drawn. The
+/// action runs after the frame, so no rendering step changes the connection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum HeaderAction {
+    #[default]
+    None,
+    /// Connect again now, and forget the last image.
+    Reconnect,
+    /// End the attempts and stay stopped until a person connects again.
+    Stop,
+}
+
+/// Collect the reconnect and stop actions without mutating the connection
+/// during rendering.
 pub(super) fn header(
     ui: &mut Ui,
     device: &DevicePanelState,
@@ -179,7 +192,7 @@ pub(super) fn header(
     status: &super::session::Status,
     interactive: bool,
     interact: bool,
-) -> bool {
+) -> HeaderAction {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(8.0);
@@ -194,13 +207,17 @@ pub(super) fn header(
         } else {
             device.display_name(server.name.as_deref())
         };
-        let reconnect = ui
+        // Stopping only means something while something runs or waits, and a
+        // stopped viewer keeps the two words that bring it back.
+        let can_stop = !matches!(status, Status::Stopped);
+        let buttons = if can_stop { 176.0 } else { 88.0 };
+        let requested = ui
             .horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
                 if ui.available_width() >= 300.0 {
                     desktop_icon(ui);
                 }
-                let width = (ui.available_width() - 100.0).max(24.0);
+                let width = (ui.available_width() - buttons - 12.0).max(24.0);
                 ui.allocate_ui_with_layout(vec2(width, 40.0), Layout::top_down(Align::Min), |ui| {
                     ui.set_min_width(width);
                     ui.add(Label::new(RichText::new(name.unwrap_or(&endpoint)).size(20.0).strong()).truncate())
@@ -221,9 +238,23 @@ pub(super) fn header(
                     )
                     .on_hover_text(&endpoint);
                 });
-                ui.allocate_ui_with_layout(vec2(88.0, 40.0), Layout::right_to_left(Align::Center), |ui| {
-                    ui.add_enabled(interactive, egui::Button::new("Reconnect").min_size(vec2(84.0, 28.0)))
+                ui.allocate_ui_with_layout(vec2(buttons, 40.0), Layout::right_to_left(Align::Center), |ui| {
+                    let mut action = HeaderAction::None;
+                    if can_stop
+                        && ui
+                            .add_enabled(interactive, egui::Button::new("Stop").min_size(vec2(72.0, 28.0)))
+                            .on_hover_text("End the connection and its automatic attempts")
+                            .clicked()
+                    {
+                        action = HeaderAction::Stop;
+                    }
+                    if ui
+                        .add_enabled(interactive, egui::Button::new("Reconnect").min_size(vec2(84.0, 28.0)))
                         .clicked()
+                    {
+                        action = HeaderAction::Reconnect;
+                    }
+                    action
                 })
                 .inner
             })
@@ -256,29 +287,48 @@ pub(super) fn header(
                 ui.label(RichText::new(source).size(12.0).color(theme::FG_SOFT()));
             }
         });
-        match status {
-            Status::Disconnected { message, .. } => {
-                ui.add_space(3.0);
-                ui.add(Label::new(RichText::new(message).size(12.0).color(theme::PALETTE_RED())).wrap());
-            }
-            Status::Stopped => {
-                ui.add_space(3.0);
-                caption(ui, "Select Reconnect to view this desktop.");
-            }
-            Status::Connecting | Status::Connected => {}
-        }
+        status_message(ui, status);
         ui.add_space(8.0);
-        reconnect
+        requested
     })
     .inner
 }
 
+/// What the state of the connection adds below its badge.
+fn status_message(ui: &mut Ui, status: &super::session::Status) {
+    match status {
+        Status::Disconnected { message, .. } => {
+            ui.add_space(3.0);
+            ui.add(Label::new(RichText::new(message).size(12.0).color(theme::PALETTE_RED())).wrap());
+        }
+        Status::Reconnecting { message, .. } => {
+            ui.add_space(3.0);
+            caption(ui, "The link is lost. The viewer tries again by itself.");
+            ui.add(Label::new(RichText::new(message).size(12.0).color(theme::FG_SOFT())).wrap());
+        }
+        Status::Stopped => {
+            ui.add_space(3.0);
+            caption(ui, "Select Reconnect to view this desktop.");
+        }
+        Status::Connecting | Status::Connected => {}
+    }
+}
+
 fn connection_status(ui: &mut Ui, status: &super::session::Status) {
     let (label, color) = match status {
-        Status::Stopped => ("Stopped", theme::FG_SOFT()),
-        Status::Connecting => ("Connecting…", theme::PALETTE_YELLOW()),
-        Status::Connected => ("Connected", theme::PALETTE_GREEN()),
-        Status::Disconnected { .. } => ("Disconnected", theme::PALETTE_RED()),
+        Status::Stopped => ("Stopped".to_string(), theme::FG_SOFT()),
+        Status::Connecting => ("Connecting…".to_string(), theme::PALETTE_YELLOW()),
+        Status::Connected => ("Connected".to_string(), theme::PALETTE_GREEN()),
+        Status::Disconnected { .. } => ("Disconnected".to_string(), theme::PALETTE_RED()),
+        Status::Reconnecting { retry_at, .. } => (
+            match whole_seconds_until(*retry_at) {
+                Some(seconds) => format!("Reconnecting · next attempt in {seconds} s"),
+                // The attempt starts within this frame, so no wait is left to
+                // count.
+                None => "Reconnecting…".to_string(),
+            },
+            theme::PALETTE_YELLOW(),
+        ),
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -286,6 +336,18 @@ fn connection_status(ui: &mut Ui, status: &super::session::Status) {
         ui.painter().circle_filled(rect.center(), 3.0, color);
         ui.label(RichText::new(label).size(12.0).color(color));
     });
+}
+
+/// The whole seconds that a person waits for the next attempt, rounded up so
+/// that a countdown never shows `0 s` while it still waits. `None` when no whole
+/// second is left.
+pub(super) fn whole_seconds_until(at: std::time::Instant) -> Option<u64> {
+    let remaining = at.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return None;
+    }
+    let round_up = u64::from(remaining.subsec_nanos() > 0);
+    Some(remaining.as_secs() + round_up)
 }
 
 fn desktop_icon(ui: &mut Ui) {

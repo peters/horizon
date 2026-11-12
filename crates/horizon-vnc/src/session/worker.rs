@@ -5,30 +5,100 @@ use std::{
 };
 
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
-use super::{Image, Route, Shared, Status, tunnel::SshTunnel};
+use super::{Image, Reconnect, Route, Shared, Status, retry, tunnel::SshTunnel};
 use crate::{Error, Frame, InputEvent, Region, ViewOptions, framebuffer::Framebuffer};
 
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Key exchange over a mesh network plus the VNC handshake behind it.
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one write of a refresh request or an input event may take before it
+/// counts as a stall of the link. A stalled write is not the end of the
+/// session: the read side ends it when the peer is gone.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One attempt of the session, and when that attempt reached the desktop.
+pub(super) struct End {
+    result: Result<(), Error>,
+    connected_at: Option<Instant>,
+}
+
+/// Connect, stream and connect again after a lost link, until `cancelled` or
+/// until the policy of the caller says that this failure stays.
+///
+/// Returns the failure that ended the session, or `None` when a person stopped
+/// it.
+pub(super) async fn session(
+    route: Route,
+    shared: &Shared,
+    latest_full: &Mutex<Option<Arc<Frame>>>,
+    input: &mut mpsc::UnboundedReceiver<InputEvent>,
+    reconnect: &Reconnect,
+    cancelled: oneshot::Receiver<()>,
+) -> Option<Error> {
+    let mut cancelled = std::pin::pin!(cancelled);
+    let mut attempts = 0;
+    loop {
+        shared.publish_status(Status::Connecting);
+        let end = tokio::select! {
+            _ = &mut cancelled => return None,
+            end = connection(route.clone(), shared, latest_full, input) => end,
+        };
+        let up = end.connected_at.map(|connected_at| connected_at.elapsed());
+        let error = match end.result {
+            Ok(()) => return None,
+            Err(error) => error,
+        };
+        match retry::after_loss(&error, reconnect, attempts, up) {
+            retry::AfterLoss::Stay => return Some(error),
+            retry::AfterLoss::Retry { attempt, after } => {
+                attempts = attempt;
+                tracing::info!(attempt, after = ?after, %error, "device viewer lost its link and waits");
+                shared.publish_status(Status::Reconnecting {
+                    attempt,
+                    retry_at: Instant::now() + after,
+                    message: error.to_string(),
+                });
+                tokio::select! {
+                    _ = &mut cancelled => return None,
+                    () = tokio::time::sleep(after) => {}
+                }
+            }
+        }
+    }
+}
 
 pub(super) async fn connection(
     route: Route,
     shared: &Shared,
     latest_full: &Mutex<Option<Arc<Frame>>>,
     input: &mut mpsc::UnboundedReceiver<InputEvent>,
-) -> Result<(), Error> {
+) -> End {
     // The tunnel process lives exactly as long as this connection.
     let host = route.tunnel_host();
-    let (client, mut tunnel) = connect_client(route).await?;
+    let (client, mut tunnel) = match connect_client(route).await {
+        Ok((client, tunnel)) => (client, tunnel),
+        Err(error) => {
+            return End {
+                result: Err(error),
+                connected_at: None,
+            };
+        }
+    };
+    let connected_at = Instant::now();
     let result = stream_desktop(client, shared, latest_full, input).await;
     match (result, tunnel.as_mut()) {
         // A forward that dies mid-session ends the stream; ssh says why.
-        (Err(error), Some(tunnel)) => Err(tunnel.explain(error, host.as_ref()).await),
-        (result, _) => result,
+        (Err(error), Some(tunnel)) => End {
+            result: Err(tunnel.explain(error, host.as_ref()).await),
+            connected_at: Some(connected_at),
+        },
+        (result, _) => End {
+            result,
+            connected_at: Some(connected_at),
+        },
     }
 }
 
@@ -88,16 +158,15 @@ async fn stream_desktop(
         if received_pixels && changed && !framebuffer.size().contains(&0) {
             publish_image(&mut framebuffer, options, &mut published, shared, latest_full)?;
         }
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            client.input(if full_refresh {
-                X11Event::FullRefresh
-            } else {
-                X11Event::Refresh
-            }),
-        )
-        .await
-        .map_err(|_| Error::Timeout)??;
+        let refresh = if full_refresh {
+            X11Event::FullRefresh
+        } else {
+            X11Event::Refresh
+        };
+        match classify_write(tokio::time::timeout(WRITE_TIMEOUT, client.input(refresh)).await) {
+            Write::Sent | Write::Stalled => {}
+            Write::Failed(error) => return Err(error),
+        }
     }
 }
 
@@ -173,6 +242,29 @@ fn untaken_changes(pending: Option<&Image>, changed: Region, image: [usize; 2]) 
     }
 }
 
+/// What one write of the session did.
+#[derive(Debug)]
+pub(super) enum Write {
+    Sent,
+    /// The write did not finish inside [`WRITE_TIMEOUT`]: the link is stalled,
+    /// which is not the end of the session. The read side ends it when the peer
+    /// is gone.
+    Stalled,
+    /// The write failed, so the connection is gone.
+    Failed(Error),
+}
+
+pub(super) fn classify_write(result: Result<Result<(), vnc::VncError>, tokio::time::error::Elapsed>) -> Write {
+    match result {
+        Ok(Ok(())) => Write::Sent,
+        Ok(Err(error)) => Write::Failed(error.into()),
+        Err(_) => {
+            tracing::debug!("a device viewer write is stalled");
+            Write::Stalled
+        }
+    }
+}
+
 const fn x11_event(event: InputEvent) -> X11Event {
     match event {
         InputEvent::Key { keysym, down } => X11Event::KeyEvent(vnc::ClientKeyEvent { keycode: keysym, down }),
@@ -199,9 +291,12 @@ async fn forward_input_until(
         }
         match tokio::time::timeout(remaining, input.recv()).await {
             Ok(Some(event)) => {
-                tokio::time::timeout(Duration::from_secs(5), client.input(x11_event(event)))
-                    .await
-                    .map_err(|_| Error::Timeout)??;
+                match classify_write(tokio::time::timeout(WRITE_TIMEOUT, client.input(x11_event(event))).await) {
+                    // A stalled input write leaves this event to the link, and the
+                    // read side decides whether the link is gone.
+                    Write::Sent | Write::Stalled => {}
+                    Write::Failed(error) => return Err(error),
+                }
             }
             // The sender lives in the Session, which cancels this worker when it
             // drops; until then a closed channel just means no more input.

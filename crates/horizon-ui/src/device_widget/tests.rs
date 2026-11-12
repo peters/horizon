@@ -38,6 +38,29 @@ fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
     ]
 }
 
+/// Every text that the viewer draws, in draw order.
+fn drawn_texts(state: &mut DeviceUiState, interactive: bool) -> Vec<String> {
+    let device = fixture_device();
+    let ctx = egui::Context::default();
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            },
+            |ui| state.show(ui, &device, interactive),
+        )
+        .discard_textures();
+    output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn toolbar_labels(state: &mut DeviceUiState, interactive: bool) -> Vec<(String, bool)> {
     let device = fixture_device();
     crate::test_egui::accesskit_labels(|ui| {
@@ -863,5 +886,110 @@ fn ordinary_or_invalid_clipboard_text_cannot_replace_native_metadata() {
             .server
             .native_session,
         Some(native)
+    );
+}
+
+#[test]
+fn an_inspect_of_a_viewer_that_lost_its_link_names_the_next_attempt() {
+    use horizon_core::browser::manifest::device::{Presentation, Reconnect};
+    let retry_at = std::time::Instant::now() + Duration::from_secs(6);
+    let mut state = DeviceUiState {
+        initialized: true,
+        status: Status::Reconnecting {
+            attempt: 2,
+            retry_at,
+            message: "connection timed out; ssh: Connection reset by peer".to_string(),
+        },
+        ..DeviceUiState::default()
+    };
+    let device = fixture_device();
+    let panel = state.observation("panel".into(), &device, true, "agent");
+    assert_eq!(panel.connection, Connection::Reconnecting);
+    assert_eq!(
+        panel.reconnect,
+        Some(Reconnect {
+            attempt: 2,
+            next_attempt_in_millis: panel.reconnect.expect("a reconnect").next_attempt_in_millis,
+        }),
+        "the answer names the attempt and the wait"
+    );
+    let wait = panel.reconnect.expect("a reconnect").next_attempt_in_millis;
+    assert!((1..=6_000).contains(&wait), "a six second wait, not {wait} ms");
+    assert_eq!(
+        panel.connection_error.as_deref(),
+        Some("connection timed out; ssh: Connection reset by peer"),
+        "the person and the agent read why the link ended"
+    );
+    assert_eq!(
+        panel
+            .diagnostics
+            .as_ref()
+            .map(|diagnostics| diagnostics.presentation.clone()),
+        Some(Presentation::Connecting),
+        "nothing of the next attempt is presented yet"
+    );
+    assert!(panel.connection_failure.is_none(), "a lost link is no refusal");
+    assert!(!panel.image.image_displayed, "a retained image is not a live one");
+}
+
+#[test]
+fn the_header_offers_stop_while_the_viewer_waits_and_calls_it_a_reconnect() {
+    let mut waiting = DeviceUiState {
+        initialized: true,
+        status: Status::Reconnecting {
+            attempt: 1,
+            retry_at: std::time::Instant::now() + Duration::from_secs(6),
+            message: "connection timed out".to_string(),
+        },
+        ..DeviceUiState::default()
+    };
+    let labels = toolbar_labels(&mut waiting, true);
+    assert!(
+        labels.iter().any(|(label, disabled)| label == "Stop" && !disabled),
+        "a person can stop the attempts: {labels:?}"
+    );
+    let shown = drawn_texts(&mut waiting, true);
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.starts_with("Reconnecting · next attempt in ")
+                && (text.ends_with("5 s") || text.ends_with("6 s"))),
+        "the badge counts the wait down: {shown:?}"
+    );
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "The link is lost. The viewer tries again by itself."),
+        "the panel says that it is trying: {shown:?}"
+    );
+
+    let mut stopped = DeviceUiState {
+        initialized: true,
+        status: Status::Stopped,
+        ..DeviceUiState::default()
+    };
+    let labels = toolbar_labels(&mut stopped, true);
+    assert!(
+        !labels.iter().any(|(label, _)| label == "Stop"),
+        "a stopped viewer has nothing to stop: {labels:?}"
+    );
+    assert!(labels.iter().any(|(label, _)| label == "Reconnect"));
+}
+
+#[test]
+fn a_countdown_rounds_up_and_never_says_zero() {
+    let now = std::time::Instant::now();
+    assert_eq!(super::details::whole_seconds_until(now), None);
+    assert_eq!(
+        super::details::whole_seconds_until(now + Duration::from_millis(1)),
+        Some(1)
+    );
+    assert_eq!(
+        super::details::whole_seconds_until(now + Duration::from_secs(6)),
+        Some(6)
+    );
+    assert_eq!(
+        super::details::whole_seconds_until(now + Duration::from_millis(5_500)),
+        Some(6)
     );
 }
