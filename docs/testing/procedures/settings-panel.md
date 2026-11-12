@@ -136,6 +136,35 @@ None of the steps deletes data, rents compute or changes access.
    Result: The host name is readable in the box. `Remove` appears at the end of
    the row, and the row stays inside the panel.
 
+### 6.2c S2c — The header of the Presets tab keeps its button clear
+
+1. Select the `Presets` tab and read the line at the top of the tab.
+
+   Result: The line reads `Templates for quickly creating new panels via the
+   command palette.` and starts at the left edge of the tab. The button
+   `+ Add Preset` is at the right end of the same line. No word of the line is
+   under the button.
+
+2. Click `+ Add Preset`.
+
+   Result: One card of a preset appears below the line. The button stays at the
+   right end of the line, and the panel width does not change.
+
+### 6.2d S2d — The longest value of every tab keeps the panel
+
+1. Write a value of 200 characters in the `Recorder` box of the `Speech` tab.
+   Write a name of 253 characters in the `SSH target` box of the `Server` tab.
+   Select each tab in turn.
+
+   Result: Each field shows the start of its value and scrolls to the rest. No
+   word of a tab is under a button of that tab, and two words never lie on each
+   other.
+
+2. Read the panel width on every tab.
+
+   Result: The width is the same on all eight tabs, and the canvas stays
+   visible on the left.
+
 ### 6.3 S3 — Long content scrolls inside the panel
 
 1. In General, write the long name of the synthetic settings into **Remote

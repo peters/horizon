@@ -156,3 +156,30 @@ pub(super) const BUTTON_LABELS: &[&str] = &[
     "Add",
     "Reset Defaults",
 ];
+
+/// The labels of the buttons of the tabs, so a test knows which drawn text of a
+/// tab is a control and which one is a word that must stay clear of it.
+pub(super) const TAB_BUTTON_LABELS: &[&str] = &[
+    "+ Add Preset",
+    "Add",
+    "Add a computer",
+    "Cancel",
+    "Copy link",
+    "Delete",
+    "Export",
+    "Import",
+    "Import from the keyring",
+    "Join",
+    "Keep",
+    "Read the list",
+    "Reconcile",
+    "Record two seconds",
+    "Refresh",
+    "Remove",
+    "Replace value",
+    "Save to the secrets file",
+    "Secrets file",
+    "Set for this session",
+    "Store",
+    "X",
+];

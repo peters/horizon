@@ -162,6 +162,17 @@ impl PortableProfilePanel {
         }
     }
 
+    /// The row whose last export or import said `notice`, for a test of the width
+    /// of the tab.
+    #[cfg(test)]
+    pub(super) fn with_notice(path: impl Into<String>, notice: (String, bool)) -> Self {
+        Self {
+            config_path: PathBuf::new(),
+            path: path.into(),
+            notice: Some(notice),
+        }
+    }
+
     /// Write the shareable definition (bindings stripped) to the path. The
     /// configuration file itself is never a destination.
     fn export(&mut self, config: &Config) {

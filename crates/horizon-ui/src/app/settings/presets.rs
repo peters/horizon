@@ -26,10 +26,12 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
 
     super::section_heading(ui, "Panel Presets");
 
-    // Header row: description + add button
-    ui.horizontal(|ui| {
-        super::dim_label(ui, "Templates for quickly creating new panels via the command palette.");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    // Header row: the description takes the width that the button leaves, so the
+    // line never runs under the button of the row.
+    super::action_row(
+        ui,
+        |ui| super::dim_label(ui, "Templates for quickly creating new panels via the command palette."),
+        |ui| {
             if ui
                 .add(
                     egui::Button::new(egui::RichText::new("+ Add Preset").size(11.0).color(theme::ACCENT()))
@@ -53,8 +55,8 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
                 });
                 changed = true;
             }
-        });
-    });
+        },
+    );
     ui.add_space(8.0);
 
     // Preset cards

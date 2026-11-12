@@ -707,3 +707,216 @@ fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
         "the tab shows the command line of its transcriber: {texts:?}"
     );
 }
+
+/// The panel of a window of 1480 points draws every tab with the longest values
+/// that its fields take: a name of 64 characters, a recorder line of 200
+/// characters, the 253-character name of a server, an open invitation, three
+/// computers of the server, an import line and one line of a refused value in
+/// every card that has one.
+///
+/// A word that its own card cuts is scrolled under the edge of the card, so the
+/// person reads only the part inside the panel. The checks here judge that part:
+/// no word of the panel lies under a control of the panel, no word lies on
+/// another, and the panel keeps one rectangle whatever its values are.
+#[test]
+fn the_panel_holds_the_longest_values_of_every_tab() {
+    // The width of a window of 1480 points gives the panel 444 points. The window
+    // is taller here, so every card of every tab is drawn and not scrolled out of
+    // the view.
+    let viewport = [1480.0_f32, 2600.0];
+    let (temp, ctx, mut app, _names) = app_with_stored_secrets();
+    seed_server_tab(&mut app, temp.path());
+    seed_long_values(&mut app);
+
+    let mut panels = Vec::new();
+    let mut drawn: Vec<(&str, Vec<String>)> = Vec::new();
+    for tab in super::SettingsTab::ALL {
+        let shapes = settings_frame(&ctx, &mut app, viewport, *tab);
+        let panel = panel_background_rect(&shapes, reserved_panel_rect(&app));
+        panels.push((tab.label(), panel));
+        let words = assert_tab_keeps_its_words_clear(&shapes, panel, tab.label());
+        drawn.push((tab.label(), words.into_iter().map(|(text, _)| text).collect()));
+    }
+    let texts_of = |tab: &str| -> &[String] {
+        &drawn
+            .iter()
+            .find(|(label, _)| *label == tab)
+            .unwrap_or_else(|| panic!("the panel drew {tab}"))
+            .1
+    };
+
+    // The long values of the test reached the tabs that show them, so the checks
+    // above judged the widest line of each tab and not an empty panel.
+    assert!(
+        texts_of("Server")
+            .iter()
+            .any(|text| text.starts_with("aaaa") && text.chars().count() == 253),
+        "the Server tab draws the 253-character name of the server: {:?}",
+        texts_of("Server")
+    );
+    assert!(
+        texts_of("Remote").iter().any(|text| text.starts_with("Imported ")),
+        "the Remote tab draws the line of its last import: {:?}",
+        texts_of("Remote")
+    );
+    assert!(
+        texts_of("Speech")
+            .iter()
+            .any(|text| text.contains("--rate 16000 {file}") && text.chars().count() > 190),
+        "the Speech tab draws the recorder line of 200 characters: {:?}",
+        texts_of("Speech")
+    );
+    assert!(
+        texts_of("Presets")
+            .iter()
+            .any(|text| text.starts_with("a-preset-with-a-long-name-")),
+        "the Presets tab draws the card of its long preset: {:?}",
+        texts_of("Presets")
+    );
+    assert!(
+        texts_of("Keys")
+            .iter()
+            .any(|text| text == "Ctrl+Alt+Shift+Super+Hyper+Meta+K"),
+        "the Keys tab draws the binding that it refuses: {:?}",
+        texts_of("Keys")
+    );
+    for (tab, line) in [
+        ("General", "remote_hosts.vnc_port must be nonzero"),
+        ("General", "browser_host.ssh_target must be one SSH name"),
+        ("Browser", "browser.quality must be between 1 and 100"),
+        ("Server", "server.command must be 1 to 200 characters"),
+        ("Speech", "speech.hotkey needs a modifier or a function key"),
+    ] {
+        assert!(
+            texts_of(tab).iter().any(|text| text.contains(line)),
+            "the {tab} tab draws the line of its refused value {line:?}: {:?}",
+            texts_of(tab)
+        );
+    }
+
+    let (first_tab, first) = panels.first().copied().expect("eight tabs");
+    for (tab, panel) in &panels {
+        assert!(
+            same_rect(*panel, first),
+            "the panel is {first:?} on {first_tab} and {panel:?} on {tab}"
+        );
+    }
+    let given = super::settings_panel_default_width(viewport[0]);
+    assert!(
+        first.width() <= given + 2.0,
+        "the longest values ask for {first:?} and the window gives the panel {given}"
+    );
+}
+
+/// The visible part of every word of the panel, with the words that a control
+/// covers and the words that lie on each other of one tab.
+fn assert_tab_keeps_its_words_clear(
+    shapes: &[egui::epaint::ClippedShape],
+    panel: egui::Rect,
+    label: &str,
+) -> Vec<(String, egui::Rect)> {
+    let mut words: Vec<(String, egui::Rect)> = Vec::new();
+    let mut controls: Vec<(String, egui::Rect)> = Vec::new();
+    for_each_painted(shapes, &mut |shape, painted, clip| {
+        let egui::Shape::Text(drawn) = shape else {
+            return;
+        };
+        // The panel is one part of the window, so only the text that a clip of the
+        // panel draws is a word of the tab.
+        if !panel.expand(1.0).contains_rect(clip) {
+            return;
+        }
+        // The part that the person reads is the part that the clip of the card
+        // leaves. A field that scrolls its value keeps the rest out of the panel.
+        let visible = painted.intersect(clip);
+        if !visible.is_positive() {
+            return;
+        }
+        let text = drawn.galley.text();
+        if super::panel_test_support::TAB_BUTTON_LABELS.contains(&text) {
+            controls.push((text.to_owned(), visible));
+        } else {
+            words.push((text.to_owned(), visible));
+        }
+    });
+
+    for (word, rect) in &words {
+        assert!(
+            panel.expand(1.0).contains_rect(*rect),
+            "the {label} tab draws the word {word:?} at {rect:?} beside the panel {panel:?}"
+        );
+        for (control, control_rect) in &controls {
+            assert!(
+                !rect.intersects(*control_rect),
+                "the {label} tab draws the word {word:?} at {rect:?} under the control {control:?} at {control_rect:?}"
+            );
+        }
+    }
+    for (index, (left, left_rect)) in words.iter().enumerate() {
+        for (right, right_rect) in &words[index + 1..] {
+            assert!(
+                !left_rect.intersects(*right_rect),
+                "the {label} tab draws the words {left:?} and {right:?} on each other at {left_rect:?} and {right_rect:?}"
+            );
+        }
+    }
+    // A control keeps its own place as well: one button over another is one
+    // button that a person cannot press.
+    for (control, rect) in &controls {
+        assert!(
+            panel.expand(1.0).contains_rect(*rect),
+            "the {label} tab draws the control {control:?} at {rect:?} beside the panel {panel:?}"
+        );
+    }
+    for (index, (left, left_rect)) in controls.iter().enumerate() {
+        for (right, right_rect) in &controls[index + 1..] {
+            assert!(
+                !left_rect.intersects(*right_rect),
+                "the {label} tab draws the controls {left:?} and {right:?} on each other at {left_rect:?} and {right_rect:?}"
+            );
+        }
+    }
+    words
+}
+
+/// The longest values that the fields of the tabs take, and one line of a refused
+/// value in every card that shows one.
+fn seed_long_values(app: &mut crate::app::HorizonApp) {
+    let Some(editor) = app.settings.as_mut() else {
+        panic!("the settings window is open");
+    };
+    // The line of a recorder of this computer: 200 characters with the file that
+    // the take replaces.
+    editor.config.speech.recorder = format!("{} --rate 16000 {{file}}", "recorder-of-the-north-".repeat(8));
+    // The name of the server: 253 characters, which is the longest name of a
+    // computer that a name of the domain system takes.
+    let server_name = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".");
+    assert_eq!(server_name.chars().count(), 253);
+    editor.config.server.ssh_target = Some(server_name);
+    // The outcome of the last import of a portable profile, with the path that the
+    // person typed.
+    let import_path = format!("/home/person/{}/remote-profile.json", "a-folder-".repeat(16));
+    let notice = format!("Imported {import_path}: 3 providers and 4 targets.");
+    editor.portable_profile = super::remote_browsers::PortableProfilePanel::with_notice(import_path, (notice, false));
+    // One preset of the Presets tab, with a name and a command line of the length
+    // that its rule allows.
+    editor.config.presets.push(horizon_core::PresetConfig {
+        name: "a-preset-with-a-long-name-".repeat(4),
+        alias: Some("a-long-alias-of-a-preset".to_owned()),
+        kind: horizon_core::PanelKind::Command,
+        command: Some(format!("{} --flag", "a-command-line-of-a-preset ".repeat(8))),
+        args: Vec::new(),
+        resume: horizon_core::PanelResume::Fresh,
+        ssh_connection: None,
+    });
+    // One binding of the Keys tab that no key of this computer names, so the row
+    // shows its indicator and the card shows the line of its rule.
+    editor.config.shortcuts.command_palette = "Ctrl+Alt+Shift+Super+Hyper+Meta+K".to_owned();
+    // One refused value in every card that shows the line of its rule.
+    editor.config.remote_hosts.vnc_port = 0;
+    editor.config.browser.quality = 0;
+    editor.config.browser_host.ssh_target = Some("a target with a space".to_owned());
+    editor.config.speech.hotkey = "Q".to_owned();
+    editor.config.server.command = Some("a command with a \"quote\"".to_owned());
+    editor.config.secrets.names.push("a name with a space in it".to_owned());
+}
