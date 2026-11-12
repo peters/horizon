@@ -980,8 +980,11 @@ mod tests {
     #[test]
     fn warning_during_recovery_is_not_an_ended_session() {
         let root = tempfile::tempdir().expect("profile root");
+        // This test needs a launch that fails at once. A program of this computer
+        // that ends at once means that; a path that this computer does not have
+        // would fall back to the browser that the computer happens to have.
         let config = BrowserConfig {
-            command: Some(root.path().join("missing-browser").to_string_lossy().into_owned()),
+            command: Some(crate::util::stand_in_program().to_string()),
             profile_root: Some(root.path().join("profiles")),
             ..BrowserConfig::default()
         };
@@ -1245,8 +1248,11 @@ mod tests {
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
+            // A launch that fails at once, from a program of this computer that
+            // ends at once. A command that this computer does not have is read as
+            // unset, and the launch would then use the browser that it has.
             config: BrowserConfig {
-                command: Some("/definitely/missing/chrome".to_string()),
+                command: Some(crate::util::stand_in_program().to_string()),
                 ..BrowserConfig::default()
             },
             teach: None,
@@ -1258,8 +1264,8 @@ mod tests {
         assert!(state.continue_pending_relaunch());
         assert!(state.pending_relaunch.is_none());
         assert!(state.session.is_some());
-        // The deliberately missing executable closes its receiver asynchronously.
-        // A retained session handle must not keep accepting commands after that exit.
+        // The program that ends at once closes its receiver asynchronously. A
+        // retained session handle must not keep accepting commands after that exit.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while state.can_accept_commands() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(1));

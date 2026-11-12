@@ -772,6 +772,9 @@ mod tests {
 
     #[test]
     fn shutdown_cancels_devtools_endpoint_wait() {
+        // This test needs a launch that does not finish. Its browser is a program
+        // of the test that starts and never answers, not a browser of this
+        // computer.
         let temp = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
         let browser = temp.path().join("delayed-browser");
         let started = temp.path().join("started");
