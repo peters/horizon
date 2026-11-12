@@ -674,8 +674,10 @@ fn a_scroll_sideways_is_its_own_step_and_a_wheel_beside_the_picture_is_ignored()
 }
 
 #[test]
-fn the_picture_of_a_new_viewer_is_drawn_wide_enough_to_read() {
+fn the_picture_of_a_new_viewer_is_drawn_as_wide_as_its_panel() {
     let (ctx, device, mut state, _sent) = frame_viewer_of([640, 360]);
+    // The style of the window, which sets the heights of the rows of the chrome.
+    crate::theme::apply(&ctx, horizon_core::AppearanceTheme::Dark);
     // The default size of a frame source panel less its titlebar and its padding:
     // the body that this widget draws in.
     let body = egui::vec2(
@@ -685,8 +687,12 @@ fn the_picture_of_a_new_viewer_is_drawn_wide_enough_to_read() {
     let output = frame_in(&ctx, &mut state, &device, body, Vec::new());
     let image = image_rect(&output);
     assert!(
-        image.width() >= 480.0,
-        "the first picture of the program is at least 480 points wide: {image:?} in {body:?}"
+        image.width() >= body.x - 0.5,
+        "the first picture of the program gets the full width of the body of its \
+         panel, and the chrome above it ({:?} of {:?}) takes no more than \
+         FRAME_SOURCE_VIEWER_CHROME_HEIGHT allows: {image:?}",
+        body.y - image.height(),
+        body
     );
     let shape = image.width() / image.height();
     assert!(
