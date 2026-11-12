@@ -229,7 +229,6 @@ def parse_delay(text):
 
 def send_later(stand_in, seconds, word):
     """Sends `word` after `seconds`, so the person can move the focus away first."""
-    print(f'{PROGRAM}: {word} after {seconds:g} s', flush=True)
     time.sleep(seconds)
     print(f'{PROGRAM}: {stand_in.send(word)}', flush=True)
 
@@ -274,9 +273,11 @@ def main(argv=None):
         later.start()
         pending.append(later)
         print(f'{PROGRAM}: {word} in {seconds:g} s', flush=True)
-    # A delay outlives the typed lines: the panel ends after the last one sends.
+    # A delay outlives the typed lines: the panel ends after the last one sends. Every
+    # delay was scheduled at most this long ago, so one deadline ends them all.
+    deadline = time.monotonic() + MAX_AFTER_SECONDS + 1
     for later in pending:
-        later.join(MAX_AFTER_SECONDS + 1)
+        later.join(max(deadline - time.monotonic(), 0))
     return 0
 
 
