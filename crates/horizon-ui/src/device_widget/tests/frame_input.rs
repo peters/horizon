@@ -685,3 +685,26 @@ fn the_counters_of_a_hidden_program_reach_an_inspection() {
         Some(horizon_core::browser::manifest::device::Presentation::Hidden)
     );
 }
+
+#[test]
+fn a_new_viewer_opens_with_its_details_and_its_controls_closed() {
+    let (ctx, device, mut state, _sent) = frame_viewer();
+    let output = frame(&ctx, &mut state, &device, Vec::new());
+    let texts: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    for header in ["Connection details", "View controls"] {
+        assert!(texts.iter().any(|text| text == header), "the viewer draws {header}");
+    }
+    for inside in ["Dropped pictures", "Maximum fps"] {
+        assert!(
+            !texts.iter().any(|text| text == inside),
+            "the picture keeps its room: {inside} is inside a closed section: {texts:?}"
+        );
+    }
+}
