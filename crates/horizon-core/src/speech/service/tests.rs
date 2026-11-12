@@ -171,6 +171,7 @@ fn read_request(stream: &mut TcpStream) -> String {
 
 fn request<'a>(endpoint: &'a Endpoint, language: Option<&'a str>) -> ServiceRequest<'a> {
     ServiceRequest {
+        upload: Duration::from_secs(30),
         endpoint,
         model: "gpt-transcribe",
         language,

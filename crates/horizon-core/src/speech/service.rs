@@ -60,8 +60,14 @@ pub struct ServiceRequest<'a> {
     /// The value of the named secret of the key. It reaches the `Authorization`
     /// header and no other byte of the request.
     pub key: &'a str,
-    /// The most time that the whole call may take.
+    /// The most time that Horizon waits for the answer of the service. It is the
+    /// bound of the answer and not of the upload: a dictation of a slow uplink
+    /// spends most of its time on the way up, and a lost take is the person's
+    /// speech.
     pub bound: Duration,
+    /// The most time that the upload of `file` may take. It grows with the size
+    /// of the take, so a long dictation on a slow uplink can still arrive.
+    pub upload: Duration,
 }
 
 impl fmt::Debug for ServiceRequest<'_> {
@@ -93,12 +99,31 @@ pub enum ServiceError {
     Tls { host: String, reason: String },
     #[error("The transcription service at {host} did not answer in {seconds} {}", seconds_unit(*seconds))]
     NoAnswer { host: String, seconds: u64 },
+    #[error("The take was not uploaded to {host} in {seconds} {}: the uplink is slower than the take", seconds_unit(*seconds))]
+    UploadTooSlow { host: String, seconds: u64 },
     #[error("The answer of the transcription service at {host} ended early or was not the expected shape")]
     EndedEarly { host: String },
     #[error("The transcription service at {host} answered {status}: {message}")]
     Refused { host: String, status: u16, message: String },
     #[error("The transcription service at {host} answered no text")]
     NoText { host: String },
+}
+
+impl ServiceError {
+    /// Whether the person's take should stay on this computer after this failure,
+    /// so that one retry can send it again.
+    ///
+    /// A slow uplink, an unreachable host and a TLS handshake that failed say
+    /// nothing about the take or the service: the same request can work in a
+    /// minute. A service that answered, an answer that ended early and an answer
+    /// without text would answer the same way, so the take is dropped then.
+    #[must_use]
+    pub const fn keeps_the_take(&self) -> bool {
+        matches!(
+            self,
+            Self::Unreachable { .. } | Self::Tls { .. } | Self::NoAnswer { .. } | Self::UploadTooSlow { .. }
+        )
+    }
 }
 
 /// The unit of the seconds of one bound: `1 second` reads as one second.
@@ -153,7 +178,14 @@ fn transcribe_with(resolver: SeamResolver, request: &ServiceRequest<'_>) -> Resu
         // take and the key to a host that they did not name.
         .max_redirects(0)
         .http_status_as_error(false)
-        .timeout_global(Some(request.bound))
+        // The way up holds the bound of the upload, and the wait for the answer
+        // holds its own: one bound for both lost a long dictation of a slow
+        // uplink that the service would have transcribed.
+        .timeout_send_request(Some(request.upload))
+        .timeout_send_body(Some(request.upload))
+        .timeout_recv_response(Some(request.bound))
+        .timeout_recv_body(Some(request.bound))
+        .timeout_global(Some(request.upload.saturating_add(request.bound)))
         .build();
     let agent = resolver::agent(config, resolver);
     // The value of the key travels in this header and in no other byte, and the
@@ -167,7 +199,7 @@ fn transcribe_with(resolver: SeamResolver, request: &ServiceRequest<'_>) -> Resu
         .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
         .header("Accept", "application/json")
         .send(body.as_slice())
-        .map_err(|error| transport_error(&error, &host, request.bound))?;
+        .map_err(|error| transport_error(&error, &host, request))?;
     let status = response.status().as_u16();
     let answer = response
         .body_mut()
@@ -192,7 +224,8 @@ fn transcribe_with(resolver: SeamResolver, request: &ServiceRequest<'_>) -> Resu
 }
 
 /// The sentence of a request that reached no answer of a service.
-fn transport_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceError {
+fn transport_error(error: &ureq::Error, host: &str, request: &ServiceRequest<'_>) -> ServiceError {
+    let bound = request.bound;
     let host = host.to_owned();
     match error {
         ureq::Error::HostNotFound => ServiceError::Unresolved { host },
@@ -215,6 +248,9 @@ fn transport_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceE
             host,
             reason: error.to_string(),
         },
+        // The way up and the answer have their own bounds, and a person reads
+        // which of the two ended the call.
+        ureq::Error::Timeout(ureq::Timeout::SendRequest | ureq::Timeout::SendBody) => upload_too_slow(host, request),
         ureq::Error::Timeout(_) => no_answer(host, bound),
         // The bytes of an answer arrived and their shape was not the one of HTTP:
         // this call reached the host, so it is no failure of a connection.
@@ -234,6 +270,8 @@ fn transport_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceE
 fn answer_error(error: &ureq::Error, host: &str, bound: Duration) -> ServiceError {
     let host = host.to_owned();
     match error {
+        // The answer holds its own bound: an answer that ended inside it is an
+        // answer that ended early, and a body that outlived it is no answer.
         ureq::Error::Timeout(_) => no_answer(host, bound),
         _ => ServiceError::EndedEarly { host },
     }
@@ -244,6 +282,14 @@ fn no_answer(host: String, bound: Duration) -> ServiceError {
     ServiceError::NoAnswer {
         host,
         seconds: bound.as_secs(),
+    }
+}
+
+/// The sentence of an upload that outlived its own bound.
+fn upload_too_slow(host: String, request: &ServiceRequest<'_>) -> ServiceError {
+    ServiceError::UploadTooSlow {
+        host,
+        seconds: request.upload.as_secs(),
     }
 }
 

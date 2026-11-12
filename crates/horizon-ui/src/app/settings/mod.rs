@@ -221,11 +221,12 @@ impl HorizonApp {
         let speech_view = speech::SpeechView {
             answer: self.speech.try_answer(),
             running: self.speech.try_running(),
+            kept: self.speech.kept_take(),
             secret: self
                 .named_secrets
                 .state_of(&editor.config.speech.transcriber.key_secret),
         };
-        let (action, changed, try_take) = render_settings_panel(
+        let (action, changed, speech_request) = render_settings_panel(
             ui,
             &panel_state,
             editor,
@@ -239,8 +240,11 @@ impl HorizonApp {
             &view,
             general_view,
         );
-        if try_take {
+        if speech_request.try_take {
             self.try_speech(ui.ctx());
+        }
+        if speech_request.retry_take {
+            self.retry_speech_take(ui.ctx());
         }
         if changed {
             if let Some(editor) = self.settings.as_mut() {
@@ -591,7 +595,7 @@ fn render_settings_panel(
     workbenches: &mut TabWorkbenches<'_>,
     view: &server::ServerView,
     general_view: general::GeneralView<'_>,
-) -> (SettingsAction, bool, bool) {
+) -> (SettingsAction, bool, speech::SpeechRequest) {
     let rect = panel_rect(ui);
     egui::Panel::right(SETTINGS_PANEL_ID)
         // One width for every tab, and the same width that the panel opens with.
@@ -627,8 +631,8 @@ fn render_settings_panel(
             ui.add_space(16.0);
 
             let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let (changed, try_take) = render_tab(ui, editor, workbenches, available, view, general_view);
-            (action, changed, try_take)
+            let (changed, speech_request) = render_tab(ui, editor, workbenches, available, view, general_view);
+            (action, changed, speech_request)
         })
         .inner
 }
@@ -650,7 +654,7 @@ fn render_tab(
     available: Vec2,
     view: &server::ServerView,
     general_view: general::GeneralView<'_>,
-) -> (bool, bool) {
+) -> (bool, speech::SpeechRequest) {
     let TabWorkbenches {
         credentials,
         allocations,
@@ -679,10 +683,13 @@ fn render_tab(
             // take the width of its widest tab.
             ui.set_width(ui.available_width());
             match active_tab {
-                SettingsTab::General => (general::render(ui, config, general_view), false),
-                SettingsTab::Shortcuts => (shortcuts::render(ui, config), false),
-                SettingsTab::Presets => (presets::render(ui, config), false),
-                SettingsTab::Browser => (browser::render(ui, config), false),
+                SettingsTab::General => (
+                    general::render(ui, config, general_view),
+                    speech::SpeechRequest::default(),
+                ),
+                SettingsTab::Shortcuts => (shortcuts::render(ui, config), speech::SpeechRequest::default()),
+                SettingsTab::Presets => (presets::render(ui, config), speech::SpeechRequest::default()),
+                SettingsTab::Browser => (browser::render(ui, config), speech::SpeechRequest::default()),
                 SettingsTab::RemoteBrowsers => {
                     remote_recovery::render(ui, allocations);
                     (
@@ -696,14 +703,26 @@ fn render_tab(
                             keyring,
                             named_secrets,
                         ),
-                        false,
+                        speech::SpeechRequest::default(),
                     )
                 }
-                SettingsTab::Secrets => (secrets::render(ui, config, named_secrets, secret_inputs), false),
-                SettingsTab::Server => (server::render(ui, config, server, view), false),
+                SettingsTab::Secrets => (
+                    secrets::render(ui, config, named_secrets, secret_inputs),
+                    speech::SpeechRequest::default(),
+                ),
+                SettingsTab::Server => (
+                    server::render(ui, config, server, view),
+                    speech::SpeechRequest::default(),
+                ),
                 SettingsTab::Speech => {
                     let outcome = speech::render(ui, config, named_secrets, speech_view);
-                    (outcome.changed, outcome.try_take)
+                    (
+                        outcome.changed,
+                        speech::SpeechRequest {
+                            try_take: outcome.try_take,
+                            retry_take: outcome.retry_take,
+                        },
+                    )
                 }
             }
         })

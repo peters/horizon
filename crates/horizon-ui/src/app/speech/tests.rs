@@ -358,3 +358,49 @@ fn the_hotkey_of_a_detached_window_takes_the_panel_that_has_the_focus_there() {
     );
     app.speech.finish();
 }
+
+#[test]
+fn a_take_that_a_slow_link_did_not_send_offers_one_retry() {
+    let mut speech = SpeechUi::new();
+    let target = PanelId(11);
+    speech.phase = super::Phase::Listening;
+    speech.target = Some(target);
+    let sentence = horizon_core::speech::service::ServiceError::UploadTooSlow {
+        host: "speech.example".to_owned(),
+        seconds: 40,
+    }
+    .to_string();
+    let routed = speech.apply(horizon_core::speech::SpeechEvent {
+        target,
+        kind: horizon_core::speech::SpeechEventKind::Kept(sentence.clone()),
+    });
+    assert_eq!(routed, None, "the kept take inserts nothing yet");
+    let kept = speech.kept_take().expect("the take waits for one retry");
+    assert!(
+        kept.starts_with("The take is kept and can be sent again."),
+        "the tab says that the take stays: {kept}"
+    );
+    let shortcut = kept
+        .split(" can be sent again. ")
+        .nth(1)
+        .expect("the sentence names the shortcut");
+    assert!(
+        shortcut.contains("Shift+R") && (shortcut.contains("Ctrl+") || shortcut.contains("Cmd+")),
+        "the sentence names the shortcut of a retry: {shortcut}"
+    );
+    let (message, until) = speech.error.clone().expect("a sentence of the mark");
+    assert!(message.contains("The take is kept"), "{message}");
+    let now = std::time::Instant::now();
+    assert!(
+        until > now + Duration::from_secs(20),
+        "the offer of a retry stays longer than another failure"
+    );
+
+    // A take that the service answered with an error keeps nothing.
+    speech.phase = super::Phase::Listening;
+    speech.apply(horizon_core::speech::SpeechEvent {
+        target,
+        kind: horizon_core::speech::SpeechEventKind::Failed("The take held no text".to_owned()),
+    });
+    assert_eq!(speech.kept_take(), None, "nothing waits for a retry");
+}

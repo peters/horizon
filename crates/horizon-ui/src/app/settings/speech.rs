@@ -26,6 +26,10 @@ pub(super) const LANGUAGE_EXAMPLES: &str = "no, en";
 /// The line under the language field: what an empty hint means.
 pub(super) const EMPTY_LANGUAGE: &str = "An empty language lets the service detect the language of each take.";
 
+/// What the tab says about the shortcut of a retry, and about the keeps.
+pub(super) const KEPT_TAKE_LINE: &str = "A take that the service did not answer stays on this computer for one retry: at most the last three takes, for \
+     one day, private to this account. Shift and the hotkey send the last kept take again.";
+
 /// What the tab asks of the window after it drew.
 #[derive(Clone, Copy, Default)]
 pub(super) struct SpeechTabOutcome {
@@ -33,12 +37,23 @@ pub(super) struct SpeechTabOutcome {
     pub(super) changed: bool,
     /// The person pressed **Try**, so the window runs one take.
     pub(super) try_take: bool,
+    /// The person asked for the kept take to be sent again.
+    pub(super) retry_take: bool,
+}
+
+/// What a tab asks the window to do with speech input after it drew.
+#[derive(Clone, Copy, Default)]
+pub(super) struct SpeechRequest {
+    pub(super) try_take: bool,
+    pub(super) retry_take: bool,
 }
 
 /// The lines that the tab reads from the state of the window.
 pub(super) struct SpeechView<'a> {
     pub(super) answer: Option<&'a Result<String, String>>,
     pub(super) running: bool,
+    /// The sentence of a take that could not be sent and stays for one retry.
+    pub(super) kept: Option<&'a str>,
     pub(super) secret: NamedSecretState,
 }
 
@@ -90,6 +105,15 @@ pub(super) fn render(
                 if view.running {
                     ui.add_space(4.0);
                     super::dim_label(ui, "Recording for two seconds…");
+                }
+                ui.add_space(6.0);
+                if let Some(sentence) = view.kept {
+                    super::dim_label(ui, sentence);
+                    if ui.button("Send the last kept take again").clicked() {
+                        outcome.retry_take = true;
+                    }
+                } else {
+                    super::dim_label(ui, KEPT_TAKE_LINE);
                 }
             }
             Some(reason) => super::dim_label(ui, &format!("{NOT_SET} {reason}")),

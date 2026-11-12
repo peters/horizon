@@ -51,6 +51,16 @@ pub(in crate::app) use pill::MarkTone;
 /// How long the sentence of a failed take stays on the panel.
 const ERROR_MARK: Duration = Duration::from_secs(6);
 
+/// How long the sentence of a kept take stays on the panel. It stays longer than
+/// another failure, because it offers the one retry of the take.
+const KEPT_MARK: Duration = Duration::from_secs(30);
+
+/// The shortcut that sends the last kept take again: the primary modifier, Shift
+/// and `R`. It is fixed, because it only acts while a kept take waits, and the
+/// Settings tab names it.
+const RETRY_SHORTCUT: ShortcutBinding =
+    ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
+
 /// How often the mark repaints while a take records.
 const LISTENING_TICK: Duration = Duration::from_secs(1);
 
@@ -89,6 +99,9 @@ pub(in crate::app) struct SpeechUi {
     started: Option<Instant>,
     /// The sentence of a failed take and the instant that it goes.
     error: Option<(String, Instant)>,
+    /// The sentence of a take that could not be sent and stays for one retry,
+    /// while that file waits in the folder of the takes.
+    kept: Option<String>,
     /// When the take of the **Try** button started, so the window ends it.
     try_started: Option<Instant>,
     /// The answer of the **Try** button of the Settings tab.
@@ -108,6 +121,7 @@ impl SpeechUi {
             target: None,
             started: None,
             error: None,
+            kept: None,
             try_started: None,
             try_answer: None,
             asked_key: None,
@@ -164,6 +178,33 @@ impl SpeechUi {
         self.asked_key = Some(name);
     }
 
+    /// The sentence of the take that waits for its one retry, when there is one.
+    pub(in crate::app) fn kept_take(&self) -> Option<&str> {
+        self.kept.as_deref()
+    }
+
+    /// Send the last kept take again. Returns whether a retry started.
+    fn retry(&mut self, ctx: &Context, plan: TakePlan, home: &Path, keys: Option<Arc<NamedSecretVault>>) -> bool {
+        if !self.is_idle() || self.kept.is_none() || self.target.is_none() {
+            return false;
+        }
+        let Some(target) = self.target else {
+            return false;
+        };
+        self.begin_input(ctx, home, keys);
+        let Some(input) = self.input.as_ref() else {
+            return false;
+        };
+        input.retry(plan, target);
+        // One retry of the last take: the offer goes with it, and the next answer
+        // either inserts the text or offers the retry that its own failure earns.
+        self.kept = None;
+        self.error = None;
+        self.phase = Phase::Writing;
+        self.started = Some(Instant::now());
+        true
+    }
+
     /// The answer of the **Try** button of the Settings tab, and whether it waits.
     pub(in crate::app) fn try_answer(&self) -> Option<&Result<String, String>> {
         self.try_answer.as_ref()
@@ -185,20 +226,29 @@ impl SpeechUi {
         if !self.is_idle() {
             return false;
         }
-        let home = self.home.get_or_insert_with(|| home.to_path_buf()).clone();
-        let wake_context = ctx.clone();
-        let keys = keys_reader(keys);
-        let input = self.input.get_or_insert_with(move || {
-            SpeechInput::start(
-                SpeechWorker::new(home, keys).with_wake(Arc::new(move || wake_context.request_repaint())),
-            )
-        });
+        self.begin_input(ctx, home, keys);
+        let Some(input) = self.input.as_ref() else {
+            return false;
+        };
         input.begin(plan, target);
         self.phase = Phase::Listening;
         self.target = Some(target);
         self.started = Some(Instant::now());
         self.error = None;
         true
+    }
+
+    /// Start the worker of this window once, with the home and the secrets of its
+    /// first take.
+    fn begin_input(&mut self, ctx: &Context, home: &Path, keys: Option<Arc<NamedSecretVault>>) {
+        let home = self.home.get_or_insert_with(|| home.to_path_buf()).clone();
+        let wake_context = ctx.clone();
+        let keys = keys_reader(keys);
+        self.input.get_or_insert_with(move || {
+            SpeechInput::start(
+                SpeechWorker::new(home, keys).with_wake(Arc::new(move || wake_context.request_repaint())),
+            )
+        });
     }
 
     /// One event of the worker, or `None` while it has none.
@@ -227,7 +277,22 @@ impl SpeechUi {
     /// One sentence of a hotkey that started nothing.
     fn fail(&mut self, message: &str) {
         self.phase = Phase::Idle;
+        self.kept = None;
         self.error = Some((message.to_owned(), Instant::now() + ERROR_MARK));
+    }
+
+    /// One sentence of a take that stays for one retry. The mark names the
+    /// shortcut of that retry, and the Settings tab offers the same with a button.
+    fn fail_kept(&mut self, message: &str) {
+        self.phase = Phase::Idle;
+        let shortcut = RETRY_SHORTCUT.display_label(primary_modifier_label());
+        self.kept = Some(format!(
+            "The take is kept and can be sent again. {shortcut} sends it again."
+        ));
+        self.error = Some((
+            format!("{message} The take is kept: {shortcut} sends it again."),
+            Instant::now() + KEPT_MARK,
+        ));
     }
 
     /// Run one two-second take for the **Try** button of the Settings tab.
@@ -272,9 +337,19 @@ impl SpeechUi {
                 }
                 return Some((event.target, text));
             }
+            SpeechEventKind::Kept(message) => {
+                self.phase = Phase::Idle;
+                self.started = None;
+                if is_try {
+                    self.try_answer = Some(Err(message));
+                } else {
+                    self.fail_kept(&message);
+                }
+            }
             SpeechEventKind::Failed(message) => {
                 self.phase = Phase::Idle;
                 self.started = None;
+                self.kept = None;
                 if is_try {
                     self.try_answer = Some(Err(message));
                 } else {
@@ -300,6 +375,12 @@ fn keys_reader(keys: Option<Arc<NamedSecretVault>>) -> Arc<dyn horizon_core::spe
         Some(keys) => keys,
         None => Arc::new(()),
     }
+}
+
+/// The name of the primary modifier of this platform, as the Settings tab and the
+/// mark show it in a shortcut.
+fn primary_modifier_label() -> &'static str {
+    if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
 }
 
 /// `elapsed` as the minutes and seconds of the mark, such as `0:03`.
@@ -331,6 +412,15 @@ impl HorizonApp {
         if cancel && self.speech.is_listening() {
             self.speech.cancel();
             self.consume_navigation_key(ctx, ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape));
+            return;
+        }
+        if ctx.input(|input| shortcut_pressed_in_events(&input.events, RETRY_SHORTCUT))
+            && self.speech.kept_take().is_some()
+        {
+            // The kept take waits for one retry, and nothing else takes this
+            // shortcut while it does.
+            self.consume_navigation_key(ctx, RETRY_SHORTCUT);
+            self.retry_speech_take(ctx);
             return;
         }
         if start {
@@ -407,6 +497,19 @@ impl HorizonApp {
         {
             // One frame at the end of the sentence of a failed take.
             ctx.request_repaint_after(until.saturating_duration_since(now));
+        }
+    }
+
+    /// Send the last kept take again, from the shortcut or the Settings tab.
+    pub(super) fn retry_speech_take(&mut self, ctx: &Context) {
+        let Some(plan) = self.template_config.speech.plan() else {
+            self.speech.fail(NOT_SET);
+            return;
+        };
+        let home = self.session_store.home().root().to_path_buf();
+        let keys = self.named_secret_vault.clone();
+        if !self.speech.retry(ctx, plan, &home, keys) {
+            self.speech.fail("There is no kept take to send again.");
         }
     }
 

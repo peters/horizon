@@ -205,6 +205,7 @@ impl Take {
                     SpeechEventKind::Writing => "writing",
                     SpeechEventKind::Text(_) => "text",
                     SpeechEventKind::Failed(_) => "failed",
+                    SpeechEventKind::Kept(_) => "kept",
                     SpeechEventKind::Dropped => "dropped",
                 };
                 if wanted.contains(&named) {
@@ -212,7 +213,7 @@ impl Take {
                     if seen.len() == wanted.len() {
                         return seen;
                     }
-                } else if let SpeechEventKind::Failed(message) = &kind {
+                } else if let SpeechEventKind::Failed(message) | SpeechEventKind::Kept(message) = &kind {
                     panic!("the worker says {message:?} and not {wanted:?}");
                 }
             }
@@ -676,12 +677,18 @@ fn a_transcriber_command_that_does_not_answer_hits_its_bound() {
     take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
-    let events = take.wait_for_event(&["failed"]);
-    let SpeechEventKind::Failed(message) = &events[0] else {
-        panic!("a failure: {events:?}");
+    // A command that a slow machine did not answer in time says nothing about
+    // the take, so the file stays for one retry.
+    let events = take.wait_for_event(&["kept"]);
+    let SpeechEventKind::Kept(message) = &events[0] else {
+        panic!("a kept take: {events:?}");
     };
     assert!(message.contains("did not answer in 0 seconds"), "{message}");
-    take.wait_for("the delete of the file", || take.files().is_empty());
+    assert_eq!(
+        take.files().len(),
+        1,
+        "the take of a transcriber that timed out is kept"
+    );
 }
 
 #[test]
@@ -719,23 +726,52 @@ fn the_folder_and_the_file_of_a_take_are_private() {
 }
 
 #[test]
-fn every_file_that_an_earlier_take_left_is_deleted_at_the_start() {
+fn a_start_keeps_the_three_newest_takes_of_a_day_and_sweeps_the_rest() {
     let home = tempfile::tempdir().expect("a home of a test");
     let folder = home.path().join(TAKE_FOLDER);
     fs::create_dir_all(&folder).expect("the folder of the takes");
-    let stale = folder.join("take-0000.wav");
-    fs::write(&stale, b"stale").expect("a stale file");
-    let clock = Arc::new(TestClock::new());
-    let worker = SpeechWorker::new(home.path().to_path_buf(), Arc::new(()) as Arc<dyn SpeechKeyStore>).with_clock(
-        Arc::clone(&clock) as Arc<dyn super::super::Clock>,
-        TakeBounds::default(),
-    );
+    // Five takes that a person could send again, oldest first.
+    for index in 0..5_u64 {
+        let path = folder.join(format!("take-000{index}.wav"));
+        fs::write(&path, b"kept").expect("a kept take");
+        let modified = std::time::SystemTime::now() - Duration::from_secs(60 * (5 - index));
+        let file = fs::File::options().write(true).open(&path).expect("the file");
+        file.set_modified(modified).expect("the age of a take");
+    }
+    // One take of two days ago, and one file that is no take at all.
+    let old = folder.join("take-old.wav");
+    fs::write(&old, b"old").expect("an old take");
+    fs::File::options()
+        .write(true)
+        .open(&old)
+        .expect("the file")
+        .set_modified(std::time::SystemTime::now() - Duration::from_hours(48))
+        .expect("the age of an old take");
+    let other = home.path().join("notes.txt");
+    fs::write(&other, b"not a take").expect("another file");
+
+    let worker = SpeechWorker::new(home.path().to_path_buf(), Arc::new(()) as Arc<dyn SpeechKeyStore>);
     let _input = SpeechInput::start(worker);
     let deadline = Instant::now() + PATIENCE;
-    while stale.exists() {
-        assert!(Instant::now() < deadline, "the stale file of a take stays");
+    while old.exists() || folder.join("take-0000.wav").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the start of the window never swept the takes"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
+    let mut left: Vec<String> = fs::read_dir(&folder)
+        .expect("the folder")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec!["take-0002.wav", "take-0003.wav", "take-0004.wav"],
+        "the folder keeps the three newest takes of the last day"
+    );
+    assert!(other.exists(), "a file that is no take is left alone");
 }
 
 #[test]
@@ -941,4 +977,112 @@ fn the_value_of_the_key_reaches_one_request_and_no_file_of_the_take() {
     assert!(request.contains("name=\"language\"\r\n\r\nno"), "{request}");
     assert!(request.contains("name=\"file\"; filename=\"take-"), "{request}");
     take.wait_for("the delete of the file", || take.files().is_empty());
+}
+
+#[test]
+fn a_take_that_a_slow_transcriber_did_not_answer_stays_for_one_retry() {
+    let take = Take::with_bounds(
+        Arc::new(()),
+        TakeBounds {
+            transcribe: Duration::from_millis(200),
+            ..TakeBounds::default()
+        },
+    );
+    let prepared = take.prepared();
+    let recorder = take.recorder("rec", &prepared);
+    let slow = take.script("slow", "#!/bin/sh\nsleep 5\nprintf 'late'\n");
+    let transcriber = CommandLine::parse(&format!("{slow} {{file}}")).expect("a line");
+    take.input.begin(
+        plan(recorder.clone(), Transcriber::Command(transcriber.clone())),
+        TARGET,
+    );
+    take.wait_for_recorder("rec");
+    take.clock.advance(Duration::from_secs(1));
+    take.input.end();
+    let events = take.wait_for_event(&["kept"]);
+    assert!(
+        matches!(&events[0], SpeechEventKind::Kept(message) if message.contains("did not answer")),
+        "{events:?}"
+    );
+    let kept = take.files();
+    assert_eq!(kept.len(), 1, "the take stays for one retry: {kept:?}");
+    let kept_path = take.folder().join(&kept[0]);
+    assert_eq!(
+        fs::metadata(&kept_path).expect("the kept take").permissions().mode() & 0o777,
+        0o600,
+        "a kept take is private"
+    );
+
+    // The service answers at the retry, and the take of the same file is sent.
+    let (quick, marker) = transcriber_script(&take, "heisan");
+    take.input.retry(plan(recorder, Transcriber::Command(quick)), TARGET);
+    let events = take.wait_for_event(&["writing", "text"]);
+    assert!(
+        matches!(&events[1], SpeechEventKind::Text(text) if text == "heisan"),
+        "{events:?}"
+    );
+    assert!(marker.exists(), "the retry transcribed the kept take");
+    take.wait_for("the delete of the sent take", || take.files().is_empty());
+}
+
+#[test]
+fn the_upload_bound_grows_with_the_size_of_the_take() {
+    use super::upload_bound;
+    // A take of 640 KB, which is twenty seconds of a 16 kHz recording.
+    assert_eq!(
+        upload_bound(640 * 1024, super::TRANSCRIBE_BOUND),
+        Duration::from_secs(40),
+        "the way up of a take at 128 kbit/s holds forty seconds"
+    );
+    assert_eq!(
+        upload_bound(1024, super::TRANSCRIBE_BOUND),
+        super::TRANSCRIBE_BOUND,
+        "a small take still gets the bound of the answer"
+    );
+    assert!(
+        upload_bound(super::MAX_TAKE_BYTES, super::TRANSCRIBE_BOUND) > Duration::from_secs(600),
+        "the largest take gets minutes on a slow uplink"
+    );
+}
+
+#[test]
+fn a_service_that_stays_away_keeps_the_take_and_an_answer_that_refused_does_not() {
+    use crate::speech::service::ServiceError;
+    for kept in [
+        ServiceError::Unreachable {
+            host: "speech.example".into(),
+        },
+        ServiceError::Tls {
+            host: "speech.example".into(),
+            reason: "certificate".into(),
+        },
+        ServiceError::NoAnswer {
+            host: "speech.example".into(),
+            seconds: 30,
+        },
+        ServiceError::UploadTooSlow {
+            host: "speech.example".into(),
+            seconds: 40,
+        },
+    ] {
+        assert!(kept.keeps_the_take(), "{kept}");
+    }
+    for dropped in [
+        ServiceError::Refused {
+            host: "speech.example".into(),
+            status: 401,
+            message: "no".into(),
+        },
+        ServiceError::NoText {
+            host: "speech.example".into(),
+        },
+        ServiceError::EndedEarly {
+            host: "speech.example".into(),
+        },
+        ServiceError::Unresolved {
+            host: "speech.example".into(),
+        },
+    ] {
+        assert!(!dropped.keeps_the_take(), "{dropped}");
+    }
 }

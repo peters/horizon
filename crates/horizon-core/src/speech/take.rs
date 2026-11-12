@@ -66,14 +66,34 @@ pub const STOP_WAIT: Duration = Duration::from_secs(2);
 /// situation, and every recorder that the settings name closes its file on it.
 pub const STOP_STEP: Duration = Duration::from_millis(300);
 
+/// The most time that the upload of a take of `bytes` may take: the seconds of
+/// that file at [`MIN_UPLOAD_RATE`], and at least the bound of the answer. A
+/// long dictation on a slow uplink is then not cut in the middle of the way up.
+#[must_use]
+pub fn upload_bound(bytes: u64, answer: Duration) -> Duration {
+    Duration::from_secs(bytes.div_ceil(MIN_UPLOAD_RATE)).max(answer)
+}
+
 /// The most time that one take records.
 pub const MAX_TAKE: Duration = Duration::from_secs(120);
 
 /// The shortest take that a transcriber runs for.
 pub const MIN_TAKE: Duration = Duration::from_millis(300);
 
-/// The most time that one transcription may take.
+/// The most time that Horizon waits for the answer of one transcription.
 pub const TRANSCRIBE_BOUND: Duration = Duration::from_secs(30);
+
+/// The slowest uplink that a take waits for, in bytes of the file per second:
+/// 128 kbit/s. The bound of an upload is the seconds of the file at this rate,
+/// and never less than [`TRANSCRIBE_BOUND`].
+pub const MIN_UPLOAD_RATE: u64 = 16 * 1024;
+
+/// How many kept takes the folder holds. A take that could not be sent stays for
+/// one retry, and the folder never grows past the last three.
+pub const KEPT_TAKES: usize = 3;
+
+/// How long a kept take stays in the folder.
+pub const KEPT_TAKE_AGE: Duration = Duration::from_hours(24);
 
 /// How often a take looks at its key events and at its child.
 pub const POLL: Duration = Duration::from_millis(10);
@@ -180,6 +200,9 @@ pub enum SpeechEventKind {
     Text(String),
     /// One sentence for the person.
     Failed(String),
+    /// The take could not be sent and its file stays on this computer, with the
+    /// sentence that says why. The window offers one retry of that file.
+    Kept(String),
     /// The take ended with nothing to insert and nothing to show.
     Dropped,
 }
@@ -231,6 +254,8 @@ enum Request {
     Begin { plan: Box<TakePlan>, target: PanelId },
     /// The hotkey came up.
     End,
+    /// Send the last kept take of `plan` again, without recording.
+    Retry { plan: Box<TakePlan>, target: PanelId },
     /// `Escape` or the end of the window.
     Cancel,
     /// The window closes.
@@ -273,6 +298,14 @@ impl SpeechInput {
     /// The hotkey came up: transcribe the take that runs.
     pub fn end(&self) {
         let _ = self.requests.send(Request::End);
+    }
+
+    /// Send the last take that stayed in the folder again, without a recorder.
+    pub fn retry(&self, plan: TakePlan, target: PanelId) {
+        let _ = self.requests.send(Request::Retry {
+            plan: Box::new(plan),
+            target,
+        });
     }
 
     /// `Escape`, or the end of the window: drop the take that runs.
@@ -320,10 +353,11 @@ impl Worker {
     }
 
     fn run(mut self) {
-        self.clear_stale_takes();
+        self.sweep_takes();
         loop {
             match self.requests.recv() {
                 Ok(Request::Begin { plan, target }) => self.take(&plan, target),
+                Ok(Request::Retry { plan, target }) => self.retry_kept(&plan, target),
                 Ok(Request::End | Request::Cancel) => {}
                 Ok(Request::Stop) | Err(_) => break,
             }
@@ -390,12 +424,18 @@ impl Worker {
             tracing::warn!(path = %file.display(), %error, "the header of a take stays open");
         }
         self.send(target, SpeechEventKind::Writing);
+        self.transcribe_take(plan, target, &file);
+    }
+
+    /// Transcribe `file` and report its text, or keep the file when the failure
+    /// says that the same request can work later.
+    fn transcribe_take(&mut self, plan: &TakePlan, target: PanelId, file: &Path) {
         let file_name = file
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        match self.transcribe(plan, &file, &file_name) {
+        match self.transcribe(plan, file, &file_name) {
             Ok(text) => {
-                remove_take_file(&file);
+                remove_take_file(file);
                 let text = clean_text(&text);
                 if text.is_empty() {
                     self.failed(target, "The take held no text");
@@ -403,11 +443,57 @@ impl Worker {
                     self.send(target, SpeechEventKind::Text(text));
                 }
             }
-            Err(message) => {
-                remove_take_file(&file);
-                self.failed(target, &message);
+            Err(failure) if failure.kept => {
+                // The person's speech stays on this computer, private, for one
+                // retry: a slow uplink or a service that is away is no reason to
+                // lose a dictation.
+                self.sweep_takes();
+                tracing::info!(
+                    path = %file.display(),
+                    "a take that could not be sent stays for a retry"
+                );
+                self.send(target, SpeechEventKind::Kept(failure.message));
+            }
+            Err(failure) => {
+                remove_take_file(file);
+                self.failed(target, &failure.message);
             }
         }
+    }
+
+    /// Transcribe the newest take that stayed in the folder, without a recorder.
+    fn retry_kept(&mut self, plan: &TakePlan, target: PanelId) {
+        let Some(file) = self.newest_kept_take() else {
+            self.failed(target, "There is no kept take to send again");
+            return;
+        };
+        if take_bytes(&file) > self.settings.bounds.max_file_bytes {
+            remove_take_file(&file);
+            self.failed(target, "The kept take is larger than a take may be");
+            return;
+        }
+        self.send(target, SpeechEventKind::Writing);
+        self.transcribe_take(plan, target, &file);
+    }
+
+    /// The newest take that an earlier failure kept, when one is there.
+    fn newest_kept_take(&self) -> Option<PathBuf> {
+        crate::ui_thread::blocking("the folder of the takes is read");
+        let folder = self.settings.home.join(TAKE_FOLDER);
+        let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+        for entry in fs::read_dir(&folder).ok()?.flatten() {
+            let path = entry.path();
+            if !is_take_file(&path) {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+                continue;
+            };
+            if newest.as_ref().is_none_or(|(at, _)| modified > *at) {
+                newest = Some((modified, path));
+            }
+        }
+        newest.map(|(_, path)| path)
     }
 
     /// Read the key events and the child until the take ends.
@@ -416,7 +502,7 @@ impl Worker {
             match self.requests.try_recv() {
                 Ok(Request::End) => return RecordEnd::KeyUp,
                 // One take runs at a time: a second press changes nothing.
-                Ok(Request::Begin { .. }) | Err(TryRecvError::Empty) => {}
+                Ok(Request::Begin { .. } | Request::Retry { .. }) | Err(TryRecvError::Empty) => {}
                 Ok(Request::Cancel | Request::Stop) | Err(TryRecvError::Disconnected) => {
                     return RecordEnd::Cancelled;
                 }
@@ -477,7 +563,7 @@ impl Worker {
         child.kill();
     }
 
-    fn transcribe(&self, plan: &TakePlan, file: &Path, file_name: &str) -> Result<String, String> {
+    fn transcribe(&self, plan: &TakePlan, file: &Path, file_name: &str) -> Result<String, TakeFailure> {
         crate::ui_thread::blocking("one take is transcribed");
         match &plan.transcriber {
             Transcriber::Command(command) => self.transcribe_by_command(command, file),
@@ -491,11 +577,14 @@ impl Worker {
                     .settings
                     .keys
                     .value(key_secret)
-                    .map_err(|error| cut_message(&error))?;
+                    .map_err(|error| TakeFailure::dropped(cut_message(&error)))?;
                 let Some(key) = key else {
-                    return Err(format!("No secret named {key_secret} is on this computer"));
+                    return Err(TakeFailure::dropped(format!(
+                        "No secret named {key_secret} is on this computer"
+                    )));
                 };
-                let bytes = read_take_file(file)?;
+                let bytes = read_take_file(file).map_err(TakeFailure::dropped)?;
+                let upload = upload_bound(bytes.len() as u64, self.settings.bounds.transcribe);
                 let request = ServiceRequest {
                     endpoint,
                     model,
@@ -504,13 +593,17 @@ impl Worker {
                     file: &bytes,
                     key: key.as_str(),
                     bound: self.settings.bounds.transcribe,
+                    upload,
                 };
-                service::transcribe(&request).map_err(|error| error.to_string())
+                service::transcribe(&request).map_err(|error| TakeFailure {
+                    message: error.to_string(),
+                    kept: error.keeps_the_take(),
+                })
             }
         }
     }
 
-    fn transcribe_by_command(&self, command: &CommandLine, file: &Path) -> Result<String, String> {
+    fn transcribe_by_command(&self, command: &CommandLine, file: &Path) -> Result<String, TakeFailure> {
         let args = command.arguments_for(file);
         match run(
             Path::new(command.program()),
@@ -519,30 +612,53 @@ impl Worker {
             self.settings.bounds.transcribe,
         ) {
             Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
-            Err(ProgramFailure::TimedOut) => Err(format!(
-                "{} did not answer in {} seconds",
-                command.program(),
-                self.settings.bounds.transcribe.as_secs()
-            )),
-            Err(ProgramFailure::Failed) => Err(format!("{} did not answer", command.program())),
+            // A command that a slow machine did not answer in time says nothing
+            // about the take, so the file stays for a retry; a command that ran
+            // and refused does not.
+            Err(ProgramFailure::TimedOut) => Err(TakeFailure {
+                message: format!(
+                    "{} did not answer in {} seconds",
+                    command.program(),
+                    self.settings.bounds.transcribe.as_secs()
+                ),
+                kept: true,
+            }),
+            Err(ProgramFailure::Failed) => Err(TakeFailure::dropped(format!("{} did not answer", command.program()))),
         }
     }
 
-    /// Delete every file that an earlier take left in the folder.
-    fn clear_stale_takes(&self) {
-        crate::ui_thread::blocking("the takes of an earlier run are deleted");
+    /// Delete the takes that the folder may not hold: every take older than
+    /// [`KEPT_TAKE_AGE`], and every take past the newest [`KEPT_TAKES`].
+    ///
+    /// A take that could not be sent stays for one retry, so the folder holds at
+    /// most three private recordings for a day. A start of the window sweeps too.
+    fn sweep_takes(&self) {
+        crate::ui_thread::blocking("the folder of the takes is swept");
         let folder = self.settings.home.join(TAKE_FOLDER);
         let Ok(entries) = fs::read_dir(&folder) else {
             return;
         };
+        let now = std::time::SystemTime::now();
+        let mut takes: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
-            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            let path = entry.path();
+            if !is_take_file(&path) {
                 continue;
             }
-            let path = entry.path();
-            if let Err(error) = fs::remove_file(&path) {
-                tracing::warn!(path = %path.display(), %error, "a take of an earlier run stays");
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let modified = metadata.modified().unwrap_or(now);
+            let age = now.duration_since(modified).unwrap_or_default();
+            if age > KEPT_TAKE_AGE {
+                remove_take_file(&path);
+                continue;
             }
+            takes.push((modified, path));
+        }
+        takes.sort_by_key(|take| std::cmp::Reverse(take.0));
+        for (_, path) in takes.into_iter().skip(KEPT_TAKES) {
+            remove_take_file(&path);
         }
     }
 
@@ -616,6 +732,30 @@ fn close_take_header(file: &Path, bytes: u64) -> std::io::Result<()> {
         take.write_all(&header[40..44])?;
     }
     Ok(())
+}
+
+/// Whether `path` is one take of this folder, and not another file.
+fn is_take_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("take-") && name.to_ascii_lowercase().ends_with(".wav"))
+}
+
+/// Why one take was not transcribed, and whether its file stays for a retry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TakeFailure {
+    message: String,
+    /// The same request can work later, so the file of the take stays on this
+    /// computer. A login that was refused or a service that answered with an
+    /// error would answer the same way, so its take is dropped at once.
+    kept: bool,
+}
+
+impl TakeFailure {
+    /// A failure that says nothing about the take: the file goes.
+    fn dropped(message: String) -> Self {
+        Self { message, kept: false }
+    }
 }
 
 /// Delete the file of one take.

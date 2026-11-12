@@ -639,6 +639,7 @@ fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() 
     let view = super::speech::SpeechView {
         answer: Some(&answer),
         running: false,
+        kept: None,
         secret: NamedSecretState::Present,
     };
     let (changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
@@ -671,6 +672,7 @@ fn the_speech_tab_keeps_the_language_empty_and_says_what_an_empty_one_means() {
     let view = super::speech::SpeechView {
         answer: None,
         running: false,
+        kept: None,
         secret: NamedSecretState::NoValue,
     };
     let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
@@ -696,6 +698,7 @@ fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
     let view = super::speech::SpeechView {
         answer: None,
         running: false,
+        kept: None,
         secret: horizon_core::named_secrets::NamedSecretState::NoValue,
     };
     let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
