@@ -53,9 +53,10 @@ bounds and the setting.
      --attention-agent-count 2 --notifications-log --plain-window
    ```
 
-   Result: the isolated desktop holds a Horizon window, a plain window and a
-   panel named Notifications. The Horizon window holds the panels `Attention
-   stand-in 1` and `Attention stand-in 2`. The terminal prints the VNC address.
+   Result: the isolated desktop holds a Horizon window and a plain window. The
+   Horizon window holds the two stand-in panels in a row above the panel
+   Notifications, which follows the log of the notifications. The terminal prints
+   the VNC address.
 
    The canvas also shows the card `Review work before continuing (1)`, with the
    line `Attention stand-in 1 Automatic continuation is not verified for this

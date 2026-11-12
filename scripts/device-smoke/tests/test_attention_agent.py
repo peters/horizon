@@ -126,9 +126,37 @@ class AttentionAgentTests(unittest.TestCase):
                 for other in panels:
                     if other is not panel:
                         self.assertNotEqual(other['position'], panel['position'])
-            self.assertEqual(panels[0]['size'], list(serve.ATTENTION_SIZE))
+            self.assertEqual(panels[0]['size'], list(serve.ATTENTION_ROW_SIZE))
             self.assertTrue((bin_dir / serve.ATTENTION_PROGRAM).is_file(),
                             'one program serves every panel of the run')
+
+    def test_no_panel_of_a_run_covers_the_panel_of_the_notifications(self):
+        window = (1480, 900)
+        for count in range(1, serve.ATTENTION_MAX_AGENTS + 1):
+            with tempfile.TemporaryDirectory() as folder:
+                state = Path(folder) / 'state'
+                state.mkdir()
+                panels, _bin_dir = serve.attention_agent(state, 0, count=count)
+                covered = [serve.notification_panel(state), *panels]
+                for panel in covered:
+                    left, top = panel['position']
+                    width, height = panel['size']
+                    self.assertGreaterEqual(left, 0, f'{panel["name"]} in {window}')
+                    self.assertGreaterEqual(top, 0, f'{panel["name"]} in {window}')
+                    self.assertLessEqual(left + width, window[0], f'{panel["name"]} in {window}')
+                    self.assertLessEqual(top + height, window[1], f'{panel["name"]} in {window}')
+                for index, panel in enumerate(covered):
+                    for other in covered[index + 1:]:
+                        self.assertFalse(self.overlap(panel, other),
+                                         f'{panel["name"]} covers {other["name"]} with {count} panels')
+
+    @staticmethod
+    def overlap(one, other):
+        left = max(one['position'][0], other['position'][0])
+        top = max(one['position'][1], other['position'][1])
+        right = min(one['position'][0] + one['size'][0], other['position'][0] + other['size'][0])
+        bottom = min(one['position'][1] + one['size'][1], other['position'][1] + other['size'][1])
+        return left < right and top < bottom
 
     def test_one_panel_keeps_the_entry_of_the_fixture(self):
         with tempfile.TemporaryDirectory() as folder:

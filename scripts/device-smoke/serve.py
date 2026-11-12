@@ -33,10 +33,17 @@ ATTENTION_PANEL_NAME = 'Attention stand-in'
 # The most stand-in panels of one run, and where they lie: two columns and two rows
 # of the isolated desktop, so a click reaches one panel and not its neighbour.
 ATTENTION_MAX_AGENTS = 4
-ATTENTION_FIRST_POSITION = (40, 60)
-ATTENTION_STEP = (660, 440)
-ATTENTION_SIZE = (620, 380)
-ATTENTION_GRID = ((0, 0), (1, 0), (0, 1), (1, 1))
+# A run with several stand-in panels puts them in one row of the band above the
+# panel of the notifications, so every panel of the procedure is visible and a click
+# reaches one of them.
+ATTENTION_ROW_LEFT = 20
+ATTENTION_ROW_TOP = 60
+ATTENTION_ROW_STEP = 360
+ATTENTION_ROW_SIZE = (340, 300)
+# The panel of the notification log lies below that row and below the single panel
+# of a run with one stand-in panel, and inside the window of the fixture.
+NOTIFICATIONS_PANEL_POSITION = (40, 560)
+NOTIFICATIONS_PANEL_SIZE = (700, 320)
 # The desktop notification: a stand-in program of the system that records one
 # call, the file that it appends to, and the panel that follows that file.
 NOTIFICATIONS_FOLDER = 'notifications'
@@ -556,11 +563,9 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1):
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         panel['cwd'] = str(folder)
         if count > 1:
-            column, row = ATTENTION_GRID[index]
             panel['name'] = f'{ATTENTION_PANEL_NAME} {index + 1}'
-            panel['position'] = [ATTENTION_FIRST_POSITION[0] + column * ATTENTION_STEP[0],
-                                 ATTENTION_FIRST_POSITION[1] + row * ATTENTION_STEP[1]]
-            panel['size'] = list(ATTENTION_SIZE)
+            panel['position'] = [ATTENTION_ROW_LEFT + index * ATTENTION_ROW_STEP, ATTENTION_ROW_TOP]
+            panel['size'] = list(ATTENTION_ROW_SIZE)
         panels.append(panel)
     return panels, bin_dir
 
@@ -607,10 +612,15 @@ def notification_standin(state):
 
 
 def notification_panel(state):
-    """The shell panel that follows the log of the notifications of this run."""
+    """The shell panel that follows the log of the notifications of this run.
+
+    The panel has its own place below the stand-in panels, so a procedure reads it
+    while the panels above stay in view.
+    """
     log = shlex.quote(str((Path(state) / NOTIFICATIONS_LOG).resolve()))
     return {'name': NOTIFICATIONS_PANEL, 'kind': 'shell', 'command': '/bin/sh',
-            'args': ['-c', f'touch {log}; exec tail -f -n +1 {log}']}
+            'args': ['-c', f'touch {log}; exec tail -f -n +1 {log}'],
+            'position': list(NOTIFICATIONS_PANEL_POSITION), 'size': list(NOTIFICATIONS_PANEL_SIZE)}
 
 
 def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None):
