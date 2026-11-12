@@ -69,6 +69,19 @@ impl CheckedMachine {
 }
 
 impl Machine {
+    /// Whether both records say the same thing about the machine, apart from the day
+    /// that it was added: a server stamps a record with its own clock, and the stamp
+    /// says nothing that a person can see or change.
+    #[must_use]
+    pub fn same_change(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.host == other.host
+            && self.user == other.user
+            && self.port == other.port
+            && self.session == other.session
+            && self.provider == other.provider
+    }
+
     /// The terminal that this machine's connection asks for, re-built from the
     /// record: the route is checked again and the tmux command is Horizon's own
     /// text, never a saved command line.

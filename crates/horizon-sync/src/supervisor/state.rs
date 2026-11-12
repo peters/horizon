@@ -783,32 +783,16 @@ impl SyncHandle {
         ui_thread::blocking("the queue and the mirror of the link are written and synced");
         let mut state = self.lock();
         let previous = state.view.clone();
-        let next: BTreeMap<&str, &Machine> = records.iter().map(|machine| (machine.name.as_str(), machine)).collect();
-        let mut asked = Vec::new();
-        for (name, record) in &next {
-            if previous.get(*name) != Some(*record) {
-                asked.push((
-                    (*name).to_owned(),
-                    Op::MachinePut {
-                        record: (*record).clone(),
-                    },
-                ));
-            }
-        }
-        for name in previous.keys() {
-            if !next.contains_key(name.as_str()) {
-                asked.push((name.clone(), Op::MachineRemove { name: name.clone() }));
-            }
-        }
+        let asked = machine_intents(&previous, records);
         let mut written = false;
         for (name, op) in asked {
             state.client.enqueue(None, op).map_err(|error| queue_error(&error))?;
             state.owned.insert(name);
             written = true;
         }
-        state.view = next
-            .into_iter()
-            .map(|(name, record)| (name.to_owned(), record.clone()))
+        state.view = records
+            .iter()
+            .map(|record| (record.name.clone(), record.clone()))
             .collect();
         if written {
             state.generation = state.generation.wrapping_add(1);
@@ -868,6 +852,28 @@ impl SyncHandle {
         let mut view = self.view.lock().unwrap_or_else(PoisonError::into_inner);
         *view = Arc::new(snapshot);
     }
+}
+
+/// The intents that turn the difference between the last load of this computer and
+/// `records` into its changes.
+///
+/// The stamp of the day that the server added a record is not a change of the
+/// record: a pull that lands between the read of a caller and its save writes the
+/// stamp of the server, and the server ignores the stamp of a pushed record, so an
+/// intent for it would only count in the sidebar as a change that waits.
+fn machine_intents(previous: &BTreeMap<String, Machine>, records: &[Machine]) -> Vec<(String, Op)> {
+    let mut asked = Vec::new();
+    for record in records {
+        if previous.get(&record.name).is_none_or(|was| !was.same_change(record)) {
+            asked.push((record.name.clone(), Op::MachinePut { record: record.clone() }));
+        }
+    }
+    for name in previous.keys() {
+        if !records.iter().any(|record| record.name == *name) {
+            asked.push((name.clone(), Op::MachineRemove { name: name.clone() }));
+        }
+    }
+    asked
 }
 
 /// The lock of the state of one link, released on the drop of this value.
@@ -959,5 +965,67 @@ fn settings_mirror_of(state: &SyncState) -> SettingsMirror {
         seeded: state.settings_seeded,
         applied: state.settings_applied.clone(),
         rows: state.settings.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str, host: &str, added_at_millis: u64) -> Machine {
+        Machine {
+            name: name.to_owned(),
+            host: host.to_owned(),
+            added_at_millis,
+            ..Machine::default()
+        }
+    }
+
+    fn view(records: &[Machine]) -> BTreeMap<String, Machine> {
+        records
+            .iter()
+            .map(|record| (record.name.clone(), record.clone()))
+            .collect()
+    }
+
+    /// A pull of the server can land between the read of a caller and its save, and
+    /// the server stamps a record with its own clock.
+    #[test]
+    fn a_record_that_differs_only_in_the_stamp_of_the_server_is_no_intent() {
+        let loaded = record("build-1", "203.0.113.10", 1);
+        let previous = view(std::slice::from_ref(&loaded));
+        let pulled_again = record("build-1", "203.0.113.10", 2);
+        assert!(
+            machine_intents(&previous, std::slice::from_ref(&pulled_again)).is_empty(),
+            "the stamp of the server is no change that waits for it"
+        );
+        assert_eq!(pulled_again.name, loaded.name);
+    }
+
+    #[test]
+    fn a_change_of_a_field_of_a_record_is_one_intent() {
+        let previous = view(&[record("build-1", "203.0.113.10", 1)]);
+        let asked = machine_intents(&previous, &[record("build-1", "203.0.113.11", 2)]);
+        assert_eq!(asked.len(), 1, "the route is a change: {asked:?}");
+        assert!(
+            matches!(&asked[0], (name, Op::MachinePut { record }) if name == "build-1" && record.host == "203.0.113.11")
+        );
+    }
+
+    #[test]
+    fn a_record_that_arrives_and_one_that_goes_are_an_add_and_a_removal() {
+        let previous = view(&[record("build-1", "203.0.113.10", 1)]);
+        let asked = machine_intents(&previous, &[record("build-2", "203.0.113.12", 3)]);
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(
+            asked
+                .iter()
+                .any(|(name, op)| name == "build-2" && matches!(op, Op::MachinePut { .. }))
+        );
+        assert!(
+            asked
+                .iter()
+                .any(|(name, op)| name == "build-1" && matches!(op, Op::MachineRemove { .. }))
+        );
     }
 }
