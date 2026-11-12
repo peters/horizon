@@ -212,6 +212,12 @@ pub enum BrowserAuditAction {
     Downloads,
     HandoffRequested,
     HandoffDone,
+    /// The link to the browser of another machine was lost. The panel kept its
+    /// page and connects again by itself.
+    LinkLost,
+    /// That link came back and the panel drives the same page again, with the
+    /// text the person typed into it, its scroll place and its session.
+    PageResumed,
     SelectOption {
         index: u32,
     },

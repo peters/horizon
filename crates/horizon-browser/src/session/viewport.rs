@@ -593,6 +593,7 @@ mod tests {
             let slot = Arc::new(FrameSlot::new());
             let config = BrowserSessionConfig {
                 attach: None,
+                resume_target: None,
                 browser: BrowserConfig {
                     automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
                     ..BrowserConfig::default()

@@ -163,6 +163,11 @@ pub struct BrowserManifest {
     pub browser_ws: String,
     /// The page target or top-level browsing context the panel is driving.
     pub target_id: String,
+    /// Whether the page this session drives came back after a link was lost,
+    /// with the text the person typed into it, its scroll place and its
+    /// session intact. Absent or false means a new page, or no lost link.
+    #[serde(default)]
+    pub page_resumed: bool,
     pub url: String,
     pub title: String,
     /// Host-owned presentation state. Hidden panels keep their browser
@@ -767,6 +772,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.passkey_pending = state.passkey_pending;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
+            manifest.page_resumed = state.page_resumed;
             manifest.url.clone_from(&state.url);
             manifest.title.clone_from(&state.title);
             manifest.audit_path = default_audit_path(panel_local_id).to_string_lossy().to_string();
@@ -789,6 +795,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.passkey_pending = state.passkey_pending;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
+            manifest.page_resumed = state.page_resumed;
             manifest.url.clone_from(&state.url);
             manifest.title.clone_from(&state.title);
             manifest.updated_at = now_millis();
@@ -1022,6 +1029,7 @@ mod tests {
             passkey_pending: false,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
+            page_resumed: false,
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
             hidden: false,

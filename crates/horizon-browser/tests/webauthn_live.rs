@@ -85,6 +85,7 @@ fn run_engine(backend: BackendKind) {
     let session = LiveSession(Some(
         start_session(BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 backend,
                 profile_root: Some(profiles.clone()),

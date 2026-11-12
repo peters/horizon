@@ -186,7 +186,7 @@ impl DriverState {
                     .and_then(|s| s.as_str())
                 && let Some(target) = self.target_id.clone()
             {
-                self.attach_setup(link, event_tx, frame_slot, session, &target);
+                self.attach_setup(link, event_tx, frame_slot, session, &target, false);
             }
             return;
         }
@@ -233,7 +233,7 @@ impl DriverState {
                 let Some(target_id) = attached_bound_page_target(event.params, self.target_id.as_deref()) else {
                     return;
                 };
-                self.attach_setup(link, event_tx, frame_slot, session, target_id);
+                self.attach_setup(link, event_tx, frame_slot, session, target_id, false);
             }
             "Target.detachedFromTarget" => {
                 if let Some(session) = target_event_session_id(event.params, event.session_id) {
@@ -623,6 +623,7 @@ mod tests {
         DriverState::new(
             &BrowserSessionConfig {
                 attach: None,
+                resume_target: None,
                 browser: BrowserConfig::default(),
                 panel_local_id: "panel-1".to_string(),
                 initial_url: None,

@@ -285,6 +285,7 @@ impl RemoteHost {
         };
         let started = start_session(BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser,
             panel_local_id: id.clone(),
             initial_url: request.url.clone(),

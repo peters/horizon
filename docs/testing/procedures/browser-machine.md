@@ -244,16 +244,30 @@ a panel after the container stops.
 
    Result: the panel paints the page with the text and the new scroll position.
 
-4. Cut the flow in the proxy for 20 seconds, then release it.
+4. Cut the flow in the proxy for 25 seconds, then release it.
 
    Result: the panel states `The link is lost. The panel connects again in N s
    (attempt 1).`, where N counts down from 3. After the release the panel
-   connects again by itself, at the first or the second attempt, and paints one
-   new page at the address of step 3. No person pressed a control. The field is
-   empty and the page is at its top. The line above the page states that the
-   page is new and that its state is gone.
+   connects again by itself, at the first or the second attempt. No person
+   pressed a control. The panel drives the same page again: the field holds the
+   text of step 3, the page keeps its scroll position, and the line above the
+   page states `The link was lost and this is the same page again: the text, the
+   scroll place and the session are still there.` It holds no line that says
+   that the page is new.
 
-5. Remove the `ProxyCommand` line of step 1 and stop the proxy.
+5. Read the state of the panel as an agent, with `browser_panel`.
+
+   Result: `link_recovered.page_resumed` is `true`, the address is the address
+   of step 3, and `failure` is absent.
+
+6. Stop the browser of the destination, as in BM-4 step 1, and press `Retry`.
+
+   Result: the panel opens a new page at the last address, and the line above
+   the page states `The link was lost, so this page is new: text that you had
+   typed into it, its scroll position and its session are gone.`
+   `link_recovered` is absent for that panel.
+
+7. Remove the `ProxyCommand` line of step 1 and stop the proxy.
 
    Result: `ssh -T -o BatchMode=yes bvm-1 'echo ok'` prints `ok` again.
 

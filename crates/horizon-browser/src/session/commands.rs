@@ -740,6 +740,7 @@ mod tests {
         DriverState::new(
             &BrowserSessionConfig {
                 attach: None,
+                resume_target: None,
                 browser: BrowserConfig::default(),
                 panel_local_id: "panel-1".to_string(),
                 initial_url: None,

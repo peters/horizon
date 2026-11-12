@@ -75,6 +75,9 @@ struct DriverConnection {
     ws_url: String,
     target_id: String,
     session_id: String,
+    /// Whether `target_id` is the page the panel drove before a lost link, so
+    /// its state is intact and no startup navigation may run.
+    resumed_page: bool,
     native_user_agent_metadata: Option<serde_json::Value>,
     /// Whether this browser accepted the panel download folder and reports
     /// the downloads it saves there.
@@ -278,7 +281,19 @@ fn initialize_target(
     // A browser of another process already holds the pages of its person: this
     // session takes a page of a sibling only when it created one before, and
     // otherwise creates its own.
-    let existing_target = if chrome.is_shared() || chrome.is_attached() {
+    let resume_target = config.resume_target.as_deref().filter(|_| chrome.is_attached());
+    let resumed_target = resume_target.and_then(|target| existing_page_target(&mut link, stop_requested, target));
+    if resume_target.is_some() && resumed_target.is_none() {
+        tracing::info!(
+            target: "browser",
+            target_id = resume_target.unwrap_or_default(),
+            "the page of the lost link is gone, so this session opens the last address in a new page"
+        );
+    }
+    let resumed_page = resumed_target.is_some();
+    let existing_target = if resumed_page {
+        resumed_target
+    } else if chrome.is_shared() || chrome.is_attached() {
         chrome.registered_target()
     } else {
         first_page_target(&mut link, stop_requested)
@@ -353,6 +368,7 @@ fn initialize_target(
         ws_url,
         target_id,
         session_id,
+        resumed_page,
         native_user_agent_metadata,
         downloads_reporting,
     })
@@ -484,6 +500,7 @@ pub(super) fn run_driver(
         frame_slot,
         &connection.session_id,
         &connection.target_id,
+        connection.resumed_page,
     ) {
         connection
             .chrome
@@ -492,6 +509,13 @@ pub(super) fn run_driver(
         return;
     }
 
+    if connection.resumed_page {
+        state.audit_session_event(crate::BrowserAuditAction::PageResumed);
+    }
+    let _ = event_tx.send(BrowserEvent::PageAttached {
+        target_id: connection.target_id.clone(),
+        resumed: connection.resumed_page,
+    });
     run_loop(
         &mut state,
         &mut connection.chrome,
@@ -503,6 +527,28 @@ pub(super) fn run_driver(
     connection
         .chrome
         .close_page(&mut connection.link, &connection.target_id);
+}
+
+/// The page target `wanted` of the browser, when it still exists as a page.
+///
+/// This is the question that decides a reattach: a link that comes back to a
+/// browser that kept running finds the old page and keeps its state; a browser
+/// that restarted has no such target, and the caller opens a new page of the
+/// last address.
+fn existing_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, wanted: &str) -> Option<String> {
+    let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
+    result
+        .get("targetInfos")
+        .and_then(|targets| targets.as_array())
+        .and_then(|targets| {
+            targets.iter().find(|target| {
+                target.get("targetId").and_then(serde_json::Value::as_str) == Some(wanted)
+                    && target.get("type").and_then(serde_json::Value::as_str) == Some("page")
+            })
+        })
+        .and_then(|target| target.get("targetId"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
 }
 
 /// First existing `page` target, if any.
@@ -781,6 +827,7 @@ mod tests {
         std::fs::create_dir_all(&profiles).expect("a profile folder");
         let session = |command: Option<String>| BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 command,
                 profile_root: Some(profiles.clone()),
@@ -822,6 +869,7 @@ mod tests {
 
         let session = start_session(BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 command: Some(browser.to_string_lossy().into_owned()),
                 profile_root: Some(temp.path().join("profiles")),

@@ -789,7 +789,7 @@ fn an_unreachable_attempt_continues_but_a_missing_browser_needs_a_person() {
 }
 
 #[test]
-fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
+fn a_lost_link_comes_back_by_itself_and_leaves_the_page_report_to_its_driver() {
     let _serial = serial();
     let directory = scratch();
     let log = directory.path().join("commands.log");
@@ -855,9 +855,9 @@ fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
         "the new page opens the address of the one the person had"
     );
     assert_eq!(
-        panel.navigation_error.as_deref(),
-        Some(super::PAGE_STATE_LOST),
-        "the panel says that the page is new and that what it held is gone"
+        panel.navigation_error, None,
+        "the driver of the new session decides whether the same page came back; this mock endpoint \
+         answers no CDP handshake, so no page report arrives"
     );
     assert_eq!(
         panel.attached_host_failure(),
@@ -865,6 +865,86 @@ fn a_lost_link_comes_back_by_itself_and_says_that_the_page_is_new() {
         "the automatic attempt reached the browser of that machine"
     );
     panel.stop();
+}
+
+/// A panel that lost its link and is inside its automatic attempt.
+fn panel_in_an_automatic_attempt(host: &AttachedHost) -> BrowserPanelState {
+    let mut panel = BrowserPanelState::attached_host_for_tests(host, "https://example.test/inbox");
+    panel.attached_reached_ready();
+    panel.start_automatic_attempt(None);
+    panel
+}
+
+#[test]
+fn a_page_that_came_back_after_a_lost_link_keeps_its_state_and_says_so() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel_in_an_automatic_attempt(&host);
+
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::PageAttached {
+            target_id: "the-old-page".to_string(),
+            resumed: true,
+        },
+        &mut output,
+    );
+
+    assert!(panel.page_resumed, "the same page is back: no page state was lost");
+    assert_eq!(
+        panel.navigation_error, None,
+        "the panel does not claim a lost page when the page came back"
+    );
+    assert!(output.had_output);
+}
+
+#[test]
+fn a_resume_target_that_is_gone_says_that_the_page_is_new() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel_in_an_automatic_attempt(&host);
+
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::PageAttached {
+            target_id: "a-new-page".to_string(),
+            resumed: false,
+        },
+        &mut output,
+    );
+
+    assert!(!panel.page_resumed);
+    assert_eq!(
+        panel.navigation_error.as_deref(),
+        Some(super::PAGE_STATE_LOST),
+        "the panel says that the page is new and that what it held is gone"
+    );
+    assert!(
+        panel.attached_page_target() == Some("a-new-page"),
+        "the next lost link resumes the page that the person has now"
+    );
+}
+
+#[test]
+fn a_first_page_of_a_browser_host_reports_no_page_state_loss() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::PageAttached {
+            target_id: "the-first-page".to_string(),
+            resumed: false,
+        },
+        &mut output,
+    );
+
+    assert!(!panel.page_resumed);
+    assert_eq!(
+        panel.navigation_error, None,
+        "a first page lost nothing, so the panel says nothing"
+    );
 }
 
 #[test]

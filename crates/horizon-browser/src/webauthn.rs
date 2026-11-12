@@ -433,6 +433,7 @@ mod tests {
     fn bridge(argv: Vec<String>) -> Option<Bridge<u64>> {
         let mut config = crate::BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "panel".into(),
             initial_url: None,

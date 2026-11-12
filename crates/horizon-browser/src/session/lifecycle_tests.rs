@@ -21,6 +21,7 @@ struct SetupOutcome {
 fn reattach_exhaustion_ends_the_driver_but_recoverable_attempts_do_not() {
     let config = BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser: BrowserConfig::default(),
         panel_local_id: "reattach-cleanup".into(),
         initial_url: None,
@@ -120,6 +121,7 @@ fn run_setup_with_browser(
     let slot = Arc::new(FrameSlot::default());
     let config = BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser,
         panel_local_id: "native-window-test".to_string(),
         initial_url: Some("https://fixture.invalid/".to_string()),
@@ -141,7 +143,7 @@ fn run_setup_with_browser(
         committed_url: CommittedUrl::default(),
     };
     let ready = if expect_failure {
-        state.attach_setup(&mut link, &events, &slot, "session", "target")
+        state.attach_setup(&mut link, &events, &slot, "session", "target", false)
     } else {
         state.session_id = Some("session".to_string());
         state.hide_embedded_native_window(&mut link, &events, &slot, "session", "target")
@@ -303,6 +305,7 @@ fn run_read_retry(attach: bool) -> ReadRetry {
             DevtoolsEndpoint::from_active_port_file("9222\n/devtools/browser/6a0c1f4e", 40000)
                 .expect("a forwarded endpoint")
         }),
+        resume_target: None,
         browser: BrowserConfig::default(),
         panel_local_id: "read-retry".into(),
         initial_url: None,
@@ -367,4 +370,136 @@ fn a_read_of_a_far_browser_is_sent_once_more_but_a_key_press_is_not() {
         "a loopback browser that misses its bound has a real problem"
     );
     assert_eq!(local.key_requests, 1);
+}
+
+/// A mock browser that answers every call of a page attach and records what it
+/// received, so a test can say which listeners a reattach sets and whether a
+/// navigation runs.
+fn run_attach(outcome_resume: Option<bool>) -> SetupOutcome {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+    let address = listener.local_addr().expect("mock address");
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept mock");
+        stream.set_read_timeout(Some(Duration::from_secs(30))).expect("timeout");
+        let mut socket = tungstenite::accept(stream).expect("mock handshake");
+        let mut commands = Vec::new();
+        while let Ok(Message::Text(text)) = socket.read() {
+            let command: Value = serde_json::from_str(&text).expect("command JSON");
+            let method = command["method"].as_str().unwrap_or_default();
+            let result = match method {
+                "Page.getFrameTree" => json!({"frameTree": {"frame": {"id": "frame"}}}),
+                "Target.getTargetInfo" => json!({"targetInfo": {"targetId": "page", "title": "Kept form"}}),
+                _ => json!({}),
+            };
+            commands.push(command.clone());
+            socket
+                .send(Message::Text(
+                    json!({ "id": command["id"], "result": result }).to_string().into(),
+                ))
+                .expect("respond");
+        }
+        commands
+    });
+    let slot = Arc::new(FrameSlot::default());
+    let config = BrowserSessionConfig {
+        attach: Some(
+            crate::DevtoolsEndpoint::from_active_port_file("9222\n/devtools/browser/kept", 40000)
+                .expect("a forwarded endpoint"),
+        ),
+        resume_target: outcome_resume.map(|_| "page".to_string()),
+        browser: BrowserConfig {
+            automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
+            ..BrowserConfig::default()
+        },
+        panel_local_id: "resume-attach".to_string(),
+        initial_url: Some("https://example.test/inbox".to_string()),
+        width: 1280,
+        height: 800,
+        frame_slot: Arc::clone(&slot),
+        coordination: None,
+        capture_directory: None,
+        video: Arc::default(),
+        remote: None,
+    };
+    let url = format!("ws://{address}/");
+    let mut link = CdpLink::connect(&url).expect("connect mock");
+    let mut state = DriverState::new(&config, &url, None, Arc::new(AtomicBool::new(false)));
+    let (tx, rx) = mpsc::channel();
+    let events = BrowserEventSender {
+        tx,
+        wake: BrowserEventWake::default(),
+        committed_url: CommittedUrl::default(),
+    };
+    let ready = state.attach_setup(
+        &mut link,
+        &events,
+        &slot,
+        "session",
+        "page",
+        outcome_resume.unwrap_or(false),
+    );
+    let session = state.session_id.clone();
+    drop(link);
+    SetupOutcome {
+        ready,
+        session,
+        commands: server.join().expect("mock server"),
+        events: rx.try_iter().collect(),
+    }
+}
+
+#[test]
+fn a_resumed_page_runs_no_navigation_and_still_sets_every_listener_once() {
+    let fresh = run_attach(None);
+    assert!(fresh.ready, "the first attach of a page is ready");
+    let navigations: Vec<&Value> = fresh
+        .commands
+        .iter()
+        .filter(|command| command["method"] == "Page.navigate")
+        .collect();
+    assert_eq!(navigations.len(), 1, "a new session opens its first page");
+    assert_eq!(navigations[0]["params"]["url"], "https://example.test/inbox");
+
+    let resumed = run_attach(Some(true));
+    assert!(resumed.ready, "a resumed page is ready");
+    assert!(
+        !resumed
+            .commands
+            .iter()
+            .any(|command| command["method"] == "Page.navigate"),
+        "a resumed page keeps the document it had: {:?}",
+        resumed.commands
+    );
+    // Everything that a new session sets, the resumed page sets again: one
+    // listener of each kind, in the same place as a fresh attach.
+    for method in [
+        "Network.enable",
+        "Page.enable",
+        "Page.setLifecycleEventsEnabled",
+        "Page.setInterceptFileChooserDialog",
+        "Target.setAutoAttach",
+        "Emulation.setDeviceMetricsOverride",
+        "Page.startScreencast",
+    ] {
+        let fresh_count = fresh
+            .commands
+            .iter()
+            .filter(|command| command["method"] == method)
+            .count();
+        let resumed_count = resumed
+            .commands
+            .iter()
+            .filter(|command| command["method"] == method)
+            .count();
+        assert_eq!(fresh_count, 1, "a new session sets {method} once");
+        assert_eq!(
+            resumed_count, 1,
+            "the reattach sets {method} again, exactly once, because a new driver owns none of it"
+        );
+    }
+    assert!(
+        resumed.events.iter().any(|event| matches!(event, BrowserEvent::Ready)),
+        "a resumed page reports that it is ready: {:?}",
+        resumed.events
+    );
 }

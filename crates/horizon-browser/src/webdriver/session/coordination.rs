@@ -268,6 +268,7 @@ impl Driver {
             automation_disclosure: self.disclosure_status,
             browser_ws: self.automation_ws.clone(),
             target_id: self.context_id.clone().unwrap_or_default(),
+            page_resumed: false,
             url: self.url.clone(),
             title: self.title.clone(),
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),

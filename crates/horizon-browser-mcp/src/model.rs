@@ -87,6 +87,12 @@ pub(crate) struct BrowserPanel {
     /// Horizon with its last address and the person has Retry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<PanelFailure>,
+    /// The link to the browser of another machine was lost and the panel kept
+    /// or reopened its page. `page_resumed` says the same page came back, so
+    /// its text, its scroll place and its session are still there; `false`
+    /// means the page is new and what it held is gone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) link_recovered: Option<LinkRecovery>,
     /// Host presentation state (shown or hidden). It says nothing about
     /// workspace membership: for a Horizon-injected agent identity every
     /// returned panel is already in that agent's workspace, while identities
@@ -107,6 +113,15 @@ pub(crate) struct BrowserPanel {
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
     pub(crate) video_capture: VideoCaptureCapability,
+}
+
+/// What a panel says about a link that came back after it was lost.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct LinkRecovery {
+    /// `true`: the same page target answered again, so the page kept the text
+    /// the person typed into it, its scroll place and its session. A recovered
+    /// panel without this member has a new page.
+    pub(crate) page_resumed: bool,
 }
 
 /// The typed reason a kept panel cannot serve a page now. `code` is the fixed
@@ -161,6 +176,7 @@ impl BrowserPanel {
                 code: failure.code,
                 message: failure.message,
             }),
+            link_recovered: value.page_resumed.then_some(LinkRecovery { page_resumed: true }),
             visible: !value.hidden,
             owner,
             agent_state: BrowserPanelAgentState {

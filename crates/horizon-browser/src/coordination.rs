@@ -16,6 +16,9 @@ pub struct CoordinationState {
     pub automation_disclosure: crate::AutomationDisclosureStatus,
     pub browser_ws: String,
     pub target_id: String,
+    /// Whether this session adopted the page the panel drove before a lost
+    /// link, so the page kept its text, its scroll place and its session.
+    pub page_resumed: bool,
     pub url: String,
     pub title: String,
     /// Configured remote target name when the session runs at a remote grid;
@@ -211,6 +214,7 @@ mod tests {
     fn failed_stale_state_cleanup_aborts_coordination_startup() {
         let config = crate::BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "panel".into(),
             initial_url: None,

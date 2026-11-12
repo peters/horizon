@@ -456,6 +456,13 @@ impl BrowserPanelState {
         self.attached.as_ref().map(|slot| slot.host.profile())
     }
 
+    /// The page target that the next lost link resumes, when the panel drives a
+    /// browser of another computer and its driver reported the page.
+    #[must_use]
+    pub fn attached_page_target(&self) -> Option<&str> {
+        self.attached_page_target.as_deref()
+    }
+
     /// Why the last connect of this panel failed. `None` while it is connected
     /// or still connecting.
     #[must_use]
@@ -487,6 +494,7 @@ impl BrowserPanelState {
         drop(slot);
         self.frame_slot.clear();
         self.navigation_error = None;
+        self.page_resumed = false;
         self.attach_endpoint = None;
         self.loading = true;
         self.status = BrowserStatus::Starting;
@@ -598,7 +606,6 @@ impl BrowserPanelState {
         };
         match outcome {
             AttachOutcome::Connected(browser) => {
-                let automatic = self.attached.as_ref().is_some_and(|slot| slot.attempts > 0);
                 if let Some(slot) = self.attached.as_mut() {
                     slot.pending = None;
                     slot.failure = None;
@@ -608,12 +615,6 @@ impl BrowserPanelState {
                 self.loading = true;
                 self.status = BrowserStatus::Starting;
                 self.launch_session(self.relaunch_target());
-                if automatic {
-                    // The browser of that machine kept running, but a new link
-                    // opens a new page of the last address: what the person had
-                    // in the old page is gone, and the panel says so.
-                    self.navigation_error = Some(PAGE_STATE_LOST.to_string());
-                }
                 true
             }
             AttachOutcome::Failed(failure) => {
@@ -662,6 +663,23 @@ impl BrowserPanelState {
         self.attached
             .as_ref()
             .is_some_and(|slot| slot.failure.is_some() && slot.reached_ready)
+    }
+
+    /// The driver bound a page target. On an automatic attempt the page is
+    /// either the one the person already had — the browser of that machine kept
+    /// running behind the lost link, so its text, its scroll place and its
+    /// session are still there — or a new page, and then the panel says that
+    /// the old state is gone.
+    pub(super) fn apply_page_attached(&mut self, resumed: bool) {
+        if !self.is_attached() {
+            return;
+        }
+        let automatic = self.attached.as_ref().is_some_and(|slot| slot.attempts > 0);
+        if !automatic {
+            return;
+        }
+        self.page_resumed = resumed;
+        self.navigation_error = (!resumed).then(|| PAGE_STATE_LOST.to_string());
     }
 
     /// Remember that the session of this connect showed a page, so a later lost

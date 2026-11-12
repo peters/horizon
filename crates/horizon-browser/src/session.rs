@@ -122,6 +122,13 @@ pub enum BrowserEvent {
     },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
+    /// The page this session drives. `resumed` says that it is the page the
+    /// panel drove before a lost link came back, so the page keeps what it
+    /// had; `false` says that the page is new and the previous state is gone.
+    PageAttached {
+        target_id: String,
+        resumed: bool,
+    },
     /// Allocation, expiry and release facts for a remote session.
     RemoteSession(crate::RemoteSessionEvent),
 }
@@ -154,6 +161,12 @@ pub struct BrowserSessionConfig {
     /// removes no profile folder, sets no download behavior, closes only the
     /// page it created and never the browser.
     pub attach: Option<crate::DevtoolsEndpoint>,
+    /// The page target that this panel drove before its link was lost. A
+    /// session with a resume target adopts that page instead of creating one,
+    /// and it does not navigate: the page still holds the text the person
+    /// typed into it, its scroll place and its session. A target that is gone
+    /// falls back to a new page of `initial_url`.
+    pub resume_target: Option<String>,
 }
 
 /// The panel-side handle to a running driver.
@@ -455,6 +468,7 @@ fn run_loop(
             // session is not worth the state surgery; surface the
             // failure and stop — the panel offers Retry.
             tracing::warn!(target: "browser", "cdp connection lost: {error}");
+            state.audit_session_event(crate::BrowserAuditAction::LinkLost);
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
             state.settle_pending_wait_for_shutdown(Instant::now());
             let _ = chrome.kill();
@@ -553,6 +567,9 @@ struct DriverState {
     native_user_agent_metadata: Option<serde_json::Value>,
     session_id: Option<String>,
     target_id: Option<String>,
+    /// Whether this session adopted the page the panel had before a lost
+    /// link, so the page keeps its state and no startup navigation runs.
+    resumed_page: bool,
     main_frame_id: Option<String>,
     pending_resize: Option<viewport::PendingResize>,
     viewport_policy: viewport::ViewportPolicy,
@@ -669,6 +686,7 @@ impl DriverState {
             native_user_agent_metadata,
             session_id: None,
             target_id: None,
+            resumed_page: false,
             main_frame_id: None,
             pending_resize: None,
             viewport_policy: viewport::ViewportPolicy::new([config.width, config.height]),
