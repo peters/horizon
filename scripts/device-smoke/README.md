@@ -363,6 +363,69 @@ To see the same board again after a restart, start the fixture with
 describes. The restored agent panel starts the script again, which draws a second
 set of cards beside the panel; the cards of the earlier run stay on the board.
 
+### An agent that a file drives
+
+A computer can refuse the input of an automated test: a Mac whose owner did not
+give the Accessibility permission to the program that runs the test sends no
+keys and no clicks. The candidate stays testable there, because its own MCP
+tools need no key and no click. `scripts/device-smoke/file_agent.py` runs them
+from the lines of a command file.
+
+```sh
+python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
+  --native-view --state /tmp/horizon-file-agent --file-agent
+```
+
+`--file-agent` opens a panel of that program. The fixture writes the two files
+in its state folder and names them in the manifest, below the key `file_agent`:
+`commands` is the file that the person writes, and `answers` is the file that
+the program appends each answer to. The command file starts empty, because a run
+must not repeat the commands of an earlier run in the same state. An answer
+file stays, and a later run appends to it.
+
+Write one JSON object per line of the command file, and keep the newline:
+
+```
+{"tool": "machine_set", "arguments": {"name": "build-1", "ssh": {"host": "127.0.0.1"}}, "timeout": 30}
+{"tool": "machines"}
+{"quit": true}
+```
+
+The program reads the file again every half second and runs each line that it
+has not run yet, in the order of the file. `arguments` and `timeout` are
+optional: an absent `arguments` sends `{}`, and an absent `timeout` waits 30
+seconds. The manifest of the MCP server gives the tool names, and each
+operation names the shape of its arguments. The program prints one line for
+each answer in its panel and appends `{"request": ..., "answer": ...}` to the
+answer file. A refusal of a tool is an answer, so the run continues. A line
+that is not a JSON object is reported and skipped, and its text stays in the
+answer file as evidence. A line counts when its newline is in the file, so a
+program that writes one line in two writes does not lose it. A command file
+that does not start with the text already read was written again, and the
+program reads it from its first line.
+
+The example sets one machine and then reads the machine list:
+
+```sh
+printf '%s\n' \
+  '{"tool": "machine_set", "arguments": {"name": "build-1", "ssh": {"host": "127.0.0.1"}}}' \
+  '{"tool": "machines"}' >> <state>/data/file-agent/commands.jsonl
+```
+
+Result: the panel of the file agent holds one line for the answer of
+`machine_set` and one line for the answer of `machines`, and the second line
+holds `build-1`. The answer file holds both requests with their answers, so a
+test reads them after the run.
+
+The program also starts by hand, outside the fixture, with the options
+`--mcp-command`, `--commands FILE` and `--answers FILE`. Horizon gives an agent
+panel its own launch arguments, so the fixture runs the program through a
+launcher script that takes them as `"$@"`. The program imports the MCP client of
+`card_agent.py`, and the fixture copies that file beside it. No command sends a
+key or a click, so this path also works where the window takes no automated
+input. The procedure is
+[the macOS window without input procedure](../../docs/testing/procedures/macos-window-without-input.md).
+
 `--ssh-config FILE` and `--ssh-identity FILE` give the app in the fixture an
 SSH configuration and an identity, so a feature that names a host over SSH can
 reach it. Give the two flags together, or give neither one:

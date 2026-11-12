@@ -75,6 +75,13 @@ WORKTREE_CARD_PRESETS = [
 WORKTREE_CARD_FOLDER = 'repo'
 WORKTREE_CARD_PRESET = 'Task shell'
 WORKTREE_CARD_LAUNCHER = 'card-agent-worktree.sh'
+# The file agent: the program of a panel that runs the tools of the candidate from
+# the lines of a command file, and the two files that a person writes to and reads.
+FILE_AGENT_PROGRAM = 'file_agent.py'
+FILE_AGENT_FOLDER = 'file-agent'
+FILE_AGENT_COMMANDS = 'commands.jsonl'
+FILE_AGENT_ANSWERS = 'answers.jsonl'
+FILE_AGENT_LAUNCHER = 'file-agent.sh'
 # The programs of this folder that a panel of the fixture runs. The sandbox binds
 # the private home over the home of the person, so a checkout under that home does
 # not exist inside it. The state folder is bound on every run, so a panel names a
@@ -82,8 +89,14 @@ WORKTREE_CARD_LAUNCHER = 'card-agent-worktree.sh'
 FIXTURE_FOLDER = Path(__file__).resolve().parent
 WORKTREE_CARD_PROGRAM = 'card_agent.py'
 ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
-PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM)
+PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM, FILE_AGENT_PROGRAM)
 PANEL_PROGRAM_FOLDER = 'programs'
+
+
+# The programs that a program of this folder imports, as one copy each: the file
+# agent imports the MCP client of the card agent, so a panel that runs a copy of
+# the file agent needs that second copy beside it.
+PROGRAM_IMPORTS = {FILE_AGENT_PROGRAM: (WORKTREE_CARD_PROGRAM,)}
 
 
 def bound_port(process, path, pattern):
@@ -480,6 +493,51 @@ def worktree_card_panel(app, repo, state, program_folder=None):
             'args': [], 'cwd': str(data)}
 
 
+def file_agent_files(state):
+    """The command file and the answer file of the file agent, in the state folder.
+
+    The sandbox binds the state folder at its own path, so the person writes the
+    commands from outside the run and the agent writes its answers inside it. The
+    command file starts empty, because this run has read no line of it: a run of a
+    reused state must not repeat the commands of the earlier run. An answer file
+    of an earlier run stays, and this run appends to it.
+    """
+    folder = Path(state).resolve() / 'data' / FILE_AGENT_FOLDER
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    commands = folder / FILE_AGENT_COMMANDS
+    commands.write_text('')
+    return commands, folder / FILE_AGENT_ANSWERS
+
+
+def file_agent_panel(app, state, commands, answers, program_folder=None):
+    """The panel of the file agent, which runs the copies of its two programs.
+
+    The program imports the MCP client of `card_agent.py`, so the copy of the card
+    agent lies beside it in the state folder. The launcher takes Horizon's launch
+    arguments as `"$@"`, as the panel of the card agent does.
+    """
+    data = Path(state).resolve() / 'data'
+    folder = data / FILE_AGENT_FOLDER
+    script = program_in_state(fixture_program(FILE_AGENT_PROGRAM, program_folder),
+                              folder / FILE_AGENT_PROGRAM, state)
+    program_in_state(fixture_program(WORKTREE_CARD_PROGRAM, program_folder),
+                     folder / WORKTREE_CARD_PROGRAM, state)
+    launcher = folder / FILE_AGENT_LAUNCHER
+    launcher.write_text(
+        '#!/bin/sh\n'
+        f'exec /usr/bin/python3 -u {shlex.quote(str(script))} '
+        f'--mcp-command {shlex.quote(str(app) + " --browser-mcp")} '
+        f'--commands {shlex.quote(str(commands))} --answers {shlex.quote(str(answers))} "$@"\n')
+    launcher.chmod(0o700)
+    return {'name': 'File agent', 'kind': 'claude', 'command': str(launcher),
+            'args': [], 'cwd': str(data)}
+
+
+def file_agent_manifest(commands, answers):
+    """The manifest entry that names the two files of the file agent."""
+    return {'commands': str(commands), 'answers': str(answers)}
+
+
 def body_in_state(destination, body, state):
     """Write `body` as the program that a panel of this fixture runs.
 
@@ -528,9 +586,11 @@ def panel_programs_in_state(panels, state, folder=None):
 
     def copy_of(name):
         if name not in copies:
-            copies[name] = program_in_state(
-                fixture_program(name, folder),
-                state / 'data' / PANEL_PROGRAM_FOLDER / name, state)
+            destination = state / 'data' / PANEL_PROGRAM_FOLDER / name
+            copies[name] = program_in_state(fixture_program(name, folder), destination, state)
+            for imported in PROGRAM_IMPORTS.get(name, ()):
+                program_in_state(fixture_program(imported, folder),
+                                 destination.parent / imported, state)
         return str(copies[name])
 
     for panel in panels:
@@ -789,6 +849,7 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('panels', '--panels'), ('attention_agent', '--attention-agent'),
     ('notifications_log', '--notifications-log'),
     ('worktree_card', '--worktree-card'),
+    ('file_agent', '--file-agent'),
     ('presets', '--presets'), ('theme', '--theme'),
     ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
     ('server_target', '--server-target'), ('server_command', '--server-command'),
@@ -958,6 +1019,12 @@ def arguments():
         help='Make the throwaway repository, the presets and the card agent panel of the '
              'worktree card procedure: one task worktree, the card of the worktrees of that '
              'repository, and its merge and remove buttons, with real git and no login')
+    parser.add_argument(
+        '--file-agent', action='store_true',
+        help='Open a panel of scripts/device-smoke/file_agent.py, which runs the MCP tools of '
+             'the candidate from the lines of a command file and appends each answer to an '
+             'answer file, so a computer that sends no input stays testable. The manifest '
+             'names the two files')
     parser.add_argument(
         '--panels',
         type=Path,
@@ -1140,6 +1207,15 @@ def main():
             notification_bin = notification_standin(args.state)
             env.update(attention_environment(env, notification_bin))
             extra_panels = list(extra_panels or []) + [notification_panel(args.state)]
+        file_agent_files_in_run = None
+        if args.file_agent:
+            # A panel of the file agent, which runs the tools of the candidate from
+            # the lines of a command file: the fixture writes the two files and names
+            # them in the manifest, so a person drives a computer that sends no input.
+            file_agent_files_in_run = file_agent_files(args.state)
+            commands, answers = file_agent_files_in_run
+            extra_panels = list(extra_panels or []) + [
+                file_agent_panel(app, args.state, commands, answers)]
         if args.plain_window:
             spawn('plain-window', plain_window_command())
         # The values of this run, and a value that an earlier run of the same private
@@ -1180,6 +1256,10 @@ def main():
                                 else ('resumed' if args.resume_session
                                       else ('saved' if args.saved_session else 'ephemeral'))),
                     'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
+        if file_agent_files_in_run is not None:
+            # The two files of the file agent, so the person reads the answers and
+            # writes the commands at the paths of this run.
+            manifest['file_agent'] = file_agent_manifest(*file_agent_files_in_run)
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)

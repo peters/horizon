@@ -42,4 +42,5 @@ documents that are not yet STE.
 | [sidebar-machines](procedures/sidebar-machines.md) | The Machines section of the sidebar: records, click to connect, restart, forget and a refused record | none |
 | [workspace-place](procedures/workspace-place.md) | A workspace that lives on a machine: its new terminals run there, re-attach after a restart and end with a close | none |
 | [desktop-notifications](procedures/desktop-notifications.md) | A desktop notification for an agent that needs the person while no window of Horizon has the focus | none |
+| [macos-window-without-input](procedures/macos-window-without-input.md) | A macOS window that a tester drives with files, when no program may send keys or clicks | none |
 
