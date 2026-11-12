@@ -1,6 +1,8 @@
 mod bar;
 mod browser;
 #[cfg(test)]
+mod field_tests;
+#[cfg(test)]
 mod footer_tests;
 mod general;
 #[cfg(test)]
@@ -781,8 +783,13 @@ fn text_field(ui: &mut egui::Ui, value: &mut String, hint: &str, id: &str) -> bo
 
 /// One field of an entry that a person may leave blank. The box edits a copy,
 /// so a blank box means the entry is not set; an entry that is not set gives an
-/// empty copy, so the common case allocates nothing. The value is written back
-/// only when the text changed, never on every frame.
+/// empty copy, so the common case allocates nothing.
+///
+/// The box keeps the text as the person typed it, spaces included. A trim of the
+/// draft of every frame would end a word at each space: the space is the last
+/// character of the draft until the next key of the word arrives, so a feed that
+/// writes the trimmed draft back takes that space away. The value is trimmed when
+/// the field is left, and a box of nothing but spaces is an entry that is not set.
 fn optional_text_field(ui: &mut egui::Ui, value: &mut Option<String>, hint: &str, id: &str) -> bool {
     let mut text = value.clone().unwrap_or_default();
     let response = ui.add(
@@ -791,11 +798,16 @@ fn optional_text_field(ui: &mut egui::Ui, value: &mut Option<String>, hint: &str
             .desired_width((ui.available_width() - ui.spacing().item_spacing.x).max(120.0))
             .id_salt(id),
     );
-    if !response.changed() {
+    let typed = if response.lost_focus() {
+        text.trim().to_owned()
+    } else {
+        text
+    };
+    let next = (!typed.trim().is_empty()).then_some(typed);
+    if next == *value {
         return false;
     }
-    let trimmed = text.trim();
-    *value = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    *value = next;
     true
 }
 
