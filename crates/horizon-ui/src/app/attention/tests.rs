@@ -7,6 +7,13 @@ use horizon_core::{Attention, PanelId, PanelKind, PanelOptions};
 
 use crate::app::test_support::{run_app_frame, test_app, test_app_with_config_and_startup};
 
+/// The time a test gives a worker of the window to answer.
+///
+/// The bound is a budget of the test and not a rule of the product: a frame
+/// starts the worker, and a computer that runs this suite beside other work can
+/// take seconds to schedule it and to write its file.
+const PATIENCE: Duration = Duration::from_secs(180);
+
 /// A panel of the board that runs nothing: these tests read the attention state
 /// of the sidebar, not a terminal.
 fn agent_panel(app: &mut crate::app::HorizonApp, workspace: horizon_core::WorkspaceId, name: &str) -> PanelId {
@@ -270,7 +277,7 @@ fn the_record_of_a_closed_panel_leaves_the_home() {
     run_app_frame(&ctx, &mut app);
     app.board.close_panel(panel);
     run_app_frame(&ctx, &mut app);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PATIENCE;
     while store.read(&local).expect("read").is_some() {
         assert!(Instant::now() < deadline, "the record of the closed panel stays");
         std::thread::sleep(Duration::from_millis(5));
@@ -320,15 +327,27 @@ fn the_attention_reads_never_run_on_the_frame() {
         },
     );
     let workspace = app.board.create_workspace("a");
-    agent_panel(&mut app, workspace, "Fix the sync");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    assert_eq!(app.panel_attention(&local), Attention::Idle);
     // The whole suite runs the UI-thread guard in strict mode: a file read on a
     // frame panics here instead of freezing the window.
-    let start = Instant::now();
     run_app_frame(&ctx, &mut app);
-    assert!(
-        start.elapsed() < Duration::from_secs(2),
-        "the frame did not wait for a read"
+    // The frame asked the worker for one read and took no answer, so no frame of
+    // the window waits for a file, however long a busy computer holds the worker.
+    assert!(app.attention.in_flight, "the frame asks the worker for one read");
+    assert_eq!(
+        app.panel_attention(&local),
+        Attention::Idle,
+        "the frame reads no ledger of its own"
     );
+    let worker = app.attention.worker.as_ref().expect("the attention worker");
+    let read = worker
+        .reads
+        .recv_timeout(PATIENCE)
+        .expect("the read that the frame asked for");
+    assert_eq!(read.len(), 1, "the read names the one agent panel of the board");
+    assert_eq!(read[0].1, local);
 }
 
 #[test]
@@ -341,10 +360,7 @@ fn the_attention_worker_reads_a_ledger_of_the_home_off_the_frame() {
     let state = super::AttentionState::new(temp.path());
     let worker = state.worker.as_ref().expect("the attention worker");
     worker.ask(vec![(PanelId(1), "panel-1".to_owned())]);
-    let read = worker
-        .reads
-        .recv_timeout(Duration::from_secs(10))
-        .expect("a read of the ledger");
+    let read = worker.reads.recv_timeout(PATIENCE).expect("a read of the ledger");
     assert_eq!(read.len(), 1);
     assert_eq!(read[0].1, "panel-1");
     assert_eq!(read[0].2.as_ref().expect("a registered ledger").session_id, "session");
