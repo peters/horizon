@@ -492,15 +492,16 @@ sound socket and the take said `pw-record ended early: error:
 > this run, and keep the id of the node for the destroy step. Do not change the
 > default device of the person.
 
-1. Make the null sink of the session:
+1. Make the null sink of the session, and read its id:
 
    ```sh
-   pw-cli create-node adapter '{ factory.name=support.null-audio-sink \
-     node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+   pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+   pw-cli info smoke-null
    ```
 
-   Result: The command prints JSON with the id and the name of the node. This is
-   `<id>` and `<name>` below.
+   Result: The first command prints no line. The second command prints the lines
+   of the node, and the first of them is `id: <id>`. The name is `smoke-null`, so
+   `<name>` is `smoke-null` and `<id>` is that number in the steps below.
 
 2. Stop the fixture of the setup. Start it again with the real recorder, the
    stand-in service of the setup and `--host-audio`:
@@ -508,8 +509,7 @@ sound socket and the take said `pw-record ended early: error:
    ```sh
    python3 scripts/device-smoke/serve.py --horizon <frozen>/horizon --native-view \
      --state <evidence>/fixture-real --host-audio \
-     --speech-recorder "pw-record --target <name> --properties stream.capture.sink=true \
-   --rate 16000 --channels 1 --format s16 {file}" \
+     --speech-recorder "pw-record --target <name> --properties stream.capture.sink=true --rate 16000 --channels 1 --format s16 {file}" \
      --speech-service "http://<stand-in>/v1/audio/transcriptions" \
      --named-secret SPEECH_API_KEY=<marker>
    ```

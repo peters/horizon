@@ -285,15 +285,17 @@ one line before it creates its state and before it starts the candidate. The
 option writes no settings, so it also fits a run with `--plain-start`.
 
 Use a null sink of the session for the take, so the recipe needs no speaker and
-changes no default device. Make the sink, read its node id, and keep the name:
+changes no default device. Make the sink. It prints no line, so read its id with
+`pw-cli info <name>` and keep the name:
 
 ```sh
-pw-cli create-node adapter '{ factory.name=support.null-audio-sink \
-  node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=smoke-null media.class=Audio/Sink object.linger=true audio.position=[MONO] }'
+pw-cli info smoke-null
 ```
 
-The command prints JSON that holds the id and the name of the node. This is
-`<name>` and `<id>` below. Then record from that sink with the recorder line of
+The second command prints the lines of the node, and the first of them is
+`id: <id>`. The name is `smoke-null` here, and the two values are `<name>` and
+`<id>` below. Then record from that sink with the recorder line of
 `--speech-recorder`, play a clip into it while the hotkey is held, and destroy
 the node:
 
