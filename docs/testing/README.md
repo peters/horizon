@@ -41,4 +41,5 @@ documents that are not yet STE.
 | [remote-browser-tunnel](procedures/remote-browser-tunnel.md) | Browser panel of a browser on another machine over an SSH forward, a lost browser and the typed refusals | none |
 | [sidebar-machines](procedures/sidebar-machines.md) | The Machines section of the sidebar: records, click to connect, restart, forget and a refused record | none |
 | [workspace-place](procedures/workspace-place.md) | A workspace that lives on a machine: its new terminals run there, re-attach after a restart and end with a close | none |
+| [desktop-notifications](procedures/desktop-notifications.md) | A desktop notification for an agent that needs the person while no window of Horizon has the focus | none |
 
