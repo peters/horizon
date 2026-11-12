@@ -204,6 +204,23 @@ impl NamedSecretWorkbench {
         self.state_of(name.as_str())
     }
 
+    /// Whether this computer holds a value for `name`, in the words of the last answer
+    /// of the worker: `Some(true)` for a value, `Some(false)` for no value, and `None`
+    /// while no answer names the name yet, or while the secrets file cannot be read.
+    ///
+    /// A frame that draws what the secrets file holds today asks this instead of a
+    /// read, so it opens no file and waits for nothing. A name that a click created or
+    /// a person deleted answers `None` while the worker reads it, and the caller then
+    /// draws what the last read of the store answered.
+    #[must_use]
+    pub fn held(&self, name: &SecretName) -> Option<bool> {
+        match self.states.get(name.as_str()) {
+            Some(NamedSecretState::Present) => Some(true),
+            Some(NamedSecretState::NoValue) => Some(false),
+            Some(NamedSecretState::Checking | NamedSecretState::Unavailable) | None => None,
+        }
+    }
+
     /// Why the last operation failed, for one line of the window.
     #[must_use]
     pub fn failure(&self) -> Option<&NamedSecretError> {

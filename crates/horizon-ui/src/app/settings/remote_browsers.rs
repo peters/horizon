@@ -356,7 +356,7 @@ fn render_keyring_section(
             );
             for line in offer.lines() {
                 ui.add_space(8.0);
-                render_network_line(ui, line, keyring, vault.as_ref());
+                render_network_line(ui, line, keyring, vault.as_ref(), named);
             }
         }
         if let Some(answer) = secrets_answer {
@@ -368,12 +368,19 @@ fn render_keyring_section(
 /// One line per network of an older Horizon: the three names of the recipe, the
 /// names that this computer already holds a value for, and the button that creates
 /// the missing ones. A name is drawn, a value never is.
+///
+/// The presence line and the button read the answer of the store that this window
+/// holds, not only the read that offered the network: a click creates the three names
+/// and the Secrets tab deletes one of them again, and both then show at once.
 fn render_network_line(
     ui: &mut Ui,
     line: &TailnetLine,
     keyring: &mut KeyringImport,
     vault: Option<&std::sync::Arc<NamedSecretVault>>,
+    secrets: &NamedSecretWorkbench,
 ) {
+    let followed = line.followed(|name| secrets.held(name));
+    let line = &followed;
     let names: Vec<&str> = line
         .names()
         .iter()
@@ -842,8 +849,14 @@ fn notice_line(kind: NoticeKind, error: Option<&RemoteCredentialError>) -> (Stri
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     use horizon_core::browser::remote::{ControlEndpoint, CredentialBinding, RemoteAdapterKind, RemoteSessionLimits};
+    use horizon_core::named_secrets::{NamedSecretVault, NamedSecretWorkbench, SecretName};
+    use horizon_core::remote_browser_credential::{
+        Bound, KeyringImport, ProgramEnvironment, RemoteCredentialStore, SharedStore,
+    };
+    use horizon_core::secret_store::SecretStore;
 
     use super::*;
 
@@ -913,6 +926,24 @@ mod tests {
         let path = folder.join(name);
         std::fs::write(&path, script).expect("the stand-in");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("an executable stand-in");
+    }
+
+    /// A stand-in for `secret-tool` that answers the OAuth client of the saved network
+    /// `saved-id` on the tailnet service of an older Horizon, and no item of any other
+    /// service.
+    fn stand_in_tailnet_keyring(folder: &std::path::Path) {
+        let script = r#"if [ "$1" = search ] && [ "$4" = service ] && [ "$5" = horizon-cloud-tailnet-api ]; then
+    printf '%s\n' '[/org/freedesktop/secrets/collection/login/7]'
+    printf '%s\n' 'label = horizon-cloud-tailnet-api'
+    printf '%s\n' 'secret = {"kind":"oauth","client_id":"synthetic-id","client_secret":"synthetic-secret"}'
+    printf '%s\n' 'created = '
+    printf '%s\n' 'modified = '
+    printf '%s\n' 'attribute.service = horizon-cloud-tailnet-api' >&2
+    printf '%s\n' 'attribute.username = saved-id' >&2
+fi
+exit 0
+"#;
+        horizon_core::stand_in_program_in(folder, "secret-tool", script).expect("the stand-in program");
     }
 
     /// A workbench of the secrets file of a test, and the store behind it.
@@ -1100,6 +1131,183 @@ mod tests {
             !texts.iter().any(|text| text.contains("synthetic")),
             "the card draws no value: {texts:?}"
         );
+    }
+
+    /// The card of the keyring over one saved network of an older Horizon, with the
+    /// secrets file of this computer and the tab of its named secrets.
+    struct NetworkCard {
+        _programs: tempfile::TempDir,
+        _home: tempfile::TempDir,
+        config: Config,
+        vault: Arc<NamedSecretVault>,
+        store: SharedStore,
+        named: NamedSecretWorkbench,
+        workbench: CredentialWorkbench,
+        keyring: KeyringImport,
+        names: [SecretName; 3],
+    }
+
+    impl NetworkCard {
+        /// The card of the network `Home`, whose OAuth client the stand-in keyring
+        /// holds, and a secrets file that holds no named secret.
+        fn new() -> Self {
+            let programs = tempfile::tempdir().expect("a folder of stand-in programs");
+            stand_in_tailnet_keyring(programs.path());
+            let home = tempfile::tempdir().expect("the home of the older version");
+            let cloud = home.path().join("cloud");
+            std::fs::create_dir_all(&cloud).expect("the folder of the older version");
+            std::fs::write(
+                cloud.join("tailnets.json"),
+                r#"{"tailnets":[{"id":"saved-id","name":"Home"}]}"#,
+            )
+            .expect("the saved network of the older version");
+
+            let values = SecretStore::in_memory().expect("a secrets file in memory");
+            let vault = Arc::new(NamedSecretVault::new(Box::new(Arc::clone(&values))));
+            let store: SharedStore = Arc::new(std::sync::Mutex::new(
+                Box::new(Arc::clone(&values)) as Box<dyn RemoteCredentialStore + Send>
+            ));
+            let names = ["TS_HOME_CLIENT_ID", "TS_HOME_CLIENT_SECRET", "TS_HOME_TAG"]
+                .map(|text| SecretName::parse(text).expect("a name of the recipe"));
+            let secrets = NamedSecretWorkbench::new(Some(Arc::clone(&vault)), &names);
+            let keyring = KeyringImport::with_programs(
+                Platform::SecretService,
+                ProgramEnvironment::with_path(programs.path()),
+                Bound::WholeImport(std::time::Duration::from_secs(10)),
+            )
+            .with_old(cloud);
+            Self {
+                _programs: programs,
+                _home: home,
+                config: Config::default(),
+                vault,
+                store,
+                named: secrets,
+                workbench: file_workbench().1,
+                keyring,
+                names,
+            }
+        }
+
+        /// The texts of the card in this frame.
+        fn texts(&mut self) -> Vec<String> {
+            let (_changed, texts) = super::super::tests::frame_of(|ui| {
+                super::render_keyring_section(
+                    ui,
+                    &self.config,
+                    &mut self.workbench,
+                    &mut self.keyring,
+                    &mut self.named,
+                );
+                false
+            });
+            texts
+        }
+
+        /// The first click, on `Import from the keyring`.
+        fn import(&mut self) {
+            let plan = KeyringImportPlan::of(&self.config.browser.remote);
+            self.keyring
+                .start(plan, Arc::clone(&self.store), Some(Arc::clone(&self.vault)));
+            self.answered();
+        }
+
+        /// The press of `Create these secrets` on the line of the network.
+        fn create(&mut self) {
+            self.keyring
+                .start_secrets(Some("HOME".to_string()), Arc::clone(&self.vault));
+            self.answered();
+        }
+
+        /// The delete of one name of the network in the `Secrets` tab.
+        fn delete(&mut self, index: usize) {
+            self.vault.remove(&self.names[index]).expect("the delete of one name");
+        }
+
+        /// The answer of the card's worker, until it is on the line of its button.
+        fn answered(&mut self) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while self.keyring.is_busy() && std::time::Instant::now() < deadline {
+                self.keyring.poll();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(!self.keyring.is_busy(), "the import of the keyring answered");
+        }
+
+        /// The read of the secrets file that the window asks for after a change, until
+        /// its answer names these three names.
+        fn read(&mut self, expected: [Option<bool>; 3]) {
+            self.named.refresh(&self.names);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut held = self.held();
+            while held != expected && std::time::Instant::now() < deadline {
+                self.named.poll();
+                held = self.held();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(held, expected, "the tab read the secrets file");
+        }
+
+        /// Whether the tab holds a value for each of the three names.
+        fn held(&self) -> [Option<bool>; 3] {
+            self.names.each_ref().map(|name| self.named.held(name))
+        }
+    }
+
+    /// Whether one of the drawn texts of the card holds `needle`.
+    fn card_holds(texts: &[String], needle: &str) -> bool {
+        texts.iter().any(|text| text.contains(needle))
+    }
+
+    /// The presence line and the button of a network follow the secrets file. The read
+    /// that offered the network answered before the click, so the answer of the click
+    /// names the three names as here, and a delete in the Secrets tab takes one of them
+    /// away again.
+    #[test]
+    fn the_line_of_a_network_follows_the_secrets_that_the_click_created() {
+        let mut card = NetworkCard::new();
+        card.import();
+        let texts = card.texts();
+        assert!(
+            card_holds(&texts, "No value of the three names is on this computer yet."),
+            "the line of the network says what the store holds: {texts:?}"
+        );
+        assert!(card_holds(&texts, "Create these secrets"), "{texts:?}");
+
+        card.create();
+        // The frame that takes the created names reads the store again, exactly as the
+        // window does: the names enter the settings list and the tab asks for them.
+        card.read([Some(true); 3]);
+        let texts = card.texts();
+        assert!(card_holds(&texts, "Created 3 secrets of the network."), "{texts:?}");
+        assert!(
+            card_holds(
+                &texts,
+                "TS_HOME_CLIENT_ID, TS_HOME_CLIENT_SECRET and TS_HOME_TAG are already here."
+            ),
+            "the presence line follows the secrets that the click created: {texts:?}"
+        );
+        assert!(
+            card_holds(&texts, "All three names are here"),
+            "the button follows the secrets that the click created: {texts:?}"
+        );
+        assert!(!card_holds(&texts, "Create these secrets"), "{texts:?}");
+        assert!(!card_holds(&texts, "synthetic"), "the card draws no value: {texts:?}");
+
+        // The Secrets tab deletes the tag, so the line and the button of the network
+        // offer it again, and the two names that stay are still here.
+        card.delete(2);
+        card.read([Some(true), Some(true), Some(false)]);
+        let texts = card.texts();
+        assert!(
+            card_holds(&texts, "TS_HOME_CLIENT_ID and TS_HOME_CLIENT_SECRET are already here."),
+            "the presence line follows the delete of the Secrets tab: {texts:?}"
+        );
+        assert!(
+            card_holds(&texts, "Create these secrets"),
+            "the button follows the delete of the Secrets tab: {texts:?}"
+        );
+        assert!(!card_holds(&texts, "All three names are here"), "{texts:?}");
     }
 
     /// The row that an import of the keyring writes is queued for the link to a

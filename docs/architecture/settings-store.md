@@ -333,7 +333,9 @@ holds, and the button under it:
    collapsed and at most 16 characters. Two names that become one `<NET>` take a
    number, such as `HOME_2`.
 2. The line says which of the three names this computer holds already. A name with
-   a value is never written over.
+   a value is never written over. The line and the button follow the secrets file:
+   the answer of a press names the secrets that the press created, and a delete in
+   the **Secrets** tab takes a name away from the line again.
 3. A press on **Create these secrets** reads the keyring again on a worker thread
    and creates the missing names through the path of a value that a person typed:
    the names enter the `secrets` section, the values enter `secrets.sqlite` under

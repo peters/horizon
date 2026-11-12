@@ -435,6 +435,12 @@ fn the_button_of_a_network_reaches_the_line_of_its_click() {
         import.secrets_line().map(|line| line.text.as_str()),
         Some("Created 3 secrets of the network.")
     );
+    // The read that offered the network answered before the click wrote the three
+    // names, so the line and the button of the network take the answer of the click:
+    // no name of it is missing any more.
+    let line = &import.offer().expect("the offer stays").lines()[0];
+    assert_eq!(line.present(), [true; 3], "the line follows the secrets of the click");
+    assert!(line.complete(), "the button has nothing left to create");
     assert_eq!(import.take_created().len(), 3);
     assert_eq!(import.take_created(), Vec::new(), "the window takes each change once");
 }

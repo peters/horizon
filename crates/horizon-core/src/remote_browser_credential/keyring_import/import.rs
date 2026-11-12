@@ -122,6 +122,7 @@ pub fn create_tailnets(
         ..TailnetReport::default()
     };
     let mut created = Vec::new();
+    let mut written = Vec::new();
     for offered in &read.offered {
         let line = &offered.line;
         if only.is_some_and(|only| only != line.net()) {
@@ -141,6 +142,7 @@ pub fn create_tailnets(
                 .put(name, value)
                 .map_err(|_| KeyringImportError::SecretsNotReadable)?;
             report.created += 1;
+            written.push(name.clone());
             created.push(change);
         }
     }
@@ -150,7 +152,7 @@ pub fn create_tailnets(
             ..KeyringImportReport::default()
         },
         changes: Vec::new(),
-        offer: Some(tailnet::offer_of(&read.offered)),
+        offer: Some(tailnet::offer_after(&read.offered, &written)),
         created,
         created_report: report,
     })

@@ -219,6 +219,26 @@ impl TailnetLine {
         self.present
     }
 
+    /// The same line, with the answer of the store of the window that draws it: a name
+    /// that the store reports as held is present, a name that it reports as absent is
+    /// not, and a name that it has no answer for keeps the answer of the read that
+    /// offered the line.
+    ///
+    /// The read that offered a line is a moment old. A click creates the three names
+    /// of the line, and the Secrets tab deletes one of them again, so the tab draws
+    /// every line through this answer: its presence line and its button then follow
+    /// the secrets file instead of the read.
+    #[must_use]
+    pub fn followed(&self, mut held: impl FnMut(&SecretName) -> Option<bool>) -> Self {
+        let mut line = self.clone();
+        for (name, present) in line.names.iter().zip(line.present.iter_mut()) {
+            if let Some(held) = held(name) {
+                *present = held;
+            }
+        }
+        line
+    }
+
     /// The names that this computer holds no value for, which are the names that a
     /// click on the button creates.
     #[must_use]
@@ -350,6 +370,17 @@ pub(super) fn offer_of(offered: &[Offered]) -> TailnetOffer {
     TailnetOffer::of(offered.iter().map(|offered| offered.line.clone()).collect())
 }
 
+/// The offer of the tab after a click that wrote the secrets `written`: every name of
+/// a line that the click created is present, so the line of that network and its
+/// button follow the secrets file at once instead of the read that offered them.
+///
+/// A write that failed is not in `written`, so its name stays missing and the button
+/// offers it again.
+pub(super) fn offer_after(offered: &[Offered], written: &[SecretName]) -> TailnetOffer {
+    let created = |name: &SecretName| written.contains(name).then_some(true);
+    TailnetOffer::of(offered.iter().map(|offered| offered.line.followed(created)).collect())
+}
+
 /// The directory of the older Horizon's saved networks, from the home of this build:
 /// that version kept them in `cloud` of its home, and this build reads no other.
 #[must_use]
@@ -468,5 +499,24 @@ mod tests {
                 .expect("the names of the recipe")
                 .complete()
         );
+    }
+
+    #[test]
+    fn the_answer_of_the_store_replaces_the_presence_of_the_read() {
+        let line = TailnetLine::of("HOME".to_string(), [true, false, false]).expect("the names of the recipe");
+
+        // A name that the store names as gone takes the presence of the read away, and
+        // a name that it names as held adds one. A name without an answer keeps the
+        // answer of the read that offered the line.
+        let followed = |held: [Option<bool>; 3]| {
+            let mut answers = held.into_iter();
+            line.followed(|_| answers.next().flatten())
+        };
+        assert_eq!(
+            followed([Some(false), Some(true), None]).present(),
+            [false, true, false]
+        );
+        assert_eq!(followed([None; 3]), line, "no answer keeps the read");
+        assert!(followed([Some(true); 3]).complete(), "the button has nothing to create");
     }
 }
