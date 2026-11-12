@@ -643,14 +643,22 @@ mod tests {
         let upload = plain_panel.clone();
         let forward = plain_panel.clone();
         let children = [
-            ("the plain SSH panel", plain_panel.to_command_args(), "ConnectTimeout=10"),
+            (
+                "the plain SSH panel",
+                plain_panel.to_command_args(),
+                "ConnectTimeout=10",
+            ),
             (
                 "the terminal of an agent",
                 SshConnection::for_agent_terminal(&checked).to_command_args(),
                 "ConnectTimeout=10",
             ),
             ("the upload", upload.ssh_transport_args(), "ConnectTimeout=10"),
-            ("the upload probe", upload.ssh_probe_transport_args(5), "ConnectTimeout=5"),
+            (
+                "the upload probe",
+                upload.ssh_probe_transport_args(5),
+                "ConnectTimeout=5",
+            ),
             (
                 "the stdio forward of a device",
                 forward.stdio_forward_args("127.0.0.1:5900"),
@@ -662,9 +670,15 @@ mod tests {
                 .iter()
                 .position(|argument| argument.starts_with("ConnectTimeout="))
                 .map(|at| args[at].clone());
-            assert_eq!(bound.as_deref(), Some(expected), "{kind} names its connect bound: {args:?}");
             assert_eq!(
-                args.iter().filter(|argument| argument.starts_with("ConnectTimeout=")).count(),
+                bound.as_deref(),
+                Some(expected),
+                "{kind} names its connect bound: {args:?}"
+            );
+            assert_eq!(
+                args.iter()
+                    .filter(|argument| argument.starts_with("ConnectTimeout="))
+                    .count(),
                 1,
                 "{kind} names one connect bound, so the first value is the whole rule: {args:?}"
             );
