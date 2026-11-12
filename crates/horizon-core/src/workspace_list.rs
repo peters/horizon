@@ -16,11 +16,17 @@ impl Waiting {
     /// The count at the front of the status line, or `None` when no panel waits.
     #[must_use]
     pub fn line(self) -> Option<String> {
-        let parts: Vec<String> = [(self.needs_you, "need you"), (self.done, "done")]
-            .into_iter()
-            .filter(|(count, _)| *count > 0)
-            .map(|(count, words)| format!("{count} {words}"))
-            .collect();
+        let mut parts = Vec::new();
+        if self.needs_you > 0 {
+            parts.push(format!(
+                "{} {}",
+                self.needs_you,
+                if self.needs_you == 1 { "needs you" } else { "need you" }
+            ));
+        }
+        if self.done > 0 {
+            parts.push(format!("{} done", self.done));
+        }
         (!parts.is_empty()).then(|| parts.join(" \u{00B7} "))
     }
 }
@@ -239,11 +245,16 @@ mod tests {
     #[test]
     fn a_row_that_waits_starts_its_line_with_the_count_of_the_agents() {
         assert_eq!(Waiting { needs_you: 2, done: 0 }.line().as_deref(), Some("2 need you"));
-        assert_eq!(Waiting { needs_you: 1, done: 0 }.line().as_deref(), Some("1 need you"));
+        assert_eq!(
+            Waiting { needs_you: 1, done: 0 }.line().as_deref(),
+            Some("1 needs you"),
+            "one agent needs the person, so its count takes the singular verb"
+        );
         assert_eq!(Waiting { needs_you: 0, done: 1 }.line().as_deref(), Some("1 done"));
+        assert_eq!(Waiting { needs_you: 0, done: 2 }.line().as_deref(), Some("2 done"));
         assert_eq!(
             Waiting { needs_you: 1, done: 2 }.line().as_deref(),
-            Some("1 need you \u{00B7} 2 done")
+            Some("1 needs you \u{00B7} 2 done")
         );
         assert_eq!(Waiting::default().line(), None);
         let waiting = Waiting { needs_you: 2, done: 0 };

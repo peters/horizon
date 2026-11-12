@@ -125,7 +125,7 @@ section 5, and **typed** is the command of step 4.
    word.
 
    Result: the panel row says **Needs you**. The workspace row shows the filled
-   warning badge with the `!` mark and its second line starts with `1 need you`.
+   warning badge with the `!` mark and its second line starts with `1 needs you`.
 
 2. Type `answer`.
 

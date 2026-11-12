@@ -907,7 +907,7 @@ fn a_narrow_row_with_a_long_workspace_name_shows_the_agents_that_wait() {
     assert_eq!(row.attention, horizon_core::Attention::NeedsYou);
     assert_eq!(
         row.waiting.line().as_deref(),
-        Some("1 need you"),
+        Some("1 needs you"),
         "the count is the front of the line and survives the cut"
     );
 }

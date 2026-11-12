@@ -155,7 +155,7 @@ fn a_workspace_row_shows_the_heaviest_state_and_the_count_of_the_agents_that_wai
     assert_eq!(row.waiting.needs_you, 1);
     assert_eq!(row.waiting.done, 1);
     assert!(
-        row.line.starts_with("1 need you \u{00B7} 1 done"),
+        row.line.starts_with("1 needs you \u{00B7} 1 done"),
         "the count comes first: {}",
         row.line
     );
