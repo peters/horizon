@@ -1715,9 +1715,14 @@ class CardAgent:
             card.select(component)
             card.note = None
         elif file_row:
-            index = int(component.split('.', 1)[1])
+            try:
+                index = int(component.split('.', 1)[1])
+            except ValueError:
+                index = -1
             if 0 <= index < len(card.files):
                 card.file = card.files[index]
+            else:
+                card.note = f'The file {component!r} is no row of this card.'
         elif component == 'refresh':
             card.refresh()
             card.note = f'Read {len(card.worktrees)} worktree(s) again.'
