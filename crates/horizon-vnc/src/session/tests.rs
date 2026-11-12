@@ -45,13 +45,50 @@ fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), Err
     drop(session);
     assert!(closed.elapsed() < Duration::from_secs(1));
     // Drain any queued refresh requests and prove the connection was closed.
-    let mut remaining = Vec::new();
-    match stream.read_to_end(&mut remaining) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
-        Err(error) => return Err(error.into()),
-    }
+    let remaining = read_until_the_peer_closes(&mut stream, Duration::from_secs(10))?;
     assert!(remaining.as_chunks::<10>().0.iter().all(|request| request[0] == 3));
+    Ok(())
+}
+
+/// Read until the peer closes the connection, or until `bound` passes.
+///
+/// The stream carries a read timeout, and a machine that is busy makes the kernel
+/// answer that timeout with `WouldBlock` before the close of the viewer arrives
+/// (`EAGAIN` on both macOS and Linux). A timed-out read is a stream that has said
+/// nothing yet, so the bound is the wait and one timeout is not a failure.
+fn read_until_the_peer_closes(stream: &mut std::net::TcpStream, bound: Duration) -> Result<Vec<u8>, Error> {
+    let deadline = std::time::Instant::now() + bound;
+    let mut remaining = Vec::new();
+    loop {
+        match stream.read_to_end(&mut remaining) {
+            Ok(_) => return Ok(remaining),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => return Ok(remaining),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && std::time::Instant::now() < deadline => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+#[test]
+fn a_read_that_times_out_waits_for_the_close_inside_its_bound() -> Result<(), Error> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let peer = std::thread::spawn(move || {
+        let stream = std::net::TcpStream::connect(address).expect("a peer of the test");
+        // The peer says nothing for longer than one read timeout, then closes, as a
+        // viewer of a busy machine does.
+        std::thread::sleep(Duration::from_millis(300));
+        drop(stream);
+    });
+    let (mut stream, _) = listener.accept()?;
+    stream.set_read_timeout(Some(Duration::from_millis(50)))?;
+    let remaining = read_until_the_peer_closes(&mut stream, Duration::from_secs(5))?;
+    assert!(remaining.is_empty(), "nothing was sent before the close");
+    peer.join().expect("the peer of the test ended");
     Ok(())
 }
 
