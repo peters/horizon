@@ -203,9 +203,10 @@ fn work(
 /// Why the program of a notification did not show it.
 ///
 /// A program of a desktop notification tells a failure by its exit status and not
-/// by its streams: `notify-send` writes nothing and answers 1 when no notification
-/// server of the session bus takes the notification, and a warning on the standard
-/// error with the status 0 is a notification that the server showed.
+/// by its streams: `notify-send` answers 1 and writes the reason to the standard
+/// error when no notification server of the session bus takes the notification,
+/// and a warning on the standard error with the status 0 is a notification that
+/// the server showed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NotShown {
     /// The program could not be started, read or reaped.
