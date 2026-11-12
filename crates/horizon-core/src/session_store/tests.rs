@@ -396,8 +396,6 @@ fn duplicated_sessions_regenerate_browser_artifact_ids() {
     );
 }
 
-/// The returned guard removes the directory when the test ends; bind it for
-/// the whole test rather than letting it drop at the end of the statement.
 /// The most time that the writer of these tests is given for one answer.
 ///
 /// The worker writes the index of a session with a real `sync_all` before it reaches the
@@ -424,6 +422,8 @@ fn the_writer_answered(answer: &std::sync::mpsc::Receiver<Result<(), String>>, w
     }
 }
 
+/// The returned guard removes the directory when the test ends; bind it for
+/// the whole test rather than letting it drop at the end of the statement.
 fn test_root(label: &str) -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(&format!("horizon-session-store-{label}-"))
