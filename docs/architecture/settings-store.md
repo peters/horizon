@@ -305,6 +305,45 @@ press it again after installing the program of the keyring. A name of a named
 secret has no keyring entry: no older version kept one, so the Secrets tab says
 that a person types such a value once more.
 
+### The OAuth client of a network of an older build
+
+An older build kept the OAuth client of one Tailscale network in the same keyring.
+The service `horizon-cloud-tailnet-api` held the client, and the service
+`horizon-cloud-tailnets` held the enrollment auth key of the same network. The
+account of an item was the slot of its binding, or the saved local id of the
+network for an entry that a person pasted before the binding existed. The value of
+the client is one JSON document, and only this shape is read:
+
+```text
+{"kind":"oauth","client_id":"<client id>","client_secret":"<client secret>"}
+```
+
+The older build kept no tag and no name in the keyring. The name is in
+`tailnets.json` of the `cloud` folder of the same home, and the slot of a managed
+client is in `tailnet-api-bindings.json` beside it. The tag is the tag that the
+older build asked for in every token request: `tag:horizon-worker`.
+
+The tab **Remote** offers one line for each saved network whose client the keyring
+holds, and the button under it:
+
+1. The line names the three secrets of
+   [the machines recipe](../../assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md):
+   `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. `<NET>` is
+   the saved name of the network in upper case, with `A-Z`, `0-9` and `_` only, `_`
+   collapsed and at most 16 characters. Two names that become one `<NET>` take a
+   number, such as `HOME_2`.
+2. The line says which of the three names this computer holds already. A name with
+   a value is never written over.
+3. A press on **Create these secrets** reads the keyring again on a worker thread
+   and creates the missing names through the path of a value that a person typed:
+   the names enter the `secrets` section, the values enter `secrets.sqlite` under
+   `named/<NAME>`, and the link to a server sends them like any other named secret.
+
+A value that is not the shape of the older build is counted, and it becomes no
+secret. A press never guesses the client id or the client secret. Neither line
+draws a value. The two files of the older build hold names and slots
+only, and the client stays in the worker thread of the press that creates it.
+
 ### The values that have no field
 
 Two sections hold values that no field of the window edits: `workspaces[*]` and

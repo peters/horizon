@@ -28,6 +28,9 @@ Three named secrets of Horizon, in **Settings → Secrets**, each with `Add`:
 | `TS_<NET>_CLIENT_SECRET` | The client secret of the same client. The field is masked. |
 | `TS_<NET>_TAG` | The tag of the network that the machine takes, for example `tag:horizon`. |
 
+If you used the older Horizon, Settings → Remote → Import from the keyring can
+create these three secrets.
+
 The three names pass the name rule of a named secret: `A-Z`, `0-9` and `_`, the
 first character is a letter, at most 64 characters, and the name starts with no
 prefix that Horizon owns. `TS_` is free, so every name of this recipe passes the

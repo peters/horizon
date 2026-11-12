@@ -84,16 +84,19 @@ value are, where a value is allowed to go, and what it never reaches.
 
 ## Untrusted: the output of a program that reads the keyring
 
-An older version of Horizon kept a value of a remote browser provider in the
-Secret Service of Linux or in the Keychain of macOS. This version reads such a
-value once, when a person presses **Import from the keyring** in the Settings tab
-"Remote". No start reads a keyring, and no crate of this workspace opens one:
-three programs of the system answer instead.
+An older version of Horizon kept a value of a remote browser provider, and the
+OAuth client of a Tailscale network, in the Secret Service of Linux or in the
+Keychain of macOS. This version reads such a value once, when a person presses
+**Import from the keyring** in the Settings tab "Remote". No start reads a
+keyring, and no crate of this workspace opens one: three programs of the system
+answer instead.
 
 - **The output of each program is untrusted.** `secret-tool search --all
-  --unlock service horizon-remote-browser`, the `gi` binding of libsecret through
-  `python3 -I -c`, and `security find-generic-password -s horizon-remote-browser
-  -a <account> -w` each print an account name and a value. A reading is accepted
+  --unlock service <service>`, the `gi` binding of libsecret through
+  `python3 -I -c`, and `security find-generic-password -s <service> -a <account>
+  -w` each print an account name and a value. This import reads the service
+  `horizon-remote-browser`, and the services `horizon-cloud-tailnet-api` and
+  `horizon-cloud-tailnets` of an older build. A reading is accepted
   only in the exact format of its program: an item without a value, a value with a
   line break, an attribute group that does not belong to one item, or any other
   line is one typed refusal and no value is written. The text of a program never
@@ -104,6 +107,27 @@ three programs of the system answer instead.
   only through a reference that the settings name. That reference passes the
   reference rule of a secret id again before any row is written, and a settings
   file that breaks it writes no row at all.
+- **A network name comes from the older build's own catalog, never from the
+  keyring.** The import reads `tailnets.json` and `tailnet-api-bindings.json` of
+  the `cloud` folder of this home: bounded documents with the exact fields of that
+  version, whose names and slots must pass the rules of that version. A document
+  that this version cannot read is one typed refusal, and an account that no saved
+  network names becomes no secret. A `<NET>` is derived from the saved name and
+  passes the name rule of a named secret before a line is offered.
+- **The OAuth client is the only value shape that this import reads.** The value of
+  an item must be the JSON document `kind: oauth` with a bounded `client_id` and
+  `client_secret` of printable bytes. A personal token, an enrollment auth key, a
+  document with a field that the older build did not write, and a document with a
+  line break are counted as entries that this version does not use, and they
+  become no secret.
+- **A named secret of a network takes the path of a typed value.** The three names
+  enter the `secrets` section, the values enter the secrets file under
+  `named/<NAME>`, and the link to a server queues them by id. An existing name
+  keeps its value, and a click never writes over a value that a person typed.
+- **No value of a network reaches the window.** The offer of the Settings tab holds
+  the `<NET>`, the three names and the names that this computer holds. The values
+  stay in the worker thread that reads them and that creates the secrets, and no
+  `Debug` or `Display` of the import holds one.
 - **A value passes the value rule of the store.** The row is written through the
   same store path as a value that a person types, so an empty value and a value of
   more than 16 KiB are refused, and the link to a server sends the value like any
@@ -123,12 +147,20 @@ three programs of the system answer instead.
 
 What the import does not guarantee:
 
-- **It cannot tell who wrote an item.** Any program of the person, and any
+- **It cannot tell who wrote an item, nor who wrote the older catalog.** Any program of the person, and any
   process of the same user, can write an item under the service name
   `horizon-remote-browser` and the account of a reference. An import cannot tell
   such a value from the value of the older Horizon, so a value that another
   program wrote is imported when its account names a reference of these settings.
-  Review a provider whose value matters with that in mind.
+  A program of the person can also write `tailnets.json` of this home, and then the
+  name of a network and its account come from that program. The three names still
+  pass the name rule, and the value still passes the shape rule. Review a provider
+  or a network whose value matters with that in mind.
+- **It cannot prove that the tag is the tag of the client.** The third secret is
+  `tag:horizon-worker`, the tag that the older build asked for in every token
+  request and that its documentation required of the client. The import cannot read
+  the tag of a client, so a person who changed the tag of that client in Tailscale
+  reads the value of `TS_<NET>_TAG` and corrects it.
 - **It cannot tell a locked keyring from an unlocked one without the person.** An
   import unlocks an item, so the system can ask the person to unlock the keyring,
   and the question belongs to the bound of the import.

@@ -24,8 +24,9 @@ that this build removed leave a notice and no error.
   [`scripts/device-smoke`](../../../scripts/device-smoke/README.md) runs on Linux.
 - This procedure does not test: the migration of a home that no release made, and
   the panels themselves. Use the other procedures for those.
-- Step 6.8 tests the keyring import with a stand-in program that is first on the
-  `PATH` of the fixture. This procedure never opens the keyring of a person.
+- Step 6.8 and step 6.9 test the keyring import with a stand-in program that is
+  first on the `PATH` of the fixture. This procedure never opens the keyring of a
+  person.
 
 ## 3. Safety
 
@@ -324,6 +325,115 @@ that this build removed leave a notice and no error.
 
    Result: no file of the stand-in stays in the state folder.
 
+### 6.9 U09 — Check the network client of the older Horizon with a stand-in
+
+> **CAUTION:** THIS STEP NEVER OPENS THE REAL KEYRING OF A PERSON. IT RUNS A
+> STAND-IN PROGRAM THAT PRINTS A SYNTHETIC OAUTH CLIENT, AND IT KEEPS THAT PROGRAM
+> FIRST ON THE `PATH` OF THE FIXTURE ONLY. DO NOT RUN `secret-tool`, `security`,
+> `gdbus`, `busctl` OR `gnome-keyring-daemon` BY HAND FOR THIS STEP.
+
+1. Make the stand-in of the two services of the older Horizon. It answers the
+   remote browser item of step 6.8 and the OAuth client of one saved network.
+
+   ```sh
+   standin="$state/standin"
+   mkdir -p "$standin"
+   cat >"$standin/secret-tool" <<'SH'
+   #!/bin/sh
+   case "$5" in
+   horizon-cloud-tailnet-api)
+     printf '%s\n' '[/org/freedesktop/secrets/collection/login/8]'
+     printf '%s\n' 'label = keyring'
+     printf 'secret = %s\n' '{"kind":"oauth","client_id":"synthetic-client-id","client_secret":"synthetic-client-secret"}'
+     printf '%s\n' 'created = '
+     printf '%s\n' 'modified = '
+     printf '%s\n' 'attribute.service = horizon-cloud-tailnet-api' >&2
+     printf '%s\n' 'attribute.username = saved-id' >&2
+     ;;
+   horizon-remote-browser)
+     printf '%s\n' '[/org/freedesktop/secrets/collection/login/7]'
+     printf '%s\n' 'label = keyring@horizon-remote-browser'
+     printf '%s\n' 'secret = synthetic-token'
+     printf '%s\n' 'created = '
+     printf '%s\n' 'modified = '
+     printf '%s\n' 'attribute.service = horizon-remote-browser' >&2
+     printf '%s\n' 'attribute.username = https://grid.example.net|remote-browser/grid/key' >&2
+     ;;
+   esac
+   SH
+   chmod 755 "$standin/secret-tool"
+   ```
+
+   Result: `$state/standin/secret-tool` is one executable file, and it prints one
+   item for each of the two service names.
+
+2. Write the saved network of the older Horizon into the private home.
+
+   ```sh
+   mkdir -p "$state/data/home/.horizon/cloud"
+   printf '%s\n' '{"tailnets":[{"id":"saved-id","name":"Home"}]}' \
+     >"$state/data/home/.horizon/cloud/tailnets.json"
+   chmod 600 "$state/data/home/.horizon/cloud/tailnets.json"
+   ```
+
+   Result: the file holds one saved network. The candidate reads the account of a
+   client from it, and the name `Home` becomes the `<NET>` `HOME`.
+
+3. Start the candidate again with the stand-in folder first on its `PATH`, as
+   step 6.8 does.
+
+   Result: the window comes up with the settings and the board of step 6.5.
+
+4. Open **Settings → Remote** and press **Import from the keyring**.
+
+   Result: the tab says `Imported 1 value.`, and it draws one line with
+   `TS_HOME_CLIENT_ID · TS_HOME_CLIENT_SECRET · TS_HOME_TAG`. The line says
+   **No value of the three names is on this computer yet.** It draws no value.
+
+5. Press **Create these secrets**.
+
+   Result: the line says `Created 3 secrets of the network.` The button of the line
+   changes to **All three names are here**.
+
+6. Open **Settings → Secrets**.
+
+   Result: the list holds `TS_HOME_CLIENT_ID`, `TS_HOME_CLIENT_SECRET` and
+   `TS_HOME_TAG`, and each row says `Stored on this computer`.
+
+7. Read the three rows of the secrets file, and prove that the settings hold no
+   value.
+
+   ```sh
+   python3 - "$state/data/home/.horizon/secrets.sqlite" \
+     "$state/data/home/.horizon/settings.sqlite" <<'PY'
+   import sqlite3, sys
+   ids = dict(sqlite3.connect(sys.argv[1]).execute("SELECT id, body FROM secrets").fetchall())
+   print(sorted(name for name in ids if name.startswith("named/TS_HOME_")))
+   print(ids["named/TS_HOME_CLIENT_ID"], ids["named/TS_HOME_TAG"])
+   rows = dict(sqlite3.connect(sys.argv[2]).execute("SELECT section, data FROM settings").fetchall())
+   print("synthetic-client-secret" in rows["secrets"])
+   PY
+   ```
+
+   Result: the output holds the three ids `named/TS_HOME_CLIENT_ID`,
+   `named/TS_HOME_CLIENT_SECRET` and `named/TS_HOME_TAG`; the client id and the tag
+   are `synthetic-client-id` and `tag:horizon-worker`; and the last line is `False`,
+   because the values are not in the settings.
+
+8. Press **Import from the keyring** one more time.
+
+   Result: the tab says `Imported 1 value. 1 was already here.`, the line of the
+   network says that the three names are already here, and the three rows keep their
+   values.
+
+9. Close the run, and remove the stand-in folder and the saved network.
+
+   ```sh
+   rm -rf "$state/standin" "$state/data/home/.horizon/cloud"
+   ```
+
+   Result: no file of the stand-in and no saved network stay in the state folder.
+
 ## 7. Pass criteria
 
 - The candidate starts with the theme, the shortcuts, the presets and the
@@ -341,6 +451,8 @@ that this build removed leave a notice and no error.
 - The import of the keyring writes one row from a stand-in program, writes no row
   over a value that is there, and names the package of the program when that
   program is missing.
+- The import offers the three names of a saved network of the older Horizon as
+  names only, creates the three named secrets, and keeps them at a second press.
 
 ## 8. Cleanup
 
