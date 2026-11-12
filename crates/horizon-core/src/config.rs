@@ -19,8 +19,8 @@ mod server;
 mod speech;
 
 pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
-pub use presets::PresetConfig;
 use presets::default_presets;
+pub use presets::{PresetConfig, preset_named};
 pub(crate) use presets::{
     default_claude_preset, default_codex_preset, default_kilo_preset, default_opencode_preset,
     insert_missing_browser_preset, insert_missing_gemini_presets, insert_missing_grok_presets,
@@ -969,7 +969,9 @@ mod store;
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets};
+    use super::{
+        Config, FeaturesConfig, PresetConfig, config_candidates_with_env, merge_discovered_ssh_presets, preset_named,
+    };
     use crate::panel::PanelKind;
     use crate::ssh::{DiscoveredSshHost, SshConnection};
 
@@ -1025,6 +1027,31 @@ mod tests {
             1,
             "a preset already using the discovered name still wins"
         );
+    }
+
+    #[test]
+    fn a_preset_is_named_by_its_name_or_its_alias_and_by_nothing_else() {
+        let config = Config::default();
+        let presets = &config.presets;
+        let shell = presets.first().expect("a preset of the settings");
+        assert_eq!(
+            preset_named(presets, &shell.name).map(|preset| preset.name.as_str()),
+            Some(shell.name.as_str()),
+            "a preset answers its own name"
+        );
+        let aliased = presets
+            .iter()
+            .find(|preset| preset.alias.is_some())
+            .expect("a preset of the settings with an alias");
+        let alias = aliased.alias.clone().expect("an alias");
+        assert_eq!(
+            preset_named(presets, &alias).map(|preset| preset.name.as_str()),
+            Some(aliased.name.as_str()),
+            "an alias answers the preset that saves it"
+        );
+        for absent in ["", " no-such-preset", &shell.name.to_lowercase()] {
+            assert!(preset_named(presets, absent).is_none(), "{absent:?} names no preset");
+        }
     }
 
     #[test]

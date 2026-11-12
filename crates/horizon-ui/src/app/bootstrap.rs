@@ -149,7 +149,7 @@ impl HorizonApp {
             device_claim: super::device_requests::claim::DeviceClaimState::default(),
             block_claim: super::block_requests::BlockClaimState::default(),
             block_clicks: super::block_clicks::BlockClickState::default(),
-            agent_terminals: super::block_terminals::AgentTerminals::default(),
+            agent_opens: super::AgentOpens::default(),
             machine_list: empty_machine_list(session_store.home()),
             sidebar_notice: None, sidebar_notice_until: None, sidebar_sticky_notice: None,
             settings_lost: None, person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),

@@ -4,6 +4,7 @@ use horizon_browser_control::block::parse_document;
 use horizon_browser_control::manifest::block::{self, Operation, Outcome};
 use horizon_browser_control::manifest::block_keys;
 use horizon_browser_control::manifest::block_machines;
+use horizon_browser_control::manifest::block_preset;
 use horizon_browser_control::manifest::block_terminal;
 
 use super::BrowserController;
@@ -33,6 +34,9 @@ impl BrowserController {
             return Ok(refusal);
         }
         if let Some(refusal) = refused_key(&operation) {
+            return Ok(refusal);
+        }
+        if let Some(refusal) = refused_panel(&operation) {
             return Ok(refusal);
         }
         // A `next_click` holds its request open for the wait it asks for, so
@@ -73,6 +77,7 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::Visibility { .. }
         | Operation::Close { .. }
         | Operation::OpenTerminal { .. }
+        | Operation::OpenPanel { .. }
         | Operation::MachineSet { .. }
         | Operation::MachineDelete { .. }
         | Operation::Machines
@@ -162,6 +167,7 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         | Operation::Visibility { .. }
         | Operation::Close { .. }
         | Operation::OpenTerminal { key: None, .. }
+        | Operation::OpenPanel { .. }
         | Operation::MachineSet { .. }
         | Operation::MachineDelete { .. }
         | Operation::Machines
@@ -170,6 +176,21 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         }
     };
     block_keys::check_name(name)
+        .err()
+        .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
+}
+
+/// The preset name and the directory of an `open_panel`, checked before the queue
+/// holds them: a path that cannot be an absolute folder of this computer and a
+/// name that cannot be a name of the settings are refused at once, and no request
+/// file is written. The host resolves the preset itself, because the settings of
+/// the person are the only place that keeps the names.
+fn refused_panel(operation: &Operation) -> Option<Outcome> {
+    let Operation::OpenPanel { preset, directory, .. } = operation else {
+        return None;
+    };
+    block_preset::check_name(preset)
+        .and_then(|_| block_preset::check_directory(directory))
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }

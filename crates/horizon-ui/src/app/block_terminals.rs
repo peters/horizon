@@ -58,7 +58,7 @@ impl HorizonApp {
         owner: &str,
         ctx: &Context,
     ) -> block::Outcome {
-        if !self.agent_terminals.allows(owner) {
+        if !self.agent_opens.terminals.allows(owner) {
             return block::Outcome::failed(
                 "too_many_terminals",
                 &format!(
@@ -72,15 +72,12 @@ impl HorizonApp {
             |key| SshConnection::for_agent_terminal_with_key(terminal, key),
         );
         let name = title.map_or_else(|| connection.display_label(), BlockPanelState::normalize_title);
-        let agent_name = self
-            .board
-            .panel(actor.panel_id)
-            .map_or("Agent", |panel| panel.kind.display_name());
+        let agent_name = self.opener_mark(actor);
         let options = PanelOptions {
             kind: PanelKind::Ssh,
             name: Some(name),
             ssh_connection: Some(connection),
-            opened_by: Some(agent_name.to_owned()),
+            opened_by: Some(agent_name),
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
@@ -95,7 +92,7 @@ impl HorizonApp {
         if let Some(focused) = focused {
             self.board.focus(focused);
         }
-        self.agent_terminals.record(owner);
+        self.agent_opens.terminals.record(owner);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         let Some(panel) = self.board.panel(id) else {

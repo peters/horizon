@@ -67,7 +67,7 @@ pub use config::{
     DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig, MAX_LANGUAGE_CHARS,
     OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig, TerminalConfig,
     TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_host, browser_mcp_args,
-    configure_browser_host, configure_server, language_hint, server,
+    configure_browser_host, configure_server, language_hint, preset_named, server,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

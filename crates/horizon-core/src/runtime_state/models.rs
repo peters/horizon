@@ -149,7 +149,8 @@ pub struct PanelState {
     pub block: Option<crate::BlockPanelState>,
     /// The agent that opened this panel for the person in its workspace, as
     /// Horizon names that agent, so the titlebar can mark it after a restart.
-    /// Only `open_terminal` sets it; a panel the person made keeps `None`.
+    /// Only `open_terminal` and `open_panel` set it; a panel the person made
+    /// keeps `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<String>,
     /// The machine of Horizon's machine list that this terminal connects to, so

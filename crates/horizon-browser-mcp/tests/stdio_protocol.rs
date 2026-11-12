@@ -248,6 +248,7 @@ fn assert_block_panel_contract(tools: &Value) {
         "visibility",
         "close",
         "open_terminal",
+        "open_panel",
         "machine_key",
         "machine_keys",
         "delete_machine_key",
@@ -256,6 +257,8 @@ fn assert_block_panel_contract(tools: &Value) {
     }
     for key_field in [
         "remote_command",
+        "preset",
+        "directory",
         "ssh",
         "key",
         "public_key",

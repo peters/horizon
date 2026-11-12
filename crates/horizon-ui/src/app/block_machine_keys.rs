@@ -121,11 +121,11 @@ impl HorizonApp {
         let name = asked.key.to_owned();
         let (root, request, ctx) = (root.map(Path::to_path_buf), request.clone(), ctx.clone());
         let opening = ctx.clone();
-        self.block_claim.key_job_started();
+        self.block_claim.worker_job_started();
         self.browser_create_host.io.then(
             move || keys.require(&name),
             move |app, required| {
-                app.block_claim.key_job_finished();
+                app.block_claim.worker_job_finished();
                 let outcome = match app.request_caller(&request) {
                     Err(refusal) => refusal,
                     Ok(actor) => match required {
@@ -153,9 +153,9 @@ impl HorizonApp {
     ) {
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let writing = ctx.clone();
-        self.block_claim.key_job_started();
+        self.block_claim.worker_job_started();
         self.browser_create_host.io.then(work, move |app, outcome| {
-            app.block_claim.key_job_finished();
+            app.block_claim.worker_job_finished();
             let outcome = outcome.unwrap_or_else(stopped);
             app.write_block_answer(BlockAnswer::new(root.as_deref(), request, outcome));
             writing.request_repaint();

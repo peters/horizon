@@ -42,6 +42,7 @@ mod audit;
 pub mod block;
 pub mod block_keys;
 pub mod block_machines;
+pub mod block_preset;
 pub mod block_terminal;
 mod capture;
 mod close;

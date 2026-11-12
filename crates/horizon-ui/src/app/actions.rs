@@ -1,7 +1,7 @@
 mod command_palette;
 mod interaction;
 mod layout;
-mod panels;
+pub(in crate::app) mod panels;
 mod pickers;
 mod search;
 pub(in crate::app) mod support;

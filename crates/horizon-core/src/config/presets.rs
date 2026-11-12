@@ -51,6 +51,18 @@ impl PresetConfig {
     }
 }
 
+/// The preset of `presets` whose name or alias is exactly `name`.
+///
+/// A preset of the settings is the one thing that Horizon runs for an agent that
+/// asks for a panel of it: the match is exact and never a prefix or a substring,
+/// so a name that a person did not save opens nothing.
+#[must_use]
+pub fn preset_named<'a>(presets: &'a [PresetConfig], name: &str) -> Option<&'a PresetConfig> {
+    presets
+        .iter()
+        .find(|preset| preset.name == name || preset.alias.as_deref() == Some(name))
+}
+
 pub(crate) fn default_opencode_presets() -> [PresetConfig; 1] {
     [default_opencode_preset()]
 }

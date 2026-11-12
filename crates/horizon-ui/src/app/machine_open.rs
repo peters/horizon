@@ -46,7 +46,7 @@ impl HorizonApp {
                 return;
             }
         };
-        if !self.agent_terminals.allows(&request.actor) {
+        if !self.agent_opens.terminals.allows(&request.actor) {
             self.answer_machine_now(
                 root,
                 request,
@@ -71,11 +71,11 @@ impl HorizonApp {
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let (writing, owner, workspace) = (ctx.clone(), request.actor.clone(), actor.workspace_id);
         let key = self.machine_list.key(name.as_str()).map(str::to_owned);
-        self.block_claim.key_job_started();
+        self.block_claim.worker_job_started();
         self.browser_create_host.io.then(
             move || required_key(&keys, key.as_deref()),
             move |app, required| {
-                app.block_claim.key_job_finished();
+                app.block_claim.worker_job_finished();
                 let outcome = match required {
                     None => stopped(),
                     Some(Err(error)) => super::block_machines::refused(&error),
@@ -93,7 +93,7 @@ impl HorizonApp {
                                 if let Some(focused) = focused {
                                     app.board.focus(focused);
                                 }
-                                app.agent_terminals.record(&owner);
+                                app.agent_opens.terminals.record(&owner);
                                 block::Outcome::Opened { panel_id }
                             }
                             Err(error) => {

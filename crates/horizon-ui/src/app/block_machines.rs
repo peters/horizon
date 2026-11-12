@@ -213,7 +213,7 @@ impl HorizonApp {
         let server = self.server_sync.as_ref().map(|sync| sync.state_code().to_owned());
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let writing = ctx.clone();
-        self.block_claim.key_job_started();
+        self.block_claim.worker_job_started();
         self.browser_create_host.io.then(
             move || {
                 keys.list().map(|keys| {
@@ -223,7 +223,7 @@ impl HorizonApp {
                 })
             },
             move |app, listed| {
-                app.block_claim.key_job_finished();
+                app.block_claim.worker_job_finished();
                 let outcome = match listed {
                     Some(Ok(present)) => {
                         for summary in &mut summaries {
@@ -335,9 +335,9 @@ impl HorizonApp {
     ) {
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let writing = ctx.clone();
-        self.block_claim.key_job_started();
+        self.block_claim.worker_job_started();
         self.browser_create_host.io.then(work, move |app, worked| {
-            app.block_claim.key_job_finished();
+            app.block_claim.worker_job_finished();
             let outcome = match worked {
                 Some(worked) => answer(app, worked),
                 None => stopped(),

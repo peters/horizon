@@ -19,7 +19,7 @@ fn asks_where_to_run(runs_here: bool, has_directory: bool, needs_directory: bool
 /// preset only governs how existing panels reconnect when they are restored.
 /// Continue-style agents (`KiloCode`) keep `last` on the panel because their
 /// reconnect flag is applied only on restore, not on the initial launch.
-fn normalize_new_panel_resume(options: &mut PanelOptions) {
+pub(in crate::app) fn normalize_new_panel_resume(options: &mut PanelOptions) {
     if options.kind.supports_session_binding() && matches!(options.resume, PanelResume::Last) {
         options.resume = PanelResume::Fresh;
     }

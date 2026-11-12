@@ -5,13 +5,14 @@
 //! `close` around it. A person's clicks on the card reach its owner through
 //! `next_click`, a request the host keeps open until a click arrives or the
 //! wait ends. `open_terminal` asks for an SSH terminal instead of a card, which
-//! the host opens for the person beside the calling agent panel, and
-//! `machine_key`, `machine_keys` and `delete_machine_key` keep the SSH key pairs
-//! that such a terminal connects with. A request travels the path of a Device
-//! panel request: a bounded file under `runtime/block-panel-requests`, claimed
-//! by this host's UI on the coordination worker, applied on the UI thread, and
-//! answered with one result file that only the asking actor and its host
-//! consume.
+//! the host opens for the person beside the calling agent panel, `open_panel`
+//! asks for a panel of one preset of the person's settings in a folder that the
+//! caller names, and `machine_key`, `machine_keys` and `delete_machine_key` keep
+//! the SSH key pairs that such a terminal connects with. A request travels the
+//! path of a Device panel request: a bounded file under
+//! `runtime/block-panel-requests`, claimed by this host's UI on the coordination
+//! worker, applied on the UI thread, and answered with one result file that only
+//! the asking actor and its host consume.
 //!
 //! The document is untrusted text from an agent that Horizon draws in a
 //! person's workspace, so the UI validates every document again before it
@@ -127,6 +128,25 @@ pub enum Operation {
         /// machine row in the sidebar opens the same panel.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+    },
+    /// Open a panel of a preset of the person's settings beside the caller, in
+    /// the caller's workspace, without taking keyboard focus. Horizon takes the
+    /// command, the arguments and the kind from the preset, so the caller adds
+    /// no command, no argument and no environment. A preset of a kind that runs
+    /// no local program, such as a browser page, a Device viewer, a card or an
+    /// SSH terminal, is refused.
+    OpenPanel {
+        /// The name or the alias of a preset of the settings, exactly. A name
+        /// that this Horizon does not keep is `unknown_preset`, and the answer
+        /// lists the names of the presets.
+        preset: String,
+        /// The absolute folder that the panel runs in, at most 1 024 bytes. It
+        /// must be a directory of this computer, and the caller chose it.
+        directory: String,
+        /// One line, at most 80 characters; the host trims it. Defaults to the
+        /// name of the preset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
     },
     /// Add or replace one machine of this Horizon: its name, SSH route, key, tmux
     /// session and the provider line that the caller read. The record belongs
@@ -298,7 +318,7 @@ pub enum Outcome {
     Closed {
         panel_id: String,
     },
-    /// An SSH terminal panel that the caller now has in its workspace.
+    /// One panel of a preset that the caller now has in its workspace.
     Opened {
         panel_id: String,
     },
@@ -724,6 +744,14 @@ mod tests {
                 }),
                 "open_terminal",
             ),
+            (
+                serde_json::json!({
+                    "operation": "open_panel",
+                    "preset": "Claude Code",
+                    "directory": "/home/person/work"
+                }),
+                "open_panel",
+            ),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -735,6 +763,7 @@ mod tests {
                 Operation::Visibility { .. } => "visibility",
                 Operation::Close { .. } => "close",
                 Operation::OpenTerminal { .. } => "open_terminal",
+                Operation::OpenPanel { .. } => "open_panel",
                 Operation::MachineSet { .. } => "machine_set",
                 Operation::MachineDelete { .. } => "machine_delete",
                 Operation::Machines => "machines",

@@ -5,6 +5,7 @@ mod block_clicks;
 mod block_links;
 mod block_machine_keys;
 mod block_machines;
+mod block_panels;
 mod block_requests;
 mod block_terminals;
 mod board_notice;
@@ -128,6 +129,15 @@ const WS_LABEL_MIN_WIDTH: f32 = 110.0;
 const WS_LABEL_MAX_WIDTH: f32 = 260.0;
 const MINIMAP_MARGIN: f32 = 16.0;
 const MINIMAP_PAD: f32 = 6.0;
+
+/// The panels that agent panels opened for the person in this Horizon run: the
+/// SSH terminals of `open_terminal` and the panels of a preset of `open_panel`.
+/// Each kind has its own bound, and both hold for the whole run.
+#[derive(Default)]
+pub(in crate::app) struct AgentOpens {
+    pub(in crate::app) terminals: block_terminals::AgentTerminals,
+    pub(in crate::app) panels: block_panels::AgentPanels,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum RenameEditAction {
@@ -286,9 +296,9 @@ pub struct HorizonApp {
     /// The `next_click` waits this host holds open, and the last wake line to
     /// each agent panel. It lives here for the same reason as `block_claim`.
     pub(in crate::app) block_clicks: block_clicks::BlockClickState,
-    /// The SSH terminals each agent panel opened for the person in this run,
-    /// bounded per agent. It lives here for the same reason as `block_claim`.
-    pub(in crate::app) agent_terminals: block_terminals::AgentTerminals,
+    /// The panels each agent panel opened for the person in this run, bounded per
+    /// agent. It lives here for the same reason as `block_claim`.
+    pub(in crate::app) agent_opens: AgentOpens,
     /// The machines that agents registered with this Horizon, read from its home
     /// on the coordination worker. The list belongs to the person, so it
     /// outlives a session and a workspace.

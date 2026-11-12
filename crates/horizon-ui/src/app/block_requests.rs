@@ -59,10 +59,10 @@ pub(in crate::app) struct BlockClaimState {
     pub(in crate::app) claimed: Vec<ClaimedBlockRequest>,
     /// Answers queued on the coordination worker whose outcome did not apply.
     writing: usize,
-    /// Key jobs of the coordination worker whose answer no frame wrote yet. A
-    /// key job does file work and starts `ssh-keygen`, so the frame that queued
-    /// it answers nothing, and the request pump must keep waking for the answer.
-    key_jobs: usize,
+    /// Jobs of the coordination worker whose answer no frame wrote yet. Such a
+    /// job reads a file or starts `ssh-keygen`, so the frame that queued it
+    /// answers nothing, and the request pump must keep waking for the answer.
+    worker_jobs: usize,
     /// Answers the worker could not write, for a later frame or pump wake and
     /// until each request's deadline.
     refused: RefusedAnswers<BlockAnswer>,
@@ -72,17 +72,21 @@ impl BlockClaimState {
     /// Whether a claim runs, a request it took waits, or an answer is not yet
     /// written: each needs a later frame or pump wake to settle.
     fn outstanding(&self) -> bool {
-        self.claiming || !self.claimed.is_empty() || self.writing > 0 || self.key_jobs > 0 || !self.refused.is_empty()
+        self.claiming
+            || !self.claimed.is_empty()
+            || self.writing > 0
+            || self.worker_jobs > 0
+            || !self.refused.is_empty()
     }
 
-    /// Counts one key job whose answer a later wake writes.
-    pub(in crate::app) fn key_job_started(&mut self) {
-        self.key_jobs += 1;
+    /// Counts one worker job whose answer a later wake writes.
+    pub(in crate::app) fn worker_job_started(&mut self) {
+        self.worker_jobs += 1;
     }
 
-    /// Counts one key job that answered, or that ended before it answered.
-    pub(in crate::app) fn key_job_finished(&mut self) {
-        self.key_jobs = self.key_jobs.saturating_sub(1);
+    /// Counts one worker job that answered, or that ended before it answered.
+    pub(in crate::app) fn worker_job_finished(&mut self) {
+        self.worker_jobs = self.worker_jobs.saturating_sub(1);
     }
 }
 
@@ -192,6 +196,20 @@ impl HorizonApp {
                     machine: machine.as_deref(),
                 },
                 actor,
+                request,
+                root,
+                ctx,
+            ),
+            Operation::OpenPanel {
+                preset,
+                directory,
+                title,
+            } => self.answer_open_panel(
+                &super::block_panels::OpenPanelFields {
+                    preset,
+                    directory,
+                    title: title.as_deref(),
+                },
                 request,
                 root,
                 ctx,
@@ -324,6 +342,15 @@ impl HorizonApp {
                 "The calling agent panel is no longer in this host",
             )
         })
+    }
+
+    /// The mark of a panel that an agent panel opened: the display name of the
+    /// kind of that panel, which is Horizon's own text and never a string of the
+    /// request.
+    pub(super) fn opener_mark(&self, actor: ActorPanel) -> String {
+        self.board
+            .panel(actor.panel_id)
+            .map_or_else(|| "Agent".to_owned(), |panel| panel.kind.display_name().to_owned())
     }
 
     /// The cards of one workspace as `list` reports them.
