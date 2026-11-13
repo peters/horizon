@@ -69,7 +69,7 @@ One input action writes up to four lines:
 | `latency action` | The first picture after one input was written: the times from the UI event to the handoff to the UI, the size of that picture, its decode time, and whether the ack left before or after it. |
 | `latency frame` | Every picture, with its bytes, its size and its decode time. |
 | `latency paint` | The frame that applied a picture to a texture, so the last hop of the same action is measurable. |
-| `latency stall` | A driver pass that blocked on the protocol for more than 50 ms, with the name of the command that it waited for. |
+| `latency stall` | A driver pass that blocked for more than 50 ms, with the name of the largest wait of that pass. |
 | `latency picture` | The first picture of a session, with the rect of the body, the size of the picture and the rect that the window painted. A picture that does not fill the body is one of these two: a session that the panel has not resized yet, or a body rect that is not the rect of the panel. |
 
 The times of these lines are microseconds from the UI event of the action, as
@@ -79,6 +79,28 @@ because it answers a question of geometry and not a question of time.
 A page that never reaches the size of the panel is asked for it again at a slow
 rate, one command every two seconds, so the picture and the input mapping come
 back without a manual resize of the panel.
+
+### What the `latency stall` line names
+
+The line carries the largest wait of the pass, and every blocking step of a pass
+names itself:
+
+| Name | The wait |
+|---|---|
+| a CDP command, such as `Page.captureScreenshot` | The protocol owed that answer. The line names the command itself. |
+| `drain-commands` | The channel of the commands of the window, and the work of the commands that it held. |
+| `cdp-read` | One socket read of the protocol, with its timeout. |
+| `http-bodies` | The response body that the page asked for. |
+| `file-chooser`, `passkeys` | The dialog state and the passkey state of the page. |
+| `manifest-write`, `audit-write` | A file write of the manifest or of the journal of the panel. |
+| `title-fetch`, `viewport-resize`, `scrollbar-layout`, `screencast-restart` | The CDP calls of those steps. |
+| `chrome-liveness`, `agent-signals`, `pending-requests` | The process check, the signals of an agent, and the requests that wait. |
+| `idle-wait` | The wait for the next command at the end of a pass. |
+
+The wait of `idle-wait` ends as soon as a command arrives, so the line shows it
+only when a command came late. The read of the protocol has a bound of 4 ms and
+the wait behind it a bound of 12 ms: an input that arrives while the page is
+quiet reaches the socket within one frame.
 
 ## 4. Compare two runs
 

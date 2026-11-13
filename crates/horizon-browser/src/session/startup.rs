@@ -138,7 +138,7 @@ fn initialize_driver(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let link = match CdpLink::connect(&ws_url) {
+    let link = match CdpLink::connect_with_timeout(&ws_url, super::DRIVER_READ_TIMEOUT) {
         Ok(link) => link,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connect failed: {error}")));
@@ -181,7 +181,7 @@ fn initialize_attached(
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let link = match CdpLink::connect(&ws_url) {
+    let link = match CdpLink::connect_with_timeout(&ws_url, super::DRIVER_READ_TIMEOUT) {
         Ok(link) => link,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connect failed: {error}")));

@@ -115,7 +115,10 @@ impl DriverState {
             BrowserAuditStatus::Completed,
             action,
         );
-        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+        let audit = crate::latency::step("audit-write");
+        let recorded = coordination.record_action(&self.config.panel_local_id, &entry);
+        drop(audit);
+        if let Err(error) = recorded {
             tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
         }
     }
@@ -132,7 +135,10 @@ impl DriverState {
             status,
             BrowserAuditAction::from_control(&request.action),
         );
-        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+        let audit = crate::latency::step("audit-write");
+        let recorded = coordination.record_action(&self.config.panel_local_id, &entry);
+        drop(audit);
+        if let Err(error) = recorded {
             tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
         }
     }
@@ -172,7 +178,10 @@ impl DriverState {
             return;
         };
         let entry = BrowserAuditEntry::new(action_id, actor, status, BrowserAuditAction::from_command(command));
-        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+        let audit = crate::latency::step("audit-write");
+        let recorded = coordination.record_action(&self.config.panel_local_id, &entry);
+        drop(audit);
+        if let Err(error) = recorded {
             tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
         }
     }

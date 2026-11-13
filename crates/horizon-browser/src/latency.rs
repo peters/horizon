@@ -19,9 +19,12 @@
 //! - `latency frame`: every picture, with its bytes, size and decode time.
 //! - `latency paint`: the egui frame that applied a picture to a texture, so the
 //!   last hop of the same action is measurable.
-//! - `latency stall`: a driver pass that blocked on the protocol, with the name
-//!   of the command it waited for.
+//! - `latency stall`: a driver pass that blocked, with the name of the largest
+//!   wait of that pass: the command that the protocol owed, a socket read with
+//!   its timeout, a sleep, a lock, the channel of the commands, the journal or
+//!   audit write, or a file write.
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
@@ -301,15 +304,84 @@ pub(crate) fn stall_fields(pass: Duration, waited: Option<(&str, Duration)>) -> 
     format!("pass_us={} waited={method} waited_us={waited_us}", micros_of(pass))
 }
 
-/// A pass that blocked on the protocol says so, with the command it waited for.
+thread_local! {
+    /// The largest wait of the pass that runs on this thread, with the name of the
+    /// step that waited it.
+    static PASS_WAIT: RefCell<Option<(&'static str, Duration)>> = const { RefCell::new(None) };
+}
+
+/// One blocking step of a driver pass, timed while this guard lives.
+///
+/// A step names itself and nothing else: [`report_blocked_pass`] writes the name of
+/// the largest one, so one line answers why a pass took its time without a second
+/// switch and without a second line. The switch off costs one load and no clock
+/// read.
+#[derive(Debug)]
+#[must_use = "a step is timed while this guard lives"]
+pub(crate) struct Step {
+    name: &'static str,
+    started: Option<Instant>,
+}
+
+/// Times one blocking step of a driver pass as `name`.
+pub(crate) fn step(name: &'static str) -> Step {
+    Step {
+        name,
+        started: enabled().then(Instant::now),
+    }
+}
+
+impl Drop for Step {
+    fn drop(&mut self) {
+        let Some(started) = self.started else {
+            return;
+        };
+        let elapsed = started.elapsed();
+        PASS_WAIT.with(|pass| {
+            let mut pass = pass.borrow_mut();
+            if pass.is_none_or(|(_, largest)| elapsed > largest) {
+                *pass = Some((self.name, elapsed));
+            }
+        });
+    }
+}
+
+/// The largest wait of the pass that just ended, and forget it.
+pub(crate) fn take_pass_wait() -> Option<(&'static str, Duration)> {
+    PASS_WAIT.with(|pass| pass.borrow_mut().take())
+}
+
+/// The larger of two waits of one pass.
+fn largest(left: Option<(String, Duration)>, right: Option<(&'static str, Duration)>) -> Option<(String, Duration)> {
+    match (left, right) {
+        (Some((left_name, left_waited)), Some((right_name, right_waited))) => {
+            if right_waited > left_waited {
+                Some((right_name.to_owned(), right_waited))
+            } else {
+                Some((left_name, left_waited))
+            }
+        }
+        (Some(left), None) => Some(left),
+        (None, Some((name, waited))) => Some((name.to_owned(), waited)),
+        (None, None) => None,
+    }
+}
+
+/// A pass that blocked says so, with the name of the largest wait of that pass.
+///
+/// The steps of the pass name themselves, and a CDP roundtrip names the command
+/// that the protocol owed. The line carries the larger of the two, so a pass that
+/// waited 200 ms for a screenshot names that command and not the step around it.
 pub(crate) fn report_blocked_pass(link: &mut crate::cdp::CdpLink, pass_started: Instant) {
+    let from_link = link.take_blocking_call();
+    let from_steps = take_pass_wait();
     if !enabled() {
         return;
     }
-    let waited = link.take_blocking_call();
+    let waited = largest(from_link, from_steps);
     stall(
         pass_started.elapsed(),
-        waited.as_ref().map(|(method, waited)| (method.as_str(), *waited)),
+        waited.as_ref().map(|(name, waited)| (name.as_str(), *waited)),
     );
 }
 
@@ -337,6 +409,16 @@ fn ack_placement(before_decode: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The switch is one `static` of this process, so the tests that turn it on
+    /// take this lock and no other test flips it under them.
+    static SWITCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn switch(on: bool) -> std::sync::MutexGuard<'static, ()> {
+        let guard = SWITCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        force_for_tests(on);
+        guard
+    }
 
     fn action_at(started: Instant) -> Action {
         let mut action = Action::new(1);
@@ -434,7 +516,7 @@ mod tests {
 
     #[test]
     fn one_action_produces_its_line_from_the_event_to_the_handed_picture() {
-        force_for_tests(true);
+        let _switch = switch(true);
         let mut probe = Probe::default();
         probe.queued();
         let action = probe.taken().expect("the driver takes the queued action");
@@ -482,14 +564,69 @@ mod tests {
                 .any(|line| line.starts_with("latency paint seq=3 action=1")),
             "{lines:?}"
         );
-        force_for_tests(false);
+    }
+
+    /// Every blocking step of a pass names itself, and the line names the largest
+    /// of them: one line answers why a pass took its time.
+    #[test]
+    fn a_pass_that_waits_in_each_step_writes_the_largest_name() {
+        let _switch = switch(true);
+        for (name, waited) in [
+            ("drain-commands", Duration::from_millis(1)),
+            ("cdp-read", Duration::from_millis(12)),
+            ("idle-wait", Duration::from_millis(3)),
+            ("manifest-write", Duration::from_millis(8)),
+        ] {
+            {
+                let _step = step(name);
+                std::thread::sleep(waited);
+            }
+            let pass = take_pass_wait().expect("a step of this pass named itself");
+            assert_eq!(pass.0, name, "the step that waited the longest names the pass");
+        }
+        // The ledger is empty again, so a pass without a wait names nothing.
+        assert!(take_pass_wait().is_none(), "one pass reports one wait");
+    }
+
+    /// A CDP roundtrip names the command that the protocol owed, and the larger of
+    /// that wait and the step around it is the one the line carries.
+    #[test]
+    fn the_awaited_command_wins_the_line_when_it_waited_longer() {
+        let from_link = Some(("Page.captureScreenshot".to_owned(), Duration::from_millis(180)));
+        let from_steps = Some(("viewport-resize", Duration::from_millis(6)));
+        let waited = largest(from_link, from_steps).expect("one wait");
+        assert_eq!(waited.0, "Page.captureScreenshot");
+        assert_eq!(waited.1, Duration::from_millis(180));
+        assert_eq!(
+            stall_fields(Duration::from_millis(200), Some((waited.0.as_str(), waited.1))),
+            "pass_us=200000 waited=Page.captureScreenshot waited_us=180000"
+        );
+
+        // A step that waited longer is the one the person must see.
+        let waited = largest(
+            Some(("Input.dispatchMouseEvent".to_owned(), Duration::from_millis(3))),
+            Some(("manifest-write", Duration::from_millis(90))),
+        )
+        .expect("one wait");
+        assert_eq!(waited.0, "manifest-write");
+
+        assert!(largest(None, None).is_none(), "a pass that did not wait names nothing");
+    }
+
+    /// The idle loop waits on the channel of the commands, and the read that comes
+    /// before it is shorter than one frame, so an input which arrives while the page
+    /// is quiet reaches the socket within a frame.
+    #[test]
+    fn a_quiet_page_waits_on_the_commands_and_not_on_a_sleep() {
+        assert!(super::super::session::DRIVER_READ_TIMEOUT < Duration::from_millis(5));
+        assert!(
+            super::super::session::DRIVER_READ_TIMEOUT + super::super::session::IDLE_WAIT <= Duration::from_millis(16)
+        );
     }
 
     #[test]
     fn a_disabled_probe_records_nothing_at_all() {
-        if enabled() {
-            return;
-        }
+        let _switch = switch(false);
         let mut probe = Probe::default();
         probe.queued();
         assert!(probe.taken().is_none(), "the switch is off: nothing is timed");

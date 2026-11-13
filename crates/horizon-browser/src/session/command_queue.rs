@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use crate::frames::FrameSlot;
 
@@ -15,11 +16,13 @@ struct QueueState {
 
 pub(super) struct CommandSender {
     state: Arc<Mutex<QueueState>>,
+    ready: Arc<Condvar>,
     frame_slot: Arc<FrameSlot>,
 }
 
 pub(crate) struct CommandReceiver {
     state: Arc<Mutex<QueueState>>,
+    ready: Arc<Condvar>,
 }
 
 pub(crate) struct CommandBatch {
@@ -33,12 +36,14 @@ pub(super) fn channel(frame_slot: Arc<FrameSlot>) -> (CommandSender, CommandRece
         sender_open: true,
         receiver_open: true,
     }));
+    let ready = Arc::new(Condvar::new());
     (
         CommandSender {
             state: Arc::clone(&state),
+            ready: Arc::clone(&ready),
             frame_slot,
         },
-        CommandReceiver { state },
+        CommandReceiver { state, ready },
     )
 }
 
@@ -72,6 +77,9 @@ impl CommandSender {
             }
         }
         state.commands.push_back(command);
+        // The driver waits on this queue between its passes, so a command that
+        // arrives then is taken at once instead of at the end of a fixed sleep.
+        self.ready.notify_one();
         true
     }
 
@@ -103,6 +111,25 @@ impl Drop for CommandReceiver {
 }
 
 impl CommandReceiver {
+    /// Waits until a command arrives or `bound` passes, and answers whether a
+    /// command waits now.
+    ///
+    /// The driver calls this at the end of a pass, where a fixed sleep used to
+    /// hold it: an input that arrives during this wait is taken at once, so the
+    /// time from the event to the socket is the time of the next pass and not the
+    /// rest of a sleep.
+    pub(crate) fn wait_for(&self, bound: Duration) -> bool {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.commands.is_empty() || !state.sender_open {
+            return !state.commands.is_empty();
+        }
+        let (state, _) = self
+            .ready
+            .wait_timeout_while(state, bound, |state| state.commands.is_empty() && state.sender_open)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !state.commands.is_empty()
+    }
+
     pub(crate) fn drain(&self, limit: usize) -> CommandBatch {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let take = limit.min(state.commands.len());
@@ -479,5 +506,46 @@ mod tests {
         assert!(!sender.receiver_connected());
         assert!(!sender.send(BrowserCommand::Reload));
         assert_eq!(frame_slot.metrics().commands_rejected, 0);
+    }
+
+    /// The idle driver waits on this queue, so an input that arrives during the
+    /// wait is taken at once and not at the end of a fixed sleep.
+    #[test]
+    fn an_input_that_arrives_during_the_wait_wakes_the_driver_within_five_milliseconds() {
+        let (sender, receiver) = channel(Arc::new(FrameSlot::new()));
+        assert!(
+            !receiver.wait_for(std::time::Duration::from_millis(2)),
+            "a quiet queue waits its bound"
+        );
+        let (sent_tx, sent_rx) = std::sync::mpsc::channel();
+        let sending = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            sent_tx
+                .send(std::time::Instant::now())
+                .expect("the instant of the input");
+            assert!(
+                sender.send(BrowserCommand::Input(BrowserInput::Wheel {
+                    x: 1.0,
+                    y: 2.0,
+                    delta_x: 0.0,
+                    delta_y: 3.0,
+                    modifiers: BrowserModifiers::default(),
+                })),
+                "the input of the person entered the queue"
+            );
+        });
+        assert!(
+            receiver.wait_for(std::time::Duration::from_secs(2)),
+            "the input woke the wait"
+        );
+        let woke = std::time::Instant::now();
+        let sent = sent_rx.recv().expect("the instant of the input");
+        assert!(
+            woke.saturating_duration_since(sent) < std::time::Duration::from_millis(5),
+            "the wait wakes on the input and does not sleep its bound: {:?}",
+            woke.saturating_duration_since(sent)
+        );
+        sending.join().expect("the thread of the input");
+        assert_eq!(receiver.drain(8).commands.len(), 1, "the input is taken once");
     }
 }
