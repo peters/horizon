@@ -208,7 +208,7 @@ impl HorizonApp {
         let outcome = if id == APPLY {
             self.apply_setting(&waiting, ctx)
         } else {
-            outcome_of(&waiting.asked, Answer::Declined)
+            unconfirmed_outcome(&waiting.asked, Answer::Declined)
         };
         self.remove_setting_card(&waiting, ctx);
         self.write_block_answer(BlockAnswer::new(waiting.root.as_deref(), waiting.request, outcome));
@@ -321,7 +321,7 @@ impl HorizonApp {
         self.write_block_answer(BlockAnswer::new(
             waiting.root.as_deref(),
             waiting.request,
-            outcome_of(&waiting.asked, Answer::TimedOut),
+            unconfirmed_outcome(&waiting.asked, Answer::TimedOut),
         ));
         self.mark_runtime_dirty();
         ctx.request_repaint();
@@ -329,14 +329,12 @@ impl HorizonApp {
     }
 }
 
-/// The answer of one setting request for the person's answer.
-fn outcome_of(asked: &Asked, answer: Answer) -> Outcome {
+/// The answer of a setting request that no press confirmed. A confirmed request
+/// writes the setting first and builds its own answer, so the link of the running
+/// program is never claimed here.
+fn unconfirmed_outcome(asked: &Asked, answer: Answer) -> Outcome {
     match asked {
-        Asked::ServerLink { .. } => Outcome::ServerLink {
-            answer,
-            // The link of the running program follows a confirmed entry now.
-            start: (answer == Answer::Confirmed).then_some(EntryStart::Linked),
-        },
+        Asked::ServerLink { .. } => Outcome::ServerLink { answer, start: None },
         Asked::BrowserHost { .. } => Outcome::BrowserHost { answer },
     }
 }
