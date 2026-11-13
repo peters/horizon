@@ -35,10 +35,13 @@ hcloud server-type list -o noheader -o columns=name,cores,memory,disk,architectu
 hcloud image list -t system -o noheader -o columns=name,os_flavor,os_version,architecture
 ```
 
-Region: `name`, for example `hel1`. Type: the cheapest that `location_available`
-names for that region, because `location` only says it is offered there. Image: the
-newest Ubuntu LTS `name` with `os_flavor=ubuntu`, for example `ubuntu-24.04`. The
-columns carry no price, and no column names a GPU.
+Region: `name`, for example `hel1`. Type: the cheapest x86 type with shared
+cores that `location_available` names for that region and that holds the cores and
+the memory of the size, because `location` only says that the type is offered
+there: `cores` and `memory` of this list decide Small, Medium and Large, and the
+row of the card names the type with both values. Image: the newest Ubuntu LTS
+`name` with `os_flavor=ubuntu`, for example `ubuntu-24.04`. The columns carry no
+price, and no column names a GPU: a GPU type belongs to a person who asks for one.
 
 ## 3. Rent
 

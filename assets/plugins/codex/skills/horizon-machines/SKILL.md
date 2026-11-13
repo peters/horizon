@@ -159,6 +159,14 @@ most 8 rows under the caption `Size`, and put the list price of each type in its
 `0.0079 EUR / hour`. A type whose price the CLI does not answer holds
 `price not read`. The click carries the chosen rows in `selected`.
 
+A row names the type, its true cores and its memory, as the provider answered
+them, and never only what the name of the row suggests: `cpx21, 3 vCPU, 4 GB`
+says what the machine is. When the person takes a size of Set up, Small is the
+cheapest x86 type with shared cores that holds at least 2 vCPU and 4 GB, Medium
+at least 4 vCPU and 8 GB, and Large at least 8 vCPU and 16 GB. A size that the
+place does not offer is a row with `disabled: true` that names the reason, and it
+is never the selected row.
+
 ### 4. Make the key and rent
 
 Call `machine_key` with the name before you rent. The answer is `{name,

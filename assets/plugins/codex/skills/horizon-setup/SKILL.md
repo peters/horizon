@@ -164,10 +164,32 @@ first card.
 ### 2. How big, and where?
 
 Read the machine types and the list price of the chosen provider with its own CLI
-just before you draw this card. Take three sizes from that answer, smallest
-first, and put the price of the row in its `value`, in the money of the provider
-and per hour. Take the places from the same answer, and mark the first one
-`selected: true`.
+just before you draw this card. Take three sizes from that answer, as the rule
+below says, and put the price of the row in its `value`, in the money of the
+provider and per hour. Take the places from the same answer, and mark the first
+one `selected: true`.
+
+The three rows are named Small, Medium and Large, and each one is the cheapest
+type of this place that holds what it needs:
+
+| Row | Cores and memory of the type | For |
+|---|---|---|
+| Small | at least 2 vCPU and 4 GB | agents and light builds |
+| Medium | at least 4 vCPU and 8 GB | builds and tests |
+| Large | at least 8 vCPU and 16 GB | several agents at once |
+
+- Take the cheapest type that holds each pair, and an x86 type with shared
+  cores: a dedicated core, an ARM type or a type with a GPU costs more for the
+  same work. Name an ARM type only when the machine is for a person who asks for
+  one.
+- The `subtitle` of a row names the type and its true cores and memory, as the
+  provider answered them, for example `cpx21, 3 vCPU, 4 GB. Agents and light
+  builds.`. The row says what the place offers, never what the name Small
+  suggests.
+- A row whose pair this place does not offer is drawn, cannot be chosen, and
+  says why: `disabled: true` with the subtitle `No type with 4 vCPU and 8 GB in
+  this place.` That row is never `selected: true`, so the first pair that the
+  place offers is the selected row.
 
 ```json
 {"components": [
@@ -176,12 +198,12 @@ and per hour. Take the places from the same answer, and mark the first one
    "badge": {"text": "Step 3 of 4"}},
   {"type": "caption", "text": "Size"},
   {"type": "list", "selection": "single", "rows": [
-    {"id": "size.small", "title": "Small", "subtitle": "2 vCPU, 4 GB. Agents and light builds.",
-     "value": "0.0079 EUR / hour", "selected": true},
-    {"id": "size.medium", "title": "Medium", "subtitle": "4 vCPU, 8 GB. Builds and tests.",
-     "value": "0.0158 EUR / hour"},
-    {"id": "size.large", "title": "Large", "subtitle": "8 vCPU, 16 GB. Several agents at once.",
-     "value": "0.0316 EUR / hour"}]},
+    {"id": "size.small", "title": "Small", "subtitle": "cpx11, 2 vCPU, 2 GB. Agents and light builds.",
+     "value": "0.0058 EUR / hour"},
+    {"id": "size.medium", "title": "Medium", "subtitle": "cpx21, 3 vCPU, 4 GB. Builds and tests.",
+     "value": "0.0089 EUR / hour", "selected": true},
+    {"id": "size.large", "title": "Large", "subtitle": "cpx31, 4 vCPU, 8 GB. Several agents at once.",
+     "value": "0.0168 EUR / hour"}]},
   {"type": "caption", "text": "Place"},
   {"type": "list", "selection": "single", "layout": "pills", "rows": [
     {"id": "place.hel1", "title": "Helsinki", "selected": true},
@@ -194,8 +216,9 @@ and per hour. Take the places from the same answer, and mark the first one
 ]}
 ```
 
-The numbers of this document are examples. Write the values that you read. A
-size row whose price the CLI does not answer holds `price not read` in `value`.
+The numbers of this document are examples. Write the values that you read: the
+type name, the cores and the memory that the place answers. A size row whose
+price the CLI does not answer holds `price not read` in `value`.
 `Back` returns to the provider card with the provider of the person still
 selected. The press on `Rent this machine` is the only press that may spend
 money.
