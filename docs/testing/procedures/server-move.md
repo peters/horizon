@@ -272,6 +272,78 @@ move back works the same way.
    Result: the sidebar shows the line about another store one time more, and the
    machine list holds the machines of the restored store again.
 
+### 6.7 M7 — A computer meets an older copy of the store
+
+This task proves that an older copy of the store does not take the records of a
+computer away. The client computer keeps its machine list, and it sends the
+machine that only the newer state holds to the server again.
+
+1. On `second`, stop the service, and copy the two files of its home to a folder
+   of this run:
+
+   ```sh
+   mkdir -p "$STATE/older"
+   chmod 700 "$STATE/older"
+   cp -p "$STATE/home/server.sqlite" "$STATE/older/"
+   cp -p "$STATE/home/server.sqlite-wal" "$STATE/older/" 2>/dev/null || true
+   cp -p "$STATE/home/server.sqlite-shm" "$STATE/older/" 2>/dev/null || true
+   ```
+
+   Result: `$STATE/older` holds `server.sqlite` at mode 600. This is the copy of
+   the state before the next step.
+
+2. Start the service on `second` again, and wait until the client computer reads
+   `Server: in step`.
+
+3. On the client computer, add one machine with the agent of a panel, and read
+   the sidebar.
+
+   Result: the row of that machine holds no `pending` after a moment, and the
+   store of `second` holds it:
+
+   ```sh
+   sqlite3 "$STATE/home/server.sqlite" "select id from objects where kind = 'machine' and deleted = 0;"
+   ```
+
+> **CAUTION: STOP THE SERVICE BEFORE THIS STEP, AND DO IT ONLY IN THE PRIVATE HOME
+> OF THIS RUN.** This step replaces the whole state of the server with an older
+> copy.
+
+4. On `second`, stop the service, copy the saved file over the file of the home,
+   and start the service again:
+
+   ```sh
+   cp -p "$STATE/older/server.sqlite" "$STATE/home/server.sqlite"
+   cp -p "$STATE/older/server.sqlite-wal" "$STATE/home/" 2>/dev/null || true
+   ```
+
+   Result: the log holds `the Horizon server answers`, and the store id is the
+   same as the one that step 3 of M1 recorded. The log holds no line about a
+   store that cannot be opened.
+
+5. On the client computer, read the sidebar within a few seconds.
+
+   Result: the sidebar shows one line, and the line says that the server holds an
+   older state than this computer saw. The line names one file in
+   `machines/server-before-reset.<time>.json` and one backup in
+   `settings.before-server.<time>.json` of the Horizon home of this run. The
+   machine list holds every machine, the machine of the previous step included.
+
+6. Read the machine list of the store of `second` as step 3 says.
+
+   Result: the store holds the machine of step 3 again. The client computer sent
+   it again, because its state is the newer one for that machine.
+
+7. On the client computer, read the kept file of the machine list:
+
+   ```sh
+   ls -l <Horizon home>/machines/server-before-reset.*.json
+   python3 -c 'import glob,json; print(json.load(open(glob.glob("<Horizon home>/machines/server-before-reset.*.json")[0]))["cause"])'
+   ```
+
+   Result: the file is at mode 600, and it prints `older-store`. The file holds
+   every machine of the machine list, and the key of each machine that uses one.
+
 ## 7. Pass criteria
 
 - The log of each server holds `the Horizon server answers` and
@@ -283,6 +355,10 @@ move back works the same way.
   moved store.
 - The store id before the move is the one after the move back.
 - The line about another store appears for a new store and not for a move.
+- The line about an older state appears when a computer meets an older copy of the
+  store, and the machine list of that computer keeps every machine.
+- The kept file of the machine list and the backup of the settings exist at mode
+  600, and the machine that only the newer state held returns to the store.
 
 ## 8. Cleanup
 

@@ -15,7 +15,7 @@ use super::files::{MirrorFile, MirroredMachine, MirroredSetting};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
 use super::settings::{RefusedSection, apply as apply_settings, refuse_settings};
 use super::view::merged_records;
-use super::{MIRROR_FORMAT, SyncState};
+use super::{MIRROR_FORMAT, SyncState, reset};
 use crate::client::PullOutcome;
 use crate::error::SyncError;
 use crate::intent::{KIND_BINDING, KIND_MACHINE, KIND_SETTING, Op, PushReply};
@@ -117,6 +117,10 @@ fn refusal_is_a_warning(refusal: &crate::error::Refusal) -> bool {
 /// Applies one answer of changes to the mirror and moves the mark of this
 /// computer. `asked_from` is the index that the request of this answer read from.
 pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: u64) -> Result<PullOutcome, SyncError> {
+    // An answer that replaces the whole mirror takes the machines and the settings of
+    // this computer with it, so this computer keeps them in one dated file of its home
+    // before the first row of it applies.
+    let kept = reset::keep_before_reset(handle, changes, asked_from);
     let (applied, secret_rows) = {
         let mut state = handle.lock();
         let applied = apply_rows(&mut state, changes)?;
@@ -131,6 +135,12 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: 
     write_secrets(handle, &secret_rows);
     let mut state = handle.lock();
     seed_local(&mut state)?;
+    // A server whose log is only older is behind this computer for the records that it
+    // does not hold, so those records go back to the queue instead of leaving the list
+    // of this computer without a word.
+    if let Some(kept) = &kept {
+        reset::send_missing_records(&mut state, kept)?;
+    }
     state.client.accept_replay(asked_from);
     state.client.accept_mark(changes.index)?;
     state.machine_keys = local_machine_keys(&state.secrets);
@@ -325,7 +335,8 @@ pub(super) fn mirror_of(state: &SyncState) -> MirrorFile {
 /// A server that answers with another store than the one this computer saw last
 /// replaces the mirror of this computer at the next pull, which is a machine list
 /// and a set of settings that the person did not change on this computer. The
-/// person reads one line about it.
+/// machine list and the settings of this computer are kept in one dated file each
+/// before that pull, and the person reads one line that names the two files.
 pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), String> {
     let mut state = handle.lock();
     let seen = state.client.store().map(str::to_owned);
@@ -344,11 +355,11 @@ pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), 
     drop(state);
     if seen.as_deref().is_some_and(|seen| seen != answer.store) {
         tracing::warn!(seen = ?seen, store = %answer.store, "the server answered with another store");
-        handle.push_notice(
-            "This computer reached another store at its server, so the machine list and the settings of this \
-             computer are now the ones of that store."
-                .to_owned(),
-        );
+        // The answer that follows this hello holds the state of that store, and it takes
+        // the records and the settings of this computer with it: both go to one dated
+        // file of the home first.
+        let line = reset::keep_before_store_change(handle);
+        handle.push_notice(line);
     }
     (handle.wake)();
     Ok(())

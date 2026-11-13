@@ -14,8 +14,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
+use horizon_core::{AppearanceTheme, Config, Machine};
 use horizon_sync::{
     Client, IntentResult, LinkBounds, LinkRefusal, LinkState, MAX_INTENTS_PER_PUSH, Outcome, PushReply, ServerReply,
     ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore, run_server_on_unix_socket,
@@ -229,6 +229,24 @@ impl Server {
         );
     }
 
+    /// Answers with the store at `path` on the socket of this server: the store that
+    /// a person restored over the file of the server, or another store of the same
+    /// person.
+    fn serve_store(&mut self, path: &Path) {
+        self.stop();
+        self.store = Store::open(path).expect("the store of this path");
+        self.restart();
+    }
+
+    /// Copies this store, with the content of its log, to `path`: the file that a
+    /// person keeps as a copy of the server.
+    fn copy_store_to(&self, path: &Path) {
+        let connection = rusqlite::Connection::open(self.store.path()).expect("a reader of the store");
+        connection
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().into_owned()])
+            .expect("the copy of the store");
+    }
+
     /// The machine records of the store, as a pull reports them.
     fn machines(&self) -> Vec<Machine> {
         self.store
@@ -256,6 +274,12 @@ struct Computer {
 
 impl Computer {
     fn start(machines_dir: &Path, socket: &Path) -> Self {
+        Self::start_with_settings(machines_dir, socket, None)
+    }
+
+    /// A computer whose shared settings follow its server, from the store at
+    /// `settings_path`.
+    fn start_with_settings(machines_dir: &Path, socket: &Path, settings_path: Option<PathBuf>) -> Self {
         let stand_in_dir = machines_dir.join("stand-in");
         fs::create_dir_all(machines_dir).expect("the machine directory");
         let keys = horizon_core::MachineKeys::new(stand_in_dir.join("machine-keys"));
@@ -263,6 +287,7 @@ impl Computer {
             SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", machines_dir, keys_only(keys))
                 .expect("the settings of the link");
         config.program = stand_in(&stand_in_dir, socket);
+        config.settings_path = settings_path;
         let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
         let store = SyncedMachineStore::new(supervisor.handle().clone());
         Self {
@@ -1089,4 +1114,135 @@ fn the_queue_of_a_computer_that_is_away_for_hours_needs_no_cap() {
         saved < Duration::from_secs(120) && loaded < Duration::from_secs(5) && drain < Duration::from_secs(120),
         "the save took {saved:?}, a start read {bytes} bytes in {loaded:?} and the drain took {drain:?}"
     );
+}
+
+/// The files of `directory` whose name starts with `prefix`.
+fn dated_files(directory: &Path, prefix: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// A person who restores or moves an older copy of the file of the server makes the
+/// log of the server end below the index that this computer saw. The computer is the
+/// newer side of that log for the records that the copy does not hold: it keeps them,
+/// it sends them to the server again, and one dated file of its home holds them.
+#[test]
+fn a_restored_older_copy_of_the_store_keeps_the_records_that_the_server_lacks() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    in_step(&a);
+    a.add("base-1", "203.0.113.10");
+    eventually("the first machine at the server", || server.has("base-1").then_some(()));
+
+    // The copy of the store that a person keeps, before the change that only the
+    // newer state has.
+    let copy = home.path().join("copy").join("server.sqlite");
+    fs::create_dir_all(copy.parent().expect("a folder of the copy")).expect("the folder of the copy");
+    server.copy_store_to(&copy);
+    a.add("newer-1", "203.0.113.11");
+    eventually("the newer machine at the server", || {
+        server.has("newer-1").then_some(())
+    });
+
+    // The person restores the older copy, and the server answers with it: its log
+    // ends below the index that this computer saw.
+    server.serve_store(&copy);
+    eventually("the machine that only the newer state had, at the server again", || {
+        server.has("newer-1").then_some(())
+    });
+    assert!(server.has("base-1"), "the machine of the copy is still there");
+    eventually("the machine list of this computer", || {
+        (a.names().len() == 2).then_some(())
+    });
+    assert!(a.names().contains(&"newer-1".to_string()), "{:?}", a.names());
+
+    let lines = a.handle().take_notices();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("older state than this computer saw")),
+        "the person reads the case: {lines:?}"
+    );
+    let kept = dated_files(&a.machines_dir, "server-before-reset.");
+    assert_eq!(kept.len(), 1, "one dated file holds what this computer had: {kept:?}");
+    let text = fs::read_to_string(&kept[0]).expect("the kept machine list");
+    assert!(text.contains("older-store"), "the file names the case: {text}");
+    for name in ["base-1", "newer-1"] {
+        assert!(text.contains(name), "the file holds {name}: {text}");
+    }
+    assert!(
+        lines.iter().any(|line| line.contains("server-before-reset.")),
+        "the line names the file that holds the list: {lines:?}"
+    );
+    a.stop();
+    server.stop();
+}
+
+/// A person who points the server at another store gives this computer the state of a
+/// store that it did not see. The machine list and the settings of this computer are
+/// kept in one dated file each before the answer of that store applies, and one line
+/// names both files.
+#[test]
+fn another_store_keeps_the_machine_list_and_the_settings_of_this_computer() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let machine_home = home.path().join("a");
+    fs::create_dir_all(&machine_home).expect("the home of this computer");
+    let settings_path = machine_home.join("config.json");
+    let mut settings = Config::default();
+    settings.appearance.theme = AppearanceTheme::Light;
+    Config::save(&settings_path, &settings).expect("the settings of this computer");
+    let mut a = Computer::start_with_settings(&machine_home, &server.socket, Some(settings_path));
+    in_step(&a);
+    a.add("base-1", "203.0.113.10");
+    eventually("the machine at the server", || server.has("base-1").then_some(()));
+
+    // The server answers with a store that this computer did not see: a file that a
+    // person made at another start of a server.
+    let other = home.path().join("other").join("server.sqlite");
+    fs::create_dir_all(other.parent().expect("a folder of the other store")).expect("the folder of the other store");
+    server.serve_store(&other);
+
+    eventually("the line of another store", || {
+        a.handle()
+            .take_notices()
+            .iter()
+            .any(|line| line.contains("another store") && line.contains("server-before-reset."))
+            .then_some(())
+    });
+    let kept = dated_files(&machine_home, "server-before-reset.");
+    assert_eq!(kept.len(), 1, "one dated file holds the machine list: {kept:?}");
+    let machines = fs::read_to_string(&kept[0]).expect("the kept machine list");
+    assert!(machines.contains("another-store"), "{machines}");
+    assert!(
+        machines.contains("base-1"),
+        "the file holds the machine list: {machines}"
+    );
+
+    let backup = dated_files(&machine_home, "settings.before-server.");
+    assert_eq!(backup.len(), 1, "one backup holds the settings: {backup:?}");
+    let settings = fs::read_to_string(&backup[0]).expect("the backup of the settings");
+    assert!(
+        settings.contains("appearance"),
+        "the backup holds the sections: {settings}"
+    );
+    assert!(
+        settings.contains("light"),
+        "the backup holds the value of this computer: {settings}"
+    );
+    a.stop();
+    server.stop();
 }

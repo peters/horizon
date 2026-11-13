@@ -514,16 +514,23 @@ the same, because every one of them is in that folder.
 
 ### What the computers do around a move
 
-- **Another store id gives one line.** The server names the id of its store in
-  its first frame. A computer that reaches a store id that it did not see last
-  takes the machine list and the settings of that store, and the sidebar shows
-  one line about it. A move keeps the id, because it copies one store, so a move
-  shows no such line. A computer that a person points at another server does.
-- **A computer that holds more than the copy takes the copy.** The index of a
-  computer is its mark in the log of the store. A computer whose index is above
-  the index of the store that it reached takes the whole state of that store, so
-  a person copies the newest `server.sqlite`. A change that only the newer store
-  held is gone from every computer that reads an older copy.
+- **Another store id gives one line and two files.** The server names the id of
+  its store in its first frame. A computer that reaches a store id that it did
+  not see last takes the machine list and the settings of that store. Before it
+  takes them, it writes what it holds in two files of its Horizon home:
+  `machines/server-before-reset.<time>.json` holds the machine list and the key
+  bindings, and `settings.before-server.<time>.json` holds the settings. The
+  sidebar shows one line that names the two files. A move keeps the id, because
+  it copies one store, so a move shows no such line. A computer that a person
+  points at another server does.
+- **A computer that holds more than the copy keeps its own records.** The index
+  of a computer is its mark in the log of the store. A computer whose mark is
+  above the index of the store that it reached is the newer side of that log. It
+  writes its machine list and its settings to the same two files, and the sidebar
+  says that the server holds an older state than this computer saw. It also sends
+  every machine that the copy does not hold to the server again, so the copy
+  becomes as new as the computer for those records. No machine leaves the list of
+  the computer.
 - **The tokens of a join still work.** A token is a row of the moved store, and
   `secret.key` reads it. The name of the computer is its own file
   `machines/server-device` of its Horizon home: a token under another device name

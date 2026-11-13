@@ -581,3 +581,17 @@ A restore stops the server, writes the newest generation over the file, and
 starts the server again. Every computer whose index is above the restored index,
 or whose tip names another log, then gets `reset: true` with the whole state of
 the restored server.
+
+A computer that meets such an answer keeps what it holds first, because a copy of
+an older file is one mistake of a person and not a change that the computers
+agreed on. It writes its machine list and its key bindings to
+`<Horizon home>/machines/server-before-reset.<time>.json`, and its shared settings
+to the backup `<Horizon home>/settings.before-server.<time>.json` that a first
+link writes. A mark that is above the index of the answer then makes the computer
+the newer side of that log: every machine record that the answer does not hold
+goes back to the queue of the computer, so the server holds it again. A secret
+value that such an answer replaces or removes is kept beside the value of the
+server, as a refusal keeps one. A server that names another store than the one
+this computer saw keeps the same two files and sends nothing back: the other store
+is the state that a person chose. The person reads one line that names the case
+and the files.

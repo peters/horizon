@@ -75,8 +75,9 @@ pub(super) struct SecretRow {
 }
 /// Reads the secret rows of one answer, remembers which versions this computer
 /// saw, and decides for each value whether a local value that differs is to be
-/// kept: a value that this computer never published, or one whose own intent
-/// still waits for the server, is kept beside the value of the server.
+/// kept: a value that this computer never published, one whose own intent still
+/// waits for the server, and every local value of an answer that replaces the whole
+/// mirror of this computer is kept beside the value of the server.
 pub(super) fn secret_rows_of(state: &mut SyncState, changes: &Changes) -> Vec<SecretRow> {
     let mut rows = Vec::new();
     for row in &changes.rows {
@@ -92,17 +93,20 @@ pub(super) fn secret_rows_of(state: &mut SyncState, changes: &Changes) -> Vec<Se
                 tracing::warn!(%error, "the version of a removed secret was not forgotten");
             }
             // A value that the server refused keeps one copy before the removal
-            // takes the value of this computer away.
+            // takes the value of this computer away, and so does a value that an
+            // answer which replaces the whole mirror removes: the newer state of this
+            // computer named that value, and only the older state does not.
             let refused = state.refused_secrets.remove(id.as_str());
             rows.push(SecretRow {
                 id,
                 body: None,
-                keep_local: refused,
+                keep_local: refused || changes.reset,
             });
             continue;
         }
-        let keep_local =
-            state.client.secret_version(id.as_str()).is_none() || state.client.secret_is_pending(id.as_str());
+        let keep_local = changes.reset
+            || state.client.secret_version(id.as_str()).is_none()
+            || state.client.secret_is_pending(id.as_str());
         // A value that the server refused is kept only when it differs from the
         // value that this answer brings, so an identical key is no conflict.
         let refused = state.refused_secrets.remove(id.as_str());

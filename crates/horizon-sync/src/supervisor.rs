@@ -64,6 +64,7 @@ mod files;
 mod link;
 mod pull;
 mod questions;
+mod reset;
 mod secrets;
 mod settings;
 mod state;
