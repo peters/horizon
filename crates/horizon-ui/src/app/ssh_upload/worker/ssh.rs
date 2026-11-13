@@ -108,9 +108,7 @@ pub(super) fn resolve_remote_directory_cancellable(
 ) -> Result<String, WorkerExit> {
     let remote_command = build_remote_shell_command(RESOLVE_REMOTE_DIR_SCRIPT, &[requested_path]);
     let mut command = Command::new("ssh");
-    command
-        .args(connection.ssh_probe_transport_args())
-        .arg(remote_command);
+    command.args(connection.ssh_probe_transport_args()).arg(remote_command);
     let output = run_cancellable_command(command, control_rx)?;
     resolved_directory(&output).map_err(WorkerExit::Failed)
 }

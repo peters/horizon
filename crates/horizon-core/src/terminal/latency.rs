@@ -3,10 +3,13 @@
 //! `HORIZON_TERMINAL_LATENCY=1`, set before Horizon starts, writes one `tracing`
 //! INFO line per key press of a terminal panel to stderr, so the answer time of a
 //! terminal of a far machine is measured instead of guessed. The line keeps the
-//! target of this module, which the default filter of the window already allows
-//! at INFO, so the switch is the only setting that it needs. It works in every
-//! build, including a release build, and one relaxed atomic load per hook is all
-//! that it costs while it is off.
+//! target of this module, and the window adds that target to its filter while the
+//! switch is on, so the switch is the only setting that it needs. It is the switch
+//! of the action of a browser panel (`HORIZON_BROWSER_LATENCY`, in the browser
+//! crate) in another place: the same rule for what counts as on, the same target
+//! of the module that writes the line, the same `_us` fields, and one relaxed
+//! atomic load per hook is all that it costs while it is off. See
+//! `docs/latency-trace.md`.
 //!
 //! The line carries four hops, always in this order, so a table of them reads
 //! down the same columns:

@@ -558,6 +558,33 @@ fn log_filter(configured: Option<&str>) -> tracing_subscriber::EnvFilter {
         .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("horizon=info,horizon_core=info"))
 }
 
+/// The filter of the window: the directive of every latency module whose switch is
+/// on, added to the filter of the person.
+///
+/// A latency switch is the only setting that its lines need, on both switches that
+/// the building has: `HORIZON_TERMINAL_LATENCY` for the key press of a terminal and
+/// `HORIZON_BROWSER_LATENCY` for an action of a browser panel. The default filter
+/// allows `horizon_core`, which covers the line of a key press; a browser line has
+/// a module of another crate, so the window names it here. A switch that is on wins
+/// over a `RUST_LOG` that silences its module, because the person asked for those
+/// lines and for nothing else.
+fn filter_with_latency(configured: Option<&str>, terminal: bool, browser: bool) -> tracing_subscriber::EnvFilter {
+    let mut directives: Vec<&str> = Vec::new();
+    if terminal {
+        directives.push("horizon_core::terminal::latency=info");
+    }
+    if browser {
+        directives.push("horizon_browser::latency=info");
+    }
+    let mut filter = log_filter(configured);
+    for directive in directives {
+        if let Ok(directive) = directive.parse() {
+            filter = filter.add_directive(directive);
+        }
+    }
+    filter
+}
+
 /// Whether an event or span may be recorded at all. Raw HTTP from the provider clients
 /// never is: at trace level `ureq_proto` dumps request bytes, and with them the API
 /// tokens and registry logins in their headers. Applied beside the `RUST_LOG` filter,
@@ -569,7 +596,11 @@ fn recordable(metadata: &tracing::Metadata<'_>) -> bool {
 
 fn init_tracing() {
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-    let env_filter = log_filter(std::env::var("RUST_LOG").ok().as_deref());
+    let env_filter = filter_with_latency(
+        std::env::var("RUST_LOG").ok().as_deref(),
+        horizon_core::latency::enabled(),
+        horizon_browser::latency::enabled(),
+    );
     let recordable = tracing_subscriber::filter::filter_fn(recordable);
 
     // Stdout is an MCP protocol channel in `--browser-mcp` mode. Keep every
@@ -624,6 +655,56 @@ mod log_filter_tests {
         }
         assert!(traces(Some("trace"), "horizon_core"), "other targets keep their level");
         assert!(!traces(None, "horizon_core"), "the default stays at info");
+    }
+
+    /// Whether one module records an INFO line under `filter_with_latency`.
+    fn records(configured: Option<&str>, terminal: bool, browser: bool, module: &str) -> bool {
+        let subscriber = tracing_subscriber::registry()
+            .with(super::filter_with_latency(configured, terminal, browser))
+            .with(tracing_subscriber::filter::filter_fn(super::recordable));
+        tracing::subscriber::with_default(subscriber, || match module {
+            "horizon_core::terminal::latency" => {
+                tracing::enabled!(target: "horizon_core::terminal::latency", tracing::Level::INFO)
+            }
+            "horizon_core::terminal" => tracing::enabled!(target: "horizon_core::terminal", tracing::Level::INFO),
+            "horizon_browser" => tracing::enabled!(target: "horizon_browser", tracing::Level::INFO),
+            _ => tracing::enabled!(target: "horizon_browser::latency", tracing::Level::INFO),
+        })
+    }
+
+    #[test]
+    fn a_latency_switch_is_the_only_setting_that_its_lines_need() {
+        let terminal = "horizon_core::terminal::latency";
+        let browser = "horizon_browser::latency";
+
+        // Each switch is the only setting that its lines need, whatever filter the
+        // person configured, because the window adds the one module of a switch
+        // that is on.
+        for configured in [None, Some("warn"), Some("error")] {
+            assert!(
+                records(configured, true, true, terminal),
+                "the terminal switch {configured:?}"
+            );
+            assert!(
+                records(configured, true, true, browser),
+                "the browser switch {configured:?}"
+            );
+        }
+        // Without that, a filter of the person silences the module of another
+        // crate, and the switch would need a second variable.
+        assert!(
+            !records(Some("warn"), false, false, browser),
+            "a browser line under a filter that silences it"
+        );
+        // A switch adds its one module and nothing else.
+        assert!(
+            !records(Some("warn"), true, true, "horizon_core::terminal"),
+            "the switch adds no whole module"
+        );
+        assert!(
+            !records(Some("warn"), false, false, terminal),
+            "a switch that is off adds nothing"
+        );
     }
 }
 

@@ -1,7 +1,7 @@
 mod content;
 mod cwd;
 mod events;
-mod latency;
+pub mod latency;
 mod lifecycle;
 mod replay;
 mod resize;

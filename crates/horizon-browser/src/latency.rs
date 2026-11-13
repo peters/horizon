@@ -4,7 +4,12 @@
 //! action through the pipeline, so a slow far browser is measured instead of
 //! guessed. The switch works in every build, including a release build without
 //! the `trace-profiling` feature, and one relaxed atomic load is all it costs
-//! while it is off.
+//! while it is off. It is the switch of the key press of a terminal
+//! (`HORIZON_TERMINAL_LATENCY`, in the core) in another place: the same rule for
+//! what counts as on, the same target of the module that writes the line, the
+//! same `_us` fields, and the window adds the target of the module to its filter
+//! while the switch is on, so the switch is the only setting. See
+//! `docs/latency-trace.md`.
 //!
 //! Four lines, each with the fields named in one place so the order is stable:
 //!
@@ -116,7 +121,9 @@ impl Probe {
         if self.emitted.len() >= 32 {
             self.emitted.remove(0);
         }
-        tracing::info!(target: "browser", "{line}");
+        // The module path is the target, as it is for the line of a key press:
+        // the window names it in its filter while this switch is on.
+        tracing::info!("{line}");
         self.emitted.push(line);
     }
 
@@ -228,19 +235,19 @@ pub(crate) fn action_fields(
     let mut line = String::new();
     let _ = write!(
         line,
-        "seq={} method={} queued_ms={} taken_ms={} written_ms={} received_ms={} decoded_ms={} handed_ms={} \
-         frame={frame_seq} bytes={bytes} width={} height={} decode_ms={} ack={}",
+        "seq={} method={} queued_us={} taken_us={} written_us={} received_us={} decoded_us={} handed_us={} \
+         frame={frame_seq} bytes={bytes} width={} height={} decode_us={} ack={}",
         action.seq,
         action.method,
-        millis(action.queued_at, action.queued_at),
-        millis(action.queued_at, taken_at),
-        millis(action.queued_at, written_at),
-        millis(action.queued_at, received_at),
-        millis(action.queued_at, decoded_at),
-        millis(action.queued_at, decoded_at),
+        micros(action.queued_at, action.queued_at),
+        micros(action.queued_at, taken_at),
+        micros(action.queued_at, written_at),
+        micros(action.queued_at, received_at),
+        micros(action.queued_at, decoded_at),
+        micros(action.queued_at, decoded_at),
         size.0,
         size.1,
-        millis(received_at, decoded_at),
+        micros(received_at, decoded_at),
         ack_placement(ack_before_decode)
     );
     line
@@ -258,10 +265,10 @@ pub(crate) fn frame_fields(
     let mut line = String::new();
     let _ = write!(
         line,
-        "seq={frame_seq} bytes={bytes} width={} height={} received_to_decoded_ms={} ack={}",
+        "seq={frame_seq} bytes={bytes} width={} height={} received_to_decoded_us={} ack={}",
         size.0,
         size.1,
-        millis(received_at, decoded_at),
+        micros(received_at, decoded_at),
         ack_placement(ack_before_decode)
     );
     line
@@ -273,27 +280,25 @@ pub(crate) fn paint_fields(handoff: &Handoff, painted_at: Instant) -> String {
     let action = handoff
         .action
         .map_or_else(|| "-".to_string(), |action| action.seq.to_string());
-    let event_to_painted = handoff
-        .action
-        .map_or_else(|| f64::NAN.to_string(), |action| millis(action.queued_at, painted_at));
+    let event_to_painted = handoff.action.map_or_else(
+        || "-".to_string(),
+        |action| micros(action.queued_at, painted_at).to_string(),
+    );
     let _ = write!(
         line,
-        "seq={} action={action} handed_to_painted_ms={} event_to_painted_ms={event_to_painted}",
+        "seq={} action={action} handed_to_painted_us={} event_to_painted_us={event_to_painted}",
         handoff.frame_seq,
-        millis(handoff.handed_at, painted_at)
+        micros(handoff.handed_at, painted_at)
     );
     line
 }
 
 /// The fields of one blocked driver pass, in the order they are written.
 pub(crate) fn stall_fields(pass: Duration, waited: Option<(&str, Duration)>) -> String {
-    let (method, waited_ms) = waited.map_or(("-".to_string(), f64::NAN), |(method, waited)| {
-        (method.to_string(), millis_of(waited))
+    let (method, waited_us) = waited.map_or(("-".to_string(), "-".to_string()), |(method, waited)| {
+        (method.to_string(), micros_of(waited).to_string())
     });
-    format!(
-        "pass_ms={:.1} waited={method} waited_ms={waited_ms:.1}",
-        millis_of(pass)
-    )
+    format!("pass_us={} waited={method} waited_us={waited_us}", micros_of(pass))
 }
 
 /// A pass that blocked on the protocol says so, with the command it waited for.
@@ -313,19 +318,16 @@ pub(crate) fn stall(pass: Duration, waited: Option<(&str, Duration)>) {
     if !enabled() || pass <= STALL_THRESHOLD {
         return;
     }
-    tracing::info!(
-        target: "browser",
-        "latency stall {}",
-        stall_fields(pass, waited)
-    );
+    tracing::info!("latency stall {}", stall_fields(pass, waited));
 }
 
-fn millis(from: Instant, to: Instant) -> String {
-    format!("{:.1}", millis_of(to.saturating_duration_since(from)))
+/// One hop in microseconds, as the line of a key press writes it.
+fn micros(from: Instant, to: Instant) -> u64 {
+    micros_of(to.saturating_duration_since(from))
 }
 
-fn millis_of(duration: Duration) -> f64 {
-    duration.as_secs_f64() * 1000.0
+fn micros_of(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 fn ack_placement(before_decode: bool) -> &'static str {
@@ -367,17 +369,17 @@ mod tests {
         let order = [
             "seq=1 ",
             "method=Input.dispatchMouseEvent ",
-            "queued_ms=0.0 ",
-            "taken_ms=4.0 ",
-            "written_ms=5.0 ",
-            "received_ms=87.0 ",
-            "decoded_ms=131.0 ",
-            "handed_ms=131.0 ",
+            "queued_us=0 ",
+            "taken_us=4000 ",
+            "written_us=5000 ",
+            "received_us=87000 ",
+            "decoded_us=131000 ",
+            "handed_us=131000 ",
             "frame=9 ",
             "bytes=205000 ",
             "width=1480 ",
             "height=880 ",
-            "decode_ms=44.0 ",
+            "decode_us=44000 ",
             "ack=before_decode",
         ];
         let mut cursor = 0;
@@ -402,7 +404,7 @@ mod tests {
         assert!(line.contains("seq=4 "), "{line}");
         assert!(line.contains("bytes=2048 "), "{line}");
         assert!(line.contains("width=740 height=440 "), "{line}");
-        assert!(line.contains("received_to_decoded_ms=20.0 "), "{line}");
+        assert!(line.contains("received_to_decoded_us=20000 "), "{line}");
         assert!(line.ends_with("ack=after_decode"), "{line}");
     }
 
@@ -417,7 +419,7 @@ mod tests {
         let line = paint_fields(&handoff, started + Duration::from_millis(148));
         assert_eq!(
             line,
-            "seq=9 action=1 handed_to_painted_ms=17.0 event_to_painted_ms=148.0"
+            "seq=9 action=1 handed_to_painted_us=17000 event_to_painted_us=148000"
         );
     }
 
@@ -427,7 +429,7 @@ mod tests {
             Duration::from_millis(180),
             Some(("Target.getTargetInfo", Duration::from_millis(175))),
         );
-        assert_eq!(line, "pass_ms=180.0 waited=Target.getTargetInfo waited_ms=175.0");
+        assert_eq!(line, "pass_us=180000 waited=Target.getTargetInfo waited_us=175000");
     }
 
     #[test]
@@ -456,16 +458,16 @@ mod tests {
         for field in [
             "seq=1 ",
             "method=Input.dispatchMouseEvent ",
-            "queued_ms=",
-            "taken_ms=",
-            "written_ms=",
-            "received_ms=",
-            "decoded_ms=",
-            "handed_ms=4",
+            "queued_us=",
+            "taken_us=",
+            "written_us=",
+            "received_us=",
+            "decoded_us=",
+            "handed_us=",
             "frame=3 ",
             "bytes=205000 ",
             "width=1480 height=880 ",
-            "decode_ms=44.0 ",
+            "decode_us=",
             "ack=before_decode",
         ] {
             let at = action_line[cursor..]

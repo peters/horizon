@@ -116,6 +116,9 @@ pub use ssh::{
     DiscoveredSshHost, MachineKey, MachineKeyError, MachineKeyRef, MachineKeys, SshConnection, SshConnectionStatus,
     discover_ssh_hosts,
 };
+/// The switch of the timing line of a key press, and the line's own module docs.
+/// The browser has its switch at the same path, so the window names both alike.
+pub use terminal::latency;
 pub use terminal::{
     ClipboardTarget, ClipboardWrite, CwdReader, OutputWake, PROGRAM_BOUND, Terminal, open_url, read_cwd,
 };

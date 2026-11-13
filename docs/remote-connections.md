@@ -85,6 +85,14 @@ handshakes, and a cut costs them again.
    the same value, and the sidebar then says `Server away` with
    `The server did not answer at its address.` in its hover.
 
+## Measure where the time of a press goes
+
+Horizon can write one line for each key press of a terminal and for each input
+action of a browser panel. Set `HORIZON_TERMINAL_LATENCY=1` or
+`HORIZON_BROWSER_LATENCY=1` before you start Horizon. See
+[measure the latency](latency-trace.md) for the fields of the lines and for the
+way to compare two runs.
+
 ## What Horizon does by itself, and what only you can do
 
 | Situation | Horizon | You |
