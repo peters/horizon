@@ -374,6 +374,84 @@ mod tests {
     /// `handle_terminal_keyboard_input` handles the mismatch, but
     /// `translate_key_event` itself must return None for Shift+Num2 so
     /// unshifted symbols don't leak through.
+    fn translate_on(key: Key, modifiers: Modifiers, mode: TermMode, macos: bool) -> Option<super::KeyTranslation> {
+        super::keyboard::translate_key_event_on(
+            super::KeyIdentity::new(key, Some(key), None),
+            super::KeyEventContext::new(true, false, modifiers, mode),
+            macos,
+        )
+    }
+
+    #[test]
+    fn control_letters_are_control_characters_on_both_systems() {
+        for macos in [true, false] {
+            let translation = translate_on(Key::C, Modifiers::CTRL, TermMode::NONE, macos);
+            assert_eq!(
+                translation.map(|translation| translation.bytes),
+                Some(vec![3]),
+                "the Control key is the control key of a terminal, macos={macos}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_key_of_a_mac_writes_nothing_for_a_letter() {
+        for key in [Key::C, Key::D, Key::L, Key::W] {
+            let command_of_a_mac = Modifiers {
+                command: true,
+                mac_cmd: true,
+                ..Modifiers::NONE
+            };
+            assert!(
+                translate_on(key, command_of_a_mac, TermMode::NONE, true).is_none(),
+                "{key:?} with Cmd writes no byte into a Mac terminal"
+            );
+            // The same key on Linux is the Control key of the toolkit, and it is
+            // the control key of the terminal.
+            let control_of_linux = Modifiers::CTRL;
+            assert!(
+                translate_on(key, control_of_linux, TermMode::NONE, false).is_some(),
+                "{key:?} with Control still sends a control character on Linux"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_key_of_a_mac_leaves_a_named_key_alone() {
+        let command_of_a_mac = Modifiers {
+            command: true,
+            mac_cmd: true,
+            ..Modifiers::NONE
+        };
+        for key in [Key::ArrowLeft, Key::Home, Key::Backspace, Key::Tab] {
+            assert!(
+                translate_on(key, command_of_a_mac, TermMode::NONE, true).is_none(),
+                "{key:?} with Cmd writes no byte into a Mac terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_key_with_control_still_reaches_the_terminal_of_a_mac() {
+        let both = Modifiers {
+            ctrl: true,
+            command: true,
+            mac_cmd: true,
+            ..Modifiers::NONE
+        };
+        assert_eq!(
+            translate_on(Key::C, both, TermMode::NONE, true).map(|translation| translation.bytes),
+            Some(vec![3]),
+            "Control+C interrupts the program even while Cmd is down"
+        );
+    }
+
+    #[test]
+    fn the_cut_chord_of_a_mac_writes_no_control_character() {
+        assert!(!super::keyboard::cut_chord_is_control_character_for(true));
+        assert!(super::keyboard::cut_chord_is_control_character_for(false));
+    }
+
     #[test]
     fn altgr_character_keys_do_not_produce_alt_sequence_with_shift() {
         // Shift+Num2 (how @ is typed on US layout) must not produce bytes.

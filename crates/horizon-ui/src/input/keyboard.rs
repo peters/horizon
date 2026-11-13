@@ -60,7 +60,21 @@ pub fn translate_key_event_with_physical(
     key_identity: KeyIdentity<'_>,
     context: KeyEventContext,
 ) -> Option<KeyTranslation> {
+    translate_key_event_on(key_identity, context, cfg!(target_os = "macos"))
+}
+
+/// [`translate_key_event_with_physical`] for the system that `macos` names, so a
+/// test runs the rules of both systems on either one.
+pub(super) fn translate_key_event_on(
+    key_identity: KeyIdentity<'_>,
+    context: KeyEventContext,
+    macos: bool,
+) -> Option<KeyTranslation> {
     if !context.pressed && !context.mode.contains(TermMode::REPORT_EVENT_TYPES) {
+        return None;
+    }
+
+    if command_chord_of_the_window(context.modifiers, macos) {
         return None;
     }
 
@@ -204,6 +218,32 @@ pub fn should_defer_textual_key(
 
 pub(super) fn control_modifier(modifiers: Modifiers) -> bool {
     modifiers.ctrl || modifiers.command
+}
+
+/// Whether a key with `modifiers` belongs to the window and not to a panel.
+///
+/// The Cmd key of a Mac is the command key of the window. It is never the
+/// Control key of a terminal: Control+C interrupts the program in a panel, and
+/// Cmd+C copies the selection. The window and the clipboard of the system take
+/// such a chord before a panel reads it, so a panel that still sees one writes
+/// nothing for it.
+///
+/// The Control key of Linux is both the control key of the terminal and the
+/// command key of the window, and the toolkit reports it as `command` there.
+/// That key is not a window chord: it is the control character of the terminal.
+pub(super) fn command_chord_of_the_window(modifiers: Modifiers, macos: bool) -> bool {
+    macos && modifiers.command && !modifiers.ctrl
+}
+
+/// Whether the cut chord of the window is the Control+X of the program in the
+/// PTY. Only the Control key of Linux is that character; the Cmd key of a Mac
+/// cuts the selection of the window and writes nothing.
+pub(crate) fn cut_chord_is_control_character() -> bool {
+    cut_chord_is_control_character_for(cfg!(target_os = "macos"))
+}
+
+pub(super) const fn cut_chord_is_control_character_for(macos: bool) -> bool {
+    !macos
 }
 
 pub(super) fn control_character(key: Key) -> Option<u8> {

@@ -82,7 +82,9 @@ pub(crate) fn handle_terminal_keyboard_input(
                     primary_selection.copy(&text);
                     crate::clipboard::copy_text(text);
                 }
-                write_keys(terminal, key_at, &[24]);
+                if input::cut_chord_is_control_character() {
+                    write_keys(terminal, key_at, &[24]);
+                }
             }
             // A clipboard or scrollback chord belongs to the terminal window,
             // not to the program in the PTY. Every press, repeat and release of

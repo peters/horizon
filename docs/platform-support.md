@@ -114,6 +114,28 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux
 (`crates/horizon-core/src/panel/spawn.rs:764-777`). Horizon starts each agent
 through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:738-742`).
 
+## The keyboard
+
+The Control key of a Mac is the control key of the terminal. **Control+C**
+interrupts the program in the panel. The Cmd key of a Mac is the command key of
+the window, and it never writes a control character into a terminal. A panel
+writes no byte for a key that the person presses with Cmd and without Control.
+**Cmd+C** copies the selection of a terminal and writes nothing, **Cmd+V**
+pastes, and **Cmd+A** writes nothing. On Linux the Control key is both the
+control key of the terminal and the command key of the window, so **Ctrl+C**
+interrupts the program and the toolkit reports the same key as Cmd
+(`crates/horizon-ui/src/input/keyboard.rs`).
+
+The Option key of a Mac is the Alt key. It sends Meta, which is `ESC` and the
+key, when the layout composes no character for it. Some layouts compose a
+character: a Norwegian layout gives `|` for Option+7. The terminal then receives
+that character alone, which is the character that the person typed. On Linux the
+Alt key sends Meta and AltGr writes the character that the layout composes.
+
+A shortcut of a key position follows that position on every layout. On a
+Norwegian layout Shift+comma composes `;`, and **Cmd+Shift+Comma** still opens
+Settings (`crates/horizon-ui/src/app/shortcuts.rs`).
+
 ## Install and update
 
 | Function | Linux | macOS |
