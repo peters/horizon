@@ -74,9 +74,22 @@ const SOCKET_READY: Duration = Duration::from_secs(20);
 /// The poll of a link that waits for the session socket.
 const SOCKET_POLL: Duration = Duration::from_millis(50);
 
-/// The poll of the session socket that waits for a link, so the idle rule can
-/// stop a browser that nobody attached to.
+/// The poll of the session socket that waits for a link.
 const ACCEPT_POLL: Duration = Duration::from_millis(100);
+
+/// The longest silence of a link that the session keeps. A link of a panel says
+/// something four times a second (the signals of its manifest), so a link that
+/// says nothing for this long is a link whose other end is gone: the session
+/// closes it, and the process of that link ends with the socket. A link whose
+/// other end vanished keeps its socket open, because the other side of `ssh`
+/// holds it, so this silence is not a rare case.
+pub(super) const LINK_SILENT: Duration = Duration::from_secs(60);
+
+/// The silence of a link that a new link of the same profile takes the page
+/// over from. A panel that lost its link attaches again after a few seconds, and
+/// the link that it left behind answered nothing since, so the page comes back
+/// instead of waiting for that link for a minute.
+pub(super) const LINK_TAKE_OVER: Duration = Duration::from_secs(1);
 
 /// The engine that a driver of a browser host serves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -332,35 +345,79 @@ fn serve_session(options: &HostDriverOptions) -> i32 {
     if let Err(error) = write_state(options) {
         eprintln!("error: {error}");
     }
+    let start = |options: &HostDriverOptions| session::HostSession::start(options);
+    let rules = LinkRules {
+        take_over: LINK_TAKE_OVER,
+        silent: LINK_SILENT,
+    };
+    serve_links(&listener, options, &socket, rules, start)
+}
+
+/// The bounds of one session of a browser host: when a new link takes the page
+/// over, and when a link is closed for its silence.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LinkRules {
+    /// The silence of a link that a new connection takes the page over from.
+    pub(super) take_over: Duration,
+    /// The silence after which the session closes a link.
+    pub(super) silent: Duration,
+}
+
+/// Serve the links of one session, in the order that this computer asks for
+/// them.
+///
+/// The session outlives every link: a link that ends leaves the browser and the
+/// page running, and the next link attaches to the same page. A new link takes
+/// the page over from a link that went silent, which is what a dropped link
+/// looks like from here, and a link whose other end vanished is closed after
+/// [`LINK_SILENT`], so its process ends instead of waiting on the socket.
+fn serve_links<F>(
+    listener: &std::os::unix::net::UnixListener,
+    options: &HostDriverOptions,
+    socket: &Path,
+    rules: LinkRules,
+    start: F,
+) -> i32
+where
+    F: Fn(&HostDriverOptions) -> std::result::Result<session::HostSession, String>,
+{
     let mut session: Option<session::HostSession> = None;
-    let mut link_ended = Instant::now();
+    let mut next_link: Option<std::os::unix::net::UnixStream> = None;
     loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let mut link = Link::over_socket(&stream);
-                let outcome = serve_one(&mut session, options, &mut link);
-                drop(link);
-                link_ended = Instant::now();
-                if outcome == LinkOutcome::Close {
-                    stop_and_cleanup(&mut session, &socket, options);
-                    return 0;
+        let stream = match next_link.take() {
+            Some(stream) => stream,
+            None => match waiting_link(listener) {
+                Some(stream) => stream,
+                None => {
+                    std::thread::sleep(ACCEPT_POLL);
+                    continue;
                 }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => {
-                eprintln!("error: the socket of this browser host failed: {error}");
-                return 1;
-            }
+            },
+        };
+        let mut link = Link::over_socket(&stream);
+        let end = serve_one(&mut session, options, &mut link, listener, rules, &start);
+        drop(link);
+        if let Some(next) = end.next {
+            next_link = Some(next);
+            continue;
         }
-        // A session that no link attached to for the idle bound stops its
-        // browser: the person who closed the panel does not leave a Firefox of
-        // this host running.
-        if session.is_some() && link_ended.elapsed() >= session::LINK_IDLE {
-            stop_and_cleanup(&mut session, &socket, options);
+        if end.outcome == LinkOutcome::Close {
+            stop_and_cleanup(&mut session, socket, options);
             return 0;
         }
-        std::thread::sleep(ACCEPT_POLL);
+    }
+}
+
+/// The connection that waits on the socket of the session, when one arrived, and
+/// otherwise nothing.
+fn waiting_link(listener: &std::os::unix::net::UnixListener) -> Option<std::os::unix::net::UnixStream> {
+    match listener.accept() {
+        Ok((stream, _)) => Some(stream),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(error) => {
+            tracing::warn!(%error, "the socket of a browser host session could not accept a link");
+            None
+        }
     }
 }
 
@@ -372,9 +429,19 @@ fn stop_and_cleanup(session: &mut Option<session::HostSession>, socket: &Path, o
     cleanup(socket, options);
 }
 
-fn serve_one(session: &mut Option<session::HostSession>, options: &HostDriverOptions, link: &mut Link) -> LinkOutcome {
+fn serve_one<F>(
+    session: &mut Option<session::HostSession>,
+    options: &HostDriverOptions,
+    link: &mut Link,
+    listener: &std::os::unix::net::UnixListener,
+    rules: LinkRules,
+    start: &F,
+) -> LinkEnd
+where
+    F: Fn(&HostDriverOptions) -> std::result::Result<session::HostSession, String>,
+{
     if session.is_none() {
-        match session::HostSession::start(options) {
+        match start(options) {
             Ok(started) => *session = Some(started),
             Err(words) => {
                 let _ = link.send(&HostDriverReply::Refusal {
@@ -383,14 +450,25 @@ fn serve_one(session: &mut Option<session::HostSession>, options: &HostDriverOpt
                     fatal: true,
                 });
                 let _ = link.flush();
-                return LinkOutcome::Closed;
+                return LinkEnd::of(LinkOutcome::Closed);
             }
         }
     }
     let Some(started) = session.as_mut() else {
-        return LinkOutcome::Closed;
+        return LinkEnd::of(LinkOutcome::Closed);
     };
-    session::serve_link(started, link, options.profile(), options.engine())
+    session::serve_link(
+        started,
+        link,
+        options.profile(),
+        options.engine(),
+        Some(&session::NewLinks {
+            listener,
+            take_over: rules.take_over,
+            silent: rules.silent,
+            profile: options.profile(),
+        }),
+    )
 }
 
 fn remove_stale_socket(socket: &Path) -> Result<()> {
@@ -434,6 +512,10 @@ pub(super) enum LinkOutcome {
     Close,
     /// The other end is gone.
     Closed,
+    /// A new link of the same profile takes the page over from this one.
+    TakeOver,
+    /// This link said nothing for longer than the session keeps it.
+    Silent,
     /// The link ends with this answer.
     Answer(HostDriverReply),
     /// The link ends with these words.
@@ -472,6 +554,27 @@ pub(super) enum Next {
     TooLong { size: usize, limit: usize },
     Ended,
     Nothing,
+}
+
+/// How one link of a browser host ended.
+pub(super) struct LinkEnd {
+    pub(super) outcome: LinkOutcome,
+    /// The connection that takes the page over, when one arrived while this link
+    /// served it.
+    pub(super) next: Option<std::os::unix::net::UnixStream>,
+}
+
+impl LinkEnd {
+    pub(super) fn of(outcome: LinkOutcome) -> Self {
+        Self { outcome, next: None }
+    }
+
+    pub(super) fn taken_over(stream: std::os::unix::net::UnixStream) -> Self {
+        Self {
+            outcome: LinkOutcome::TakeOver,
+            next: Some(stream),
+        }
+    }
 }
 
 /// One step of a link: a request to apply, a silent pass, the end of the link,
@@ -607,36 +710,60 @@ fn read_into(mut reader: impl Read, sender: &mpsc::Sender<Incoming>) {
 ///
 /// The relay does not read the protocol: it copies bytes. The words of a refusal
 /// of the session are therefore the words that this computer reads.
+///
+/// This link lives as long as its two ends copy. It ends when the session closes
+/// its socket, which is what a session does when the person closes the panel,
+/// when this link went silent, or when a new link took the page over. It does not
+/// wait for its own input to end first: the other side of `ssh` keeps the input
+/// of this process open after the person's computer is gone, so an input that
+/// never ends is not the end of a link.
 fn relay(stream: std::os::unix::net::UnixStream) -> i32 {
-    let reader = match stream.try_clone() {
+    relay_streams(std::io::stdin(), std::io::stdout(), stream)
+}
+
+/// [`relay`] over the two streams of a link, so a test drives a link whose
+/// input never ends.
+fn relay_streams(
+    input: impl Read + Send + 'static,
+    output: impl Write + Send + 'static,
+    session: std::os::unix::net::UnixStream,
+) -> i32 {
+    let reader = match session.try_clone() {
         Ok(reader) => reader,
         Err(error) => {
             eprintln!("error: this link of a browser host cannot read its session: {error}");
             return HOST_DRIVER_REFUSED_EXIT;
         }
     };
-    let to_stdout = std::thread::Builder::new()
+    let (ended, ended_rx) = mpsc::channel();
+    let to_caller = std::thread::Builder::new()
         .name("browser-host-relay-out".to_string())
         .spawn(move || {
             let mut reader = BufReader::new(reader);
-            let mut stdout = std::io::stdout().lock();
-            let _ = std::io::copy(&mut reader, &mut stdout);
-            let _ = stdout.flush();
+            let mut output = output;
+            let _ = std::io::copy(&mut reader, &mut output);
+            let _ = output.flush();
+            let _ = ended.send(());
         });
-    let mut writer = stream;
-    let mut stdin = std::io::stdin().lock();
-    let copied = std::io::copy(&mut stdin, &mut writer);
-    let _ = writer.shutdown(std::net::Shutdown::Write);
-    match copied {
-        Ok(_) => {
-            if let Ok(handle) = to_stdout {
-                let _ = handle.join();
-            }
-            0
-        }
-        Err(error) => {
-            eprintln!("error: this link of a browser host could not read its input: {error}");
-            HOST_DRIVER_REFUSED_EXIT
-        }
+    if to_caller.is_err() {
+        return HOST_DRIVER_REFUSED_EXIT;
+    }
+    let mut writer = session;
+    let to_session = std::thread::Builder::new()
+        .name("browser-host-relay-in".to_string())
+        .spawn(move || {
+            let mut input = input;
+            let _ = std::io::copy(&mut input, &mut writer);
+            let _ = writer.shutdown(std::net::Shutdown::Write);
+        });
+    if to_session.is_err() {
+        return HOST_DRIVER_REFUSED_EXIT;
+    }
+    // The session ends this link, and its end is the end of this process. The
+    // thread that copies the input of `ssh` ends with this process, so a link
+    // that waits on an input that never closes leaves nothing behind.
+    match ended_rx.recv() {
+        Ok(()) => 0,
+        Err(_) => HOST_DRIVER_REFUSED_EXIT,
     }
 }

@@ -36,7 +36,7 @@ fn pair(quality: u32) -> (DriverLink, std::thread::JoinHandle<()>) {
         let session = HostSession::over_page(Box::new(FakePage::silent()), slot);
         let mut session = session;
         let mut link = super::Link::over_socket(&theirs);
-        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox);
+        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
     let link = DriverLink::over_stream(&ours, &host(), quality).expect("the driver greets this computer");
     (link, handle)
@@ -107,7 +107,7 @@ fn a_pushed_picture_reaches_the_frame_slot_and_is_acknowledged_once() {
     let handle = std::thread::spawn(move || {
         let mut session = HostSession::over_page(Box::new(FakePage::silent()), Arc::clone(&host_slot));
         let mut link = super::Link::over_socket(&theirs);
-        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox);
+        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
     let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
 
@@ -148,7 +148,7 @@ fn a_link_that_comes_back_says_that_the_page_is_the_same_one() {
         let mut session = HostSession::over_page(Box::new(FakePage::silent()), slot);
         for stream in [first_of_theirs, second_of_theirs] {
             let mut link = super::Link::over_socket(&stream);
-            serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox);
+            serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
         }
     });
 
@@ -349,7 +349,7 @@ fn a_request_of_this_computer_reaches_the_page_of_the_host() {
         };
         let mut session = HostSession::over_page(Box::new(page), Arc::new(FrameSlot::new()));
         let mut link = super::Link::over_socket(&theirs);
-        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox);
+        serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
     let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
     link.request(&HostDriverRequest::Navigate {

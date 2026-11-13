@@ -14,13 +14,15 @@
 //! waits for the acknowledgement of the last, so a slow link shows fewer and
 //! newer frames instead of a queue of the past.
 
+use std::io::{BufReader, Write as _};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use horizon_browser::host_driver::{
     FrameGate, HostDriverFrame, HostDriverFrameFormat, HostDriverPage, HostDriverPageState, HostDriverReply,
-    HostDriverRequest, HostDriverWelcome, HostSystem, MAX_HOST_FRAME_SIDE,
+    HostDriverRequest, HostDriverWelcome, HostSystem, MAX_HOST_DRIVER_LINE_BYTES, MAX_HOST_FRAME_SIDE,
+    read_line as read_wire_line,
 };
 use horizon_browser::{
     BrowserCommand, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameData, FrameSlot,
@@ -28,12 +30,7 @@ use horizon_browser::{
 };
 
 use super::coordination::WireCoordination;
-use super::{HostDriverEngine, HostDriverOptions, Link, LinkOutcome, Next, Step, paths};
-
-/// How long the session of a browser host waits for a link before it stops the
-/// browser and ends. A cut link comes back in seconds; a person who closed the
-/// panel and went home does not leave a Firefox running for a day.
-pub(super) const LINK_IDLE: Duration = Duration::from_secs(600);
+use super::{HostDriverEngine, HostDriverOptions, Link, LinkEnd, LinkOutcome, Next, Step, paths};
 
 /// How long one pass of the loop waits for a request before it looks at the
 /// page and the frame again.
@@ -45,6 +42,74 @@ const EVENT_BURST: usize = 64;
 
 /// Bound of the stop of one session of a browser host.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a link has to greet the session. The greeting is the first line that
+/// this computer writes on a link, so a link that says nothing for this long is
+/// not a panel, and the next connection may take the session over.
+const GREET_WAIT: Duration = Duration::from_secs(5);
+
+/// The connections that arrive on the socket of the session while one link
+/// serves it, and the silences that decide what happens to them.
+pub(super) struct NewLinks<'a> {
+    pub(super) listener: &'a std::os::unix::net::UnixListener,
+    /// The silence of the serving link that a new connection takes the page over
+    /// from.
+    pub(super) take_over: Duration,
+    /// The silence after which the session closes the serving link.
+    pub(super) silent: Duration,
+    /// The profile of this session, for the words of a refusal.
+    pub(super) profile: &'a str,
+}
+
+impl NewLinks<'_> {
+    /// The connection that waits on the socket, when one arrived, and otherwise
+    /// nothing.
+    fn waiting(&self) -> Option<std::os::unix::net::UnixStream> {
+        match self.listener.accept() {
+            Ok((stream, _)) => Some(stream),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
+            Err(error) => {
+                tracing::warn!(%error, "the socket of a browser host session could not accept a link");
+                None
+            }
+        }
+    }
+}
+
+/// Tell a new connection why the page of its profile is not free, and close it.
+///
+/// A second panel of one profile is a second page on one browser, and this
+/// session shows one page. The person reads what to close instead of a link that
+/// says nothing.
+///
+/// The greeting of the new link is read first, in a thread of its own: a link
+/// that this session closes with its answer still unread answers the write of
+/// the greeting with a reset, and this computer would then read no words at all.
+fn refuse_busy_link(stream: std::os::unix::net::UnixStream, profile: &str) {
+    let reply = HostDriverReply::Refusal {
+        code: "link_busy".to_string(),
+        message: format!(
+            "the page of the profile {profile} of this browser host is attached to another link: close the other panel of this profile, then use Retry"
+        ),
+        fatal: true,
+    };
+    std::thread::Builder::new()
+        .name("browser-host-refusal".to_string())
+        .spawn(move || {
+            let _ = stream.set_read_timeout(Some(GREET_WAIT));
+            if let Ok(reader) = stream.try_clone() {
+                let mut reader = BufReader::new(reader);
+                let _ = read_wire_line(&mut reader, MAX_HOST_DRIVER_LINE_BYTES);
+            }
+            if let Ok(line) = horizon_browser::host_driver::encode_line(&reply) {
+                let mut writer = &stream;
+                let _ = writer.write_all(&line);
+                let _ = writer.flush();
+            }
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        })
+        .ok();
+}
 
 /// The viewport of a session that no panel has sized yet.
 const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
@@ -202,6 +267,10 @@ impl HostSession {
         }
         self.links = self.links.saturating_add(1);
         self.quality = quality;
+        // The picture of this session is new to this link: a panel that attaches
+        // to a session that nobody looked at has no frame of its own, so the
+        // newest one travels again, as the key frame of that link.
+        self.last_sent = None;
         self.page_state
     }
 
@@ -350,30 +419,58 @@ fn frame_reply(frame: &FrameData, quality: u32, key: bool) -> Option<HostDriverR
 }
 
 /// Serve one link of this computer until it ends.
+///
+/// `new_links` is the socket of the session, so a link that arrives while this
+/// one serves the page can take it over; a session of a test serves a link with
+/// no socket and answers nothing to a new connection.
 pub(super) fn serve_link(
     session: &mut HostSession,
     link: &mut Link,
     profile: &str,
     engine: HostDriverEngine,
-) -> LinkOutcome {
+    new_links: Option<&NewLinks<'_>>,
+) -> LinkEnd {
     let mut gate = FrameGate::new();
-    match greet(session, link, profile, engine) {
-        LinkOutcome::Continue => {}
-        outcome => return finish(link, outcome),
+    match greet(session, link, profile, engine, new_links) {
+        LinkEnd {
+            outcome: LinkOutcome::Continue,
+            ..
+        } => {}
+        end => return finish(link, end),
     }
-    let outcome = pass(session, link, &mut gate);
-    finish(link, outcome)
+    let end = pass(session, link, &mut gate, new_links);
+    finish(link, end)
 }
 
 /// Greet this computer: the version of the wire, the system of the host, and the
 /// page that this link came back to.
-fn greet(session: &mut HostSession, link: &mut Link, profile: &str, engine: HostDriverEngine) -> LinkOutcome {
-    let next = link.next(Duration::from_secs(20));
-    let request = match request_of(next) {
-        Step::Request(request) => request,
-        // A link that says nothing for 20 seconds is not a panel of this host.
-        Step::Silent | Step::Ended => return LinkOutcome::Closed,
-        Step::Refuse(outcome) => return outcome,
+fn greet(
+    session: &mut HostSession,
+    link: &mut Link,
+    profile: &str,
+    engine: HostDriverEngine,
+    new_links: Option<&NewLinks<'_>>,
+) -> LinkEnd {
+    let greeted_at = Instant::now();
+    let request = loop {
+        // A link that arrives while this one has not greeted yet is the link of
+        // a panel: it takes the session over, and this one ends with no words.
+        if let Some(next) = new_links.and_then(NewLinks::waiting) {
+            tracing::info!(
+                profile,
+                "a new link of a browser host takes the session over from a link that did not greet it"
+            );
+            return LinkEnd::taken_over(next);
+        }
+        match request_of(link.next(PASS_WAIT)) {
+            Step::Request(request) => break request,
+            // A link that says nothing for this long is not a panel of this
+            // host.
+            Step::Silent if greeted_at.elapsed() >= GREET_WAIT => return LinkEnd::of(LinkOutcome::Closed),
+            Step::Silent => {}
+            Step::Ended => return LinkEnd::of(LinkOutcome::Closed),
+            Step::Refuse(outcome) => return LinkEnd::of(outcome),
+        }
     };
     let HostDriverRequest::Hello {
         version,
@@ -382,25 +479,33 @@ fn greet(session: &mut HostSession, link: &mut Link, profile: &str, engine: Host
         ..
     } = request
     else {
-        return greeting_refusal("the first message of a link of a browser host is its greeting");
+        return LinkEnd::of(greeting_refusal(
+            "the first message of a link of a browser host is its greeting",
+        ));
     };
     if version != horizon_browser::host_driver::HOST_DRIVER_VERSION {
-        return LinkOutcome::Answer(horizon_browser::host_driver::version_refusal(version));
+        return LinkEnd::of(LinkOutcome::Answer(horizon_browser::host_driver::version_refusal(
+            version,
+        )));
     }
     if let Some(words) = system.copy_refusal(&HostSystem::here()) {
-        return greeting_refusal(&words);
+        return LinkEnd::of(greeting_refusal(&words));
     }
     session.attach(horizon_browser::host_driver::clamp_quality(quality));
     if link
         .send(&HostDriverReply::Welcome(session.welcome(profile, engine)))
         .is_err()
     {
-        return LinkOutcome::Closed;
+        return LinkEnd::of(LinkOutcome::Closed);
     }
+    // The state of the page follows the welcome at once, so this computer has
+    // an address for the picture that comes next, and a request that follows
+    // the welcome is read in the pass below.
     if link.send(&HostDriverReply::Page(session.page_message())).is_err() {
-        return LinkOutcome::Closed;
+        return LinkEnd::of(LinkOutcome::Closed);
     }
-    LinkOutcome::Continue
+    let _ = link.flush();
+    LinkEnd::of(LinkOutcome::Continue)
 }
 
 fn greeting_refusal(sentence: &str) -> LinkOutcome {
@@ -427,20 +532,43 @@ fn request_of(next: Next) -> Step {
 
 /// One pass of a link: the requests of this computer, the events of the page,
 /// and one picture when the last one was acknowledged.
-fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate) -> LinkOutcome {
+fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, new_links: Option<&NewLinks<'_>>) -> LinkEnd {
     let mut sent_page = session.page_message();
+    // When this link last said something. Two rules of the session read it: a
+    // link that is silent belongs to nobody, and a new link may take the page
+    // over from it.
+    let mut last_line = Instant::now();
     loop {
+        // A connection that waits on the socket of the session: the page comes
+        // back to a link whose link before it is gone, and a second panel of a
+        // profile that is in use reads why it waits.
+        if let Some(next) = new_links.and_then(NewLinks::waiting) {
+            let silent = last_line.elapsed();
+            if let Some(links) = new_links
+                && silent >= links.take_over
+            {
+                tracing::info!(
+                    profile = links.profile,
+                    silent = ?silent,
+                    "a new link of a browser host takes the page over from a link that went silent"
+                );
+                return LinkEnd::taken_over(next);
+            }
+            if let Some(links) = new_links {
+                refuse_busy_link(next, links.profile);
+            }
+        }
         session.apply_events();
         let page = session.page_message();
         if page != sent_page {
             sent_page = page.clone();
             if link.send(&HostDriverReply::Page(page)).is_err() {
-                return LinkOutcome::Closed;
+                return LinkEnd::of(LinkOutcome::Closed);
             }
         }
         if let Some(reply) = session.next_frame(gate) {
             if link.send(&reply).is_err() {
-                return LinkOutcome::Closed;
+                return LinkEnd::of(LinkOutcome::Closed);
             }
             if let HostDriverReply::Frame(frame) = &reply {
                 gate.sent(frame.seq);
@@ -450,13 +578,28 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate) -> Lin
         }
         while let Some(reply) = session.take_reply() {
             if link.send(&reply).is_err() {
-                return LinkOutcome::Closed;
+                return LinkEnd::of(LinkOutcome::Closed);
             }
         }
         if link.flush().is_err() {
-            return LinkOutcome::Closed;
+            return LinkEnd::of(LinkOutcome::Closed);
+        }
+        // A link whose other end vanished keeps its socket open, because the
+        // other side of `ssh` holds it, so the end of this link is its silence.
+        if let Some(links) = new_links
+            && last_line.elapsed() >= links.silent
+        {
+            tracing::info!(
+                profile = links.profile,
+                silent = ?last_line.elapsed(),
+                "a link of a browser host said nothing for the bound of the session, so the session closes it"
+            );
+            return LinkEnd::of(LinkOutcome::Silent);
         }
         let next = link.next(PASS_WAIT);
+        if matches!(next, Next::Line(_)) {
+            last_line = Instant::now();
+        }
         match request_of(next) {
             Step::Request(request) => match session.apply(request, gate) {
                 LinkOutcome::Continue => {}
@@ -471,22 +614,22 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate) -> Lin
                         })
                         .is_err()
                     {
-                        return LinkOutcome::Closed;
+                        return LinkEnd::of(LinkOutcome::Closed);
                     }
                 }
-                outcome => return outcome,
+                outcome => return LinkEnd::of(outcome),
             },
             // A silent pass is the normal case of an idle page.
             Step::Silent => {}
-            Step::Ended => return LinkOutcome::Closed,
-            Step::Refuse(outcome) => return outcome,
+            Step::Ended => return LinkEnd::of(LinkOutcome::Closed),
+            Step::Refuse(outcome) => return LinkEnd::of(outcome),
         }
     }
 }
 
 /// Write the answer of a link that ends, and flush it before the link closes.
-fn finish(link: &mut Link, outcome: LinkOutcome) -> LinkOutcome {
-    match &outcome {
+fn finish(link: &mut Link, end: LinkEnd) -> LinkEnd {
+    match &end.outcome {
         LinkOutcome::Answer(reply) => {
             let _ = link.send(reply);
         }
@@ -500,10 +643,14 @@ fn finish(link: &mut Link, outcome: LinkOutcome) -> LinkOutcome {
         LinkOutcome::Close => {
             let _ = link.send(&HostDriverReply::Closed);
         }
-        LinkOutcome::Continue | LinkOutcome::Closed | LinkOutcome::Note { .. } => {}
+        LinkOutcome::Continue
+        | LinkOutcome::Closed
+        | LinkOutcome::TakeOver
+        | LinkOutcome::Silent
+        | LinkOutcome::Note { .. } => {}
     }
     let _ = link.flush();
-    outcome
+    end
 }
 
 #[cfg(test)]
