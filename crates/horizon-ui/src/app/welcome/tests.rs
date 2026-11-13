@@ -140,6 +140,42 @@ fn a_tile_of_a_goal_starts_set_up_with_that_goal() {
     assert!(app.setup.notice_panel.is_some(), "Set up ran for the goal of the tile");
 }
 
+/// The keyboard reaches the tiles: Tab puts the focus ring on one, and Space
+/// starts it.
+#[test]
+fn the_keyboard_starts_a_tile_that_it_reached() {
+    let (_temp, mut app) = test_app();
+    app.setup.integrations = false;
+    let ctx = Context::default();
+    let frame = |app: &mut crate::app::HorizonApp, events: Vec<egui::Event>| {
+        let mut input = crate::app::test_support::raw_input([1200.0, 900.0], None);
+        input.events = events;
+        ctx.run_ui(input, |ui| app.render_welcome_page(ui.ctx()))
+            .discard_textures()
+    };
+    let _ = frame(&mut app, Vec::new());
+    let _ = frame(&mut app, Vec::new());
+    let key = |key: egui::Key, pressed: bool| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // Tab walks the four tiles; the second one is the machine.
+    for _ in 0..2 {
+        let _ = frame(&mut app, vec![key(egui::Key::Tab, true)]);
+    }
+    let _ = frame(&mut app, vec![key(egui::Key::Space, true)]);
+    let _ = frame(&mut app, vec![key(egui::Key::Space, false)]);
+
+    assert_eq!(
+        app.setup.goal,
+        horizon_core::SetupGoal::Rent,
+        "Space started the second tile, which Set up receives as the goal rent"
+    );
+}
+
 /// Presses the tile of `tile` on the page, as a pointer does, and answers
 /// whether the page drew a press.
 fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: WelcomeTile) -> bool {
