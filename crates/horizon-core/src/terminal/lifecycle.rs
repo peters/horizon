@@ -1,7 +1,7 @@
 use super::{
-    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PendingClipboard, PtyOptions,
+    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, PendingClipboard, PtyOptions,
     ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-    TerminalSshTrust, WindowSize, drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
+    TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc, replay_terminal_bytes, term, tty,
 };
 
 impl Terminal {
@@ -52,7 +52,8 @@ impl Terminal {
         };
         let replay_bytes = options.replay_bytes;
         let (event_tx, event_rx) = mpsc::channel();
-        let event_loop_proxy = TerminalEventProxy::new(event_tx, trust);
+        let latency = Arc::new(latency::Probe::new());
+        let event_loop_proxy = TerminalEventProxy::new(event_tx, trust, Arc::clone(&latency));
         let term_proxy = event_loop_proxy.clone();
 
         tty::setup_env();
@@ -99,6 +100,7 @@ impl Terminal {
             term,
             event_sender,
             event_rx,
+            latency,
             event_loop_handle,
             #[cfg(target_os = "linux")]
             child_start_time,
@@ -136,6 +138,24 @@ impl Terminal {
     /// Forward pointer motion without treating a hover as a user decision.
     pub fn write_pointer_motion(&self, bytes: &[u8]) {
         self.write_protocol(bytes);
+    }
+
+    /// The time that this frame took a key event, while the latency lines of this
+    /// terminal are on.
+    #[must_use]
+    pub fn press_clock(&self) -> Option<Instant> {
+        self.latency.timed().then(Instant::now)
+    }
+
+    /// Records one key press that this frame wrote, for the latency lines.
+    pub fn note_key_press(&self, event_at: Instant, bytes: usize) {
+        self.latency.key_written(event_at, bytes);
+    }
+
+    /// Records that this frame painted the grid, which closes the lines of the
+    /// key presses whose echo it shows.
+    pub fn note_output_painted(&self) {
+        self.latency.painted();
     }
 
     pub(super) fn write_protocol(&self, bytes: &[u8]) {
@@ -335,3 +355,7 @@ mod tests;
 
 #[cfg(test)]
 mod snapshot_tests;
+
+// The latency lines run against a real PTY.
+#[cfg(all(test, unix))]
+mod latency_tests;

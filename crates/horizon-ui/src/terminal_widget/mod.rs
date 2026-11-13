@@ -130,9 +130,8 @@ impl<'a> TerminalView<'a> {
         let had_recent_output = self.panel.had_recent_output();
         let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
 
-        if ui.is_rect_visible(interaction.layout.outer)
-            && let Some(terminal) = self.panel.terminal_mut()
-        {
+        let on_screen = ui.is_rect_visible(interaction.layout.outer);
+        if on_screen && let Some(terminal) = self.panel.terminal_mut() {
             let history_size = terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
             let mut grid_cache = self.grid_cache.take();
@@ -168,6 +167,9 @@ impl<'a> TerminalView<'a> {
                 );
             });
             self.grid_cache = grid_cache;
+            // The grid of this frame carries whatever output the frame drained,
+            // so the latency line of a key press that this grid echoes ends here.
+            self.panel.note_output_painted();
         }
 
         // The line of a panel that has no shell sits under the grid, so a person

@@ -57,6 +57,12 @@ impl Terminal {
             had_events = true;
         }
         self.flush_pending_pty_resize();
+        if had_events {
+            // This frame took the output of the panel, which may be the echo of a
+            // key press of a person, so the latency line of that press has its
+            // third hop now.
+            self.latency.drained();
+        }
         had_events
     }
 

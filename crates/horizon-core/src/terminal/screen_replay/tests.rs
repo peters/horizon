@@ -10,7 +10,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
 use super::screen_replay_bytes;
 use crate::terminal::support::replay_terminal_bytes;
-use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust};
+use crate::terminal::{TerminalDimensions, TerminalEventProxy};
 
 fn screen(rows: u16, cols: u16) -> Arc<FairMutex<Term<TerminalEventProxy>>> {
     let (event_tx, _event_rx) = mpsc::channel::<Event>();
@@ -18,7 +18,7 @@ fn screen(rows: u16, cols: u16) -> Arc<FairMutex<Term<TerminalEventProxy>>> {
     Arc::new(FairMutex::new(Term::new(
         term::Config::default(),
         &dimensions,
-        TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
+        TerminalEventProxy::for_tests(event_tx),
     )))
 }
 

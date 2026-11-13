@@ -1,6 +1,7 @@
 mod content;
 mod cwd;
 mod events;
+mod latency;
 mod lifecycle;
 mod replay;
 mod resize;
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, State};
@@ -123,6 +124,8 @@ struct TerminalEventProxy {
     /// Forwards only `Event::Exit`, for a scratch grid whose other events describe
     /// output nobody sees.
     exit_only: bool,
+    /// The key presses of a person that this output answers, for the opt-in lines.
+    latency: Arc<latency::Probe>,
     // Both the grid and event loop retain trust through detached/asynchronous teardown.
     _ssh_trust: TerminalSshTrust,
 }
@@ -134,10 +137,11 @@ struct TerminalSshTrust {
 }
 
 impl TerminalEventProxy {
-    fn new(event_tx: mpsc::Sender<Event>, ssh_trust: TerminalSshTrust) -> Self {
+    fn new(event_tx: mpsc::Sender<Event>, ssh_trust: TerminalSshTrust, latency: Arc<latency::Probe>) -> Self {
         Self {
             event_tx,
             exit_only: false,
+            latency,
             _ssh_trust: ssh_trust,
         }
     }
@@ -146,8 +150,16 @@ impl TerminalEventProxy {
         Self {
             event_tx,
             exit_only: true,
+            latency: Arc::new(latency::Probe::new()),
             _ssh_trust: TerminalSshTrust::default(),
         }
+    }
+
+    /// A proxy for a grid that no person types into and no frame draws, for a
+    /// test that needs a terminal.
+    #[cfg(test)]
+    fn for_tests(event_tx: mpsc::Sender<Event>) -> Self {
+        Self::new(event_tx, TerminalSshTrust::default(), Arc::new(latency::Probe::new()))
     }
 }
 
@@ -155,6 +167,10 @@ impl EventListener for TerminalEventProxy {
     fn send_event(&self, event: Event) {
         if self.exit_only && !matches!(event, Event::Exit) {
             return;
+        }
+        if matches!(event, Event::Wakeup) {
+            // The event loop read bytes, which may be the echo of a person's key.
+            self.latency.output_read();
         }
         let _ = self.event_tx.send(event);
     }
@@ -196,6 +212,7 @@ pub struct Terminal {
     term: Arc<FairMutex<Term<TerminalEventProxy>>>,
     event_sender: EventLoopSender,
     event_rx: mpsc::Receiver<Event>,
+    latency: Arc<latency::Probe>,
     event_loop_handle: Option<JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>>,
     child_pid: Option<u32>,
     #[cfg(target_os = "linux")]
@@ -223,7 +240,7 @@ mod tests {
 
     use super::{
         ClipboardTarget, ClipboardWrite, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions,
-        TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, queue_debounced_pty_resize,
+        TerminalEventProxy, TerminalSpawnOptions, default_terminal_rgb, queue_debounced_pty_resize,
         replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
@@ -521,7 +538,7 @@ mod tests {
         Arc::new(FairMutex::new(Term::new(
             config,
             &dimensions,
-            TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
+            TerminalEventProxy::for_tests(event_tx),
         )))
     }
 

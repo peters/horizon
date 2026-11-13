@@ -5,7 +5,7 @@ use alacritty_terminal::term::{self, Term};
 use alacritty_terminal::vte::ansi;
 
 use super::{append_cell_text, bottom_row_texts, screen_row_texts};
-use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust};
+use crate::terminal::{TerminalDimensions, TerminalEventProxy};
 
 fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
     let mut line = String::new();
@@ -94,11 +94,7 @@ fn test_term(rows: u16, cols: u16) -> Term<TerminalEventProxy> {
         ..term::Config::default()
     };
 
-    Term::new(
-        config,
-        &dimensions,
-        TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
-    )
+    Term::new(config, &dimensions, TerminalEventProxy::for_tests(event_tx))
 }
 
 #[test]

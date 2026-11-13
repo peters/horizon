@@ -32,6 +32,9 @@ pub(crate) fn handle_terminal_keyboard_input(
     let Some(terminal) = panel.terminal_mut() else {
         return false;
     };
+    // The clock of the latency lines, taken once for every key event that this
+    // frame handles. It is `None` while the switch is off.
+    let key_at = terminal.press_clock();
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
     let mut ime_enabled = terminal_ime_enabled(ui, terminal_id);
@@ -53,13 +56,13 @@ pub(crate) fn handle_terminal_keyboard_input(
                     terminal.clear_selection();
                 }
                 if !emission.bytes.is_empty() {
-                    terminal.write_input(&emission.bytes);
+                    write_keys(terminal, key_at, &emission.bytes);
                 }
             }
             egui::Event::Paste(text) => {
                 terminal.clear_selection();
                 let bytes = input::paste_bytes(text, mode, true);
-                terminal.write_input(&bytes);
+                write_keys(terminal, key_at, &bytes);
             }
             // A terminal takes text, so a clipboard image becomes a private PNG
             // file and its path is pasted when the worker has written it.
@@ -68,7 +71,7 @@ pub(crate) fn handle_terminal_keyboard_input(
             }
             egui::Event::Copy => {
                 if event.is_plain_ctrl_c_copy_command() {
-                    terminal.write_input(&[3]);
+                    write_keys(terminal, key_at, &[3]);
                 } else if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
                     crate::clipboard::copy_text(text);
@@ -79,7 +82,7 @@ pub(crate) fn handle_terminal_keyboard_input(
                     primary_selection.copy(&text);
                     crate::clipboard::copy_text(text);
                 }
-                terminal.write_input(&[24]);
+                write_keys(terminal, key_at, &[24]);
             }
             // A clipboard or scrollback chord belongs to the terminal window,
             // not to the program in the PTY. Every press, repeat and release of
@@ -100,7 +103,7 @@ pub(crate) fn handle_terminal_keyboard_input(
                 } else {
                     let emission = forwarder.on_key(event, mode);
                     if !emission.bytes.is_empty() {
-                        terminal.write_input(&emission.bytes);
+                        write_keys(terminal, key_at, &emission.bytes);
                     }
                 }
             }
@@ -110,12 +113,26 @@ pub(crate) fn handle_terminal_keyboard_input(
 
     let emission = forwarder.finish();
     if !emission.bytes.is_empty() {
-        terminal.write_input(&emission.bytes);
+        write_keys(terminal, key_at, &emission.bytes);
     }
 
     store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
 
     false
+}
+
+/// Writes the bytes of one input of a person into the terminal of this panel.
+///
+/// `key_at` is the time that the frame took the key event, so the opt-in latency
+/// line of that press starts where the person's key reached the window.
+fn write_keys(terminal: &horizon_core::Terminal, key_at: Option<std::time::Instant>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    terminal.write_input(bytes);
+    if let Some(key_at) = key_at {
+        terminal.note_key_press(key_at, bytes.len());
+    }
 }
 
 /// Run a chord that the terminal window owns. Nothing here reaches the PTY.
