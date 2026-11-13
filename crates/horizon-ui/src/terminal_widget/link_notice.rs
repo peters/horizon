@@ -42,7 +42,7 @@ impl LinkNotice {
                 reconnect: true,
             }),
             SshConnectionStatus::Reconnecting => Some(Self {
-                line: format!("Horizon reaches {host} again. Text typed here is not sent."),
+                line: format!("Horizon tries {host} again. Text typed here is not sent."),
                 reconnect: false,
             }),
             // An attempt of a machine terminal runs its own `ssh`, so text that a
@@ -112,7 +112,7 @@ mod tests {
     fn a_panel_that_waits_for_its_attempt_says_the_same_and_needs_no_button() {
         let notice = LinkNotice::of(PanelKind::Ssh, Some(SshConnectionStatus::Reconnecting), "lab-1")
             .expect("a waiting terminal says a line");
-        assert_eq!(notice.line, "Horizon reaches lab-1 again. Text typed here is not sent.");
+        assert_eq!(notice.line, "Horizon tries lab-1 again. Text typed here is not sent.");
         assert!(
             !notice.reconnect,
             "the wait of a machine terminal ends by itself, so the panel offers no second way"

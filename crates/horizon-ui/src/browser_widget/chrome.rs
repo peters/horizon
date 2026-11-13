@@ -101,7 +101,8 @@ pub fn show(
     if browser.page_resumed {
         ui.label(
             RichText::new(
-                "The link was lost and this is the same page again: the text, the scroll place and the session are still there.",
+                "The link to the browser was lost and this is the same page again: the text, the scroll place and the session \
+                 are still there.",
             )
             .size(10.5)
             .color(theme::PALETTE_YELLOW()),

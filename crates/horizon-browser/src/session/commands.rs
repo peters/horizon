@@ -287,7 +287,8 @@ impl DriverState {
         BrowserControlFailure::new(
             "link_lost",
             format!(
-                "the link to the browser was lost during this action, so it may or may not have happened;                  the panel connects again by itself and a later call works: {}",
+                "the link to the browser was lost during this action, so it may or may not have happened; the panel tries again \
+                 by itself and a later call works: {}",
                 failure.message
             ),
         )

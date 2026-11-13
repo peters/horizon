@@ -192,8 +192,8 @@ a panel after the container stops.
    ```
 
    Result: the panel does not go away. It keeps its place and its last address,
-   and its body states `The link is lost. The panel connects again in N s
-   (attempt 1).`, where N counts down from 3. The body holds no word of the
+   and its body states `The link to the browser is lost. Horizon tries again in
+   N s (attempt 1).`, where N counts down from 3. The body holds no word of the
    browser engine.
 
 2. Read the state of the panel as an agent, with `browser_panel`.
@@ -246,14 +246,14 @@ a panel after the container stops.
 
 4. Cut the flow in the proxy for 25 seconds, then release it.
 
-   Result: the panel states `The link is lost. The panel connects again in N s
-   (attempt 1).`, where N counts down from 3. After the release the panel
-   connects again by itself, at the first or the second attempt. No person
+   Result: the panel states `The link to the browser is lost. Horizon tries
+   again in N s (attempt 1).`, where N counts down from 3. After the release the
+   panel tries again by itself, at the first or the second attempt. No person
    pressed a control. The panel drives the same page again: the field holds the
    text of step 3, the page keeps its scroll position, and the line above the
-   page states `The link was lost and this is the same page again: the text, the
-   scroll place and the session are still there.` It holds no line that says
-   that the page is new.
+   page states `The link to the browser was lost and this is the same page again:
+   the text, the scroll place and the session are still there.` It holds no line
+   that says that the page is new.
 
 5. Read the state of the panel as an agent, with `browser_panel`.
 

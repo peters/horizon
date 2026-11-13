@@ -104,7 +104,7 @@ change.
 
    Result: The badge says `Reconnecting · next attempt in N s`, and the count
    goes down. The line below the badge says
-   `The link is lost. The viewer tries again by itself.`
+   `The link to the desktop is lost. Horizon tries again by itself.`
 
 4. Release the cut in the proxy.
 

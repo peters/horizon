@@ -959,7 +959,7 @@ fn the_header_offers_stop_while_the_viewer_waits_and_calls_it_a_reconnect() {
     assert!(
         shown
             .iter()
-            .any(|text| text == "The link is lost. The viewer tries again by itself."),
+            .any(|text| text == "The link to the desktop is lost. Horizon tries again by itself."),
         "the panel says that it is trying: {shown:?}"
     );
 

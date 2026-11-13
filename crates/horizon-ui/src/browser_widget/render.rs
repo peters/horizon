@@ -266,9 +266,9 @@ fn placeholder(
             waiting = Some(remaining);
             let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);
             if seconds == 0 {
-                format!("The link is lost. The panel connects again now (attempt {attempt}).")
+                format!("The link to the browser is lost. Horizon tries again now (attempt {attempt}).")
             } else {
-                format!("The link is lost. The panel connects again in {seconds} s (attempt {attempt}).")
+                format!("The link to the browser is lost. Horizon tries again in {seconds} s (attempt {attempt}).")
             }
         }
     };

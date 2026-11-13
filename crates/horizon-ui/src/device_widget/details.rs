@@ -303,7 +303,7 @@ fn status_message(ui: &mut Ui, status: &super::session::Status) {
         }
         Status::Reconnecting { message, .. } => {
             ui.add_space(3.0);
-            caption(ui, "The link is lost. The viewer tries again by itself.");
+            caption(ui, "The link to the desktop is lost. Horizon tries again by itself.");
             ui.add(Label::new(RichText::new(message).size(12.0).color(theme::FG_SOFT())).wrap());
         }
         Status::Stopped => {

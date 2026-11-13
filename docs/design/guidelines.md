@@ -625,6 +625,26 @@ outline).
   cuts shows the whole text in its hover text. When a row cannot keep its
   actions beside the text, the actions take the line under the text.
 
+### A lost link
+
+One vocabulary names a lost connection in every panel, so a person reads the same
+words in a terminal, in a device viewer, in a browser panel and in the Server tab.
+
+- The noun is **the link**. A state sentence names what the link goes to:
+  `The link to lab-1 is lost.`, `The link to the desktop is lost.`,
+  `The link to the browser is lost.`
+- The actor of a retry is **Horizon**: `Horizon tries lab-1 again.`,
+  `Horizon tries again by itself.`, `Horizon tries again in 4 s (attempt 2).`
+  A plain SSH panel that no timer reaches says that typed text is not sent, and
+  it offers `Reconnect`.
+- A cause sentence names the other side and starts with **The**: `The desktop
+  link timed out`, `The computer that runs the desktop refused the connection`,
+  `The server did not answer at its address.`
+- A mark names the state and not the cause: `Connecting...`, `Reconnecting`,
+  `Disconnected`, `Server away`.
+- Do not write "connects again" or "reaches again" for a retry that Horizon
+  starts by itself, and do not name the panel or the viewer as the actor.
+
 ### Card panel
 
 A card panel shows a document that an agent composed. Horizon owns the frame
