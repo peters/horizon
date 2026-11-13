@@ -87,3 +87,46 @@ fn a_row_that_the_document_selects_is_selected_until_the_person_changes_it() {
     let click = card.take_click(1_000).expect("a press on a row is a click");
     assert_eq!(click.selected, vec!["gcloud".to_owned()]);
 }
+
+#[test]
+fn a_row_that_cannot_be_chosen_sends_no_click_and_keeps_the_selection() {
+    let document = every_component();
+    let mut card = CardRuntime::default();
+    let frames = CardFrames::new();
+
+    frames.press(&document, &mut card, Owner::Listening, "AWS");
+
+    assert!(
+        card.take_click(1_000).is_none(),
+        "a row that says what is missing reaches no agent"
+    );
+    assert_eq!(card.selected(6), None, "a row that cannot be chosen is not a choice");
+}
+
+#[test]
+fn a_step_list_takes_no_click() {
+    let document = super::steps_document();
+    let mut card = CardRuntime::default();
+    CardFrames::new().press(
+        &document,
+        &mut card,
+        Owner::Listening,
+        "Create the machine at the provider",
+    );
+
+    assert!(card.take_click(1_000).is_none(), "a step is a report, not a control");
+}
+
+#[test]
+fn a_pill_of_a_pills_list_is_the_selection_like_a_row_is() {
+    let document = super::pills_document();
+    let mut card = CardRuntime::default();
+    let frames = CardFrames::new();
+
+    frames.press(&document, &mut card, Owner::Listening, "Falkenstein");
+
+    assert_eq!(card.selected(0), Some("place.falkenstein"));
+    let click = card.take_click(1_000).expect("a press on a live pill is a click");
+    assert_eq!(click.component_id, "place.falkenstein");
+    assert_eq!(click.selected, vec!["place.falkenstein".to_owned()]);
+}

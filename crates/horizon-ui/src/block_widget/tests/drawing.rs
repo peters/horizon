@@ -2,7 +2,7 @@
 
 use egui::Color32;
 use egui::epaint::Shape;
-use horizon_browser_control::block::{BlockDocument, Button, Component, Selection, Tone};
+use horizon_browser_control::block::{BlockDocument, Button, Component, ListLayout, Selection, Tone};
 use horizon_core::{CardFrames as HostFrames, CardRuntime};
 
 use crate::block_widget::metrics::BODY_PAD_SIDE;
@@ -46,8 +46,19 @@ fn every_component_draws_its_text() {
         "Provider",
         "CX22 - 2 vCPU",
         "0.42 EUR/h",
+        "0.006 EUR/h",
+        "Ready",
         "Google Cloud",
         "gcloud is not installed",
+        "AWS",
+        "No profile found. Run aws configure sso",
+        "Place",
+        "Helsinki",
+        "Falkenstein",
+        "Create the machine at the provider",
+        "11 s",
+        "Wait for SSH with the machine key",
+        "Add the machine to Machines",
         "Connect",
         "Stop",
         "Delete",
@@ -214,7 +225,11 @@ fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
                 subtitle: None,
                 tone: Some(Tone::Warn),
                 selected: false,
+                value: None,
+                badge: None,
+                disabled: false,
             }],
+            layout: ListLayout::Rows,
         }],
     };
     let nodes = card_nodes(&document, Owner::Listening);
@@ -323,5 +338,42 @@ fn a_wide_card_keeps_the_badge_on_the_heading_row() {
     assert!(
         (badge.x1 - row_right).abs() < 0.5,
         "the badge ends at the right edge of the heading row: {badge:?}"
+    );
+}
+
+#[test]
+fn a_row_that_cannot_be_chosen_tells_a_reader_that_it_takes_no_press() {
+    let nodes = card_nodes(&every_component(), Owner::Listening);
+    assert_eq!(
+        disabled_state(&nodes, "AWS"),
+        Some(true),
+        "a row the document disables reads as disabled"
+    );
+    assert_eq!(
+        disabled_state(&nodes, "CX22 - 2 vCPU"),
+        Some(false),
+        "a row of a choice reads as live"
+    );
+}
+
+#[test]
+fn a_step_reports_its_own_state_to_a_reader_as_its_line() {
+    let nodes = card_nodes(&every_component(), Owner::Listening);
+    let lines: Vec<&str> = nodes.iter().map(|(text, _)| text.as_str()).collect();
+    assert!(
+        lines.contains(&"Wait for SSH with the machine key"),
+        "the line of a step is a node of its own: {lines:?}"
+    );
+    assert!(
+        lines.contains(&"38 s"),
+        "the time of a step is a node of its own too: {lines:?}"
+    );
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|(text, _)| text == "Create the machine at the provider")
+            .count(),
+        1,
+        "a step is one node"
     );
 }

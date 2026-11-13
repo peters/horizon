@@ -78,6 +78,7 @@ impl CardRuntime {
         let Some(Component::List {
             selection: Selection::Single,
             rows,
+            ..
         }) = document.components.get(component)
         else {
             return false;
@@ -233,6 +234,7 @@ impl CardRuntime {
                 let Component::List {
                     selection: Selection::Single,
                     rows,
+                    ..
                 } = component
                 else {
                     return None;
@@ -256,6 +258,7 @@ impl CardRuntime {
             let Component::List {
                 selection: Selection::Single,
                 rows,
+                ..
             } = component
             else {
                 continue;
@@ -286,6 +289,7 @@ impl CardRuntime {
             let Some(Component::List {
                 selection: Selection::Single,
                 rows,
+                ..
             }) = document.components.get(*index)
             else {
                 return false;
@@ -344,7 +348,7 @@ impl CardRuntime {
 
 #[cfg(test)]
 mod tests {
-    use horizon_browser_control::block::{Button, Component, ListRow, Selection, Tone};
+    use horizon_browser_control::block::{Button, Component, ListLayout, ListRow, Selection, Tone};
 
     use super::{CardFrames, CardRuntime};
 
@@ -356,6 +360,9 @@ mod tests {
                 subtitle: None,
                 tone: None,
                 selected: false,
+                value: None,
+                badge: None,
+                disabled: false,
             })
             .collect()
     }
@@ -371,6 +378,7 @@ mod tests {
                 Component::List {
                     selection: Selection::Single,
                     rows: rows(row_ids),
+                    layout: ListLayout::Rows,
                 },
                 Component::Buttons {
                     items: vec![Button {
@@ -403,6 +411,7 @@ mod tests {
         card.components.push(Component::List {
             selection: Selection::None,
             rows: rows(&["b"]),
+            layout: ListLayout::Rows,
         });
         let mut runtime = CardRuntime::default();
 

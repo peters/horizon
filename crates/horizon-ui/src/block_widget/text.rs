@@ -48,3 +48,20 @@ pub(super) fn wrapped(
     );
     painter.layout_job(job)
 }
+
+/// One line of `text` in upper case, with `tracking` between its letters, as a
+/// caption draws it.
+pub(super) fn spaced_line(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    tracking: f32,
+) -> Arc<Galley> {
+    let mut job = single_line_label_job(&text.to_uppercase(), font, color, max_width);
+    for section in &mut job.sections {
+        section.format.extra_letter_spacing = tracking;
+    }
+    painter.layout_job(job)
+}

@@ -13,6 +13,7 @@
 
 mod badge;
 mod buttons;
+mod caption;
 pub(crate) mod chip;
 mod footer;
 mod heading;
@@ -23,6 +24,7 @@ mod metrics;
 mod progress;
 mod size;
 mod status;
+mod steps;
 mod text;
 mod tones;
 
@@ -207,7 +209,13 @@ fn show_component(
             progress::show(ui, index, label, *percent, detail.as_deref());
         }
         Component::Divider => show_divider(ui),
-        Component::List { selection, rows } => list::show(ui, index, *selection, rows, view, enabled),
+        Component::Caption { text } => caption::show(ui, index, text),
+        Component::Steps { steps } => steps::show(ui, index, steps),
+        Component::List {
+            selection,
+            rows,
+            layout,
+        } => list::show(ui, index, *selection, rows, *layout, view, enabled),
         Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled),
         // A link opens a browser panel of Horizon itself, so it needs no agent:
         // only a host dialog over the card keeps it from taking a press.

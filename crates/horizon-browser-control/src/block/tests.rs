@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::{
-    Badge, BlockDocument, BlockDocumentError, Button, Component, KvRow, ListRow, Selection, Tone, parse_document,
-    validate_document,
+    Badge, BlockDocument, BlockDocumentError, Button, Component, KvRow, ListLayout, ListRow, Selection, Step,
+    StepState, Tone, parse_document, validate_document,
 };
 
 /// The example an agent sends for a machine it holds.
@@ -156,7 +156,11 @@ fn a_hand_built_document_with_every_component_validates() {
                     subtitle: None,
                     tone: Some(Tone::Warn),
                     selected: false,
+                    value: Some("0.42 EUR/h".to_owned()),
+                    badge: None,
+                    disabled: false,
                 }],
+                layout: ListLayout::Rows,
             },
             Component::Buttons {
                 items: vec![Button {
@@ -168,6 +172,16 @@ fn a_hand_built_document_with_every_component_validates() {
             Component::Link {
                 label: "Open session".to_owned(),
                 url: "https://cloud.example.test/sessions/7".to_owned(),
+            },
+            Component::Caption {
+                text: "Size".to_owned(),
+            },
+            Component::Steps {
+                steps: vec![Step {
+                    label: "Create the machine at the provider".to_owned(),
+                    state: StepState::Now,
+                    at: Some("11 s".to_owned()),
+                }],
             },
         ],
     };
@@ -854,4 +868,182 @@ fn a_revision_is_not_part_of_the_document() {
     let error = parse_document(r#"{"revision":7,"components":[]}"#).expect_err("the host adds the revision");
     assert_eq!(error.code(), "invalid_document");
     assert!(error.to_string().contains("unknown field `revision`"), "{error}");
+}
+
+#[test]
+fn a_row_carries_a_value_a_badge_and_a_state_that_takes_no_choice() {
+    let document = parse_document(&document_of(&[
+        json!({"type": "list", "selection": "single", "layout": "pills", "rows": [
+            {"id": "size.small", "title": "Small", "subtitle": "2 vCPU, 4 GB.",
+             "value": "0.006 EUR/h", "badge": {"text": "Ready", "tone": "ok"}, "selected": true},
+            {"id": "provider.gcloud", "title": "Google Cloud",
+             "subtitle": "Not signed in. Run gcloud auth login", "disabled": true}
+        ]})
+        .to_string(),
+    ]))
+    .expect("a row holds a value, a badge and a disabled state");
+
+    let Component::List {
+        selection,
+        rows,
+        layout,
+    } = &document.components[0]
+    else {
+        panic!("a list");
+    };
+    assert_eq!((*selection, *layout), (Selection::Single, ListLayout::Pills));
+    assert_eq!(rows[0].value.as_deref(), Some("0.006 EUR/h"));
+    assert_eq!(
+        rows[0].badge,
+        Some(Badge {
+            text: "Ready".to_owned(),
+            tone: Tone::Ok
+        })
+    );
+    assert!(rows[0].selected, "the default choice is the row its document selects");
+    assert!(!rows[0].disabled);
+    assert!(!rows[1].selected, "the row without a selected field is not chosen");
+    assert_eq!(rows[1].value, None);
+    assert_eq!(rows[1].badge, None);
+    assert!(rows[1].disabled, "a row that is not signed in cannot be chosen");
+}
+
+#[test]
+fn a_list_draws_its_rows_one_under_another_unless_it_says_otherwise() {
+    let plain = json!({"type": "list", "selection": "none", "rows": [{"id": "row.1", "title": "Row"}]}).to_string();
+    let document = parse_document(&document_of(&[plain])).expect("a list without a layout");
+    let Component::List { layout, .. } = &document.components[0] else {
+        panic!("a list");
+    };
+    assert_eq!(*layout, ListLayout::Rows);
+
+    let unknown = json!({"type": "list", "selection": "none", "layout": "grid", "rows": []}).to_string();
+    let error = parse_document(&document_of(&[unknown])).expect_err("grid is not a layout");
+    assert!(error.to_string().contains("unknown variant `grid`"), "{error}");
+}
+
+#[test]
+fn a_caption_is_one_filled_line() {
+    let caption = json!({"type": "caption", "text": "SIZE"}).to_string();
+    let document = parse_document(&document_of(&[caption])).expect("a caption");
+    assert_eq!(
+        document.components[0],
+        Component::Caption {
+            text: "SIZE".to_owned()
+        }
+    );
+
+    let empty = json!({"type": "caption", "text": " "}).to_string();
+    assert_eq!(
+        parse_document(&document_of(&[empty])).expect_err("a caption is filled"),
+        BlockDocumentError::EmptyText {
+            path: "components[0].text".to_owned()
+        }
+    );
+
+    let two_lines = json!({"type": "caption", "text": "SIZE\nPLACE"}).to_string();
+    assert_eq!(
+        parse_document(&document_of(&[two_lines])).expect_err("a caption is one line"),
+        BlockDocumentError::ControlCharacter {
+            path: "components[0].text".to_owned(),
+            code_point: 10
+        }
+    );
+}
+
+#[test]
+fn a_step_holds_a_label_a_state_and_a_short_time() {
+    let steps = json!({"type": "steps", "steps": [
+        {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
+        {"label": "Check tmux on the machine", "state": "now", "at": "now"},
+        {"label": "Add the machine to Machines"}
+    ]})
+    .to_string();
+    let document = parse_document(&document_of(&[steps])).expect("a step list");
+    let Component::Steps { steps } = &document.components[0] else {
+        panic!("steps");
+    };
+    assert_eq!(steps[0].state, StepState::Done);
+    assert_eq!(steps[0].at.as_deref(), Some("2 s"));
+    assert_eq!(steps[1].state, StepState::Now);
+    assert_eq!(
+        steps[2].state,
+        StepState::Waiting,
+        "a step waits unless it says otherwise"
+    );
+    assert_eq!(steps[2].at, None);
+
+    for (step, path) in [
+        (
+            json!({"type": "steps", "steps": [{"label": ""}]}).to_string(),
+            "components[0].steps[0].label",
+        ),
+        (
+            json!({"type": "steps", "steps": [{"label": "Wait", "at": "a\tb"}]}).to_string(),
+            "components[0].steps[0].at",
+        ),
+    ] {
+        let error = parse_document(&document_of(&[step])).expect_err("the step text is not allowed");
+        assert_eq!(error.code(), "invalid_document", "{path}");
+    }
+
+    let unknown = json!({"type": "steps", "steps": [{"label": "Wait", "icon": "clock"}]}).to_string();
+    let error = parse_document(&document_of(&[unknown])).expect_err("a step holds no icon");
+    assert!(error.to_string().contains("unknown field `icon`"), "{error}");
+}
+
+#[test]
+fn steps_at_the_limit_parse_and_one_over_is_rejected() {
+    let steps = |count: usize| {
+        let steps: Vec<serde_json::Value> = (0..count).map(|_| json!({"label": "Create the machine"})).collect();
+        json!({"type": "steps", "steps": steps}).to_string()
+    };
+    assert!(parse_document(&document_of(&[steps(BlockDocument::MAX_STEPS)])).is_ok());
+
+    let error = parse_document(&document_of(&[steps(BlockDocument::MAX_STEPS + 1)])).expect_err("one over");
+    assert_eq!(
+        error,
+        BlockDocumentError::TooManyItems {
+            path: "components[0].steps".to_owned(),
+            actual: BlockDocument::MAX_STEPS + 1,
+            limit: BlockDocument::MAX_STEPS
+        }
+    );
+}
+
+#[test]
+fn the_value_and_the_badge_of_a_row_hold_512_characters_and_no_control_character() {
+    let longest = "b".repeat(BlockDocument::MAX_TEXT_CHARS);
+    for row in [
+        json!({"id": "row.1", "title": "Row", "value": longest}),
+        json!({"id": "row.1", "title": "Row", "badge": {"text": longest}}),
+    ] {
+        let document = json!({"type": "list", "selection": "none", "rows": [row]}).to_string();
+        assert!(
+            parse_document(&document_of(&[document])).is_ok(),
+            "512 characters are accepted: {row}"
+        );
+    }
+
+    let long = "b".repeat(BlockDocument::MAX_TEXT_CHARS + 1);
+    for (row, path) in [
+        (
+            json!({"id": "row.1", "title": "Row", "value": long}),
+            "components[0].rows[0].value",
+        ),
+        (
+            json!({"id": "row.1", "title": "Row", "badge": {"text": long}}),
+            "components[0].rows[0].badge.text",
+        ),
+        (
+            json!({"id": "row.1", "title": "Row", "value": "a\nb"}),
+            "components[0].rows[0].value",
+        ),
+    ] {
+        let error = parse_document(&document_of(&[
+            json!({"type": "list", "selection": "none", "rows": [row]}).to_string(),
+        ]))
+        .expect_err("the value is one line of at most 512 characters");
+        assert!(error.to_string().contains(path), "{path}: {error}");
+    }
 }

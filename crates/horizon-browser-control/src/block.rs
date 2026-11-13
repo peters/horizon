@@ -4,9 +4,10 @@
 //! holds, a plan, a list of results — and sends this document for the body.
 //! The document is a flat list of components in draw order: a heading, body
 //! text, label and value pairs, a badge, a progress bar, a rule, selectable
-//! rows, buttons and a link. It has no inputs, images or tables, and no field
-//! that Horizon fetches or opens by itself: a link opens in a browser panel
-//! only when the person presses it.
+//! rows, buttons and a link, a caption and the steps of a longer piece of work.
+//! It has no inputs, images or tables, and no field that Horizon fetches or
+//! opens by itself: a link opens in a browser panel only when the person
+//! presses it.
 //!
 //! The document holds components only. The host assigns the revision, keeps
 //! the card in its own state and reports a click on a button or a row back to
@@ -21,7 +22,9 @@ mod validate;
 
 pub use events::ClickEvent;
 pub use link::{checked_link, link_host};
-pub use model::{Badge, BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
+pub use model::{
+    Badge, BlockDocument, Button, Component, KvRow, ListLayout, ListRow, Selection, Step, StepState, Tone,
+};
 pub use validate::{BlockDocumentError, parse_document, validate_document};
 
 #[cfg(test)]

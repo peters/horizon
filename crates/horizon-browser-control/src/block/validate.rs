@@ -24,6 +24,8 @@ impl BlockDocument {
     pub const MAX_LIST_ROWS: usize = 32;
     /// Most items one `buttons` component may hold.
     pub const MAX_BUTTONS: usize = 8;
+    /// Most steps one `steps` component may hold.
+    pub const MAX_STEPS: usize = 16;
     /// Most `link` components one document may hold.
     pub const MAX_LINKS: usize = 8;
     /// Most characters the label of one `link` may hold.
@@ -260,7 +262,11 @@ fn validate_component<'a>(
             Ok(())
         }
         Component::Divider => Ok(()),
-        Component::List { selection, rows } => {
+        Component::List {
+            selection,
+            rows,
+            layout: _,
+        } => {
             check_count(&field(&at, "rows"), rows.len(), BlockDocument::MAX_LIST_ROWS)?;
             let mut selected: Option<String> = None;
             for (row_index, row) in rows.iter().enumerate() {
@@ -287,6 +293,18 @@ fn validate_component<'a>(
             check_count(&field(&at, "items"), items.len(), BlockDocument::MAX_BUTTONS)?;
             for (item_index, item) in items.iter().enumerate() {
                 validate_button(&element(&at, "items", item_index), item, ids)?;
+            }
+            Ok(())
+        }
+        Component::Caption { text } => filled_line(&field(&at, "text"), text),
+        Component::Steps { steps } => {
+            check_count(&field(&at, "steps"), steps.len(), BlockDocument::MAX_STEPS)?;
+            for (step_index, step) in steps.iter().enumerate() {
+                let step_at = element(&at, "steps", step_index);
+                filled_line(&field(&step_at, "label"), &step.label)?;
+                if let Some(at) = &step.at {
+                    line(&field(&step_at, "at"), at)?;
+                }
             }
             Ok(())
         }
@@ -331,6 +349,12 @@ fn validate_list_row<'a>(at: &str, row: &'a ListRow, ids: &mut HashSet<&'a str>)
     filled_line(&field(at, "title"), &row.title)?;
     if let Some(subtitle) = &row.subtitle {
         line(&field(at, "subtitle"), subtitle)?;
+    }
+    if let Some(value) = &row.value {
+        line(&field(at, "value"), value)?;
+    }
+    if let Some(badge) = &row.badge {
+        line(&field(&format!("{at}.badge"), "text"), &badge.text)?;
     }
     Ok(())
 }

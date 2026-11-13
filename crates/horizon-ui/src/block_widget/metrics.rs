@@ -99,6 +99,43 @@ pub(super) const LIST_TITLE_FONT: f32 = 13.0;
 pub(super) const LIST_SUBTITLE_FONT: f32 = 11.5;
 /// Space between the title and the second line of a row.
 pub(super) const LIST_LINE_GAP: f32 = 2.0;
+/// Font of the short value at the right edge of a row.
+pub(super) const LIST_VALUE_FONT: f32 = 12.0;
+/// Least space between the text of a row and its value or its badge.
+pub(super) const LIST_VALUE_GAP: f32 = 12.0;
+
+/// Height of one pill of a list that draws pills.
+pub(super) const PILL_HEIGHT: f32 = 30.0;
+/// Corner radius of a pill.
+pub(super) const PILL_RADIUS: u8 = 8;
+/// Space on both sides inside a pill.
+pub(super) const PILL_PAD_SIDE: f32 = 12.0;
+/// Font of a pill.
+pub(super) const PILL_FONT: f32 = 12.5;
+/// Space between two pills of one line.
+pub(super) const PILL_GAP: f32 = 6.0;
+/// Space between two lines of pills.
+pub(super) const PILL_LINE_GAP: f32 = 6.0;
+
+/// Font of a caption.
+pub(super) const CAPTION_FONT: f32 = 10.5;
+/// How far the letters of a caption are spread, in points.
+pub(super) const CAPTION_TRACKING: f32 = 0.7;
+
+/// Diameter of the mark of a step.
+pub(super) const STEP_MARK: f32 = 16.0;
+/// Ring width of the mark of a step.
+pub(super) const STEP_MARK_RING: f32 = 1.5;
+/// Space between the mark of a step and its text.
+pub(super) const STEP_MARK_GAP: f32 = 10.0;
+/// Space between two steps.
+pub(super) const STEP_GAP: f32 = 10.0;
+/// Font of the line of a step.
+pub(super) const STEP_FONT: f32 = 12.5;
+/// Font of the time at the right edge of a step.
+pub(super) const STEP_TIME_FONT: f32 = 11.5;
+/// Least space between the line of a step and its time.
+pub(super) const STEP_TIME_GAP: f32 = 10.0;
 
 /// Font of the label row of a progress bar.
 pub(super) const PROGRESS_LABEL_FONT: f32 = 11.5;

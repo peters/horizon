@@ -69,6 +69,21 @@ pub enum Component {
         selection: Selection,
         /// The rows, in draw order.
         rows: Vec<ListRow>,
+        /// How the rows are drawn; one under another when omitted.
+        #[serde(default)]
+        layout: ListLayout,
+    },
+    /// A caption above a group of rows or a choice: upper case, small and
+    /// dim, such as `SIZE` or `PLACE`.
+    Caption {
+        /// The caption text. Horizon draws it in upper case.
+        text: String,
+    },
+    /// The steps of a longer piece of work, each with its state and an
+    /// optional short time. A step takes no press.
+    Steps {
+        /// The steps, in the order they run.
+        steps: Vec<Step>,
     },
     /// Buttons a person can press.
     Buttons {
@@ -117,6 +132,18 @@ pub enum Selection {
     Single,
 }
 
+/// How a list draws its rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ListLayout {
+    /// One row under another, with the mark of the row that is selected.
+    #[default]
+    Rows,
+    /// One row of small pills, for a short choice such as a place. It carries
+    /// the titles of its rows only.
+    Pills,
+}
+
 /// A short status pill beside a heading, or on a row of its own as a
 /// [`Component::Badge`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -161,6 +188,45 @@ pub struct ListRow {
     /// may hold a selected row, and at most one row of a list.
     #[serde(default)]
     pub selected: bool,
+    /// A short value at the right edge of the row, drawn in the monospace
+    /// family: a price or a size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// A short pill at the right edge of the row, after its value: `Ready`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub badge: Option<Badge>,
+    /// Drawn as a row that the person cannot choose: a dashed outline and a
+    /// softer title, whose second line says what is missing. A press on it
+    /// reaches no agent, and it never carries the selection of its list.
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+/// One step of a longer piece of work.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Step {
+    /// The line of this step.
+    pub label: String,
+    /// What the step does now; waiting when omitted.
+    #[serde(default)]
+    pub state: StepState,
+    /// A short time at the right edge, such as `38 s` or `now`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+/// What one step of a `steps` component does now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepState {
+    /// The step finished.
+    Done,
+    /// The step runs now.
+    Now,
+    /// The step waits for the ones before it.
+    #[default]
+    Waiting,
 }
 
 /// One button.

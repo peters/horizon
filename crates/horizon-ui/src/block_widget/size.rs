@@ -7,18 +7,23 @@
 //! the thread that draws a frame. The measurement of the first pass is the
 //! truth: the host gives the card the height that fits, once per document.
 
-use horizon_browser_control::block::{BlockDocument, Component};
+use horizon_browser_control::block::{BlockDocument, Component, ListLayout};
 
 use super::metrics::{
-    BADGE_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_TOP, BUTTON_HEIGHT, CARD_MAX_HEIGHT, CARD_MIN_HEIGHT, CARD_WIDTH,
-    COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP, KV_ROW_HEIGHT,
-    LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT, PROGRESS_BAR_HEIGHT,
-    PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, TEXT_FONT, TEXT_LINE_HEIGHT, count,
+    BADGE_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_TOP, BUTTON_HEIGHT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
+    CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT,
+    HEADING_SUBTITLE_GAP, KV_ROW_HEIGHT, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT,
+    LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP,
+    STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
 /// Characters of body text that fit on one line at the card width.
 const TEXT_CHARS_PER_LINE: usize = 58;
+/// Characters of pill titles that fit on one line of pills at the card width.
+const PILL_CHARS_PER_LINE: usize = 34;
+/// The characters of padding that one pill spends around its title.
+const PILL_CHARS_OF_PADDING: usize = 3;
 /// Height of one line of the proportional face, as a multiple of its size.
 const LINE_FACTOR: f32 = 1.35;
 
@@ -99,6 +104,22 @@ fn component_height(component: &Component) -> f32 {
         Component::Badge { .. } => BADGE_HEIGHT,
         Component::Progress { .. } => PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT,
         Component::Divider => 1.0,
+        Component::List {
+            rows,
+            layout: ListLayout::Pills,
+            ..
+        } => {
+            // A pill takes its title and its padding; the lines wrap where the
+            // card width ends. The first pass measures the real content.
+            let characters = rows
+                .iter()
+                .map(|row| row.title.chars().count() + PILL_CHARS_OF_PADDING)
+                .sum::<usize>();
+            let lines = characters
+                .div_ceil(PILL_CHARS_PER_LINE)
+                .max(usize::from(!rows.is_empty()));
+            count(lines) * PILL_HEIGHT + count(lines.saturating_sub(1)) * PILL_LINE_GAP
+        }
         Component::List { rows, .. } => {
             let heights: f32 = rows
                 .iter()
@@ -120,5 +141,17 @@ fn component_height(component: &Component) -> f32 {
             }
         }
         Component::Link { .. } => super::link::height(),
+        Component::Caption { .. } => CAPTION_FONT + CAPTION_TRACKING,
+        Component::Steps { steps } => {
+            let heights: f32 = steps
+                .iter()
+                .map(|_| {
+                    (STEP_MARK)
+                        .max(STEP_FONT * LINE_FACTOR)
+                        .max(STEP_TIME_FONT * LINE_FACTOR)
+                })
+                .sum();
+            heights + count(steps.len().saturating_sub(1)) * STEP_GAP
+        }
     }
 }

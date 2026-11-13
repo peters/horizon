@@ -12,7 +12,9 @@ mod link;
 mod rules;
 
 use egui::{Pos2, Rect, Vec2, accesskit};
-use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, ListRow, Selection, Tone};
+use horizon_browser_control::block::{
+    BlockDocument, Button, Component, KvRow, ListLayout, ListRow, Selection, Step, StepState, Tone,
+};
 use horizon_core::{CardRuntime, PanelId};
 
 use super::{CardView, show};
@@ -243,10 +245,13 @@ fn center_of(nodes: &[(accesskit::NodeId, accesskit::Node)], label: &str) -> Pos
 }
 
 /// The screen rectangle of the node labelled `label`.
+///
+/// A control carries its text as a label, and a text of the card carries it as
+/// a value, so a press finds either.
 fn bounds_of(nodes: &[(accesskit::NodeId, accesskit::Node)], label: &str) -> Option<accesskit::Rect> {
     nodes
         .iter()
-        .find(|(_, node)| node.label().is_some_and(|text| text == label))
+        .find(|(_, node)| node.label().or_else(|| node.value()).is_some_and(|text| text == label))
         .and_then(|(_, node)| node.bounds())
 }
 
@@ -323,82 +328,209 @@ fn disabled_state(nodes: &[(String, bool)], label: &str) -> Option<bool> {
 
 /// A document that holds every component the card can draw.
 pub(super) fn every_component() -> BlockDocument {
+    let mut components = vec![
+        Component::Heading {
+            text: "build-1".to_string(),
+            subtitle: Some("Hetzner · Helsinki".to_string()),
+            badge: Some(horizon_browser_control::block::Badge {
+                text: "Running".to_string(),
+                tone: Tone::Ok,
+            }),
+        },
+        Component::Badge {
+            text: "needs your choice".to_string(),
+            tone: Tone::Info,
+        },
+        Component::Kv {
+            rows: vec![
+                KvRow {
+                    label: "Address".to_string(),
+                    value: "203.0.113.10".to_string(),
+                    mono: true,
+                },
+                KvRow {
+                    label: "Up for".to_string(),
+                    value: "2 h 14 min".to_string(),
+                    mono: false,
+                },
+            ],
+        },
+        Component::Text {
+            text: "Billed from 14:02 UTC.".to_string(),
+        },
+        Component::Progress {
+            label: "Step 1 of 3".to_string(),
+            percent: 33,
+            detail: Some("Provider".to_string()),
+        },
+        Component::Divider,
+        Component::List {
+            selection: Selection::Single,
+            rows: vec![
+                ListRow {
+                    id: "size.cx22".to_string(),
+                    title: "CX22 - 2 vCPU".to_string(),
+                    subtitle: Some("0.42 EUR/h".to_string()),
+                    tone: None,
+                    selected: false,
+                    value: Some("0.006 EUR/h".to_string()),
+                    badge: None,
+                    disabled: false,
+                },
+                ListRow {
+                    id: "gcloud".to_string(),
+                    title: "Google Cloud".to_string(),
+                    subtitle: Some("gcloud is not installed".to_string()),
+                    tone: Some(Tone::Warn),
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                },
+                ListRow {
+                    id: "aws".to_string(),
+                    title: "AWS".to_string(),
+                    subtitle: Some("No profile found. Run aws configure sso".to_string()),
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: Some(horizon_browser_control::block::Badge {
+                        text: "Ready".to_string(),
+                        tone: Tone::Ok,
+                    }),
+                    disabled: true,
+                },
+            ],
+            layout: ListLayout::Rows,
+        },
+        Component::Buttons {
+            items: vec![
+                Button {
+                    id: "connect".to_string(),
+                    label: "Connect".to_string(),
+                    tone: Tone::Primary,
+                },
+                Button {
+                    id: "stop".to_string(),
+                    label: "Stop".to_string(),
+                    tone: Tone::Neutral,
+                },
+                Button {
+                    id: "delete".to_string(),
+                    label: "Delete".to_string(),
+                    tone: Tone::Danger,
+                },
+            ],
+        },
+    ];
+    components.extend(pills_and_steps());
+    BlockDocument { components }
+}
+
+/// The second half of a card: a caption, a choice drawn as pills and the steps
+/// of longer work.
+fn pills_and_steps() -> Vec<Component> {
+    vec![
+        Component::Caption {
+            text: "Place".to_string(),
+        },
+        Component::List {
+            selection: Selection::Single,
+            rows: vec![
+                ListRow {
+                    id: "place.helsinki".to_string(),
+                    title: "Helsinki".to_string(),
+                    subtitle: None,
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                },
+                ListRow {
+                    id: "place.falkenstein".to_string(),
+                    title: "Falkenstein".to_string(),
+                    subtitle: None,
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                },
+            ],
+            layout: ListLayout::Pills,
+        },
+        Component::Steps {
+            steps: vec![
+                Step {
+                    label: "Create the machine at the provider".to_string(),
+                    state: StepState::Done,
+                    at: Some("11 s".to_string()),
+                },
+                Step {
+                    label: "Wait for SSH with the machine key".to_string(),
+                    state: StepState::Now,
+                    at: Some("38 s".to_string()),
+                },
+                Step {
+                    label: "Add the machine to Machines".to_string(),
+                    state: StepState::Waiting,
+                    at: None,
+                },
+            ],
+        },
+    ]
+}
+
+/// A document with the steps of a longer piece of work and nothing else.
+pub(super) fn steps_document() -> BlockDocument {
     BlockDocument {
-        components: vec![
-            Component::Heading {
-                text: "build-1".to_string(),
-                subtitle: Some("Hetzner · Helsinki".to_string()),
-                badge: Some(horizon_browser_control::block::Badge {
-                    text: "Running".to_string(),
-                    tone: Tone::Ok,
-                }),
-            },
-            Component::Badge {
-                text: "needs your choice".to_string(),
-                tone: Tone::Info,
-            },
-            Component::Kv {
-                rows: vec![
-                    KvRow {
-                        label: "Address".to_string(),
-                        value: "203.0.113.10".to_string(),
-                        mono: true,
-                    },
-                    KvRow {
-                        label: "Up for".to_string(),
-                        value: "2 h 14 min".to_string(),
-                        mono: false,
-                    },
-                ],
-            },
-            Component::Text {
-                text: "Billed from 14:02 UTC.".to_string(),
-            },
-            Component::Progress {
-                label: "Step 1 of 3".to_string(),
-                percent: 33,
-                detail: Some("Provider".to_string()),
-            },
-            Component::Divider,
-            Component::List {
-                selection: Selection::Single,
-                rows: vec![
-                    ListRow {
-                        id: "size.cx22".to_string(),
-                        title: "CX22 - 2 vCPU".to_string(),
-                        subtitle: Some("0.42 EUR/h".to_string()),
-                        tone: None,
-                        selected: false,
-                    },
-                    ListRow {
-                        id: "gcloud".to_string(),
-                        title: "Google Cloud".to_string(),
-                        subtitle: Some("gcloud is not installed".to_string()),
-                        tone: Some(Tone::Warn),
-                        selected: false,
-                    },
-                ],
-            },
-            Component::Buttons {
-                items: vec![
-                    Button {
-                        id: "connect".to_string(),
-                        label: "Connect".to_string(),
-                        tone: Tone::Primary,
-                    },
-                    Button {
-                        id: "stop".to_string(),
-                        label: "Stop".to_string(),
-                        tone: Tone::Neutral,
-                    },
-                    Button {
-                        id: "delete".to_string(),
-                        label: "Delete".to_string(),
-                        tone: Tone::Danger,
-                    },
-                ],
-            },
-        ],
+        components: vec![Component::Steps {
+            steps: vec![
+                Step {
+                    label: "Create the machine at the provider".to_string(),
+                    state: StepState::Done,
+                    at: Some("11 s".to_string()),
+                },
+                Step {
+                    label: "Add the machine to Machines".to_string(),
+                    state: StepState::Waiting,
+                    at: None,
+                },
+            ],
+        }],
+    }
+}
+
+/// A document with one list of pills and nothing else.
+pub(super) fn pills_document() -> BlockDocument {
+    BlockDocument {
+        components: vec![Component::List {
+            selection: Selection::Single,
+            rows: vec![
+                ListRow {
+                    id: "place.helsinki".to_string(),
+                    title: "Helsinki".to_string(),
+                    subtitle: None,
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                },
+                ListRow {
+                    id: "place.falkenstein".to_string(),
+                    title: "Falkenstein".to_string(),
+                    subtitle: None,
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                },
+            ],
+            layout: ListLayout::Pills,
+        }],
     }
 }
 

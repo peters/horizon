@@ -387,12 +387,24 @@ A document holds components in draw order, and only these components:
 - `progress`: `label`, `percent` and optional `detail`, drawn on the right of
   the label row.
 - `divider`: no fields.
-- `list`: `selection` (`none` or `single`) and `rows` with `id`, `title`,
-  optional `subtitle`, optional `tone` for the colour of the subtitle and
-  optional `selected`. A row with `selected: true` is the row that the list
+- `list`: `selection` (`none` or `single`), optional `layout` (`rows` by
+  default, or `pills`) and `rows` with `id`, `title`, optional `subtitle`,
+  optional `tone` for the colour of the subtitle, optional `selected`,
+  optional `value`, optional `badge` with `text` and optional `tone`, and
+  optional `disabled`. A row with `selected: true` is the row that the list
   starts with: a click reports it until the person selects another row. Only a
   list with `selection: single` may hold a selected row, and at most one row of
-  a list.
+  a list. `value` is a short word at the right edge, drawn in the monospace
+  family: a price, a size or a time. `badge` is a small pill at the right edge:
+  `Ready` with tone `ok`. A row with `disabled: true` is drawn with a dashed
+  outline and a softer title, says in its subtitle what is missing, and sends no
+  click. `layout: pills` draws the titles of the rows as one line of small
+  pills, for a short choice such as a place; a pill is a row for the click.
+- `caption`: `text`. One short line above a group of rows, such as `Size` or
+  `Place`. Horizon draws it in upper case, small and dim.
+- `steps`: `steps` with `label`, optional `state` (`done`, `now` or `waiting`,
+  the default) and optional `at`, a short time at the right edge such as `38 s`
+  or `now`. A step list reports progress and takes no click.
 - `buttons`: `items` with `id`, `label` and optional `tone`.
 - `link`: `label` and `url`. The label is one line of 1 to 80 characters. The
   URL is an absolute `http` or `https` URL with a host, 1 to 2048 characters,
@@ -407,9 +419,10 @@ The limits are:
 - 32 KiB for the whole serialized document.
 - 64 components.
 - 24 rows in one `kv` and 32 rows in one `list`.
+- 16 steps in one `steps`.
 - 8 buttons in one `buttons`, and 8 `link` components in one card.
-- 512 characters in one text, including `subtitle`, the `badge` text and
-  `detail`.
+- 512 characters in one text, including `subtitle`, the `badge` text,
+  `detail`, the `value` of a row and the `at` of a step.
 - Ids from `[a-z0-9_.-]`, at most 64 characters, unique in the whole document.
 - A `tone` from `neutral`, `info`, `ok`, `warn`, `danger` or `primary`.
 - A `percent` from 0 to 100.
@@ -435,7 +448,9 @@ A person can press a button, and select a row in a list that has
 `selection: single`. A selection is Horizon's own state: it is not saved, and a
 new document drops a selection whose row is gone. A press on a selectable row
 changes the selection and is also a click. A list whose row has `selected: true`
-starts with that row selected, until the person selects another row.
+starts with that row selected, until the person selects another row. A row with
+`disabled: true` takes no press and is never selected, and a `caption` and a
+`steps` component take no press at all.
 
 `next_click` waits for the next click on a card that the caller owns. Leave out
 `panel_id` and it waits on every card that the caller owns, oldest click first:
