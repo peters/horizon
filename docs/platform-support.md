@@ -211,12 +211,18 @@ works, so the platform gives the default and the recipe.
 
 | Function | Linux | macOS |
 |---|---|---|
-| The hotkey, the state mark and the insert of the text | Yes | Yes |
+| The hotkey, the microphone icon of the title bar, the pill and the insert of the text | Yes | Yes |
 | The default recorder line | Yes: `pw-record` of PipeWire records 16 kHz on one channel | No: no recorder is a part of macOS, so the line is empty and the person installs one |
 | A recorder recipe that the documents give | `pw-record --rate 16000 --channels 1 --format s16 {file}` | `ffmpeg -f avfoundation -i :default -ac 1 -ar 16000 -y {file}`, or `rec -c 1 -r 16000 {file}` of SoX |
 | A take with a real microphone | Yes with PipeWire | Not tested: no run of this repository used a real microphone on macOS |
 | The transcription service over HTTPS | Yes | Yes |
 | The transcription command | Yes | Yes |
+
+The microphone icon in the title bar of a panel states the take of that panel:
+it is red while the take records and it pulses amber while the take is
+transcribed. One click on the icon starts a take into that panel, and one click
+on the red icon stops it. The pill at the bottom of the panel holds the
+sentences only: the reason of a failed take, and the offer of a kept take.
 
 A Linux computer needs a PipeWire session, because `pw-record` records from it.
 macOS holds no recorder that a person can use without an install, so the tab says

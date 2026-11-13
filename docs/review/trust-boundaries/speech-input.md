@@ -203,11 +203,12 @@ What the guarantees do not cover:
 - **Escape cancels the take that is running.** The recording is stopped and the
   file is deleted; no request runs.
 - **The insert is untrusted text of a cleaned shape.** See the clean above.
-- **The state mark is Horizon's own text.** "Listening 0:03", "Writing…" and one
-  sentence of an error are drawn by Horizon. The text of a service reaches the
-  panel and never the mark, the log or the settings.
-- **The state mark repaints once per second while a take records.** No frame
-  repeats while a take waits, so an idle window costs nothing.
+- **The state mark is Horizon's own text.** The icon of the title bar, the clock
+  of a take and one sentence of an error are drawn by Horizon. The text of a
+  service reaches the panel and never the mark, the log or the settings.
+- **The frame rate of a take is Horizon's own.** A window repaints while the
+  icon of a take pulses, which is while its recorder or its transcription runs.
+  No frame repeats while every icon is idle, so an idle window costs nothing.
 - **The worker holds the take.** The recorder child, the service request, the
   command, the file reads and the file deletes run on one worker thread of the
   window. The UI thread sends the hotkey events and reads the state, and every

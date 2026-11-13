@@ -460,7 +460,8 @@ when it names one of those kinds.
   command line of the settings, `endpoint` checks the endpoint of a service,
   `service` builds one multipart request, `text` cleans one answer, `clock` holds
   the bounds that a test replaces, and `take` runs one take on a worker thread.
-  `app::speech` holds the hotkey, the insert and the state mark, and
+  `app::speech` holds the hotkey, the icon, the insert and the pill of a
+  sentence, `app::panels::mic` draws the icon of the title bar, and
   `app::settings::speech` is the **Speech** tab.
 
 ## File Size Policy

@@ -96,11 +96,18 @@ you can rotate.
 3. Press **Record two seconds**. The tab shows the text of that take, or the
    sentence of its error.
 
-The state mark of a take is a small pill at the bottom of the panel: the seconds
-while it records, then one line of a transcription, then six seconds of a
-sentence of a failure. The sentences are one of: the recorder is not installed;
-the recorder ended early, with its last line of standard error; no secret of that
-name is on this computer.
+The microphone icon in the title bar of a panel states the take of that panel: it
+is dim while no take records, red with a pulsing ring while the take of that
+panel records, and pulsing amber while that take is transcribed. One click
+starts a take into the panel, and one click on the red icon stops it. The seconds
+of a take are in the hover text and in the value of the icon. A panel wears the
+icon only while speech input is on, and only a panel that a take can enter: a
+terminal panel or an agent panel. The pill at the bottom of the panel holds the
+sentences only: the reason of a failed take, and the offer of a kept take.
+
+The pill shows the sentence of a failure for six seconds. The sentences are one
+of: the recorder is not installed; the recorder ended early, with its last line
+of standard error; no secret of that name is on this computer.
 
 One call of a service has one sentence for each of its failures, and the tab
 **Try** shows the same sentence as the pill:

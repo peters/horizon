@@ -15,7 +15,7 @@ owner: peters
 This procedure proves that one take of speech input records with a recorder
 program of this computer, that a transcription service or a transcription
 command turns the take into text, that the text reaches the panel that had the
-focus with no line break, that the state mark tells the state of the take, that
+focus with no line break, that the microphone icon of the title bar and the pill tell the state of the take, that
 the take file goes after every outcome, and that the key of the service reaches
 one request header and no file of the run.
 
@@ -130,9 +130,10 @@ for the commands of the sink and for the measured limit of that route.
 
 1. Press and hold `F9` for two seconds, then release it.
 
-   Result: A pill at the bottom of the panel says `Listening 0:00`, then
-   `Listening 0:01` after one second. It counts the seconds while the key is
-   down. After the release it says `Writing…`, and then it goes.
+   Result: The microphone icon of the title bar of the panel is red, and a ring
+   pulses around it. Its hover text counts the seconds of the take. After the
+   release the icon pulses amber, and then it is dim again. The pill at the
+   bottom of the panel shows no line.
 
 2. Read the last line of the panel.
 
@@ -163,9 +164,10 @@ for the commands of the sink and for the measured limit of that route.
 
 ### 6.2 SI-2 — Escape drops the take
 
-1. Press and hold `F9`, and press `Escape` while the pill counts.
+1. Press and hold `F9`, and press `Escape` while the icon is red.
 
-   Result: The pill goes at once. The panel gains no text.
+   Result: The icon is dim at once, and it does not pulse. The panel gains no
+   text, and the pill shows no line.
 
 2. List the folder of the takes:
 
@@ -208,9 +210,9 @@ for the commands of the sink and for the measured limit of that route.
 4. Press and hold `F9` for five seconds, and keep the key down.
 
    Result: The pill says `sh ended early: the sound server is away` while the key
-   is still down. It does not count the seconds and it does not say `Listening`
-   again, because one press starts one take. The folder of the takes holds no
-   file.
+   is still down. The icon of the panel is dim, because the take ended, and it
+   does not become red again: one press starts one take. The folder of the takes
+   holds no file.
 
 5. Release `F9`.
 
@@ -288,8 +290,9 @@ for the commands of the sink and for the measured limit of that route.
 
 2. Press and hold `F9`, speak one short sentence, and release it.
 
-   Result: The pill counts the seconds, then says `Writing…`, then the panel gains
-   the text of the sentence with no line break.
+   Result: The icon of the panel is red and a ring pulses around it, its hover
+   text counts the seconds, and then the icon pulses amber while the take is
+   transcribed. The panel gains the text of the sentence with no line break.
 
 3. Delete the named secret of the key.
 
@@ -315,8 +318,9 @@ for the commands of the sink and for the measured limit of that route.
 
 4. Press and hold `F9`, and speak one short sentence.
 
-   Result: The pill counts the seconds, then the panel gains the text of the
-   sentence with no line break. This step needs a microphone on the test machine.
+   Result: The icon of the panel is red while the take records, its hover text
+   counts the seconds, and then the panel gains the text of the sentence with no
+   line break. This step needs a microphone on the test machine.
 
 5. If SoX is installed, repeat steps 3 and 4 with
    `rec -c 1 -r 16000 {file}`.
@@ -348,9 +352,9 @@ for the commands of the sink and for the measured limit of that route.
 2. Click the panel of the detached window, then press and hold the speech
    hotkey and speak one short sentence.
 
-   Result: The state mark of the take is in the detached window, on the panel
-   that has the focus there. The panel gains the text of the sentence with no
-   line break, and the panel of the main window gains no text.
+   Result: The icon of that panel, in the detached window, is red while the take
+   records. The panel gains the text of the sentence with no line break, and the
+   panel of the main window gains no text.
 
 ### 6.12 SI-12 — A recorder that ignores the interrupt signal is stopped
 
@@ -368,10 +372,11 @@ for the commands of the sink and for the measured limit of that route.
 
 2. Press and hold `F9` for two seconds, then release it.
 
-   Result: The pill says `Listening 0:01`, then `Writing…`, then it goes. The
-   panel gains the text `<text>` in less than one second after the release: the
-   stop sent `SIGTERM` after 0.3 seconds, so the recorder ended without the two
-   second kill of the bound.
+   Result: The icon of the panel is red, its hover text counts the seconds, and
+   then it pulses amber while the take is transcribed. The panel gains the text
+   `<text>` in less than one second after the release: the stop sent `SIGTERM`
+   after 0.3 seconds, so the recorder ended without the two second kill of the
+   bound.
 
 3. Read the record of the stand-in service as in SI-1 step 3.
 
@@ -545,9 +550,9 @@ sound socket and the take said `pw-record ended early: error:
    pw-play --target <name> <evidence>/take.wav
    ```
 
-   Result: The pill counts the seconds of the take. After the release it says
-   `Writing…`, and then it goes. The state mark holds no line of
-   `pw_context_connect()`.
+   Result: The icon of the panel is red while the take records, and its hover
+   text counts the seconds. After the release the icon pulses amber, and then it
+   is dim again. The pill holds no line of `pw_context_connect()`.
 
 4. Read the last line of the panel, and read the record of the stand-in service
    as in SI-1 step 3.
@@ -599,7 +604,8 @@ sound socket and the take said `pw-record ended early: error:
 
 3. Press and hold `F9` for two seconds, and release it.
 
-   Result: The pill says `Writing…` and then
+   Result: The icon of the panel pulses amber while the take is transcribed, and
+   the pill says
    `The transcription service at 127.0.0.1:<free> did not answer in 30 seconds.
    The take is kept: Ctrl+Shift+R sends it again.` The sentence names no file and
    no path.
@@ -632,6 +638,73 @@ sound socket and the take said `pw-record ended early: error:
    Result: The folder holds no file of this take. A take that was sent is
    deleted, as before.
 
+### 6.18 SI-18 — The microphone icon of the title bar
+
+This task uses the stand-in recorder of the setup, which records one prepared
+file and opens no audio device.
+
+1. Click the terminal panel `Live render heartbeat`, and read its title bar.
+
+   Result: The title bar is bright, and a microphone icon is in it. The centre of
+   the icon is 44 points left of the right edge of the panel, on the centre line
+   of the title bar. The history meter and the session badge sit left of the icon.
+
+2. Put the pointer on the icon, and wait one second.
+
+   Result: The icon is bright, and the hover text says `Dictate into this panel
+   (click, or hold: F9)`. The key that the text names is the hotkey of the
+   settings.
+
+3. Click the icon, and hold the pointer on it for three seconds.
+
+   Result: The icon is red, and a ring pulses around it. The hover text says
+   `Recording into this panel (click to stop): 0:03` with the seconds of the
+   take, and the seconds move. The pill at the bottom of the panel shows no line.
+   Read the accessibility value of the icon: it holds the same clock.
+
+4. Click the icon again.
+
+   Result: The red and the ring go. The icon pulses amber while the take is
+   transcribed, and then it is dim again. The panel gains the text `<text>`, and
+   no line starts.
+
+5. Press `Tab` until the icon has the focus, then press `Enter`.
+
+   Result: A focus ring shows on the icon. `Enter` starts the take of that panel,
+   as step 3 does.
+
+6. Click the icon again to end that take. Run one more take, and press `Space`
+   while the icon has the focus.
+
+   Result: `Space` starts and stops the take as a click does.
+
+7. Start one take with a click on the icon, and press and release `F9` while it
+   records.
+
+   Result: The take keeps recording. The release of the key ends only the take
+   that the key started.
+
+8. Open a second terminal panel, and click the icon of the first panel.
+
+   Result: The icon of the first panel is red, and the icon of the second panel
+   is dim. Its hover text says `Dictation is active in another panel`, a click on
+   it starts nothing, and the take of the first panel keeps recording.
+
+9. Click the red icon of the first panel to end that take.
+
+   Result: The icon is dim again, and the two panels hold one icon each.
+
+10. Open **Settings** › **Speech**, clear the recorder line, and press **Save**.
+    Close the Settings window.
+
+    Result: No panel wears a microphone icon. The history meter and the session
+    badge move right, into the place that the icon held.
+
+11. Restore the recorder line of the setup, and press **Save**.
+
+    Result: Every terminal panel wears the icon again. An editor panel and a card
+    panel never wear it.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
@@ -648,6 +721,11 @@ sound socket and the take said `pw-record ended early: error:
 - A recording that its recorder did not close reaches the transcriber with the
   length of its file in its header, and a recording of another shape reaches it
   unchanged.
+- The icon of the title bar of a panel states the state of its take: dim for no
+  take, red with a ring while the take records, and pulsing amber while the take
+  is transcribed. A click starts and stops the take, and `Enter` or `Space` does
+  the same while the icon has the focus. No panel wears the icon while speech
+  input is off, and no panel wears it that a take cannot enter.
 - Every test of the module of a take passes as a background job of a
   non-interactive shell, and no recorder of a test stays.
 - The marker value is in the secrets file and in no log file, no settings file
