@@ -37,11 +37,17 @@ struct Stand {
 
 impl Stand {
     fn new() -> Self {
-        let folder = tempfile::tempdir().expect("a folder of a test");
+        // The socket of a session lives under the home of the host, and a Unix
+        // socket path has a bound, so this folder is a short base path: the
+        // temporary folder of a system can be too long for it.
+        let folder = ["/var/tmp", "/tmp"]
+            .iter()
+            .find_map(|base| tempfile::Builder::new().prefix("hz-link").tempdir_in(base).ok())
+            .expect("a folder of a test");
         let home = folder.path().join("home");
         std::fs::create_dir_all(&home).expect("the home of the host");
         let socket = host_driver::session_socket_in(&home, PROFILE, HostDriverEngine::Firefox)
-            .expect("the socket of the session of the host");
+            .expect("a home that is short enough for the socket of a session");
         std::fs::create_dir_all(socket.parent().expect("the folder of a socket"))
             .expect("the folder of the socket of the host");
         let pid_file = folder.path().join("link.pid");

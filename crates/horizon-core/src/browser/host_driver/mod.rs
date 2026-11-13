@@ -543,7 +543,13 @@ where
 /// otherwise nothing.
 fn waiting_link(listener: &std::os::unix::net::UnixListener) -> Option<std::os::unix::net::UnixStream> {
     match listener.accept() {
-        Ok((stream, _)) => Some(stream),
+        // A socket that `accept` gives takes the mode of its listener on this
+        // system, and the listener polls, so the link is put back into the
+        // blocking mode that its two ends read and write with.
+        Ok((stream, _)) => {
+            let _ = stream.set_nonblocking(false);
+            Some(stream)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
         Err(error) => {
             tracing::warn!(%error, "the socket of a browser host session could not accept a link");
