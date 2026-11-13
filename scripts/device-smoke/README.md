@@ -100,7 +100,10 @@ The harness removes `HORIZON_HOME` from the child environment, so the fixture
 keeps its state in `.horizon` of the masked home.
 The same namespace gives namespaced processes a private writable `/tmp` and a
 session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
-runtime, so native applications and `dbus-run-session` can bind sockets. Host
+runtime, so native applications and `dbus-run-session` can bind sockets. A panel
+of the fixture also takes that folder as its `TMPDIR`, because every other folder
+of the host is read-only inside the namespace and a program that writes a
+temporary file would stop before its work. Host
 `/tmp/.X11-unix` is re-bound read-only when bwrap starts, after Xvfb has created
 it, so the fixture X server stays reachable even if that directory was missing
 when the harness prepared the namespace. `--horizon` and `--tools` paths are

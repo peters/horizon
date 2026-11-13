@@ -346,6 +346,12 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), re
     sandbox_env = dict(host_env)
     sandbox_env['XDG_RUNTIME_DIR'] = dest
     sandbox_env['DBUS_SESSION_BUS_ADDRESS'] = address
+    # A panel writes its temporary files where `TMPDIR` names. The namespace binds
+    # one writable `/tmp` and keeps every other folder of the host read-only, so a
+    # `TMPDIR` of the person points at a folder that a program inside the fixture
+    # cannot write: give the panels the folder that is that `/tmp`, so a rent, a
+    # provider program and an agent all write where the fixture allows it.
+    sandbox_env['TMPDIR'] = str(private_tmp)
     return Sandbox(
         state=state,
         data=data,
