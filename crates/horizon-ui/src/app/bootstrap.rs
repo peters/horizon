@@ -286,10 +286,13 @@ pub(crate) fn configure_fonts() -> egui::FontDefinitions {
         FONT_JETBRAINS_MONO,
         include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"),
     );
-    // The two faces of the interface itself, hinted the one way that keeps the
-    // stems of a line equally thick at the screen sizes that the interface has.
-    for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
-        let hinted = fonts.font_data.remove(name).map(|font| hinted((*font).clone()).into());
+    // The two faces of the interface itself, hinted for even stems at the screen
+    // sizes that the interface has.
+    for (name, horizontal_fit) in [(FONT_INTER, false), (FONT_JETBRAINS_MONO, true)] {
+        let hinted = fonts
+            .font_data
+            .remove(name)
+            .map(|font| hinted((*font).clone(), horizontal_fit).into());
         if let Some(font) = hinted {
             fonts.font_data.insert(name.to_owned(), font);
         }
@@ -330,19 +333,24 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
 ///
 /// Both faces are hinted true-type faces that the interface draws at 9 to 14
 /// screen points, where an unhinted stem can land anywhere between two pixels
-/// and a stem next to it lands on a third: that is the uneven weight that a
-/// person reads as a blurry line. Normal hinting grid-fits the stem both ways,
-/// and letting the hinter keep its own horizontal fit is what makes the stems
-/// of one word equally thick. Advances stay those of the shaper, so the layout
-/// does not move, and a zoom of 1 on a display of scale 1 keeps the letters it
-/// drew before apart from this fit.
-fn hinted(font: egui::FontData) -> egui::FontData {
+/// and the stem beside it lands somewhere else: that is the uneven weight that
+/// a person reads as a blurry line. Normal hinting grid-fits a stem to a pixel.
+///
+/// The horizontal fit of the hinter is the half that decides whether the stems
+/// of one word are equally thick, and it also makes the ink of a glyph up to a
+/// pixel wider than its advance. A line of a panel is measured and cut by that
+/// ink, so the interface text keeps the fit off: advances and ink stay the
+/// values of the unhinted font and no label wraps because of hinting. The
+/// terminal takes the fit: its cells, its cursor and its box drawing come from
+/// the advances alone, so the fit only makes the stems of every cell equal and
+/// keeps the box drawing on the edges of its cell.
+fn hinted(font: egui::FontData, horizontal_fit: bool) -> egui::FontData {
     font.tweak(egui::epaint::text::FontTweak {
         hinting: Some(true),
         hinting_target: egui::epaint::text::HintingTarget::Smooth(egui::epaint::text::SmoothHinting {
             light: false,
             symmetric_rendering: true,
-            preserve_linear_metrics: false,
+            preserve_linear_metrics: !horizontal_fit,
         }),
         ..egui::epaint::text::FontTweak::default()
     })
@@ -404,18 +412,26 @@ mod tests {
     #[test]
     fn the_two_faces_of_the_interface_are_hinted_for_even_stems() {
         let fonts = configure_fonts();
-        for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
+        let smooth = |name: &str| {
             let tweak = &fonts.font_data[name].tweak;
             assert_eq!(tweak.hinting, Some(true), "{name} hints its stems");
             let egui::epaint::text::HintingTarget::Smooth(smooth) = tweak.hinting_target else {
                 panic!("{name} should be hinted for anti-aliased text");
             };
-            assert!(!smooth.light, "{name} fits its stems in both directions");
-            assert!(
-                !smooth.preserve_linear_metrics,
-                "{name} keeps the horizontal fit of its hinter, so one word has even stems"
-            );
-        }
+            smooth
+        };
+        let ui = smooth(FONT_INTER);
+        assert!(!ui.light, "the interface text fits its stems to the pixel");
+        assert!(
+            ui.preserve_linear_metrics,
+            "a line of a panel is cut by the ink of its glyphs, so the interface text keeps the unhinted advance and ink"
+        );
+        let terminal = smooth(FONT_JETBRAINS_MONO);
+        assert!(!terminal.light, "the terminal fits its stems to the pixel");
+        assert!(
+            !terminal.preserve_linear_metrics,
+            "the cells of the terminal come from the advances, so its text takes the horizontal fit"
+        );
         assert_eq!(
             fonts.font_data[FONT_NOTO_CJK].tweak.hinting, None,
             "a fallback face keeps the default hinting"
