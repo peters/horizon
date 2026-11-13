@@ -435,22 +435,63 @@ leaves the server on the machine.
 
 ### 4. Add another computer
 
+A second computer joins with one of three ways, and the place of this server
+decides which one works. Choose the row of that way, and draw the other rows
+`disabled: true` with the reason.
+
 ```json
 {"components": [
   {"type": "heading", "text": "Add another computer",
-   "subtitle": "Start Horizon on the other computer, open Set up there and choose Join a server that you already have.",
+   "subtitle": "This server keeps the machine list, the machine keys and your settings. Here is how another computer joins it.",
    "badge": {"text": "10 minutes"}},
   {"type": "kv", "rows": [
     {"label": "Computers now", "value": "1 (this one)"},
-    {"label": "Reached over", "value": "your private network only"}]},
-  {"type": "text", "text": "With an SSH login on the server computer, the other computer links by itself. Without one, Settings, Server shows a QR code and a code for one computer."},
-  {"type": "buttons", "items": [{"id": "done", "label": "Done", "tone": "primary"}]}
+    {"label": "Server runs on", "value": "helsinki-1, a rented machine"},
+    {"label": "This computer", "value": "linked over SSH with the machine key"}]},
+  {"type": "caption", "text": "The other computer"},
+  {"type": "list", "selection": "single", "rows": [
+    {"id": "add.ssh_login", "title": "A computer that you log in to",
+     "subtitle": "A rented machine holds no login of the person.",
+     "disabled": true},
+    {"id": "add.key_install", "title": "A machine that only this computer reaches",
+     "subtitle": "The other computer makes a machine key, and this computer adds its public line to the machine.",
+     "selected": true},
+    {"id": "add.invite", "title": "An overlay network that both computers are on",
+     "subtitle": "The server listens on the overlay, and Add a computer shows a link and a QR code.",
+     "disabled": true, "badge": {"text": "No overlay", "tone": "warn"}}]},
+  {"type": "text", "text": "The row that is selected is the way that works for the place of this server. A row that cannot be chosen says why."},
+  {"type": "text", "text": "The link and the QR code of the last row are the Settings window, Server: a card cannot draw a code."},
+  {"type": "buttons", "items": [
+    {"id": "done", "label": "Done", "tone": "primary"},
+    {"id": "close", "label": "Close"}]}
 ]}
 ```
 
-The QR code and the list of the computers are the Settings window, Server: a card
-cannot draw a code. Say that on the card, as this document does. `Done` closes
-the Set up card.
+The three ways are the three rows, in their order:
+
+1. `add.ssh_login`, a server on a computer of the person, which the other computer
+   reaches with the login of the person.
+2. `add.key_install`, a server on a rented machine, which the other computer reaches
+   with a machine key that this computer installs.
+3. `add.invite`, a server on an overlay network, which the other computer reaches
+   with a link and a code.
+
+- A server on a computer of the person: the other computer writes the SSH name of
+  that computer in Settings, Server, SSH target, with the command of the server,
+  and starts Horizon again one time, or its agent asks for the same entry on a card
+  that applies it at once. Its link then travels over SSH with the login of the
+  person. No code, no listener and no key of Horizon.
+- A server on a rented machine, with no overlay network: the other computer makes
+  a machine key with `machine_key`, the person writes its public line in this
+  panel, and you add that line to the `authorized_keys` of the machine through the
+  machine key of this computer. Then the other computer writes one `Host` block of
+  its SSH configuration for the machine, with that key file, and links over SSH.
+  The skill `horizon-server` gives the exact commands.
+- An overlay network: the server runs with `--listen <overlay address>:7000`, and
+  Settings, Server, Add a computer shows a link and a QR code for ten minutes. The
+  other computer pastes the link in Join with a link.
+
+`Done` closes the Set up card, and `Close` does the same.
 
 ## Goal `browser`
 
