@@ -58,7 +58,7 @@ impl HorizonApp {
                 server,
                 &settings_path,
                 secrets,
-                keys,
+                &keys,
                 program,
                 wake,
             ));
@@ -85,6 +85,7 @@ impl HorizonApp {
             Ok(Ok(load)) if asked_at == self.machine_epoch => {
                 tracing::info!(count = load.machines.records().len(), "loaded the machine list");
                 self.machine_list = load.machines;
+                self.settings_request.link_failure.clone_from(&load.server_failure);
                 if let Some(reason) = load.server_failure {
                     self.set_sidebar_notice(format!("The machine list: {reason}"));
                 }

@@ -344,10 +344,21 @@ place, with the removal of `horizon-server`, and the card says what was removed
 and what is left. It deletes nothing on this computer.
 
 The last two steps of the list need the press of the person: call
-`server_link_request` with the SSH target of the place and the command of the
-server, and wait while Horizon draws its own card. Read its answer: `confirmed`
-means the entry is written; `declined` and `timed_out` mean the server is set up
-and this computer does not follow it yet. Say which one on the card.
+`server_link_request` with `machine` and the name of the place, and the command
+of the server, and wait while Horizon draws its own card. `machine` names the
+machine of the list that the flow already gave Horizon, so the link uses the
+address, the user, the key file and the known-hosts file of a terminal of that
+machine. Name `ssh_target` only when the server runs on a computer of the person.
+
+Read the answer of the request:
+
+- `confirmed` with `link: in_step` means that the server answered and this
+  computer is in step with it. Draw the ready card of the next section.
+- `confirmed` with `link: away` means that the entry is written and the server
+  did not answer within about 20 seconds. Draw the failure card with `reason` as
+  its subtitle, which is one sentence that names the cause.
+- `declined` and `timed_out` mean the server is set up and this computer does not
+  follow it yet. Say which one on the card.
 
 ### 3. The server is ready
 
@@ -368,10 +379,29 @@ and this computer does not follow it yet. Say which one on the card.
 ]}
 ```
 
-When the answer of `server_link_request` carries `restart_needed`, the `subtitle`
-is `Close Horizon and start it again one time.` instead, because this Horizon
-does not start the link of a new entry itself. An agent never restarts the
-program of the person.
+Draw this card only for `link: in_step`. When the answer carries
+`restart_needed`, the `subtitle` is `Close Horizon and start it again one time.`
+instead, because this Horizon does not start the link of a new entry itself. An
+agent never restarts the program of the person.
+
+For `link: away`, draw this card instead, and name the cause that `reason` gave:
+
+```json
+{"components": [
+  {"type": "heading", "text": "The server did not answer",
+   "subtitle": "The machine has the server, and this computer cannot reach it yet.",
+   "badge": {"text": "Not linked", "tone": "error"}},
+  {"type": "text", "text": "<the sentence of reason>"},
+  {"type": "text", "text": "The sidebar says Server away. The log of Horizon holds the words of the attempt."},
+  {"type": "buttons", "items": [
+    {"id": "try_again", "label": "Try again", "tone": "primary"},
+    {"id": "stop", "label": "Stop", "tone": "neutral"}]}
+]}
+```
+
+The machine, its service and this computer are not broken by an `away` link, so
+`Try again` asks the person to press `Link` again on a new card, and `Stop`
+leaves the server on the machine.
 
 ### 4. Add another computer
 

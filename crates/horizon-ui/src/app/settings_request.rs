@@ -24,17 +24,19 @@ use std::path::{Path, PathBuf};
 use egui::Context;
 use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, Tone};
 use horizon_browser_control::manifest::block::{
-    Answer, BrowserEngine, EntryStart, HOST_APPLY_TIMEOUT, Operation, Outcome, Request,
+    Answer, BrowserEngine, EntryStart, HOST_APPLY_TIMEOUT, Operation, Outcome, Request, ServerLinkState,
 };
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::now_millis;
 use horizon_core::{
     BlockPanelState, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, PanelId, PanelKind, PanelOptions, ServerConfig,
 };
+use horizon_sync::LinkState;
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
 use super::browser_requests::ActorPanel;
+use super::server_sync::ServerLine;
 
 /// The name of the card that asks about the server, as its titlebar and its
 /// title show it.
@@ -60,6 +62,10 @@ pub(in crate::app) const SERVER_KEPT: &str = "The settings of this computer are 
 /// runs on a machine of the list.
 pub(in crate::app) const SERVER_MACHINE: &str =
     "The link runs on that machine with its address, its user and the machine key that a terminal of it uses.";
+/// How long the answer of a confirmed server entry waits for the first answer of
+/// the server. The hello of a link holds the SSH connect and one round trip, so a
+/// server that is away has ended its first attempt inside this bound.
+pub(in crate::app) const LINK_ANSWER_BOUND: std::time::Duration = std::time::Duration::from_secs(20);
 /// The line of the browser card that says which profile of which browser the new
 /// panels use, in the words of the Settings window.
 pub(in crate::app) const BROWSER_USES: &str =
@@ -112,17 +118,34 @@ struct Waiting {
     deadline_at_millis: i64,
 }
 
+/// The answer of a confirmed server entry that waits for the first answer of the
+/// server.
+struct Linking {
+    /// The queue that the answer goes to.
+    root: Option<PathBuf>,
+    /// The request to answer.
+    request: Request,
+    /// When the person pressed, so the bound of the wait counts from the press.
+    pressed_at: std::time::Instant,
+}
+
 /// The setting request that this host holds open, if any.
 #[derive(Default)]
 pub(in crate::app) struct SettingRequestState {
     waiting: Option<Waiting>,
+    /// A confirmed server entry whose answer waits for the link.
+    linking: Option<Linking>,
+    /// Why the link of the running program did not start at all, when the read
+    /// that starts it answered that. A confirmed server entry answers it as the
+    /// reason of a link that is away.
+    pub(in crate::app) link_failure: Option<String>,
 }
 
 impl SettingRequestState {
-    /// Whether a card of Horizon waits for the person's press, so the request
-    /// pump keeps waking until the wait ends.
+    /// Whether a card of Horizon waits for the person's press or an answer waits
+    /// for the link, so the request pump keeps waking until the wait ends.
     pub(in crate::app) fn is_waiting(&self) -> bool {
-        self.waiting.is_some()
+        self.waiting.is_some() || self.linking.is_some()
     }
 }
 
@@ -230,19 +253,23 @@ impl HorizonApp {
             return false;
         };
         self.remove_setting_card(&waiting, ctx);
-        let outcome = if id == APPLY {
-            self.apply_setting(&waiting, ctx)
+        if id == APPLY {
+            self.apply_setting(&waiting, ctx);
         } else {
-            unconfirmed_outcome(&waiting.asked, Answer::Declined)
-        };
+            self.answer_setting(&waiting, unconfirmed_outcome(&waiting.asked, Answer::Declined));
+        }
+        self.mark_runtime_dirty();
+        ctx.request_repaint();
+        true
+    }
+
+    /// Writes the answer of one setting request now.
+    fn answer_setting(&mut self, waiting: &Waiting, outcome: Outcome) {
         self.write_block_answer(BlockAnswer::new(
             waiting.root.as_deref(),
             waiting.request.clone(),
             outcome,
         ));
-        self.mark_runtime_dirty();
-        ctx.request_repaint();
-        true
     }
 
     /// Writes the setting that the person confirmed, as the Settings window
@@ -250,23 +277,31 @@ impl HorizonApp {
     /// their rule when the card was drawn, so a refusal names a setting of the
     /// store that the new entry contradicts.
     ///
-    fn apply_setting(&mut self, waiting: &Waiting, ctx: &Context) -> Outcome {
-        let written = match &waiting.asked {
-            Asked::ServerLink { entry, command } => {
-                self.write_server_entry(entry, command, ctx)
-                    .map(|start| Outcome::ServerLink {
-                        answer: Answer::Confirmed,
-                        start: Some(start),
-                    })
-            }
+    /// A confirmed server entry answers later: the card told the person that the
+    /// server receives the list, so the answer says whether the link reached it.
+    fn apply_setting(&mut self, waiting: &Waiting, ctx: &Context) {
+        let refused = |message: String| Outcome::failed(block_machines::INVALID_REQUEST, &message);
+        match &waiting.asked {
+            Asked::ServerLink { entry, command } => match self.write_server_entry(entry, command, ctx) {
+                Ok(start) => {
+                    self.settings_request.linking = Some(Linking {
+                        root: waiting.root.clone(),
+                        request: waiting.request.clone(),
+                        pressed_at: std::time::Instant::now(),
+                    });
+                    tracing::info!(start = ?start, "a confirmed server entry wrote the settings and started its link");
+                }
+                Err(message) => self.answer_setting(waiting, refused(message)),
+            },
             Asked::BrowserHost { ssh_target, profile } => {
-                self.write_browser_host_entry(ssh_target, profile)
-                    .map(|()| Outcome::BrowserHost {
+                let outcome = self
+                    .write_browser_host_entry(ssh_target, profile)
+                    .map_or_else(refused, |()| Outcome::BrowserHost {
                         answer: Answer::Confirmed,
-                    })
+                    });
+                self.answer_setting(waiting, outcome);
             }
-        };
-        written.unwrap_or_else(|message| Outcome::failed(block_machines::INVALID_REQUEST, &message))
+        }
     }
 
     /// Writes the server entry of this computer and starts the link of it now, as
@@ -334,6 +369,69 @@ impl HorizonApp {
         ctx.request_repaint();
     }
 
+    /// Answers a confirmed server entry when the link of it knows whether the server
+    /// answered: `in_step` when it did, and `away` with the reason of the link in
+    /// words when it did not, or when the bound of the wait passed.
+    ///
+    /// A frame reads the published snapshot of the link and never the lock of its
+    /// state, so no frame waits for the link. The link itself runs on its worker, so
+    /// the wait costs this thread no blocking call.
+    pub(super) fn settle_link_answer(&mut self) {
+        let Some(linking) = self.settings_request.linking.as_ref() else {
+            return;
+        };
+        let expired = linking.pressed_at.elapsed() >= LINK_ANSWER_BOUND;
+        let (link, reason) = match self.server_sync.as_ref() {
+            Some(sync) => {
+                let snapshot = sync.snapshot();
+                match snapshot.state() {
+                    LinkState::InStep { .. } => (Some(ServerLinkState::InStep), None),
+                    LinkState::Removed | LinkState::NotLoggedIn => (
+                        Some(ServerLinkState::Away),
+                        Some(ServerLine::of(snapshot.state(), snapshot.refusal()).text()),
+                    ),
+                    // The first attempt of this link failed, or the bound passed
+                    // while it was still connecting.
+                    _ => match snapshot.refusal() {
+                        Some(refusal) => (Some(ServerLinkState::Away), Some(refusal.sentence().to_owned())),
+                        None if expired => (
+                            Some(ServerLinkState::Away),
+                            Some(format!(
+                                "The server did not answer within {} seconds.",
+                                LINK_ANSWER_BOUND.as_secs()
+                            )),
+                        ),
+                        None => return,
+                    },
+                }
+            }
+            // The link did not start at all: the read that starts it answered the
+            // reason in words, which the sidebar already shows.
+            None => match self.settings_request.link_failure.clone() {
+                Some(reason) => (Some(ServerLinkState::Away), Some(reason)),
+                None if expired => (
+                    Some(ServerLinkState::Away),
+                    Some(format!(
+                        "The server did not answer within {} seconds.",
+                        LINK_ANSWER_BOUND.as_secs()
+                    )),
+                ),
+                None => return,
+            },
+        };
+        let Some(linking) = self.settings_request.linking.take() else {
+            return;
+        };
+        let outcome = Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+            link,
+            reason,
+        };
+        self.write_block_answer(BlockAnswer::new(linking.root.as_deref(), linking.request, outcome));
+        self.mark_runtime_dirty();
+    }
+
     /// Answers the card that waited when its deadline passed, or when the person
     /// closed it without a press. A wait that no person answered is `timed_out`,
     /// and the card goes with it.
@@ -368,7 +466,12 @@ impl HorizonApp {
 /// program is never claimed here.
 fn unconfirmed_outcome(asked: &Asked, answer: Answer) -> Outcome {
     match asked {
-        Asked::ServerLink { .. } => Outcome::ServerLink { answer, start: None },
+        Asked::ServerLink { .. } => Outcome::ServerLink {
+            answer,
+            start: None,
+            link: None,
+            reason: None,
+        },
         Asked::BrowserHost { .. } => Outcome::BrowserHost { answer },
     }
 }

@@ -66,6 +66,25 @@ fn link_machine(machine: &str) -> Operation {
     }
 }
 
+/// Runs the parts of a frame that apply the answer of a link, so a confirmed
+/// server entry answers once its link knows whether the server is there.
+fn settle_link(app: &mut HorizonApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        app.poll_machine_load();
+        app.poll_server_sync();
+        app.settle_browser_host_io();
+        if !app.settings_request.is_waiting() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the link of the confirmed entry answered in time"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 fn browser(ssh_target: &str, profile: &str, engine: Option<BrowserEngine>) -> Operation {
     Operation::BrowserHostRequest {
         ssh_target: ssh_target.to_owned(),
@@ -183,8 +202,12 @@ fn a_press_on_link_writes_the_store_and_starts_the_link_without_a_restart() {
     );
 }
 
+/// A pressed `Link` answers `confirmed` and `linked` only after the link of the new
+/// entry says whether the server answered: the stand-in child of this test ends at
+/// once, so the server is away and the answer carries the reason of the attempt in
+/// words.
 #[test]
-fn the_answer_of_a_pressed_link_is_confirmed_and_linked() {
+fn the_answer_of_a_pressed_link_is_confirmed_with_the_state_of_its_link() {
     let (temp, ctx, mut app) = app();
     let root = temp.path().join("block-panel-requests");
     std::fs::create_dir_all(&root).expect("the queue directory");
@@ -193,12 +216,30 @@ fn the_answer_of_a_pressed_link_is_confirmed_and_linked() {
     let card = asking_card(&mut app);
     let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
     app.press_host_card_button(&ctx, id, APPLY);
-    app.settle_browser_host_io();
+    assert!(
+        app.settings_request.is_waiting(),
+        "the answer waits for the first answer of the server"
+    );
+    settle_link(&mut app);
 
+    let answer = answer_at(&root, &request);
+    assert_eq!(answer["status"], serde_json::json!("server_link"));
+    assert_eq!(answer["answer"], serde_json::json!("confirmed"));
     assert_eq!(
-        answer_at(&root, &request),
-        serde_json::json!({"status": "server_link", "answer": "confirmed", "start": "linked"}),
+        answer["start"],
+        serde_json::json!("linked"),
         "the entry applies to the running program, so no start is needed"
+    );
+    assert_eq!(
+        answer["link"],
+        serde_json::json!("away"),
+        "the child of the link ended without a hello: {answer}"
+    );
+    assert!(
+        answer["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.trim().is_empty()),
+        "the reason of the link reaches the agent in words: {answer}"
     );
 }
 
@@ -231,7 +272,7 @@ fn a_card_that_names_a_machine_states_it_and_stores_its_name() {
     assert!(!text.contains("Server target"), "a machine names no raw target: {text}");
 
     app.press_host_card_button(&ctx, id, APPLY);
-    app.settle_browser_host_io();
+    settle_link(&mut app);
     let stored = stored(&mut app);
     assert_eq!(stored.server.machine.as_deref(), Some("rented-1"));
     assert_eq!(

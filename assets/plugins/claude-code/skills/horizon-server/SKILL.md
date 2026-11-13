@@ -223,11 +223,15 @@ journal, and start the service again.
 
 ### 5. Link this computer
 
-Call `server_link_request` with the SSH target of the place and the command:
+Call `server_link_request` with `machine` and the name of the place, and the
+command:
 
-- The SSH target is the name that `ssh` of this computer resolves: an SSH config
-  alias, a `user@host`, or an address. `This computer` uses its own name or
-  `127.0.0.1` only when that name is in the SSH configuration.
+- `machine` names the machine of the list that runs the server, as `machines`
+  reports it. The link uses the address, the user, the port, the key file and the
+  known-hosts file that a terminal of that machine uses. Name `ssh_target`
+  instead only when the server runs on a computer of the person: that target is
+  the name that `ssh` of this computer resolves, and `This computer` uses its own
+  name or `127.0.0.1` only when that name is in the SSH configuration.
 - The command is the whole path of the binary on the place and `--server-link`,
   for example `/home/person/bin/horizon --server-link`. A non-interactive SSH
   session has a short `PATH`, so give the whole path.
@@ -235,7 +239,10 @@ Call `server_link_request` with the SSH target of the place and the command:
 Horizon draws its own card and the person presses `Link`. The answer is
 `confirmed`, `declined` or `timed_out`, and `start` says `linked` when the
 running Horizon follows the entry now, or `restart_needed` when the person starts
-Horizon again one time.
+Horizon again one time. A `confirmed` answer also carries `link`: `in_step` when
+the server answered within about 20 seconds, or `away` when it did not, with
+`reason` holding one sentence that names the cause. Say `in_step` as the ready
+card of the flow, and draw a failure card for `away` with that sentence.
 
 An agent never restarts the program of the person.
 
