@@ -20,6 +20,13 @@ pub(super) const PROFILES_FOLDER: &str = "browser-profiles";
 /// The longest socket path that a Unix socket accepts, in bytes.
 const MAX_SOCKET_PATH_BYTES: usize = 100;
 
+/// The folder of the sockets of the host driver sessions, under the home of the
+/// person of that machine. It is shorter than the folder of the browser profiles,
+/// because a socket path has a bound of its own: macOS takes 104 bytes and Linux
+/// 108, so a deep home has room for the socket of a session that its profile
+/// folder does not give it.
+pub(super) const SOCKETS_FOLDER: &str = "host-driver";
+
 /// The home folder of the person of this machine, or the refusal that names the
 /// missing variable.
 ///
@@ -58,11 +65,23 @@ pub(super) fn profile_root(profile: &str) -> Result<PathBuf> {
 /// # Errors
 /// See [`home`], or the path is longer than a Unix socket accepts.
 pub(super) fn socket_path(profile: &str, engine: &str) -> Result<PathBuf> {
-    let path = profile_root(profile)?.join(format!("host-{engine}.sock"));
+    socket_path_in(&home()?, profile, engine)
+}
+
+/// The socket of one session under `home`, so the rule of a path that is too long
+/// for a Unix socket is tested without the home of a person.
+///
+/// # Errors
+/// The path is longer than a Unix socket accepts.
+pub(super) fn socket_path_in(home: &Path, profile: &str, engine: &str) -> Result<PathBuf> {
+    let path = home
+        .join(HORIZON_FOLDER)
+        .join(SOCKETS_FOLDER)
+        .join(format!("{engine}-{profile}.sock"));
     let length = path.as_os_str().len();
     if length > MAX_SOCKET_PATH_BYTES {
         return Err(Error::Config(format!(
-            "the home of this machine is too long for the socket of a browser host: {} has {length} bytes, and one socket takes at most {MAX_SOCKET_PATH_BYTES}",
+            "the home of this machine is too long for the socket of a browser host: {} has {length} bytes, and one socket takes at most {MAX_SOCKET_PATH_BYTES}; move the home of the person of that machine, or use a shorter profile name",
             path.display()
         )));
     }
@@ -105,25 +124,30 @@ pub(super) fn ensure_profile_root(folder: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SOCKET_PATH_BYTES, socket_path};
+    use std::path::Path;
+
+    use super::{MAX_SOCKET_PATH_BYTES, socket_path_in};
 
     #[test]
     fn the_socket_of_a_profile_names_its_engine_and_stays_inside_the_socket_bound() {
-        let path = socket_path("mail", "firefox").expect("a socket path");
-        assert!(
-            path.ends_with("browser-profiles/mail/host-firefox.sock"),
-            "{}",
-            path.display()
-        );
-        let home = super::home().expect("a home of the test");
-        assert!(
-            path.starts_with(&home),
-            "the socket is on this machine: {}",
-            path.display()
-        );
+        let path = socket_path_in(Path::new("/home/person"), "mail", "firefox").expect("a socket path");
+        assert_eq!(path, Path::new("/home/person/.horizon/host-driver/firefox-mail.sock"));
         assert!(
             path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES,
-            "a test home is short enough for one socket"
+            "the socket of a normal home is inside the bound"
+        );
+    }
+
+    #[test]
+    fn a_home_that_is_too_deep_for_a_socket_is_refused_with_its_length() {
+        let deep = format!("/{}", "d".repeat(200));
+        let error = socket_path_in(Path::new(&deep), "mail", "firefox").expect_err("a refused home");
+        let words = error.to_string();
+        assert!(words.contains("too long for the socket"), "{words}");
+        assert!(words.contains(&MAX_SOCKET_PATH_BYTES.to_string()), "{words}");
+        assert!(
+            words.contains("or use a shorter profile name"),
+            "the words say what a person can do: {words}"
         );
     }
 }
