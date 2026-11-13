@@ -185,10 +185,12 @@ with that key.
    Horizon there, and the log holds `ssh` arguments with `-i` and the key file of
    that machine, and no key of this computer.
 
-4. Remove the key of the machine from this Horizon home, and open a panel again.
+4. Move the key of the machine out of the key folder of this Horizon home, and
+   open a panel again.
 
-   Result: the panel says that the machine key is not on this computer, and it
-   names the machine.
+   Result: the panel names the SSH target of the machine and keeps the words of
+   `ssh`, which say that the identity file is not accessible and that the login
+   was refused. The panel starts no shell and asks no password.
 
 ### 6.5 F4 — each refusal gives its words
 

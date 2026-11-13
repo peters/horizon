@@ -71,13 +71,14 @@ pub(in crate::app) const BROWSER_USES: &str = "Browser panels open in that profi
 /// The line of the browser card that says when the entry applies.
 pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the next start of Horizon.";
 
-/// The server that the card asks about, as the request named it and as the store
+/// The host that the card asks about, as the request named it and as the store
 /// will hold it: an SSH target of the person, or a machine of the machine list.
+/// The card of a server link and the card of a browser host both name one host.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ServerEntry {
     /// A target that the SSH configuration of the person resolves.
     Target(String),
-    /// A machine of the list, whose own login the link uses.
+    /// A machine of the list, whose own login the link or the browser uses.
     Machine(String),
 }
 

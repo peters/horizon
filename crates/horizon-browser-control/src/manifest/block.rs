@@ -230,8 +230,10 @@ pub enum Operation {
     /// browser panels. Horizon draws a card of its own that states the host, the
     /// profile and the engine, and it writes `browser_host` of the settings only
     /// when the person presses `Use it`. The answer is `browser_host` with the
-    /// person's answer. Only Chromium runs on another machine, so Firefox is
-    /// refused with `engine_unavailable` and no card is drawn.
+    /// person's answer. Both engines run on another machine: a Chromium host
+    /// serves its `DevTools` port, and a Firefox host needs Firefox, geckodriver
+    /// and a Horizon of the same version, because a driver of Horizon beside that
+    /// browser carries the page.
     BrowserHostRequest {
         /// The SSH target, as the settings field `browser_host.ssh_target`
         /// takes it: the `Host` name of the SSH configuration, one word. Give one
