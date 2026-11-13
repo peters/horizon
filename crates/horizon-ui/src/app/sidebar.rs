@@ -59,6 +59,9 @@ struct SidebarPanelEntry {
 struct SidebarActions {
     create_workspace: bool,
     fit_active_workspace: bool,
+    /// The Set up control of the machine section: rent a machine, add the
+    /// Horizon server or a browser that stays signed in.
+    press_set_up: bool,
     workspace_drop: Option<SidebarWorkspaceDropAction>,
     focus_panel: Option<PanelId>,
     pan_to_panel: Option<PanelId>,
@@ -559,6 +562,9 @@ impl HorizonApp {
         }
         if actions.fit_active_workspace {
             let _ = self.fit_active_workspace(ctx);
+        }
+        if actions.press_set_up {
+            self.press_set_up(ctx, horizon_core::SetupGoal::Choose);
         }
         let workspace_collision_ids = self.workspace_collision_scope(None);
         let workspace_drop_target = actions.workspace_drop.map(|drop| {
