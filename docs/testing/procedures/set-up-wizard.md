@@ -454,16 +454,19 @@ network. The agent is real, and it follows the skill `horizon-setup`.
    Result: `<work-agent>/bin/hcloud` is an executable file, and
    `<work-agent>/bin/hcloud version` prints `hcloud 1.69.0`.
 
-2. Start the fixture with that folder in front of the `PATH` of the run:
+2. Start the fixture with that folder in front of the `PATH` of the run.
+   Step 1 made the state folder, so the run keeps it:
 
    ```sh
    PATH=<work-agent>/bin:$PATH python3 scripts/device-smoke/serve.py \
-     --horizon <candidate> --native-view --state <state-agent>
+     --horizon <candidate> --native-view --state <state-agent> --reuse-state
    ```
 
    Open the live view as in setup step 4. Result: The fixture prints its JSON
    line, and Horizon runs with `<work-agent>/bin` in front of its `PATH`, so the
-   agent that Set up starts finds the stand-in as `hcloud`.
+   agent that Set up starts finds the stand-in as `hcloud`. The fixture binds the
+   state folder at its own path, so `<work-agent>/bin` is the same path inside
+   the run.
 
 3. Press `Set up` in the machine section of the sidebar.
 
