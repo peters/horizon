@@ -1088,3 +1088,107 @@ fn the_card_documents_of_the_set_up_procedure_are_valid() {
         ]
     );
 }
+
+/// The card documents that the skills of Set up ship. The two bundled copies of
+/// each skill hold the same bytes, and the coverage check keeps them in step, so
+/// one copy is read here.
+const SKILL_DOCUMENTS: [(&str, &str); 3] = [
+    (
+        "horizon-setup",
+        include_str!("../../../../assets/plugins/claude-code/skills/horizon-setup/SKILL.md"),
+    ),
+    (
+        "horizon-server",
+        include_str!("../../../../assets/plugins/claude-code/skills/horizon-server/SKILL.md"),
+    ),
+    (
+        "horizon-machines",
+        include_str!("../../../../assets/plugins/claude-code/skills/horizon-machines/SKILL.md"),
+    ),
+];
+
+/// Every fenced JSON block of one skill that is a card document.
+fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
+    let mut documents = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("```json\n") {
+        let after = &rest[start + "```json\n".len()..];
+        let Some(end) = after.find("```") else {
+            panic!("{skill}: a fenced JSON block does not close");
+        };
+        let block = after[..end].trim();
+        rest = &after[end + 3..];
+        if !block.starts_with(r#"{"components""#) {
+            continue;
+        }
+        documents.push(parse_document(block).unwrap_or_else(|error| panic!("{skill}: {error}\n{block}")));
+    }
+    documents
+}
+
+#[test]
+fn the_card_documents_of_the_set_up_skills_are_valid() {
+    let setup = skill_documents(SKILL_DOCUMENTS[0].0, SKILL_DOCUMENTS[0].1);
+    let server = skill_documents(SKILL_DOCUMENTS[1].0, SKILL_DOCUMENTS[1].1);
+    let machines = skill_documents(SKILL_DOCUMENTS[2].0, SKILL_DOCUMENTS[2].1);
+
+    assert_eq!(
+        setup.len(),
+        15,
+        "the wizard ships the card of each step and the failure card"
+    );
+    assert_eq!(
+        machines.len(),
+        7,
+        "the machine cards and the step list of a rent keep their documents"
+    );
+    assert!(
+        server.is_empty(),
+        "the server skill gives commands and no card, so a card cannot drift from its recipe"
+    );
+
+    let headings: Vec<String> = setup
+        .iter()
+        .filter_map(|document| match &document.components[0] {
+            Component::Heading { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        headings,
+        vec![
+            "What do you want to do?",
+            "Where do you rent?",
+            "How big, and where?",
+            "Renting the machine",
+            "helsinki-1 is ready",
+            "The machine is ready",
+            "Where does the server run?",
+            "Setting up the server",
+            "The server is ready",
+            "Add another computer",
+            "A browser that stays signed in",
+            "Preparing the browser",
+            "The browser is ready",
+            "Join a server that you already have",
+            "The step did not finish",
+        ],
+        "every card of a goal is the card of the mock-up"
+    );
+    // Every card of a flow takes a press, so the person can move on: a card
+    // holds a button or a row that takes one.
+    for document in setup.iter().chain(&machines) {
+        let takes_a_press = document.components.iter().any(|component| match component {
+            Component::Buttons { items } => !items.is_empty(),
+            Component::List { rows, selection, .. } => {
+                *selection == Selection::Single && rows.iter().any(|row| !row.disabled)
+            }
+            _ => false,
+        });
+        let heading = match &document.components[0] {
+            Component::Heading { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        assert!(takes_a_press, "the card {heading} leaves the person no press");
+    }
+}

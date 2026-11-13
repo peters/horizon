@@ -171,6 +171,20 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
             "/assets/plugins/claude-code/skills/horizon-speech/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        relative_path: "skills/horizon-server/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-server/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-setup/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-setup/SKILL.md"
+        )),
+    },
 ];
 
 /// The skill that owns a tool of its own: the body, the three references and the
@@ -212,6 +226,22 @@ pub(super) const MOBILE_SKILL_FILES: &[EmbeddedFile] = &[
         )),
     },
 ];
+
+pub(super) const SERVER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-server/SKILL.md"
+    )),
+}];
+
+pub(super) const SETUP_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-setup/SKILL.md"
+    )),
+}];
 
 pub(super) const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
