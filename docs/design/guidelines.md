@@ -391,10 +391,14 @@ asks for a weight: `typeface::rich` for a stock widget and `typeface::format` or
 `typeface::Weight::coords` for a layout job. The word "strong" in the table
 below means such a weight.
 
-Both faces of the interface ask for normal hinting with the horizontal fit of
-the hinter kept (`FontTweak::hinting_target`). A stem at 9 to 14 screen points
-then lands on a pixel, and the stems of one word come out equally thick. A
-fallback face keeps the default hinting.
+Both faces of the interface ask for normal hinting (`FontTweak::hinting_target`).
+A stem at 9 to 14 screen points then lands on a pixel. The horizontal fit of
+the hinter is the other half, and it also widens the ink of a glyph by up to a
+pixel beyond its advance. The interface text keeps that fit off, because a line
+of a panel is cut by that ink. The terminal takes the fit: its cells, its
+cursor and its box drawing come from the advances alone, so the fit only makes
+the stems of every cell equally thick. A fallback face keeps the default
+hinting.
 
 ### Text under the canvas zoom
 
