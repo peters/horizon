@@ -749,6 +749,11 @@ struct SessionOfTest {
 
 impl SessionOfTest {
     fn start(profile: &str, take_over: Duration, silent: Duration) -> Self {
+        Self::start_with(profile, take_over, silent, None)
+    }
+
+    /// A session whose browser stops after `idle_stop` with no link attached.
+    fn start_with(profile: &str, take_over: Duration, silent: Duration, idle_stop: Option<Duration>) -> Self {
         let folder = tempfile::tempdir().expect("a folder of a test");
         let path = folder.path().join("session.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("a socket of a test");
@@ -774,7 +779,11 @@ impl SessionOfTest {
                 &listener,
                 &options,
                 &socket,
-                super::LinkRules { take_over, silent },
+                super::LinkRules {
+                    take_over,
+                    silent,
+                    idle_stop,
+                },
                 start,
             )
         });
@@ -1010,4 +1019,81 @@ fn a_link_process_ends_when_its_session_ends_though_its_input_never_ends() {
         handle.join().is_ok(),
         "the link process of a session that ended does not wait on an input that never ends"
     );
+}
+
+#[test]
+fn a_session_with_no_link_keeps_its_browser_until_the_idle_bound_stops_it() {
+    // The person closed the laptop for the night: the session and its page stay,
+    // because a panel that comes back attaches to the page that it had.
+    let session = SessionOfTest::start("overnight", Duration::from_millis(50), Duration::from_millis(100));
+    let mut first = session.connect();
+    first.send(&hello(60));
+    assert_eq!(first.welcome(WAIT).page, HostDriverPageState::New);
+    store(&session.slot, 4, 2, 30);
+    let _ = first.wait_for("frame", WAIT);
+    // The link goes away without a goodbye, which leaves the session with no
+    // link and its browser running.
+    assert!(first.closed(Duration::from_secs(2)));
+    std::thread::sleep(Duration::from_millis(500));
+    let mut second = session.connect();
+    second.send(&hello(60));
+    assert_eq!(
+        second.welcome(WAIT).page,
+        HostDriverPageState::Same,
+        "no link is not the end of a session: the page is here in the morning"
+    );
+    let code = session.close(&mut second);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn a_session_stops_its_browser_at_the_idle_bound_of_its_entry() {
+    let mut session = SessionOfTest::start_with(
+        "idle-bound",
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        Some(Duration::from_millis(300)),
+    );
+    let mut first = session.connect();
+    first.send(&hello(60));
+    assert_eq!(first.welcome(WAIT).page, HostDriverPageState::New);
+    assert!(first.closed(Duration::from_secs(2)), "the session closes a silent link");
+    let code = session
+        .handle
+        .take()
+        .expect("a session thread")
+        .join()
+        .expect("the session ends at its idle bound");
+    assert_eq!(code, 0, "a session that reached its idle bound stops its browser");
+}
+
+#[test]
+fn the_idle_bound_of_a_host_entry_is_minutes_and_off_without_it() {
+    let options = HostDriverOptions::parse([]).expect("the default of the mode");
+    assert_eq!(
+        options.idle_stop(),
+        None,
+        "a session keeps its browser unless the entry of the host names a bound"
+    );
+    let bounded = HostDriverOptions::parse(
+        ["--idle-stop", "120"]
+            .map(std::ffi::OsString::from)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+    .expect("a host with an idle bound");
+    assert_eq!(bounded.idle_stop(), Some(Duration::from_secs(120 * 60)));
+    assert!(bounded.session_arguments().contains("--idle-stop 120"));
+    for arguments in [
+        &["--idle-stop", "0"][..],
+        &["--idle-stop", "10081"],
+        &["--idle-stop", "later"],
+        &["--idle-stop"],
+        &["--idle-stop", "5", "--idle-stop", "6"],
+    ] {
+        assert!(
+            HostDriverOptions::parse(arguments.iter().map(std::ffi::OsString::from)).is_err(),
+            "{arguments:?} must be refused"
+        );
+    }
 }

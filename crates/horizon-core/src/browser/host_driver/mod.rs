@@ -28,6 +28,16 @@
 //! That is the promise that a Chromium host gives with its running browser, and
 //! this is how Firefox keeps it.
 //!
+//! A session lives until the person closes the panel, until the person removes
+//! the browser of that profile, or until the machine of the host restarts. An
+//! idle session keeps the browser of that profile with its page: the Firefox
+//! process of the profile, its content processes and its `geckodriver`, the page
+//! with its typed text, its scroll place and its cookies, and the profile folder
+//! on the disk. That is the memory of one Firefox window, about 400 MB of memory
+//! of the host for one page. An entry of a host can stop that browser after a
+//! bound with no link, `--idle-stop <minutes>` on the command of the entry, and a
+//! session without that option never stops by itself.
+//!
 //! Everything of the session is on the host: the profile folder
 //! `<home>/.horizon/browser-profiles/<profile>`, its downloads, its log and its
 //! socket. This computer never reads or prepares one of them.
@@ -137,6 +147,7 @@ impl HostDriverEngine {
 pub struct HostDriverOptions {
     profile: String,
     engine: HostDriverEngine,
+    idle_stop: Option<Duration>,
 }
 
 /// The name of the profile that a browser host driver uses when no link names
@@ -153,18 +164,42 @@ impl HostDriverOptions {
                 "`{profile}` is not one profile name of a browser host: 1 to 40 of a-z, 0-9 and '-', with a letter or a digit at each end"
             )));
         }
-        Ok(Self { profile, engine })
+        Ok(Self {
+            profile,
+            engine,
+            idle_stop: None,
+        })
     }
 
-    /// Read the arguments of `--browser-host-driver`: `--profile <name>` and
-    /// `--engine <engine>`, each at most once.
+    /// Stop the browser of this host after `minutes` with no link attached.
+    ///
+    /// The session keeps its browser and its page until the person closes the
+    /// panel, until the person removes the browser or until the machine of the
+    /// host restarts, so this bound is off unless the entry of the host asks for
+    /// it.
+    ///
+    /// # Errors
+    /// The bound is not 1 to [`MAX_IDLE_STOP_MINUTES`] minutes.
+    pub fn with_idle_stop_minutes(mut self, minutes: u32) -> Result<Self> {
+        if minutes == 0 || minutes > MAX_IDLE_STOP_MINUTES {
+            return Err(Error::Config(format!(
+                "`{minutes}` is not a bound for an idle browser host: `--idle-stop` takes 1 to {MAX_IDLE_STOP_MINUTES} minutes, and a session without the option keeps its browser"
+            )));
+        }
+        self.idle_stop = Some(Duration::from_secs(u64::from(minutes) * 60));
+        Ok(self)
+    }
+
+    /// Read the arguments of `--browser-host-driver`: `--profile <name>`,
+    /// `--engine <engine>` and `--idle-stop <minutes>`, each at most once.
     ///
     /// # Errors
     /// An argument that this mode does not serve, a repeated flag, or a value
-    /// that the rule of the profile and the engine refuses.
+    /// that the rule of the profile, the engine and the idle bound refuses.
     pub fn parse(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Self> {
         let mut profile: Option<String> = None;
         let mut engine: Option<HostDriverEngine> = None;
+        let mut idle_stop: Option<u32> = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             let flag = argument.to_str().ok_or_else(|| {
@@ -186,6 +221,17 @@ impl HostDriverOptions {
                         return Err(Error::Config("`--engine` is given once".into()));
                     }
                 }
+                "--idle-stop" => {
+                    let value = value_of(&mut arguments, flag)?;
+                    let minutes = value.trim().parse::<u32>().map_err(|_| {
+                        Error::Config(format!(
+                            "`{value}` is not a number of minutes for the idle bound of a browser host"
+                        ))
+                    })?;
+                    if idle_stop.replace(minutes).is_some() {
+                        return Err(Error::Config("`--idle-stop` is given once".into()));
+                    }
+                }
                 other => {
                     return Err(Error::Config(format!(
                         "`{other}` is not part of the browser host driver mode"
@@ -193,10 +239,14 @@ impl HostDriverOptions {
                 }
             }
         }
-        Self::new(
+        let options = Self::new(
             profile.unwrap_or_else(|| DEFAULT_HOST_DRIVER_PROFILE.to_string()),
             engine.unwrap_or(HostDriverEngine::Firefox),
-        )
+        )?;
+        match idle_stop {
+            Some(minutes) => options.with_idle_stop_minutes(minutes),
+            None => Ok(options),
+        }
     }
 
     /// The profile of the browser on the host.
@@ -210,7 +260,31 @@ impl HostDriverOptions {
     pub const fn engine(&self) -> HostDriverEngine {
         self.engine
     }
+
+    /// The bound that stops the browser of this host with no link attached, and
+    /// `None` when the entry of the host asks for none.
+    #[must_use]
+    pub fn idle_stop(&self) -> Option<Duration> {
+        self.idle_stop
+    }
+
+    /// The arguments that start this session again, so a person reads one
+    /// command of a host in a log.
+    fn session_arguments(&self) -> String {
+        let mut arguments = format!(
+            "--browser-host-driver --profile {} --engine {}",
+            quote(self.profile()),
+            quote(self.engine().as_str())
+        );
+        if let Some(idle_stop) = self.idle_stop {
+            arguments.push_str(&format!(" --idle-stop {}", idle_stop.as_secs() / 60));
+        }
+        arguments
+    }
 }
+
+/// The longest idle bound that a host entry can name, in minutes.
+pub const MAX_IDLE_STOP_MINUTES: u32 = 10_080;
 
 fn value_of(arguments: &mut impl Iterator<Item = std::ffi::OsString>, flag: &str) -> Result<String> {
     let value = arguments
@@ -284,12 +358,13 @@ fn start_session_process(options: &HostDriverOptions) -> Result<std::path::PathB
         .map_err(|error| Error::Config(format!("this binary has no path to start again: {error}")))?;
     // The session keeps the browser of this machine after this link ends, so it
     // must not die with the `ssh` child that started it: `nohup` and `&` are the
-    // two words of `sh` that a host of this mode always has.
+    // two words of `sh` that a host of this mode always has. The session takes
+    // the arguments of this link, so the bound of an idle session is the one
+    // that the entry of the host names.
     let script = format!(
-        "{HOST_SESSION_ENV}=1 nohup {} --browser-host-driver --profile {} --engine {} >> {} 2>&1 &",
+        "{HOST_SESSION_ENV}=1 nohup {} {} >> {} 2>&1 &",
         quote(&program.to_string_lossy()),
-        quote(options.profile()),
-        quote(options.engine().as_str()),
+        options.session_arguments(),
         quote(&log.to_string_lossy()),
     );
     Command::new("sh")
@@ -349,18 +424,23 @@ fn serve_session(options: &HostDriverOptions) -> i32 {
     let rules = LinkRules {
         take_over: LINK_TAKE_OVER,
         silent: LINK_SILENT,
+        idle_stop: options.idle_stop(),
     };
     serve_links(&listener, options, &socket, rules, start)
 }
 
 /// The bounds of one session of a browser host: when a new link takes the page
-/// over, and when a link is closed for its silence.
+/// over, when a link is closed for its silence, and when a browser with no link
+/// is stopped.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LinkRules {
     /// The silence of a link that a new connection takes the page over from.
     pub(super) take_over: Duration,
     /// The silence after which the session closes a link.
     pub(super) silent: Duration,
+    /// The bound that stops the browser of a session with no link, when the
+    /// entry of the host names one.
+    pub(super) idle_stop: Option<Duration>,
 }
 
 /// Serve the links of one session, in the order that this computer asks for
@@ -383,17 +463,29 @@ where
 {
     let mut session: Option<session::HostSession> = None;
     let mut next_link: Option<std::os::unix::net::UnixStream> = None;
+    let mut idle_since: Option<Instant> = None;
     loop {
         let stream = match next_link.take() {
             Some(stream) => stream,
             None => match waiting_link(listener) {
                 Some(stream) => stream,
                 None => {
+                    if let Some(idle_stop) = rules.idle_stop
+                        && idle_since.is_some_and(|since| since.elapsed() >= idle_stop)
+                    {
+                        tracing::info!(
+                            profile = options.profile(),
+                            "the session of a browser host kept its browser with no link for the idle bound, so it stops"
+                        );
+                        stop_and_cleanup(&mut session, socket, options);
+                        return 0;
+                    }
                     std::thread::sleep(ACCEPT_POLL);
                     continue;
                 }
             },
         };
+        idle_since = None;
         let mut link = Link::over_socket(&stream);
         let end = serve_one(&mut session, options, &mut link, listener, rules, &start);
         drop(link);
@@ -405,6 +497,7 @@ where
             stop_and_cleanup(&mut session, socket, options);
             return 0;
         }
+        idle_since = Some(Instant::now());
     }
 }
 
