@@ -104,7 +104,9 @@ and the settings of the person go, so `server_link_request` and
   before the new one starts, as it does after a join, so the person starts
   Horizon no second time. `start` says `linked` when the running program follows
   the entry. A host that cannot start the link answers `restart_needed` instead,
-  and the person starts Horizon again one time.
+  and the person starts Horizon again one time. A link that starts and cannot
+  reach its server is still `linked`: the entry is in force, and the link says
+  its own reason in the sidebar and in the Server tab.
 - **Only two fields of one entry change:** the SSH target and the command of
   `server`, or the SSH target and the profile of `browser_host`. The address of a
   join and every other field of the entry stay as the store holds them. The
