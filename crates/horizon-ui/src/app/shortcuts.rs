@@ -114,7 +114,14 @@ fn key_matches(logical_key: Key, physical_key: Option<Key>, shortcut_key: Shortc
         ShortcutKey::Escape => logical_key == Key::Escape,
         ShortcutKey::Enter => logical_key == Key::Enter,
         ShortcutKey::Tab => logical_key == Key::Tab,
-        ShortcutKey::Comma => logical_key == Key::Comma,
+        // Shift changes the character of the comma key on some layouts: it is
+        // `;` on a Norwegian layout, where egui then knows the logical key as
+        // `Semicolon`. The person presses the comma keycap that the menu names,
+        // so the position of the key decides. The minus and plus keys cannot
+        // follow their position this way: on a Norwegian layout the position
+        // that winit reports as `Minus` carries the `+` keycap, and a fallback
+        // there would run the zoom out for a person who asked to zoom in.
+        ShortcutKey::Comma => logical_key == Key::Comma || physical_key == Some(Key::Comma),
         ShortcutKey::Minus => logical_key == Key::Minus,
         ShortcutKey::Plus => logical_key == Key::Plus || logical_key == Key::Equals,
         ShortcutKey::Digit(digit) => {
@@ -309,6 +316,62 @@ mod tests {
         let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
 
         assert!(shortcut_pressed(&input, binding));
+    }
+
+    /// The Mac event of Cmd+Shift+comma on a Norwegian layout, taken from a
+    /// trace of that system: the layout composes `;` and the position of the
+    /// key stays the comma keycap.
+    fn shift_comma_event(logical_key: Key, physical_key: Key) -> Event {
+        Event::Key {
+            key: logical_key,
+            physical_key: Some(physical_key),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND | Modifiers::SHIFT,
+        }
+    }
+
+    #[test]
+    fn settings_opens_from_the_comma_keycap_of_a_layout_that_composes_semicolon() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Comma);
+        let mut raw = RawInput::default();
+        raw.events.push(shift_comma_event(Key::Semicolon, Key::Comma));
+
+        let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
+
+        assert!(shortcut_pressed(&input, binding));
+    }
+
+    #[test]
+    fn a_semicolon_keycap_alone_does_not_open_settings() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Comma);
+        let mut raw = RawInput::default();
+        // A layout that has both keycaps reports the semicolon keycap as
+        // `Semicolon` at its own position.
+        raw.events.push(shift_comma_event(Key::Semicolon, Key::Semicolon));
+
+        let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
+
+        assert!(!shortcut_pressed(&input, binding));
+    }
+
+    #[test]
+    fn a_plus_keycap_does_not_run_the_zoom_out_of_its_position() {
+        // The position that a Norwegian layout reports as `Minus` carries the
+        // `+` keycap, so the zoom out must not follow that position.
+        let zoom_out = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus);
+        let mut raw = RawInput::default();
+        raw.events.push(Event::Key {
+            key: Key::Plus,
+            physical_key: Some(Key::Minus),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        });
+
+        let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
+
+        assert!(!shortcut_pressed(&input, zoom_out));
     }
 
     #[test]
