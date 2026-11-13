@@ -50,6 +50,11 @@ price. There is no CPU-flavor catalog and no `--vcpu` flag, so `--compute-type c
 with no `--gpu-id` rents the smallest CPU pod that the datacenter has. Show no
 price. An earlier pod was 2 vCPU, 4 GB, `gpuCount` 0.
 
+RunPod answers no cores and no memory of a CPU pod, so a size row of Set up cannot
+say what the place offers: draw the row with `disabled: true` and the subtitle
+`RunPod publishes no vCPU and memory for a CPU pod.`, and rent only when the person
+chooses a GPU type by its own name and price.
+
 ## 3. Rent
 
 Do not add a key to the account: account keys are shared with every pod and appear

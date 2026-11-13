@@ -55,6 +55,18 @@ pub fn ssh_program() -> String {
 /// every value of it inside the allowed words of that shell.
 #[must_use]
 pub fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command {
+    ssh_command_with_options(program, &[], target, remote_command)
+}
+
+/// One `ssh` call of [`ssh_command`] with the options of one login in front of the
+/// target: the port, the key file and the known-hosts file of a machine of the
+/// machine list.
+///
+/// They come after the bounded options of every call, so the login chooses the
+/// key and the known-hosts file while the connect and the keepalive stay bounded,
+/// and before the target, where `ssh` reads an option.
+#[must_use]
+pub fn ssh_command_with_options(program: &str, options: &[String], target: &str, remote_command: &str) -> Command {
     let mut command = Command::new(program);
     command.args([
         "-T".to_string(),
@@ -68,9 +80,9 @@ pub fn ssh_command(program: &str, target: &str, remote_command: &str) -> Command
         format!("ServerAliveInterval={SERVER_ALIVE_INTERVAL_SECONDS}"),
         "-o".to_string(),
         format!("ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}"),
-        target.to_string(),
-        remote_command.to_string(),
     ]);
+    command.args(options);
+    command.args([target.to_string(), remote_command.to_string()]);
     command
 }
 

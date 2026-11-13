@@ -164,10 +164,32 @@ first card.
 ### 2. How big, and where?
 
 Read the machine types and the list price of the chosen provider with its own CLI
-just before you draw this card. Take three sizes from that answer, smallest
-first, and put the price of the row in its `value`, in the money of the provider
-and per hour. Take the places from the same answer, and mark the first one
-`selected: true`.
+just before you draw this card. Take three sizes from that answer, as the rule
+below says, and put the price of the row in its `value`, in the money of the
+provider and per hour. Take the places from the same answer, and mark the first
+one `selected: true`.
+
+The three rows are named Small, Medium and Large, and each one is the cheapest
+type of this place that holds what it needs:
+
+| Row | Cores and memory of the type | For |
+|---|---|---|
+| Small | at least 2 vCPU and 4 GB | agents and light builds |
+| Medium | at least 4 vCPU and 8 GB | builds and tests |
+| Large | at least 8 vCPU and 16 GB | several agents at once |
+
+- Take the cheapest type that holds each pair, and an x86 type with shared
+  cores: a dedicated core, an ARM type or a type with a GPU costs more for the
+  same work. Name an ARM type only when the machine is for a person who asks for
+  one.
+- The `subtitle` of a row names the type and its true cores and memory, as the
+  provider answered them, for example `cpx21, 3 vCPU, 4 GB. Agents and light
+  builds.`. The row says what the place offers, never what the name Small
+  suggests.
+- A row whose pair this place does not offer is drawn, cannot be chosen, and
+  says why: `disabled: true` with the subtitle `No type with 4 vCPU and 8 GB in
+  this place.` That row is never `selected: true`, so the first pair that the
+  place offers is the selected row.
 
 ```json
 {"components": [
@@ -176,12 +198,12 @@ and per hour. Take the places from the same answer, and mark the first one
    "badge": {"text": "Step 3 of 4"}},
   {"type": "caption", "text": "Size"},
   {"type": "list", "selection": "single", "rows": [
-    {"id": "size.small", "title": "Small", "subtitle": "2 vCPU, 4 GB. Agents and light builds.",
-     "value": "0.0079 EUR / hour", "selected": true},
-    {"id": "size.medium", "title": "Medium", "subtitle": "4 vCPU, 8 GB. Builds and tests.",
-     "value": "0.0158 EUR / hour"},
-    {"id": "size.large", "title": "Large", "subtitle": "8 vCPU, 16 GB. Several agents at once.",
-     "value": "0.0316 EUR / hour"}]},
+    {"id": "size.small", "title": "Small", "subtitle": "cpx11, 2 vCPU, 2 GB. Agents and light builds.",
+     "value": "0.0058 EUR / hour"},
+    {"id": "size.medium", "title": "Medium", "subtitle": "cpx21, 3 vCPU, 4 GB. Builds and tests.",
+     "value": "0.0089 EUR / hour", "selected": true},
+    {"id": "size.large", "title": "Large", "subtitle": "cpx31, 4 vCPU, 8 GB. Several agents at once.",
+     "value": "0.0168 EUR / hour"}]},
   {"type": "caption", "text": "Place"},
   {"type": "list", "selection": "single", "layout": "pills", "rows": [
     {"id": "place.hel1", "title": "Helsinki", "selected": true},
@@ -194,8 +216,9 @@ and per hour. Take the places from the same answer, and mark the first one
 ]}
 ```
 
-The numbers of this document are examples. Write the values that you read. A
-size row whose price the CLI does not answer holds `price not read` in `value`.
+The numbers of this document are examples. Write the values that you read: the
+type name, the cores and the memory that the place answers. A size row whose
+price the CLI does not answer holds `price not read` in `value`.
 `Back` returns to the provider card with the provider of the person still
 selected. The press on `Rent this machine` is the only press that may spend
 money.
@@ -344,10 +367,21 @@ place, with the removal of `horizon-server`, and the card says what was removed
 and what is left. It deletes nothing on this computer.
 
 The last two steps of the list need the press of the person: call
-`server_link_request` with the SSH target of the place and the command of the
-server, and wait while Horizon draws its own card. Read its answer: `confirmed`
-means the entry is written; `declined` and `timed_out` mean the server is set up
-and this computer does not follow it yet. Say which one on the card.
+`server_link_request` with `machine` and the name of the place, and the command
+of the server, and wait while Horizon draws its own card. `machine` names the
+machine of the list that the flow already gave Horizon, so the link uses the
+address, the user, the key file and the known-hosts file of a terminal of that
+machine. Name `ssh_target` only when the server runs on a computer of the person.
+
+Read the answer of the request:
+
+- `confirmed` with `link: in_step` means that the server answered and this
+  computer is in step with it. Draw the ready card of the next section.
+- `confirmed` with `link: away` means that the entry is written and the server
+  did not answer within about 20 seconds. Draw the failure card with `reason` as
+  its subtitle, which is one sentence that names the cause.
+- `declined` and `timed_out` mean the server is set up and this computer does not
+  follow it yet. Say which one on the card.
 
 ### 3. The server is ready
 
@@ -360,6 +394,7 @@ and this computer does not follow it yet. Say which one on the card.
     {"label": "Runs on", "value": "helsinki-1"},
     {"label": "Starts by itself", "value": "yes, as a service"},
     {"label": "This computer", "value": "linked over SSH"},
+    {"label": "SSH from", "value": "any address, machine key only"},
     {"label": "Sent", "value": "1 machine, your settings"},
     {"label": "Kept aside", "value": "settings.before-server.1763020800000.json", "mono": true}]},
   {"type": "buttons", "items": [
@@ -368,29 +403,95 @@ and this computer does not follow it yet. Say which one on the card.
 ]}
 ```
 
-When the answer of `server_link_request` carries `restart_needed`, the `subtitle`
-is `Close Horizon and start it again one time.` instead, because this Horizon
-does not start the link of a new entry itself. An agent never restarts the
-program of the person.
+Draw this card only for `link: in_step`. When the answer carries
+`restart_needed`, the `subtitle` is `Close Horizon and start it again one time.`
+instead, because this Horizon does not start the link of a new entry itself. An
+agent never restarts the program of the person.
+
+The row `SSH from` says which rule is in force on a rented machine:
+`any address, machine key only` for the default, or
+`<address of this computer>/32, machine key only` for a rule that the person asked
+for. Read it from the firewall of the place, or from the card of
+`horizon-machines` that made it, and never guess it.
+
+For `link: away`, draw this card instead, and name the cause that `reason` gave:
+
+```json
+{"components": [
+  {"type": "heading", "text": "The server did not answer",
+   "subtitle": "The machine has the server, and this computer cannot reach it yet.",
+   "badge": {"text": "Not linked", "tone": "danger"}},
+  {"type": "text", "text": "<the sentence of reason>"},
+  {"type": "text", "text": "The sidebar says Server away. The log of Horizon holds the words of the attempt."},
+  {"type": "buttons", "items": [
+    {"id": "try_again", "label": "Try again", "tone": "primary"},
+    {"id": "stop", "label": "Stop", "tone": "neutral"}]}
+]}
+```
+
+The machine, its service and this computer are not broken by an `away` link, so
+`Try again` asks the person to press `Link` again on a new card, and `Stop`
+leaves the server on the machine.
 
 ### 4. Add another computer
+
+A second computer joins with one of three ways, and the place of this server
+decides which one works. Choose the row of that way, and draw the other rows
+`disabled: true` with the reason.
 
 ```json
 {"components": [
   {"type": "heading", "text": "Add another computer",
-   "subtitle": "Start Horizon on the other computer, open Set up there and choose Join a server that you already have.",
+   "subtitle": "This server keeps the machine list, the machine keys and your settings. Here is how another computer joins it.",
    "badge": {"text": "10 minutes"}},
   {"type": "kv", "rows": [
     {"label": "Computers now", "value": "1 (this one)"},
-    {"label": "Reached over", "value": "your private network only"}]},
-  {"type": "text", "text": "With an SSH login on the server computer, the other computer links by itself. Without one, Settings, Server shows a QR code and a code for one computer."},
-  {"type": "buttons", "items": [{"id": "done", "label": "Done", "tone": "primary"}]}
+    {"label": "Server runs on", "value": "helsinki-1, a rented machine"},
+    {"label": "This computer", "value": "linked over SSH with the machine key"}]},
+  {"type": "caption", "text": "The other computer"},
+  {"type": "list", "selection": "single", "rows": [
+    {"id": "add.ssh_login", "title": "A computer that you log in to",
+     "subtitle": "A rented machine holds no login of the person.",
+     "disabled": true},
+    {"id": "add.key_install", "title": "A machine that only this computer reaches",
+     "subtitle": "The other computer makes a machine key, and this computer adds its public line to the machine.",
+     "selected": true},
+    {"id": "add.invite", "title": "An overlay network that both computers are on",
+     "subtitle": "The server listens on the overlay, and Add a computer shows a link and a QR code.",
+     "disabled": true, "badge": {"text": "No overlay", "tone": "warn"}}]},
+  {"type": "text", "text": "The row that is selected is the way that works for the place of this server. A row that cannot be chosen says why."},
+  {"type": "text", "text": "The link and the QR code of the last row are the Settings window, Server: a card cannot draw a code."},
+  {"type": "buttons", "items": [
+    {"id": "done", "label": "Done", "tone": "primary"},
+    {"id": "close", "label": "Close"}]}
 ]}
 ```
 
-The QR code and the list of the computers are the Settings window, Server: a card
-cannot draw a code. Say that on the card, as this document does. `Done` closes
-the Set up card.
+The three ways are the three rows, in their order:
+
+1. `add.ssh_login`, a server on a computer of the person, which the other computer
+   reaches with the login of the person.
+2. `add.key_install`, a server on a rented machine, which the other computer reaches
+   with a machine key that this computer installs.
+3. `add.invite`, a server on an overlay network, which the other computer reaches
+   with a link and a code.
+
+- A server on a computer of the person: the other computer writes the SSH name of
+  that computer in Settings, Server, SSH target, with the command of the server,
+  and starts Horizon again one time, or its agent asks for the same entry on a card
+  that applies it at once. Its link then travels over SSH with the login of the
+  person. No code, no listener and no key of Horizon.
+- A server on a rented machine, with no overlay network: the other computer makes
+  a machine key with `machine_key`, the person writes its public line in this
+  panel, and you add that line to the `authorized_keys` of the machine through the
+  machine key of this computer. Then the other computer writes one `Host` block of
+  its SSH configuration for the machine, with that key file, and links over SSH.
+  The skill `horizon-server` gives the exact commands.
+- An overlay network: the server runs with `--listen <overlay address>:7000`, and
+  Settings, Server, Add a computer shows a link and a QR code for ten minutes. The
+  other computer pastes the link in Join with a link.
+
+`Done` closes the Set up card, and `Close` does the same.
 
 ## Goal `browser`
 

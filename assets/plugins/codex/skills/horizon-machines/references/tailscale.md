@@ -283,10 +283,10 @@ the provider reference that made the rule:
 
 | Provider | The rule of the rent | Command that closes port 22 | Result |
 |---|---|---|---|
-| Hetzner | Inbound TCP 22 from the address of the person, on `$NAME-fw` | `hcloud firewall delete-rule --direction in --protocol tcp --port 22 --source-ips "$MY_IP/32" $NAME-fw` | The rule is gone; the firewall keeps its other rules (doc). |
+| Hetzner | Inbound TCP 22 from every address, on `$NAME-fw` | `hcloud firewall delete-rule --direction in --protocol tcp --port 22 --source-ips 0.0.0.0/0 $NAME-fw` and the same line with `--source-ips ::/0` | The rule is gone; the firewall keeps its other rules (doc). |
 | Azure | The rule `$RG-ssh` of the group `$RG-nsg` | `az network nsg rule delete -g "$RG" --nsg-name "$RG-nsg" -n "$RG-ssh"` | The group keeps its other rules (doc). |
 | GCP | The rule `$NAME-ssh` of the rent | The delete of step 7 of [gcp](gcp.md) | The rule is gone. |
-| AWS | Inbound TCP 22 of the group `$SG` | `$AWS ec2 revoke-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$CALLER_IP/32"` | The group keeps its other rules. |
+| AWS | Inbound TCP 22 of the group `$SG` | `$AWS ec2 revoke-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr 0.0.0.0/0` | The group keeps its other rules. |
 | RunPod | No firewall exists | None | The published port stays reachable from the internet. |
 
 None of those commands ran in this slice. The Hetzner, Azure and GCP forms are

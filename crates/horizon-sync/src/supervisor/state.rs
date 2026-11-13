@@ -25,7 +25,7 @@ use super::files::{
     MirrorFile, MirroredMachine, MirroredSetting, SETTINGS_MIRROR_FORMAT, SettingsMirror, read_bindings, read_mirror,
     read_settings_mirror, seed_records, write_mirror, write_settings_mirror,
 };
-use super::pull::{merged_bindings, mirror_of};
+use super::pull::{mirror_of, view_bindings};
 use super::questions::{NO_LINK_SENTENCE, ServerReply, ServerRequest};
 use super::secrets::local_machine_keys;
 use super::view::records_of;
@@ -689,7 +689,7 @@ impl SyncHandle {
         ui_thread::blocking("the queue and the mirror of the link are written and synced");
         let mut state = self.lock();
         let next = bindings.names().clone();
-        let previous = merged_bindings(&state);
+        let previous = view_bindings(&state);
         let mut asked = Vec::new();
         for (machine, key) in &next {
             if previous.get(machine) != Some(key) {

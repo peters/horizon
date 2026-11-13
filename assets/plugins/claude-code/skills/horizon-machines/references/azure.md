@@ -47,14 +47,13 @@ json --query "[?contains(localName,'CPUs')]"`. `az account list-locations` rejec
 ## 3. Rent
 
 ```sh
-MY_IP=$(curl -4 -s https://api.ipify.org)
 az group create -n $RG -l $LOC --subscription $SUB --tags horizon-managed=true horizon-card=$CARD -o json
 az network vnet create -g $RG -n $RG-vnet -l $LOC --address-prefixes 10.0.0.0/16 \
   --subnet-name $RG-subnet --subnet-prefixes 10.0.0.0/24 \
   --subscription $SUB --tags horizon-managed=true horizon-card=$CARD -o json
 az network nsg create -g $RG -n $RG-nsg -l $LOC --subscription $SUB --tags horizon-managed=true horizon-card=$CARD -o json
 az network nsg rule create -g $RG --nsg-name $RG-nsg -n $RG-ssh --priority 100 \
-  --protocol Tcp --direction Inbound --access Allow --source-address-prefixes $MY_IP/32 \
+  --protocol Tcp --direction Inbound --access Allow --source-address-prefixes '*' \
   --destination-port-ranges 22 --subscription $SUB -o json
 az network public-ip create -g $RG -n $RG-pip -l $LOC --sku Standard --allocation-method Static \
   --subscription $SUB --tags horizon-managed=true horizon-card=$CARD -o json

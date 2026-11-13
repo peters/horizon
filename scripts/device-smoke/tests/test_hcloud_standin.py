@@ -87,6 +87,55 @@ class StandInTests(unittest.TestCase):
         self.assertEqual(deleted.returncode, 0, deleted.stderr)
         self.assertNotIn('build-1', run(self.folder, 'server', 'list', '--quiet').stdout)
 
+    def test_the_cleanup_of_the_flow_answers_every_call_that_it_makes(self):
+        # The reference creates the key and the firewall before the machine, closes
+        # the machine first and then deletes the two, and proves the empty answer of
+        # `all list`. Every one of those calls must answer, or the flow ends with
+        # `Cleanup incomplete` for a reason of the stand-in.
+        firewall = run(self.folder, 'firewall', 'create', '--name', 'build-1-fw',
+                       '--label', 'horizon-managed=true', '-o', 'json')
+        self.assertEqual(firewall.returncode, 0, firewall.stderr)
+        self.assertEqual(json.loads(firewall.stdout)['firewall']['name'], 'build-1-fw')
+        rule = run(self.folder, 'firewall', 'add-rule', '--direction', 'in', '--protocol', 'tcp',
+                   '--port', '22', '--source-ips', '0.0.0.0/0', '--source-ips', '::/0',
+                   '--description', 'horizon-ssh', 'build-1-fw')
+        self.assertEqual(rule.returncode, 0, rule.stderr)
+        applied = run(self.folder, 'firewall', 'apply-to-resource', '--type', 'server',
+                      '--server', 'build-1', 'build-1-fw')
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+
+        key = run(self.folder, 'ssh-key', 'create', '--name', 'build-1-key',
+                  '--public-key-from-file', str(self.folder / 'key.pub'), '-o', 'json')
+        self.assertEqual(key.returncode, 0, key.stderr)
+        listed = run(self.folder, 'ssh-key', 'list', '-o', 'noheader', '-o', 'columns=id,name')
+        self.assertIn('build-1-key', listed.stdout)
+
+        run(self.folder, 'server', 'create', '--name', 'build-1')
+        held = json.loads(run(self.folder, 'all', 'list', '-l', 'horizon-card=build-1', '-o', 'json').stdout)
+        self.assertEqual(len(held['servers']), 1, held)
+        self.assertEqual(len(held['firewalls']), 1, held)
+        self.assertEqual(len(held['ssh_keys']), 1, held)
+
+        for arguments in (
+            ('server', 'delete', 'build-1'),
+            ('firewall', 'delete', 'build-1-fw'),
+            ('ssh-key', 'delete', 'build-1-key'),
+        ):
+            deleted = run(self.folder, *arguments)
+            self.assertEqual(deleted.returncode, 0, (arguments, deleted.stderr))
+        empty = json.loads(run(self.folder, 'all', 'list', '-l', 'horizon-card=build-1', '-o', 'json').stdout)
+        self.assertEqual(empty, {'servers': [], 'firewalls': [], 'ssh_keys': []}, empty)
+
+    def test_a_delete_of_a_resource_that_the_stand_in_does_not_hold_is_refused(self):
+        for arguments in (
+            ('firewall', 'delete', 'other-fw'),
+            ('ssh-key', 'delete', 'other-key'),
+            ('firewall', 'add-rule', '--direction', 'in', '--port', '22', 'other-fw'),
+        ):
+            refused = run(self.folder, *arguments)
+            self.assertEqual(refused.returncode, 1, arguments)
+            self.assertIn('not part of the stand-in', refused.stderr)
+
     def test_a_describe_or_delete_without_a_machine_is_refused(self):
         for arguments in (('server', 'describe', '-o', 'json'), ('server', 'delete', 'build-1')):
             refused = run(self.folder, *arguments)
@@ -100,13 +149,13 @@ class StandInTests(unittest.TestCase):
         self.assertEqual(len(refused.stderr.strip().splitlines()), 1, refused.stderr)
         self.assertIn('not part of the stand-in', refused.stderr)
 
-    def test_the_program_writes_one_file_beside_itself_and_makes_nothing(self):
+    def test_the_program_writes_one_file_per_resource_beside_itself_and_makes_nothing(self):
         before = set(self.folder.iterdir())
         run(self.folder, 'server', 'create', '--name', 'build-1')
         after = set(self.folder.iterdir())
         self.assertEqual(
             sorted(path.name for path in after - before), ['hcloud-standin.record'],
-            'the stand-in keeps its one machine in one file beside itself',
+            'a create writes the file of the resource that it made',
         )
         self.assertEqual((self.folder / 'hcloud-standin.record').read_text().strip(), 'build-1')
         self.assertNotIn('build-1', run(self.folder, 'volume', 'create').stderr)

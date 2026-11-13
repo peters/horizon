@@ -159,6 +159,14 @@ most 8 rows under the caption `Size`, and put the list price of each type in its
 `0.0079 EUR / hour`. A type whose price the CLI does not answer holds
 `price not read`. The click carries the chosen rows in `selected`.
 
+A row names the type, its true cores and its memory, as the provider answered
+them, and never only what the name of the row suggests: `cpx21, 3 vCPU, 4 GB`
+says what the machine is. When the person takes a size of Set up, Small is the
+cheapest x86 type with shared cores that holds at least 2 vCPU and 4 GB, Medium
+at least 4 vCPU and 8 GB, and Large at least 8 vCPU and 16 GB. A size that the
+place does not offer is a row with `disabled: true` that names the reason, and it
+is never the selected row.
+
 ### 4. Make the key and rent
 
 Call `machine_key` with the name before you rent. The answer is `{name,
@@ -178,6 +186,28 @@ resource that the provider can tag with `horizon-managed=true` and
 `horizon-card=<name>`. Put the name in the resource name when the provider has no
 tag, as `references/gcp.md` and `references/runpod.md` say. Keep the returned ids
 in your notes to delete later.
+
+### The SSH rule of a rented machine
+
+Open SSH to every address, and let the machine key be the protection:
+
+- The machine holds no password of the person. The image has no root password,
+  and the provider puts the public key of the machine key in `authorized_keys`.
+  Step 5 proves that the key logs in and that the ssh server refuses a password.
+- A rule that names the address of this computer at this moment locks the person
+  out when the address changes, when the person travels, and for every other
+  computer of the person. Item 4 of the work of Set up asked for this.
+- An image with no provider firewall allows every port to the internet. Give the
+  machine a firewall with one inbound rule for TCP 22 and no other, as each
+  provider reference shows, and keep its other ports closed.
+
+A rule narrowed to one address stays a choice of the person: when the person asks
+for it in words, set the source of the TCP 22 rule to the address of this computer
+as `/32`, and say on the card that another network address and another computer
+cannot reach the machine after that. The section "A narrow SSH rule" gives the
+commands.
+
+### 5. Wait for SSH and prepare the machine
 
 ### 5. Wait for SSH and prepare the machine
 
@@ -223,11 +253,36 @@ the `%` twice in `<known_hosts_path>` too.
 1. Wait until SSH answers: run the form with `true` as `<command>` every 10
    seconds, for at most 3 minutes. Update the card between the tries, and never
    show `Connect` before a try answers.
-2. Check the multiplexer: `command -v tmux` answers a path when it is there.
-3. Install it when it is missing and the user can use sudo, with the install
-   command of the provider reference. Never change the ssh configuration of the
-   machine and never install more than this.
-4. Prove it: `command -v tmux` answers a path after the install.
+2. Prove that the login is key-only, which is the protection of the rule that
+   lets every address in. The key answered step 1 with `BatchMode=yes`, so this
+   asks the ssh server what it accepts:
+
+   ```
+   sudo sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'
+   ```
+
+   `passwordauthentication no` and `kbdinteractiveauthentication no` are the
+   answer of every Canonical, Debian and Hetzner cloud image. A machine that
+   answers `yes` accepts a password from every address, so tell the person, and
+   turn it off only when the person agrees:
+
+   > CAUTION: `sshd -T` and the next command change who can log in. A mistake
+   > here closes the login of the machine. Keep the shell of step 1 open until
+   > the new login answered.
+
+   ```
+   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\n' \
+     | sudo tee /etc/ssh/sshd_config.d/10-horizon.conf
+   sudo sshd -t && sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd
+   ```
+
+   Run the `sshd -T` line again, and open one more SSH session with the machine
+   key before you close the first.
+3. Check the multiplexer: `command -v tmux` answers a path when it is there.
+4. Install it when it is missing and the user can use sudo, with the install
+   command of the provider reference. Never change another part of the machine
+   and never install more than this.
+5. Prove it: `command -v tmux` answers a path after the install.
 
 When no try answers within 3 minutes, the card must not stay on `Starting`. Show
 the heading with a `warn` badge `No SSH yet`, one `text` component with the last
@@ -263,8 +318,12 @@ Update the card. The heading is the name, the subtitle is the provider and the
 region, and the badge is the state that the CLI reports: `Running` with `ok` when
 the machine answers, `Starting` with `info`, `Stopped` with `warn`, and `danger`
 with the provider's own words when a command failed. Give `kv` rows for Type,
-Address, Session, Rented at and Cost, draw the address and the session name in
-`mono`, and give the cost as the provider's list price that you read. Then give
+Address, Session, SSH from, Rented at and Cost, draw the address and the session
+name in `mono`, and give the cost as the provider's list price that you read.
+
+The row `SSH from` says which rule is in force: `any address, machine key only`
+for the default, or `<address of this computer>/32, machine key only` for a rule
+that the person asked for. Then give
 `Connect` with tone `primary`, `Put the Horizon server here`, `Add a browser`,
 `Stop`, and `Delete` in `danger`. When the machine is stopped, draw `Start`
 instead of `Stop`.
@@ -351,6 +410,29 @@ there, and that their tmux sessions end with the machine.
 
 A leftover resource means the delete did not finish. Show the provider's own
 words on the card and keep `Delete it`, so the person can try again.
+
+## A narrow SSH rule
+
+The default rule accepts TCP 22 from every address and the key is the protection.
+When the person asks for a rule that accepts SSH only from this computer, set its
+source to the address of this computer as `/32`, and say on the card that another
+network address and another computer cannot reach the machine after that.
+
+```sh
+MY_IP=$(curl -4 -s https://api.ipify.org)/32
+```
+
+| Provider | Command that narrows the rule of the rent | Command that opens it again |
+|---|---|---|
+| Hetzner | `hcloud firewall delete-rule --direction in --protocol tcp --port 22 --source-ips 0.0.0.0/0 $NAME-fw` and then `hcloud firewall add-rule --direction in --protocol tcp --port 22 --source-ips "$MY_IP" --description horizon-ssh $NAME-fw` | The add-rule line with `0.0.0.0/0` instead of `$MY_IP` |
+| GCP | The `firewall-rules create` of `references/gcp.md` with `--source-ranges="$MY_IP"` | The same line with `--source-ranges=0.0.0.0/0` |
+| AWS | `$AWS ec2 revoke-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr 0.0.0.0/0` and then the `authorize-security-group-ingress` of `references/aws.md` with `--cidr "$MY_IP"` | The authorize line with `--cidr 0.0.0.0/0` |
+| Azure | The `nsg rule create` of `references/azure.md` with `--source-address-prefixes "$MY_IP"` | The same line with `--source-address-prefixes '*'` |
+| RunPod | No firewall exists, and the published port cannot be narrowed | None |
+
+None of those commands ran in this slice. Read the rule list of the provider
+after the change, and let the person confirm the new login with the machine key
+from this computer before the address changes.
 
 ## A machine on a Tailscale network
 
@@ -454,8 +536,9 @@ The machine runs. The person may connect, stop or delete it:
     {"label": "Type", "value": "cpx02, 1 vCPU, 1 GB"},
     {"label": "Address", "value": "203.0.113.10", "mono": true},
     {"label": "Session", "value": "build-1", "mono": true},
+    {"label": "SSH from", "value": "any address, machine key only"},
     {"label": "Rented at", "value": "2026-11-10 19:53 UTC"}]},
-  {"type": "text", "text": "Connect gives a shell. Port 22 is open to your address only. The two buttons below belong to Set up."},
+  {"type": "text", "text": "Connect gives a shell. Port 22 is open to every address and the machine key is the only login. The two buttons below belong to Set up."},
   {"type": "buttons", "items": [
     {"id": "connect", "label": "Connect", "tone": "primary"},
     {"id": "server_here", "label": "Put the Horizon server here"},

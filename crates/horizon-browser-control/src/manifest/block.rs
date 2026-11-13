@@ -196,17 +196,30 @@ pub enum Operation {
     /// known-hosts file. Call it after the machine is deleted.
     DeleteMachineKey { name: String },
     /// Ask the person to link this computer to a Horizon server. Horizon draws
-    /// a card of its own in the caller's workspace that states the SSH target
-    /// and the command exactly as the settings store them, and it writes the
-    /// entry of the settings only when the person presses `Link`. The answer is
-    /// `server_link` with the person's answer, and with whether the link of the
-    /// running program follows the new entry now. The caller can press nothing
-    /// itself: a request that no person presses ends as `timed_out` after five
-    /// minutes, and the card goes with it.
+    /// a card of its own in the caller's workspace that states the target and
+    /// the command exactly as the settings store them, and it writes the entry
+    /// of the settings only when the person presses `Link`. The answer is
+    /// `server_link` with the person's answer, with whether the link of the
+    /// running program follows the new entry now, and, when it does, with
+    /// whether the server answered: `in_step` or `away` with the reason of the
+    /// link in words. The caller can press nothing itself: a request that no
+    /// person presses ends as `timed_out` after five minutes, and the card goes
+    /// with it.
     ServerLinkRequest {
         /// The SSH target, as the settings field `server.ssh_target` takes it:
-        /// an SSH config alias, a `user@host` or an address, one word.
-        ssh_target: String,
+        /// an SSH config alias, a `user@host` or an address, one word. Give this
+        /// for a computer of the person, which answers the keys of the person.
+        /// Omit it when `machine` names the server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_target: Option<String>,
+        /// The name of a machine of the machine list that runs the server, as
+        /// `machines` reports it. The link then uses the address, the user, the
+        /// port, the key file and the known-hosts file of a terminal of that
+        /// machine, so a machine that Horizon rented is reachable: it holds the
+        /// public key of Horizon and no key of the person. Give one of this and
+        /// `ssh_target`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
         /// The command that the link runs on the server, as
         /// `server.command` takes it. Omitted means the default
         /// `horizon --server-link`.
@@ -245,6 +258,18 @@ pub enum Answer {
     Declined,
     /// No press arrived before the wait ended, or the person closed the card.
     TimedOut,
+}
+
+/// Whether the link of a server entry reached its server before the answer of a
+/// request that the person confirmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerLinkState {
+    /// The server answered the hello, and this computer is in step with it.
+    InStep,
+    /// No answer arrived within the bound of the request. `reason` of
+    /// [`Outcome::ServerLink`] says why in words that a person reads.
+    Away,
 }
 
 /// Whether a setting that the person confirmed applies to the running program.
@@ -445,11 +470,17 @@ pub enum Outcome {
     /// The answer of the person to the card that asked to link this computer to
     /// a Horizon server. `start` says whether the link of the running program
     /// follows the new entry now, and it is absent when the person did not
-    /// confirm.
+    /// confirm. `link` says whether the server answered within the bound of the
+    /// request, so `in_step` is the only answer that reads as a server that is
+    /// ready; `reason` holds the words of a link that is `away`.
     ServerLink {
         answer: Answer,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start: Option<EntryStart>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<ServerLinkState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// The answer of the person to the card that asked to use the browser of
     /// another machine for new browser panels.
@@ -1254,7 +1285,8 @@ mod tests {
         assert_eq!(
             link,
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: Some("/opt/horizon --server-link".into()),
             }
         );
@@ -1264,10 +1296,23 @@ mod tests {
             }))
             .expect("the command is optional"),
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: None,
             },
             "without a command the link runs the default"
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "server_link_request", "machine": "rented-1"
+            }))
+            .expect("a machine of the list names the server"),
+            Operation::ServerLinkRequest {
+                ssh_target: None,
+                machine: Some("rented-1".into()),
+                command: None,
+            },
+            "a machine of the list carries no SSH target, and the link uses its login"
         );
         let browser = serde_json::from_value::<Operation>(serde_json::json!({
             "operation": "browser_host_request",
@@ -1306,9 +1351,17 @@ mod tests {
                 "a setting request names no other field: {unknown}"
             );
         }
+    }
+
+    /// The answer of one setting request names the person's press, and says whether
+    /// the running Horizon follows a server entry now.
+    #[test]
+    fn the_answer_of_a_setting_request_names_the_press() {
         let confirmed = serde_json::to_value(Outcome::ServerLink {
             answer: Answer::Confirmed,
             start: Some(EntryStart::Linked),
+            link: Some(ServerLinkState::InStep),
+            reason: None,
         })
         .expect("serialize");
         assert_eq!(confirmed["status"], serde_json::json!("server_link"));
@@ -1317,6 +1370,8 @@ mod tests {
         let declined = serde_json::to_value(Outcome::ServerLink {
             answer: Answer::Declined,
             start: None,
+            link: None,
+            reason: None,
         })
         .expect("serialize");
         assert!(
@@ -1332,11 +1387,43 @@ mod tests {
         );
     }
 
+    /// The answer of a confirmed server entry says whether the server answered, and
+    /// the reason of a link that is away reaches the agent in words.
+    #[test]
+    fn a_confirmed_server_link_answers_with_the_state_of_its_link() {
+        let in_step = serde_json::to_value(Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+            link: Some(ServerLinkState::InStep),
+            reason: None,
+        })
+        .expect("serialize");
+        assert_eq!(in_step["link"], serde_json::json!("in_step"));
+        assert!(
+            in_step.get("reason").is_none(),
+            "a link that answered names no reason: {in_step}"
+        );
+        let away = serde_json::to_value(Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+            link: Some(ServerLinkState::Away),
+            reason: Some("The key of the server is not the key that this computer knows.".into()),
+        })
+        .expect("serialize");
+        assert_eq!(away["link"], serde_json::json!("away"));
+        assert_eq!(
+            away["reason"],
+            serde_json::json!("The key of the server is not the key that this computer knows."),
+            "the reason of a link that is away reaches the agent in words"
+        );
+    }
+
     #[test]
     fn a_setting_request_waits_for_the_person_and_never_for_an_hour() {
         for operation in [
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: None,
             },
             Operation::BrowserHostRequest {

@@ -131,6 +131,25 @@ impl SshConnection {
         args
     }
 
+    /// The options of the login alone, for a child that sets its own bounds: the
+    /// port, the machine key of this connection with its own known-hosts file, and
+    /// no ssh agent.
+    ///
+    /// A server link to a machine of the list starts `ssh` with these, so it uses
+    /// the address, the user, the key file, the known-hosts file and the options of
+    /// a terminal of that machine and never the keys of the person.
+    #[must_use]
+    pub fn login_option_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(port) = self.port {
+            args.extend(["-p".to_string(), port.to_string()]);
+        }
+        if let Some(key) = self.machine_key.as_ref() {
+            args.extend(key.ssh_option_args());
+        }
+        args
+    }
+
     #[must_use]
     pub fn ssh_transport_args(&self) -> Vec<String> {
         let mut args = self.base_transport_args(true, CONNECT_TIMEOUT_SECS);

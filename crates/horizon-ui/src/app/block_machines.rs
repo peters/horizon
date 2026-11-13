@@ -52,12 +52,13 @@ impl HorizonApp {
         let settings_path = self.config_path.clone();
         let program = self.link_child_program();
         std::thread::spawn(move || {
-            let secrets = super::server_sync::secret_vault(&home, keys, &remote, &names);
+            let secrets = super::server_sync::secret_vault(&home, keys.clone(), &remote, &names);
             let _ = tx.send(super::server_sync::load(
                 registry,
                 server,
                 &settings_path,
                 secrets,
+                &keys,
                 program,
                 wake,
             ));
@@ -84,6 +85,7 @@ impl HorizonApp {
             Ok(Ok(load)) if asked_at == self.machine_epoch => {
                 tracing::info!(count = load.machines.records().len(), "loaded the machine list");
                 self.machine_list = load.machines;
+                self.settings_request.link_failure.clone_from(&load.server_failure);
                 if let Some(reason) = load.server_failure {
                     self.set_sidebar_notice(format!("The machine list: {reason}"));
                 }

@@ -389,14 +389,26 @@ and you can press nothing.
 ```
 
 ```json
+{"operation": "server_link_request", "machine": "helsinki-1",
+ "command": "/home/person/bin/horizon --server-link"}
+```
+
+```json
 {"operation": "browser_host_request", "ssh_target": "browser-vm",
  "profile": "work", "engine": "chromium"}
 ```
 
 - The fields pass the rule of the settings field that stores them before a card
-  exists: `ssh_target` is one SSH name, `command` is one command of letters,
-  digits and `._:/=@+-`, and `profile` is 1 to 40 characters of `a-z`, `0-9` and
-  `-`. A request that fails the rule is `invalid_request` and draws no card.
+  exists: `ssh_target` is one SSH name, `machine` is the name of one machine of
+  `machines`, `command` is one command of letters, digits and `._:/=@+-`, and
+  `profile` is 1 to 40 characters of `a-z`, `0-9` and `-`. A request that fails
+  the rule is `invalid_request` and draws no card.
+- A server on a machine that Horizon rented takes `machine` and no
+  `ssh_target`: the link then uses the address, the user, the port, the key file
+  and the known-hosts file of a terminal of that machine, because the machine
+  holds the machine key of Horizon and no key of the person. A server on a
+  computer of the person takes `ssh_target`. A request that names both, or
+  neither, is `invalid_request`.
 - `command` is optional. Without it the link runs `horizon --server-link`.
 - `engine` is `chromium` or `firefox`. Only Chromium runs on another machine, so
   `firefox` is `engine_unavailable` and draws no card.
@@ -406,6 +418,10 @@ and you can press nothing.
   `declined` or `timed_out`. A `confirmed` `server_link` also carries `start`:
   `linked` when the running Horizon follows the new entry now, or
   `restart_needed` when the person starts Horizon again one time.
+- A `confirmed` `server_link` carries `link`: `in_step` when the server answered
+  within about 20 seconds, or `away` when it did not. An `away` answer carries
+  `reason` with one sentence that names the cause. Draw the ready card only for
+  `in_step`, and a failure card with `reason` for `away`.
 - The wait is five minutes, and the card goes away with the wait. A second
   request while one waits is `request_pending`. A person who closes the card
   pressed neither button, so the answer is `timed_out`.

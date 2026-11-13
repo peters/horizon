@@ -401,6 +401,26 @@ fn render_link_section(ui: &mut Ui, config: &mut Config, state: &mut ServerTabSt
                 );
                 ui.end_row();
             });
+        // A server that runs on a machine of the list is named by that machine, and
+        // the link uses the login of a terminal of it. The person leaves that route
+        // here to name an SSH target instead.
+        if let Some(machine) = config.server.machine().map(str::to_owned) {
+            ui.add_space(6.0);
+            super::dim_label(
+                ui,
+                &format!(
+                    "The link uses the machine {machine}: its address, its user and the machine key that a \
+                     terminal of it uses."
+                ),
+            );
+            if ui
+                .add(crate::app::util::chrome_button("Use an SSH target instead"))
+                .clicked()
+            {
+                config.server.machine = None;
+                changed = true;
+            }
+        }
         if !view.device.is_empty() {
             ui.add_space(6.0);
             super::dim_label(

@@ -47,11 +47,21 @@ card contract is in `horizon-block`, and the provider commands are in
    ```
 
 2. Read the same two values of this computer, and the path of the binary that
-   runs here:
+   runs here. Horizon puts that path in the environment of every agent panel as
+   `HORIZON_EXECUTABLE`, so read the variable and never look on `PATH`:
 
    ```sh
-   uname -s; uname -m; command -v horizon
+   uname -s; uname -m; printf '%s\n' "$HORIZON_EXECUTABLE"
    ```
+
+   The variable names the program that runs this Horizon, which is the binary
+   that this flow copies. On Linux it is `/proc/<pid>/exe`, which follows the
+   live program after the file at the original path was replaced or deleted; on
+   macOS it is the path that Horizon started from, and a file that the person
+   deleted is not there to copy. An empty value means that an agent of another
+   program started this panel, or that Horizon could not resolve its own path:
+   stop and tell the person in one sentence to start the agent from a panel of
+   Horizon.
 
 3. When both pairs match, copy the binary of this computer to the place:
 
@@ -67,7 +77,7 @@ card contract is in `horizon-block`, and the provider commands are in
 
    `<private_key_path>` and `<known_hosts_path>` are the fields of the
    `machine_key` answer of `horizon-machines`, and `<path of horizon>` is the
-   absolute path that `command -v horizon` answered.
+   value of `HORIZON_EXECUTABLE`.
 
 4. When the two pairs differ, stop and tell the person in one sentence what to
    do: build Horizon on a computer of that system and CPU, or choose a place of
@@ -223,11 +233,15 @@ journal, and start the service again.
 
 ### 5. Link this computer
 
-Call `server_link_request` with the SSH target of the place and the command:
+Call `server_link_request` with `machine` and the name of the place, and the
+command:
 
-- The SSH target is the name that `ssh` of this computer resolves: an SSH config
-  alias, a `user@host`, or an address. `This computer` uses its own name or
-  `127.0.0.1` only when that name is in the SSH configuration.
+- `machine` names the machine of the list that runs the server, as `machines`
+  reports it. The link uses the address, the user, the port, the key file and the
+  known-hosts file that a terminal of that machine uses. Name `ssh_target`
+  instead only when the server runs on a computer of the person: that target is
+  the name that `ssh` of this computer resolves, and `This computer` uses its own
+  name or `127.0.0.1` only when that name is in the SSH configuration.
 - The command is the whole path of the binary on the place and `--server-link`,
   for example `/home/person/bin/horizon --server-link`. A non-interactive SSH
   session has a short `PATH`, so give the whole path.
@@ -235,19 +249,74 @@ Call `server_link_request` with the SSH target of the place and the command:
 Horizon draws its own card and the person presses `Link`. The answer is
 `confirmed`, `declined` or `timed_out`, and `start` says `linked` when the
 running Horizon follows the entry now, or `restart_needed` when the person starts
-Horizon again one time.
+Horizon again one time. A `confirmed` answer also carries `link`: `in_step` when
+the server answered within about 20 seconds, or `away` when it did not, with
+`reason` holding one sentence that names the cause. Say `in_step` as the ready
+card of the flow, and draw a failure card for `away` with that sentence.
 
 An agent never restarts the program of the person.
 
 ### 6. Another computer
 
-The other computer joins with one of two transports:
+The other computer of the person joins with one of three ways. The place of this
+server decides which one works, and only the last one needs no step of the person
+beyond a press.
 
-- With an SSH login on the server computer: start Horizon there, open Set up, and
-  choose `Join a server that you already have`.
-- Without one: **Settings**, **Server**, **Add a computer** shows a QR code and a
-  code for one computer, for ten minutes. A card cannot draw a code; name that
-  place on the card.
+**A. The server runs on a computer of the person, and the other computer has an
+SSH login to it.** The other computer writes the SSH name of that computer in
+**Settings**, **Server**, **SSH target**, with the command of the server, and
+starts Horizon again one time: the tab writes the store and the entry applies at
+the next start. An agent of that computer shortens this with
+`server_link_request { ssh_target }`, whose card applies the entry at once. Its
+link then travels over SSH with the login of the person, and the server needs no
+code, no listener and no key of Horizon. The skill `horizon-setup` gives the same
+way as the goal `join`.
+
+**B. The server runs on a rented machine, and there is no overlay network.** The
+machine holds the machine key of this computer and no login of the person, so the
+other computer cannot reach it. This is the one way that works today:
+
+1. On the other computer, call `machine_key` with a name, and keep the
+   `public_key` line of the answer. The private half stays there.
+2. The person writes that line in the panel of the agent on this computer.
+3. On this computer, add the line to the machine through the machine key. The
+   form is the one of `horizon-machines`, and the user is the user of the record:
+
+   ```sh
+   ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+       -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+       -o BatchMode=yes -o ConnectTimeout=10 <user>@<address> \
+       'mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" && touch "$HOME/.ssh/authorized_keys" && chmod 600 "$HOME/.ssh/authorized_keys" && grep -qxF "<public line of the other computer>" "$HOME/.ssh/authorized_keys" || printf "%s\n" "<public line of the other computer>" >> "$HOME/.ssh/authorized_keys"'
+   ```
+
+4. On the other computer, write one block of its SSH configuration, with the two
+   paths of its own `machine_key` answer:
+
+   ```text
+   Host horizon-server
+       HostName <address of the machine>
+       User <user of the record>
+       IdentityFile <private_key_path on the other computer>
+       IdentitiesOnly yes
+       IdentityAgent none
+       UserKnownHostsFile <known_hosts_path on the other computer>
+       StrictHostKeyChecking accept-new
+   ```
+
+5. The other computer writes `horizon-server` in **Settings**, **Server**, **SSH
+   target**, with the command of the server, and its link travels over SSH to the
+   machine with its own key.
+
+   This way is not one press: steps 1 and 2 belong to the person. Tell the person
+   that, and do not invent a code that does not exist.
+
+**C. An overlay network holds the machine and both computers.** Start the server
+on its overlay address with `--listen <overlay address>:7000 --name <overlay
+name>`, and open the listener port in the firewall of the overlay, which carries
+its own encryption. Then **Settings**, **Server**, **Add a computer** shows a link
+and a code for one computer, for ten minutes, and the other computer pastes the
+link in **Join with a link**. Its token is stored and its link travels over the
+overlay. A card cannot draw a code: name that place on the card.
 
 The tab lists the computers of the server. Removing one there ends its links, and
 that computer keeps the copies of the keys and the values that it already had.

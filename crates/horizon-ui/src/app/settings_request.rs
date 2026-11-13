@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use egui::Context;
 use horizon_browser_control::block::{BlockDocument, Button, Component, KvRow, Tone};
 use horizon_browser_control::manifest::block::{
-    Answer, BrowserEngine, EntryStart, HOST_APPLY_TIMEOUT, Operation, Outcome, Request,
+    Answer, BrowserEngine, EntryStart, HOST_APPLY_TIMEOUT, Operation, Outcome, Request, ServerLinkState,
 };
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::now_millis;
@@ -32,10 +32,12 @@ use horizon_core::{
     BlockPanelState, BrowserHostConfig, BrowserHostEngine, Config, DEFAULT_LINK_COMMAND, PanelId, PanelKind,
     PanelOptions, ServerConfig,
 };
+use horizon_sync::LinkState;
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
 use super::browser_requests::ActorPanel;
+use super::server_sync::ServerLine;
 
 /// The name of the card that asks about the server, as its titlebar and its
 /// title show it.
@@ -54,6 +56,14 @@ pub(in crate::app) const REQUEST_PENDING: &str = "request_pending";
 pub(in crate::app) const SERVER_SENT: &str = "Your machine list, the machine keys and your settings are sent there.";
 /// The second line of the server card: what Horizon does before the first link.
 pub(in crate::app) const SERVER_KEPT: &str = "The settings of this computer are kept aside in a dated file first.";
+/// The line of the server card that says which login the link uses when the server
+/// runs on a machine of the list.
+pub(in crate::app) const SERVER_MACHINE: &str =
+    "The link runs on that machine with its address, its user and the machine key that a terminal of it uses.";
+/// How long the answer of a confirmed server entry waits for the first answer of
+/// the server. The hello of a link holds the SSH connect and one round trip, so a
+/// server that is away has ended its first attempt inside this bound.
+pub(in crate::app) const LINK_ANSWER_BOUND: std::time::Duration = std::time::Duration::from_secs(20);
 /// The line of the browser card that says which profile of which browser the new
 /// panels use, in the words of the Settings window. A Firefox host runs a driver
 /// of Horizon beside its browser, so that machine needs the same Horizon.
@@ -61,12 +71,32 @@ pub(in crate::app) const BROWSER_USES: &str = "Browser panels open in that profi
 /// The line of the browser card that says when the entry applies.
 pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the next start of Horizon.";
 
+/// The server that the card asks about, as the request named it and as the store
+/// will hold it: an SSH target of the person, or a machine of the machine list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ServerEntry {
+    /// A target that the SSH configuration of the person resolves.
+    Target(String),
+    /// A machine of the list, whose own login the link uses.
+    Machine(String),
+}
+
+impl ServerEntry {
+    /// The name of the entry as the card states it and the settings store it.
+    fn label(&self) -> &str {
+        match self {
+            Self::Target(target) => target,
+            Self::Machine(machine) => machine,
+        }
+    }
+}
+
 /// The change that waits for the person's press, as the request named it and as
 /// the store will hold it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Asked {
-    /// The SSH target and the command of the server entry.
-    ServerLink { ssh_target: String, command: String },
+    /// The server entry and the command that the link runs there.
+    ServerLink { entry: ServerEntry, command: String },
     /// The SSH target, the profile and the engine of the browser host entry.
     BrowserHost {
         ssh_target: String,
@@ -90,17 +120,34 @@ struct Waiting {
     deadline_at_millis: i64,
 }
 
+/// The answer of a confirmed server entry that waits for the first answer of the
+/// server.
+struct Linking {
+    /// The queue that the answer goes to.
+    root: Option<PathBuf>,
+    /// The request to answer.
+    request: Request,
+    /// When the person pressed, so the bound of the wait counts from the press.
+    pressed_at: std::time::Instant,
+}
+
 /// The setting request that this host holds open, if any.
 #[derive(Default)]
 pub(in crate::app) struct SettingRequestState {
     waiting: Option<Waiting>,
+    /// A confirmed server entry whose answer waits for the link.
+    linking: Option<Linking>,
+    /// Why the link of the running program did not start at all, when the read
+    /// that starts it answered that. A confirmed server entry answers it as the
+    /// reason of a link that is away.
+    pub(in crate::app) link_failure: Option<String>,
 }
 
 impl SettingRequestState {
-    /// Whether a card of Horizon waits for the person's press, so the request
-    /// pump keeps waking until the wait ends.
+    /// Whether a card of Horizon waits for the person's press or an answer waits
+    /// for the link, so the request pump keeps waking until the wait ends.
     pub(in crate::app) fn is_waiting(&self) -> bool {
-        self.waiting.is_some()
+        self.waiting.is_some() || self.linking.is_some()
     }
 }
 
@@ -207,54 +254,79 @@ impl HorizonApp {
         let Some(waiting) = self.settings_request.waiting.take() else {
             return false;
         };
-        let outcome = if id == APPLY {
-            self.apply_setting(&waiting, ctx)
-        } else {
-            unconfirmed_outcome(&waiting.asked, Answer::Declined)
-        };
         self.remove_setting_card(&waiting, ctx);
-        self.write_block_answer(BlockAnswer::new(waiting.root.as_deref(), waiting.request, outcome));
+        if id == APPLY {
+            self.apply_setting(&waiting, ctx);
+        } else {
+            self.answer_setting(&waiting, unconfirmed_outcome(&waiting.asked, Answer::Declined));
+        }
         self.mark_runtime_dirty();
         ctx.request_repaint();
         true
+    }
+
+    /// Writes the answer of one setting request now.
+    fn answer_setting(&mut self, waiting: &Waiting, outcome: Outcome) {
+        self.write_block_answer(BlockAnswer::new(
+            waiting.root.as_deref(),
+            waiting.request.clone(),
+            outcome,
+        ));
     }
 
     /// Writes the setting that the person confirmed, as the Settings window
     /// writes it. A refusal here is the answer of the request: the fields passed
     /// their rule when the card was drawn, so a refusal names a setting of the
     /// store that the new entry contradicts.
-    fn apply_setting(&mut self, waiting: &Waiting, ctx: &Context) -> Outcome {
-        let written = match &waiting.asked {
-            Asked::ServerLink { ssh_target, command } => {
-                self.write_server_entry(ssh_target, command, ctx)
-                    .map(|start| Outcome::ServerLink {
-                        answer: Answer::Confirmed,
-                        start: Some(start),
-                    })
-            }
+    ///
+    /// A confirmed server entry answers later: the card told the person that the
+    /// server receives the list, so the answer says whether the link reached it.
+    fn apply_setting(&mut self, waiting: &Waiting, ctx: &Context) {
+        let refused = |message: String| Outcome::failed(block_machines::INVALID_REQUEST, &message);
+        match &waiting.asked {
+            Asked::ServerLink { entry, command } => match self.write_server_entry(entry, command, ctx) {
+                Ok(start) => {
+                    self.settings_request.linking = Some(Linking {
+                        root: waiting.root.clone(),
+                        request: waiting.request.clone(),
+                        pressed_at: std::time::Instant::now(),
+                    });
+                    tracing::info!(start = ?start, "a confirmed server entry wrote the settings and started its link");
+                }
+                Err(message) => self.answer_setting(waiting, refused(message)),
+            },
             Asked::BrowserHost {
                 ssh_target,
                 profile,
                 engine,
-            } => self
-                .write_browser_host_entry(ssh_target, profile, *engine)
-                .map(|()| Outcome::BrowserHost {
-                    answer: Answer::Confirmed,
-                }),
-        };
-        written.unwrap_or_else(|message| Outcome::failed(block_machines::INVALID_REQUEST, &message))
+            } => {
+                let outcome = self
+                    .write_browser_host_entry(ssh_target, profile, *engine)
+                    .map_or_else(refused, |()| Outcome::BrowserHost {
+                        answer: Answer::Confirmed,
+                    });
+                self.answer_setting(waiting, outcome);
+            }
+        }
     }
 
     /// Writes the server entry of this computer and starts the link of it now, as
-    /// a join does. The SSH target and the command are the two fields that the
-    /// card stated; every other field of the entry stays as the store holds it.
-    fn write_server_entry(&mut self, ssh_target: &str, command: &str, ctx: &Context) -> Result<EntryStart, String> {
+    /// a join does. The entry and the command are the two fields that the card
+    /// stated, and the card names the whole entry: an address that a join of
+    /// another server wrote does not survive it, because the link would keep trying
+    /// that listener instead of the login of the entry.
+    fn write_server_entry(&mut self, entry: &ServerEntry, command: &str, ctx: &Context) -> Result<EntryStart, String> {
         let before = self.stored_config();
         let mut stored = before.clone();
+        let (ssh_target, machine) = match entry {
+            ServerEntry::Target(target) => (Some(target.clone()), None),
+            ServerEntry::Machine(machine) => (None, Some(machine.clone())),
+        };
         stored.server = ServerConfig {
-            ssh_target: Some(ssh_target.to_owned()),
+            ssh_target,
+            machine,
             command: Some(command.to_owned()),
-            address: stored.server.address.clone(),
+            address: None,
         };
         stored.validate().map_err(|error| error.to_string())?;
         self.save_setting(&before, stored);
@@ -312,6 +384,69 @@ impl HorizonApp {
         ctx.request_repaint();
     }
 
+    /// Answers a confirmed server entry when the link of it knows whether the server
+    /// answered: `in_step` when it did, and `away` with the reason of the link in
+    /// words when it did not, or when the bound of the wait passed.
+    ///
+    /// A frame reads the published snapshot of the link and never the lock of its
+    /// state, so no frame waits for the link. The link itself runs on its worker, so
+    /// the wait costs this thread no blocking call.
+    pub(super) fn settle_link_answer(&mut self) {
+        let Some(linking) = self.settings_request.linking.as_ref() else {
+            return;
+        };
+        let expired = linking.pressed_at.elapsed() >= LINK_ANSWER_BOUND;
+        let (link, reason) = match self.server_sync.as_ref() {
+            Some(sync) => {
+                let snapshot = sync.snapshot();
+                match snapshot.state() {
+                    LinkState::InStep { .. } => (Some(ServerLinkState::InStep), None),
+                    LinkState::Removed | LinkState::NotLoggedIn => (
+                        Some(ServerLinkState::Away),
+                        Some(ServerLine::of(snapshot.state(), snapshot.refusal()).text()),
+                    ),
+                    // The first attempt of this link failed, or the bound passed
+                    // while it was still connecting.
+                    _ => match snapshot.refusal() {
+                        Some(refusal) => (Some(ServerLinkState::Away), Some(refusal.sentence().to_owned())),
+                        None if expired => (
+                            Some(ServerLinkState::Away),
+                            Some(format!(
+                                "The server did not answer within {} seconds.",
+                                LINK_ANSWER_BOUND.as_secs()
+                            )),
+                        ),
+                        None => return,
+                    },
+                }
+            }
+            // The link did not start at all: the read that starts it answered the
+            // reason in words, which the sidebar already shows.
+            None => match self.settings_request.link_failure.clone() {
+                Some(reason) => (Some(ServerLinkState::Away), Some(reason)),
+                None if expired => (
+                    Some(ServerLinkState::Away),
+                    Some(format!(
+                        "The server did not answer within {} seconds.",
+                        LINK_ANSWER_BOUND.as_secs()
+                    )),
+                ),
+                None => return,
+            },
+        };
+        let Some(linking) = self.settings_request.linking.take() else {
+            return;
+        };
+        let outcome = Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+            link,
+            reason,
+        };
+        self.write_block_answer(BlockAnswer::new(linking.root.as_deref(), linking.request, outcome));
+        self.mark_runtime_dirty();
+    }
+
     /// Answers the card that waited when its deadline passed, or when the person
     /// closed it without a press. A wait that no person answered is `timed_out`,
     /// and the card goes with it.
@@ -346,7 +481,12 @@ impl HorizonApp {
 /// program is never claimed here.
 fn unconfirmed_outcome(asked: &Asked, answer: Answer) -> Outcome {
     match asked {
-        Asked::ServerLink { .. } => Outcome::ServerLink { answer, start: None },
+        Asked::ServerLink { .. } => Outcome::ServerLink {
+            answer,
+            start: None,
+            link: None,
+            reason: None,
+        },
         Asked::BrowserHost { .. } => Outcome::BrowserHost { answer },
     }
 }
@@ -358,22 +498,52 @@ fn unconfirmed_outcome(asked: &Asked, answer: Answer) -> Outcome {
 /// exists, and the card shows the values that the store will hold.
 fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument), Outcome> {
     match operation {
-        Operation::ServerLinkRequest { ssh_target, command } => {
-            let target = ssh_target.trim();
+        Operation::ServerLinkRequest {
+            ssh_target,
+            machine,
+            command,
+        } => {
+            let target = ssh_target.as_deref().map(str::trim).filter(|target| !target.is_empty());
+            let named = machine.as_deref().map(str::trim).filter(|machine| !machine.is_empty());
+            let (ssh_target, machine_name) = match (target, named) {
+                (Some(target), None) => (Some(target), None),
+                (None, Some(machine)) => (None, Some(machine)),
+                (Some(_), Some(_)) => {
+                    return Err(Outcome::failed(
+                        block_machines::INVALID_REQUEST,
+                        "A server link request names one server: give `machine` for a machine of the list, or `ssh_target` for a computer of the person, and not both",
+                    ));
+                }
+                (None, None) => {
+                    return Err(Outcome::failed(
+                        block_machines::INVALID_REQUEST,
+                        "A server link request names no server: give `machine` with the name of a machine of the list, or `ssh_target` with an SSH target",
+                    ));
+                }
+            };
             let command = command.as_deref().map_or(DEFAULT_LINK_COMMAND, str::trim);
             let entry = ServerConfig {
-                ssh_target: Some(target.to_owned()),
+                ssh_target: ssh_target.map(str::to_owned),
+                machine: machine_name.map(str::to_owned),
                 command: Some(command.to_owned()),
                 address: None,
             };
             entry
                 .validate()
                 .map_err(|error| Outcome::failed(block_machines::INVALID_REQUEST, &error.to_string()))?;
-            let asked = Asked::ServerLink {
-                ssh_target: target.to_owned(),
-                command: command.to_owned(),
+            let entry = match machine_name {
+                Some(machine) => ServerEntry::Machine(machine.to_owned()),
+                None => ServerEntry::Target(ssh_target.unwrap_or_default().to_owned()),
             };
-            Ok((asked, SERVER_TITLE, server_document(target, command)))
+            let document = server_document(&entry, command);
+            Ok((
+                Asked::ServerLink {
+                    entry,
+                    command: command.to_owned(),
+                },
+                SERVER_TITLE,
+                document,
+            ))
         }
         Operation::BrowserHostRequest {
             ssh_target,
@@ -410,29 +580,45 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
 }
 
 /// The card that asks the person to link this computer to a Horizon server, with
-/// the target and the command exactly as the settings store them.
-fn server_document(ssh_target: &str, command: &str) -> BlockDocument {
-    BlockDocument {
+/// the entry and the command exactly as the settings store them.
+///
+/// A server on a machine of the list states the machine, and the line that says
+/// which login the link uses: the machine holds the machine key of Horizon, so the
+/// person cannot reach it with their own SSH configuration.
+fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
+    let mut rows = vec![KvRow {
+        label: match entry {
+            ServerEntry::Target(_) => "Server target".to_owned(),
+            ServerEntry::Machine(_) => "Machine".to_owned(),
+        },
+        value: entry.label().to_owned(),
+        mono: true,
+    }];
+    rows.push(KvRow {
+        label: "Command".to_owned(),
+        value: command.to_owned(),
+        mono: true,
+    });
+    let mut components = vec![
+        Component::Heading {
+            text: match entry {
+                ServerEntry::Target(target) => format!("Link this computer to the Horizon server on {target}?"),
+                ServerEntry::Machine(machine) => {
+                    format!("Link this computer to the Horizon server on the machine {machine}?")
+                }
+            },
+            subtitle: None,
+            badge: None,
+        },
+        Component::Kv { rows },
+    ];
+    if matches!(entry, ServerEntry::Machine(_)) {
+        components.push(Component::Text {
+            text: SERVER_MACHINE.to_owned(),
+        });
+    }
+    let rest = BlockDocument {
         components: vec![
-            Component::Heading {
-                text: format!("Link this computer to the Horizon server on {ssh_target}?"),
-                subtitle: None,
-                badge: None,
-            },
-            Component::Kv {
-                rows: vec![
-                    KvRow {
-                        label: "Server target".to_owned(),
-                        value: ssh_target.to_owned(),
-                        mono: true,
-                    },
-                    KvRow {
-                        label: "Command".to_owned(),
-                        value: command.to_owned(),
-                        mono: true,
-                    },
-                ],
-            },
             Component::Text {
                 text: SERVER_SENT.to_owned(),
             },
@@ -454,7 +640,9 @@ fn server_document(ssh_target: &str, command: &str) -> BlockDocument {
                 ],
             },
         ],
-    }
+    };
+    components.extend(rest.components);
+    BlockDocument { components }
 }
 
 /// The card that asks the person to use the browser of another machine for new

@@ -25,7 +25,7 @@ mod transport;
 pub use horizon_browser::valid_profile_name as valid_profile;
 pub use remote_browser::{remote_browser_command, remote_port_command};
 pub use ssh::Ssh;
-pub use transport::{ssh_command, ssh_program, valid_target};
+pub use transport::{ssh_command, ssh_command_with_options, ssh_program, valid_target};
 
 use self::transport::{
     CONNECT_TIMEOUT_SECONDS, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, failure_reason, run_bounded,

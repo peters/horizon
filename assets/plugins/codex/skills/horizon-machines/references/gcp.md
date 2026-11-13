@@ -55,9 +55,8 @@ Reuse the `default` network when step 1 showed it. GCE gives networks, subnets a
 rules no labels, so the tag text goes into `--description` and the card into a name.
 
 ```sh
-CALLER_IP="$(curl -4 -fsS https://api.ipify.org)/32"
 $G compute firewall-rules create "$FW" --network=default --direction=INGRESS --action=ALLOW --rules=tcp:22 \
-  --source-ranges="$CALLER_IP" --target-tags="$TAG" --description="horizon-managed=true horizon-card=$CARD" \
+  --source-ranges=0.0.0.0/0 --target-tags="$TAG" --description="horizon-managed=true horizon-card=$CARD" \
   --format="value(name,id,sourceRanges.list(),allowed[].map().firewall_rule().list(),targetTags.list())"
 $G compute instances create "$NAME" --zone="$ZONE" --machine-type="$TYPE" \
   --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \

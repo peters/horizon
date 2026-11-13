@@ -8,9 +8,10 @@
 # copy of this file on a private `PATH` under the name `hcloud`, so the agent
 # finds it as the provider CLI.
 #
-# The one machine that this program reports lives in one small file beside the
-# copy, so `create`, `list`, `describe` and `delete` agree, and a second run of
-# the procedure starts from no machine again when the file is removed.
+# The one machine that this program reports lives in small files beside the copy,
+# one for the machine, one for its ssh key and one for its firewall, so `create`,
+# `list`, `describe`, `delete` and the proof of the cleanup agree, and a second run
+# of the procedure starts from nothing again when the files are removed.
 #
 # The address of the machine is `127.0.0.1`, so the SSH step of the flow fails at
 # once: no machine holds the key that Horizon made. That failure is the point of
@@ -19,6 +20,8 @@ set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 record="$here/hcloud-standin.record"
+key_record="$here/hcloud-standin.key"
+firewall_record="$here/hcloud-standin.firewall"
 address=127.0.0.1
 created=2026-01-01T09:40:00+00:00
 
@@ -32,6 +35,38 @@ machine_name() {
         echo "hcloud-standin: no machine. Run create first." >&2
         exit 1
     fi
+}
+
+# The name that one create call gives, from its `--name` argument.
+created_name() {
+    name=""
+    for argument in "$@"; do
+        if [ "$name" = "next" ]; then
+            name=$argument
+            break
+        fi
+        if [ "$argument" = "--name" ]; then
+            name=next
+        fi
+    done
+    if [ -z "$name" ] || [ "$name" = "next" ]; then
+        echo "hcloud-standin: create needs --name" >&2
+        exit 1
+    fi
+    printf '%s\n' "$name"
+}
+
+# The name that one call of a firewall or of a key names: the last argument of the
+# call, as `firewall delete $NAME-fw` and `firewall add-rule ... $NAME-fw` give it.
+last_name() {
+    for argument in "$@"; do
+        name=$argument
+    done
+    if [ -z "${name:-}" ]; then
+        echo "hcloud-standin: this call names no resource" >&2
+        exit 1
+    fi
+    printf '%s\n' "$name"
 }
 
 server_json() {
@@ -67,20 +102,7 @@ case "$first $second" in
         server_json "$name"
         ;;
     "server create")
-        name=""
-        for argument in "$@"; do
-            if [ "$name" = "next" ]; then
-                name=$argument
-                break
-            fi
-            if [ "$argument" = "--name" ]; then
-                name=next
-            fi
-        done
-        if [ -z "$name" ] || [ "$name" = "next" ]; then
-            echo "hcloud-standin: create needs --name" >&2
-            exit 1
-        fi
+        name=$(created_name "$@")
         printf '%s\n' "$name" > "$record"
         # A create writes its progress to the standard error, as the real one does.
         echo "Waiting for server to be running..." >&2
@@ -115,13 +137,75 @@ case "$first $second" in
         printf 'ubuntu-22.04    ubuntu    22.04    x86\n'
         ;;
     "ssh-key create")
-        echo '{"ssh_key": {"id": 20000001, "name": "build-1-key"}}'
+        name=$(created_name "$@")
+        printf '%s\n' "$name" > "$key_record"
+        printf '{"ssh_key": {"id": 20000001, "name": "%s"}}\n' "$name"
+        ;;
+    "ssh-key list")
+        printf '%-10s %s\n' "ID" "NAME"
+        if [ -f "$key_record" ]; then
+            printf '%-10s %s\n' "20000001" "$(cat "$key_record")"
+        fi
+        ;;
+    "ssh-key delete")
+        name=$(last_name "$@")
+        if [ -f "$key_record" ] && [ "$(cat "$key_record")" = "$name" ]; then
+            rm -f "$key_record"
+            echo "SSH key $name deleted"
+        else
+            echo "hcloud-standin: no ssh key $name. It is not part of the stand-in." >&2
+            exit 1
+        fi
         ;;
     "firewall create")
-        echo '{"firewall": {"id": 30000001, "name": "build-1-fw", "rules": []}}'
+        name=$(created_name "$@")
+        printf '%s\n' "$name" > "$firewall_record"
+        printf '{"firewall": {"id": 30000001, "name": "%s", "rules": []}}\n' "$name"
         ;;
     "firewall add-rule")
-        echo "Firewall rule added"
+        name=$(last_name "$@")
+        if [ -f "$firewall_record" ] && [ "$(cat "$firewall_record")" = "$name" ]; then
+            echo "Firewall rule added"
+        else
+            echo "hcloud-standin: no firewall $name. It is not part of the stand-in." >&2
+            exit 1
+        fi
+        ;;
+    "firewall apply-to-resource")
+        name=$(last_name "$@")
+        if [ -f "$firewall_record" ] && [ "$(cat "$firewall_record")" = "$name" ]; then
+            echo "Firewall $name applied"
+        else
+            echo "hcloud-standin: no firewall $name. It is not part of the stand-in." >&2
+            exit 1
+        fi
+        ;;
+    "firewall delete")
+        name=$(last_name "$@")
+        if [ -f "$firewall_record" ] && [ "$(cat "$firewall_record")" = "$name" ]; then
+            rm -f "$firewall_record"
+            echo "Firewall $name deleted"
+        else
+            echo "hcloud-standin: no firewall $name. It is not part of the stand-in." >&2
+            exit 1
+        fi
+        ;;
+    "all list")
+        # The proof of the cleanup reads one document with one array for each kind
+        # of resource that the labels cover. The stand-in holds three of them.
+        servers=
+        if [ -f "$record" ]; then
+            servers=$(server_json "$(cat "$record")")
+        fi
+        firewalls=
+        if [ -f "$firewall_record" ]; then
+            firewalls=$(printf '{"id": 30000001, "name": "%s"}' "$(cat "$firewall_record")")
+        fi
+        keys=
+        if [ -f "$key_record" ]; then
+            keys=$(printf '{"id": 20000001, "name": "%s"}' "$(cat "$key_record")")
+        fi
+        printf '{"servers": [%s], "firewalls": [%s], "ssh_keys": [%s]}\n' "$servers" "$firewalls" "$keys"
         ;;
     *)
         echo "hcloud-standin: this call is not part of the stand-in: $*" >&2

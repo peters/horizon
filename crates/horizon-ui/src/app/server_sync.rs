@@ -276,6 +276,7 @@ pub(in crate::app) fn load(
     server: Option<ServerConfig>,
     settings_path: &std::path::Path,
     secrets: SecretHandles,
+    keys: &horizon_core::MachineKeys,
     program: String,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<MachineLoad, MachineError> {
@@ -286,6 +287,16 @@ pub(in crate::app) fn load(
             server_failure: None,
             named_secrets: secrets.named.clone(),
         });
+    };
+    // A server that runs on a machine of the list is reached with the login of that
+    // machine: the machine holds the machine key of Horizon and no key of the
+    // person. The record and the key are files, so this worker reads them.
+    let route = match server.machine() {
+        Some(machine) => match horizon_sync::machine_login(registry.root(), keys, machine) {
+            Ok(route) => Some(route),
+            Err(error) => return file_list(registry, error.to_string(), secrets.named),
+        },
+        None => None,
     };
     // A link of the TCP listener needs an address and the token of a join. An
     // address without a token falls back to the `ssh` child, as the entry did
@@ -319,13 +330,14 @@ pub(in crate::app) fn load(
         }
     };
     config.token_store.clone_from(&secrets.store);
+    config.route.clone_from(&route);
     config.program = program;
     // The sections of the settings of this computer follow the server through the
     // same link: a start reads the store first, so no frame waits for the server,
     // and a section that arrives afterwards is written to that store.
     config.settings_path = Some(settings_path.to_path_buf());
     config.address = server.address().map(str::to_owned).filter(|_| token.is_some());
-    if server.address().is_some() && config.address.is_none() && server.ssh_target().is_none() {
+    if server.address().is_some() && config.address.is_none() && server.ssh_target().is_none() && route.is_none() {
         return file_list(
             registry,
             "This computer is not logged in to the server. Join it with a link from a computer that is logged in."
@@ -523,6 +535,7 @@ impl HorizonApp {
         // The old link ends before the new one starts, so one computer never holds
         // two writers of one queue.
         self.server_sync = None;
+        self.settings_request.link_failure = None;
         self.settings_io.set_link(None);
         self.load_machines(ctx);
     }
@@ -717,6 +730,9 @@ impl HorizonApp {
         if let Some(sync) = self.server_sync.as_ref() {
             self.settings_lost = sync.handle().settings_lost();
         }
+        // A confirmed server entry answers as soon as the link knows whether the
+        // server answered, so this runs every frame and reads only the snapshot.
+        self.settle_link_answer();
         // A secret or a setting of this computer that lost the version rule is
         // kept, and the person reads where it went in the sidebar.
         let notices = self

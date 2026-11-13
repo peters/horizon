@@ -1,10 +1,13 @@
 //! The server that holds the machine list of more than one computer.
 //!
 //! A person names one SSH target and, when the default does not fit, the command
-//! that the link runs there. Every computer of the person that names the same
-//! server then shares one machine list. This module owns the entry and its rule;
-//! the link lives in `horizon_sync`, and the process of the server is the same
-//! `horizon` binary with `--server`.
+//! that the link runs there. A server that runs on a machine that Horizon rented
+//! is named by the machine of the list instead, and then the link uses the address,
+//! the user, the key file and the known-hosts file of a terminal of that machine:
+//! the machine holds the public key of Horizon and no key of the person. Every
+//! computer of the person that names the same server then shares one machine list.
+//! This module owns the entry and its rule; the link lives in `horizon_sync`, and
+//! the process of the server is the same `horizon` binary with `--server`.
 //!
 //! A non-interactive `ssh` reads a short `PATH`, so a person can write the whole
 //! path of the binary in the command instead of the bare name.
@@ -38,6 +41,14 @@ pub struct ServerConfig {
     /// that `ssh` resolves: an SSH config alias, a user and host, or an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
+    /// The name of a machine of the machine list that runs `horizon --server`. The
+    /// link then uses the address, the user, the port, the key file and the
+    /// known-hosts file of a terminal of that machine, because a machine that
+    /// Horizon rented holds the machine key of Horizon and no key of the person. It
+    /// names a machine and never a route, so a machine whose address changes keeps
+    /// one entry here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Command that the link runs on that computer. Without one it is
     /// [`DEFAULT_LINK_COMMAND`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,7 +86,19 @@ impl ServerConfig {
     /// file of this computer, as before this entry existed.
     #[must_use]
     pub fn names_server(&self) -> bool {
-        self.address().is_some() || self.ssh_target().is_some_and(|target| !target.is_empty())
+        self.address().is_some()
+            || self.ssh_target().is_some_and(|target| !target.is_empty())
+            || self.machine().is_some()
+    }
+
+    /// The machine of the list that runs the server, without the surrounding spaces
+    /// that a person can type.
+    #[must_use]
+    pub fn machine(&self) -> Option<&str> {
+        self.machine
+            .as_deref()
+            .map(str::trim)
+            .filter(|machine| !machine.is_empty())
     }
 
     /// The address of the listener of the server, without the surrounding spaces
@@ -110,9 +133,20 @@ impl ServerConfig {
 
     /// # Errors
     /// Rejects an SSH target that `ssh` would read as an option or that holds a
-    /// control character, and a command that holds a character outside the
-    /// allowed set or is too long.
+    /// control character, a command that holds a character outside the allowed set
+    /// or is too long, a machine name that breaks the rule of a machine, and an
+    /// entry that names both a machine and an SSH target.
     pub fn validate(&self) -> Result<()> {
+        if let Some(machine) = self.machine() {
+            crate::machines::machine_name(machine)
+                .map_err(|error| Error::Config(format!("server.machine: {error}")))?;
+            if self.ssh_target().is_some() {
+                return Err(Error::Config(
+                    "server.machine and server.ssh_target name one server twice; keep the machine of the list or the SSH target"
+                        .into(),
+                ));
+            }
+        }
         if let Some(target) = self.ssh_target() {
             if target.len() > MAX_SSH_TARGET_LEN {
                 return Err(Error::Config(format!(
@@ -164,6 +198,14 @@ mod tests {
             ssh_target: ssh_target.map(str::to_string),
             command: command.map(str::to_string),
             address: None,
+            machine: None,
+        }
+    }
+
+    fn on_machine(machine: &str) -> ServerConfig {
+        ServerConfig {
+            machine: Some(machine.to_owned()),
+            ..ServerConfig::default()
         }
     }
 
@@ -172,6 +214,48 @@ mod tests {
             address: address.map(str::to_string),
             ..ServerConfig::default()
         }
+    }
+
+    #[test]
+    fn a_machine_of_the_list_names_the_server_with_the_login_of_that_machine() {
+        let config = on_machine("  rented-1  ");
+        assert!(config.names_server(), "a machine alone names a server");
+        assert_eq!(config.machine(), Some("rented-1"));
+        assert_eq!(config.ssh_target(), None, "the machine is the route, not a target");
+        assert_eq!(config.command(), DEFAULT_LINK_COMMAND);
+        assert!(config.validate().is_ok());
+
+        // One entry names one route: both fields would decide the same thing.
+        let twice = ServerConfig {
+            ssh_target: Some("server-vm".to_owned()),
+            ..on_machine("rented-1")
+        };
+        let error = twice.validate().expect_err("two routes");
+        assert!(
+            error.to_string().contains("server.machine") && error.to_string().contains("server.ssh_target"),
+            "the refusal names both fields: {error}"
+        );
+
+        for bad in ["two words", "-dash", "a/b", ""] {
+            let config = on_machine(bad);
+            if bad.trim().is_empty() {
+                assert_eq!(config.machine(), None, "a blank machine names none");
+                assert!(!config.names_server());
+                continue;
+            }
+            let error = config.validate().expect_err(bad);
+            assert!(!error.to_string().is_empty(), "{bad} is refused with a sentence");
+        }
+
+        // The entry round-trips as the name of the machine alone.
+        let config = Config {
+            server: on_machine("rented-1"),
+            ..Config::default()
+        };
+        let document = config.to_json().expect("serialize");
+        assert!(document.contains("\"machine\": \"rented-1\""), "{document}");
+        assert!(!document.contains("ssh_target"), "{document}");
+        assert_eq!(Config::from_json(&document).expect("parse").server, config.server);
     }
 
     #[test]
