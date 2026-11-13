@@ -1350,6 +1350,12 @@ mod tests {
                 "a setting request names no other field: {unknown}"
             );
         }
+    }
+
+    /// The answer of one setting request names the person's press, and says whether
+    /// the running Horizon follows a server entry now.
+    #[test]
+    fn the_answer_of_a_setting_request_names_the_press() {
         let confirmed = serde_json::to_value(Outcome::ServerLink {
             answer: Answer::Confirmed,
             start: Some(EntryStart::Linked),
@@ -1371,6 +1377,31 @@ mod tests {
             declined.get("start").is_none(),
             "a person who pressed Not now starts nothing: {declined}"
         );
+        assert_eq!(
+            serde_json::to_value(Outcome::BrowserHost {
+                answer: Answer::TimedOut
+            })
+            .expect("serialize")["answer"],
+            serde_json::json!("timed_out")
+        );
+    }
+
+    /// The answer of a confirmed server entry says whether the server answered, and
+    /// the reason of a link that is away reaches the agent in words.
+    #[test]
+    fn a_confirmed_server_link_answers_with_the_state_of_its_link() {
+        let in_step = serde_json::to_value(Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+            link: Some(ServerLinkState::InStep),
+            reason: None,
+        })
+        .expect("serialize");
+        assert_eq!(in_step["link"], serde_json::json!("in_step"));
+        assert!(
+            in_step.get("reason").is_none(),
+            "a link that answered names no reason: {in_step}"
+        );
         let away = serde_json::to_value(Outcome::ServerLink {
             answer: Answer::Confirmed,
             start: Some(EntryStart::Linked),
@@ -1383,14 +1414,6 @@ mod tests {
             away["reason"],
             serde_json::json!("The key of the server is not the key that this computer knows."),
             "the reason of a link that is away reaches the agent in words"
-        );
-        assert_eq!(confirmed["link"], serde_json::json!("in_step"));
-        assert_eq!(
-            serde_json::to_value(Outcome::BrowserHost {
-                answer: Answer::TimedOut
-            })
-            .expect("serialize")["answer"],
-            serde_json::json!("timed_out")
         );
     }
 
