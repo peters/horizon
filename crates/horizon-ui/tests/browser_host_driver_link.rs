@@ -12,7 +12,6 @@
 
 #![cfg(unix)]
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -57,18 +56,16 @@ impl Stand {
     /// the mode of the driver of a host, in the home of the host, and it writes
     /// the process id of that child, so the test kills the link of the panel.
     fn stand_in_ssh(&self) -> String {
-        let script = self.folder.path().join("ssh");
         let body = format!(
-            "#!/bin/sh\necho $$ > '{}'\nHOME='{}'\nexport HOME\nexec '{}' --browser-host-driver --profile {PROFILE} --engine firefox\n",
+            "echo $$ > '{}'\nHOME='{}'\nexport HOME\nexec '{}' --browser-host-driver --profile {PROFILE} --engine firefox\n",
             self.pid_file.display(),
             self.home.display(),
             env!("CARGO_BIN_EXE_horizon"),
         );
-        std::fs::write(&script, body).expect("the script of the stand-in ssh");
-        let mut permissions = std::fs::metadata(&script).expect("the script").permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions).expect("an executable script");
-        script.to_string_lossy().into_owned()
+        horizon_core::stand_in_program_in(self.folder.path(), "ssh", &body)
+            .expect("the stand-in ssh of the panel")
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn link_pid(&self) -> Option<i32> {
