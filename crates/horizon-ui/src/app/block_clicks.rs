@@ -99,7 +99,12 @@ impl HorizonApp {
     /// that agent waits for a click right now.
     pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'static>> {
         let panel = self.board.panel(panel_id)?;
-        panel.block()?;
+        let owned_by_an_agent = panel.block()?.owner_actor.is_some();
+        // A card that Horizon wrote itself names Horizon, not an agent that is
+        // not there: its buttons are Horizon's own controls.
+        if !owned_by_an_agent {
+            return Some(CardChip::of_horizon());
+        }
         let listening = self.block_listening(panel_id);
         Some(match self.card_owner_panel(panel) {
             Some(owner) => CardChip::for_panel(self.board.panel(owner)?.kind, listening, true),

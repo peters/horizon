@@ -80,7 +80,12 @@ Horizon before they write anything.
   `<state-off>` for the run with the integrations off, an empty folder
   `<state-tiles>` for the tile presses, and an empty folder `<state-cards>` for
   the stand-in agent.
-- An empty work folder `<work>`.
+- The files of the stand-in agent, in the state folder of the fixture. The
+  sandbox of the fixture shows the whole file system read-only, and it binds only
+  these folders read-write: the state folder `<state>`, its `data/home` (the
+  private home of the run), its `data/tmp` (`/tmp`) and its `data/runtime`
+  (`/run/user/<uid>`). A file that a panel program reads or writes must lie in
+  one of them.
 - An empty folder `<state-agent>` for the second part, with the work folder
   `<work-agent>` inside it: `<work-agent>` is `<state-agent>/data/work-agent`,
   because the fixture binds the state folder and not a folder beside it.
@@ -98,32 +103,28 @@ Horizon before they write anything.
 
 ## 5. Setup
 
-1. Write this panel list to `<work>/stand-in.json`. It gives the fixture one
-   agent panel that runs the stand-in agent of this repository:
+1. Write no panel of the stand-in agent by hand. The fixture writes it, because
+   the program of an agent panel must be a script FILE: Horizon puts
+   `--session-id <id>` in front of the arguments of an agent panel, so a
+   `/bin/sh -c <program>` command receives it as an option of `/bin/sh` and ends
+   with `Illegal option --`. A script file takes those arguments as `"$@"`.
 
-   ```json
-   [
-     {"name": "Stand-in agent", "kind": "claude", "command": "/bin/sh",
-      "args": ["-c", "exec /usr/bin/python3 -u <repo>/scripts/device-smoke/file_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --commands <work>/commands.txt \\\n  --answers <work>/answers.json \"$@\"", "file-agent"],
-      "cwd": "<work>", "position": [40, 620], "size": [560, 320]}
-   ]
-   ```
+   Task 6.7 starts the fixture with `--file-agent`. The fixture then writes four
+   files into `<state-cards>/data/file-agent`: the program of the panel
+   `file-agent.sh`, the two stand-in programs `file_agent.py` and
+   `card_agent.py`, and the empty command file `commands.txt`. It writes the
+   answers to `<state-cards>/data/file-agent/answers.json`. The JSON line that
+   the fixture prints names the last two files as `file_agent.commands` and
+   `file_agent.answers`.
 
-   The `/bin/sh -c` wrapper is necessary. Horizon starts an agent panel with
-   `--session-id <id>` in front of the arguments of the panel and
-   `--plugin-dir <path>` after them, and the program receives them as `"$@"`.
-   The program takes its identity of an agent panel from the environment of
-   that panel.
+   Result: The rule of the files is clear, and no file of the procedure lies
+   outside the state folder.
 
-   Result: The file exists.
+2. Do not write the command file. The fixture writes it empty at every start,
+   and task 6.7 appends one line per card. The answers of an earlier run stay in
+   the answer file of that state folder.
 
-2. Write this command file to `<work>/commands.txt` with no line:
-
-   ```sh
-   : > <work>/commands.txt
-   ```
-
-   Result: The file is empty. Task 6.6 appends one line per card.
+   Result: `commands.txt` is empty before the first card.
 
 3. Start the fixture on the first empty state:
 
@@ -148,14 +149,19 @@ Horizon before they write anything.
 
 1. Examine the live view of the first start.
 
-   Result: The page says `What do you want to do?`. Under it is the line that
-   starts `Horizon is one canvas for your terminals`. Four tiles are in one row:
+   Result: The page says `What do you want to do?`, and the line under it is in
+   the middle of the canvas: the block of the heading, the four tiles and the
+   line of shortcuts stands in the middle of the height of the canvas, and the
+   lower half of the canvas is not empty. Under the heading is the line that
+   starts `Horizon is one canvas for your terminals`, and each of its two lines
+   is centred under the heading. Four tiles are in one row:
    `Run agents side by side`, `Work on a bigger machine`, `Use Horizon on all
    your computers` and `A browser that stays signed in`. Each tile holds a small
    drawing, its title, one sentence and one line that starts with
    `Start with one agent`, `Rent a machine`, `Set up the server` or
    `Set up a browser`. Below the tiles is the line `You know Horizon already?`
-   with the keys of this computer.
+   with the keys of this computer. The whole line shows: no letter of it is cut,
+   and no scroll bar stands at the right edge of the last tile.
 
 2. Move the pointer over a tile.
 
@@ -263,9 +269,11 @@ or `choose`.
 2. Press `Set up` in the machine section.
 
    Result: A card panel named `Set up needs an agent` opens. Its title is
-   `Set up needs an agent` and the line under it says that an agent in a panel
+   `Set up needs an agent`, and the line under it says that an agent in a panel
    does the work of Set up, and that Horizon found no agent program on this
-   computer.
+   computer. The line takes every line that its words need: no part of it ends in
+   an ellipsis. The chip of the title bar says `Horizon`, because Horizon wrote
+   this card itself.
 
 3. Examine the inset box of the card.
 
@@ -275,8 +283,9 @@ or `choose`.
 
 4. Examine the two buttons and the footer.
 
-   Result: The buttons are `Look again` and `Open Settings, Presets`. The footer
-   says `Notice of Horizon, not of an agent`. The card holds no link.
+   Result: The buttons are `Look again` and `Open Settings, Presets`, and they
+   stand whole above the footer. The footer says
+   `Notice of Horizon, not of an agent`. The card holds no link.
 
 5. Press `Open Settings, Presets`.
 
@@ -352,12 +361,13 @@ Start the fixture on `<state-cards>` with the panel list of setup step 1:
 
 ```sh
 python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
-  --state <state-cards> --panels <work>/stand-in.json --saved-session
+  --state <state-cards> --file-agent --saved-session
 ```
 
 Open the live view as in setup step 4. Each step appends one line to
-`<work>/commands.txt`. The answer of each line is in `<work>/answers.json`, and
-the panel of `Stand-in agent` shows its short form.
+`<state-cards>/data/file-agent/commands.txt`. The answer of each line is in
+`<state-cards>/data/file-agent/answers.json`, and the panel of `File agent`
+shows its short form.
 
 1. Append this line. It draws the card of the provider choice: a row with a
    badge, a default row, and three rows that cannot be chosen.
@@ -366,9 +376,11 @@ the panel of `Stand-in agent` shows its short form.
    {"tool": "block_panel", "arguments": {"operation": "create", "title": "Rent a machine", "document": {"components": [{"type": "heading", "text": "Where do you rent?", "subtitle": "The machine is made in your own account. You pay the provider, not Horizon.", "badge": {"text": "Step 2 of 4"}}, {"type": "list", "selection": "single", "rows": [{"id": "provider.hetzner", "title": "Hetzner", "subtitle": "Signed in with hcloud", "badge": {"text": "Ready", "tone": "ok"}, "selected": true}, {"id": "provider.azure", "title": "Azure", "subtitle": "Signed in with az", "badge": {"text": "Ready", "tone": "ok"}}, {"id": "provider.gcloud", "title": "Google Cloud", "subtitle": "Not signed in. Run gcloud auth login", "disabled": true}, {"id": "provider.aws", "title": "AWS", "subtitle": "No profile found. Run aws configure sso", "disabled": true}, {"id": "provider.runpod", "title": "RunPod", "subtitle": "GPU machines. No RUNPOD_API_KEY is stored", "disabled": true}]}, {"type": "buttons", "items": [{"id": "back", "label": "Back"}, {"id": "look_again", "label": "Look again"}]}]}}, "timeout": 30}
    ```
 
-   Result: A card appears beside the panel of `Stand-in agent`. It says
+   Result: A card appears beside the panel of `File agent`. It says
    `Where do you rent?`, with the badge `Step 2 of 4` at the right of the title
-   row. The row `Hetzner` is drawn as the default choice before any press, with
+   row. The line under the title is the whole sentence
+   `The machine is made in your own account. You pay the provider, not Horizon.`:
+   it wraps inside the card and no word of it is replaced by an ellipsis. The row `Hetzner` is drawn as the default choice before any press, with
    the badge `Ready` in the ok tone at its right edge. The rows `Google Cloud`,
    `AWS` and `RunPod` have a dashed outline and a softer title, and their second
    lines say what is missing.
@@ -376,11 +388,12 @@ the panel of `Stand-in agent` shows its short form.
 2. Press the row `Google Cloud`, then the row `AWS`.
 
    Result: Nothing changes on the card: the rows are not a choice. The panel of
-   `Stand-in agent` gains no line, and `<work>/answers.json` gains no click.
+   `File agent` gains no line, and
+   `<state-cards>/data/file-agent/answers.json` gains no click.
 
 3. Press the row `Azure`.
 
-   Result: `Azure` takes the selected look, and the panel of `Stand-in agent`
+   Result: `Azure` takes the selected look, and the panel of `File agent`
    gains one line for the click with `selected ["provider.azure"]`.
 
 4. Append this line. It draws the card of the size and the place: a value at the
@@ -399,7 +412,7 @@ the panel of `Stand-in agent` shows its short form.
 5. Press `Falkenstein`.
 
    Result: `Falkenstein` takes the selected look and `Helsinki` loses it. The
-   panel of `Stand-in agent` gains one line for the click with
+   panel of `File agent` gains one line for the click with
    `selected ["size.small", "place.falkenstein"]`.
 
 6. Append this line. It draws the card of the work: the steps with their states
@@ -417,7 +430,7 @@ the panel of `Stand-in agent` shows its short form.
 
 7. Press the step `Check tmux on the machine`.
 
-   Result: Nothing changes on the card. The panel of `Stand-in agent` gains no
+   Result: Nothing changes on the card. The panel of `File agent` gains no
    line.
 
 8. Append this line. It draws the card of the machine that is ready.
@@ -434,7 +447,7 @@ the panel of `Stand-in agent` shows its short form.
 
 9. Close each of the four cards.
 
-   Result: The panel of `Stand-in agent` gains one line for each close and
+   Result: The panel of `File agent` gains one line for each close and
    stays in the workspace.
 
 ## 6.8 F08 — The rent flow with a real agent and a stand-in provider
@@ -727,7 +740,7 @@ This task rents nothing.
 
    Result: The fixture process ends and the live view closes.
 
-3. Remove `<work>` and the four state folders.
+3. Remove the state folders of this procedure.
 
    Result: The folders are gone.
 

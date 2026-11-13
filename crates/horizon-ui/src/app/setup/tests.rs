@@ -41,6 +41,14 @@ fn set_up_with_the_integrations_off_draws_the_notice_of_horizon() {
     );
     let document = serde_json::to_string(&block.document).expect("the document serializes");
     assert!(document.contains(notice::INTEGRATIONS_OFF), "{document}");
+    let chip = app
+        .card_titlebar_chip(panel.id)
+        .expect("a card of Horizon carries a chip in its titlebar");
+    assert_eq!(
+        chip.spoken(),
+        ("", "", crate::block_widget::chip::HORIZON),
+        "the titlebar of the notice names Horizon, not an agent that is not there"
+    );
     assert_eq!(app.setup.notice_panel, Some(panel.id));
 }
 

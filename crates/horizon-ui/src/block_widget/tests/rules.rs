@@ -126,6 +126,14 @@ fn the_chip_names_the_agent_and_says_when_it_listens() {
     assert_eq!(gone.state, ChipState::Gone);
     assert_eq!(gone.spoken(), ("", "", "No agent"), "a gone owner is not named");
 
+    let horizon = CardChip::of_horizon();
+    assert_eq!(horizon.state, ChipState::Horizon);
+    assert_eq!(
+        horizon.spoken(),
+        ("", "", "Horizon"),
+        "a card that Horizon wrote itself names Horizon, not an agent that never was"
+    );
+
     let opened = CardChip::opened_by("Claude");
     assert_eq!(opened.state, ChipState::OpenedBy);
     assert_eq!(

@@ -24,6 +24,9 @@ pub(super) const FOOTER_PAD_SIDE: f32 = 16.0;
 pub(super) const HEADING_FONT: f32 = 18.0;
 /// Font of the second line under a heading.
 pub(super) const HEADING_SUBTITLE_FONT: f32 = 12.5;
+/// Line height of the second line under a heading, as a multiple of its font
+/// size.
+pub(super) const HEADING_SUBTITLE_LINE_HEIGHT: f32 = 1.35;
 /// Space between a heading and its second line.
 pub(super) const HEADING_SUBTITLE_GAP: f32 = 4.0;
 /// Space between the heading text and a badge on the same row.

@@ -149,6 +149,129 @@ fn a_tall_document_scrolls_in_the_body_and_never_reaches_the_footer() {
     );
 }
 
+/// The document of the notice that Horizon draws when Set up finds no agent:
+/// a heading with a long second line, the rows of the programs, a line of text
+/// and the two buttons of Horizon.
+fn notice_document() -> BlockDocument {
+    let rows = (0..6)
+        .map(|index| KvRow {
+            label: format!("Agent {index}"),
+            value: "not found".to_string(),
+            mono: true,
+        })
+        .chain(std::iter::once(KvRow {
+            label: "Agent integrations".to_string(),
+            value: "on".to_string(),
+            mono: true,
+        }))
+        .collect();
+    BlockDocument {
+        components: vec![
+            Component::Heading {
+                text: "Set up needs an agent".to_string(),
+                subtitle: Some(
+                    "An agent in a panel does the work of Set up and shows each step as a card. \
+                     Horizon found no agent program on this computer."
+                        .to_string(),
+                ),
+                badge: None,
+            },
+            Component::Kv { rows },
+            Component::Text {
+                text: "Install one agent program and sign in to it. Then press Set up again. \
+                       Horizon installs nothing for you and stores no login of the agent."
+                    .to_string(),
+            },
+            Component::Buttons {
+                items: vec![
+                    button("look_again", "Look again", Tone::Primary),
+                    button("open_presets", "Open Settings, Presets", Tone::Neutral),
+                ],
+            },
+        ],
+    }
+}
+
+/// The text shape that drew the second line of a heading, in a pass of the
+/// card that `document` draws.
+fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui::epaint::TextShape {
+    let mut found = None;
+    for clipped in &output.shapes {
+        fn walk<'a>(shape: &'a egui::Shape, text: &str, out: &mut Option<&'a egui::epaint::TextShape>) {
+            match shape {
+                egui::Shape::Text(shape) if shape.galley.text() == text => *out = Some(shape),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, text, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk(&clipped.shape, subtitle, &mut found);
+        if found.is_some() {
+            break;
+        }
+    }
+    found.unwrap_or_else(|| panic!("the card drew the second line of its heading"))
+}
+
+#[test]
+fn the_second_line_of_a_heading_wraps_instead_of_ending_in_an_ellipsis() {
+    let document = notice_document();
+    let Some(Component::Heading {
+        subtitle: Some(subtitle),
+        ..
+    }) = document.components.first()
+    else {
+        panic!("the notice starts with a heading and its second line");
+    };
+    let subtitle = subtitle.clone();
+    let mut card = CardRuntime::default();
+
+    let (output, _) = draw_card(card_panel(560.0), &document, &mut card);
+
+    let drawn = subtitle_shape(&output, &subtitle);
+    assert!(
+        drawn.galley.rows.len() >= 2,
+        "the second line takes the lines that its words need: {:?}",
+        drawn.galley.rows.len()
+    );
+    assert!(!drawn.galley.elided, "no word of the second line is dropped");
+    let body = card_body(card_panel(560.0));
+    let ink = Rect::from_min_size(drawn.pos, drawn.galley.size());
+    assert!(
+        ink.max.x <= body.max.x + 0.5,
+        "the second line stays inside the card: {ink:?} against {body:?}"
+    );
+}
+
+#[test]
+fn a_notice_of_horizon_holds_its_buttons_above_the_footer() {
+    let document = notice_document();
+    let mut card = CardRuntime::default();
+    let estimated = crate::block_widget::default_card_size(&document)[1];
+
+    let (_, measured) = draw_card(card_panel(estimated), &document, &mut card);
+    let height = fitted_card_height(measured, false, estimated, CARD_HEIGHT_LIMITS);
+    let panel = card_panel(height);
+    let (output, remeasured) = draw_card(panel, &document, &mut card);
+    let body = card_body(panel);
+    let room = body.height() - FOOTER_HEIGHT;
+
+    assert!(
+        remeasured <= room + 0.5,
+        "the fitted card holds its content without a scroll area: {remeasured} against {room}"
+    );
+    let (label_top, _) = drawn_text(&output, "Look again");
+    assert!(
+        label_top.y < body.max.y - FOOTER_HEIGHT,
+        "the buttons of the notice stand above the footer: {} against {}",
+        label_top.y,
+        body.max.y - FOOTER_HEIGHT
+    );
+}
+
 #[test]
 fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
     // One heading and one button row: the card that the live run opened at 220

@@ -26,12 +26,16 @@ pub(crate) enum ChipState {
     OpenedBy,
     /// The person's panel runs on the machine of its workspace's place.
     OnMachine,
+    /// Horizon wrote the card itself, so no agent owns it.
+    Horizon,
 }
 
 /// The text the chip adds after the agent name while a wait is open.
 const LISTENS: &str = " listens";
 /// The chip text when the owner is gone.
 const NO_AGENT: &str = "No agent";
+/// The name that the chip of a card of Horizon carries.
+pub(crate) const HORIZON: &str = "Horizon";
 /// The words that mark a panel that an agent opened for the person.
 const OPENED: &str = "opened by ";
 /// The words that mark a terminal of a workspace that is placed on a machine.
@@ -65,7 +69,7 @@ impl ChipState {
         match self {
             Self::OpenedBy => Some(OPENED),
             Self::OnMachine => Some(ON),
-            Self::Listening | Self::Present | Self::Gone => None,
+            Self::Listening | Self::Present | Self::Gone | Self::Horizon => None,
         }
     }
 }
@@ -96,6 +100,15 @@ impl<'a> CardChip<'a> {
         }
     }
 
+    /// The mark of a card that Horizon wrote itself. Its buttons are Horizon's
+    /// own controls, so no agent owns it and none can wait for a click.
+    pub(crate) fn of_horizon() -> Self {
+        Self {
+            name: HORIZON,
+            state: ChipState::Horizon,
+        }
+    }
+
     /// The mark of a terminal that runs on the machine `name`, because its
     /// workspace is placed there.
     pub(crate) fn on_machine(name: &'a str) -> Self {
@@ -118,7 +131,7 @@ impl<'a> CardChip<'a> {
                     .size()
                     .x;
             }
-            ChipState::Present | ChipState::OpenedBy | ChipState::OnMachine => {
+            ChipState::Present | ChipState::OpenedBy | ChipState::OnMachine | ChipState::Horizon => {
                 width += text::line(ui.painter(), self.name, &font, theme::FG_SOFT(), f32::INFINITY)
                     .size()
                     .x;
@@ -145,6 +158,7 @@ impl<'a> CardChip<'a> {
             ChipState::Listening => ("", LISTENS, self.name),
             ChipState::Present => ("", "", self.name),
             ChipState::Gone => ("", "", NO_AGENT),
+            ChipState::Horizon => ("", "", HORIZON),
             ChipState::OpenedBy => (OPENED, "", self.name),
             ChipState::OnMachine => (ON, "", self.name),
         }
@@ -167,7 +181,7 @@ impl<'a> CardChip<'a> {
             ChipState::Listening => {
                 painter.circle_filled(dot, CHIP_DOT * 0.5, theme::PALETTE_GREEN());
             }
-            ChipState::Present | ChipState::Gone | ChipState::OpenedBy | ChipState::OnMachine => {
+            ChipState::Present | ChipState::Gone | ChipState::OpenedBy | ChipState::OnMachine | ChipState::Horizon => {
                 painter.circle_stroke(dot, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, theme::FG_SOFT()));
             }
         }

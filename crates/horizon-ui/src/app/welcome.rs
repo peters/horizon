@@ -74,6 +74,10 @@ const TILE_RADIUS: u8 = 16;
 const TILE_OUTLINE: f32 = 1.0;
 /// The width of the ring that says where the keyboard is.
 const FOCUS_RING: f32 = 2.0;
+/// How far a second pass of the heading stands to the right of the first, in
+/// whole points: the bundled face has one weight, and the two passes together
+/// give the heavy heading of the mockup.
+const HEAVY_OFFSET: f32 = 0.6;
 /// The half-height of the chevron of the press of a tile.
 const CHEVRON: f32 = 5.0;
 /// The space between the press text and its chevron.
@@ -103,20 +107,19 @@ pub(in crate::app) struct WelcomeCache {
 }
 
 impl WelcomeCache {
-    /// The metrics of the page in `ui`, for the width that it has.
-    fn metrics(&mut self, ui: &Ui, width: f32) -> WelcomeMetrics {
+    /// The metrics of the page for `width`, measured with `painter`.
+    fn metrics(&mut self, painter: &Painter, width: f32) -> WelcomeMetrics {
         let key = WelcomeKey {
             width: width.to_bits(),
             theme: theme::current_theme(),
         };
         if self.key != Some(key) {
-            let metrics = WelcomeMetrics::measure(ui.painter(), width);
+            let metrics = WelcomeMetrics::measure(painter, width);
             self.key = Some(key);
             self.metrics = Some(metrics);
             self.drawings = Default::default();
         }
-        self.metrics
-            .unwrap_or_else(|| WelcomeMetrics::measure(ui.painter(), width))
+        self.metrics.unwrap_or_else(|| WelcomeMetrics::measure(painter, width))
     }
 }
 
@@ -134,7 +137,8 @@ struct WelcomeMetrics {
     tile_height: f32,
     heading_height: f32,
     lead_height: f32,
-    content_height: f32,
+    /// The height of everything the page draws, its pads excluded.
+    block_height: f32,
 }
 
 impl WelcomeMetrics {
@@ -176,7 +180,7 @@ impl WelcomeMetrics {
         );
         let lead_height = lead.size().y;
         let shortcuts_height = SHORTCUTS_FONT * 1.45;
-        let content_height = HEADING_GAP
+        let block_height = HEADING_GAP
             + heading_height
             + HEADING_GAP
             + lead_height
@@ -184,15 +188,14 @@ impl WelcomeMetrics {
             + rows * tile_height
             + (rows - 1.0).max(0.0) * ROW_GAP
             + SHORTCUTS_GAP
-            + shortcuts_height
-            + PAGE_PAD_BOTTOM;
+            + shortcuts_height;
         Self {
             columns,
             tile_width: tile,
             tile_height,
             heading_height,
             lead_height,
-            content_height,
+            block_height,
         }
     }
 
@@ -213,9 +216,17 @@ impl HorizonApp {
         }
         let canvas = self.canvas_rect(ctx);
         let pad_side = f32::from(PAGE_PAD_SIDE);
-        let pad_top = f32::from(PAGE_PAD_TOP);
+        let width = (canvas.width() - 2.0 * pad_side).max(1.0);
+        // The block is measured before it is shown, because a block that fits
+        // the canvas is centred in it and one that does not starts at the top.
+        let measure = ctx.layer_painter(egui::LayerId::new(
+            Order::Background,
+            Id::unique("welcome_page_measure"),
+        ));
+        let metrics = self.welcome.metrics(&measure, width);
+        let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
         let inner = Rect::from_min_max(
-            Pos2::new(canvas.min.x + pad_side, canvas.min.y + pad_top),
+            Pos2::new(canvas.min.x + pad_side, top),
             Pos2::new((canvas.max.x - pad_side).max(canvas.min.x), canvas.max.y),
         );
         let shortcut_lines = self.shortcut_lines();
@@ -225,15 +236,24 @@ impl HorizonApp {
             .fixed_pos(inner.min)
             .order(Order::Foreground)
             .show(ctx, |ui| {
+                // The page owns the rect that the canvas gives it, so a tall
+                // block scrolls inside the canvas and a block that fits is drawn
+                // whole, whatever room the layer around the page has.
+                ui.set_max_size(inner.size());
                 egui::ScrollArea::vertical()
                     .id_salt("welcome_page_scroll")
+                    .max_height(inner.height())
+                    // A block that fits draws no scrollbar, and the bar that a
+                    // taller block needs takes no room from the tiles.
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_width(inner.width());
                         ui.spacing_mut().item_spacing = Vec2::ZERO;
-                        let metrics = self.welcome.metrics(ui, inner.width());
-                        let (content, _) =
-                            ui.allocate_exact_size(Vec2::new(inner.width(), metrics.content_height), Sense::hover());
+                        let (content, _) = ui.allocate_exact_size(
+                            Vec2::new(inner.width(), metrics.block_height + PAGE_PAD_BOTTOM),
+                            Sense::hover(),
+                        );
                         pressed = paint_page(ui, &mut self.welcome, content, metrics, &shortcut_lines);
                     });
             });
@@ -290,6 +310,20 @@ impl HorizonApp {
     }
 }
 
+/// The distance from the top of the canvas to the top of the block of the page.
+///
+/// A block that fits between the top pads of the page is centred in the height
+/// of the canvas, so the page does not sit against the top with an empty lower
+/// half. A block that needs more room keeps the top pad and scrolls under it.
+fn page_top(canvas_height: f32, block_height: f32) -> f32 {
+    let top = f32::from(PAGE_PAD_TOP);
+    if canvas_height >= block_height + 2.0 * top {
+        (canvas_height - block_height) * 0.5
+    } else {
+        top
+    }
+}
+
 /// Whether the first page shows, from the counts of the board.
 pub(in crate::app) fn welcome_page_shows(workspace_count: usize, panel_count: usize, overlays_visible: bool) -> bool {
     overlays_visible && workspace_count == 0 && panel_count == 0
@@ -330,20 +364,52 @@ fn paint_page(
 fn paint_heading(painter: &Painter, content: Rect, metrics: WelcomeMetrics, y: f32) -> f32 {
     let center = content.center().x;
     let heading = painter.layout_no_wrap(HEADING.to_owned(), FontId::proportional(HEADING_FONT), theme::FG());
-    painter.galley(Pos2::new(center - heading.size().x * 0.5, y), heading, theme::FG());
+    let left = center - heading.size().x * 0.5;
+    paint_heavy(painter, Pos2::new(left, y), heading);
     let lead_top = y + metrics.heading_height + HEADING_GAP;
-    let lead = painter.layout(
-        LEAD.to_owned(),
-        FontId::proportional(LEAD_FONT),
+    let lead = painter.layout_job(centred_job(
+        LEAD,
+        &FontId::proportional(LEAD_FONT),
         theme::FG_SOFT(),
-        HEADING_MAX_WIDTH.min(content.width()),
-    );
-    painter.galley(
-        Pos2::new(center - lead.size().x * 0.5, lead_top),
-        lead,
-        theme::FG_SOFT(),
-    );
+        HEADING_MAX_WIDTH.min(content.width().max(1.0)),
+    ));
+    // The rows of a centred job stand around its own origin, so the galley is
+    // drawn on the middle line of the page.
+    painter.galley(Pos2::new(center, lead_top), lead, theme::FG_SOFT());
     lead_top + metrics.lead_height + HEADING_BLOCK_GAP - HEADING_GAP
+}
+
+/// Paints one line with the weight of a heading of the mockup.
+///
+/// The bundled face carries one weight, so the line is painted twice by a hair
+/// instead of once: the page asks for a strong heading and no second face is
+/// bundled for it.
+fn paint_heavy(painter: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>) {
+    painter.galley(pos, galley.clone(), theme::FG());
+    painter.galley(pos + Vec2::new(HEAVY_OFFSET, 0.0), galley, theme::FG());
+}
+
+/// The text of the page wrapped to `max_width` with every row centred, as the
+/// line under the heading of the mockup is.
+fn centred_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob {
+        halign: egui::Align::Center,
+        wrap: egui::text::TextWrapping {
+            max_width,
+            ..egui::text::TextWrapping::default()
+        },
+        ..egui::text::LayoutJob::default()
+    };
+    job.append(
+        text,
+        0.0,
+        egui::text::TextFormat {
+            font_id: font.clone(),
+            color,
+            ..egui::text::TextFormat::default()
+        },
+    );
+    job
 }
 
 /// Paints one tile, and answers whether the person pressed it.

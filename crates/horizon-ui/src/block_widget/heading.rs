@@ -9,6 +9,7 @@ use crate::theme;
 use super::badge;
 use super::metrics::{
     BADGE_HEIGHT, HEADING_BADGE_GAP, HEADING_BADGE_ROW_GAP, HEADING_FONT, HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP,
+    HEADING_SUBTITLE_LINE_HEIGHT,
 };
 use super::text;
 
@@ -71,13 +72,17 @@ pub(super) fn show(
 
     let title = text::line(ui.painter(), text, &font, theme::FG(), text_width);
     let title_height = title.size().y;
+    // The second line says what the card is for, so it takes every line that
+    // its words need inside the room that the card has, and the height of the
+    // heading counts them.
     let subtitle_galley = subtitle.map(|subtitle| {
-        text::line(
+        text::wrapped(
             ui.painter(),
             subtitle,
             &FontId::proportional(HEADING_SUBTITLE_FONT),
             theme::FG_SOFT(),
             text_width,
+            Some(HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT),
         )
     });
     let subtitle_height = subtitle_galley.as_ref().map_or(0.0, |galley| galley.size().y);
@@ -132,7 +137,7 @@ fn label_node(ui: &Ui, index: usize, row: Rect, top: f32, subtitle: Option<&str>
     let Some(subtitle) = subtitle else { return };
     let rect = Rect::from_min_max(
         Pos2::new(row.min.x, top),
-        Pos2::new(row.max.x, top + HEADING_SUBTITLE_FONT),
+        Pos2::new(row.max.x, top + HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT),
     );
     let response = ui.interact(
         rect,

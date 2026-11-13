@@ -12,14 +12,18 @@ use horizon_browser_control::block::{BlockDocument, Component, ListLayout};
 use super::metrics::{
     BADGE_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_TOP, BUTTON_HEIGHT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
     CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT,
-    HEADING_SUBTITLE_GAP, KV_ROW_HEIGHT, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT,
-    LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP,
-    STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, count,
+    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y,
+    LIST_SUBTITLE_FONT, LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT,
+    PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
 /// Characters of body text that fit on one line at the card width.
 const TEXT_CHARS_PER_LINE: usize = 58;
+/// Characters of the second line under a heading that fit on one line at the
+/// card width. The line is drawn in the size of the body text, so it holds the
+/// same number of characters.
+const SUBTITLE_CHARS_PER_LINE: usize = TEXT_CHARS_PER_LINE;
 /// Characters of pill titles that fit on one line of pills at the card width.
 const PILL_CHARS_PER_LINE: usize = 34;
 /// The characters of padding that one pill spends around its title.
@@ -85,8 +89,9 @@ fn component_height(component: &Component) -> f32 {
     match component {
         Component::Heading { subtitle, badge, .. } => {
             let mut height = HEADING_FONT * LINE_FACTOR;
-            if subtitle.is_some() {
-                height += HEADING_SUBTITLE_GAP + HEADING_SUBTITLE_FONT * LINE_FACTOR;
+            if let Some(subtitle) = subtitle {
+                let lines = subtitle.chars().count().div_ceil(SUBTITLE_CHARS_PER_LINE).max(1);
+                height += HEADING_SUBTITLE_GAP + count(lines) * HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT;
             }
             if badge.is_some() {
                 height = height.max(BADGE_HEIGHT);

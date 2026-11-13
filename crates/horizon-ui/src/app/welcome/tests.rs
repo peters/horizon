@@ -2,9 +2,20 @@
 
 use egui::Context;
 
-use super::{HEADING, LEAD, SHORTCUTS_LEAD, WelcomeTile, welcome_page_shows};
+use super::{HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, WelcomeTile, page_top, welcome_page_shows};
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
+
+/// The shapes of the last frame of the page, with the rectangle each is
+/// clipped to.
+fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
+    let _ = frame_texts(ctx, app);
+    let output = ctx.run_ui(crate::app::test_support::raw_input([1200.0, 900.0], None), |ui| {
+        app.render_welcome_page(ui.ctx());
+    });
+    let output: egui::FullOutput = output.discard_textures();
+    output.shapes
+}
 
 /// Every text that a frame of the window painted.
 fn frame_texts(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<String> {
@@ -36,6 +47,86 @@ fn collect_texts(shape: &egui::Shape, texts: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+fn walk_text<'a>(shape: &'a egui::Shape, text: &str, out: &mut Option<&'a egui::epaint::TextShape>) {
+    match shape {
+        egui::Shape::Text(shape) if shape.galley.text() == text => *out = Some(shape),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                walk_text(shape, text, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The text shape that painted `text`, with the rectangle it was clipped to.
+fn text_shape<'a>(
+    shapes: &'a [egui::epaint::ClippedShape],
+    text: &str,
+) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
+    shapes.iter().find_map(|clipped| {
+        let mut shape = None;
+        walk_text(&clipped.shape, text, &mut shape);
+        shape.map(|shape| (shape, clipped.clip_rect))
+    })
+}
+
+#[test]
+fn the_block_of_the_page_is_centred_in_a_canvas_that_holds_it() {
+    // The height of the block of the live window, in a canvas that is taller.
+    let block = 470.0;
+    let centred = page_top(900.0, block);
+    assert!(
+        (centred - (900.0 - block) * 0.5).abs() < 0.5,
+        "the block stands in the middle of the canvas: {centred}"
+    );
+    assert!(centred > f32::from(PAGE_PAD_TOP), "the middle is below the top pad");
+
+    let top = page_top(block + f32::from(PAGE_PAD_TOP) + 1.0, block);
+    assert!(
+        (top - f32::from(PAGE_PAD_TOP)).abs() < 0.5,
+        "a canvas that does not hold the block keeps it at the top: {top}"
+    );
+}
+
+#[test]
+fn the_line_under_the_heading_is_centred_row_by_row() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    let shapes = frame_shapes(&ctx, &mut app);
+    let (text, _) = text_shape(&shapes, LEAD).expect("the line under the heading is drawn");
+    assert!(
+        text.galley.rows.len() >= 2,
+        "the line wraps at this width: {:?}",
+        text.galley.rows.len()
+    );
+    let centre = app.canvas_rect(&ctx).center().x;
+    for placed in &text.galley.rows {
+        let row_centre = text.pos.x + placed.pos.x + placed.row.size.x * 0.5;
+        assert!(
+            (row_centre - centre).abs() < 3.0,
+            "every row of the line is centred like the mockup: {row_centre} against {centre}"
+        );
+    }
+}
+
+#[test]
+fn the_shortcut_line_is_drawn_whole_inside_the_canvas() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    let shapes = frame_shapes(&ctx, &mut app);
+    let (text, clip) = text_shape(&shapes, SHORTCUTS_LEAD).expect("the shortcut line is drawn");
+    let bottom = text.pos.y + text.galley.size().y;
+    assert!(
+        clip.max.y + 0.5 >= bottom,
+        "the shortcut line is not cut by the page: {clip:?} against {bottom}"
+    );
+    assert!(
+        clip.max.y <= 900.0 + 0.5,
+        "the shortcut line stands inside the canvas: {clip:?}"
+    );
 }
 
 #[test]
