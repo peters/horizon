@@ -13,11 +13,22 @@ impl Panel {
     /// The screen that a restart of this panel keeps, as the output that draws
     /// it again in the new terminal.
     ///
-    /// Only a terminal that attaches a tmux session on a machine keeps its
-    /// screen: the session still holds the work, so the person reads the last
-    /// screen of it until the new connection draws. Every other panel starts
-    /// with the empty screen that its own new output fills.
+    /// A terminal that attaches a tmux session on a machine keeps its screen:
+    /// the session still holds the work, so the person reads the last screen of
+    /// it until the new connection draws. A panel whose program ended keeps its
+    /// screen above the new program, which starts under the text that the person
+    /// read before. Every other panel starts with the empty screen that its own
+    /// new output fills.
     pub(super) fn restart_replay_bytes(&self) -> Vec<u8> {
+        if self.program_end.is_some() {
+            let mut replay = self.terminal().map(Terminal::screen_replay_bytes).unwrap_or_default();
+            if !replay.is_empty() {
+                // The cursor moves under the text that the old program left, so
+                // the new program writes below it instead of over it.
+                replay.extend_from_slice(b"\r\n");
+            }
+            return replay;
+        }
         if !self.attaches_a_tmux_session() {
             return Vec::new();
         }
@@ -115,6 +126,7 @@ impl Panel {
             terminal.work_continuation = work.state;
         }
         self.launched_at_millis = current_unix_millis();
+        self.clear_program_end();
         self.ssh_connected_at_millis = None;
         self.ssh_exit_recorded = false;
         self.ssh_end = None;

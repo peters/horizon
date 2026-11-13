@@ -7,17 +7,10 @@
 //! `Connecting...` and `Reconnecting` and reaches its tmux session again on its
 //! own, so it needs no button.
 
-use egui::{Align, Layout, Rect, Ui, UiBuilder, Vec2};
+use egui::{Rect, Ui};
 use horizon_core::{PanelKind, SshConnectionStatus};
 
-use crate::theme;
-
-/// The height of the strip at the bottom of the grid, in points.
-const HEIGHT: f32 = 26.0;
-/// The padding inside the strip.
-const PADDING: Vec2 = Vec2::new(10.0, 4.0);
-/// The size of the text of the line.
-const TEXT_SIZE: f32 = 11.5;
+use super::notice_strip;
 
 /// One line about a panel that has no shell, for the strip under its grid.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,37 +48,14 @@ impl LinkNotice {
 /// Paints the line of `notice` under the grid of `body`, and answers whether the
 /// person asked for the next attempt in this pass.
 pub(super) fn show(ui: &mut Ui, body: Rect, notice: &LinkNotice, interactive: bool) -> bool {
-    let strip = Rect::from_min_max(egui::pos2(body.min.x, (body.max.y - HEIGHT).max(body.min.y)), body.max);
-    if !ui.is_rect_visible(strip) {
+    let Some(strip) = notice_strip::paint(ui, body) else {
         return false;
-    }
-    ui.painter().rect_filled(strip, 0.0, theme::PANEL_BG_ALT());
-    let mut reconnect = false;
-    ui.scope_builder(
-        UiBuilder::new()
-            .max_rect(strip.shrink2(PADDING))
-            .layout(Layout::left_to_right(Align::Center)),
-        |ui| {
-            ui.add(egui::Label::new(
-                egui::RichText::new(&notice.line)
-                    .color(theme::FG_SOFT())
-                    .size(TEXT_SIZE),
-            ));
-            if notice.reconnect {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let reconnect_button =
-                        egui::Button::new(egui::RichText::new("Reconnect").size(TEXT_SIZE).color(theme::FG_SOFT()))
-                            .fill(theme::PANEL_BG())
-                            .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
-                            .corner_radius(10);
-                    if ui.add_enabled(interactive, reconnect_button).clicked() {
-                        reconnect = true;
-                    }
-                });
-            }
-        },
-    );
-    reconnect
+    };
+    notice_strip::row(ui, strip, |ui| {
+        notice_strip::sides(ui, &notice.line, |ui| {
+            notice.reconnect && notice_strip::control(ui, "Reconnect", interactive)
+        })
+    })
 }
 
 #[cfg(test)]

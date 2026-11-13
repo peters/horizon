@@ -177,6 +177,74 @@ mod tests {
     use super::RestartCause;
     use crate::app::test_support::test_app;
 
+    /// Waits until the program of `panel_id` ended and the app knows it.
+    fn wait_for_the_end(app: &mut crate::app::HorizonApp, panel_id: PanelId) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            if let Some(panel) = app.board.panel_mut(panel_id) {
+                panel.process_output();
+                if panel.program_end().is_some() {
+                    return;
+                }
+            } else {
+                panic!("the panel of the test left the board");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the program of the panel did not end");
+    }
+
+    /// C10: the two controls of an ended program do what they say. "Start again"
+    /// asks for one restart of the same panel, and "Close" closes it.
+    #[test]
+    fn an_ended_program_starts_again_or_closes_only_when_the_person_asks() {
+        use crate::terminal_widget::PanelNoticeAction;
+
+        let (_temp, mut app) = test_app();
+        let workspace = app.board.ensure_workspace();
+        let options = horizon_core::PanelOptions {
+            kind: PanelKind::Command,
+            command: Some("/bin/sh".to_owned()),
+            args: vec!["-c".to_owned(), "exit 4".to_owned()],
+            ..horizon_core::PanelOptions::default()
+        };
+        let created = app
+            .create_panel_with_options(options, workspace)
+            .expect("a command panel");
+        app.settle_panel_starts();
+        wait_for_the_end(&mut app, created);
+        assert_eq!(
+            app.board.panel(created).and_then(horizon_core::Panel::program_end),
+            Some(horizon_core::ProgramEnd { exit_status: Some(4) }),
+            "the panel reports the end of its program"
+        );
+        assert!(
+            app.panels_to_close.is_empty() && app.panels_to_restart.is_empty(),
+            "an ended program starts nothing again and closes nothing by itself"
+        );
+
+        app.run_panel_notice_action(created, PanelNoticeAction::StartProgramAgain);
+        assert_eq!(
+            app.panels_to_restart,
+            vec![created],
+            "the control asks for one restart of the panel"
+        );
+        let frame = horizon_core::ui_thread::FrameScope::enter();
+        app.apply_panel_transitions();
+        drop(frame);
+        app.settle_panel_restarts();
+        assert_eq!(
+            app.board.panel(created).and_then(horizon_core::Panel::program_end),
+            None,
+            "the new program of the panel holds the panel"
+        );
+
+        app.run_panel_notice_action(created, PanelNoticeAction::ClosePanel);
+        assert_eq!(app.panels_to_close, vec![created], "the control closes the panel");
+        app.run_panel_notice_action(created, PanelNoticeAction::None);
+        assert_eq!(app.panels_to_close, vec![created], "no other action closes a panel");
+    }
+
     #[test]
     fn a_restart_of_the_person_runs_on_the_coordination_worker_and_keeps_its_attempts() {
         let (_temp, mut app) = test_app();

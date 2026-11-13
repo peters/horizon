@@ -6,7 +6,7 @@ use alacritty_terminal::term::TermMode;
 use egui::{Context, Event, Pos2, RawInput, Rect, Vec2};
 use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
-use super::{TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView};
+use super::{PanelNoticeAction, TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView};
 use crate::primary_selection::PrimarySelection;
 use crate::test_egui::DiscardTextures;
 
@@ -208,7 +208,7 @@ impl TerminalHarness {
                             primary_selection: &self.primary_selection,
                             clipboard_images: &self.clipboard_images,
                             local_ssh_reconnect_enabled: false,
-                            reconnect_requested: &mut false,
+                            notice_action: &mut PanelNoticeAction::default(),
                         },
                     );
                 });
@@ -240,7 +240,7 @@ impl TerminalHarness {
                             primary_selection: &self.primary_selection,
                             clipboard_images: &self.clipboard_images,
                             local_ssh_reconnect_enabled: false,
-                            reconnect_requested: &mut false,
+                            notice_action: &mut PanelNoticeAction::default(),
                         },
                     );
                 });
@@ -329,7 +329,7 @@ fn tab_does_not_steal_focus_from_another_text_field() {
                         primary_selection: &harness.primary_selection,
                         clipboard_images: &harness.clipboard_images,
                         local_ssh_reconnect_enabled: false,
-                        reconnect_requested: &mut false,
+                        notice_action: &mut PanelNoticeAction::default(),
                     },
                 );
                 egui::Window::new("Synthetic pairing")

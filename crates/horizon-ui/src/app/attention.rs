@@ -359,6 +359,19 @@ impl HorizonApp {
         self.attention.state(local_id)
     }
 
+    /// The state of one panel of the board, whose program may have ended.
+    ///
+    /// An ended program runs nothing and waits for nothing, and the five states
+    /// name the turns of an agent, so none of them fits it. Idle is the state
+    /// that keeps the row quiet: the ledger of a panel that exited in the middle
+    /// of a turn would otherwise say that the agent still works.
+    pub(in crate::app) fn panel_attention_of(&self, panel: &horizon_core::Panel) -> Attention {
+        if panel.program_end().is_some() {
+            return Attention::Idle;
+        }
+        self.panel_attention(&panel.local_id)
+    }
+
     /// The agent panels that a jump goes to: the panels that need the person,
     /// with the moment their turn reached that state.
     pub(in crate::app) fn attention_targets(&self) -> Vec<AttentionTarget> {

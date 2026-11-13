@@ -118,6 +118,7 @@ impl Terminal {
             child_exited: false,
             answered_query: false,
             child_exit_status: None,
+            snapshot: matches!(output, PtyOutput::Discarded),
         };
         terminal.process_events();
         Ok(terminal)

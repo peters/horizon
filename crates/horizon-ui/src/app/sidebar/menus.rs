@@ -334,7 +334,7 @@ impl HorizonApp {
                 let idle = self
                     .board
                     .panel(panel_id)
-                    .is_some_and(|panel| self.panel_attention(&panel.local_id) == horizon_core::Attention::Idle);
+                    .is_some_and(|panel| self.panel_attention_of(panel) == horizon_core::Attention::Idle);
                 if ui
                     .add_enabled(
                         idle,

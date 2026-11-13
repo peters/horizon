@@ -204,6 +204,14 @@ impl Terminal {
         self.child_exited
     }
 
+    /// This terminal shows a screen that a frame draws and runs a stand-in
+    /// process only because a terminal needs a PTY. Its exit says nothing about
+    /// a program of the person, so a panel does not report it as one.
+    #[must_use]
+    pub const fn is_snapshot(&self) -> bool {
+        self.snapshot
+    }
+
     /// Returns the exit status of the child process if it has exited *and* a
     /// status was reported. `None` while the child is still running, or after
     /// an `Event::Exit` that didn't carry a status (e.g. internal teardown).

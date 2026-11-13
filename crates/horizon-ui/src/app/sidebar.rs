@@ -193,7 +193,7 @@ impl HorizonApp {
             label,
             kind: panel.kind,
             is_focused: self.board.focused == Some(panel.id),
-            attention: self.panel_attention(&panel.local_id),
+            attention: self.panel_attention_of(panel),
         }
     }
 

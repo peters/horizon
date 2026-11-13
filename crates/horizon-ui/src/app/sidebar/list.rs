@@ -78,13 +78,13 @@ impl HorizonApp {
                     panels
                         .clone()
                         .filter(|panel| panel.kind.is_agent())
-                        .map(|panel| self.panel_attention(&panel.local_id)),
+                        .map(|panel| self.panel_attention_of(panel)),
                 );
                 let waiting = sufficient_waiting(
                     panels
                         .clone()
                         .filter(|panel| panel.kind.is_agent())
-                        .map(|panel| self.panel_attention(&panel.local_id)),
+                        .map(|panel| self.panel_attention_of(panel)),
                 );
                 let line =
                     workspace_list::primary_panel(panels, self.board.focused).and_then(workspace_list::panel_line);

@@ -28,6 +28,13 @@ pub(crate) fn handle_terminal_keyboard_input(
         return true;
     }
 
+    // A panel whose program ended takes no key. The line under its grid says
+    // that typed text is not sent, so the key reaches no dead PTY and no key is
+    // dropped without that sentence.
+    if !panel.accepts_input() {
+        return false;
+    }
+
     let panel_id = panel.id;
     let Some(terminal) = panel.terminal_mut() else {
         return false;

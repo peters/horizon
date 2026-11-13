@@ -8,7 +8,7 @@ use super::super::editor_widget::{MarkdownEditorView, MarkdownPreviewCache};
 use super::super::input::TerminalInputEvent;
 use super::super::primary_selection::PrimarySelection;
 use super::super::terminal_widget::{
-    TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView,
+    PanelNoticeAction, TerminalGridCache, TerminalKeyboardContext, TerminalSelectionDragState, TerminalView,
 };
 use super::super::theme;
 pub(super) use super::panel_chrome::{
@@ -160,7 +160,8 @@ struct PanelBodyContext<'a> {
     local_ssh_reconnect_enabled: bool,
     primary_selection: &'a PrimarySelection,
     clipboard_images: &'a crate::clipboard_image::ClipboardImages,
-    reconnect_requested: &'a mut bool,
+    /// What the person pressed in the line under the grid of this panel.
+    notice_action: &'a mut PanelNoticeAction,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
@@ -253,7 +254,7 @@ fn show_panel_body_contents(
                 primary_selection: body_context.primary_selection,
                 clipboard_images: body_context.clipboard_images,
                 local_ssh_reconnect_enabled: body_context.local_ssh_reconnect_enabled,
-                reconnect_requested: body_context.reconnect_requested,
+                notice_action: body_context.notice_action,
             },
         ),
     }
@@ -282,6 +283,25 @@ impl CanvasClippedArea for egui::Area {
 }
 
 impl HorizonApp {
+    /// Runs what the person pressed in the line under the grid of `panel_id`.
+    ///
+    /// A restart and a close wait for the end of the frame: the restart asks the
+    /// coordination worker for its pre-flight, and the board must not lose a
+    /// panel that this pass still draws. A reconnect is the one request that the
+    /// frame makes itself, as it did before the line offered other controls.
+    pub(in crate::app) fn run_panel_notice_action(&mut self, panel_id: PanelId, action: PanelNoticeAction) {
+        match action {
+            PanelNoticeAction::None => {}
+            PanelNoticeAction::Reconnect => self.reconnect_panel_now(panel_id),
+            PanelNoticeAction::StartProgramAgain => self.queue_panel_restart(panel_id),
+            PanelNoticeAction::ClosePanel => {
+                if !self.panels_to_close.contains(&panel_id) {
+                    self.panels_to_close.push(panel_id);
+                }
+            }
+        }
+    }
+
     fn local_ssh_reconnect_shortcut_enabled(&self) -> bool {
         !ssh_reconnect_shortcut_conflicts(&self.shortcuts)
     }
@@ -381,7 +401,7 @@ impl HorizonApp {
                         .max_rect(body_rect)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                        let mut reconnect_requested = false;
+                        let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let claim_editor_focus = true;
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
@@ -420,7 +440,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     clipboard_images: &self.clipboard_images,
-                                    reconnect_requested: &mut reconnect_requested,
+                                    notice_action: &mut notice_action,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
@@ -438,9 +458,7 @@ impl HorizonApp {
                                 },
                             );
                         }
-                        if reconnect_requested {
-                            self.reconnect_panel_now(panel_id);
-                        }
+                        self.run_panel_notice_action(panel_id, notice_action);
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ui.ctx(), panel_id, &url);
                         }
@@ -764,7 +782,7 @@ impl HorizonApp {
                         .max_rect(rects.body)
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
-                        let mut reconnect_requested = false;
+                        let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let claim_editor_focus = snapshot.is_focused;
                         let card_agent_present = self.card_agent_present(panel_id);
@@ -809,7 +827,7 @@ impl HorizonApp {
                                     local_ssh_reconnect_enabled,
                                     primary_selection: &self.primary_selection,
                                     clipboard_images: &self.clipboard_images,
-                                    reconnect_requested: &mut reconnect_requested,
+                                    notice_action: &mut notice_action,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
@@ -833,9 +851,7 @@ impl HorizonApp {
                                 outcome.request_focus();
                             }
                         }
-                        if reconnect_requested {
-                            self.reconnect_panel_now(panel_id);
-                        }
+                        self.run_panel_notice_action(panel_id, notice_action);
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ctx, panel_id, &url);
                         }

@@ -3,6 +3,8 @@ mod ime;
 mod input;
 mod layout;
 mod link_notice;
+mod notice_strip;
+mod program_end_notice;
 mod render;
 mod scrollbar;
 
@@ -15,6 +17,7 @@ pub(crate) use self::input::TerminalSelectionDragState;
 use self::input::{PointerSupport, handle_terminal_keyboard_input, handle_terminal_pointer_input};
 use self::layout::{GridMetrics, terminal_interaction, terminal_layout, terminal_viewport_size};
 use self::link_notice::LinkNotice;
+pub(crate) use self::program_end_notice::PanelNoticeAction;
 pub(crate) use self::render::TerminalGridCache;
 use self::render::{render_cursor, render_grid};
 use self::scrollbar::render_scrollbar;
@@ -37,7 +40,9 @@ pub struct TerminalKeyboardContext<'a> {
     /// Clipboard images become a private file whose path the terminal pastes.
     pub clipboard_images: &'a super::clipboard_image::ClipboardImages,
     pub local_ssh_reconnect_enabled: bool,
-    pub reconnect_requested: &'a mut bool,
+    /// What the person pressed in the line under the grid of this panel, which
+    /// the frame that draws the panel reads once.
+    pub notice_action: &'a mut PanelNoticeAction,
 }
 
 impl<'a> TerminalView<'a> {
@@ -179,14 +184,14 @@ impl<'a> TerminalView<'a> {
         // The line of a panel that has no shell sits under the grid, so a person
         // reads why the keys do nothing and where the next attempt starts. Only a
         // panel in that state builds it; a connected terminal has no such work.
-        self.show_link_notice(ui, interaction.layout.body, interactive, keyboard.reconnect_requested);
+        self.show_panel_notice(ui, interaction.layout.body, interactive, &mut *keyboard.notice_action);
 
         if interactive && has_terminal_focus {
             // The bytes of a key press arm the echo of this panel, so the first
             // output after them asks for the next frame instead of waiting for
             // the idle poll of the window. Output that nobody typed arms nothing,
             // so a program that prints without end never drives the window.
-            *keyboard.reconnect_requested |= handle_terminal_keyboard_input(
+            let reconnect_requested = handle_terminal_keyboard_input(
                 ui,
                 interaction.body.id,
                 self.panel,
@@ -195,22 +200,37 @@ impl<'a> TerminalView<'a> {
                 keyboard.clipboard_images,
                 keyboard.local_ssh_reconnect_enabled,
             );
+            if reconnect_requested {
+                *keyboard.notice_action = PanelNoticeAction::Reconnect;
+            }
         }
 
         interaction.body.clicked()
     }
 
-    /// Paints the line of a panel whose shell is not there, and takes the
-    /// `Reconnect` that the person presses in it.
-    fn show_link_notice(&self, ui: &mut egui::Ui, body: egui::Rect, interactive: bool, reconnect_requested: &mut bool) {
-        let Some(connection) = self.panel.ssh_connection.as_ref() else {
+    /// Paints the line of a panel that holds no shell, and takes the control that
+    /// the person presses in it: `Reconnect` for a lost link, `Start again` and
+    /// `Close` for a program that ended.
+    fn show_panel_notice(
+        &self,
+        ui: &mut egui::Ui,
+        body: egui::Rect,
+        interactive: bool,
+        action: &mut PanelNoticeAction,
+    ) {
+        if let Some(connection) = self.panel.ssh_connection.as_ref()
+            && let Some(notice) = LinkNotice::of(self.panel.kind, self.panel.ssh_status(), &connection.display_label())
+        {
+            if link_notice::show(ui, body, &notice, interactive) {
+                *action = PanelNoticeAction::Reconnect;
+            }
             return;
-        };
-        let Some(notice) = LinkNotice::of(self.panel.kind, self.panel.ssh_status(), &connection.display_label()) else {
-            return;
-        };
-        if link_notice::show(ui, body, &notice, interactive) {
-            *reconnect_requested = true;
+        }
+        if let Some(end) = self.panel.program_end() {
+            let pressed = program_end_notice::ProgramEndNotice { end }.show(ui, body, interactive);
+            if pressed != PanelNoticeAction::None {
+                *action = pressed;
+            }
         }
     }
 }

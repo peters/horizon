@@ -2,14 +2,18 @@ mod cwd;
 mod echo;
 mod lifecycle;
 mod metrics;
+mod program_end;
 pub(crate) mod spawn;
+mod ssh_state;
 mod work_resume;
 
+pub use program_end::ProgramEnd;
 pub use spawn::{
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
     prepare_restart,
 };
 pub(crate) use spawn::{shutdown_for_restart, spawn_waiting_panel};
+pub use ssh_state::SshConnectionEnd;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -333,18 +337,9 @@ pub struct Panel {
     ssh_exit_recorded: bool,
     /// The end of the last ssh process, until the app reads it.
     ssh_end: Option<SshConnectionEnd>,
-}
-
-/// The end of one ssh process of a panel, as the app reads it once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SshConnectionEnd {
-    /// The exit status of the process, when the system reported one.
-    pub exit_code: Option<i32>,
-    /// How long the connection was up before it ended; `None` when it never
-    /// reached the machine.
-    pub connected_for: Option<Duration>,
-    /// The panel's saved command attaches a tmux session on a machine.
-    pub machine_tied: bool,
+    /// The end of the program of this panel while it has none, so the panel
+    /// says what happened and offers to start it again.
+    program_end: Option<ProgramEnd>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -377,90 +372,6 @@ impl Panel {
         self.content.terminal_mut()
     }
 
-    #[must_use]
-    pub fn ssh_status(&self) -> Option<SshConnectionStatus> {
-        self.ssh_status
-    }
-
-    /// Keep the connection status of an SSH panel, and record the end of its
-    /// ssh process once, so the app can decide whether to connect again.
-    fn track_ssh_connection(&mut self, child_exited: bool, had_output: bool) {
-        if child_exited {
-            // The status of a panel whose process ended more than once is the
-            // app's: it waits for an attempt, or it stays disconnected.
-            if self.ssh_exit_recorded {
-                return;
-            }
-            self.ssh_exit_recorded = true;
-            let now = current_unix_millis();
-            self.ssh_end = Some(SshConnectionEnd {
-                exit_code: self
-                    .content
-                    .terminal()
-                    .and_then(Terminal::child_exit_status)
-                    .and_then(|status| status.code()),
-                connected_for: self
-                    .ssh_connected_at_millis
-                    .map(|up| Duration::from_millis(u64::try_from(now.saturating_sub(up)).unwrap_or_default())),
-                machine_tied: self.attaches_a_tmux_session(),
-            });
-            self.ssh_status = Some(SshConnectionStatus::Disconnected);
-        } else if had_output && matches!(self.ssh_status, Some(SshConnectionStatus::Connecting)) {
-            self.ssh_status = Some(SshConnectionStatus::Connected);
-            self.ssh_connected_at_millis = Some(current_unix_millis());
-            self.ssh_reconnect_attempt = 0;
-        }
-    }
-
-    /// The end of this panel's ssh process, read once. `None` while its process
-    /// runs, and after the app made its decision.
-    #[must_use]
-    pub fn take_ssh_end(&mut self) -> Option<SshConnectionEnd> {
-        self.ssh_end.take()
-    }
-
-    /// Whether the saved command of this panel attaches to a tmux session on a
-    /// machine, so Horizon can reach the same work again by itself.
-    #[must_use]
-    pub fn attaches_a_tmux_session(&self) -> bool {
-        self.kind == PanelKind::Ssh
-            && crate::place::attaches_a_tmux_session(
-                self.ssh_connection
-                    .as_ref()
-                    .and_then(|connection| connection.remote_command.as_deref()),
-            )
-    }
-
-    /// Marks this panel as waiting for its next attempt `attempt` after a lost
-    /// link, and says how many attempts Horizon already made. The body keeps the
-    /// last screen until the command starts again.
-    pub fn show_reconnecting(&mut self, attempt: u32) {
-        if self.kind != PanelKind::Ssh {
-            return;
-        }
-        self.ssh_status = Some(SshConnectionStatus::Reconnecting);
-        self.ssh_reconnect_attempt = attempt;
-    }
-
-    /// The attempt that the reconnect of this panel reached, while its mark is
-    /// the one of a lost link that waits for the next one.
-    #[must_use]
-    pub fn ssh_status_attempt(&self) -> Option<u32> {
-        matches!(self.ssh_status, Some(SshConnectionStatus::Reconnecting))
-            .then_some(self.ssh_reconnect_attempt)
-            .filter(|attempt| *attempt > 0)
-    }
-
-    /// Marks this panel as disconnected, after Horizon did not start its command
-    /// again.
-    pub fn show_disconnected(&mut self) {
-        if self.kind == PanelKind::Ssh {
-            self.ssh_status = Some(SshConnectionStatus::Disconnected);
-            self.ssh_reconnect_attempt = 0;
-        }
-    }
-
-    /// The agent that opened this panel for the person, as Horizon names it, or
     /// `None` for a panel the person made.
     #[must_use]
     pub fn opened_by(&self) -> Option<&str> {
@@ -622,6 +533,7 @@ impl Panel {
             ssh_connected_at_millis: None,
             ssh_exit_recorded: false,
             ssh_end: None,
+            program_end: None,
         }
     }
 
@@ -713,6 +625,9 @@ impl Panel {
         };
         let placeholder = spawn::Placeholder::for_working_directory(failure);
         let replacement = spawn::placeholder_terminal(self, rows, cols, placeholder)?;
+        // The placeholder says why the panel cannot start, so the line of an
+        // ended program must not repeat the end over it.
+        self.clear_program_end();
         if let PanelContent::Terminal(mut old) =
             std::mem::replace(&mut self.content, PanelContent::Terminal(replacement))
         {
@@ -767,6 +682,7 @@ impl Panel {
         if self.kind == PanelKind::Ssh {
             self.track_ssh_connection(child_exited, had_output);
         }
+        self.track_program_end(child_exited);
 
         // The directory of the process is a read that can start a program, so
         // the worker answers it and a later frame keeps the value.
@@ -860,10 +776,18 @@ impl Panel {
         true
     }
 
-    pub fn write_input(&mut self, bytes: &[u8]) {
-        if let Some(terminal) = self.content.terminal_mut() {
-            terminal.write_input(bytes);
+    /// Writes the bytes of a person into the program of this panel. Answers
+    /// whether a program took them: a panel whose program ended writes nothing,
+    /// because the line under its grid says that typed text reaches nothing.
+    pub fn write_input(&mut self, bytes: &[u8]) -> bool {
+        if !self.accepts_input() {
+            return false;
         }
+        let Some(terminal) = self.content.terminal_mut() else {
+            return false;
+        };
+        terminal.write_input(bytes);
+        true
     }
 
     /// Asks the content of this panel to stop. A dirty editor buffer only asks
@@ -1036,6 +960,7 @@ mod tests {
             ssh_connected_at_millis: None,
             ssh_exit_recorded: false,
             ssh_end: None,
+            program_end: None,
         }
     }
 

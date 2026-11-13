@@ -249,6 +249,9 @@ pub struct Terminal {
     child_exited: bool,
     child_exit_status: Option<std::process::ExitStatus>,
     answered_query: bool,
+    /// This terminal runs a stand-in process that exits at once, because it
+    /// shows a screen that a frame draws instead of the output of a program.
+    snapshot: bool,
 }
 
 #[cfg(test)]

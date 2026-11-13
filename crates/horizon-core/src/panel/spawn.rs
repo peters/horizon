@@ -204,6 +204,7 @@ impl StaticPanelSeed {
             ssh_connected_at_millis: None,
             ssh_exit_recorded: false,
             ssh_end: None,
+            program_end: None,
         }
     }
 }
