@@ -76,6 +76,7 @@ mod session_kill;
 mod session_manager;
 mod settings;
 mod settings_io;
+mod settings_request;
 mod setup;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
@@ -303,6 +304,9 @@ pub struct HorizonApp {
     /// The `next_click` waits this host holds open, and the last wake line to
     /// each agent panel. It lives here for the same reason as `block_claim`.
     pub(in crate::app) block_clicks: block_clicks::BlockClickState,
+    /// The card of Horizon that asks the person about a setting of this
+    /// computer, and the request that waits for the answer.
+    pub(in crate::app) settings_request: settings_request::SettingRequestState,
     /// The panels each agent panel opened for the person in this run, bounded per
     /// agent. It lives here for the same reason as `block_claim`.
     pub(in crate::app) agent_opens: AgentOpens,
@@ -356,6 +360,10 @@ pub struct HorizonApp {
     machine_load_rx: Option<Receiver<Result<server_sync::MachineLoad, horizon_core::MachineError>>>,
     /// The link of this Horizon to its server, when the settings name one.
     pub(in crate::app) server_sync: Option<server_sync::ServerSync>,
+    /// The child program of a link that this Horizon starts. `None` runs `ssh`;
+    /// a test of a path that starts a link names a program that ends at once,
+    /// because a unit test starts no `ssh`.
+    link_child: Option<String>,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
     /// The callback that asks this window for the frame that shows the echo of a

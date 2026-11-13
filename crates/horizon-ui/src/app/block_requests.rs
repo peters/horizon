@@ -131,6 +131,9 @@ impl HorizonApp {
         // Click waits settle before a request applies: a click that waits reaches
         // the wait it was made for, and the counts a request reports are fresh.
         let settled = self.settle_block_clicks();
+        // A card of Horizon that asks about a setting answers at its deadline or
+        // when the person closes it without a press.
+        let settings = self.settle_setting_requests(ctx);
         let claimed = std::mem::take(&mut self.block_claim.claimed);
         let changed = !claimed.is_empty();
         for request in claimed {
@@ -139,7 +142,7 @@ impl HorizonApp {
                 self.write_block_answer(BlockAnswer::new(request.root.as_deref(), request.request, outcome));
             }
         }
-        changed | self.retry_block_answers() | settled
+        changed | self.retry_block_answers() | settled | settings
     }
 
     /// Applies a request against the process runtime root, as a claim's apply
@@ -148,6 +151,13 @@ impl HorizonApp {
     pub(super) fn apply_block_request(&mut self, request: &Request, ctx: &Context) -> Outcome {
         self.apply_block_request_at(request, None, ctx)
             .expect("the request answers at once")
+    }
+
+    /// Applies one request that the host keeps open, without a queue: a test of a
+    /// wait judges the card and writes the answer it reads itself.
+    #[cfg(test)]
+    pub(super) fn apply_block_request_waiting(&mut self, request: &Request, ctx: &Context) -> Option<Outcome> {
+        self.apply_block_request_at(request, None, ctx)
     }
 
     /// Applies one request against an explicit queue directory, as a test does
@@ -254,6 +264,9 @@ impl HorizonApp {
             Operation::DeleteMachineKey { name } => {
                 self.answer_deleted_machine_key(name, request, root, ctx);
                 None
+            }
+            Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
+                self.answer_setting_request(&request.operation, actor, request, root, ctx)
             }
         }
     }

@@ -205,9 +205,13 @@ impl HorizonApp {
         }
     }
 
-    /// A press on a button of a card that Horizon owns. Only the notice of Set up
-    /// is such a card, so another card of an agent never reaches this.
+    /// A press on a button of a card that Horizon owns. The notice of Set up and
+    /// the card that asks about a setting of this computer are such cards, so
+    /// another card of an agent never reaches this.
     pub(in crate::app) fn press_host_card_button(&mut self, ctx: &Context, panel: PanelId, id: &str) {
+        if self.press_setting_request(ctx, panel, id) {
+            return;
+        }
         if self.setup.notice_panel != Some(panel) {
             return;
         }

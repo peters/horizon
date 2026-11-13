@@ -50,6 +50,7 @@ impl HorizonApp {
         // values of this read, at most for the bound of the store.
         horizon_core::named_secrets::expect_a_publish();
         let settings_path = self.config_path.clone();
+        let program = self.link_child_program();
         std::thread::spawn(move || {
             let secrets = super::server_sync::secret_vault(&home, keys, &remote, &names);
             let _ = tx.send(super::server_sync::load(
@@ -57,10 +58,19 @@ impl HorizonApp {
                 server,
                 &settings_path,
                 secrets,
+                program,
                 wake,
             ));
         });
         self.machine_load_rx = Some(rx);
+    }
+
+    /// The child program of a link that this Horizon starts: `ssh`, or the
+    /// program that a test of a link substituted.
+    fn link_child_program(&self) -> String {
+        self.link_child
+            .clone()
+            .unwrap_or_else(horizon_browser_control::ssh_forward::ssh_program)
     }
 
     /// Applies the startup read when it answers. A list that a write already

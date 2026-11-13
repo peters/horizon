@@ -8,8 +8,11 @@
 //! the host opens for the person beside the calling agent panel, `open_panel`
 //! asks for a panel of one preset of the person's settings in a folder that the
 //! caller names, and `machine_key`, `machine_keys` and `delete_machine_key` keep
-//! the SSH key pairs that such a terminal connects with. A request travels the
-//! path of a Device panel request: a bounded file under
+//! the SSH key pairs that such a terminal connects with. `server_link_request`
+//! and `browser_host_request` ask the person to change a setting of this
+//! computer on a card that Horizon draws itself: the agent states the change and
+//! reads the person's answer, and only the person's press writes it. A request
+//! travels the path of a Device panel request: a bounded file under
 //! `runtime/block-panel-requests`, claimed by this host's UI on the coordination
 //! worker, applied on the UI thread, and answered with one result file that only
 //! the asking actor and its host consume.
@@ -56,6 +59,10 @@ pub const DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 300_000;
 pub const MAX_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 3_600_000;
 /// The shortest wait a `next_click` may ask for.
 pub const MIN_NEXT_CLICK_TIMEOUT_MILLIS: u64 = 1_000;
+/// How long the card of a setting request waits for the person's press, and
+/// then removes itself. A request that names a setting never waits longer, so an
+/// agent's question cannot hold a card open for an hour.
+pub const SETTING_REQUEST_TIMEOUT_MILLIS: u64 = 300_000;
 
 /// Card commands. The document belongs to the agent; the panel id, revision
 /// and ownership belong to the host.
@@ -188,6 +195,79 @@ pub enum Operation {
     /// Delete one key pair of the calling agent's workspace, with its
     /// known-hosts file. Call it after the machine is deleted.
     DeleteMachineKey { name: String },
+    /// Ask the person to link this computer to a Horizon server. Horizon draws
+    /// a card of its own in the caller's workspace that states the SSH target
+    /// and the command exactly as the settings store them, and it writes the
+    /// entry of the settings only when the person presses `Link`. The answer is
+    /// `server_link` with the person's answer, and with whether the link of the
+    /// running program follows the new entry now. The caller can press nothing
+    /// itself: a request that no person presses ends as `timed_out` after five
+    /// minutes, and the card goes with it.
+    ServerLinkRequest {
+        /// The SSH target, as the settings field `server.ssh_target` takes it:
+        /// an SSH config alias, a `user@host` or an address, one word.
+        ssh_target: String,
+        /// The command that the link runs on the server, as
+        /// `server.command` takes it. Omitted means the default
+        /// `horizon --server-link`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
+    /// Ask the person to make the browser of one machine the browser of new
+    /// browser panels. Horizon draws a card of its own that states the target,
+    /// the profile and the engine, and it writes `browser_host` of the settings
+    /// only when the person presses `Use it`. The answer is `browser_host` with
+    /// the person's answer. Only Chromium runs on another machine, so Firefox is
+    /// refused with `engine_unavailable` and no card is drawn.
+    BrowserHostRequest {
+        /// The SSH target, as the settings field `browser_host.ssh_target`
+        /// takes it: the `Host` name of the SSH configuration, one word.
+        ssh_target: String,
+        /// The profile of that machine, 1 to 40 characters of `a-z`, `0-9` and
+        /// `-`, with a letter or a digit at each end.
+        profile: String,
+        /// The engine of the browser panels; `chromium` when omitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        engine: Option<BrowserEngine>,
+    },
+}
+
+/// What the person answered to a card that Horizon drew about a setting of this
+/// computer. Only the person can press it, so an agent never reads `confirmed`
+/// without a press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// The person pressed the button that applies the change, and Horizon
+    /// wrote it.
+    Confirmed,
+    /// The person pressed the button that keeps the setting as it is.
+    Declined,
+    /// No press arrived before the wait ended, or the person closed the card.
+    TimedOut,
+}
+
+/// Whether a setting that the person confirmed applies to the running program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryStart {
+    /// The link of the running program reads the new entry now, so no start is
+    /// needed.
+    Linked,
+    /// The entry is stored, and the program must start again one time before
+    /// the link reads it.
+    RestartNeeded,
+}
+
+/// The engine of the browser that a browser host runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserEngine {
+    /// Chromium, which runs on another machine through the SSH tunnel of
+    /// Horizon.
+    Chromium,
+    /// Firefox, which a browser host does not serve yet.
+    Firefox,
 }
 
 /// Public card input. Model providers refuse a tool whose input schema has
@@ -361,6 +441,20 @@ pub enum Outcome {
     DeletedMachineKey {
         name: String,
     },
+    /// The answer of the person to the card that asked to link this computer to
+    /// a Horizon server. `start` says whether the link of the running program
+    /// follows the new entry now, and it is absent when the person did not
+    /// confirm.
+    ServerLink {
+        answer: Answer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<EntryStart>,
+    },
+    /// The answer of the person to the card that asked to use the browser of
+    /// another machine for new browser panels.
+    BrowserHost {
+        answer: Answer,
+    },
     Failed {
         code: String,
         message: String,
@@ -387,6 +481,9 @@ impl Operation {
                     .unwrap_or(DEFAULT_NEXT_CLICK_TIMEOUT_MILLIS)
                     .clamp(MIN_NEXT_CLICK_TIMEOUT_MILLIS, MAX_NEXT_CLICK_TIMEOUT_MILLIS),
             ),
+            // The card of a setting request waits for the person, not for the
+            // caller, so the caller names no wait and the bound is fixed.
+            Self::ServerLinkRequest { .. } | Self::BrowserHostRequest { .. } => Some(SETTING_REQUEST_TIMEOUT_MILLIS),
             _ => None,
         }
     }
@@ -770,6 +867,8 @@ mod tests {
                 Operation::MachineKey { .. } => "machine_key",
                 Operation::MachineKeys => "machine_keys",
                 Operation::DeleteMachineKey { .. } => "delete_machine_key",
+                Operation::ServerLinkRequest { .. } => "server_link_request",
+                Operation::BrowserHostRequest { .. } => "browser_host_request",
             };
             assert_eq!(name, expected);
         }
@@ -1141,6 +1240,121 @@ mod tests {
             );
             assert!(refused.is_err(), "{actor} with host {host:?} must be refused");
         }
+    }
+
+    #[test]
+    fn a_setting_request_parses_and_its_answer_names_the_persons_press() {
+        let link = serde_json::from_value::<Operation>(serde_json::json!({
+            "operation": "server_link_request",
+            "ssh_target": "server-vm",
+            "command": "/opt/horizon --server-link"
+        }))
+        .expect("server_link_request parses");
+        assert_eq!(
+            link,
+            Operation::ServerLinkRequest {
+                ssh_target: "server-vm".into(),
+                command: Some("/opt/horizon --server-link".into()),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "server_link_request", "ssh_target": "server-vm"
+            }))
+            .expect("the command is optional"),
+            Operation::ServerLinkRequest {
+                ssh_target: "server-vm".into(),
+                command: None,
+            },
+            "without a command the link runs the default"
+        );
+        let browser = serde_json::from_value::<Operation>(serde_json::json!({
+            "operation": "browser_host_request",
+            "ssh_target": "browser-vm",
+            "profile": "work",
+            "engine": "chromium"
+        }))
+        .expect("browser_host_request parses");
+        assert_eq!(
+            browser,
+            Operation::BrowserHostRequest {
+                ssh_target: "browser-vm".into(),
+                profile: "work".into(),
+                engine: Some(BrowserEngine::Chromium),
+            }
+        );
+        assert!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "browser_host_request", "ssh_target": "browser-vm", "profile": "work",
+                "engine": "webkit"
+            }))
+            .is_err(),
+            "an engine outside the two known ones is refused"
+        );
+        for unknown in [
+            serde_json::json!({
+                "operation": "server_link_request", "ssh_target": "server-vm", "address": "server:7000"
+            }),
+            serde_json::json!({
+                "operation": "browser_host_request", "ssh_target": "browser-vm", "profile": "work",
+                "command": "chromium"
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<Operation>(unknown.clone()).is_err(),
+                "a setting request names no other field: {unknown}"
+            );
+        }
+        let confirmed = serde_json::to_value(Outcome::ServerLink {
+            answer: Answer::Confirmed,
+            start: Some(EntryStart::Linked),
+        })
+        .expect("serialize");
+        assert_eq!(confirmed["status"], serde_json::json!("server_link"));
+        assert_eq!(confirmed["answer"], serde_json::json!("confirmed"));
+        assert_eq!(confirmed["start"], serde_json::json!("linked"));
+        let declined = serde_json::to_value(Outcome::ServerLink {
+            answer: Answer::Declined,
+            start: None,
+        })
+        .expect("serialize");
+        assert!(
+            declined.get("start").is_none(),
+            "a person who pressed Not now starts nothing: {declined}"
+        );
+        assert_eq!(
+            serde_json::to_value(Outcome::BrowserHost {
+                answer: Answer::TimedOut
+            })
+            .expect("serialize")["answer"],
+            serde_json::json!("timed_out")
+        );
+    }
+
+    #[test]
+    fn a_setting_request_waits_for_the_person_and_never_for_an_hour() {
+        for operation in [
+            Operation::ServerLinkRequest {
+                ssh_target: "server-vm".into(),
+                command: None,
+            },
+            Operation::BrowserHostRequest {
+                ssh_target: "browser-vm".into(),
+                profile: "work".into(),
+                engine: None,
+            },
+        ] {
+            assert_eq!(
+                operation.wait_timeout_millis(),
+                Some(SETTING_REQUEST_TIMEOUT_MILLIS),
+                "the card of a setting asks the person for five minutes"
+            );
+            assert_eq!(
+                request_timeout(&operation),
+                HOST_APPLY_TIMEOUT + Duration::from_millis(SETTING_REQUEST_TIMEOUT_MILLIS)
+            );
+        }
+        assert_eq!(SETTING_REQUEST_TIMEOUT_MILLIS, 300_000);
     }
 
     #[test]

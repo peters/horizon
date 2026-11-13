@@ -518,10 +518,13 @@ impl HorizonApp {
         true
     }
 
-    /// Whether a `next_click` holds this host open. The request pump wakes
-    /// slowly while one does, so a deadline passes also when no frame runs.
+    /// Whether a `next_click` or a card of Horizon that asks about a setting
+    /// holds this host open. The request pump wakes slowly while one does, so a
+    /// deadline passes also when no frame runs.
     pub(in crate::app) fn block_waiters_outstanding(&self) -> bool {
-        !self.block_clicks.card_waiters.is_empty() || !self.block_clicks.agent_waiters.is_empty()
+        !self.block_clicks.card_waiters.is_empty()
+            || !self.block_clicks.agent_waiters.is_empty()
+            || self.settings_request.is_waiting()
     }
 }
 

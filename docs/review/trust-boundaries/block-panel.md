@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/block_widget/**"
+applyTo: "crates/horizon-core/src/block_panel.rs,crates/horizon-core/src/block_panel/**,crates/horizon-browser-control/src/block.rs,crates/horizon-browser-control/src/block/**,crates/horizon-browser-control/src/manifest/block.rs,crates/horizon-browser-mcp/src/controller/block.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-ui/src/app/block_links.rs,crates/horizon-ui/src/app/block_links/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/settings_request.rs,crates/horizon-ui/src/app/settings_request/**,crates/horizon-ui/src/block_widget/**"
 ---
 
 # Trust boundary of agent cards
@@ -67,6 +67,54 @@ Horizon is the one that opens it, in a browser panel of its own.
   created, the reason reaches the person through the log line that every refused
   panel creation of a person uses. A card cannot draw it.
 
+## An agent states a setting, and only the person confirms it
+
+The server target and the browser host decide where the machine list, the keys
+and the settings of the person go, so `server_link_request` and
+`browser_host_request` change nothing by themselves.
+
+- **Untrusted: the target, the command, the profile and the engine.** They are
+  text from an agent. Horizon checks them with the rule of the settings field
+  that stores them (`server.ssh_target`, `server.command`,
+  `browser_host.ssh_target`, `browser_host.profile`) before any card exists: one
+  SSH name without a leading dash, a space or a control character, a command of
+  letters, digits and `._:/=@+-` with single spaces, a profile of 1 to 40
+  characters of `a-z`, `0-9` and `-`. A request that fails the rule is refused
+  with `invalid_request` and draws no card. An engine other than Chromium is
+  `engine_unavailable`, and draws no card.
+- **The card shows the values that the store will hold.** Horizon trims the
+  target and the command, stores the trimmed value, and draws that same value in
+  the card, so the person reads exactly what is written. The card is Horizon's
+  own document: its words are constants of the host, and no field of the request
+  reaches a sentence except the values above, drawn as plain text.
+- **Only a press writes.** The request is held open while the card asks, and the
+  answer is `confirmed`, `declined` or `timed_out`. An agent can press nothing:
+  the two buttons are the host's controls, the card has no owner agent, and a
+  press reaches the host and no agent. A closed card and a card whose five
+  minutes passed both answer `timed_out` and remove the card, and a second
+  request while one waits is `request_pending`.
+- **The write is the one the Settings window makes.** Horizon saves the store on
+  the settings worker, with the sections that the write changed, exactly as the
+  Settings window's save does. The card states that the settings of this
+  computer are kept aside in a dated file first, which is the rule of the first
+  link with a server: the link writes `settings.before-server.<time>.json` beside
+  the store when the server holds a section that replaces a value of this
+  computer.
+- **A confirmed server entry starts the link of this run.** The old link ends
+  before the new one starts, as it does after a join, so the person starts
+  Horizon no second time. `start` says `linked` when the running program follows
+  the entry. A host that cannot start the link answers `restart_needed` instead,
+  and the person starts Horizon again one time.
+- **Only two fields of one entry change:** the SSH target and the command of
+  `server`, or the SSH target and the profile of `browser_host`. The address of a
+  join and every other field of the entry stay as the store holds them. The
+  browser host applies at the next start of Horizon, which the card says, because
+  the browser panels of this run read the entry of their start.
+- **Does not guarantee:** that the target answers. Horizon writes the entry and
+  starts the link; the link reports its own reason when the server is away, in
+  the sidebar and in the Server tab. A press is not a proof that the person read
+  the card.
+
 ## Trusted: the caller identity
 
 The caller is the agent panel that Horizon launched, and its identity is the two
@@ -87,6 +135,11 @@ variables that Horizon injects into that panel.
   `next_click` without `panel_id` covers only the cards that the caller owns in
   its own workspace; a caller that owns none gets `no_cards`, so the wait never
   reaches another agent's card.
+- A setting request passes the same checks as every other operation, and its
+  card is drawn in the caller's own workspace. A request of another host is
+  `wrong_host`, a request whose actor is no agent panel of this board is
+  `caller_unavailable`, and a request that reached the host after its deadline is
+  `request_expired`.
 
 ## Horizon writes into an agent terminal
 
@@ -176,6 +229,10 @@ state: a default row is a row id that the person can change.
   `stale`, and Horizon does not decide whether the older intent still holds. A
   row that a document marks as selected is Horizon's runtime state: the person's
   own selection wins while its row is still drawn.
+- **A setting wait is lost with a restart too.** The card of a setting request
+  and its wait live in the Horizon process, so a restart answers nothing and the
+  asking agent reads `host_timeout` or no answer. The entry that the person
+  already confirmed stays in the store.
 - **The wake line can be ignored.** Horizon proves that the line was written to
   the terminal of an idle agent panel, not that the agent read it or acts on it.
   An agent that ignores the line never reads the click, and the person sees only

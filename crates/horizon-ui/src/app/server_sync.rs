@@ -267,11 +267,16 @@ fn named_secret_vault(home: &HorizonHome, names: &[String]) -> Arc<NamedSecretVa
 
 /// Reads the machine list of this start and starts its link. It runs on a worker
 /// thread, because it reads files and starts one process.
+///
+/// `program` is the child of the link, which is `ssh`. It is a parameter because
+/// a test of a path that starts a link substitutes a program that ends at once:
+/// a unit test starts no `ssh`.
 pub(in crate::app) fn load(
     registry: MachineRegistry,
     server: Option<ServerConfig>,
     settings_path: &std::path::Path,
     secrets: SecretHandles,
+    program: String,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<MachineLoad, MachineError> {
     let Some(server) = server.filter(ServerConfig::names_server) else {
@@ -314,6 +319,7 @@ pub(in crate::app) fn load(
         }
     };
     config.token_store.clone_from(&secrets.store);
+    config.program = program;
     // The sections of the settings of this computer follow the server through the
     // same link: a start reads the store first, so no frame waits for the server,
     // and a section that arrives afterwards is written to that store.
@@ -502,6 +508,18 @@ impl HorizonApp {
             editor.server.link.clear();
             editor.server.notice = Some("This computer joined the server.".to_owned());
         }
+        // The old link ends before the new one starts, so one computer never holds
+        // two writers of one queue.
+        self.restart_server_link(ctx);
+    }
+
+    /// Ends the link of this computer and starts the link of the entry that the
+    /// settings hold now, as the frame after a join does. A confirmed server
+    /// link reaches this too, so the person needs no start of Horizon.
+    ///
+    /// A start reads the entry of the run in [`HorizonApp::template_config`], so
+    /// the caller writes that entry first.
+    pub(in crate::app) fn restart_server_link(&mut self, ctx: &egui::Context) {
         // The old link ends before the new one starts, so one computer never holds
         // two writers of one queue.
         self.server_sync = None;
