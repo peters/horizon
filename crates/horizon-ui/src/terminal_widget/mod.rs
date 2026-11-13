@@ -43,6 +43,9 @@ pub struct TerminalKeyboardContext<'a> {
     /// What the person pressed in the line under the grid of this panel, which
     /// the frame that draws the panel reads once.
     pub notice_action: &'a mut PanelNoticeAction,
+    /// The person created or revealed this panel, so its body takes the keyboard
+    /// of the window and the next key reaches its program.
+    pub take_keyboard_focus: bool,
 }
 
 impl<'a> TerminalView<'a> {
@@ -86,6 +89,11 @@ impl<'a> TerminalView<'a> {
             .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);
+        if interactive && keyboard.take_keyboard_focus {
+            // The person asked for this panel, so its body takes the keys of the
+            // window even when another widget held them.
+            interaction.body.request_focus();
+        }
         if interactive {
             handle_terminal_pointer_input(
                 ui,

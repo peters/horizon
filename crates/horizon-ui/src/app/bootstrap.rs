@@ -154,7 +154,7 @@ impl HorizonApp {
     ) -> Self {
         Self {
             board,
-            panels_to_close: Vec::new(), panels_to_restart: Vec::new(),
+            panels_to_close: Vec::new(), panels_to_restart: Vec::new(), keyboard_focus: None,
             workspace_assignments: Vec::new(), workspace_creates: Vec::new(),
             appearance_theme: config.appearance.theme,
             resolved_theme,

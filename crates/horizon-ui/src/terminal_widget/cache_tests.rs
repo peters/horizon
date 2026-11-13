@@ -209,6 +209,7 @@ impl TerminalHarness {
                             clipboard_images: &self.clipboard_images,
                             local_ssh_reconnect_enabled: false,
                             notice_action: &mut PanelNoticeAction::default(),
+                            take_keyboard_focus: false,
                         },
                     );
                 });
@@ -241,6 +242,7 @@ impl TerminalHarness {
                             clipboard_images: &self.clipboard_images,
                             local_ssh_reconnect_enabled: false,
                             notice_action: &mut PanelNoticeAction::default(),
+                            take_keyboard_focus: false,
                         },
                     );
                 });
@@ -330,6 +332,7 @@ fn tab_does_not_steal_focus_from_another_text_field() {
                         clipboard_images: &harness.clipboard_images,
                         local_ssh_reconnect_enabled: false,
                         notice_action: &mut PanelNoticeAction::default(),
+                        take_keyboard_focus: false,
                     },
                 );
                 egui::Window::new("Synthetic pairing")

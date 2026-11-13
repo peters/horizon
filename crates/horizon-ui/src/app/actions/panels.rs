@@ -170,7 +170,7 @@ impl HorizonApp {
     pub(in crate::app) fn reveal_selected_panel(&mut self, ctx: &egui::Context, panel_id: PanelId) {
         match self.board.panel_workspace_id(panel_id) {
             Some(workspace_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
-            None => self.board.focus(panel_id),
+            None => self.give_the_keyboard_to(panel_id),
         }
     }
 
@@ -185,10 +185,12 @@ impl HorizonApp {
         panel_id: PanelId,
     ) {
         if self.focus_workspace_window(ctx, workspace_id) {
-            self.board.focus(panel_id);
+            self.give_the_keyboard_to(panel_id);
             return;
         }
         self.reveal_panel_visible(ctx, panel_id);
+        // The person created or revealed this panel, so the next key goes to it.
+        self.give_the_keyboard_to(panel_id);
     }
 
     pub(in crate::app) fn close_panel(&mut self, panel_id: PanelId) {

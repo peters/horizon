@@ -204,6 +204,13 @@ impl Terminal {
         self.child_exited
     }
 
+    /// Whether the program of this terminal holds the keyboard of its window,
+    /// so it is told when the focus of the window comes and goes.
+    #[must_use]
+    pub fn has_keyboard_focus(&self) -> bool {
+        self.term.lock().is_focused
+    }
+
     /// This terminal shows a screen that a frame draws and runs a stand-in
     /// process only because a terminal needs a PTY. Its exit says nothing about
     /// a program of the person, so a panel does not report it as one.

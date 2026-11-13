@@ -133,7 +133,7 @@ impl HorizonApp {
             return self.create_machine_panel_beside(workspace, options, beside);
         }
         let id = self.board.create_panel_waiting(options, workspace)?;
-        self.board.focus(id);
+        self.give_the_keyboard_to(id);
         self.mark_runtime_dirty();
         self.board
             .panel(id)

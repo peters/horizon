@@ -593,7 +593,9 @@ impl HorizonApp {
             self.connect_machine(&name, ctx);
         }
         if let Some(panel_id) = actions.focus_panel {
-            self.board.focus(panel_id);
+            // A click on a row of an open machine or of a panel is the person's,
+            // so the terminal of that panel takes the next key.
+            self.give_the_keyboard_to(panel_id);
         }
 
         let pan_to_panel_workspace = actions

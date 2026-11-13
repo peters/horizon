@@ -162,6 +162,8 @@ struct PanelBodyContext<'a> {
     clipboard_images: &'a crate::clipboard_image::ClipboardImages,
     /// What the person pressed in the line under the grid of this panel.
     notice_action: &'a mut PanelNoticeAction,
+    /// The person created or revealed this panel, so its body takes the keyboard.
+    take_keyboard_focus: bool,
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
@@ -255,6 +257,7 @@ fn show_panel_body_contents(
                 clipboard_images: body_context.clipboard_images,
                 local_ssh_reconnect_enabled: body_context.local_ssh_reconnect_enabled,
                 notice_action: body_context.notice_action,
+                take_keyboard_focus: body_context.take_keyboard_focus,
             },
         ),
     }
@@ -404,6 +407,7 @@ impl HorizonApp {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let claim_editor_focus = true;
+                        let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         let card_agent_present = self.card_agent_present(panel_id);
                         let card_owner_name = self.card_owner_name(panel_id);
@@ -441,6 +445,7 @@ impl HorizonApp {
                                     primary_selection: &self.primary_selection,
                                     clipboard_images: &self.clipboard_images,
                                     notice_action: &mut notice_action,
+                                    take_keyboard_focus,
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
@@ -459,6 +464,9 @@ impl HorizonApp {
                             );
                         }
                         self.run_panel_notice_action(panel_id, notice_action);
+                        if take_keyboard_focus {
+                            self.keyboard_focus_answered(panel_id);
+                        }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ui.ctx(), panel_id, &url);
                         }
@@ -785,6 +793,7 @@ impl HorizonApp {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let claim_editor_focus = snapshot.is_focused;
+                        let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let card_agent_present = self.card_agent_present(panel_id);
                         let card_owner_name = self.card_owner_name(panel_id);
                         let board = &mut self.board;
@@ -828,6 +837,7 @@ impl HorizonApp {
                                     primary_selection: &self.primary_selection,
                                     clipboard_images: &self.clipboard_images,
                                     notice_action: &mut notice_action,
+                                    take_keyboard_focus,
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
@@ -852,6 +862,9 @@ impl HorizonApp {
                             }
                         }
                         self.run_panel_notice_action(panel_id, notice_action);
+                        if take_keyboard_focus {
+                            self.keyboard_focus_answered(panel_id);
+                        }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ctx, panel_id, &url);
                         }

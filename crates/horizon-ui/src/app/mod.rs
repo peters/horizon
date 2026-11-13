@@ -50,6 +50,7 @@ mod editor_saves;
 mod file_drop;
 mod file_drop_highlight;
 mod frame_stats;
+mod keyboard_focus;
 mod lifecycle;
 mod machine_click;
 mod machine_open;
@@ -260,6 +261,9 @@ pub struct HorizonApp {
     board: Board,
     panels_to_close: Vec<PanelId>,
     panels_to_restart: Vec<PanelId>,
+    /// The panel whose body takes the keyboard in the frame that draws it, because
+    /// a person created or revealed it.
+    keyboard_focus: Option<PanelId>,
     workspace_assignments: Vec<(PanelId, WorkspaceId)>,
     workspace_creates: Vec<PanelId>,
     appearance_theme: AppearanceTheme,
