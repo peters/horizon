@@ -664,9 +664,7 @@ fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() 
     // system that runs it and the tab states the same on both.
     let platform = SpeechPlatform::current();
     assert!(
-        texts
-            .iter()
-            .any(|text| text == &platform.default_recorder_sentence()),
+        texts.iter().any(|text| text == &platform.default_recorder_sentence()),
         "the recorder row names the default of {}: {texts:?}",
         platform.name()
     );
