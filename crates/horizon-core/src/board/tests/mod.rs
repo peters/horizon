@@ -5,6 +5,7 @@ mod core;
 mod exit_bounds;
 mod layout;
 mod machine_restore;
+mod panel_identity;
 mod panel_working_directory;
 mod reordering;
 mod workspace;

@@ -114,10 +114,18 @@ impl Board {
 
     fn create_waiting_panel_with_layout(
         &mut self,
-        opts: PanelOptions,
+        mut opts: PanelOptions,
         workspace: WorkspaceId,
         beside: Option<PanelId>,
     ) -> Result<PanelId> {
+        // One identity from here to the last process of this panel: an agent
+        // program reads its browser actor from the local id of its panel, and the
+        // board answers a request of that actor with the same panel. The panel
+        // that waits and the panel that starts from its preparation keep the id
+        // that is set here.
+        if opts.local_id.is_none() {
+            opts.local_id = Some(crate::runtime_state::new_local_id());
+        }
         let pending = opts.waits_for_its_start().then(|| opts.clone());
         let id = self.create_panel_with_layout(opts, workspace, beside, crate::panel::spawn_waiting_panel)?;
         if let Some(options) = pending {

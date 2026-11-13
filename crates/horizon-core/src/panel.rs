@@ -613,6 +613,11 @@ impl Panel {
             }
             return Ok(());
         }
+        // The panel keeps the identity that it had while it waited. A start that
+        // minted a second local id would leave the program that it started under
+        // an actor that names no panel.
+        let mut options = options.clone();
+        options.local_id = Some(self.local_id.clone());
         let mut started = match spawn::spawn_started_panel(self.id, self.workspace_id, options.clone(), start) {
             Ok(panel) => panel,
             Err(error) => {

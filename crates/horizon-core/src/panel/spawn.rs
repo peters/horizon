@@ -814,8 +814,15 @@ pub(crate) fn replay_bytes_with_notice(mut replay_bytes: Vec<u8>, named_secrets_
 
 pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
     let mut env = HashMap::new();
-    // Nested launches must not inherit another panel's work-hook identity.
-    for key in crate::agent_work::WORK_ENV_KEYS {
+    // The process of a panel inherits the environment of this Horizon, so it also
+    // inherits the identity of a panel of another board when this Horizon was
+    // started from one. An empty value overrides that inherited value and reads as
+    // "no panel" to the tools, so a nested launch never speaks as another panel.
+    // The values of an agent panel are set below, over these two.
+    for key in crate::agent_work::WORK_ENV_KEYS
+        .into_iter()
+        .chain(PANEL_IDENTITY_ENV_KEYS)
+    {
         env.insert(key.to_owned(), String::new());
     }
     if kind.is_agent() {
@@ -867,6 +874,15 @@ pub fn browser_actor(local_id: &str) -> String {
     local_id.hash(&mut hasher);
     format!("horizon:{:016x}", hasher.finish())
 }
+
+/// The variables that name the panel of a Horizon to the tools that it starts.
+///
+/// A panel sets the values of its own panel, and a process without one of these
+/// variables reads no actor at all. A value of the Horizon that started this one
+/// names another panel, or a panel of a board that does not stand any more, so no
+/// panel may keep it.
+pub(crate) const PANEL_IDENTITY_ENV_KEYS: [&str; 2] =
+    ["HORIZON_BROWSER_ACTOR", crate::browser::manifest::HOST_INSTANCE_ENV];
 
 /// The browser MCP entry of a Codex panel, as the `-c` arguments of `codex`.
 fn horizon_codex_mcp_args() -> Vec<String> {
@@ -1026,8 +1042,40 @@ mod tests {
         for key in crate::agent_work::WORK_ENV_KEYS {
             assert_eq!(shell_env.get(key).map(String::as_str), Some(""));
         }
-        assert!(!shell_env.contains_key("HORIZON_BROWSER_ACTOR"));
         assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
+    }
+
+    /// The process of a panel inherits the environment of the Horizon that starts
+    /// it. A panel of another board is not this panel, and a value that names one
+    /// would speak as it: every panel of a kind that is not an agent, and every
+    /// agent panel before its own values, holds an empty identity instead.
+    #[test]
+    fn no_panel_keeps_the_identity_of_the_horizon_that_started_it() {
+        for kind in [
+            PanelKind::Shell,
+            PanelKind::Ssh,
+            PanelKind::Command,
+            PanelKind::Codex,
+            PanelKind::Claude,
+            PanelKind::Pi,
+            PanelKind::Grok,
+            PanelKind::OpenCode,
+        ] {
+            let env = agent_env(kind, "panel-42", true);
+            for key in PANEL_IDENTITY_ENV_KEYS {
+                assert!(env.contains_key(key), "{kind:?} overrides the inherited {key}");
+            }
+            let expected = if kind.is_agent() {
+                browser_actor("panel-42")
+            } else {
+                String::new()
+            };
+            assert_eq!(
+                env.get(PANEL_IDENTITY_ENV_KEYS[0]).map(String::as_str),
+                Some(expected.as_str()),
+                "{kind:?} names its own panel, and a panel that is not an agent names none"
+            );
+        }
     }
 
     #[test]
