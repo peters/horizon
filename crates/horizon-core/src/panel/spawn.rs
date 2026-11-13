@@ -832,6 +832,13 @@ pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
             crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
             crate::browser::manifest::host_instance().to_string(),
         );
+        // The full path of the program that runs this panel's Horizon, so a skill
+        // copies the binary of this computer instead of looking for it on a `PATH`
+        // that holds no `horizon` when the person starts it from a folder.
+        let executable = crate::browser_mcp_executable()
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .unwrap_or_default();
+        env.insert(EXECUTABLE_ENV.to_string(), executable);
         // Every named secret whose value this computer holds, as one environment
         // variable each, so a tool that the agent starts reads its key without an
         // export in the shell of this computer. A terminal panel, and a terminal on
@@ -884,6 +891,36 @@ pub fn browser_actor(local_id: &str) -> String {
 pub(crate) const PANEL_IDENTITY_ENV_KEYS: [&str; 2] =
     ["HORIZON_BROWSER_ACTOR", crate::browser::manifest::HOST_INSTANCE_ENV];
 
+/// The environment variable that holds the full path of the program that runs
+/// Horizon, in every agent panel.
+///
+/// A person who starts Horizon from a folder has no `horizon` on `PATH`, so a
+/// skill that copies the binary of this computer to another machine reads this
+/// variable and never `command -v horizon`.
+///
+/// The value is the running program itself, not the path that a newer build may
+/// have taken over: on Linux it is `/proc/<pid>/exe`, which follows the live
+/// inode after the file at the original path was replaced or removed, and it is
+/// the only name that a copy of a replaced build would get wrong. On macOS it is
+/// [`std::env::current_exe`], the path that this Horizon started from, and a file
+/// that the person deleted is not there for the copy. A build that cannot resolve
+/// its own path sets the variable to the empty string, as the Grok panel already
+/// handles `HORIZON_BROWSER_MCP_EXECUTABLE`.
+pub const EXECUTABLE_ENV: &str = "HORIZON_EXECUTABLE";
+
+/// The variables of this Horizon that a Codex panel passes to the Horizon browser
+/// MCP server: the identity of the panel, the home of this Horizon and the program
+/// that runs it.
+fn codex_mcp_env_vars() -> String {
+    let names = [
+        "HORIZON_BROWSER_ACTOR",
+        crate::browser::manifest::HOST_INSTANCE_ENV,
+        horizon_browser_control::paths::HOME_ENV,
+        EXECUTABLE_ENV,
+    ];
+    serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_owned())
+}
+
 /// The browser MCP entry of a Codex panel, as the `-c` arguments of `codex`.
 fn horizon_codex_mcp_args() -> Vec<String> {
     let Some(command) = crate::browser_mcp_executable()
@@ -901,8 +938,7 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         format!("mcp_servers.horizon-browser.args={server_args}"),
         "-c".to_string(),
-        "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_HOME\"]"
-            .to_string(),
+        format!("mcp_servers.horizon-browser.env_vars={}", codex_mcp_env_vars()),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
         "-c".to_string(),
@@ -1090,9 +1126,17 @@ mod tests {
         let command = args.join(" ");
         assert!(command.contains("mcp_servers.horizon-browser.command="));
         assert!(command.contains("mcp_servers.horizon-browser.args="));
-        assert!(command.contains(
-            "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\",\"HORIZON_HOME\"]"
-        ));
+        assert!(
+            command.contains(&format!(
+                "mcp_servers.horizon-browser.env_vars={}",
+                codex_mcp_env_vars()
+            )),
+            "the entry passes the identity, the home and the program of this Horizon: {command}"
+        );
+        assert!(
+            codex_mcp_env_vars().contains("HORIZON_EXECUTABLE"),
+            "a Codex panel hands the path of the running program to its MCP server"
+        );
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"));
         assert!(command.contains("--browser-mcp"));
@@ -1174,6 +1218,48 @@ mod tests {
         assert!(command.contains("/opt/custom-codex --custom-flag"));
         assert!(!command.contains("mcp_servers.horizon-browser"));
         assert!(!command.contains("--browser-mcp"));
+    }
+
+    /// Every agent panel names the program that runs Horizon, so a skill copies the
+    /// binary of this computer instead of looking for `horizon` on a `PATH` that
+    /// holds none when the person starts Horizon from a folder. A panel that is not
+    /// an agent runs no skill, so it keeps none of its own.
+    #[test]
+    fn every_agent_panel_names_the_running_program() {
+        for kind in [
+            PanelKind::Codex,
+            PanelKind::Claude,
+            PanelKind::OpenCode,
+            PanelKind::Gemini,
+            PanelKind::KiloCode,
+            PanelKind::Pi,
+            PanelKind::Grok,
+        ] {
+            let env = agent_env(kind, "panel-42", true);
+            let named = env
+                .get(EXECUTABLE_ENV)
+                .unwrap_or_else(|| panic!("{kind:?} names the program that runs it"));
+            assert!(!named.is_empty(), "{kind:?} names one path");
+            assert!(
+                std::path::Path::new(named).is_file(),
+                "{kind:?} names a file that this computer can copy: {named}"
+            );
+        }
+        for kind in [
+            PanelKind::Shell,
+            PanelKind::Ssh,
+            PanelKind::Command,
+            PanelKind::Editor,
+            PanelKind::Browser,
+            PanelKind::Device,
+            PanelKind::Block,
+        ] {
+            assert!(
+                !agent_env(kind, "panel-42", true).contains_key(EXECUTABLE_ENV),
+                "{kind:?} starts no skill, so it names no program of Horizon"
+            );
+        }
+        assert_eq!(EXECUTABLE_ENV, "HORIZON_EXECUTABLE");
     }
 
     #[test]

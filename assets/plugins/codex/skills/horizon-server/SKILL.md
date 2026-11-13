@@ -47,11 +47,21 @@ card contract is in `horizon-block`, and the provider commands are in
    ```
 
 2. Read the same two values of this computer, and the path of the binary that
-   runs here:
+   runs here. Horizon puts that path in the environment of every agent panel as
+   `HORIZON_EXECUTABLE`, so read the variable and never look on `PATH`:
 
    ```sh
-   uname -s; uname -m; command -v horizon
+   uname -s; uname -m; printf '%s\n' "$HORIZON_EXECUTABLE"
    ```
+
+   The variable names the program that runs this Horizon, which is the binary
+   that this flow copies. On Linux it is `/proc/<pid>/exe`, which follows the
+   live program after the file at the original path was replaced or deleted; on
+   macOS it is the path that Horizon started from, and a file that the person
+   deleted is not there to copy. An empty value means that an agent of another
+   program started this panel, or that Horizon could not resolve its own path:
+   stop and tell the person in one sentence to start the agent from a panel of
+   Horizon.
 
 3. When both pairs match, copy the binary of this computer to the place:
 
@@ -67,7 +77,7 @@ card contract is in `horizon-block`, and the provider commands are in
 
    `<private_key_path>` and `<known_hosts_path>` are the fields of the
    `machine_key` answer of `horizon-machines`, and `<path of horizon>` is the
-   absolute path that `command -v horizon` answered.
+   value of `HORIZON_EXECUTABLE`.
 
 4. When the two pairs differ, stop and tell the person in one sentence what to
    do: build Horizon on a computer of that system and CPU, or choose a place of
