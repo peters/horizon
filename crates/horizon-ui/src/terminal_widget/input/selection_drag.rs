@@ -8,6 +8,26 @@ use horizon_core::PanelId;
 pub(crate) struct TerminalSelectionDragState {
     active: Option<ActiveSelectionDrag>,
     primary_gestures: Vec<ActivePrimaryGesture>,
+    last_press: Option<LastPress>,
+}
+
+/// The last primary press of a terminal, which decides whether the next press of
+/// the same place continues it.
+struct LastPress {
+    at: f64,
+    pos: Pos2,
+    count: u32,
+}
+
+/// What a press of the primary button selects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PressSelection {
+    /// One character, and the text that a drag from it covers.
+    Character,
+    /// The word under the press, and the words that a drag from it covers.
+    Word,
+    /// The line under the press, and the lines that a drag from it covers.
+    Line,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +65,26 @@ pub(super) enum AutoScrollCadence {
 }
 
 impl TerminalSelectionDragState {
+    /// What the press at `pos` at `time` selects.
+    ///
+    /// The toolkit reports a double click only when the button comes up, which
+    /// is after the press that starts a selection. A terminal therefore counts
+    /// the presses itself: a second press within the click delay and distance of
+    /// the first selects a word, and a third selects a line, as every text field
+    /// of the system does.
+    pub(super) fn press_selection(&mut self, pos: Pos2, time: f64, max_delay: f64, max_dist: f32) -> PressSelection {
+        let count = match self.last_press.take() {
+            Some(last) if time - last.at < max_delay && last.pos.distance(pos) < max_dist => (last.count + 1).min(3),
+            _ => 1,
+        };
+        self.last_press = Some(LastPress { at: time, pos, count });
+        match count {
+            2 => PressSelection::Word,
+            3.. => PressSelection::Line,
+            _ => PressSelection::Character,
+        }
+    }
+
     pub(super) fn capture_primary_gesture(
         &mut self,
         panel_id: PanelId,

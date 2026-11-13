@@ -3,10 +3,10 @@ use super::routing::{
     pointer_button_routes_to_pty_mouse, pointer_button_starts_local_selection, pointer_drag_updates_local_selection,
     pointer_motion_routes_to_pty_mouse,
 };
-use super::selection_drag::{CapturedPrimaryGesture, TerminalSelectionDragState};
+use super::selection_drag::{CapturedPrimaryGesture, PressSelection, TerminalSelectionDragState};
 use super::suppress_unowned_primary_motion;
 use alacritty_terminal::term::TermMode;
-use egui::{Modifiers, PointerButton};
+use egui::{Modifiers, PointerButton, Pos2};
 use horizon_core::PanelId;
 
 use crate::input::PointerButtons;
@@ -243,4 +243,54 @@ fn interrupted_primary_gesture_clears_after_the_physical_release() {
     assert!(state.finish_primary_gesture(panel_id, 8, 2).is_some());
     state.cancel_interrupted_primary_gesture(false, false, true);
     assert!(state.has_primary_gesture());
+}
+
+#[test]
+fn a_second_press_of_the_same_place_selects_a_word_and_a_third_a_line() {
+    let mut state = TerminalSelectionDragState::default();
+    let pos = Pos2::new(40.0, 60.0);
+    let max_delay = 0.3;
+    let max_dist = 6.0;
+
+    assert_eq!(
+        state.press_selection(pos, 10.0, max_delay, max_dist),
+        PressSelection::Character
+    );
+    assert_eq!(
+        state.press_selection(pos, 10.2, max_delay, max_dist),
+        PressSelection::Word,
+        "a second press within the delay of the system selects a word"
+    );
+    assert_eq!(
+        state.press_selection(pos, 10.4, max_delay, max_dist),
+        PressSelection::Line
+    );
+    assert_eq!(
+        state.press_selection(pos, 10.6, max_delay, max_dist),
+        PressSelection::Line,
+        "a fourth press stays a line"
+    );
+}
+
+#[test]
+fn a_press_elsewhere_or_late_selects_one_character() {
+    let mut state = TerminalSelectionDragState::default();
+    let pos = Pos2::new(40.0, 60.0);
+    let max_delay = 0.3;
+    let max_dist = 6.0;
+
+    assert_eq!(
+        state.press_selection(pos, 10.0, max_delay, max_dist),
+        PressSelection::Character
+    );
+    assert_eq!(
+        state.press_selection(Pos2::new(200.0, 60.0), 10.1, max_delay, max_dist),
+        PressSelection::Character,
+        "a press far away starts a new selection"
+    );
+    assert_eq!(
+        state.press_selection(pos, 10.5, max_delay, max_dist),
+        PressSelection::Character,
+        "a press after the delay of the system starts a new selection"
+    );
 }

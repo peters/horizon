@@ -5,6 +5,7 @@ use horizon_core::{Panel, SelectionType, TerminalSide};
 
 use super::super::layout::{GridMetrics, cell_side, grid_point_from_position};
 use super::PointerContext;
+use super::selection_drag::PressSelection;
 
 pub(super) const SELECTION_AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -36,7 +37,12 @@ pub(super) fn handle_pointer_selection_drag(
     }
 }
 
-pub(super) fn start_local_selection_at(panel: &mut Panel, pointer: &PointerContext<'_>, pos: Pos2) {
+pub(super) fn start_local_selection_at(
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    pos: Pos2,
+    press: PressSelection,
+) {
     let body_rect = pointer.interaction.layout.body;
     if let Some(point) = grid_point_from_position(
         body_rect,
@@ -45,12 +51,10 @@ pub(super) fn start_local_selection_at(panel: &mut Panel, pointer: &PointerConte
         pointer.visible_rows,
         pointer.visible_cols,
     ) {
-        let sel_type = if pointer.interaction.body.triple_clicked() {
-            SelectionType::Lines
-        } else if pointer.interaction.body.double_clicked() {
-            SelectionType::Semantic
-        } else {
-            SelectionType::Simple
+        let sel_type = match press {
+            PressSelection::Line => SelectionType::Lines,
+            PressSelection::Word => SelectionType::Semantic,
+            PressSelection::Character => SelectionType::Simple,
         };
         let side = cell_side(pos, body_rect, pointer.metrics, point);
         if let Some(terminal) = panel.terminal_mut() {

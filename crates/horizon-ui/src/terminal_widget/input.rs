@@ -21,7 +21,7 @@ use self::routing::{
     pointer_button_starts_local_selection, pointer_motion_routes_to_pty_mouse,
 };
 pub(crate) use self::selection_drag::TerminalSelectionDragState;
-use self::selection_drag::{AutoScrollCadence, CapturedPrimaryGesture, SelectionFrameOutcome};
+use self::selection_drag::{AutoScrollCadence, CapturedPrimaryGesture, PressSelection, SelectionFrameOutcome};
 use self::viewport_scroll::{
     SELECTION_AUTO_SCROLL_INTERVAL, handle_pointer_selection_drag, start_local_selection_at,
     update_pointer_selection_endpoint,
@@ -274,7 +274,9 @@ fn handle_pointer_events(
                         continue;
                     }
                     if *pressed && local_scrollback_changed {
-                        start_local_selection_at(panel, pointer, pos);
+                        // The press of this frame already chose what it selects;
+                        // the wheel only moves the text under it.
+                        start_local_selection_at(panel, pointer, pos, PressSelection::Character);
                     } else if local_scrollback_changed && selection_outcome.release_replay_index == Some(index) {
                         update_pointer_selection_endpoint(
                             panel,
@@ -517,7 +519,14 @@ fn handle_terminal_body_pointer_actions(
     {
         outcome.osc8_replay_index = frame_events.osc8_replay_index;
         pointer.interaction.body.request_focus();
-        start_local_selection_at(panel, pointer, pos);
+        let (max_delay, max_dist) = pointer.ui_ctx.options(|options| {
+            (
+                options.input_options.max_double_click_delay,
+                options.input_options.max_click_dist,
+            )
+        });
+        let press_selection = selection_drag.press_selection(pos, pointer.frame_time, max_delay, max_dist);
+        start_local_selection_at(panel, pointer, pos, press_selection);
         selection_drag.start(panel.id, pos);
     }
 
@@ -651,7 +660,7 @@ fn handle_pointer_button(
     }
 
     if pointer_button_starts_local_selection(pointer.terminal_mode, button, pressed, modifiers) {
-        start_local_selection_at(panel, pointer, pos);
+        start_local_selection_at(panel, pointer, pos, PressSelection::Character);
     } else if pointer_button_routes_to_pty_mouse(pointer.terminal_mode, button, modifiers)
         && let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,
