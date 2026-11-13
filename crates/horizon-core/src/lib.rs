@@ -23,6 +23,7 @@ pub mod named_secrets;
 pub mod notify;
 mod opencode_paths;
 mod panel;
+mod panel_shutdown;
 pub mod place;
 mod process;
 pub mod qr;

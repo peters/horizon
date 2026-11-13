@@ -50,6 +50,35 @@ fn gone_within(pid: u32, bound: Duration) -> bool {
 /// loaded computer does not fail it.
 const TEST_BOUND: Duration = Duration::from_secs(6);
 
+/// A python of this system, or `None` when the computer has none.
+fn python_program() -> Option<&'static str> {
+    [
+        "/usr/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+    ]
+    .into_iter()
+    .find(|candidate| std::path::Path::new(candidate).exists())
+}
+
+/// A program that catches the hangup, ends the program it started, and exits,
+/// the way an agent program of a real panel does.
+///
+/// The single quotes are kept out of the source, because the shell of the panel
+/// passes it as one argument.
+const AGENT_WITH_A_CHILD: &str = "import signal, subprocess, time\n\
+child = subprocess.Popen([\"/bin/sleep\", \"30\"])\n\
+\ndef stop(_number, _frame):\n\
+    raise SystemExit(0)\n\
+\n\
+for name in (\"SIGTERM\", \"SIGINT\", \"SIGHUP\"):\n\
+    signal.signal(getattr(signal, name), stop)\n\
+\ntry:\n\
+    time.sleep(60)\n\
+finally:\n\
+    child.kill()\n\
+    child.wait()\n";
+
 /// E1: a program that ends at the hangup of its terminal ends at once, and the
 /// shutdown of the board waits for no step of the escalation.
 #[test]
@@ -146,4 +175,30 @@ fn a_closed_panel_ends_its_program_with_the_same_steps() {
             "the program outlived the hangup of the closed panel: {elapsed:?}"
         );
     }
+}
+
+/// E5: the synchronous exit cleanup completes on the end of a program, not on
+/// the reaping of it.
+///
+/// A Mac keeps a program that ended in its exiting state while the kernel tears
+/// it down, so the wait of the terminal crate for that entry of the process
+/// table has no bound. A program that ends at the hangup must therefore complete
+/// the shutdown of its panel at once, on the path that the quit of the window
+/// runs.
+#[test]
+fn a_program_that_ends_at_the_hangup_completes_the_synchronous_shutdown() {
+    let Some(python) = python_program() else {
+        eprintln!("no python3 on this computer: the stand-in agent program is not run");
+        return;
+    };
+    let script = format!("exec {python} -c '{AGENT_WITH_A_CHILD}'");
+    let (mut board, pid) = board_that_runs(&script);
+    let started = Instant::now();
+    board.shutdown_terminal_panels();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < AFTER_HANGUP,
+        "a program that ended completed the synchronous shutdown without a wait: {elapsed:?}"
+    );
+    assert!(gone_within(pid, TEST_BOUND), "the program of the panel is gone");
 }

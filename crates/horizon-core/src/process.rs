@@ -150,6 +150,72 @@ impl HangingChild {
         }
         .still_names_this_process()
     }
+
+    /// Whether the program this value names has ended: no process with that id
+    /// exists, or the system shows it as one that ended (a zombie, or the
+    /// exiting state of a Mac) even while nobody reaped it yet.
+    ///
+    /// A program that ended is never waited for: a reaper that waits for its
+    /// process table entry to disappear can wait without a bound on a Mac. An
+    /// answer that this computer cannot read is `false`, so a caller keeps its
+    /// own bound instead of treating an unknown state as an end.
+    #[must_use]
+    pub(crate) fn has_ended(&self) -> bool {
+        if !is_alive(self.pid) {
+            return true;
+        }
+        state_has_ended(self.pid).unwrap_or(false)
+    }
+}
+
+/// Whether the process with `pid` ended, read from the state that this system
+/// reports for it.
+///
+/// `None` when this computer cannot read the state of that id. Linux answers
+/// from `/proc` without a program; every other Unix runs the `ps` of the system
+/// through the bounded program runner, so a caller answers off the UI thread.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(crate) fn state_has_ended(pid: u32) -> Option<bool> {
+    linux_state(pid).map(|state| horizon_browser_control::process_info::state_has_ended(&state))
+}
+
+/// Whether the process with `pid` ended, read from the `ps` of this system.
+///
+/// # Panics
+///
+/// Never: it is the reader of every Unix that has no `/proc`.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub(crate) fn state_has_ended(pid: u32) -> Option<bool> {
+    let programs = ProgramEnvironment::of_this_process();
+    unix_state(pid, &programs, START_TIME_BOUND)
+        .map(|state| horizon_browser_control::process_info::state_has_ended(&state))
+}
+
+/// The state of `pid` in the standard output of the `ps` of this system.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub(crate) fn unix_state(pid: u32, programs: &ProgramEnvironment, bound: Duration) -> Option<String> {
+    let program = programs.find(horizon_browser_control::process_info::START_TIME_PROGRAM)?;
+    let args: Vec<OsString> = horizon_browser_control::process_info::state_arguments(pid)
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    let output = run(Path::new(&program), &args, programs, bound).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    horizon_browser_control::process_info::parse_state(&output.stdout)
+}
+
+/// The state of `pid` as `/proc` reports it, without a program.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(crate) fn linux_state(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let state = stat.rsplit_once(')')?.1.split_whitespace().next()?;
+    (!state.is_empty()).then(|| state.to_string())
 }
 
 impl OwnedProcess {
@@ -164,8 +230,11 @@ impl OwnedProcess {
 #[cfg(test)]
 mod tests {
     use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
-    use super::{START_TIME_BOUND, is_alive, start_time, unix_start_time};
+    use super::{
+        HangingChild, START_TIME_BOUND, is_alive, start_identity, start_time, state_has_ended, unix_start_time,
+    };
     use crate::bounded_program::ProgramEnvironment;
 
     /// A child that ended and was reaped, so its id names no process.
@@ -179,6 +248,17 @@ mod tests {
         let pid = child.id();
         child.wait().expect("the child ends");
         pid
+    }
+
+    /// A child that ended and that nobody reaped, so its entry of the process
+    /// table is still there.
+    fn ended_child_not_yet_reaped() -> std::process::Child {
+        Command::new(crate::util::stand_in_program())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a stand-in program")
     }
 
     #[test]
@@ -221,5 +301,61 @@ mod tests {
         let pid = reaped_child_pid();
         assert_eq!(unix_start_time(pid, &programs, START_TIME_BOUND), None);
         assert_eq!(start_time(pid), None);
+    }
+
+    /// Waits until the state reader of this system answers `true` for `pid`, and
+    /// answers whether it did.
+    fn ended_within(pid: u32, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        while Instant::now() < deadline {
+            if state_has_ended(pid) == Some(true) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        state_has_ended(pid) == Some(true)
+    }
+
+    #[test]
+    fn a_program_that_ended_but_that_nobody_reaped_has_ended() {
+        let mut child = ended_child_not_yet_reaped();
+        let pid = child.id();
+        let watching = HangingChild::new(pid, start_identity(pid));
+
+        assert!(
+            ended_within(pid, START_TIME_BOUND + Duration::from_secs(2)),
+            "the state of a program that ended names its end"
+        );
+        assert!(
+            watching.has_ended(),
+            "a program that ended is never waited for, also while its entry of the process table stays"
+        );
+        child.wait().expect("the child ends");
+    }
+
+    #[test]
+    fn a_program_that_runs_has_not_ended() {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("a shell of this system");
+        let pid = child.id();
+
+        assert_eq!(state_has_ended(pid), Some(false), "a program that runs has not ended");
+        let watching = HangingChild::new(pid, start_identity(pid));
+        assert!(!watching.has_ended());
+
+        child.kill().expect("the program of the test ends");
+        child.wait().expect("the child ends");
+    }
+
+    #[test]
+    fn an_id_of_no_process_has_ended() {
+        let watching = HangingChild::new(reaped_child_pid(), start_identity(1));
+        assert!(watching.has_ended());
     }
 }

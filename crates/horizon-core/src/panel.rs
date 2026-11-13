@@ -13,8 +13,15 @@ pub use termination::{AFTER_HANGUP, AFTER_TERM};
 
 /// Watches the program of one panel after the hangup of its terminal, and ends
 /// it in bounded steps when the hangup does not.
-pub(crate) fn watch_a_program_at_the_end(child: crate::process::HangingChild, name: &str) {
-    termination::watch(child, name);
+///
+/// `completion` counts that panel once its program has ended, which is the
+/// shutdown of a panel that waits for no reaping.
+pub(crate) fn watch_a_program_at_the_end(
+    child: crate::process::HangingChild,
+    name: &str,
+    completion: Option<crate::panel_shutdown::PanelCompletion>,
+) {
+    termination::watch(child, name, completion);
 }
 pub use spawn::{
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,

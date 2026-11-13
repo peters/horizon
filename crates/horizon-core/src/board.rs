@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
+use crate::panel_shutdown::PanelCompletion;
 use crate::runtime_state::{PanelState, RuntimeState};
 use crate::terminal::OutputWake;
 use crate::workspace::{Workspace, WorkspaceId};
@@ -487,26 +488,38 @@ impl Board {
         let mut browser_shutdown_signals = Vec::new();
 
         for panel in &mut self.panels {
-            // The program of the panel gets the hangup of its terminal. A
-            // program that outlives the hangup is watched here, so the join of
-            // its event loop cannot hold the exit without a bound.
-            if let Some(child) = panel.terminal().and_then(crate::terminal::Terminal::hanging_child) {
-                crate::panel::watch_a_program_at_the_end(child, &panel.title);
-            }
+            let completion = PanelCompletion::new(&completed);
+            let hanging = panel.terminal().and_then(crate::terminal::Terminal::hanging_child);
+            let mut counted = false;
+            // The work of an agent panel that continues is set aside before the
+            // exit, and that work counts the panel itself: the transcript of the
+            // panel lands before the exit.
             if let Some(terminal) = panel.terminal_mut()
-                && terminal.begin_work_shutdown(&completed)
+                && terminal.begin_work_shutdown(&completion)
             {
-                panel_count += 1;
-            } else {
-                panel.request_shutdown();
+                counted = true;
             }
+            // The program of the panel gets the hangup of its terminal. Its end
+            // is what completes this panel, because a program that ended is
+            // never waited for: the reaping of a program that the kernel still
+            // holds after its end has no bound.
+            if let Some(child) = hanging {
+                let watched = (!counted).then(|| completion.clone());
+                crate::panel::watch_a_program_at_the_end(child, &panel.title, watched);
+                counted = true;
+            }
+            if counted {
+                panel_count += 1;
+            }
+            panel.request_shutdown();
         }
 
         for panel in &mut self.panels {
-            if let Some(terminal) = panel.terminal_mut()
-                && terminal.begin_async_join(&completed)
-            {
-                panel_count += 1;
+            if let Some(terminal) = panel.terminal_mut() {
+                // The join of a terminal releases its PTY and reaps its program.
+                // It is detached, because a program that ended can hold that
+                // reaping without a bound while the panel is already counted.
+                terminal.begin_async_join();
             }
             // Browser drivers tear down Chrome on their own threads; count
             // that teardown in the shutdown progress so the app cannot exit

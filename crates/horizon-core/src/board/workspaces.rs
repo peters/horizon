@@ -357,7 +357,7 @@ impl Board {
         // programs of the exit, so a program that ignores the hangup cannot run
         // on after the panel is gone.
         if let Some(child) = panel.terminal().and_then(crate::terminal::Terminal::hanging_child) {
-            crate::panel::watch_a_program_at_the_end(child, &panel.title);
+            crate::panel::watch_a_program_at_the_end(child, &panel.title, None);
         }
         // The buffer that leaves keeps no dirty mark to clear, so its text goes
         // to the coordination worker with the panel that held it.

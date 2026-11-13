@@ -9,11 +9,18 @@
 //! process group after [`AFTER_HANGUP`], and `SIGKILL` after [`AFTER_TERM`] when
 //! it still runs. Each signal re-reads the start time of the process, so it never
 //! reaches a later process that the system gave the same id.
+//!
+//! The end of the program is also what completes the shutdown of its panel. A
+//! program that ended is never waited for: the reaping of a process that the
+//! kernel still holds after its end (a zombie, or the exiting state of a Mac)
+//! has no bound, so the shutdown counts the panel when the program ended and
+//! lets its event loop go on its own.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustix::process::Signal;
 
+use crate::panel_shutdown::PanelCompletion;
 use crate::process::HangingChild;
 
 /// The time that a program has after the hangup of its terminal, before
@@ -23,27 +30,69 @@ pub const AFTER_HANGUP: Duration = Duration::from_secs(2);
 /// The time that `SIGTERM` has, before `SIGKILL` reaches the process group.
 pub const AFTER_TERM: Duration = Duration::from_millis(1500);
 
+/// The last time that a program has after `SIGKILL`, before the shutdown stops
+/// waiting for the end of the process table entry.
+pub const AFTER_KILL: Duration = Duration::from_millis(500);
+
+/// The time between two reads of the state of a program.
+const READ_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Watches `child` on its own thread and ends it when it outlives the hangup.
 ///
 /// `name` is the panel whose program this is, and it reaches the log with the
-/// step that ended the program.
-pub(crate) fn watch(child: HangingChild, name: &str) {
+/// step that ended the program. `completion` counts that panel once its program
+/// has ended, or once every step below ran without an end.
+pub(crate) fn watch(child: HangingChild, name: &str, completion: Option<PanelCompletion>) {
     let watched = name.to_owned();
     let spawned = std::thread::Builder::new()
         .name("panel-exit-watchdog".to_owned())
-        .spawn(move || end_after_hangup(&child, &watched));
+        .spawn(move || end_after_hangup(&child, &watched, completion.as_ref()));
     if let Err(error) = spawned {
         tracing::warn!(panel = %name, %error, "cannot watch a program that outlives its terminal");
     }
 }
 
-fn end_after_hangup(child: &HangingChild, name: &str) {
-    std::thread::sleep(AFTER_HANGUP);
-    if !signal(child, Signal::TERM, "SIGTERM", name) {
+fn end_after_hangup(child: &HangingChild, name: &str, completion: Option<&PanelCompletion>) {
+    if ended_within(child, AFTER_HANGUP) {
+        finish(completion);
         return;
     }
-    std::thread::sleep(AFTER_TERM);
+    if !signal(child, Signal::TERM, "SIGTERM", name) {
+        finish(completion);
+        return;
+    }
+    if ended_within(child, AFTER_TERM) {
+        finish(completion);
+        return;
+    }
     let _ = signal(child, Signal::KILL, "SIGKILL", name);
+    // A program that the kernel already tore down cannot answer a signal and
+    // never leaves its entry of the process table on a Mac, so the last wait has
+    // its own end too.
+    let _ = ended_within(child, AFTER_KILL);
+    finish(completion);
+}
+
+/// Counts the panel of this program, whichever step ended it.
+fn finish(completion: Option<&PanelCompletion>) {
+    if let Some(completion) = completion {
+        completion.finish();
+    }
+}
+
+/// Waits up to `within` for the program to end, and answers whether it did.
+fn ended_within(child: &HangingChild, within: Duration) -> bool {
+    let deadline = Instant::now() + within;
+    loop {
+        if child.has_ended() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(READ_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
 }
 
 /// Sends one signal to the process group of `child` when its id still names that

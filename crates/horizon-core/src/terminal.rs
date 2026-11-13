@@ -13,7 +13,7 @@ mod wake;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -256,7 +256,6 @@ pub struct Terminal {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use std::collections::HashMap;
@@ -389,14 +388,8 @@ mod tests {
     #[test]
     fn asynchronous_teardown_remains_observable_after_the_handle_is_taken() {
         let mut terminal = spawn_test_terminal();
-        let completed = Arc::new(AtomicUsize::new(0));
         terminal.request_shutdown();
-        assert!(terminal.begin_async_join(&completed));
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while completed.load(Ordering::Acquire) == 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        assert_eq!(completed.load(Ordering::Acquire), 1);
+        terminal.begin_async_join();
         assert!(terminal.wait_for_shutdown(Duration::ZERO));
         assert!(terminal.shutdown_with_timeout(Duration::ZERO));
     }

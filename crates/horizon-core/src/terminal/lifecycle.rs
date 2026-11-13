@@ -1,9 +1,11 @@
 use super::{
-    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
+    Arc, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
     PendingClipboard, PtyOptions, ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions,
     TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc,
     replay_terminal_bytes, term, tty,
 };
+
+use crate::panel_shutdown::PanelCompletion;
 
 impl Terminal {
     /// Spawn a terminal session backed by `alacritty_terminal`.
@@ -285,7 +287,7 @@ impl Terminal {
 
     /// Preparation, cancellation and final evidence stay inside the existing
     /// asynchronous shutdown budget; the UI never waits for repository I/O.
-    pub(crate) fn begin_work_shutdown(&mut self, completed: &Arc<AtomicUsize>) -> bool {
+    pub(crate) fn begin_work_shutdown(&mut self, completion: &PanelCompletion) -> bool {
         if self.event_loop_handle.is_none() {
             return false;
         }
@@ -299,7 +301,7 @@ impl Terminal {
             return false;
         };
         let sender = self.event_sender.clone();
-        let done = Arc::clone(completed);
+        let completion = completion.clone();
         let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             let prepared = owner.prepare_suspend();
@@ -318,7 +320,7 @@ impl Terminal {
                 }
             }
             terminal_done.store(true, Ordering::Release);
-            done.fetch_add(1, Ordering::Relaxed);
+            completion.finish();
         });
         true
     }
@@ -343,22 +345,23 @@ impl Terminal {
         self.event_loop_handle.is_none() && self.shutdown_complete.load(Ordering::Acquire)
     }
 
-    /// Spawns a background thread to join the event-loop handle, incrementing
-    /// `completed` when done. Returns `true` if a join thread was spawned.
-    pub(crate) fn begin_async_join(&mut self, completed: &Arc<AtomicUsize>) -> bool {
+    /// Spawns a detached thread that joins the event-loop handle and drops it,
+    /// which releases the PTY and reaps the program of the panel.
+    ///
+    /// The thread counts no panel: a program that ended can hold that reaping
+    /// without a bound (a Mac keeps it in its exiting state), so a shutdown
+    /// never waits for this join. The panel is complete when its program ended.
+    pub(crate) fn begin_async_join(&mut self) {
         let Some(handle) = self.event_loop_handle.take() else {
-            return false;
+            return;
         };
-        let done = Arc::clone(completed);
         let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             // Join and drop on this helper thread so PTY teardown cannot block
             // the UI thread.
             let _ = handle.join();
             terminal_done.store(true, Ordering::Release);
-            done.fetch_add(1, Ordering::Relaxed);
         });
-        true
     }
 }
 
