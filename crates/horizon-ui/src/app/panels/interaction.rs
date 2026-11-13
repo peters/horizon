@@ -1,6 +1,7 @@
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{PanelId, PanelKind, WorkspaceId};
 
+use crate::app::speech::SpeechWindow;
 use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
 use crate::terminal_widget::viewport_for_available_space;
 
@@ -95,9 +96,15 @@ impl HorizonApp {
         is_renaming: bool,
         drag_response: &egui::Response,
         close_response: &egui::Response,
+        mic_response: Option<&egui::Response>,
         resize_response: &egui::Response,
         outcome: &mut PanelUiOutcome,
     ) {
+        if mic_response.is_some_and(egui::Response::clicked) {
+            // The panel of the icon takes the focus, as a press on its title bar does.
+            outcome.mic_clicked = true;
+            outcome.request_focus();
+        }
         if resize_response.drag_started() || resize_response.clicked() {
             outcome.request_focus();
         }
@@ -244,6 +251,7 @@ impl HorizonApp {
         panel_id: PanelId,
         snapshot: &PanelSnapshot,
         outcome: &PanelUiOutcome,
+        window: SpeechWindow,
         workspace_collision_ids: &[WorkspaceId],
     ) -> bool {
         self.panel_screen_rects.insert(panel_id, snapshot.screen_rect);
@@ -321,6 +329,11 @@ impl HorizonApp {
                 self.board.focus(panel_id);
             }
             PanelFocusRequest::None => {}
+        }
+        if outcome.mic_clicked {
+            // The press is applied after the focus of the panel, so a take that the
+            // icon starts belongs to this panel as a take of the hotkey does.
+            self.click_speech_mic(ctx, panel_id, window);
         }
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);

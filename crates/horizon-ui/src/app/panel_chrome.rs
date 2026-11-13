@@ -4,6 +4,7 @@ use horizon_core::{AgentStatus, PanelId, PanelKind, SshConnectionStatus, agent_d
 use crate::theme;
 
 use super::RenameEditAction;
+use super::panels::mic::{MicControl, paint as paint_mic_control};
 use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
 use crate::badge;
@@ -33,12 +34,18 @@ pub(super) struct PanelChrome<'a> {
     /// The state chip of a card, painted right of the title and left of the
     /// close control.
     pub card: Option<CardChip<'a>>,
+    /// The microphone icon of speech input; `None` on a panel that speech input
+    /// cannot enter, and while speech input is off.
+    pub mic: Option<MicControl>,
 }
 
 impl PanelChrome<'_> {
     /// Leftmost titlebar control: badges and the title stop left of this.
-    const fn controls_anchor(&self) -> Rect {
-        self.close_rect
+    ///
+    /// The icon takes its place left of the close control, so every other control
+    /// keeps its own room and moves left with it.
+    fn controls_anchor(&self) -> Rect {
+        self.mic.map_or(self.close_rect, |mic| mic.rect)
     }
 }
 
@@ -256,6 +263,9 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
         );
     }
 
+    if let Some(mic) = chrome.mic {
+        paint_mic_control(ui, &painter, mic);
+    }
     if chrome.agent_status == AgentStatus::Working {
         paint_working_indicator(
             ui,
@@ -683,9 +693,10 @@ mod tests {
 
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
-        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_title_content_rect, panel_titlebar_fill, session_badge_rect, ssh_mark, ssh_status_color,
-        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
+        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill,
+        panel_history_badge_rect, panel_title_color, panel_title_content_rect, panel_titlebar_fill, session_badge_rect,
+        ssh_mark, ssh_status_color, title_focus_indicator_rect, title_right_boundary, working_indicator_reserve,
+        working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -715,6 +726,7 @@ mod tests {
             ssh_status_attempt: None,
             session_id: None,
             card: None,
+            mic: None,
         }
     }
 
@@ -869,6 +881,32 @@ mod tests {
         let plain = test_chrome(AgentStatus::Idle);
         let editor_plain = panel_title_content_rect(&plain);
         assert!(approx_eq(editor_plain.right(), badges_left_boundary(&plain)));
+    }
+
+    #[test]
+    fn the_icon_takes_the_room_of_the_controls_left_of_the_close_control() {
+        let plain = test_chrome(AgentStatus::Idle);
+        let mut with_icon = test_chrome(AgentStatus::Idle);
+        let mic_rect = super::super::panels::mic::mic_rect(plain.panel_rect, plain.titlebar_rect);
+        with_icon.mic = Some(super::super::panels::mic::MicControl {
+            rect: mic_rect,
+            hovered: false,
+            state: super::super::speech::MicState::Idle,
+        });
+
+        // Every control of the title bar stops left of the icon, so no control
+        // covers it and every control keeps its own room.
+        assert_eq!(badges_left_boundary(&with_icon), mic_rect.min.x - 12.0);
+        assert!(badges_left_boundary(&with_icon) < badges_left_boundary(&plain));
+        assert_eq!(
+            panel_history_badge_rect(with_icon.titlebar_rect, with_icon.controls_anchor())
+                .max
+                .x,
+            panel_history_badge_rect(plain.titlebar_rect, plain.controls_anchor())
+                .max
+                .x
+                - 26.0
+        );
     }
 
     #[test]

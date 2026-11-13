@@ -15,11 +15,14 @@ pub(super) use super::panel_chrome::{
     PanelChrome, paint_panel_chrome, panel_kind_icon, panel_title_content_rect, show_inline_rename_editor,
 };
 use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
+use super::speech::SpeechWindow;
 use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RenameEditAction};
 use crate::block_widget::CardChip;
 
 mod resize;
+
+pub(in crate::app) mod mic;
 
 mod interaction;
 pub(super) use interaction::ArrangedPanelDrag;
@@ -83,6 +86,8 @@ struct PanelUiOutcome {
     session_rebind_and_restart: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
+    /// A press on the microphone icon of this panel.
+    mic_clicked: bool,
 }
 
 impl PanelUiOutcome {
@@ -105,6 +110,9 @@ struct PanelFrame {
     titlebar: Rect,
     body: Rect,
     close: Rect,
+    /// The square of the microphone icon, left of the close control. It shows an
+    /// icon only on a panel that speech input can enter.
+    mic: Rect,
 }
 
 impl PanelFrame {
@@ -121,16 +129,22 @@ impl PanelFrame {
             Pos2::new(panel_rect.max.x - 18.0, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5),
             Vec2::splat(16.0),
         );
+        let mic = mic::mic_rect(panel_rect, titlebar);
         Self {
             panel: panel_rect,
             titlebar,
             body,
             close,
+            mic,
         }
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct PanelRenderScope {
+    /// The window that draws the panel, for the take of speech input that its icon
+    /// starts and stops.
+    pub(super) window: SpeechWindow,
     /// Detached viewports dispatch only the fit/minimap toolbar shortcuts.
     pub(super) detached: bool,
     pub(super) host_dialog_open: bool,
@@ -501,6 +515,7 @@ impl HorizonApp {
                 &workspace_collision_ids,
                 &browser_events,
                 PanelRenderScope {
+                    window: SpeechWindow::Root,
                     detached: false,
                     host_dialog_open,
                     frame_has_pointer_button,
@@ -550,7 +565,14 @@ impl HorizonApp {
             return false;
         };
         let outcome = self.show_panel_area(ctx, canvas_rect, panel_id, &snapshot, browser_events, scope);
-        self.apply_panel_outcome(ctx, panel_id, &snapshot, &outcome, workspace_collision_ids)
+        self.apply_panel_outcome(
+            ctx,
+            panel_id,
+            &snapshot,
+            &outcome,
+            scope.window,
+            workspace_collision_ids,
+        )
     }
 
     #[profiling::function]
@@ -653,6 +675,10 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
+                // The icon registers after the drag area and the close control, so a
+                // press on it belongs to the take and never to a drag or a close.
+                let mic = self.panel_mic(panel_id, scope.window, interactive);
+                let mic_widget = mic.map(|mic| mic::show(ui, panel_id, rects.mic, mic));
                 if interactive && !snapshot.is_renaming {
                     self.show_panel_context_menu(
                         &drag_response,
@@ -709,6 +735,7 @@ impl HorizonApp {
                     ssh_status: snapshot.ssh_status,
                     ssh_status_attempt: snapshot.ssh_status_attempt,
                     session_id,
+                    mic: mic_widget.as_ref().map(|widget| widget.control),
                     card: self
                         .card_titlebar_chip(panel_id)
                         .or_else(|| opened_by.map(CardChip::opened_by))
@@ -819,6 +846,7 @@ impl HorizonApp {
                         snapshot.is_renaming,
                         &drag_response,
                         &close_response,
+                        mic_widget.as_ref().map(|widget| &widget.response),
                         &resize_response,
                         &mut outcome,
                     );

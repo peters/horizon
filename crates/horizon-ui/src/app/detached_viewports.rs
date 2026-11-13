@@ -478,6 +478,7 @@ impl HorizonApp {
                 &workspace_collision_ids,
                 &browser_events,
                 crate::app::panels::PanelRenderScope {
+                    window: crate::app::speech::SpeechWindow::Detached(workspace_id),
                     detached: true,
                     host_dialog_open,
                     frame_has_pointer_button,

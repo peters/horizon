@@ -94,9 +94,8 @@ fn a_hotkey_with_no_terminal_starts_no_recording_and_says_so() {
         "no worker thread starts a take that has no panel"
     );
     assert_eq!(app.speech.target(), None);
-    let (message, tone) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, NO_TERMINAL);
-    assert_eq!(tone, crate::app::speech::MarkTone::Error);
     assert!(
         !remaining
             .iter()
@@ -175,9 +174,8 @@ fn the_sentence_of_a_failed_take_shows_for_six_seconds_and_then_goes() {
     let mut speech = SpeechUi::new();
     let now = Instant::now();
     speech.fail("pw-record is not installed on this computer");
-    let (message, tone) = speech.mark(now).expect("the sentence of the failure");
+    let (message, _) = speech.mark(now).expect("the sentence of the failure");
     assert_eq!(message, "pw-record is not installed on this computer");
-    assert_eq!(tone, crate::app::speech::MarkTone::Error);
     assert!(speech.mark(now + Duration::from_secs(5)).is_some());
     assert_eq!(speech.mark(now + Duration::from_secs(7)), None);
 }
@@ -528,7 +526,7 @@ fn a_held_hotkey_starts_one_take_and_shows_a_recorder_that_dies_at_once() {
 }
 
 #[test]
-fn the_mark_counts_the_seconds_while_the_recorder_lives() {
+fn the_icon_of_the_panel_records_while_the_recorder_lives() {
     let scripts = tempfile::tempdir().expect("a folder of the stand-ins");
     let program = horizon_core::stand_in_shell_in(
         scripts.path(),
@@ -538,25 +536,29 @@ fn the_mark_counts_the_seconds_while_the_recorder_lives() {
     .expect("a recorder of a test");
     let mut config = speech_on();
     config.speech.recorder = format!("{program} {{file}}");
-    let (_temp, ctx, mut app, _panel) = window_with_a_terminal(&config);
+    let (_temp, ctx, mut app, panel) = window_with_a_terminal(&config);
 
     take_frame(&ctx, &mut app, vec![key(Key::F9, true)]);
     let started = Instant::now();
-    let mut texts: Vec<String> = Vec::new();
     while started.elapsed() < Duration::from_millis(1250) {
         take_frame(&ctx, &mut app, Vec::new());
-        if let Some((text, super::MarkTone::Listening)) = app.speech.mark(Instant::now())
-            && texts.last() != Some(&text)
-        {
-            texts.push(text);
-        }
+        assert_eq!(
+            app.speech.mic_state(panel),
+            super::MicState::Recording,
+            "the icon of the panel is the recording of its take"
+        );
+        assert_eq!(
+            app.speech.mic_state(PanelId(999)),
+            super::MicState::Idle,
+            "the icon of another panel is idle"
+        );
         std::thread::sleep(Duration::from_millis(40));
     }
-    assert_eq!(texts.first().map(String::as_str), Some("Listening 0:00"), "{texts:?}");
+    let take_started = app.speech.take_started().expect("the take of the panel records");
     assert_eq!(
-        texts.last().map(String::as_str),
-        Some("Listening 0:01"),
-        "the counter of the mark moves while the recorder lives: {texts:?}"
+        super::clock_text(take_started.elapsed()),
+        "0:01",
+        "the clock of the icon moves while the recorder lives"
     );
 
     // The release ends the take, and the recorder of the test ends with it.
@@ -567,4 +569,296 @@ fn the_mark_counts_the_seconds_while_the_recorder_lives() {
         assert!(Instant::now() < deadline, "the take of the test never ended");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A window of one terminal panel with a stand-in recorder that records until its
+/// take ends, and the file that counts the recorders that started.
+fn window_with_a_staying_recorder() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Context,
+    crate::app::HorizonApp,
+    PanelId,
+    std::path::PathBuf,
+) {
+    let scripts = tempfile::tempdir().expect("a folder of the stand-ins");
+    let starts = scripts.path().join("starts.txt");
+    let program = horizon_core::stand_in_shell_in(
+        scripts.path(),
+        "recorder",
+        &format!(
+            "printf 'start\\n' >> '{}'\ntrap 'exit 0' INT TERM\nwhile :; do sleep 0.02; done",
+            starts.display()
+        ),
+    )
+    .expect("a recorder of a test");
+    let mut config = speech_on();
+    config.speech.recorder = format!("{program} {{file}}");
+    let (temp, ctx, app, panel) = window_with_a_terminal(&config);
+    (scripts, temp, ctx, app, panel, starts)
+}
+
+/// Wait until `done` holds, with frames of the window.
+fn wait_until(ctx: &Context, app: &mut crate::app::HorizonApp, done: impl Fn(&crate::app::HorizonApp) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done(app) {
+        take_frame(ctx, app, Vec::new());
+        assert!(
+            Instant::now() < deadline,
+            "the window never reached the state of the test"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_panel_shows_no_icon_while_speech_input_is_off() {
+    let (_temp, mut app) = test_app();
+    let mut config = speech_on();
+    config.speech.transcriber.command = String::new();
+    assert!(!config.speech.is_on(), "a settings file with no transcriber");
+    app.apply_runtime_config(&config);
+    let workspace = app.board.create_workspace("main window");
+    let panel = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: horizon_core::PanelKind::Shell,
+                rows: 6,
+                cols: 40,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("a panel of the window");
+
+    assert!(
+        app.panel_mic(panel, super::SpeechWindow::Root, true).is_none(),
+        "no panel wears the icon while speech input is off"
+    );
+
+    app.apply_runtime_config(&speech_on());
+    let mic = app
+        .panel_mic(panel, super::SpeechWindow::Root, true)
+        .expect("the icon of a terminal while speech input is on");
+    assert_eq!(mic.state, super::MicState::Idle);
+    assert!(mic.enabled, "an idle icon of a window that waits can be pressed");
+}
+
+#[test]
+fn only_a_panel_that_a_take_can_enter_wears_the_icon() {
+    let (_temp, mut app) = test_app();
+    app.apply_runtime_config(&speech_on_with_a_recorder_that_cannot_start());
+    let main = app.board.create_workspace("main window");
+    let side = app.board.create_workspace("side window");
+    let panel = |kind| PanelOptions {
+        kind,
+        rows: 6,
+        cols: 40,
+        ..PanelOptions::default()
+    };
+    let terminal = app
+        .board
+        .create_panel(panel(horizon_core::PanelKind::Shell), main)
+        .expect("a terminal of the main window");
+    let editor = app
+        .board
+        .create_panel(panel(horizon_core::PanelKind::Editor), main)
+        .expect("an editor of the main window");
+    let detached = app
+        .board
+        .create_panel(panel(horizon_core::PanelKind::Shell), side)
+        .expect("a terminal of the side window");
+    app.detach_workspace(side);
+
+    assert!(app.panel_mic(terminal, super::SpeechWindow::Root, true).is_some());
+    assert!(
+        app.panel_mic(editor, super::SpeechWindow::Root, true).is_none(),
+        "a paste enters no editor panel, so the hotkey never takes it"
+    );
+    assert!(
+        app.panel_mic(detached, super::SpeechWindow::Root, true).is_none(),
+        "a panel that another window draws is no target of this window"
+    );
+    assert!(
+        app.panel_mic(detached, super::SpeechWindow::Detached(side), true)
+            .is_some(),
+        "the window that draws the panel shows its icon"
+    );
+}
+
+#[test]
+fn a_click_on_the_icon_starts_and_stops_the_take_of_that_panel() {
+    let (_temp, ctx, mut app, panel) = window_with_a_terminal(&speech_on_with_a_recorder_that_cannot_start());
+    assert_eq!(app.speech.target(), None, "no take runs at the start");
+
+    // A press on the icon of a panel starts the take of that panel, even though the
+    // hotkey of the window would take no panel while the focus is elsewhere.
+    app.click_speech_mic(&ctx, panel, super::SpeechWindow::Root);
+
+    assert_eq!(
+        app.speech.target(),
+        Some(panel),
+        "the take belongs to the panel of the icon"
+    );
+    assert!(app.speech.is_listening(), "the press starts one take");
+    assert_eq!(app.speech.mic_state(panel), super::MicState::Recording);
+
+    // The second press on the red icon ends the take, and the worker answers its end.
+    app.click_speech_mic(&ctx, panel, super::SpeechWindow::Root);
+    wait_until(&ctx, &mut app, |app| !app.speech.is_listening());
+    assert_ne!(
+        app.speech.mic_state(panel),
+        super::MicState::Recording,
+        "the icon of the panel is no recording after the second press"
+    );
+}
+
+#[test]
+fn a_take_that_the_hotkey_started_ends_with_a_click_on_its_icon() {
+    let (_scripts, _temp, ctx, mut app, panel, starts) = window_with_a_staying_recorder();
+
+    take_frame(&ctx, &mut app, vec![key(Key::F9, true)]);
+    assert!(app.speech.is_listening(), "the key starts one take");
+    wait_until(&ctx, &mut app, |_| starts_of(&starts) == 1);
+
+    app.click_speech_mic(&ctx, panel, super::SpeechWindow::Root);
+    wait_until(&ctx, &mut app, |app| !app.speech.is_listening());
+    assert_eq!(starts_of(&starts), 1, "the press on the icon starts no recorder");
+}
+
+#[test]
+fn a_take_that_the_icon_started_does_not_end_when_a_key_comes_up() {
+    let (_scripts, _temp, ctx, mut app, panel, starts) = window_with_a_staying_recorder();
+
+    app.click_speech_mic(&ctx, panel, super::SpeechWindow::Root);
+    wait_until(&ctx, &mut app, |_| starts_of(&starts) == 1);
+
+    // The release, and then the press, of the hotkey belong to no take of this key.
+    take_frame(&ctx, &mut app, vec![key(Key::F9, false)]);
+    assert!(
+        app.speech.is_listening(),
+        "the release of the hotkey ends only the take that the hotkey started"
+    );
+    take_frame(&ctx, &mut app, vec![key(Key::F9, true)]);
+    assert_eq!(starts_of(&starts), 1, "the press starts no second recorder");
+    assert_eq!(app.speech.target(), Some(panel));
+
+    app.speech.cancel();
+}
+
+#[test]
+fn the_icon_of_another_panel_is_disabled_while_a_take_runs() {
+    let (_scripts, _temp, ctx, mut app, first, starts) = window_with_a_staying_recorder();
+    let workspace = app.board.panel(first).expect("the first panel").workspace_id;
+    let second = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: horizon_core::PanelKind::Shell,
+                rows: 6,
+                cols: 40,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("a second terminal of the window");
+
+    let before = app
+        .panel_mic(second, super::SpeechWindow::Root, true)
+        .expect("the icon of the second panel");
+    assert!(before.enabled, "an idle icon of an idle window can be pressed");
+    assert!(!before.active);
+
+    app.click_speech_mic(&ctx, first, super::SpeechWindow::Root);
+    wait_until(&ctx, &mut app, |_| starts_of(&starts) == 1);
+
+    let during = app
+        .panel_mic(second, super::SpeechWindow::Root, true)
+        .expect("the icon of the second panel");
+    assert_eq!(during.state, super::MicState::Idle, "no take records for it");
+    assert!(during.active, "the window holds the take of the first panel");
+    assert!(!during.enabled, "the icon of the other panel takes no press");
+
+    // A press on it starts nothing, and the take of the first panel keeps running.
+    app.click_speech_mic(&ctx, second, super::SpeechWindow::Root);
+    assert_eq!(app.speech.target(), Some(first));
+    assert!(app.speech.is_listening());
+    assert_eq!(starts_of(&starts), 1, "no second recorder starts");
+
+    app.speech.cancel();
+}
+
+#[test]
+fn the_icon_of_a_take_that_is_transcribed_takes_no_press() {
+    let (_temp, ctx, mut app, panel) = window_with_a_terminal(&speech_on_with_a_recorder_that_cannot_start());
+    app.speech.phase = super::Phase::Writing;
+    app.speech.target = Some(panel);
+
+    let mic = app
+        .panel_mic(panel, super::SpeechWindow::Root, true)
+        .expect("the icon of the panel");
+    assert_eq!(mic.state, super::MicState::Busy);
+    assert!(!mic.enabled, "a transcribed take takes no press");
+
+    app.click_speech_mic(&ctx, panel, super::SpeechWindow::Root);
+    assert_eq!(
+        app.speech.phase,
+        super::Phase::Writing,
+        "the press changes no transcribed take"
+    );
+    assert!(app.speech.input.is_none(), "no take started");
+}
+
+/// The repaint requests that one pass of `poll_speech` made.
+///
+/// egui keeps the requests of a pass in the pass after it, so the window of the
+/// measurement is the pass of the state and the empty pass that follows it.
+fn speech_repaint_requests(ctx: &Context, app: &mut crate::app::HorizonApp) -> usize {
+    let _ = ctx
+        .run_ui(egui::RawInput::default(), |_ui| app.poll_speech(ctx))
+        .discard_textures();
+    let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {}).discard_textures();
+    ctx.repaint_causes()
+        .iter()
+        .filter(|cause| cause.file.ends_with("app/speech.rs"))
+        .count()
+}
+
+#[test]
+fn an_idle_icon_requests_no_frame_and_a_recording_one_does() {
+    let (_temp, ctx, mut app, panel) = window_with_a_terminal(&speech_on());
+    // The first passes of a context settle its fonts and its input, and they ask
+    // for the frames of that work.
+    for _ in 0..3 {
+        let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {}).discard_textures();
+    }
+
+    assert_eq!(
+        speech_repaint_requests(&ctx, &mut app),
+        0,
+        "a window whose every icon is idle asks for no frame of the pulse"
+    );
+
+    app.speech.phase = super::Phase::Listening;
+    app.speech.source = Some(super::TakeSource::Icon);
+    app.speech.target = Some(panel);
+    app.speech.started = Some(Instant::now());
+    assert!(
+        speech_repaint_requests(&ctx, &mut app) > 0,
+        "the pulse of an icon that records asks for the next frame"
+    );
+
+    app.speech.phase = super::Phase::Writing;
+    assert!(
+        speech_repaint_requests(&ctx, &mut app) > 0,
+        "the pulse of an icon that is transcribed asks for the next frame"
+    );
+
+    app.speech.cancel();
+    assert_eq!(
+        speech_repaint_requests(&ctx, &mut app),
+        0,
+        "no icon pulses while no take runs"
+    );
 }

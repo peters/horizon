@@ -1,15 +1,17 @@
-//! The hotkey, the insert and the state mark of speech input.
+//! The hotkey, the insert, the microphone icon and the sentence of speech input.
 //!
 //! The window sends one key event to the worker thread of
 //! [`horizon_core::speech`] and reads its events: the recorder runs while the
 //! hotkey is down, and the text of the take goes into the panel that had the focus
 //! when the key went down, through the paste path of the terminal.
 //!
-//! The state mark is a small pill of the panel of the take. It is drawn while a
-//! take records and for six seconds after a failed one, and it repaints once per
-//! second while the take records: a quiet window pays nothing for it.
+//! The icon of the title bar of a panel states what the take of that panel does, and
+//! one press on it starts or stops that take. The sentence of a failed take or of a
+//! kept take is a small pill of the panel of the take.
 
 mod pill;
+
+pub(in crate::app) use pill::MarkTone;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,8 +48,6 @@ impl SpeechWindow {
     }
 }
 
-pub(in crate::app) use pill::MarkTone;
-
 /// How long the sentence of a failed take stays on the panel.
 const ERROR_MARK: Duration = Duration::from_secs(6);
 
@@ -61,8 +61,43 @@ const KEPT_MARK: Duration = Duration::from_secs(30);
 const RETRY_SHORTCUT: ShortcutBinding =
     ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
 
-/// How often the mark repaints while a take records.
-const LISTENING_TICK: Duration = Duration::from_secs(1);
+/// Why the sentence of this window shows a take: the hotkey, the icon of a panel, or
+/// the **Try** button of the Settings tab.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TakeSource {
+    Hotkey,
+    Icon,
+    Settings,
+}
+
+/// The state that the microphone icon of a panel shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::app) enum MicState {
+    /// No take records for this panel.
+    Idle,
+    /// The recorder of the take of this panel runs.
+    Recording,
+    /// The take of this panel is transcribed.
+    Busy,
+}
+
+/// The microphone icon of the title bar of one panel: the state that it shows and
+/// what a press on it does.
+#[derive(Clone, Copy)]
+pub(in crate::app) struct PanelMic {
+    pub state: MicState,
+    /// Whether a press does anything: no other take runs, the window answers, and
+    /// the panel can take a take.
+    pub enabled: bool,
+    /// Whether a take of this window runs at all, so the icon of another panel says
+    /// that the take is elsewhere.
+    pub active: bool,
+    /// When the take of this panel started to record, while it records: the hover
+    /// text and the value of the control show its clock.
+    pub started: Option<Instant>,
+    /// The hotkey of the settings, while they name one.
+    pub hotkey: Option<ShortcutBinding>,
+}
 
 /// How long the take of the **Try** button of the Settings tab records.
 const TRY_TAKE: Duration = Duration::from_secs(2);
@@ -76,7 +111,7 @@ pub(super) const NOT_SET: &str = "Speech input is off. Set a recorder and a tran
 /// The panel of a take that the Settings tab runs, so no panel receives its text.
 pub(super) const SETTINGS_TRY: PanelId = PanelId(u64::MAX);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Idle,
     Listening,
@@ -93,6 +128,9 @@ pub(in crate::app) struct SpeechUi {
     /// The hotkey of the settings, or `None` while the settings name none.
     binding: Option<ShortcutBinding>,
     phase: Phase,
+    /// The control that started the take that runs, so only the take of the hotkey
+    /// ends when its key comes up.
+    source: Option<TakeSource>,
     /// The panel that had the focus when the hotkey went down.
     target: Option<PanelId>,
     /// When the take started to record, for the seconds of the mark.
@@ -118,6 +156,7 @@ impl SpeechUi {
             home: None,
             binding: None,
             phase: Phase::Idle,
+            source: None,
             target: None,
             started: None,
             error: None,
@@ -142,6 +181,40 @@ impl SpeechUi {
 
     fn is_listening(&self) -> bool {
         self.phase == Phase::Listening
+    }
+
+    /// Whether a take of this window runs at all, whatever panel it belongs to.
+    pub(in crate::app) fn is_active(&self) -> bool {
+        !self.is_idle()
+    }
+
+    /// Whether the release of the hotkey ends the take that runs: only a take that
+    /// the hotkey started ends with the key, because a press on the icon is its own
+    /// start and its own stop.
+    pub(in crate::app) fn ends_with_hotkey_release(&self) -> bool {
+        self.is_listening() && self.source == Some(TakeSource::Hotkey)
+    }
+
+    /// The state that the icon of `panel` shows, from the phases of the take.
+    pub(in crate::app) fn mic_state(&self, panel: PanelId) -> MicState {
+        if self.target != Some(panel) {
+            return MicState::Idle;
+        }
+        match self.phase {
+            Phase::Idle => MicState::Idle,
+            Phase::Listening => MicState::Recording,
+            Phase::Writing => MicState::Busy,
+        }
+    }
+
+    /// When the take that records started, for the clock of its icon.
+    pub(in crate::app) fn take_started(&self) -> Option<Instant> {
+        self.is_listening().then_some(self.started).flatten()
+    }
+
+    /// The hotkey of the settings, while they name one.
+    pub(in crate::app) fn hotkey(&self) -> Option<ShortcutBinding> {
+        self.binding
     }
 
     /// The panel of the take that the mark is drawn on.
@@ -185,6 +258,8 @@ impl SpeechUi {
 
     /// Send the last kept take again. Returns whether a retry started.
     fn retry(&mut self, ctx: &Context, plan: TakePlan, home: &Path, keys: Option<Arc<NamedSecretVault>>) -> bool {
+        // A retry is not a press of the hotkey or of an icon: nothing but its own
+        // answer ends it.
         if !self.is_idle() || self.kept.is_none() || self.target.is_none() {
             return false;
         }
@@ -220,6 +295,7 @@ impl SpeechUi {
         ctx: &Context,
         plan: TakePlan,
         target: PanelId,
+        source: TakeSource,
         home: &Path,
         keys: Option<Arc<NamedSecretVault>>,
     ) -> bool {
@@ -232,6 +308,7 @@ impl SpeechUi {
         };
         input.begin(plan, target);
         self.phase = Phase::Listening;
+        self.source = Some(source);
         self.target = Some(target);
         self.started = Some(Instant::now());
         self.error = None;
@@ -270,6 +347,7 @@ impl SpeechUi {
         }
         self.try_started = None;
         self.phase = Phase::Idle;
+        self.source = None;
         self.target = None;
         self.started = None;
     }
@@ -298,7 +376,7 @@ impl SpeechUi {
     /// Run one two-second take for the **Try** button of the Settings tab.
     fn try_take(&mut self, ctx: &Context, plan: TakePlan, home: &Path, keys: Option<Arc<NamedSecretVault>>) {
         self.try_answer = None;
-        if self.begin(ctx, plan, SETTINGS_TRY, home, keys) {
+        if self.begin(ctx, plan, SETTINGS_TRY, TakeSource::Settings, home, keys) {
             self.try_started = Some(Instant::now());
         }
     }
@@ -378,19 +456,19 @@ fn keys_reader(keys: Option<Arc<NamedSecretVault>>) -> Arc<dyn horizon_core::spe
 }
 
 /// The name of the primary modifier of this platform, as the Settings tab and the
-/// mark show it in a shortcut.
-fn primary_modifier_label() -> &'static str {
+/// icon show it in a shortcut.
+pub(in crate::app) fn primary_modifier_label() -> &'static str {
     if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
 }
 
-/// The shortcut that sends a kept take again, as a person reads it. The mark and
+/// The shortcut that sends a kept take again, as a person reads it. The pill and
 /// the Settings tab name the same keys.
 pub(in crate::app) fn retry_shortcut_label() -> String {
     RETRY_SHORTCUT.display_label(primary_modifier_label())
 }
 
-/// `elapsed` as the minutes and seconds of the mark, such as `0:03`.
-fn clock_text(elapsed: Duration) -> String {
+/// `elapsed` as the minutes and seconds of a take, such as `0:03`.
+pub(in crate::app) fn clock_text(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
@@ -435,25 +513,45 @@ impl HorizonApp {
             self.start_speech_take(ctx, window);
         }
         // A tap whose release is in the same frame ends the take of that frame: a
-        // take of a few milliseconds is dropped, as every short take is.
-        if end && self.speech.is_listening() {
+        // take of a few milliseconds is dropped, as every short take is. A take that
+        // the icon started has no key to come up, so this release never ends it.
+        if end && self.speech.ends_with_hotkey_release() {
             self.speech.finish();
         }
     }
 
     /// Start the take of one press of the hotkey, or say why nothing started.
     fn start_speech_take(&mut self, ctx: &Context, window: SpeechWindow) {
+        let target = self.speech_target(window);
+        self.begin_speech_take(ctx, target, TakeSource::Hotkey);
+    }
+
+    /// Start one take into `target`, or say why nothing started.
+    fn begin_speech_take(&mut self, ctx: &Context, target: Option<PanelId>, source: TakeSource) {
         let Some(plan) = self.template_config.speech.plan() else {
             self.speech.fail(NOT_SET);
             return;
         };
-        let Some(target) = self.speech_target(window) else {
+        let Some(target) = target else {
             self.speech.fail(NO_TERMINAL);
             return;
         };
         let home = self.session_store.home().root().to_path_buf();
         let keys = self.named_secret_vault.clone();
-        self.speech.begin(ctx, plan, target, &home, keys);
+        self.speech.begin(ctx, plan, target, source, &home, keys);
+    }
+
+    /// Whether a take of speech input can go into `panel` while `window` draws it.
+    ///
+    /// This is the one rule of the target of a take: the hotkey takes it, the icon of
+    /// the title bar is drawn for it, and a press on the icon starts it. A panel that
+    /// another window draws is no target, because the person does not see it here.
+    fn speech_panel_accepts(&self, panel_id: PanelId, window: SpeechWindow) -> bool {
+        self.board.panel(panel_id).is_some_and(|panel| {
+            panel.visible
+                && panel.terminal().is_some()
+                && window.holds(self.workspace_is_detached(panel.workspace_id), panel.workspace_id)
+        })
     }
 
     /// The hotkey of the only section that speech input reads.
@@ -464,19 +562,54 @@ impl HorizonApp {
     }
 
     /// The panel that a take records for, in the window that read the hotkey: the
-    /// focused panel, when this window draws it and a paste enters it. A panel of a
-    /// workspace that another window draws is no target, because the person does
-    /// not see it here.
+    /// focused panel, when this window draws it and a paste enters it.
     fn speech_target(&self, window: SpeechWindow) -> Option<PanelId> {
         let focused = self.board.focused?;
-        self.board
-            .panel(focused)
-            .filter(|panel| {
-                panel.visible
-                    && panel.terminal().is_some()
-                    && window.holds(self.workspace_is_detached(panel.workspace_id), panel.workspace_id)
-            })
-            .map(|panel| panel.id)
+        self.speech_panel_accepts(focused, window).then_some(focused)
+    }
+
+    /// The microphone icon of the title bar of `panel`, or `None` while that panel
+    /// shows no icon.
+    ///
+    /// The icon is drawn only while speech input is on, and only on a panel that a
+    /// take could enter: the rule of [`Self::speech_panel_accepts`] is the whole
+    /// rule of both.
+    pub(in crate::app) fn panel_mic(
+        &self,
+        panel_id: PanelId,
+        window: SpeechWindow,
+        interactive: bool,
+    ) -> Option<PanelMic> {
+        if !self.template_config.speech.is_on() || !self.speech_panel_accepts(panel_id, window) {
+            return None;
+        }
+        let state = self.speech.mic_state(panel_id);
+        Some(PanelMic {
+            state,
+            enabled: panel_mic_enabled(interactive, self.speech.is_active(), state),
+            active: self.speech.is_active(),
+            started: self.speech.take_started(),
+            hotkey: self.speech.hotkey(),
+        })
+    }
+
+    /// One press on the microphone icon of `panel`: the start of a take into that
+    /// panel, or the end of the take of that panel.
+    pub(super) fn click_speech_mic(&mut self, ctx: &Context, panel_id: PanelId, window: SpeechWindow) {
+        if self.speech.target() == Some(panel_id) && self.speech.is_listening() {
+            self.speech.finish();
+            // The pulse of the icon and the answer of the worker need frames of
+            // their own.
+            ctx.request_repaint();
+            return;
+        }
+        // The icon of a panel is disabled while a take of another panel runs, and
+        // the icon of a transcribed take takes no press.
+        if !self.speech.is_idle() {
+            return;
+        }
+        let target = self.speech_panel_accepts(panel_id, window).then_some(panel_id);
+        self.begin_speech_take(ctx, target, TakeSource::Icon);
     }
 
     /// Apply the answers of the worker of speech input, and keep the mark fresh.
@@ -494,10 +627,11 @@ impl HorizonApp {
         }
         let now = Instant::now();
         self.speech.poll_try(ctx, now);
-        if self.speech.phase == Phase::Listening {
-            // The seconds of the mark are one repaint per second, and only while a
-            // take records.
-            ctx.request_repaint_after(LISTENING_TICK);
+        if self.speech.is_active() {
+            // The pulse of the icon of the take needs every frame, and only while its
+            // icon is red or amber. A window whose every icon is idle asks for no
+            // frame of its own.
+            ctx.request_repaint();
         } else if let Some((_, until)) = &self.speech.error
             && *until > now
         {
@@ -553,6 +687,17 @@ pub(super) fn tone_color(tone: MarkTone) -> egui::Color32 {
         MarkTone::Writing => theme::FG_DIM(),
         MarkTone::Error => theme::PALETTE_RED(),
     }
+}
+
+/// Whether a press on the icon does anything: the window answers, and only the icon
+/// of the take that runs can end it.
+pub(in crate::app) const fn panel_mic_enabled(interactive: bool, speech_active: bool, state: MicState) -> bool {
+    interactive
+        && match state {
+            MicState::Idle => !speech_active,
+            MicState::Recording => true,
+            MicState::Busy => false,
+        }
 }
 
 #[cfg(test)]
