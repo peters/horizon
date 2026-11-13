@@ -9,7 +9,8 @@ Each child is one TCP connection and one SSH session of its own.
 | A plain SSH panel of the Remote Hosts overlay | `ssh` with the command of that host |
 | An upload over SSH | one `ssh` for the directory of the destination, then one `ssh` for each file |
 | A Device panel over SSH | `ssh -W <endpoint>` |
-| A browser panel of a browser host | one `ssh -N -L` browser tunnel, and short calls for the endpoint and the browser |
+| A browser panel of a browser host, Chromium engine | one `ssh -N -L` browser tunnel, and short calls for the endpoint and the browser |
+| A browser panel of a browser host, Firefox engine | one `ssh` child that runs the driver of Horizon there and carries one line of JSON each way |
 | The link to a Horizon server | `ssh <target> <command> --server-link`, or one TCP socket to the listener |
 
 ## What Horizon sets, and what your configuration decides
@@ -20,7 +21,7 @@ Horizon gives these options on the command line of each child:
 |---|---|
 | A terminal of a machine | `ConnectTimeout=10`, `ServerAliveInterval=5`, `ServerAliveCountMax=3` |
 | A plain SSH panel, an upload, a `ssh -W` forward | `ConnectTimeout=10`, `ServerAliveInterval=15`, `ServerAliveCountMax=1` |
-| The link to a server, and the calls of a browser host | `ConnectTimeout=5`, `ServerAliveInterval=5`, `ServerAliveCountMax=2`, `BatchMode=yes` |
+| The link to a server, the calls of a browser host, and the driver of a Firefox host | `ConnectTimeout=5`, `ServerAliveInterval=5`, `ServerAliveCountMax=2`, `BatchMode=yes` |
 
 `ssh` reads the first value of an option that it meets, and a value of the
 command line comes before a value of a configuration file. A value in your file
@@ -102,7 +103,8 @@ way to compare two runs.
 | A cut during a plain SSH panel | The panel ends as `Disconnected`, the body says that the text typed there is not sent, and `Reconnect` runs the same command again. | Press `Reconnect`. Horizon never runs the command by itself, because a command that is not a tmux session would start its work from the start. |
 | A stall during an upload | `Cancel` ends the upload in about a tenth of a second, also when the write of the file waits for a far side that stopped reading. The window shows `Upload cancelled` and the number of files that were whole. | Press `Cancel`. There is no resume: send the file again after the link returns. |
 | A cut during a Device panel of an SSH desktop | The panel reads `Disconnected`. | Press `Reconnect`. This build does not return by itself. |
-| A cut during a browser panel of a browser host | The panel reads `Browser stopped`, and `Retry` opens a new page on the browser of that host. Text that you did not send is gone. | Press `Retry`. |
+| A cut during a Chromium browser panel of a browser host | The panel reads `Browser stopped`, and `Retry` opens a new page on the browser of that host. Text that you did not send is gone. | Press `Retry`. |
+| A cut during a Firefox browser panel of a browser host | The panel reads that the link is lost and counts down to the next attempt, then attaches to the same page of that host. A page that is gone comes back as a new one and the panel says so. | Nothing for a cut. Press `Retry` when the panel says that the driver of that machine needs work. |
 | The link to a server is away | The line reads `Server away`, with `· N pending` when changes wait. The changes are queued and sent by itself when the link returns. | Nothing. The link tries again after 3, 6, 12, 24 and then 30 seconds. |
 | The link to a server did not open | The hover of the line and the Server tab name the reason of the last attempt in one sentence. | Read the reason, and edit the `Address` or the target in the settings when the address moved. |
 
@@ -130,6 +132,8 @@ few milliseconds, and it leaves in pushes of at most 256 intents.
 | Connect of a child | 10 seconds, 5 seconds for the calls of a browser host |
 | Keepalive that ends a quiet child | 5 seconds × 3 tries for a machine, 15 × 1 for the other children, 5 × 2 for a browser host |
 | Answer of a push or a pull | 20 seconds |
+| Greeting of the driver of a Firefox host | 20 seconds: the `ssh` connect, the authentication and the start of the driver, but not the start of its browser |
+| Idle wait of the driver of a Firefox host | 10 minutes without a link, then it stops its browser and ends |
 | Answer of the idle wait | 21 seconds: 15 seconds of the server and a margin of 6 |
 | Answer of the idle wait of an older server | 65 seconds: 50 seconds of that server and a margin of 15 |
 | Next attempt of a lost link | 3, 6, 12, 24 and then 30 seconds; the delays start again after a link that lasted 10 seconds |

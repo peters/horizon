@@ -654,28 +654,33 @@ That needs a working desktop. The native window can appear briefly at startup an
 
 ### On another computer of yours
 
-A Browser panel can use the Chromium of a machine that you already log in to, over SSH — a build server, a mini PC, or a second laptop. The page renders in the panel here, and you click, type, scroll and resize it as usual. Your sign-ins live on that machine, so a site that refuses a headless browser there, or needs an account that is already signed in, still works.
+A Browser panel can use the browser of a machine that you already log in to, over SSH — a build server, a mini PC, or a second laptop. The page renders in the panel here, and you click, type, scroll and resize it as usual. Your sign-ins live on that machine, so a site that refuses a headless browser there, or needs an account that is already signed in, still works. Chromium and Firefox both work there.
 
-Name that machine and one profile in **Settings** (**Ctrl+Shift+,**) → **General** → **Browser host**: **SSH target** and **Profile**. The section of a settings file is `browser_host`:
+Name that machine, one profile and the engine in **Settings** (**Ctrl+Shift+,**) → **General** → **Browser host**: **SSH target**, **Profile** and **Engine**. The section of a settings file is `browser_host`:
 
 ```json
 {
   "browser_host": {
     "ssh_target": "build-server",
-    "profile": "mail"
+    "profile": "mail",
+    "engine": "firefox"
   }
 }
 ```
 
-`ssh_target` is a name that `ssh` already understands, such as an alias from `~/.ssh/config`. The profile is a folder on that machine, `~/.horizon/browser-profiles/<profile>`, that keeps the cookies and sign-ins; leave it out and Horizon uses `default`. The next start of Horizon applies the entry.
+`ssh_target` is a name that `ssh` already understands, such as an alias from `~/.ssh/config`. The profile is a folder on that machine, `~/.horizon/browser-profiles/<profile>`, that keeps the cookies and sign-ins; leave it out and Horizon uses `default`. The engine is `chromium` when you name none. The next start of Horizon applies the entry.
+
+How the two engines differ:
+
+- **Chromium** needs a Chrome or Chromium on that machine and no Horizon. Horizon starts it when no browser answers, signs nothing in for you, and keeps it running after you close Horizon.
+- **Firefox** needs that machine to have Firefox, geckodriver and the same version of Horizon. Horizon starts a small driver of itself there, beside the browser, and that driver keeps the browser and the page while you are away. Copy the `horizon` binary of this computer to that machine when both have the same system and CPU, and name its path with **Driver program** (the default is `horizon --browser-host-driver`). A machine of another system needs a build of Horizon for that system, and both builds must be the same version.
 
 What to expect:
 
-- Horizon starts Chrome or Chromium on that machine when no browser answers, signs nothing in for you, and keeps it running after you close Horizon. Open the panel again and you are still signed in.
-- Only Chromium works there. A Firefox or Safari panel stays on this computer.
-- Downloads are saved on that machine and the panel does not list them. File upload from this computer is refused, because that browser cannot read your files here.
+- A link that is cut comes back by itself, after 3, 6, 12 and 24 seconds, then every 30 seconds. A Firefox host keeps its page while the link is down, so the text that you typed into a form is still there when it returns, and the panel tells you when the page is a new one instead.
+- Downloads are saved on that machine. File upload from this computer is refused, because that browser cannot read your files here.
 - Every account on that machine can drive that browser, so use a machine and a profile that you trust. If the machine does not answer, the panel says why and offers **Retry**.
-- The test procedure is [remote browser tunnel](docs/testing/procedures/remote-browser-tunnel.md).
+- The test procedures are [remote browser tunnel](docs/testing/procedures/remote-browser-tunnel.md) for Chromium and [browser host with Firefox](docs/testing/procedures/browser-host-firefox.md) for Firefox.
 
 ### On BrowserStack
 
