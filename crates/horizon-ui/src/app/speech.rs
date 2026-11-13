@@ -58,8 +58,8 @@ const KEPT_MARK: Duration = Duration::from_secs(30);
 const RETRY_SHORTCUT: ShortcutBinding =
     ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('R'));
 
-/// Why the sentence of this window shows a take: the hotkey, the icon of a panel, or
-/// the **Try** button of the Settings tab.
+/// Which control started the take that runs: the hotkey, the icon of a panel, or the
+/// **Try** button of the Settings tab.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TakeSource {
     Hotkey,
@@ -133,7 +133,7 @@ pub(in crate::app) struct SpeechUi {
     source: Option<TakeSource>,
     /// The panel that had the focus when the hotkey went down.
     target: Option<PanelId>,
-    /// When the take started to record, for the seconds of the mark.
+    /// When the take started to record, for the clock of its icon.
     started: Option<Instant>,
     /// The sentence of a failed take and the instant that it goes.
     error: Option<(String, Instant)>,
