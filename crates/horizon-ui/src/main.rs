@@ -83,6 +83,13 @@ fn main() -> eframe::Result {
             run_browser_mcp_server();
             return Ok(());
         }
+        // The driver of a browser host runs on that machine and speaks on the
+        // standard input and output of one `ssh` child. It owns nothing of this
+        // computer, so it comes before the home, the settings and the window.
+        Start::BrowserHostDriver(options) => {
+            init_tracing();
+            std::process::exit(horizon_core::browser::host_driver::run(&options));
+        }
         // The server and its link are the same binary, and they touch one
         // directory of their own. They come before the Horizon home, the settings
         // and the agent integration of the desktop, because a server must never

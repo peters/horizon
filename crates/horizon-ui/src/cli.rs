@@ -24,6 +24,10 @@ pub(crate) enum Start {
     Sync(SyncMode),
     /// `--browser-mcp`: the browser MCP server on the standard input and output.
     BrowserMcp,
+    /// `--browser-host-driver`: the driver of a browser panel that runs beside
+    /// the Firefox of a browser host, on the standard input and output of one
+    /// `ssh` child.
+    BrowserHostDriver(horizon_core::browser::host_driver::HostDriverOptions),
     /// The window of the person, or a command that ends without one.
     Desktop(CliArgs),
 }
@@ -47,6 +51,10 @@ pub(crate) fn parse_start(args: impl IntoIterator<Item = std::ffi::OsString>) ->
             parse_browser_mcp_args(args.iter().cloned())?;
             Ok(Start::BrowserMcp)
         }
+        Some("--browser-host-driver") => Ok(Start::BrowserHostDriver(
+            horizon_core::browser::host_driver::HostDriverOptions::parse(args.iter().skip(1).cloned())
+                .map_err(|error| error.to_string())?,
+        )),
         _ => match parse_sync_mode(args.iter().cloned())? {
             Some(mode) => Ok(Start::Sync(mode)),
             None => Ok(Start::Desktop(parse_cli_args(args)?)),
@@ -175,7 +183,8 @@ pub(crate) const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemera
        horizon [--config <path>] --import-remote-profile <path>
        horizon --server [--listen <ip>:<port>] [--name <dns-name>]
        horizon --server-link
-       horizon --server-invite";
+       horizon --server-invite
+       horizon --browser-host-driver [--profile <name>] [--engine <engine>]";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RemoteProfileCommand {
@@ -305,6 +314,34 @@ mod tests {
             matches!(start(&[]).expect("a start with no argument"), Start::Desktop(_)),
             "no argument is the window of the person"
         );
+    }
+
+    #[test]
+    fn the_host_driver_names_its_profile_and_its_engine() {
+        let Start::BrowserHostDriver(options) = start(&["--browser-host-driver"]).expect("the mode") else {
+            panic!("the browser host driver mode");
+        };
+        assert_eq!(options.profile(), "default");
+        assert_eq!(options.engine().as_str(), "firefox");
+
+        let Start::BrowserHostDriver(options) =
+            start(&["--browser-host-driver", "--profile", "mail", "--engine", "firefox"]).expect("the mode")
+        else {
+            panic!("the browser host driver mode");
+        };
+        assert_eq!(options.profile(), "mail");
+
+        for bad in [
+            &["--browser-host-driver", "--profile"][..],
+            &["--browser-host-driver", "--profile", "Mail"],
+            &["--browser-host-driver", "--engine", "safari"],
+            &["--browser-host-driver", "--engine", "chromium"],
+            &["--browser-host-driver", "--profile", "mail", "--profile", "other"],
+            &["--browser-host-driver", "--listen", "127.0.0.1:1"],
+        ] {
+            let error = start(bad).expect_err("the mode refuses it");
+            assert!(!error.is_empty(), "{bad:?}");
+        }
     }
 
     #[test]

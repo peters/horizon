@@ -41,6 +41,9 @@ git2.workspace = true
 sha2.workspace = true
 atomicwrites.workspace = true
 zeroize.workspace = true
+# One JPEG encoder for the picture that the driver of a browser host pushes:
+# 47 to 111 KB per frame at quality 60 against 110 to 484 KB as PNG.
+jpeg-encoder = "0.7.1"
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
