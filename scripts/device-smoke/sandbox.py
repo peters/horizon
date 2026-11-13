@@ -33,9 +33,31 @@ STRIPPED_KEYS = (
     'XAUTHORITY',
 ) + HOST_SESSION_KEYS
 
+# The identity of a panel of another Horizon. A run that starts inside a panel of a
+# Horizon of the person inherits the actor and the work identity of that panel, and
+# a program inside the fixture would then read a caller that its board does not
+# hold. The fixture sets the values of its own run after this strip.
+STRIPPED_PREFIXES = (
+    'HORIZON_BROWSER_',
+    'HORIZON_WORK_',
+)
+
 
 def runtime_dest(uid=None):
     return f'/run/user/{os.getuid() if uid is None else uid}'
+
+
+def without_inherited_horizon(environ):
+    """A copy of `environ` without the Horizon variables of the calling shell.
+
+    The keys that name a panel of a Horizon, and the keys that name the Horizon
+    itself, belong to the run that sets them: a fixture that keeps the values of
+    the shell that started it hands its own panels the identity of a panel of
+    another board.
+    """
+    stripped = {key: value for key, value in environ.items()
+                if key not in STRIPPED_KEYS and not key.startswith(STRIPPED_PREFIXES)}
+    return stripped
 
 
 def bus_address(uid=None):
@@ -301,9 +323,7 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), re
         namespace += ['--tmpfs', SSH_SYSTEM_INCLUDE]
     namespace += access_bind
     namespace += ['--chdir', str(data), '--']
-    base = dict(environ if environ is not None else os.environ)
-    for key in STRIPPED_KEYS:
-        base.pop(key, None)
+    base = without_inherited_horizon(environ if environ is not None else os.environ)
     host_env = dict(base)
     host_env.update(
         XDG_DATA_HOME=str(data),
