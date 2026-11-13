@@ -638,31 +638,43 @@ machine costs.
 
    Result: The card says `A browser that stays signed in` with the badge
    `Step 2 of 4`, the caption `BROWSER` and the two engine rows. `Chromium`
-   carries the badge `Ready`, and `Firefox` cannot be chosen: it has a dashed
-   outline and the badge `To build`.
+   carries the badge `Ready` and the row is selected. `Firefox` carries the
+   badge `Ready` and its subtitle names Horizon and Firefox on that machine.
 
 3. Press the row `Firefox`.
 
-   Result: Nothing changes on the card, and the agent's panel gains no line.
+   Result: The row of `Firefox` is selected and the row of `Chromium` is not,
+   and the card keeps its other lines.
 
-4. Press the button that names the place, such as
+4. Press the row `Chromium` again.
+
+   Result: The row of `Chromium` is selected, so step 5 sets up Chromium.
+
+5. Press the button that names the place, such as
    `Put the browser on helsinki-1`.
 
    Result: The card says `Preparing the browser` with the badge `Working` and
    five steps. The steps that copy the files and install the container finish,
    with their times.
 
-5. Examine the card after the last step.
+6. Examine the card after the last step.
 
    Result: A card of Horizon says
    `Use the browser on <target> for new browser panels?` with the engine, the
    profile and the SSH target, and the buttons `Use it` and `Not now`.
 
-6. Press `Use it`, then read **Settings**, **General**, **Browser host**.
+7. Press `Use it`, then read **Settings**, **General**, **Browser host**.
 
    Result: The SSH target and the profile hold the values of the card. The card
    of the flow says that new browser panels use it after the next start of
    Horizon. `~/.horizon/settings.before-server.<time>.json` is unchanged.
+
+8. Ask the agent for `browser_host_request` with `machine` set to a machine of
+   the list, the profile `work` and the engine `firefox`, and press `Use it`.
+
+   Result: The card says `Use the browser on the machine <name> for new browser
+   panels?` with the rows `Browser`, `Profile`, `Machine` and `SSH from`. The
+   section **Browser host** of Settings shows the machine and no SSH target.
 
 ## 6.12 F12 — The join flow with a real agent
 

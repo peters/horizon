@@ -510,8 +510,8 @@ Three cards: the engine and the place, the steps, and the ready card.
      "subtitle": "Live picture. You and an agent share the page.",
      "badge": {"text": "Ready", "tone": "ok"}, "selected": true},
     {"id": "engine.firefox", "title": "Firefox",
-     "subtitle": "For sites that refuse Chromium. Not on another machine yet.",
-     "badge": {"text": "To build"}, "disabled": true}]},
+     "subtitle": "For sites that refuse Chromium. It needs Horizon and Firefox on that machine, and its picture comes slower.",
+     "badge": {"text": "Ready", "tone": "ok"}}]},
   {"type": "caption", "text": "Runs on"},
   {"type": "list", "selection": "single", "rows": [
     {"id": "place.machine.helsinki-1", "title": "helsinki-1",
@@ -524,9 +524,19 @@ Three cards: the engine and the place, the steps, and the ready card.
 ]}
 ```
 
-Only Chromium runs on another machine. The Firefox row keeps
-`"disabled": true` and the badge `To build` until Horizon serves it, and one
-field of that row turns it on. Do not offer a Firefox row that takes a press.
+Both rows take a press, and each engine has its own needs on that machine:
+
+- Chromium runs on that machine through its `DevTools` port. The machine needs a
+  Chromium program, and no Horizon.
+- Firefox runs behind a driver of Horizon on that machine, so that machine needs
+  Firefox, `geckodriver` and a `horizon` binary of the same version. The picture
+  of that browser is pushed as compressed frames, so it is slower than Chromium.
+  Name the program of the driver with `browser_host.command` when the default
+  does not fit.
+
+Read the binary of this computer from `HORIZON_EXECUTABLE` and never from `PATH`:
+that variable is the program that runs Horizon, so a copy of it is the version
+that the driver of that machine must speak.
 
 A press on `place.new_machine` runs the goal `rent` first and returns to this
 card. `Back` returns to the first card.
@@ -539,7 +549,7 @@ the steps of `browser-machine` and the browser host request:
 ```json
 {"components": [
   {"type": "heading", "text": "Preparing the browser",
-   "subtitle": "Chromium on helsinki-1. The first time takes some minutes.",
+   "subtitle": "The browser on helsinki-1. The first time takes some minutes.",
    "badge": {"text": "Working", "tone": "info"}},
   {"type": "progress", "label": "Prepare the browser", "percent": 40, "detail": "2 of 5"},
   {"type": "steps", "steps": [
@@ -554,11 +564,33 @@ the steps of `browser-machine` and the browser host request:
 ```
 
 The profile is the name of the person or `work` when the person names none: 1 to
-40 characters of `a-z`, `0-9` and `-`. The last step needs the press of the
-person: call `browser_host_request` with the SSH target, the profile and the
-engine, and wait while Horizon draws its own card. `Stop and undo` removes the
-container and the files of this flow on the machine, and the card says what was
-removed and what is left.
+40 characters of `a-z`, `0-9` and `-`.
+
+The engine of the press decides the steps:
+
+- Chromium: the steps of the reference `browser-machine` of the skill
+  `horizon-machines`. The machine needs a Chromium program there, and no Horizon.
+- Firefox in the container: the same steps with `--engine firefox`, and the
+  binary of this computer as a fifth input. The setup prints a `command=` value;
+  name it as `browser_host.command`, because the driver of Horizon runs inside the
+  container and that machine needs no Horizon outside it.
+- Firefox on a machine that already has one: probe it with
+  `command -v firefox; command -v geckodriver`, and stop when one of them answers
+  nothing. Then copy the binary of this computer to the machine:
+
+  ```sh
+  scp "$HORIZON_EXECUTABLE" <target>:horizon
+  ssh <target> 'chmod 755 horizon && ./horizon --version'
+  ```
+
+  The version of that copy must be the version of this computer, because the
+  driver of the machine speaks one version of the link.
+
+The last step needs the press of the person: call `browser_host_request` with the
+machine of the list or the SSH target, the profile and the engine, and wait while
+Horizon draws its own card. A press on `Stop and undo` on a Firefox flow removes
+the copied binary beside the files and the container of this flow, and the card
+says what was removed and what is left.
 
 ### 3. The browser is ready
 
@@ -580,6 +612,11 @@ removed and what is left.
     {"id": "remove", "label": "Remove the browser", "tone": "danger"}]}
 ]}
 ```
+
+The row `Browser` names the engine of the press in its own words: `Chromium`, or
+`Firefox, with Horizon on that machine`. A Firefox host adds the row
+`Driver program` with the command of `browser_host.command` when the card flow
+wrote one.
 
 `Use this computer again` is a change of a setting, and only the person changes
 it: `browser_host_request` writes a host and never clears one. Say on the card
@@ -670,7 +707,10 @@ credential in the panel.
 
 ## Limits of this version
 
-- Firefox on another machine is not built. Its row cannot be chosen.
+- Firefox on another machine needs Firefox, `geckodriver` and a `horizon` binary
+  of the same version on that machine, and its picture is slower than the picture
+  of Chromium. It refuses a file from this computer, a recording of the page and a
+  native `<select>`, with one sentence each in the panel.
 - A card cannot draw a QR code, a picture or a table. The invitation of another
   computer stays in Settings, Server, and the card names that place.
 - The browser host entry applies at the next start of Horizon. The card says so.

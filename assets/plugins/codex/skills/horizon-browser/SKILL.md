@@ -381,8 +381,12 @@ computer.
   each end; without a profile, Horizon uses `default`. Its folder is
   `~/.horizon/browser-profiles/<profile>` on that machine, and it keeps the
   sign-ins of that browser.
-- Only Chromium runs on that path: a `browser_create` with `backend: firefox`
-  or `backend: safari` is refused with `unsupported_backend`.
+- The browser host serves the engine of its profile and no other: a
+  `browser_create` of another engine is refused with `unsupported_backend`, and
+  the message names the engine of the host. `chromium` needs a Chromium program
+  on that machine; `firefox` needs Firefox, `geckodriver` and a `horizon` binary
+  of the same version there, because a driver of Horizon beside that browser
+  carries the page as compressed frames.
 - That browser starts headed with no window of its own, and it keeps running
   after Horizon stops. A later panel and the next Horizon attach to the same
   browser, so a signed-in page is still signed in. Horizon closes only its own
