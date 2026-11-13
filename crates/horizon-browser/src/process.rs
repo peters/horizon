@@ -292,14 +292,14 @@ impl ChromeProcess {
 
 /// The process id of the browser that a watch must end.
 #[cfg(unix)]
-fn child_id(child: &Arc<Mutex<ProcessChild>>) -> u32 {
+pub(super) fn child_id(child: &Arc<Mutex<ProcessChild>>) -> u32 {
     child.lock().unwrap_or_else(std::sync::PoisonError::into_inner).id()
 }
 
 /// The watch of the browser whose process id is `browser`, or `None` on a system
 /// without it.
 #[cfg(unix)]
-fn start_watch(browser: u32) -> Option<BrowserWatch> {
+pub(super) fn start_watch(browser: u32) -> Option<BrowserWatch> {
     match BrowserWatch::start(browser) {
         Ok(watch) => Some(watch),
         Err(error) => {

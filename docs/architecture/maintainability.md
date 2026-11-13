@@ -151,8 +151,10 @@ when it names one of those kinds.
   when the Horizon that started it is gone: one child of Horizon holds the read end
   of a pipe whose write end belongs to Horizon, so a `SIGTERM`, a `SIGINT`, a crash
   or a `SIGKILL` of Horizon closes that end and the watch signals the process group
-  of the browser. The browser that Horizon ends itself stops its watch first, and a
-  browser that Horizon did not start has no watch. Default builds omit the AV1 encoder; Horizon and its
+  of the browser. A browser of the Chromium engine has one, and so has the driver
+  of the Firefox and Safari engines, because that driver starts their browser. The
+  browser that Horizon ends itself stops its watch first, and a browser that
+  Horizon did not start has no watch. Default builds omit the AV1 encoder; Horizon and its
   CLI/MCP consumers explicitly enable recording. The standalone CI feature
   matrix guards both configurations against host dependencies.
   It consumes and re-exports the lightweight protocol

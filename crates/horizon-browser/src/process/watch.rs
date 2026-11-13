@@ -36,7 +36,7 @@ const REAP_BOUND: Duration = Duration::from_secs(5);
 /// The watch of one browser: its own child, and the write end of the pipe that
 /// tells that child that this process is alive.
 #[derive(Debug)]
-pub(super) struct BrowserWatch {
+pub(crate) struct BrowserWatch {
     child: Option<Child>,
     /// The write end of the pipe. Dropping it tells the watcher that this process
     /// is gone, which is what the kernel does to it when the process dies.
@@ -53,7 +53,7 @@ impl BrowserWatch {
     /// Returns why the child of the watch cannot start. The caller logs it and
     /// keeps the browser: a browser without a watch is the behavior of every
     /// Horizon before this one.
-    pub(super) fn start(browser: u32) -> std::io::Result<Self> {
+    pub(crate) fn start(browser: u32) -> std::io::Result<Self> {
         let mut child = Command::new("/bin/sh")
             .arg("-c")
             .arg(watch_script())
@@ -73,7 +73,7 @@ impl BrowserWatch {
     /// Ends the watch of a browser that this process ends itself. The browser is
     /// already gone or going, so the watch has nothing left to do, and it is not
     /// given the second of its own wait.
-    pub(super) fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         self.beacon.take();
         let Some(mut child) = self.child.take() else {
             return;
@@ -87,7 +87,7 @@ impl BrowserWatch {
     /// the parent, so it reads the same path as a `SIGTERM`, a `SIGINT` and a
     /// `SIGKILL` of Horizon.
     #[cfg(all(test, unix))]
-    pub(super) fn release(mut self) {
+    pub(crate) fn release(mut self) {
         self.beacon.take();
         if let Some(mut child) = self.child.take() {
             // The watcher ends by itself after its work, and a thread of the test
@@ -102,12 +102,12 @@ impl BrowserWatch {
 
     /// Whether the watch left no child of its own.
     #[cfg(all(test, unix))]
-    pub(super) fn has_no_child(&self) -> bool {
+    pub(crate) fn has_no_child(&self) -> bool {
         self.child.is_none()
     }
     /// The longest time that a test waits for a process that a watch ends.
     #[cfg(all(test, unix))]
-    pub(super) fn reap_bound() -> Duration {
+    pub(crate) fn reap_bound() -> Duration {
         REAP_BOUND
     }
 }

@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 
+#[cfg(unix)]
+use super::child_id;
 use super::{ProcessChild, kill_and_reap, poll_and_cleanup_exited_tree, spawn_process, take_stderr};
 
 /// Exact loopback automation-service process (`geckodriver` or
@@ -17,6 +19,10 @@ use super::{ProcessChild, kill_and_reap, poll_and_cleanup_exited_tree, spawn_pro
 pub(crate) struct ServiceProcess {
     child: Arc<Mutex<ProcessChild>>,
     control: ChromeProcessControl,
+    /// The child that ends the driver and the browser that it started when this
+    /// process is gone, whatever ended it.
+    #[cfg(unix)]
+    watch: Option<super::watch::BrowserWatch>,
     exit_status: Option<std::process::ExitStatus>,
     stderr_tail: Arc<Mutex<String>>,
     stderr_reader: Option<JoinHandle<()>>,
@@ -234,9 +240,13 @@ impl ServiceProcess {
         };
         let child = Arc::new(Mutex::new(child));
         control.register(&child);
+        #[cfg(unix)]
+        let watch = super::start_watch(child_id(&child));
         Ok(Self {
             child,
             control,
+            #[cfg(unix)]
+            watch,
             exit_status: None,
             stderr_tail: tail,
             stderr_reader: Some(reader),
@@ -292,6 +302,7 @@ impl ServiceProcess {
             Ok(Some(status)) => {
                 drop(child);
                 self.exit_status = Some(status);
+                self.stop_watch();
                 self.drain_stderr_reader();
                 self.control.clear(&self.child);
                 true
@@ -312,6 +323,24 @@ impl ServiceProcess {
                 );
                 false
             }
+        }
+    }
+
+    /// Ends the watch of this driver and of the browser that it started. The
+    /// driver is gone or going, so the watch has nothing left to do.
+    fn stop_watch(&mut self) {
+        #[cfg(unix)]
+        if let Some(mut watch) = self.watch.take() {
+            watch.stop();
+        }
+    }
+
+    /// Lets the watch act as it does when this process dies. A test uses it to be
+    /// that death without killing itself.
+    #[cfg(all(test, unix))]
+    pub(crate) fn release_watch(&mut self) {
+        if let Some(watch) = self.watch.take() {
+            watch.release();
         }
     }
 
@@ -404,6 +433,52 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!process_exists(&descendant_pid));
+    }
+
+    /// A driver that this process starts has a watch, and the watch ends the
+    /// driver and the browser in its process group when this process dies without
+    /// a cleanup: the kernel closes the pipe of the watch for a `SIGTERM`, a
+    /// `SIGINT` and a `SIGKILL` of Horizon alike.
+    #[cfg(unix)]
+    #[test]
+    fn a_driver_of_a_panel_ends_when_the_horizon_that_started_it_is_gone() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
+        let pid_file = root.path().join("browser.pid");
+        let args = vec![
+            "-c".to_string(),
+            "trap '' TERM; /bin/sleep 30 & printf '%s\\n' \"$!\" > \"$1\".tmp && \
+             mv \"$1\".tmp \"$1\"; wait"
+                .to_string(),
+            "horizon-service-watch-test".to_string(),
+            pid_file.display().to_string(),
+        ];
+        let mut process = ServiceProcess::spawn(
+            Path::new("/bin/sh"),
+            &args,
+            ChromeProcessControl::default(),
+            "test-driver",
+        )
+        .unwrap_or_else(|error| panic!("spawn service test process: {error}"));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pid_file.is_file() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let browser_pid = std::fs::read_to_string(&pid_file)
+            .unwrap_or_else(|error| panic!("read browser pid: {error}"))
+            .trim()
+            .to_string();
+        assert!(process_exists(&browser_pid));
+
+        process.release_watch();
+        while process_exists(&browser_pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !process_exists(&browser_pid),
+            "the browser of a dead Horizon is gone with the driver"
+        );
+        let _ = process.kill();
     }
 
     #[test]
