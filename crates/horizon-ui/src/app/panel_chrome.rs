@@ -895,9 +895,12 @@ mod tests {
         });
 
         // Every control of the title bar stops left of the icon, so no control
-        // covers it and every control keeps its own room.
-        assert_eq!(badges_left_boundary(&with_icon), mic_rect.min.x - 12.0);
-        assert!(badges_left_boundary(&with_icon) < badges_left_boundary(&plain));
+        // covers it and every control keeps its own room. The centre of the icon is
+        // 26 points left of the centre of the close control, so every control moves
+        // left by those 26 points.
+        let shift = plain.close_rect.center().x - mic_rect.center().x;
+        assert!((shift - 26.0).abs() <= f32::EPSILON);
+        assert_eq!(badges_left_boundary(&with_icon), badges_left_boundary(&plain) - shift);
         assert_eq!(
             panel_history_badge_rect(with_icon.titlebar_rect, with_icon.controls_anchor())
                 .max
@@ -905,8 +908,11 @@ mod tests {
             panel_history_badge_rect(plain.titlebar_rect, plain.controls_anchor())
                 .max
                 .x
-                - 26.0
+                - shift
         );
+        // The icon itself keeps off the history meter and the close control.
+        assert!(mic_rect.min.x > panel_history_badge_rect(plain.titlebar_rect, mic_rect).max.x);
+        assert!(mic_rect.max.x < plain.close_rect.min.x);
     }
 
     #[test]
