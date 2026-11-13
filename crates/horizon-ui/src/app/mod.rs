@@ -89,6 +89,7 @@ mod test_support;
 mod transcript_deletes;
 pub(crate) mod util;
 mod view;
+mod welcome;
 mod work_resume;
 mod workspace;
 mod workspace_destination;
@@ -482,6 +483,8 @@ pub struct HorizonApp {
     /// Set up: the panel of its agent, its search of the agent programs and the
     /// notice that Horizon draws when it cannot start one.
     setup: setup::SetupState,
+    /// The first start page: the metrics and the drawings of the four tiles.
+    welcome: welcome::WelcomeCache,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {

@@ -1,4 +1,4 @@
-use egui::{Align, Context, Id, Layout, Margin, Mesh, Order, Pos2, Rect, Shape, Stroke, Vec2};
+use egui::{Context, Id, Margin, Mesh, Order, Pos2, Rect, Shape, Stroke, Vec2};
 
 use crate::theme;
 
@@ -119,118 +119,6 @@ impl HorizonApp {
                 });
         });
     }
-
-    pub(super) fn render_empty_state_card(&mut self, ctx: &Context) {
-        if !self.empty_state_card_visible() {
-            return;
-        }
-
-        let primary_label = super::util::primary_shortcut_label();
-        let quick_nav_shortcut = self.shortcuts.command_palette.display_label(primary_label);
-        let canvas_gesture_hint = super::util::canvas_gesture_hint(primary_label);
-        let fit_shortcut = self.shortcuts.fit_active_workspace.display_label(primary_label);
-        let has_attached_workspace = self
-            .board
-            .workspaces
-            .iter()
-            .any(|workspace| !self.workspace_is_detached(workspace.id));
-        let card_size = Vec2::new(540.0, 228.0);
-        let card_rect = Rect::from_center_size(self.canvas_rect(ctx).center(), card_size);
-
-        egui::Area::new(Id::unique("empty_state_card"))
-            .fixed_pos(card_rect.min)
-            .order(Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(theme::alpha(theme::PANEL_BG(), 238))
-                    .stroke(Stroke::new(1.0_f32, theme::alpha(theme::BORDER_SUBTLE(), 210)))
-                    .corner_radius(20)
-                    .inner_margin(Margin::same(20))
-                    .show(ui, |ui| {
-                        ui.set_min_size(card_size);
-                        ui.set_max_size(card_size);
-                        ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new("Start with a workspace-first flow")
-                                    .color(theme::FG())
-                                    .size(18.0)
-                                    .strong(),
-                            );
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "Create a workspace, launch a preset-driven terminal, jump with Quick Nav, then fit the active workspace when you want a clean overview.",
-                                )
-                                .color(theme::FG_SOFT())
-                                .size(12.0),
-                            );
-                            ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new(
-                                    "Rows / Cols / Grid live on each workspace header once panels are open, so you can stay structured without giving up the canvas.",
-                                )
-                                .color(theme::FG_DIM())
-                                .size(11.0),
-                            );
-                            ui.add_space(18.0);
-                            ui.horizontal_wrapped(|ui| {
-                                self.render_empty_state_new_buttons(ui);
-                                if ui.add(super::util::chrome_button("New Terminal")).clicked() {
-                                    if let Some(preset) = self.presets.first().cloned() {
-                                        let workspace_id = self.ensure_workspace_visible(ctx);
-                                        self.add_panel_to_workspace(ctx, workspace_id, preset, None);
-                                    } else {
-                                        self.create_panel(ctx);
-                                    }
-                                }
-                                if ui.add(super::util::chrome_button("Quick Nav")).clicked() {
-                                    self.open_command_palette();
-                                }
-                                if ui
-                                    .add_enabled(has_attached_workspace, super::util::chrome_button("Fit Workspace"))
-                                    .clicked()
-                                {
-                                    let _ = self.fit_active_workspace(ctx);
-                                }
-                            });
-                            ui.add_space(14.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Quick Nav: {quick_nav_shortcut}    Fit Workspace: {fit_shortcut}"
-                                ))
-                                .monospace()
-                                .color(theme::FG_SOFT())
-                                .size(11.0),
-                            );
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new(canvas_gesture_hint)
-                                    .color(theme::FG_DIM())
-                                    .size(10.5),
-                            );
-                        });
-                    });
-            });
-    }
-
-    /// The empty state creates a workspace on this computer.
-    fn render_empty_state_new_buttons(&mut self, ui: &mut egui::Ui) {
-        if ui.add(super::util::chrome_button("New Workspace")).clicked() {
-            self.create_new_workspace(ui.ctx(), None);
-        }
-    }
-
-    fn empty_state_card_visible(&self) -> bool {
-        should_show_empty_state_card(
-            self.board.workspaces.len(),
-            self.board.panels.len(),
-            self.fixed_overlays_visible(),
-        )
-    }
-}
-
-fn should_show_empty_state_card(workspace_count: usize, panel_count: usize, fixed_overlays_visible: bool) -> bool {
-    fixed_overlays_visible && workspace_count == 0 && panel_count == 0
 }
 
 /// The rectangle that the canvas paints in: what `ui` has left, and never the
@@ -333,7 +221,7 @@ mod tests {
 
     use super::{
         CanvasGridCacheKey, GRID_SPACING, MIN_GRID_SCREEN_SPACING, canvas_paint_rect, dot_grid_axis_count,
-        dot_grid_layout, should_show_empty_state_card,
+        dot_grid_layout,
     };
 
     #[test]
@@ -426,13 +314,5 @@ mod tests {
             empty.max.x <= available.min.x,
             "a panel wider than the window leaves no canvas: {empty:?}"
         );
-    }
-
-    #[test]
-    fn empty_state_card_only_shows_for_truly_empty_board() {
-        assert!(should_show_empty_state_card(0, 0, true));
-        assert!(!should_show_empty_state_card(1, 0, true));
-        assert!(!should_show_empty_state_card(1, 1, true));
-        assert!(!should_show_empty_state_card(0, 0, false));
     }
 }

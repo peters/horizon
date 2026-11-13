@@ -109,7 +109,8 @@ fn the_canvas_gesture_takes_the_modifier_of_this_system_alone() {
     let (_temp, mut app) = test_app();
     let ctx = egui::Context::default();
     run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
-    let pos = Pos2::new(500.0, 400.0);
+    // The free canvas below the tiles of the first-start page.
+    let pos = Pos2::new(600.0, 800.0);
     let double_click = |app: &mut HorizonApp, modifiers: egui::Modifiers, start: f64| {
         for (time, pressed) in [(0.0, true), (0.05, false), (0.15, true), (0.20, false)] {
             let mut raw = raw_input([1400.0, 900.0], None);
