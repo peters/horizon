@@ -92,6 +92,10 @@ pub fn show_body(
         f32::from(u16::try_from(height).unwrap_or(0xFFFF)),
     ];
 
+    // The first picture of a session is the one that says whether the page fills
+    // the panel: a session that ended can leave a picture of its own size in the
+    // slot, and the panel then draws it letterboxed until a resize.
+    let first_picture = state.seq == 0;
     // Update the texture only when a new frame actually arrived —
     // screencasts are change-driven, so idle pages do no work here.
     if state.seq != data.seq {
@@ -119,9 +123,7 @@ pub fn show_body(
         };
     };
 
-    // Letterbox (upscale allowed; linear filtering smooths it).
-    let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
-    let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
+    let rect = picture_rect(panel_id, body_rect, frame_size, first_picture);
     paint_browser_frame(ui, rect, texture);
     let page_scroll = browser.frame_slot.page_scroll_state();
     paint_page_scrollbar(ui, rect, page_scroll);
@@ -144,6 +146,53 @@ pub fn show_body(
         body_clicked,
         keyboard_focus_id,
     }
+}
+
+/// The rect of one picture inside the body, letterboxed (upscale allowed; linear
+/// filtering smooths it), and the line of the latency switch when this picture is
+/// the first one of its session.
+fn picture_rect(panel_id: horizon_core::PanelId, body_rect: Rect, frame_size: [f32; 2], first: bool) -> Rect {
+    let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
+    let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
+    if first {
+        trace_first_picture(panel_id, body_rect, frame_size, rect);
+    }
+    rect
+}
+
+/// The target of the latency lines, so one switch turns every line on.
+const LATENCY_TARGET: &str = "horizon_browser::latency";
+
+/// The first picture of a browser session, with the body that the page must fill,
+/// the size of the picture and the rect that the panel painted.
+///
+/// The two rects answer one question that no line answered before: a picture that
+/// does not fill the panel has either the size of a session that ended (a new
+/// session that the panel has not resized yet) or a body rect that is not the rect
+/// of the panel (a layout that moved). `HORIZON_BROWSER_LATENCY=1` writes it.
+fn trace_first_picture(panel_id: horizon_core::PanelId, body: Rect, frame_size: [f32; 2], drawn: Rect) {
+    if !horizon_browser::latency::enabled() {
+        return;
+    }
+    tracing::info!(target: LATENCY_TARGET, "latency picture {}", picture_fields(panel_id, body, frame_size, drawn));
+}
+
+/// The fields of one first-picture line, in the order they are written.
+pub(super) fn picture_fields(panel_id: horizon_core::PanelId, body: Rect, frame_size: [f32; 2], drawn: Rect) -> String {
+    format!(
+        "panel={} body={:.1}x{:.1} at={:.1},{:.1} frame={:.1}x{:.1} drawn={:.1}x{:.1} at={:.1},{:.1}",
+        panel_id.0,
+        body.width(),
+        body.height(),
+        body.min.x,
+        body.min.y,
+        frame_size[0],
+        frame_size[1],
+        drawn.width(),
+        drawn.height(),
+        drawn.min.x,
+        drawn.min.y
+    )
 }
 
 fn paint_browser_frame(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {

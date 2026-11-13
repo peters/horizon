@@ -70,9 +70,15 @@ One input action writes up to four lines:
 | `latency frame` | Every picture, with its bytes, its size and its decode time. |
 | `latency paint` | The frame that applied a picture to a texture, so the last hop of the same action is measurable. |
 | `latency stall` | A driver pass that blocked on the protocol for more than 50 ms, with the name of the command that it waited for. |
+| `latency picture` | The first picture of a session, with the rect of the body, the size of the picture and the rect that the window painted. A picture that does not fill the body is one of these two: a session that the panel has not resized yet, or a body rect that is not the rect of the panel. |
 
 The times of these lines are microseconds from the UI event of the action, as
-the line of a key press gives them.
+the line of a key press gives them. The line `latency picture` carries no time,
+because it answers a question of geometry and not a question of time.
+
+A page that never reaches the size of the panel is asked for it again at a slow
+rate, one command every two seconds, so the picture and the input mapping come
+back without a manual resize of the panel.
 
 ## 4. Compare two runs
 

@@ -7,6 +7,15 @@
 
 const VIEWPORT_RETRY_INTERVAL_SECONDS: f64 = 0.25;
 const MAX_VIEWPORT_CONVERGENCE_RETRIES: u8 = 8;
+/// How often the viewport of the body is asked for again after the fast retries
+/// are spent on a page that did not reach it.
+///
+/// A page that never reached the size of the body keeps a picture that does not
+/// fill the panel and an input mapping that does not follow the panel, until a
+/// person resizes the panel. The slow retry sends the same command that a resize
+/// sends, so the page converges by itself. It costs one command every two seconds
+/// and only while the picture does not match the body.
+const SLOW_VIEWPORT_RETRY_SECONDS: f64 = 2.0;
 // Window-manager decoration convergence can leave an otherwise current
 // screencast within four physical pixels of the requested content viewport.
 // Letterboxing already scales that small skew; larger differences still block
@@ -413,7 +422,6 @@ fn synchronize_viewport(
             state.last_viewport,
             now,
             state.viewport_retry_at,
-            state.viewport_retry_count,
         )
     {
         return;
@@ -429,7 +437,7 @@ fn synchronize_viewport(
             state.viewport_retry_count = 0;
         }
         state.last_viewport = viewport;
-        state.viewport_retry_at = now + VIEWPORT_RETRY_INTERVAL_SECONDS;
+        state.viewport_retry_at = now + viewport_retry_interval(state.viewport_retry_count);
     }
 }
 
@@ -488,18 +496,31 @@ fn frame_matches_viewport(
         && (frame_size[1] - f32::from(height)).abs() <= VIEWPORT_FRAME_TOLERANCE
 }
 
+/// Whether the panel asks the page for the size of its body now.
 fn viewport_command_due(
     frame_size: Option<[f32; 2]>,
     desired_viewport: (u32, u32),
     sent_viewport: (u32, u32),
     now: f64,
     retry_at: f64,
-    retry_count: u8,
 ) -> bool {
     desired_viewport != sent_viewport
-        || (retry_count < MAX_VIEWPORT_CONVERGENCE_RETRIES
-            && !frame_matches_viewport(frame_size, Some(desired_viewport), sent_viewport)
-            && now >= retry_at)
+        || (!frame_matches_viewport(frame_size, Some(desired_viewport), sent_viewport) && now >= retry_at)
+}
+
+/// How long the panel waits before it asks the page for the size of its body again.
+///
+/// The first attempts of one target are close together, so a resize settles at
+/// once. The attempts after them are slow: a page that never reached the size of
+/// the body keeps a picture that does not fill the panel until a person resizes
+/// the panel, and one command every two seconds is what makes that repair happen
+/// by itself.
+const fn viewport_retry_interval(retry_count: u8) -> f64 {
+    if retry_count < MAX_VIEWPORT_CONVERGENCE_RETRIES {
+        VIEWPORT_RETRY_INTERVAL_SECONDS
+    } else {
+        SLOW_VIEWPORT_RETRY_SECONDS
+    }
 }
 
 #[cfg(test)]
@@ -510,7 +531,7 @@ mod tests {
     use super::input::PointerViewportState;
     use super::{
         BrowserUiState, MAX_VIEWPORT_CONVERGENCE_RETRIES, frame_matches_viewport, page_focus_event_filter,
-        page_keyboard_can_route, pointer_viewport_state, viewport_command_due,
+        page_keyboard_can_route, pointer_viewport_state, viewport_command_due, viewport_retry_interval,
     };
 
     #[test]
@@ -713,41 +734,133 @@ mod tests {
             (900, 600),
             (800, 600),
             1.0,
-            2.0,
-            0
+            2.0
         ));
         assert!(!viewport_command_due(
             Some([805.0, 600.0]),
             (800, 600),
             (800, 600),
             1.0,
-            2.0,
-            0
+            2.0
         ));
         assert!(viewport_command_due(
             Some([805.0, 600.0]),
             (800, 600),
             (800, 600),
             2.0,
-            2.0,
-            0
+            2.0
         ));
         assert!(!viewport_command_due(
             Some([800.0, 600.0]),
             (800, 600),
             (800, 600),
             3.0,
-            2.0,
-            0
+            2.0
+        ));
+    }
+
+    /// A page that the panel never reached keeps its wrong picture until a person
+    /// resizes the panel. The slow retry asks for the body again, with the command
+    /// that a resize sends.
+    #[test]
+    fn a_viewport_that_the_page_never_reached_is_asked_for_again_at_a_slow_rate() {
+        assert!((viewport_retry_interval(0) - 0.25).abs() < f64::EPSILON);
+        assert!((viewport_retry_interval(MAX_VIEWPORT_CONVERGENCE_RETRIES - 1) - 0.25).abs() < f64::EPSILON);
+        assert!((viewport_retry_interval(MAX_VIEWPORT_CONVERGENCE_RETRIES) - 2.0).abs() < f64::EPSILON);
+        // The attempts of one target are spent, and the frame still has the size of
+        // the session that ended: the panel asks again when the slow instant passed.
+        assert!(viewport_command_due(
+            Some([1410.0, 900.0]),
+            (1600, 900),
+            (1600, 900),
+            4.5,
+            4.0
         ));
         assert!(!viewport_command_due(
-            Some([805.0, 600.0]),
-            (800, 600),
-            (800, 600),
-            3.0,
-            2.0,
-            MAX_VIEWPORT_CONVERGENCE_RETRIES
+            Some([1410.0, 900.0]),
+            (1600, 900),
+            (1600, 900),
+            3.5,
+            4.0
         ));
+    }
+
+    /// The body of one fullscreen browser panel at `size`, with `browser` in it.
+    fn show_body_at(
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        browser: &mut horizon_core::browser::BrowserPanelState,
+        state: &mut BrowserUiState,
+    ) -> super::render::BodyOutput {
+        use crate::test_egui::DiscardTextures as _;
+        let mut output = None;
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(true);
+        let _ = ctx
+            .run_ui(input, |ui| {
+                output = Some(super::render::show_body(
+                    ui,
+                    horizon_core::PanelId(1),
+                    browser,
+                    state,
+                    true,
+                ));
+            })
+            .discard_textures();
+        output.expect("one body of a browser panel")
+    }
+
+    /// A picture of `frame` in a fullscreen body of `body` must fill it: the panel
+    /// paints the picture into the rect of its body, so a letterbox is a picture that
+    /// the session did not resize to the panel.
+    #[test]
+    fn the_first_picture_of_a_new_session_fills_the_body_of_a_fullscreen_panel() {
+        let ctx = egui::Context::default();
+        let size = egui::vec2(800.0, 450.0);
+        let body = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut browser = horizon_core::browser::BrowserPanelState::inert();
+        let mut state = BrowserUiState::default();
+        // The session that ended left a picture of its own size, which a fullscreen
+        // panel paints letterboxed: the band of a page of another size.
+        browser
+            .frame_slot
+            .store_rgb(705, 450, vec![0; 705 * 450 * 3])
+            .expect("a picture of the old session");
+        let letterboxed = show_body_at(&ctx, size, &mut browser, &mut state);
+        let drawn = letterboxed.image_rect.expect("the old picture is drawn");
+        assert!(drawn.min.x > body.min.x, "the old picture is letterboxed: {drawn:?}");
+        assert!((drawn.min.x - body.min.x - 47.5).abs() < 0.5, "{drawn:?}");
+
+        // The retry clears the caches of the session that ended, and the new session
+        // answers at the size of the body.
+        state.reset_rendering();
+        browser
+            .frame_slot
+            .store_rgb(800, 450, vec![0; 800 * 450 * 3])
+            .expect("a picture of the new session");
+        let filled = show_body_at(&ctx, size, &mut browser, &mut state);
+        assert_eq!(
+            filled.image_rect,
+            Some(body),
+            "the first picture of the new session fills the body"
+        );
+        assert_eq!(filled.viewport_size, Some((800, 450)));
+    }
+
+    /// A picture that does not fill the body is the one a live run must be able to
+    /// name, so the latency switch writes the body, the picture and the drawn rect.
+    #[test]
+    fn a_first_picture_of_another_size_is_traced_with_its_body_and_its_drawn_rect() {
+        let body = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        let drawn = egui::Rect::from_center_size(body.center(), egui::vec2(1410.0, 900.0));
+        let line = super::render::picture_fields(horizon_core::PanelId(7), body, [1410.0, 900.0], drawn);
+        assert_eq!(
+            line,
+            "panel=7 body=1600.0x900.0 at=0.0,0.0 frame=1410.0x900.0 drawn=1410.0x900.0 at=95.0,0.0"
+        );
     }
 
     #[test]
