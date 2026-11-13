@@ -43,14 +43,13 @@ columns carry no price, and no column names a GPU.
 ## 3. Rent
 
 ```sh
-MY_IP=$(curl -4 -s https://api.ipify.org)     # agrees with https://checkip.amazonaws.com
 TYPE=<cheapest available>; LOCATION=<from step 2>; IMAGE=ubuntu-24.04
 hcloud ssh-key create --name $NAME-key --public-key-from-file "$KEY.pub" \
   --label horizon-managed=true --label horizon-card=$CARD -o json     # .ssh_key.id
 hcloud firewall create --name $NAME-fw \
   --label horizon-managed=true --label horizon-card=$CARD -o json     # .firewall.id
 hcloud firewall add-rule --direction in --protocol tcp --port 22 \
-  --source-ips $MY_IP/32 --description horizon-ssh $NAME-fw
+  --source-ips 0.0.0.0/0 --source-ips ::/0 --description horizon-ssh $NAME-fw
 hcloud server create --name $NAME --type $TYPE --image $IMAGE --location $LOCATION \
   --ssh-key $NAME-key --firewall $NAME-fw \
   --label horizon-managed=true --label horizon-card=$CARD -o json      # .server.*
@@ -58,9 +57,13 @@ hcloud server create --name $NAME --type $TYPE --image $IMAGE --location $LOCATI
 
 `-o json` on a create nests the object under the resource key and sends progress
 text to stderr. A new firewall has `rules: []` and allows nothing inbound: add the
-SSH rule before you connect. The provider injects the public key into `root`'s
-`authorized_keys`, so keep `--firewall`. Create no Network; if you must, label it
-and delete it in step 7. A later attach needs
+SSH rule before you connect. The rule accepts every address, because the machine
+key is the protection: an Ubuntu cloud image has no root password, and Hetzner
+puts the public key of the rent into `root`'s `authorized_keys`, so no password
+can log in. Step 5 of the skill proves that the ssh server refuses one. A server
+that you create without `--firewall` has no filter at all: every port answers the
+internet, so keep `--firewall`. Create no Network; if you must, label it and
+delete it in step 7. A later attach needs
 `hcloud firewall apply-to-resource --type server --server $NAME $NAME-fw`
 (UNVERIFIED).
 

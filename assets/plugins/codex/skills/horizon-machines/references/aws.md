@@ -57,10 +57,11 @@ price. The default VPC needs no create call, and its subnets set `MapPublicIpOnL
 ## 3. Rent (UNVERIFIED)
 
 Lead with `describe-images`: the SSM parameter path is often denied. Port 22 opens
-to the caller address only, and step 7 closes it.
+to every address, and the machine key is the protection: a Canonical AMI has no
+root password and the key pair is the only login. A new security group denies every
+inbound port, so the rule below is the one port that answers. Step 7 closes it.
 
 ```sh
-CALLER_IP=$(curl -4 -s https://api.ipify.org)   # or https://checkip.amazonaws.com
 VPC=$($AWS ec2 describe-vpcs --filters Name=isDefault,Values=true --output text --query 'Vpcs[0].VpcId')
 SUBNET=$($AWS ec2 describe-subnets --filters Name=vpc-id,Values=$VPC Name=default-for-az,Values=true \
   --output text --query 'Subnets[0].SubnetId')
@@ -70,7 +71,7 @@ SG=$($AWS ec2 create-security-group --group-name $NAME-sg --description "card $C
   --vpc-id "$VPC" --tag-specifications "ResourceType=security-group,Tags=$HZ" \
   --output text --query 'GroupId')                                                            # UNVERIFIED
 $AWS ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 \
-  --cidr "$CALLER_IP/32"                                                                      # UNVERIFIED
+  --cidr 0.0.0.0/0                                                                            # UNVERIFIED
 IID=$($AWS ec2 run-instances --image-id "$AMI" --instance-type "$TYPE" --count 1 \
   --key-name $NAME-key --security-group-ids "$SG" --subnet-id "$SUBNET" --associate-public-ip-address \
   --tag-specifications "ResourceType=instance,Tags=$HZ" "ResourceType=volume,Tags=$HZ" \

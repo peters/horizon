@@ -371,6 +371,7 @@ Read the answer of the request:
     {"label": "Runs on", "value": "helsinki-1"},
     {"label": "Starts by itself", "value": "yes, as a service"},
     {"label": "This computer", "value": "linked over SSH"},
+    {"label": "SSH from", "value": "any address, machine key only"},
     {"label": "Sent", "value": "1 machine, your settings"},
     {"label": "Kept aside", "value": "settings.before-server.1763020800000.json", "mono": true}]},
   {"type": "buttons", "items": [
@@ -383,6 +384,12 @@ Draw this card only for `link: in_step`. When the answer carries
 `restart_needed`, the `subtitle` is `Close Horizon and start it again one time.`
 instead, because this Horizon does not start the link of a new entry itself. An
 agent never restarts the program of the person.
+
+The row `SSH from` says which rule is in force on a rented machine:
+`any address, machine key only` for the default, or
+`<address of this computer>/32, machine key only` for a rule that the person asked
+for. Read it from the firewall of the place, or from the card of
+`horizon-machines` that made it, and never guess it.
 
 For `link: away`, draw this card instead, and name the cause that `reason` gave:
 
