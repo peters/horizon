@@ -281,6 +281,35 @@ fn a_card_that_names_a_machine_states_it_and_stores_its_name() {
     );
 }
 
+/// A card names the whole entry of the server, so an address that a join of another
+/// server wrote does not survive the person's press: the link would keep trying that
+/// listener instead of the login of the entry.
+#[test]
+fn a_confirmed_entry_replaces_the_address_of_a_join() {
+    let (temp, ctx, mut app) = app();
+    let root = temp.path().join("block-panel-requests");
+    std::fs::create_dir_all(&root).expect("the queue directory");
+    let mut joined = app.template_config.clone();
+    joined.server.address = Some("100.64.0.7:7000".to_owned());
+    app.template_config.server = joined.server.clone();
+    app.settings_io.save_config(app.config_path.clone(), joined, Vec::new());
+    app.wait_for_settings_io();
+
+    let request = request(&app, link("server-vm"));
+    assert!(app.apply_block_request_in(&request, &root, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    settle_link(&mut app);
+
+    let stored = stored(&mut app);
+    assert_eq!(stored.server.ssh_target.as_deref(), Some("server-vm"));
+    assert_eq!(
+        stored.server.address, None,
+        "the entry of the card names the route, so the listener of another server goes"
+    );
+}
+
 #[test]
 fn a_press_on_not_now_leaves_the_settings_as_they_are() {
     let (temp, ctx, mut app) = app();

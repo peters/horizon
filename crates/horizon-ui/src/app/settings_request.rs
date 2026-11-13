@@ -306,7 +306,9 @@ impl HorizonApp {
 
     /// Writes the server entry of this computer and starts the link of it now, as
     /// a join does. The entry and the command are the two fields that the card
-    /// stated; every other field of the store stays as it holds it.
+    /// stated, and the card names the whole entry: an address that a join of
+    /// another server wrote does not survive it, because the link would keep trying
+    /// that listener instead of the login of the entry.
     fn write_server_entry(&mut self, entry: &ServerEntry, command: &str, ctx: &Context) -> Result<EntryStart, String> {
         let before = self.stored_config();
         let mut stored = before.clone();
@@ -318,7 +320,7 @@ impl HorizonApp {
             ssh_target,
             machine,
             command: Some(command.to_owned()),
-            address: stored.server.address.clone(),
+            address: None,
         };
         stored.validate().map_err(|error| error.to_string())?;
         self.save_setting(&before, stored);
