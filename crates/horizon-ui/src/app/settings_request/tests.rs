@@ -52,7 +52,16 @@ fn request(app: &HorizonApp, operation: Operation) -> Request {
 
 fn link(ssh_target: &str) -> Operation {
     Operation::ServerLinkRequest {
-        ssh_target: ssh_target.to_owned(),
+        ssh_target: Some(ssh_target.to_owned()),
+        machine: None,
+        command: Some("/opt/horizon --server-link".to_owned()),
+    }
+}
+
+fn link_machine(machine: &str) -> Operation {
+    Operation::ServerLinkRequest {
+        ssh_target: None,
+        machine: Some(machine.to_owned()),
         command: Some("/opt/horizon --server-link".to_owned()),
     }
 }
@@ -190,6 +199,44 @@ fn the_answer_of_a_pressed_link_is_confirmed_and_linked() {
         answer_at(&root, &request),
         serde_json::json!({"status": "server_link", "answer": "confirmed", "start": "linked"}),
         "the entry applies to the running program, so no start is needed"
+    );
+}
+
+/// A card that names a machine of the list states the machine and the login that
+/// the link uses, and the entry stores the name of the machine.
+#[test]
+fn a_card_that_names_a_machine_states_it_and_stores_its_name() {
+    let (temp, ctx, mut app) = app();
+    let root = temp.path().join("block-panel-requests");
+    std::fs::create_dir_all(&root).expect("the queue directory");
+    let request = request(&app, link_machine("rented-1"));
+    assert!(app.apply_block_request_in(&request, &root, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    let document = app
+        .board
+        .panel(id)
+        .and_then(|panel| panel.block())
+        .map(|block| block.document.clone())
+        .expect("the document of the card");
+    assert_eq!(validate_document(&document), Ok(()), "the card is a valid card");
+    let text = format!("{document:?}");
+    for word in [
+        "Link this computer to the Horizon server on the machine rented-1?",
+        SERVER_MACHINE,
+        SERVER_SENT,
+    ] {
+        assert!(text.contains(word), "the card says {word}: {text}");
+    }
+    assert!(!text.contains("Server target"), "a machine names no raw target: {text}");
+
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+    let stored = stored(&mut app);
+    assert_eq!(stored.server.machine.as_deref(), Some("rented-1"));
+    assert_eq!(
+        stored.server.ssh_target, None,
+        "the entry names the machine alone, so a new address of it needs no edit"
     );
 }
 
@@ -334,8 +381,19 @@ fn a_target_that_the_settings_would_refuse_draws_no_card() {
         link("-oProxyCommand=evil"),
         link("two hosts"),
         Operation::ServerLinkRequest {
-            ssh_target: "server-vm".to_owned(),
+            ssh_target: Some("server-vm".to_owned()),
+            machine: None,
             command: Some("horizon; rm -rf /".to_owned()),
+        },
+        Operation::ServerLinkRequest {
+            ssh_target: Some("server-vm".to_owned()),
+            machine: Some("rented-1".to_owned()),
+            command: None,
+        },
+        Operation::ServerLinkRequest {
+            ssh_target: None,
+            machine: None,
+            command: None,
         },
         browser("two hosts", "work", None),
         browser("browser-vm", "Work Profile", None),

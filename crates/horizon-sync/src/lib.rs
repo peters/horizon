@@ -92,6 +92,6 @@ pub use store::{
 pub use supervisor::{
     LEGACY_WAIT_ANSWER_BOUND, LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, SettingsSyncView,
     Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings, WAIT_ANSWER_BOUND,
-    WAIT_ANSWER_MARGIN, proposed_device_name, stored_device_name, write_device_name,
+    WAIT_ANSWER_MARGIN, machine_login, proposed_device_name, stored_device_name, write_device_name,
 };
 pub use tip::tip;

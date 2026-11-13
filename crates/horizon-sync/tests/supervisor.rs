@@ -800,6 +800,102 @@ fn a_machine_list_without_a_server_starts_no_child() {
     );
 }
 
+/// A server that runs on a machine of the list is reached with the login of a
+/// terminal of that machine: its address, its user, its port, the machine key of
+/// Horizon and the known-hosts file of that key, and never a key of the person.
+#[test]
+fn a_server_on_a_machine_of_the_list_starts_ssh_with_the_login_of_that_machine() {
+    let home = tempfile::tempdir().expect("a directory");
+    let machines_dir = home.path().join("machines");
+    fs::create_dir_all(&machines_dir).expect("the machine directory");
+    let registry = horizon_core::MachineRegistry::new(machines_dir.clone());
+    let record = Machine {
+        name: "rented-1".to_owned(),
+        host: "203.0.113.40".to_owned(),
+        user: Some("root".to_owned()),
+        port: Some(2222),
+        added_at_millis: 1,
+        ..Machine::default()
+    };
+    horizon_core::Machines::with_records(registry, vec![record])
+        .with_key("rented-1", "horizon-rented-1")
+        .save()
+        .expect("the list of this computer");
+    // The three files of the machine key, as `machine_key` writes them.
+    let keys_dir = machines_dir.join("machine-keys");
+    fs::create_dir_all(&keys_dir).expect("the key folder");
+    for name in [
+        "horizon-rented-1",
+        "horizon-rented-1.pub",
+        "horizon-rented-1.known_hosts",
+    ] {
+        fs::write(keys_dir.join(name), "").expect("a file of the key");
+    }
+
+    let mut server = Server::start(&home.path().join("server"));
+    let stand_in_dir = machines_dir.join("stand-in");
+    let keys = horizon_core::MachineKeys::new(keys_dir.clone());
+    let mut config = SupervisorConfig::for_server(
+        "a raw target is not used",
+        "/root/bin/horizon --server-link",
+        &machines_dir,
+        keys_only(keys.clone()),
+    )
+    .expect("the settings of the link");
+    config.route =
+        Some(horizon_sync::machine_login(&machines_dir, &keys, "rented-1").expect("the login of the machine"));
+    config.program = stand_in(&stand_in_dir, &server.socket);
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+    let store = SyncedMachineStore::new(supervisor.handle().clone());
+    let mut computer = Computer {
+        machines_dir: machines_dir.clone(),
+        supervisor: Some(supervisor),
+        store,
+    };
+    eventually("the link of the machine", || {
+        matches!(computer.state(), LinkState::InStep { .. }).then_some(())
+    });
+
+    let key = keys_dir.display();
+    let called = arguments(&stand_in_dir);
+    let expected: Vec<String> = [
+        "-T",
+        "-o",
+        "LogLevel=ERROR",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=2",
+        "-p",
+        "2222",
+        "-i",
+        &format!("{key}/horizon-rented-1"),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        &format!("UserKnownHostsFile={key}/horizon-rented-1.known_hosts"),
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "root@203.0.113.40",
+        "/root/bin/horizon --server-link",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(
+        called, expected,
+        "the link of a machine holds the bounded options and then the login of a terminal of it"
+    );
+    computer.stop();
+    server.stop();
+}
+
 /// The relay of an `ssh` whose server refuses the greeting: it reads the hello,
 /// answers the error of `sys.argv[1]`, and ends the link. It adds one line to its
 /// starts file for every start, so a test sees that no other attempt ran.

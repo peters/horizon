@@ -52,12 +52,13 @@ impl HorizonApp {
         let settings_path = self.config_path.clone();
         let program = self.link_child_program();
         std::thread::spawn(move || {
-            let secrets = super::server_sync::secret_vault(&home, keys, &remote, &names);
+            let secrets = super::server_sync::secret_vault(&home, keys.clone(), &remote, &names);
             let _ = tx.send(super::server_sync::load(
                 registry,
                 server,
                 &settings_path,
                 secrets,
+                keys,
                 program,
                 wake,
             ));

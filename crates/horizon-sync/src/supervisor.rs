@@ -43,10 +43,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use horizon_browser_control::ssh_forward::ssh_command;
+use horizon_browser_control::ssh_forward::{ssh_command, ssh_command_with_options};
 use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
 use horizon_core::secret_store::{self, SecretStore};
-use horizon_core::{Machine, MachineError, SecretTarget};
+use horizon_core::{Machine, MachineError};
+use horizon_core::{SecretTarget, SshConnection};
 
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
@@ -61,6 +62,7 @@ use view::records_of;
 mod connect;
 mod files;
 mod link;
+mod machine_login;
 mod pull;
 mod questions;
 mod reset;
@@ -69,6 +71,7 @@ mod settings;
 mod state;
 mod view;
 
+pub use machine_login::machine_login;
 pub use questions::{ServerReply, ServerRequest};
 pub use settings::SyncedSettings;
 pub(crate) use state::SyncState;
@@ -188,6 +191,11 @@ pub fn write_device_name(directory: &Path, name: &str) -> Result<(), SyncError> 
 pub struct SupervisorConfig {
     /// SSH target of the server, as the settings entry names it.
     pub target: String,
+    /// The login of the server when the entry names a machine of the machine list:
+    /// its address, its user, its port and the machine key of Horizon with its own
+    /// known-hosts file. `None` starts `ssh <target>` with the SSH configuration of
+    /// the person, as a computer of the person needs.
+    pub route: Option<SshConnection>,
     /// Command that the child runs on the server.
     pub command: String,
     /// The program of the child: `ssh`, or a stand-in of a test.
@@ -273,6 +281,7 @@ impl SupervisorConfig {
     fn at(target: &str, command: &str, directory: &Path, device: String, secrets: Arc<dyn SecretTarget>) -> Self {
         Self {
             target: target.to_owned(),
+            route: None,
             command: command.to_owned(),
             program: horizon_browser_control::ssh_forward::ssh_program(),
             address: None,
@@ -294,7 +303,15 @@ impl SupervisorConfig {
     /// the call of the browser forward.
     #[must_use]
     pub fn command_line(&self) -> Command {
-        ssh_command(&self.program, &self.target, &self.command)
+        match &self.route {
+            Some(route) => ssh_command_with_options(
+                &self.program,
+                &route.login_option_args(),
+                &route.transport_target(),
+                &self.command,
+            ),
+            None => ssh_command(&self.program, &self.target, &self.command),
+        }
     }
 
     /// The token of this computer on its server, or `None` when it is not logged

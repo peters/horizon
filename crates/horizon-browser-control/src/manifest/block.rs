@@ -196,17 +196,30 @@ pub enum Operation {
     /// known-hosts file. Call it after the machine is deleted.
     DeleteMachineKey { name: String },
     /// Ask the person to link this computer to a Horizon server. Horizon draws
-    /// a card of its own in the caller's workspace that states the SSH target
-    /// and the command exactly as the settings store them, and it writes the
-    /// entry of the settings only when the person presses `Link`. The answer is
-    /// `server_link` with the person's answer, and with whether the link of the
-    /// running program follows the new entry now. The caller can press nothing
-    /// itself: a request that no person presses ends as `timed_out` after five
-    /// minutes, and the card goes with it.
+    /// a card of its own in the caller's workspace that states the target and
+    /// the command exactly as the settings store them, and it writes the entry
+    /// of the settings only when the person presses `Link`. The answer is
+    /// `server_link` with the person's answer, with whether the link of the
+    /// running program follows the new entry now, and, when it does, with
+    /// whether the server answered: `in_step` or `away` with the reason of the
+    /// link in words. The caller can press nothing itself: a request that no
+    /// person presses ends as `timed_out` after five minutes, and the card goes
+    /// with it.
     ServerLinkRequest {
         /// The SSH target, as the settings field `server.ssh_target` takes it:
-        /// an SSH config alias, a `user@host` or an address, one word.
-        ssh_target: String,
+        /// an SSH config alias, a `user@host` or an address, one word. Give this
+        /// for a computer of the person, which answers the keys of the person.
+        /// Omit it when `machine` names the server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_target: Option<String>,
+        /// The name of a machine of the machine list that runs the server, as
+        /// `machines` reports it. The link then uses the address, the user, the
+        /// port, the key file and the known-hosts file of a terminal of that
+        /// machine, so a machine that Horizon rented is reachable: it holds the
+        /// public key of Horizon and no key of the person. Give one of this and
+        /// `ssh_target`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
         /// The command that the link runs on the server, as
         /// `server.command` takes it. Omitted means the default
         /// `horizon --server-link`.
@@ -1253,7 +1266,8 @@ mod tests {
         assert_eq!(
             link,
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: Some("/opt/horizon --server-link".into()),
             }
         );
@@ -1263,10 +1277,23 @@ mod tests {
             }))
             .expect("the command is optional"),
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: None,
             },
             "without a command the link runs the default"
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "server_link_request", "machine": "rented-1"
+            }))
+            .expect("a machine of the list names the server"),
+            Operation::ServerLinkRequest {
+                ssh_target: None,
+                machine: Some("rented-1".into()),
+                command: None,
+            },
+            "a machine of the list carries no SSH target, and the link uses its login"
         );
         let browser = serde_json::from_value::<Operation>(serde_json::json!({
             "operation": "browser_host_request",
@@ -1335,7 +1362,8 @@ mod tests {
     fn a_setting_request_waits_for_the_person_and_never_for_an_hour() {
         for operation in [
             Operation::ServerLinkRequest {
-                ssh_target: "server-vm".into(),
+                ssh_target: Some("server-vm".into()),
+                machine: None,
                 command: None,
             },
             Operation::BrowserHostRequest {

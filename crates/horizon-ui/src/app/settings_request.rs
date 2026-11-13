@@ -56,6 +56,10 @@ pub(in crate::app) const ENGINE_UNAVAILABLE: &str = "engine_unavailable";
 pub(in crate::app) const SERVER_SENT: &str = "Your machine list, the machine keys and your settings are sent there.";
 /// The second line of the server card: what Horizon does before the first link.
 pub(in crate::app) const SERVER_KEPT: &str = "The settings of this computer are kept aside in a dated file first.";
+/// The line of the server card that says which login the link uses when the server
+/// runs on a machine of the list.
+pub(in crate::app) const SERVER_MACHINE: &str =
+    "The link runs on that machine with its address, its user and the machine key that a terminal of it uses.";
 /// The line of the browser card that says which profile of which browser the new
 /// panels use, in the words of the Settings window.
 pub(in crate::app) const BROWSER_USES: &str =
@@ -63,12 +67,32 @@ pub(in crate::app) const BROWSER_USES: &str =
 /// The line of the browser card that says when the entry applies.
 pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the next start of Horizon.";
 
+/// The server that the card asks about, as the request named it and as the store
+/// will hold it: an SSH target of the person, or a machine of the machine list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ServerEntry {
+    /// A target that the SSH configuration of the person resolves.
+    Target(String),
+    /// A machine of the list, whose own login the link uses.
+    Machine(String),
+}
+
+impl ServerEntry {
+    /// The name of the entry as the card states it and the settings store it.
+    fn label(&self) -> &str {
+        match self {
+            Self::Target(target) => target,
+            Self::Machine(machine) => machine,
+        }
+    }
+}
+
 /// The change that waits for the person's press, as the request named it and as
 /// the store will hold it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Asked {
-    /// The SSH target and the command of the server entry.
-    ServerLink { ssh_target: String, command: String },
+    /// The server entry and the command that the link runs there.
+    ServerLink { entry: ServerEntry, command: String },
     /// The SSH target and the profile of the browser host entry.
     BrowserHost { ssh_target: String, profile: String },
 }
@@ -205,13 +229,17 @@ impl HorizonApp {
         let Some(waiting) = self.settings_request.waiting.take() else {
             return false;
         };
+        self.remove_setting_card(&waiting, ctx);
         let outcome = if id == APPLY {
             self.apply_setting(&waiting, ctx)
         } else {
             unconfirmed_outcome(&waiting.asked, Answer::Declined)
         };
-        self.remove_setting_card(&waiting, ctx);
-        self.write_block_answer(BlockAnswer::new(waiting.root.as_deref(), waiting.request, outcome));
+        self.write_block_answer(BlockAnswer::new(
+            waiting.root.as_deref(),
+            waiting.request.clone(),
+            outcome,
+        ));
         self.mark_runtime_dirty();
         ctx.request_repaint();
         true
@@ -221,10 +249,11 @@ impl HorizonApp {
     /// writes it. A refusal here is the answer of the request: the fields passed
     /// their rule when the card was drawn, so a refusal names a setting of the
     /// store that the new entry contradicts.
+    ///
     fn apply_setting(&mut self, waiting: &Waiting, ctx: &Context) -> Outcome {
         let written = match &waiting.asked {
-            Asked::ServerLink { ssh_target, command } => {
-                self.write_server_entry(ssh_target, command, ctx)
+            Asked::ServerLink { entry, command } => {
+                self.write_server_entry(entry, command, ctx)
                     .map(|start| Outcome::ServerLink {
                         answer: Answer::Confirmed,
                         start: Some(start),
@@ -241,13 +270,18 @@ impl HorizonApp {
     }
 
     /// Writes the server entry of this computer and starts the link of it now, as
-    /// a join does. The SSH target and the command are the two fields that the
-    /// card stated; every other field of the entry stays as the store holds it.
-    fn write_server_entry(&mut self, ssh_target: &str, command: &str, ctx: &Context) -> Result<EntryStart, String> {
+    /// a join does. The entry and the command are the two fields that the card
+    /// stated; every other field of the store stays as it holds it.
+    fn write_server_entry(&mut self, entry: &ServerEntry, command: &str, ctx: &Context) -> Result<EntryStart, String> {
         let before = self.stored_config();
         let mut stored = before.clone();
+        let (ssh_target, machine) = match entry {
+            ServerEntry::Target(target) => (Some(target.clone()), None),
+            ServerEntry::Machine(machine) => (None, Some(machine.clone())),
+        };
         stored.server = ServerConfig {
-            ssh_target: Some(ssh_target.to_owned()),
+            ssh_target,
+            machine,
             command: Some(command.to_owned()),
             address: stored.server.address.clone(),
         };
@@ -346,22 +380,52 @@ fn unconfirmed_outcome(asked: &Asked, answer: Answer) -> Outcome {
 /// exists, and the card shows the values that the store will hold.
 fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument), Outcome> {
     match operation {
-        Operation::ServerLinkRequest { ssh_target, command } => {
-            let target = ssh_target.trim();
+        Operation::ServerLinkRequest {
+            ssh_target,
+            machine,
+            command,
+        } => {
+            let target = ssh_target.as_deref().map(str::trim).filter(|target| !target.is_empty());
+            let named = machine.as_deref().map(str::trim).filter(|machine| !machine.is_empty());
+            let (ssh_target, machine_name) = match (target, named) {
+                (Some(target), None) => (Some(target), None),
+                (None, Some(machine)) => (None, Some(machine)),
+                (Some(_), Some(_)) => {
+                    return Err(Outcome::failed(
+                        block_machines::INVALID_REQUEST,
+                        "A server link request names one server: give `machine` for a machine of the list, or `ssh_target` for a computer of the person, and not both",
+                    ));
+                }
+                (None, None) => {
+                    return Err(Outcome::failed(
+                        block_machines::INVALID_REQUEST,
+                        "A server link request names no server: give `machine` with the name of a machine of the list, or `ssh_target` with an SSH target",
+                    ));
+                }
+            };
             let command = command.as_deref().map_or(DEFAULT_LINK_COMMAND, str::trim);
             let entry = ServerConfig {
-                ssh_target: Some(target.to_owned()),
+                ssh_target: ssh_target.map(str::to_owned),
+                machine: machine_name.map(str::to_owned),
                 command: Some(command.to_owned()),
                 address: None,
             };
             entry
                 .validate()
                 .map_err(|error| Outcome::failed(block_machines::INVALID_REQUEST, &error.to_string()))?;
-            let asked = Asked::ServerLink {
-                ssh_target: target.to_owned(),
-                command: command.to_owned(),
+            let entry = match machine_name {
+                Some(machine) => ServerEntry::Machine(machine.to_owned()),
+                None => ServerEntry::Target(ssh_target.unwrap_or_default().to_owned()),
             };
-            Ok((asked, SERVER_TITLE, server_document(target, command)))
+            let document = server_document(&entry, command);
+            Ok((
+                Asked::ServerLink {
+                    entry,
+                    command: command.to_owned(),
+                },
+                SERVER_TITLE,
+                document,
+            ))
         }
         Operation::BrowserHostRequest {
             ssh_target,
@@ -397,29 +461,45 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
 }
 
 /// The card that asks the person to link this computer to a Horizon server, with
-/// the target and the command exactly as the settings store them.
-fn server_document(ssh_target: &str, command: &str) -> BlockDocument {
-    BlockDocument {
+/// the entry and the command exactly as the settings store them.
+///
+/// A server on a machine of the list states the machine, and the line that says
+/// which login the link uses: the machine holds the machine key of Horizon, so the
+/// person cannot reach it with their own SSH configuration.
+fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
+    let mut rows = vec![KvRow {
+        label: match entry {
+            ServerEntry::Target(_) => "Server target".to_owned(),
+            ServerEntry::Machine(_) => "Machine".to_owned(),
+        },
+        value: entry.label().to_owned(),
+        mono: true,
+    }];
+    rows.push(KvRow {
+        label: "Command".to_owned(),
+        value: command.to_owned(),
+        mono: true,
+    });
+    let mut components = vec![
+        Component::Heading {
+            text: match entry {
+                ServerEntry::Target(target) => format!("Link this computer to the Horizon server on {target}?"),
+                ServerEntry::Machine(machine) => {
+                    format!("Link this computer to the Horizon server on the machine {machine}?")
+                }
+            },
+            subtitle: None,
+            badge: None,
+        },
+        Component::Kv { rows },
+    ];
+    if matches!(entry, ServerEntry::Machine(_)) {
+        components.push(Component::Text {
+            text: SERVER_MACHINE.to_owned(),
+        });
+    }
+    let rest = BlockDocument {
         components: vec![
-            Component::Heading {
-                text: format!("Link this computer to the Horizon server on {ssh_target}?"),
-                subtitle: None,
-                badge: None,
-            },
-            Component::Kv {
-                rows: vec![
-                    KvRow {
-                        label: "Server target".to_owned(),
-                        value: ssh_target.to_owned(),
-                        mono: true,
-                    },
-                    KvRow {
-                        label: "Command".to_owned(),
-                        value: command.to_owned(),
-                        mono: true,
-                    },
-                ],
-            },
             Component::Text {
                 text: SERVER_SENT.to_owned(),
             },
@@ -441,7 +521,9 @@ fn server_document(ssh_target: &str, command: &str) -> BlockDocument {
                 ],
             },
         ],
-    }
+    };
+    components.extend(rest.components);
+    BlockDocument { components }
 }
 
 /// The card that asks the person to use the browser of another machine for new
