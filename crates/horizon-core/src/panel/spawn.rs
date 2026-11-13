@@ -1,10 +1,12 @@
 #[cfg(test)]
 mod attention_standin_tests;
 mod block;
+mod browser;
 mod device;
 mod start;
 mod terminal;
 
+use browser::{browser_spawn_mode, restored_browser_mode};
 pub use start::{
     PanelStart, PendingRestart, PreparedLaunch, RestartPreflight, StartRequest, finish_restart, prepare_panel_start,
 };
@@ -449,93 +451,6 @@ enum BrowserSpawnMode {
     /// The browser host and profile that served a panel in a previous run. It
     /// comes back on that host, as a page cannot move between machines.
     RestoredHost(crate::browser::AttachedHost),
-}
-
-/// The backend of a new browser panel: the browser host that the settings name,
-/// or the browser of this computer.
-///
-/// A panel that follows the entry carries the flag in its `PanelOptions`: the
-/// preset picker of a person, and a create that an agent asks for. Both open the
-/// ordinary browser panel, and only the machine that runs the Chromium differs.
-/// A saved panel, and a page of a local profile that a panel duplicates, keep
-/// the backend that their caller chose.
-///
-/// # Errors
-/// Returns the reason that `AttachedHost::new` gives for a target that `ssh`
-/// would take as an option or split, so no such value reaches a forward.
-/// The mode of a browser panel that a previous run saved: the browser host and
-/// profile that served it, when the saved panel carries them, and otherwise the
-/// mode that its other saved fields give.
-///
-/// The entry of today's settings takes no part: a saved panel keeps the host
-/// that served it, and a live page cannot move between machines.
-///
-/// # Errors
-/// Returns the reason that `AttachedHost::new` gives for a saved target that
-/// `ssh` would take as an option or split, so no such value reaches a forward.
-fn restored_browser_mode(
-    mode: BrowserSpawnMode,
-    browser_host: Option<crate::runtime_state::BrowserHostState>,
-) -> Result<BrowserSpawnMode> {
-    match (browser_host, mode) {
-        (Some(host), BrowserSpawnMode::Local(None)) => {
-            let mut attached = crate::browser::AttachedHost::with_engine(
-                host.ssh_target,
-                host.profile.as_deref(),
-                host.engine.unwrap_or_default(),
-                host.command.as_deref(),
-            )?;
-            // A saved panel of a machine of the list comes back through the machine
-            // key of this computer, which is the only login that such a machine has.
-            if let Some(login) = host.login {
-                attached = attached.with_login(login);
-            }
-            Ok(BrowserSpawnMode::RestoredHost(attached))
-        }
-        (_, mode) => Ok(mode),
-    }
-}
-
-fn browser_spawn_mode(
-    mode: BrowserSpawnMode,
-    browser_host: Option<&crate::BrowserHostConfig>,
-    follows_browser_host: bool,
-    login: Option<SshConnection>,
-) -> Result<BrowserSpawnMode> {
-    if !follows_browser_host {
-        return Ok(mode);
-    }
-    let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
-        return Ok(mode);
-    };
-    if !matches!(mode, BrowserSpawnMode::Local(None)) {
-        return Ok(mode);
-    }
-    let named = browser_host
-        .ssh_target()
-        .or_else(|| browser_host.machine())
-        .unwrap_or_default();
-    let host = crate::browser::AttachedHost::with_engine(
-        named,
-        browser_host.profile(),
-        browser_host.engine(),
-        browser_host.driver_command(),
-    )?;
-    // A machine of the list answers to the machine key of Horizon alone, so the
-    // panel takes the login that the machine record and that key make, and never
-    // the SSH configuration of the person.
-    let host = match browser_host.machine() {
-        Some(machine) => match login {
-            Some(login) => host.with_login(login),
-            None => {
-                return Err(crate::error::Error::Config(format!(
-                    "The browser host of this computer names the machine {machine}, and this run holds no login of it. Start Horizon again, or name the SSH target of that host."
-                )));
-            }
-        },
-        None => host,
-    };
-    Ok(BrowserSpawnMode::AttachedHost(host))
 }
 
 /// Spawn a browser panel. The generic `command` field carries the optional
