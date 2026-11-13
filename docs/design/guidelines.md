@@ -370,13 +370,64 @@ bars, outlines and tints, and put label text in `FG` or `FG_SOFT`.
 JetBrains Mono is the metrics source for the terminal grid; the CJK and symbol
 fonts only fill glyphs it lacks. Do not add another UI family.
 
+### Weights
+
+Inter is a variable face. One file holds every weight, and the rasteriser draws
+a weight only when the layout asks for the `wght` coordinate of that weight.
+`typeface::Weight` names the weights of the approved mockups. Do not write a
+`wght` value in a call site.
+
+| Weight | `wght` | Where it is used |
+|---|---|---|
+| Regular | 400 | Body text, secondary lines, hints, key labels, the second line of a heading |
+| Medium | 500 | Sidebar row titles |
+| Semibold | 600 | Row titles, the label of a primary button, the step that is under way, the title bar of a focused panel, the sidebar brand and its captions, Settings headings |
+| Bold | 650 | The heading of a card, the title of a tile |
+| Black | 700 | The heading of the first start page, a caption in upper case |
+
+`egui::RichText::strong` is not a weight in this toolkit version. It paints the
+same glyphs in the strong colour of the visuals. Text that must look heavier
+asks for a weight: `typeface::rich` for a stock widget and `typeface::format` or
+`typeface::Weight::coords` for a layout job. The word "strong" in the table
+below means such a weight.
+
+Both faces of the interface ask for normal hinting with the horizontal fit of
+the hinter kept (`FontTweak::hinting_target`). A stem at 9 to 14 screen points
+then lands on a pixel, and the stems of one word come out equally thick. A
+fallback face keeps the default hinting.
+
+### Text under the canvas zoom
+
+The canvas is one layer under a scale transform. A text shape under a layer
+transform keeps the glyph pictures that were made for scale 1 and scales only
+their rectangles. Therefore every text that the canvas zoom draws goes through
+`zoom_text`, and no call site multiplies a font size by a zoom itself.
+
+- `zoom_text::layout_job`, `layout_no_wrap`, `text` and `text_shape` take a
+  painter or the terminal's font rasteriser. They lay the text out at the size
+  that it takes on the screen and hand the painter the glyph offsets of that
+  size, divided by the zoom that made the pictures. One glyph texel then meets
+  one pixel.
+- The layout stays the layout of zoom 1. The wrap width, the line height, the
+  cell grid of a terminal and the height estimate of a card are the values of
+  zoom 1. `layout_job` multiplies every size, every tracking value and the wrap
+  width by one factor. Font advances grow linearly with the font size, so a
+  paragraph breaks at the words of zoom 1 at every zoom.
+- The screen sizes are quarter points. A zoom that moves keeps the pictures of
+  the zoom at which the gesture started for 120 ms, then makes the pictures of
+  the new size once and asks for one frame. A still window asks for no frame.
+- The state keeps at most 64 screen sizes. The toolkit clears its whole glyph
+  atlas when it passes 80 % fill, so the pictures of a long zoom session cannot
+  fill it.
+- Zoom 1 takes the plain path. The look of a display of scale 1 does not change.
+
 ### Scale
 
 Horizon does not override egui's named text styles (defaults for egui 0.36:
 Body and Button 13, Heading 18, Small 9, Monospace 13). Widgets that need a
 specific size set it explicitly with `RichText::size` or `FontId`, so the
-sizes actually used form this scale. Size is in logical points; weight is
-egui's normal or `.strong()` (a bolder rendering of the same family).
+sizes actually used form this scale. Size is in logical points. The weight comes
+from the `Weight` table above.
 
 | Size | Weight | Where it is used | Color |
 |---|---|---|---|
