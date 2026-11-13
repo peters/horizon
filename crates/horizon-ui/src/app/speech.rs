@@ -11,8 +11,6 @@
 
 mod pill;
 
-pub(in crate::app) use pill::MarkTone;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,7 +22,6 @@ use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 use super::HorizonApp;
 use super::shortcuts::{key_pressed_in_events, shortcut_pressed_in_events, shortcut_released_in_events};
-use crate::theme;
 
 /// The window that reads the hotkey of speech input, and holds the panel of its
 /// take.
@@ -222,23 +219,14 @@ impl SpeechUi {
         self.target
     }
 
-    /// The line of the mark at `now`, with the color of its tone.
-    pub(in crate::app) fn mark(&self, now: Instant) -> Option<(String, MarkTone)> {
-        if let Some((message, until)) = &self.error
-            && now < *until
-        {
-            return Some((message.clone(), MarkTone::Error));
-        }
-        match self.phase {
-            Phase::Idle => None,
-            Phase::Listening => {
-                let elapsed = self
-                    .started
-                    .map_or(Duration::ZERO, |started| now.saturating_duration_since(started));
-                Some((format!("Listening {}", clock_text(elapsed)), MarkTone::Listening))
-            }
-            Phase::Writing => Some(("Writing…".to_owned(), MarkTone::Writing)),
-        }
+    /// The sentence of the mark at `now`, while one shows.
+    ///
+    /// The icon of the title bar states that a take records or is transcribed, so the
+    /// pill holds only the sentences that a person must read: the reason of a failed
+    /// take, and the offer of a kept take.
+    pub(in crate::app) fn mark(&self, now: Instant) -> Option<String> {
+        let (message, until) = self.error.as_ref()?;
+        (now < *until).then(|| message.clone())
     }
 
     /// The name of the key whose state the window read last.
@@ -667,25 +655,15 @@ impl HorizonApp {
         );
     }
 
-    /// Draw the state mark of a take on the panel of that take, inside `rect`.
+    /// Draw the sentence of a take on the panel of that take, inside `rect`.
     pub(super) fn paint_speech_mark(&self, painter: &egui::Painter, panel: PanelId, rect: egui::Rect) {
         if self.speech.target() != Some(panel) {
             return;
         }
-        let Some((text, tone)) = self.speech.mark(Instant::now()) else {
+        let Some(text) = self.speech.mark(Instant::now()) else {
             return;
         };
-        pill::paint(painter, rect, &text, tone);
-    }
-}
-
-/// The color of one tone of the mark: the accent of a recording, the soft text of
-/// a transcription, and the red of a sentence.
-pub(super) fn tone_color(tone: MarkTone) -> egui::Color32 {
-    match tone {
-        MarkTone::Listening => theme::ACCENT(),
-        MarkTone::Writing => theme::FG_DIM(),
-        MarkTone::Error => theme::PALETTE_RED(),
+        pill::paint(painter, rect, &text);
     }
 }
 

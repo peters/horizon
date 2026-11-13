@@ -71,7 +71,7 @@ fn a_hotkey_of_the_start_works_before_the_first_save() {
     );
     let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true)]);
     assert!(app.speech.input.is_none(), "no take runs without a terminal");
-    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let message = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, NO_TERMINAL);
     assert!(
         !remaining
@@ -94,7 +94,7 @@ fn a_hotkey_with_no_terminal_starts_no_recording_and_says_so() {
         "no worker thread starts a take that has no panel"
     );
     assert_eq!(app.speech.target(), None);
-    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let message = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, NO_TERMINAL);
     assert!(
         !remaining
@@ -114,7 +114,7 @@ fn a_tap_whose_release_is_in_the_same_frame_starts_no_long_take() {
     // so a tap never records until its bound.
     let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true), key(Key::F9, false)]);
 
-    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let message = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, NO_TERMINAL, "the tap of a key with no terminal starts nothing");
     assert!(app.speech.input.is_none());
     assert!(
@@ -133,7 +133,7 @@ fn a_hotkey_while_the_settings_name_no_transcriber_says_that_speech_input_is_off
     let remaining = frame_with_keys(&ctx, &mut app, vec![key(Key::F9, true)]);
 
     assert!(app.speech.input.is_none());
-    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let message = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, super::NOT_SET);
     assert!(
         !remaining
@@ -143,30 +143,36 @@ fn a_hotkey_while_the_settings_name_no_transcriber_says_that_speech_input_is_off
 }
 
 #[test]
-fn the_mark_counts_the_seconds_of_a_take_and_names_a_transcription() {
+fn the_pill_holds_no_line_of_a_take_and_its_sentence_of_an_error() {
+    // The icon of the title bar states that a take records or is transcribed, so
+    // the pill says nothing while it does.
     let mut speech = SpeechUi::new();
     let started = Instant::now();
     speech.target = Some(PanelId(3));
     speech.phase = super::Phase::Listening;
+    speech.source = Some(super::TakeSource::Hotkey);
     speech.started = Some(started);
 
-    let (text, tone) = speech
-        .mark(started + Duration::from_secs(3))
-        .expect("the mark of a take");
-    assert_eq!(text, "Listening 0:03");
-    assert_eq!(tone, crate::app::speech::MarkTone::Listening);
-
-    let (text, tone) = speech
-        .mark(started + Duration::from_secs(63))
-        .expect("the mark of a long take");
-    assert_eq!(text, "Listening 1:03");
-    assert_eq!(tone, crate::app::speech::MarkTone::Listening);
+    assert_eq!(
+        speech.mark(started + Duration::from_secs(3)),
+        None,
+        "a recording take draws no line of the pill"
+    );
+    assert_eq!(speech.mic_state(PanelId(3)), super::MicState::Recording);
+    assert_eq!(speech.take_started(), Some(started));
 
     speech.phase = super::Phase::Writing;
     speech.started = None;
-    let (text, tone) = speech.mark(started).expect("the mark of a transcription");
-    assert_eq!(text, "Writing…");
-    assert_eq!(tone, crate::app::speech::MarkTone::Writing);
+    assert_eq!(speech.mark(started), None, "a transcribed take draws no line either");
+    assert_eq!(speech.mic_state(PanelId(3)), super::MicState::Busy);
+
+    // The sentence of a failed take is the line that the pill still draws.
+    speech.phase = super::Phase::Idle;
+    speech.fail("pw-record is not installed on this computer");
+    assert_eq!(
+        speech.mark(started),
+        Some("pw-record is not installed on this computer".to_owned())
+    );
 }
 
 #[test]
@@ -174,7 +180,7 @@ fn the_sentence_of_a_failed_take_shows_for_six_seconds_and_then_goes() {
     let mut speech = SpeechUi::new();
     let now = Instant::now();
     speech.fail("pw-record is not installed on this computer");
-    let (message, _) = speech.mark(now).expect("the sentence of the failure");
+    let message = speech.mark(now).expect("the sentence of the failure");
     assert_eq!(message, "pw-record is not installed on this computer");
     assert!(speech.mark(now + Duration::from_secs(5)).is_some());
     assert_eq!(speech.mark(now + Duration::from_secs(7)), None);
@@ -316,7 +322,7 @@ fn the_hotkey_of_the_main_window_never_takes_a_panel_of_a_detached_workspace() {
 
     assert_eq!(app.speech.target(), None, "the main window has no panel of a take");
     assert!(app.speech.input.is_none(), "no take runs for a panel of another window");
-    let (message, _) = app.speech.mark(Instant::now()).expect("the sentence of the key");
+    let message = app.speech.mark(Instant::now()).expect("the sentence of the key");
     assert_eq!(message, NO_TERMINAL);
     assert!(
         !remaining
@@ -445,7 +451,7 @@ fn wait_for_sentence(ctx: &Context, app: &mut crate::app::HorizonApp) -> String 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         take_frame(ctx, app, Vec::new());
-        if let Some((text, super::MarkTone::Error)) = app.speech.mark(Instant::now()) {
+        if let Some(text) = app.speech.mark(Instant::now()) {
             return text;
         }
         assert!(
@@ -513,16 +519,15 @@ fn a_held_hotkey_starts_one_take_and_shows_a_recorder_that_dies_at_once() {
         std::thread::sleep(Duration::from_millis(20));
     }
     take_frame(&ctx, &mut app, Vec::new());
-    let (text, tone) = app.speech.mark(Instant::now()).expect("the mark of the take");
-    assert_eq!(tone, super::MarkTone::Error, "the mark keeps the failure: {text}");
+    let text = app.speech.mark(Instant::now()).expect("the mark of the take");
+    assert!(!text.is_empty(), "the mark keeps the failure: {text}");
     assert_eq!(starts_of(&starts), 1, "one held key starts one recorder");
 
     // The release of a key whose take already ended adds nothing.
     take_frame(&ctx, &mut app, vec![key(Key::F9, false)]);
     take_frame(&ctx, &mut app, Vec::new());
     assert_eq!(starts_of(&starts), 1, "the release starts no recorder");
-    let (_, tone) = app.speech.mark(Instant::now()).expect("the mark of the take");
-    assert_eq!(tone, super::MarkTone::Error);
+    assert!(app.speech.mark(Instant::now()).is_some(), "the mark keeps the failure");
 }
 
 #[test]
@@ -551,6 +556,11 @@ fn the_icon_of_the_panel_records_while_the_recorder_lives() {
             app.speech.mic_state(PanelId(999)),
             super::MicState::Idle,
             "the icon of another panel is idle"
+        );
+        assert_eq!(
+            app.speech.mark(Instant::now()),
+            None,
+            "the pill counts nothing while the recorder lives"
         );
         std::thread::sleep(Duration::from_millis(40));
     }
