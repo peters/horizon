@@ -340,7 +340,7 @@ impl KeyboardInputForwarder {
 
         if let Some(translation) = input::translate_key_event_on(key_identity, context, self.macos) {
             if *pressed
-                && translation.suppress_text.is_some()
+                && (translation.suppress_text.is_some() || translation.meta_text_pending)
                 && (modifiers.alt
                     || mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL)
                     || input::should_defer_textual_key(*key, *physical_key, *pressed, *modifiers, mode))
@@ -424,6 +424,20 @@ impl DeferredTextKey {
     }
 
     fn resolve_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
+        if self
+            .press_translation
+            .as_ref()
+            .is_some_and(|translation| translation.meta_text_pending)
+        {
+            // The Meta escape of this press waited for the character: Alt and
+            // Shift with a symbol writes the escape and the character of the
+            // text of the press, once.
+            let mut bytes = Vec::with_capacity(text.len() + 1);
+            bytes.push(b'\x1b');
+            bytes.extend_from_slice(text.as_bytes());
+            return InputEmission::pty(bytes);
+        }
+
         if self
             .press_translation
             .as_ref()
@@ -819,6 +833,41 @@ mod tests {
         (Key::Period, Key::Period, ".", ">"),
     ];
 
+    /// The press, the text that follows it and the release of one chord of
+    /// `AltGr`, which the toolkit of Linux reports as no `alt`, with Shift when
+    /// `shift` is set.
+    fn chord_events_without_alt(
+        key: Key,
+        physical_key: Key,
+        key_without_modifiers_text: &str,
+        text: &str,
+        shift: bool,
+    ) -> Vec<TerminalInputEvent> {
+        let modifiers = Modifiers {
+            shift,
+            ..Modifiers::NONE
+        };
+        vec![
+            key_event(
+                key,
+                Some(physical_key),
+                Some(key_without_modifiers_text),
+                true,
+                false,
+                modifiers,
+            ),
+            text_event(text),
+            key_event(
+                key,
+                Some(physical_key),
+                Some(key_without_modifiers_text),
+                false,
+                false,
+                modifiers,
+            ),
+        ]
+    }
+
     /// The press, the text that follows it and the release of one chord with
     /// Alt, and with Shift when `shift` is set.
     fn chord_events(
@@ -854,20 +903,101 @@ mod tests {
         ]
     }
 
-    /// The Alt key of Linux stays the Meta key for every chord of Shift, also
-    /// where the toolkit reports the shifted symbol as a key of its own. These
-    /// are the bytes of the head before the rule of Option: the text of a symbol
-    /// with Shift is not printable text, so the Meta path of these chords writes
-    /// no `ESC` on either head, and the text of the key reaches the terminal.
+    /// The Alt key of Linux is the Meta key for every chord of Shift, also where
+    /// the toolkit reports the shifted symbol as a key of its own: the terminal
+    /// reads the escape and the character of the press, once.
     #[test]
-    fn alt_with_shift_keeps_the_bytes_of_linux() {
+    fn alt_with_shift_writes_the_escape_and_the_character_of_linux() {
         for (key, physical_key, without_modifiers, text) in ALT_SHIFT_ON_LINUX {
             let events = chord_events(key, physical_key, without_modifiers, text, true);
+            let expected = format!("\x1b{text}");
+
+            assert_eq!(
+                forward_bytes_on(&events, TermMode::NONE, false),
+                expected.as_bytes(),
+                "Alt+Shift with {key:?} writes Meta and {text} on Linux"
+            );
+        }
+    }
+
+    /// A symbol or a digit without Shift keeps its character in the key, so the
+    /// escape and the character leave with the press and the text of the press
+    /// writes nothing twice.
+    #[test]
+    fn alt_with_a_symbol_writes_the_escape_and_the_character_once() {
+        for (key, text) in [
+            (Key::Slash, "/"),
+            (Key::Num1, "1"),
+            (Key::Semicolon, ";"),
+            (Key::Backslash, "\\"),
+            (Key::OpenBracket, "["),
+            (Key::Equals, "="),
+            (Key::Minus, "-"),
+            (Key::Period, "."),
+        ] {
+            let events = chord_events(key, key, text, text, false);
+            let expected = format!("\x1b{text}");
+
+            assert_eq!(
+                forward_bytes_on(&events, TermMode::NONE, false),
+                expected.as_bytes(),
+                "Alt with {key:?} writes Meta and {text} once on Linux"
+            );
+        }
+    }
+
+    /// The Meta escape of a shifted symbol waits for the text of the press, so a
+    /// chord whose text never arrives writes no escape of its own.
+    #[test]
+    fn a_shifted_chord_without_text_writes_nothing() {
+        let press = key_event(
+            Key::Minus,
+            Some(Key::Minus),
+            Some("-"),
+            true,
+            false,
+            Modifiers {
+                alt: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+        );
+        let release = key_event(
+            Key::Minus,
+            Some(Key::Minus),
+            Some("-"),
+            false,
+            false,
+            Modifiers {
+                alt: true,
+                shift: true,
+                ..Modifiers::NONE
+            },
+        );
+
+        assert_eq!(
+            forward_bytes_on(&[press, release], TermMode::NONE, false),
+            b"",
+            "a chord whose text of the press never arrives writes no escape"
+        );
+    }
+
+    /// The `AltGr` key of a Linux layout is not the Alt key of the toolkit, so its
+    /// character reaches the terminal alone: `{` on a Norwegian layout, and `\`
+    /// for the chords of `AltGr` and Shift.
+    #[test]
+    fn an_altgr_character_reaches_the_pty_alone_on_linux() {
+        for (key, physical_key, without_modifiers, text, shift) in [
+            (Key::OpenCurlyBracket, Key::Num7, "7", "{", false),
+            (Key::Backslash, Key::Num7, "7", "\\", true),
+            (Key::Num2, Key::Num2, "2", "@", false),
+        ] {
+            let events = chord_events_without_alt(key, physical_key, without_modifiers, text, shift);
 
             assert_eq!(
                 forward_bytes_on(&events, TermMode::NONE, false),
                 text.as_bytes(),
-                "Alt+Shift with {key:?} gives {text} alone on Linux, as it did before the rule of Option"
+                "AltGr with {key:?} writes {text} alone on Linux"
             );
         }
     }

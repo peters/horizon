@@ -54,6 +54,30 @@ impl KeyEventContext {
 pub struct KeyTranslation {
     pub bytes: Vec<u8>,
     pub suppress_text: Option<String>,
+    /// The Meta escape of this press waits for the text of the key, because only
+    /// that text names the character: a Linux system reports the character of a
+    /// shifted symbol in the text of the press and not in the key.
+    pub meta_text_pending: bool,
+}
+
+impl KeyTranslation {
+    fn new(bytes: Vec<u8>, suppress_text: Option<String>) -> Self {
+        Self {
+            bytes,
+            suppress_text,
+            meta_text_pending: false,
+        }
+    }
+
+    /// The `ESC` of a Meta chord, which waits for the character of the text of
+    /// the press.
+    fn meta_waits_for_the_character() -> Self {
+        Self {
+            bytes: Vec::new(),
+            suppress_text: None,
+            meta_text_pending: true,
+        }
+    }
 }
 
 /// The key rules for the system that `macos` names, so a test runs the rules of
@@ -98,7 +122,7 @@ pub(crate) fn translate_key_event_on(
                     || should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
             })
             .map(ToOwned::to_owned);
-        return Some(KeyTranslation { bytes, suppress_text });
+        return Some(KeyTranslation::new(bytes, suppress_text));
     }
 
     if !context.pressed {
@@ -108,12 +132,12 @@ pub(crate) fn translate_key_event_on(
     if remapped_text.is_none()
         && let Some(bytes) = named_key_sequence(key_identity.key, context.modifiers, context.mode)
     {
-        return Some(KeyTranslation {
+        return Some(KeyTranslation::new(
             bytes,
-            suppress_text: should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
+            should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
                 .then_some(text)
                 .flatten(),
-        });
+        ));
     }
 
     if control && let Some(byte) = control_character(key_identity.key) {
@@ -122,30 +146,47 @@ pub(crate) fn translate_key_event_on(
             bytes.push(b'\x1b');
         }
         bytes.push(byte);
-        return Some(KeyTranslation {
-            bytes,
-            suppress_text: None,
-        });
+        return Some(KeyTranslation::new(bytes, None));
     }
 
     if context.modifiers.alt
         && let Some(text) = text
     {
-        if option_composed_character(key_identity, &text) {
-            // The Option key asked the layout for this character, so it is the
-            // character of the layout and reaches the terminal as text.
+        if macos && option_composed_character(key_identity, &text) {
+            // The Option key of a Mac asked the layout for this character, so it
+            // is the character of the layout and reaches the terminal as text.
             return None;
         }
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.push(b'\x1b');
         bytes.extend_from_slice(text.as_bytes());
-        return Some(KeyTranslation {
-            bytes,
-            suppress_text: Some(text),
-        });
+        return Some(KeyTranslation::new(bytes, Some(text)));
+    }
+
+    // A Linux system reports the character of a shifted symbol in the text of
+    // the press, and the symbol itself in the key where the layout has one. Alt
+    // is the Meta key there, with or without Shift, so the escape and the
+    // character of the text of this press reach the terminal once.
+    if !macos && context.modifiers.alt && alt_waits_for_the_text_of_the_press(key_identity, context.modifiers) {
+        return Some(KeyTranslation::meta_waits_for_the_character());
     }
 
     None
+}
+
+/// Whether Alt with `modifiers` writes the character of a symbol or a digit, and
+/// only the text of the press names that character.
+///
+/// A letter carries its own Shift, so `printable_text` answers with it and the
+/// caller already wrote the escape and the letter. A symbol or a digit with
+/// Shift arrives here: the key names the shifted symbol on one layout and the
+/// key without modifiers on another, and the text of the press names the
+/// character in both.
+fn alt_waits_for_the_text_of_the_press(key_identity: KeyIdentity<'_>, modifiers: Modifiers) -> bool {
+    if !modifiers.shift || key_identity.remapped_text().is_some() {
+        return false;
+    }
+    printable_text(key_identity.key, Modifiers::NONE).is_some()
 }
 
 pub fn translate_text_event(
@@ -167,10 +208,7 @@ pub fn translate_text_event(
         repeat: context.repeat,
         text: Some(text),
     })?;
-    Some(KeyTranslation {
-        bytes,
-        suppress_text: None,
-    })
+    Some(KeyTranslation::new(bytes, None))
 }
 
 pub fn paste_bytes(text: &str, mode: TermMode, bracketed: bool) -> Vec<u8> {
