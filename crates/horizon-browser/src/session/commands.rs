@@ -104,6 +104,7 @@ impl DriverState {
                 continue;
             }
             let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
+            let result = result.map_err(|failure| Self::failure_when_link_lost(link, failure));
             self.complete_agent_action(&request, result);
             if stop {
                 return true;
@@ -274,6 +275,22 @@ impl DriverState {
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
         Ok(false)
+    }
+
+    /// A call that failed because the link to the browser went away says so, so
+    /// an agent reads a lost link and not a socket error, and never reads a
+    /// lost link as a completed action.
+    fn failure_when_link_lost(link: &CdpLink, failure: BrowserControlFailure) -> BrowserControlFailure {
+        if !link.link_lost() {
+            return failure;
+        }
+        BrowserControlFailure::new(
+            "link_lost",
+            format!(
+                "the link to the browser was lost during this action, so it may or may not have happened;                  the panel connects again by itself and a later call works: {}",
+                failure.message
+            ),
+        )
     }
 
     fn page_command_failure(
@@ -755,10 +772,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
+    use std::time::Duration;
 
     use crate::frames::FrameSlot;
     use crate::session::{BrowserEventSender, BrowserEventWake, CommittedUrl};
-    use crate::{BrowserConfig, PageScrollState, session::BrowserSessionConfig};
+    use crate::{BrowserConfig, BrowserControlFailure, PageScrollState, session::BrowserSessionConfig};
 
     use super::DriverState;
 
@@ -1029,6 +1047,57 @@ mod tests {
         assert!(state.scrollbar_layout.layout.is_none());
         assert!(state.vertical_scrollbar_drag.is_none());
         assert!(frame_slot.page_scroll_state().is_none());
+    }
+
+    #[test]
+    fn a_call_that_failed_because_the_link_went_away_says_so() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mock");
+            let socket = tungstenite::accept(stream).expect("mock handshake");
+            // The link goes away while the action waits for an answer.
+            drop(socket);
+        });
+        let mut link = crate::cdp::CdpLink::connect(&format!("ws://{address}/")).expect("connect mock");
+        let _state = driver_state();
+
+        let refused = DriverState::failure_when_link_lost(
+            &link,
+            BrowserControlFailure::new("protocol_error", "cdp error -32000: refused"),
+        );
+        assert_eq!(
+            refused.code, "protocol_error",
+            "a link that still answers keeps the words of the browser"
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !link.link_lost() && std::time::Instant::now() < deadline {
+            let _ = link.read_one();
+        }
+        assert!(link.link_lost(), "the closed link reports its loss");
+        let lost = DriverState::failure_when_link_lost(
+            &link,
+            BrowserControlFailure::new(
+                "protocol_error",
+                "websocket: Connection reset without closing handshake",
+            ),
+        );
+        assert_eq!(lost.code, "link_lost");
+        assert!(
+            lost.message.contains("may or may not have happened"),
+            "{}",
+            lost.message
+        );
+        assert!(
+            lost.message.contains("a later call works"),
+            "the agent reads that the panel recovers: {}",
+            lost.message
+        );
+        drop(link);
+        let _ = server.join();
     }
 
     #[test]
