@@ -40,9 +40,13 @@ For Firefox, copy the binary of this computer as well and name it:
 
 ```sh
 scp Dockerfile entrypoint.sh horizon-browser-wrapper.sh setup.sh <target>:
-scp "$(command -v horizon)" <target>:horizon
+scp "$HORIZON_EXECUTABLE" <target>:horizon
 ssh <target> 'sh setup.sh --profile work --engine firefox --horizon horizon'
 ```
+
+`HORIZON_EXECUTABLE` is the program that runs Horizon, and an agent panel holds
+its path. Do not look for a `horizon` on `PATH`: another program of that name
+would speak another version of the link, and the driver refuses it.
 
 The last line is
 `browser-machine ready profile=work engine=firefox command=docker exec -i -e HOME=/profile hz-bvm-work /opt/horizon/horizon --browser-host-driver`.

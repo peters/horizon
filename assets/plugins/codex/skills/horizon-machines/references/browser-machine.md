@@ -75,9 +75,13 @@ For the firefox engine, copy the horizon binary of this computer as well, and
 name it:
 
 ```sh
-scp "$(command -v horizon)" <target>:horizon
+scp "$HORIZON_EXECUTABLE" <target>:horizon
 ssh <target> 'sh setup.sh --profile <profile> --engine firefox --horizon horizon'
 ```
+
+`HORIZON_EXECUTABLE` is the program that runs Horizon, and an agent panel holds
+its path. Do not look for a `horizon` on `PATH`: another program of that name
+would speak another version of the link, and the driver refuses it.
 
 The setup then ends with a `command=` value instead of a `port=` value. Write it
 as `browser_host.command` in step 4, and set the engine of the entry to Firefox.

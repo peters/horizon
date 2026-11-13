@@ -64,15 +64,18 @@ second home folder; use one of them.
 
    Result: the last command ends with no output and exit code 0.
 
-2. Copy the binary of this computer into the home folder of that account.
+2. Copy the binary of this computer into the home folder of that account. The
+   variable `HORIZON_EXECUTABLE` of an agent panel is that binary; do not read a
+   `horizon` on `PATH`.
 
    ```sh
-   cp /path/to/horizon /tmp/horizon-fftest
+   cp "$HORIZON_EXECUTABLE" /tmp/horizon-fftest
    install -m 0755 /tmp/horizon-fftest /home/fftest/horizon
    sudo -u fftest /home/fftest/horizon --version
    ```
 
-   Result: the last command prints the same version as this computer.
+   Result: the last command prints the same version as the command
+   `"$HORIZON_EXECUTABLE" --version` on this computer.
 
 **A second home folder (Linux or macOS).**
 
@@ -87,7 +90,9 @@ second home folder; use one of them.
 2. Prove that the driver starts in that folder.
 
    ```sh
-   ssh 127.0.0.1 'HOME=/tmp/ffhost-home /path/to/horizon --browser-host-driver --profile fftest --engine firefox'
+   cp "$HORIZON_EXECUTABLE" /tmp/ffhost-home/horizon
+   chmod 755 /tmp/ffhost-home/horizon
+   ssh 127.0.0.1 'HOME=/tmp/ffhost-home /tmp/ffhost-home/horizon --browser-host-driver --profile fftest --engine firefox'
    ```
 
    Result: the command prints one line that starts with `{"type":"refusal"` and
