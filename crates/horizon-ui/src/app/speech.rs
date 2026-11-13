@@ -124,6 +124,9 @@ pub(in crate::app) struct SpeechUi {
     home: Option<PathBuf>,
     /// The hotkey of the settings, or `None` while the settings name none.
     binding: Option<ShortcutBinding>,
+    /// Whether the settings turn speech input on: a recorder and a transcriber are
+    /// set. It is read from the settings, never from a frame.
+    on: bool,
     phase: Phase,
     /// The control that started the take that runs, so only the take of the hotkey
     /// ends when its key comes up.
@@ -152,6 +155,7 @@ impl SpeechUi {
             input: None,
             home: None,
             binding: None,
+            on: false,
             phase: Phase::Idle,
             source: None,
             target: None,
@@ -164,12 +168,18 @@ impl SpeechUi {
         }
     }
 
-    /// The hotkey of `config`.
+    /// The hotkey and the state of `config`.
     pub(in crate::app) fn configure(&mut self, config: &horizon_core::Config) {
         let hotkey = config.speech.hotkey.trim();
         self.binding = (!hotkey.is_empty())
             .then(|| ShortcutBinding::parse(hotkey).ok())
             .flatten();
+        self.on = config.speech.is_on();
+    }
+
+    /// Whether the settings of this window turn speech input on.
+    pub(in crate::app) fn is_on(&self) -> bool {
+        self.on
     }
 
     fn is_idle(&self) -> bool {
@@ -568,7 +578,7 @@ impl HorizonApp {
         window: SpeechWindow,
         interactive: bool,
     ) -> Option<PanelMic> {
-        if !self.template_config.speech.is_on() || !self.speech_panel_accepts(panel_id, window) {
+        if !self.speech.is_on() || !self.speech_panel_accepts(panel_id, window) {
             return None;
         }
         let state = self.speech.mic_state(panel_id);
