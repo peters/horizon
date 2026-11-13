@@ -98,6 +98,47 @@ second home folder; use one of them.
    Result: the command prints one line that starts with `{"type":"refusal"` and
    names the greeting of the link, because no hello arrived. Press `Ctrl+C`.
 
+**The fixture of this procedure.** A fixture run writes the entry of the host in
+its private settings, so no hand edit of a settings store is necessary.
+
+1. Start the fixture with `--browser-host` and name the engine of that host with
+   `--browser-host-engine firefox`; without that option the fixture follows the
+   Chromium of the host.
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon "$HORIZON_EXECUTABLE" \
+     --native-view --state /tmp/ff-fixture --browser-host fftest@127.0.0.1 \
+     --browser-host-profile fftest --browser-host-engine firefox
+   ```
+
+   Result: the entry of the fixture names the engine `firefox`, and the panel
+   follows the driver of that host.
+
+2. Name the program of the driver with `--browser-host-command` when the
+   non-interactive `ssh` of the host finds no `horizon` on its `PATH`, such as
+   `/home/fftest/horizon --browser-host-driver`; without that option the entry
+   leaves the command to its default.
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon "$HORIZON_EXECUTABLE" \
+     --native-view --state /tmp/ff-fixture --browser-host fftest@127.0.0.1 \
+     --browser-host-profile fftest --browser-host-engine firefox \
+     --browser-host-command '/home/fftest/horizon --browser-host-driver'
+   ```
+
+   Result: the entry of the fixture holds that command, and the driver of the
+   host starts from it.
+
+3. Keep the browser of the host after the panel closes. A session of that
+   browser lives until the panel closes it, until the person removes the browser
+   or until the machine of the host restarts. To stop it after a bound with no
+   link, add `--idle-stop <minutes>` to the command of the entry, as in
+   `/home/fftest/horizon --browser-host-driver --idle-stop 120`; without that
+   option the browser of the host never stops by itself.
+
+   Result: the session of the host keeps its page with no panel, and it stops
+   after the bound of its entry.
+
 ## 6. Tasks
 
 ### 6.1 F1 — the panel shows the Firefox of the host
@@ -151,7 +192,9 @@ second home folder; use one of them.
 3. Wait for the countdown.
 
    Result: the panel attaches again, the picture shows the same page, and the
-   text that you typed is still in the field.
+   text that you typed is still in the field. The panel shows no notice that the
+   page state is gone, and the log names the reason of the lost link such as the
+   status of `ssh` or its words; the log holds no empty reason.
 
 4. Read the latency lines of one press. Start Horizon with
    `HORIZON_BROWSER_LATENCY=1`, press a key, and read the log.
@@ -224,7 +267,9 @@ with that key.
 
 - The panel paints the page of the host, and the input of the person reaches it.
 - A cut link attaches again to the same page, and the text of a form field
-  survives it.
+  survives it. The log of that loss names its reason.
+- The browser of the host stays after the panel is closed, and it stops only at
+  the idle bound of the entry or at `close`.
 - Each refusal names what is missing on the host, in one sentence, and offers
   **Retry**.
 - The latency lines of a press exist and are in order.

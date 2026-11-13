@@ -42,6 +42,16 @@ STRIPPED_PREFIXES = (
     'HORIZON_WORK_',
 )
 
+# The switches that a fixture run keeps: they ask Horizon for the latency lines of
+# its own panels, which a person reads while the fixture runs, and they name no
+# identity. The list is the table of `docs/latency-trace.md`. A switch that this
+# tuple misses is removed with the identity of the shell, and the lines of that
+# action do not appear.
+TRACE_SWITCHES = (
+    'HORIZON_BROWSER_LATENCY',
+    'HORIZON_TERMINAL_LATENCY',
+)
+
 
 def runtime_dest(uid=None):
     return f'/run/user/{os.getuid() if uid is None else uid}'
@@ -56,7 +66,8 @@ def without_inherited_horizon(environ):
     another board.
     """
     stripped = {key: value for key, value in environ.items()
-                if key not in STRIPPED_KEYS and not key.startswith(STRIPPED_PREFIXES)}
+                if key in TRACE_SWITCHES
+                or (key not in STRIPPED_KEYS and not key.startswith(STRIPPED_PREFIXES))}
     return stripped
 
 

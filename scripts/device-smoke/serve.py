@@ -736,7 +736,8 @@ def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None)
 
 
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
-                         browser_host=None, browser_host_profile=None, theme='dark', server_target=None,
+                         browser_host=None, browser_host_profile=None, browser_host_engine=None,
+                         browser_host_command=None, theme='dark', server_target=None,
                          server_command=None, server_address=None, secret_names=None, speech=None):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
@@ -783,6 +784,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
         entry = {'ssh_target': browser_host}
         if browser_host_profile:
             entry['profile'] = browser_host_profile
+        if browser_host_engine:
+            entry['engine'] = browser_host_engine
+        if browser_host_command:
+            entry['command'] = browser_host_command
         fixture['browser_host'] = entry
     if server_target or server_address:
         # The server that the machine list of the fixture follows, so a procedure
@@ -852,6 +857,8 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('file_agent', '--file-agent'),
     ('presets', '--presets'), ('theme', '--theme'),
     ('browser_host', '--browser-host'), ('browser_host_profile', '--browser-host-profile'),
+    ('browser_host_engine', '--browser-host-engine'),
+    ('browser_host_command', '--browser-host-command'),
     ('server_target', '--server-target'), ('server_command', '--server-command'),
     ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
     ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
@@ -859,6 +866,15 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('speech_service', '--speech-service'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
 )
+
+
+def check_browser_host_arguments(parser, args):
+    """The options of a browser host name one host: a profile, an engine and a command need it."""
+    for value, flag in ((args.browser_host_profile, '--browser-host-profile'),
+                        (args.browser_host_engine, '--browser-host-engine'),
+                        (args.browser_host_command, '--browser-host-command')):
+        if value and not args.browser_host:
+            parser.error(f'{flag} needs --browser-host')
 
 
 def plain_start_conflicts(args):
@@ -968,6 +984,14 @@ def arguments():
         '--browser-host-profile',
         help='Profile of that browser host whose pages the fixture opens; needs --browser-host')
     parser.add_argument(
+        '--browser-host-engine', choices=('chromium', 'firefox'),
+        help='Engine of that browser host, when the procedure follows its Firefox instead of its '
+             'Chromium; needs --browser-host')
+    parser.add_argument(
+        '--browser-host-command',
+        help='Command that starts the driver of that browser host, when its horizon is not on the '
+             'PATH of a non-interactive ssh, such as a full path; needs --browser-host')
+    parser.add_argument(
         '--server-target',
         help='SSH target of the Horizon server that the machine list of the fixture follows, such as '
              'an SSH config alias to a second computer')
@@ -1051,8 +1075,7 @@ def main():
         ssh_config, ssh_identity = sandbox.ssh_sources(args.ssh_config, args.ssh_identity)
     except ValueError as problem:
         parser.error(str(problem))
-    if args.browser_host_profile and not args.browser_host:
-        parser.error('--browser-host-profile needs --browser-host')
+    check_browser_host_arguments(parser, args)
     if args.worktree_card and args.presets:
         parser.error('--worktree-card writes the presets of the worktree card; do not give '
                      '--presets as well')
@@ -1228,7 +1251,8 @@ def main():
         speech = speech_section(args.speech_recorder, args.speech_transcriber_command, args.speech_service)
         fixture = application_document(
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
-            args.browser_host, args.browser_host_profile, args.theme, args.server_target,
+            args.browser_host, args.browser_host_profile, args.browser_host_engine,
+            args.browser_host_command, args.theme, args.server_target,
             args.server_command, args.server_address, named_secret_names(held), speech)
         if not args.plain_start:
             # A plain start keeps the home as its own settings writer: the fixture
