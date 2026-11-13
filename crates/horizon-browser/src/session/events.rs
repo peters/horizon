@@ -155,6 +155,9 @@ impl DriverState {
         if self.handle_navigate_response(event_tx, id, result.as_ref(), error.as_ref()) {
             return;
         }
+        if self.handle_reload_response(event_tx, id, error.as_ref()) {
+            return;
+        }
         if self.handle_screencast_response(id, error.as_ref()) {
             return;
         }
@@ -273,9 +276,7 @@ impl DriverState {
                     self.http_auth.reset_requests();
                     self.screencast_on = false;
                     self.screencast_request_id = None;
-                    self.navigate_request_id = None;
-                    self.pending_viewport_capture_at = None;
-                    self.viewport_capture_request_id = None;
+                    self.forget_page_requests();
                     self.invalidate_scrollbar_layout(event_tx);
                     self.reset_clipboard_tracking();
                     self.main_frame_id = None;

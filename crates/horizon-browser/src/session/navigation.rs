@@ -11,6 +11,16 @@ use crate::{AgentAction, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, NavigationWait, norm
 use super::{BrowserEventSender, DriverState};
 
 impl DriverState {
+    /// Forgets the replies that this driver still owes for the page session that
+    /// went away, so a later answer of another session is not read as one of
+    /// these commands.
+    pub(super) fn forget_page_requests(&mut self) {
+        self.navigate_request_id = None;
+        self.reload_request_id = None;
+        self.pending_viewport_capture_at = None;
+        self.viewport_capture_request_id = None;
+    }
+
     /// Dispatch `Page.navigate` for a `Navigate` agent action. A dispatch-only
     /// wait settles at once; otherwise the action stays pending until the
     /// commit, `DOMContentLoaded`, failure, or deadline arrives.

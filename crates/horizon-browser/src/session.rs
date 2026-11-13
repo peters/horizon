@@ -508,6 +508,9 @@ struct DriverState {
     /// In-flight `Page.navigate` request. The reply is routed asynchronously
     /// so a slow destination never blocks frames, input, or coordination.
     navigate_request_id: Option<u64>,
+    /// The reply of `Page.reload`, which this driver sends without waiting: a key
+    /// or a click that follows the reload must not wait for a far browser.
+    reload_request_id: Option<u64>,
     /// In-flight `Page.startScreencast` request, for the same reason.
     screencast_request_id: Option<u64>,
     /// In-flight `Target.getTargetInfo` question, which never blocks the loop.
@@ -615,6 +618,7 @@ impl DriverState {
             pending_wait: None,
             top_frame_navigating: false,
             navigate_request_id: None,
+            reload_request_id: None,
             screencast_request_id: None,
             title_request_id: None,
             clipboard: ClipboardState::default(),
@@ -799,6 +803,36 @@ impl DriverState {
         self.clipboard.pending_capture = false;
         // Passkey caller contexts belong to the Runtime domain of the session.
         self.reset_passkeys();
+    }
+
+    /// Sends `Page.reload` without waiting for the page, and answers the request
+    /// id whose reply [`Self::handle_reload_response`] reads in a later pass.
+    pub(super) fn reload_page(&mut self, link: &mut CdpLink) -> Result<u64, CdpError> {
+        let Some(session) = self.session_id.clone() else {
+            return Err(CdpError::NoPageSession {
+                method: "Page.reload".to_string(),
+            });
+        };
+        link.send_request("Page.reload", &serde_json::json!({}), Some(session.as_str()))
+    }
+
+    /// Consume the asynchronous `Page.reload` reply: an error of the protocol is
+    /// a reload that did not happen, and the panel says so.
+    pub(super) fn handle_reload_response(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        id: u64,
+        error: Option<&crate::cdp::CdpErrorInfo>,
+    ) -> bool {
+        if self.reload_request_id != Some(id) {
+            return false;
+        }
+        self.reload_request_id = None;
+        if let Some(error) = error {
+            self.top_frame_navigating = false;
+            self.page_command_failure(event_tx, "reload", "protocol_error", error.to_string());
+        }
+        true
     }
 
     fn navigate_to(

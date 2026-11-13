@@ -19,6 +19,22 @@ use super::{
     SCROLLBAR_LAYOUT_RETRY_DELAY, VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
 };
 
+/// The name of the wait of one command of the window, for the latency line of a
+/// pass that blocked.
+const fn command_step_name(command: &BrowserCommand) -> &'static str {
+    match command {
+        BrowserCommand::Input(_) => "drain:input",
+        BrowserCommand::Navigate(_) | BrowserCommand::Back | BrowserCommand::Forward => "drain:navigate",
+        BrowserCommand::Reload => "drain:reload",
+        BrowserCommand::SetViewport { .. } => "drain:viewport",
+        BrowserCommand::DropFiles { .. } => "drain:drop-files",
+        BrowserCommand::NativeSelectChoose { .. } | BrowserCommand::NativeSelectDismiss => "drain:native-select",
+        BrowserCommand::HandoffDone => "drain:handoff",
+        BrowserCommand::Video { .. } => "drain:video",
+        BrowserCommand::Orientation { .. } | BrowserCommand::Stop => "drain:control",
+    }
+}
+
 impl DriverState {
     /// Process every pending UI command. Returns `true` when `Stop` arrived.
     pub(super) fn drain_commands(
@@ -34,10 +50,13 @@ impl DriverState {
         let batch = command_rx.drain(256);
         for command in batch.commands {
             self.audit_user_command(&command);
-            if self
-                .dispatch_command(link, event_tx, frame_slot, command, true)
-                .is_ok_and(|stop| stop)
-            {
+            // Each command names its own wait, so a line of `latency stall` says
+            // which command of the window held the pass and not only that the
+            // drain took its time.
+            let step = crate::latency::step(command_step_name(&command));
+            let dispatched = self.dispatch_command(link, event_tx, frame_slot, command, true);
+            drop(step);
+            if dispatched.is_ok_and(|stop| stop) {
                 return true;
             }
         }
@@ -170,8 +189,12 @@ impl DriverState {
                 // round trip (a fast reload's commit or stop) may already
                 // clear it, and must not be overwritten afterwards.
                 self.top_frame_navigating = true;
-                match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
-                    Ok(_) => {
+                // The reply arrives in a later pass, so a person's key or click
+                // that follows this reload is written to the socket at once
+                // instead of after a far browser answered it.
+                match self.reload_page(link) {
+                    Ok(request_id) => {
+                        self.reload_request_id = Some(request_id);
                         self.pending_restart_at = Some(Instant::now());
                         Ok(false)
                     }
@@ -294,7 +317,7 @@ impl DriverState {
         )
     }
 
-    fn page_command_failure(
+    pub(super) fn page_command_failure(
         &mut self,
         event_tx: &BrowserEventSender,
         action: &str,
@@ -810,6 +833,108 @@ mod tests {
             wake: BrowserEventWake::default(),
             committed_url: CommittedUrl::default(),
         }
+    }
+
+    /// A CDP endpoint that holds the answer of `Page.reload` for a far link's
+    /// round trip, and answers every other command at once. It reports the time
+    /// between the reload and the next command it reads, so a test can tell
+    /// whether that command was written while the reload's answer was owed.
+    fn reload_holding_server() -> (String, std::thread::JoinHandle<std::time::Duration>) {
+        use std::time::{Duration, Instant};
+
+        const FAR_LINK: Duration = Duration::from_millis(200);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_millis(5))).unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let mut held: Option<(serde_json::Value, Instant)> = None;
+            let mut gap = Duration::ZERO;
+            loop {
+                match socket.read() {
+                    Ok(tungstenite::Message::Text(text)) => {
+                        let command: serde_json::Value = serde_json::from_str(&text).unwrap();
+                        let method = command["method"].as_str().unwrap_or_default().to_string();
+                        if method != "Page.reload"
+                            && let Some((reload, reload_at)) = held.take()
+                        {
+                            // The page answers the reload now, and the command
+                            // that arrived while its answer was owed leaves with
+                            // the same write.
+                            gap = reload_at.elapsed();
+                            for answer in [reload, command] {
+                                let response = serde_json::json!({"id": answer["id"], "result": {}});
+                                socket
+                                    .send(tungstenite::Message::Text(response.to_string().into()))
+                                    .unwrap();
+                            }
+                            break;
+                        }
+                        if held.is_none() {
+                            held = Some((command, Instant::now()));
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tungstenite::Error::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(_) => break,
+                }
+                if let Some((reload, reload_at)) = held.as_ref()
+                    && reload_at.elapsed() >= FAR_LINK
+                {
+                    let (reload, reload_at) = (reload.clone(), *reload_at);
+                    // The far link answered the reload before any command of the
+                    // window reached the page: the page was held for a whole
+                    // round trip.
+                    gap = reload_at.elapsed();
+                    let response = serde_json::json!({"id": reload["id"], "result": {}});
+                    socket
+                        .send(tungstenite::Message::Text(response.to_string().into()))
+                        .unwrap();
+                    break;
+                }
+            }
+            gap
+        });
+        (url, server)
+    }
+
+    /// F1: a key that follows a reload is written to the socket at once. The
+    /// reload's answer belongs to a far browser and arrives a round trip later,
+    /// and waiting for it in the drain would hold every input behind it.
+    #[test]
+    fn a_key_that_follows_a_reload_leaves_before_the_reload_is_answered() {
+        use std::time::Duration;
+
+        let (url, server) = reload_holding_server();
+        let mut state = driver_state();
+        state.session_id = Some("page".into());
+        let slot = Arc::clone(&state.config.frame_slot);
+        let events = test_events();
+        let (sender, receiver) = super::super::command_queue::channel(Arc::clone(&slot));
+        assert!(sender.send(crate::BrowserCommand::Reload));
+        assert!(sender.send(crate::BrowserCommand::Input(crate::BrowserInput::KeyDown {
+            physical_key: None,
+            key: crate::BrowserKey::Char('a'),
+            text: Some("a".into()),
+            modifiers: crate::BrowserModifiers::default(),
+            repeat: false,
+            edit_command: None,
+        })));
+        let mut link = crate::cdp::CdpLink::connect(&url).unwrap();
+
+        let stop = state.drain_commands(&mut link, &receiver, &events, &slot);
+
+        assert!(!stop, "the drain of the test keeps the session");
+        let gap = server.join().unwrap();
+        assert!(
+            gap < Duration::from_millis(100),
+            "the key left {gap:?} after the reload, before its answer at 200 ms"
+        );
     }
 
     #[test]
