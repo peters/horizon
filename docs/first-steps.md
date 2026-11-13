@@ -190,6 +190,53 @@ Start Horizon from the new installation to make sure you use the new executable.
 If the build stops with a missing font, do step 6 again. On Linux, a
 `pkg-config` or linker error usually tells you that a `-dev` package is missing.
 
+## The first start page and Set up
+
+The first start shows one page with four starts. Each tile is a button: click it,
+or push Tab until it has the focus ring and then push Enter or Space.
+
+| Tile | What it does |
+|---|---|
+| `Run agents side by side` | Makes a workspace and opens a panel of the first preset of your settings. |
+| `Work on a bigger machine` | Starts Set up with the goal `rent`. |
+| `Use Horizon on all your computers` | Starts Set up with the goal `server`. |
+| `A browser that stays signed in` | Starts Set up with the goal `browser`. |
+
+Under the tiles is the row of shortcuts of this computer: New terminal,
+Quick Nav and Machines you have. On macOS, the primary key is Cmd.
+
+Set up opens a panel of your agent and gives it one sentence: `Use the
+horizon-setup skill. The person pressed Set up. Goal: <goal>.` The agent then
+does the work and shows each step as a card.
+
+You can start Set up in three places:
+
+1. The control **Set up** in the header of the **Machines** section of the
+   sidebar. It has no goal, so the agent asks which one you want.
+2. The row **Set up** in the Menu of the titlebar, above Settings. It has no
+   goal either.
+3. One of the three Set up tiles of the first start page. Each tile gives its
+   own goal.
+
+Set up starts the agent preset that your settings name first among the agent
+programs that this computer has. To change the choice, open **Settings**,
+**Presets**, and change the order of the presets or the command of one preset.
+A preset of Gemini or KiloCode is never chosen, because those programs take no
+first message on the command line.
+
+A second press of Set up shows the panel that the first press opened. It starts
+no second panel. When you close that panel, the next press opens a new one.
+
+When no agent can start, Horizon draws its own card, **Set up needs an agent**.
+The card names each agent program that Horizon looked for, says whether it
+found one, and says whether the agent integrations of this run are on. Its
+buttons are **Look again** and **Open Settings, Presets**.
+
+If you start Horizon with `HORIZON_AGENT_INTEGRATIONS=off`, the agent has no
+Horizon skills, so Set up does not start. The card then says: `Agent
+integrations are off, so the agent has no Horizon skills. Start Horizon without
+HORIZON_AGENT_INTEGRATIONS=off.`
+
 ## Use the board
 
 On macOS, use Cmd instead of Ctrl in each step of this procedure. A shell

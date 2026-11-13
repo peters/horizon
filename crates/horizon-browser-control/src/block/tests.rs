@@ -1047,3 +1047,44 @@ fn the_value_and_the_badge_of_a_row_hold_512_characters_and_no_control_character
         assert!(error.to_string().contains(path), "{path}: {error}");
     }
 }
+
+/// The four card documents of the Set up test procedure are valid cards, so the
+/// person who runs that procedure draws the mock-up as it is written. The
+/// procedure is an input of this test: a document that drifts from the rules of
+/// a card fails here.
+#[test]
+fn the_card_documents_of_the_set_up_procedure_are_valid() {
+    let procedure = include_str!("../../../../docs/testing/procedures/set-up-wizard.md");
+    let mut documents = Vec::new();
+    for line in procedure.lines() {
+        let request = line.trim();
+        if !request.starts_with(r#"{"tool": "block_panel""#) {
+            continue;
+        }
+        let request: serde_json::Value = serde_json::from_str(request).expect("the request of the procedure is JSON");
+        let document = request
+            .pointer("/arguments/document")
+            .expect("the request of the procedure carries a document");
+        let encoded = serde_json::to_string(document).expect("the document serializes");
+        let parsed = parse_document(&encoded).unwrap_or_else(|error| panic!("{request}: {error}"));
+        documents.push(parsed);
+    }
+
+    assert_eq!(documents.len(), 4, "the procedure draws the four cards of the mock-up");
+    let texts: Vec<String> = documents
+        .iter()
+        .filter_map(|document| match &document.components[0] {
+            Component::Heading { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            "Where do you rent?".to_owned(),
+            "How big, and where?".to_owned(),
+            "Renting the machine".to_owned(),
+            "helsinki-1 is ready".to_owned(),
+        ]
+    );
+}

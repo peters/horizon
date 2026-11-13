@@ -107,6 +107,9 @@ Once that loop is familiar, the rest is optional: **New** in the sidebar for an 
 
 New here? [First steps](docs/first-steps.md) walks you from install to your first board, agent and browser.
 
+- **A first start that asks what you want.** An empty window shows one page with four starts: run agents side by side, rent a bigger machine, one Horizon server for all your computers, or a browser that stays signed in. Each tile is a button, the keyboard reaches it with Tab, and the row underneath names the keys of your computer.
+- **Set up does the setup for you.** **Set up** in the Menu, in the machine section of the sidebar, or one of the page's tiles opens a panel of your agent and gives it your goal. The agent does the work and shows every step as a card. Horizon picks the first agent preset in your settings whose program is installed; reorder the presets in Settings to pick another. When no agent program is there, Horizon says so on a card of its own with the programs it looked for.
+
 - **Remote Hosts**. Open a terminal or a desktop on another machine, over SSH or from your Tailscale devices. See [Remote Hosts](#remote-hosts).
 - **Agent-driven desktops** — agents click and type in an isolated X11 desktop while you watch it in a Device panel. The input works on Linux with X11 only; the Device panel view works on Linux and macOS. See [Watch an app over VNC](#watch-an-app-over-vnc).
 - **Speech input** — hold **F9**, speak, and the text of the take waits at the prompt of your panel. Horizon runs a recorder program of your computer and one transcription service or command, with no speech engine in the build. See [Speech input](#speech-input).
