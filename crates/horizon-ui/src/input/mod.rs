@@ -8,6 +8,7 @@ mod terminal_local;
 mod winit_keyboard;
 
 pub(crate) use ime_commit::ImeCommitNormalizer;
+pub(crate) use keyboard::cut_chord_is_control_character;
 pub use keyboard::{
     KeyEventContext, KeyIdentity, KeyTranslation, paste_bytes, should_defer_textual_key,
     translate_key_event_with_physical, translate_text_event,
