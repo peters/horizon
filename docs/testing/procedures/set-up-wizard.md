@@ -84,10 +84,17 @@ Horizon before they write anything.
 - An empty folder `<state-agent>` for the second part, with the work folder
   `<work-agent>` inside it: `<work-agent>` is `<state-agent>/data/work-agent`,
   because the fixture binds the state folder and not a folder beside it.
-- For tasks 6.10 to 6.12: an agent preset that the settings name first, an SSH
-  login of this computer to the server computer of task 6.10, and the empty
-  folder `<state-server>` with its work folder
-  `<state-server>/data/work-server`.
+- For tasks 6.9 to 6.12: an agent preset that the settings name first, and an
+  SSH login of this computer to its own name, for the server of task 6.10.
+- For task 6.9: the empty folder `<state-rent>` with its work folder
+  `<work-rent>`, which is `<state-rent>/data/work-rent`, and a signed-in provider
+  CLI of the person.
+- For task 6.10: the empty folder `<state-server>` with its work folder
+  `<work-server>`, which is `<state-server>/data/work-server`.
+- For task 6.11: the empty folder `<state-browser>`, and the browser machine of
+  the procedure `browser-machine.md`.
+- For task 6.12: the empty folder `<state-join>`, and a Horizon server that runs
+  on another computer of the person.
 
 ## 5. Setup
 
@@ -455,7 +462,8 @@ network. The agent is real, and it follows the skill `horizon-setup`.
    ```
 
    Open the live view as in setup step 4. Result: The fixture prints its JSON
-   line, and the panel that it opens has the stand-in on its `PATH`.
+   line, and Horizon runs with `<work-agent>/bin` in front of its `PATH`, so the
+   agent that Set up starts finds the stand-in as `hcloud`.
 
 3. Press `Set up` in the machine section of the sidebar.
 
@@ -516,8 +524,8 @@ network. The agent is real, and it follows the skill `horizon-setup`.
 > **CAUTION: THIS TASK RENTS A MACHINE AND COSTS MONEY.** Ask the person first.
 > Use the smallest machine and the nearest place.
 
-1. Repeat steps 1 to 5 of task 6.8 on `<state-rent>`, without the stand-in
-   `PATH`, at the provider of the person.
+1. Repeat steps 1 to 5 of task 6.8 at the provider of the person, on
+   `<state-rent>` and without the stand-in `PATH`.
 
    Result: The row of that provider carries the badge `Ready`, and each size row
    carries the list price that the provider CLI answered in this run, such as

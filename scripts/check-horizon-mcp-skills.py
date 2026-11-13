@@ -60,6 +60,22 @@ EXAMPLE_OPERATIONS = {
         'horizon-block',
     ),
 }
+# The skills that this build installs, by name. A skill that vanishes from a
+# bundle, or one that arrives without its name here, fails the check.
+REQUIRED_SKILLS = {
+    'horizon-block',
+    'horizon-browser',
+    'horizon-device',
+    'horizon-machines',
+    'horizon-mobile',
+    'horizon-server',
+    'horizon-setup',
+    'horizon-speech',
+    'horizon-worktree',
+}
+# The operations of the block tool that ask the person for a setting of this
+# computer: each one names its card and the two answers of the person.
+REQUIRED_SETTING_OPERATIONS = ('server_link_request', 'browser_host_request')
 # The nested object that an operation field carries, with the struct of its
 # fields, so an example of a route is checked like an operation.
 NESTED_FIELDS = {
@@ -172,6 +188,8 @@ def check():
     other_skills = {p.name for p in claude.iterdir() if p.is_dir()}
     if primary_skills != other_skills:
         errors.append('bundle skill sets differ: ' + ', '.join(sorted(primary_skills ^ other_skills)))
+    if primary_skills != REQUIRED_SKILLS:
+        errors.append('bundle skills differ from this build: ' + ', '.join(sorted(primary_skills ^ REQUIRED_SKILLS)))
     for skill in sorted(codex.iterdir()):
         if not skill.is_dir():
             continue
@@ -243,6 +261,12 @@ def check():
         for name in enum_variants((ROOT / source).read_text(), enum):
             if name not in excluded and snake_case(name) not in documented:
                 errors.append(f'{enum}.{name}: operation missing from {skill}')
+    block_document = documents.get('horizon-block', '')
+    for name in REQUIRED_SETTING_OPERATIONS:
+        if name not in block_document:
+            errors.append(f'{name}: the setting operation missing from horizon-block')
+        if name not in documents.get('horizon-setup', ''):
+            errors.append(f'{name}: the setting operation missing from horizon-setup')
     errors.extend(example_errors(documents))
     standalone = ROOT / 'crates/horizon-device/skills/horizon-device/SKILL.md'
     if standalone.read_bytes() != (codex / 'horizon-device/SKILL.md').read_bytes():
