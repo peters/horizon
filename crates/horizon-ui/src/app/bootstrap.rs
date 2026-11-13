@@ -286,6 +286,14 @@ pub(crate) fn configure_fonts() -> egui::FontDefinitions {
         FONT_JETBRAINS_MONO,
         include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf"),
     );
+    // The two faces of the interface itself, hinted the one way that keeps the
+    // stems of a line equally thick at the screen sizes that the interface has.
+    for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
+        let hinted = fonts.font_data.remove(name).map(|font| hinted((*font).clone()).into());
+        if let Some(font) = hinted {
+            fonts.font_data.insert(name.to_owned(), font);
+        }
+    }
     // Keep JetBrains Mono as the metrics source for the terminal grid, then
     // fall back to broader Unicode coverage for glyphs it does not contain.
     insert_font_data(
@@ -316,6 +324,28 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
     fonts
         .font_data
         .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+}
+
+/// The hinting of the two faces that the interface draws its own text in.
+///
+/// Both faces are hinted true-type faces that the interface draws at 9 to 14
+/// screen points, where an unhinted stem can land anywhere between two pixels
+/// and a stem next to it lands on a third: that is the uneven weight that a
+/// person reads as a blurry line. Normal hinting grid-fits the stem both ways,
+/// and letting the hinter keep its own horizontal fit is what makes the stems
+/// of one word equally thick. Advances stay those of the shaper, so the layout
+/// does not move, and a zoom of 1 on a display of scale 1 keeps the letters it
+/// drew before apart from this fit.
+fn hinted(font: egui::FontData) -> egui::FontData {
+    font.tweak(egui::epaint::text::FontTweak {
+        hinting: Some(true),
+        hinting_target: egui::epaint::text::HintingTarget::Smooth(egui::epaint::text::SmoothHinting {
+            light: false,
+            symmetric_rendering: true,
+            preserve_linear_metrics: false,
+        }),
+        ..egui::epaint::text::FontTweak::default()
+    })
 }
 
 /// Keep root chrome at the OS display scale.
@@ -367,6 +397,29 @@ mod tests {
         assert_eq!(monospace.get(2).map(String::as_str), Some(FONT_NOTO_SYMBOLS));
         assert!(fonts.font_data.contains_key(FONT_NOTO_CJK));
         assert!(fonts.font_data.contains_key(FONT_NOTO_SYMBOLS));
+    }
+
+    /// The stems of one line must be equally thick at 9 to 14 screen points,
+    /// which is the hinting that the interface asks of its own two faces.
+    #[test]
+    fn the_two_faces_of_the_interface_are_hinted_for_even_stems() {
+        let fonts = configure_fonts();
+        for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
+            let tweak = &fonts.font_data[name].tweak;
+            assert_eq!(tweak.hinting, Some(true), "{name} hints its stems");
+            let egui::epaint::text::HintingTarget::Smooth(smooth) = tweak.hinting_target else {
+                panic!("{name} should be hinted for anti-aliased text");
+            };
+            assert!(!smooth.light, "{name} fits its stems in both directions");
+            assert!(
+                !smooth.preserve_linear_metrics,
+                "{name} keeps the horizontal fit of its hinter, so one word has even stems"
+            );
+        }
+        assert_eq!(
+            fonts.font_data[FONT_NOTO_CJK].tweak.hinting, None,
+            "a fallback face keeps the default hinting"
+        );
     }
 
     #[test]
