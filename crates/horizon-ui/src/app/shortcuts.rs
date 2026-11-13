@@ -16,6 +16,13 @@ pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> 
     shortcut_pressed_in_events(&input.events, binding)
 }
 
+/// Whether `events` hold one press of `binding`: the frame in which its key goes
+/// down.
+///
+/// An auto-repeat of a key that is already down is the continuation of a press and
+/// not a second one. A held chord therefore runs its action once, and a gesture
+/// that starts a long job — a speech take, a new panel — cannot run it again for
+/// every repeat that the key sends while the person keeps it down.
 pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBinding) -> bool {
     events.iter().any(|event| shortcut_event_matches(event, binding))
 }
@@ -70,6 +77,8 @@ pub(crate) fn key_pressed_in_events(events: &[Event], key: Key) -> bool {
         .any(|event| matches!(event, Event::Key { key: pressed_key, pressed: true, repeat: false, .. } if *pressed_key == key))
 }
 
+/// Whether `event` is the press of `binding`, and not the release of it and not the
+/// auto-repeat that a held key sends.
 pub(crate) fn shortcut_event_matches(event: &Event, binding: ShortcutBinding) -> bool {
     let modifiers = egui_modifiers(binding.modifiers);
     matches!(
@@ -78,6 +87,7 @@ pub(crate) fn shortcut_event_matches(event: &Event, binding: ShortcutBinding) ->
             key,
             physical_key,
             pressed: true,
+            repeat: false,
             modifiers: event_modifiers,
             ..
         } if event_modifiers.matches_logically(modifiers)
@@ -238,6 +248,31 @@ mod tests {
             &key_event(Key::J, true, false, Modifiers::CTRL),
             binding
         ));
+    }
+
+    #[test]
+    fn a_repeat_of_a_held_chord_is_not_a_second_press() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(9));
+        // egui reads `repeat` from the keys that are down, so the press and the
+        // auto-repeat that the window system sends after it are two passes of one
+        // state of the input.
+        let mut press = RawInput::default();
+        press.events.push(key_event(Key::F9, true, false, Modifiers::NONE));
+        let input = egui::InputState::default().begin_pass(press, false, 1.0, egui::InputOptions::default());
+        assert!(shortcut_pressed(&input, binding), "the press of a key is one action");
+
+        let mut repeat = RawInput::default();
+        repeat.events.push(key_event(Key::F9, true, true, Modifiers::NONE));
+        let input = input.begin_pass(repeat, false, 1.0, egui::InputOptions::default());
+        assert!(
+            !shortcut_pressed(&input, binding),
+            "a key that is already down runs its action once"
+        );
+
+        let mut release = RawInput::default();
+        release.events.push(key_event(Key::F9, false, false, Modifiers::NONE));
+        let input = input.begin_pass(release, false, 1.0, egui::InputOptions::default());
+        assert!(!shortcut_pressed(&input, binding), "the release is no press");
     }
 
     #[test]

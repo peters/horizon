@@ -404,3 +404,167 @@ fn a_take_that_a_slow_link_did_not_send_offers_one_retry() {
     });
     assert_eq!(speech.kept_take(), None, "nothing waits for a retry");
 }
+
+/// One press of a key that the person already holds: a repeat of that key, which
+/// the window system sends again and again until the key is released.
+fn repeat_key(key: Key) -> Event {
+    Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: true,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// One frame with `events`, in which the window handles its speech hotkey and
+/// applies the answers of the worker of the take, as a frame of the window does.
+fn take_frame(ctx: &Context, app: &mut crate::app::HorizonApp, events: Vec<Event>) {
+    let mut input = egui::RawInput {
+        events,
+        time: Some(0.0),
+        focused: true,
+        ..Default::default()
+    };
+    input.events.insert(0, Event::WindowFocused(true));
+    input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(true);
+    let _ = ctx
+        .run_ui(input, |_ui| {
+            app.handle_speech_key(ctx, super::SpeechWindow::Root);
+            app.poll_speech(ctx);
+        })
+        .discard_textures();
+}
+
+/// How many times a stand-in recorder of a test started.
+fn starts_of(file: &std::path::Path) -> usize {
+    std::fs::read_to_string(file).map_or(0, |text| text.lines().count())
+}
+
+/// The sentence of the mark, once the window has applied it, and at most five
+/// seconds of frames.
+fn wait_for_sentence(ctx: &Context, app: &mut crate::app::HorizonApp) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        take_frame(ctx, app, Vec::new());
+        if let Some((text, super::MarkTone::Error)) = app.speech.mark(Instant::now()) {
+            return text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the window shows no sentence of the take, and its mark is {:?}",
+            app.speech.mark(Instant::now())
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The window of one terminal panel, with the settings of speech input on.
+fn window_with_a_terminal(config: &Config) -> (tempfile::TempDir, Context, crate::app::HorizonApp, PanelId) {
+    let (temp, mut app) = test_app();
+    app.apply_runtime_config(config);
+    let workspace = app.board.create_workspace("main window");
+    let panel = app
+        .board
+        .create_panel(
+            PanelOptions {
+                kind: horizon_core::PanelKind::Shell,
+                rows: 6,
+                cols: 40,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("a panel of the window");
+    app.board.focus(panel);
+    (temp, Context::default(), app, panel)
+}
+
+#[test]
+fn a_held_hotkey_starts_one_take_and_shows_a_recorder_that_dies_at_once() {
+    // The recorder of this test cannot record: it answers one line of an error and
+    // ends, which is the recorder of a computer whose sound server is away.
+    let scripts = tempfile::tempdir().expect("a folder of the stand-ins");
+    let starts = scripts.path().join("starts.txt");
+    let program = horizon_core::stand_in_shell_in(
+        scripts.path(),
+        "recorder",
+        &format!(
+            "printf 'start\\n' >> '{}'\nprintf 'the sound server is away\\n' >&2\nexit 1\n",
+            starts.display()
+        ),
+    )
+    .expect("a recorder of a test");
+    let mut config = speech_on();
+    config.speech.recorder = format!("{program} {{file}}");
+    let (_temp, ctx, mut app, panel) = window_with_a_terminal(&config);
+
+    take_frame(&ctx, &mut app, vec![key(Key::F9, true)]);
+    assert_eq!(app.speech.target(), Some(panel), "the take belongs to the panel");
+    assert!(app.speech.is_listening(), "the press starts one take");
+
+    // The key stays down and the recorder ends by itself: the person reads why.
+    let sentence = wait_for_sentence(&ctx, &mut app);
+    assert!(sentence.contains("ended early"), "{sentence}");
+    assert!(sentence.contains("the sound server is away"), "{sentence}");
+
+    // Every auto-repeat of the held key is still the same press, so no second take
+    // starts a second recorder behind the mark.
+    for _ in 0..6 {
+        take_frame(&ctx, &mut app, vec![repeat_key(Key::F9)]);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    take_frame(&ctx, &mut app, Vec::new());
+    let (text, tone) = app.speech.mark(Instant::now()).expect("the mark of the take");
+    assert_eq!(tone, super::MarkTone::Error, "the mark keeps the failure: {text}");
+    assert_eq!(starts_of(&starts), 1, "one held key starts one recorder");
+
+    // The release of a key whose take already ended adds nothing.
+    take_frame(&ctx, &mut app, vec![key(Key::F9, false)]);
+    take_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(starts_of(&starts), 1, "the release starts no recorder");
+    let (_, tone) = app.speech.mark(Instant::now()).expect("the mark of the take");
+    assert_eq!(tone, super::MarkTone::Error);
+}
+
+#[test]
+fn the_mark_counts_the_seconds_while_the_recorder_lives() {
+    let scripts = tempfile::tempdir().expect("a folder of the stand-ins");
+    let program = horizon_core::stand_in_shell_in(
+        scripts.path(),
+        "recorder",
+        "trap 'exit 0' INT TERM\nwhile :; do sleep 0.02; done",
+    )
+    .expect("a recorder of a test");
+    let mut config = speech_on();
+    config.speech.recorder = format!("{program} {{file}}");
+    let (_temp, ctx, mut app, _panel) = window_with_a_terminal(&config);
+
+    take_frame(&ctx, &mut app, vec![key(Key::F9, true)]);
+    let started = Instant::now();
+    let mut texts: Vec<String> = Vec::new();
+    while started.elapsed() < Duration::from_millis(1250) {
+        take_frame(&ctx, &mut app, Vec::new());
+        if let Some((text, super::MarkTone::Listening)) = app.speech.mark(Instant::now())
+            && texts.last() != Some(&text)
+        {
+            texts.push(text);
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert_eq!(texts.first().map(String::as_str), Some("Listening 0:00"), "{texts:?}");
+    assert_eq!(
+        texts.last().map(String::as_str),
+        Some("Listening 0:01"),
+        "the counter of the mark moves while the recorder lives: {texts:?}"
+    );
+
+    // The release ends the take, and the recorder of the test ends with it.
+    take_frame(&ctx, &mut app, vec![key(Key::F9, false)]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.speech.is_listening() {
+        take_frame(&ctx, &mut app, Vec::new());
+        assert!(Instant::now() < deadline, "the take of the test never ended");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

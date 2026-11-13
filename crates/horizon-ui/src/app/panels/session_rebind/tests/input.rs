@@ -37,13 +37,25 @@ fn picker_blocks_root_shortcuts_and_restores_them_after_expiry() {
         let _ = ctx
             .run_ui(
                 RawInput {
-                    events: vec![Event::Key {
-                        key,
-                        physical_key: Some(key),
-                        pressed: true,
-                        repeat: false,
-                        modifiers: Modifiers::NONE,
-                    }],
+                    events: vec![
+                        // One tap of the key: a key that a report of the test leaves
+                        // down would send the next press as a repeat, and a repeat is
+                        // no press of a shortcut.
+                        Event::Key {
+                            key,
+                            physical_key: Some(key),
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        },
+                        Event::Key {
+                            key,
+                            physical_key: Some(key),
+                            pressed: false,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
                     ..Default::default()
                 },
                 |_| {

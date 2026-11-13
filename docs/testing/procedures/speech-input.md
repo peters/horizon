@@ -130,8 +130,9 @@ for the commands of the sink and for the measured limit of that route.
 
 1. Press and hold `F9` for two seconds, then release it.
 
-   Result: A pill at the bottom of the panel says `Listening 0:01` and counts the
-   seconds. After the release it says `Writing…`, and then it goes.
+   Result: A pill at the bottom of the panel says `Listening 0:00`, then
+   `Listening 0:01` after one second. It counts the seconds while the key is
+   down. After the release it says `Writing…`, and then it goes.
 
 2. Read the last line of the panel.
 
@@ -195,7 +196,27 @@ for the commands of the sink and for the measured limit of that route.
    Result: A pill says `hz-no-such-recorder is not installed on this computer`,
    and it names the program.
 
-3. Restore the recorder line of the setup, and press **Save**.
+3. Open **Settings** › **Speech**, and change the recorder line to a recorder
+   that starts and then ends with an error:
+
+   ```sh
+   sh -c 'echo the sound server is away >&2; exit 1' sh {file}
+   ```
+
+   Press **Save**, and close the Settings window.
+
+4. Press and hold `F9` for five seconds, and keep the key down.
+
+   Result: The pill says `sh ended early: the sound server is away` while the key
+   is still down. It does not count the seconds and it does not say `Listening`
+   again, because one press starts one take. The folder of the takes holds no
+   file.
+
+5. Release `F9`.
+
+   Result: The pill keeps the sentence, and no new take starts.
+
+6. Restore the recorder line of the setup, and press **Save**.
 
    Result: The status line shows `Saved`.
 
