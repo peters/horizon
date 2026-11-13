@@ -253,16 +253,8 @@ fn run(
         }
         match DriverLink::open(&ssh, &driver_host, quality) {
             Ok(mut link) => {
-                let resumed = link.welcome().page.resumed();
-                let page = link.initial_page().cloned().unwrap_or_else(|| HostDriverPage {
-                    resumed,
-                    loading: true,
-                    ..HostDriverPage::default()
-                });
-                let _ = events.send(HostDriverEvent::Ready { resumed, page });
-                wake(&waker);
                 ready_at = Some(Instant::now());
-                match serve(
+                match follow(
                     &mut link,
                     panel_local_id,
                     &frame_slot,
@@ -334,6 +326,40 @@ fn run(
             return;
         }
     }
+}
+
+/// Tell the panel that its page is here, and serve the link until it ends.
+#[allow(clippy::too_many_arguments)]
+fn follow(
+    link: &mut DriverLink,
+    panel_local_id: &str,
+    frame_slot: &Arc<FrameSlot>,
+    commands: &mpsc::Receiver<(BrowserCommand, Instant)>,
+    events: &mpsc::Sender<HostDriverEvent>,
+    stop: &AtomicBool,
+    waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
+    manifest: &ManifestCoordination,
+    probe: &mut super::latency::LinkProbe,
+) -> PumpOutcome {
+    let resumed = link.welcome().page.resumed();
+    let page = link.initial_page().cloned().unwrap_or_else(|| HostDriverPage {
+        resumed,
+        loading: true,
+        ..HostDriverPage::default()
+    });
+    let _ = events.send(HostDriverEvent::Ready { resumed, page });
+    wake(waker);
+    serve(
+        link,
+        panel_local_id,
+        frame_slot,
+        commands,
+        events,
+        stop,
+        waker,
+        manifest,
+        probe,
+    )
 }
 
 pub(super) fn wake(waker: &Arc<Mutex<Option<BrowserEventWaker>>>) {

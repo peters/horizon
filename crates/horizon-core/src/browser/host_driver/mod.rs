@@ -159,6 +159,7 @@ pub fn session_socket_in(home: &Path, profile: &str, engine: HostDriverEngine) -
 /// is the link of a host, this thread is the session and its page, and no
 /// browser of this machine takes part.
 #[doc(hidden)]
+#[must_use]
 pub fn serve_test_session(
     listener: std::os::unix::net::UnixListener,
     socket: std::path::PathBuf,
@@ -314,15 +315,15 @@ impl HostDriverOptions {
     /// The arguments that start this session again, so a person reads one
     /// command of a host in a log.
     fn session_arguments(&self) -> String {
-        let mut arguments = format!(
-            "--browser-host-driver --profile {} --engine {}",
-            quote(self.profile()),
-            quote(self.engine().as_str())
-        );
-        if let Some(idle_stop) = self.idle_stop {
-            arguments.push_str(&format!(" --idle-stop {}", idle_stop.as_secs() / 60));
+        let profile = quote(self.profile());
+        let engine = quote(self.engine().as_str());
+        match self.idle_stop {
+            Some(idle_stop) => format!(
+                "--browser-host-driver --profile {profile} --engine {engine} --idle-stop {}",
+                idle_stop.as_secs() / 60
+            ),
+            None => format!("--browser-host-driver --profile {profile} --engine {engine}"),
         }
-        arguments
     }
 }
 
@@ -508,25 +509,19 @@ where
     let mut next_link: Option<std::os::unix::net::UnixStream> = None;
     let mut idle_since: Option<Instant> = None;
     loop {
-        let stream = match next_link.take() {
-            Some(stream) => stream,
-            None => match waiting_link(listener) {
-                Some(stream) => stream,
-                None => {
-                    if let Some(idle_stop) = rules.idle_stop
-                        && idle_since.is_some_and(|since| since.elapsed() >= idle_stop)
-                    {
-                        tracing::info!(
-                            profile = options.profile(),
-                            "the session of a browser host kept its browser with no link for the idle bound, so it stops"
-                        );
-                        stop_and_cleanup(&mut session, socket, options);
-                        return 0;
-                    }
-                    std::thread::sleep(ACCEPT_POLL);
-                    continue;
-                }
-            },
+        let Some(stream) = next_link.take().or_else(|| waiting_link(listener)) else {
+            if let Some(idle_stop) = rules.idle_stop
+                && idle_since.is_some_and(|since| since.elapsed() >= idle_stop)
+            {
+                tracing::info!(
+                    profile = options.profile(),
+                    "the session of a browser host kept its browser with no link for the idle bound, so it stops"
+                );
+                stop_and_cleanup(&mut session, socket, options);
+                return 0;
+            }
+            std::thread::sleep(ACCEPT_POLL);
+            continue;
         };
         idle_since = None;
         let mut link = Link::over_socket(&stream);

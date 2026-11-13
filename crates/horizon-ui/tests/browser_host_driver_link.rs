@@ -12,6 +12,7 @@
 
 #![cfg(unix)]
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -195,7 +196,6 @@ fn the_panel_of_a_firefox_host_attaches_shows_a_picture_and_comes_back_after_a_l
     drop(panel);
     std::thread::sleep(Duration::from_millis(1500));
     let mut closing = std::os::unix::net::UnixStream::connect(&stand.socket).expect("a link of the test");
-    use std::io::Write as _;
     let hello = horizon_browser::host_driver::encode_line(&horizon_browser::host_driver::HostDriverRequest::Hello {
         version: horizon_browser::host_driver::HOST_DRIVER_VERSION,
         horizon_version: env!("CARGO_PKG_VERSION").to_string(),

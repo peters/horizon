@@ -376,7 +376,7 @@ impl DriverLink {
                 "line_too_long",
                 &format!("the driver wrote a message of {size} bytes, and a link carries at most {limit} bytes"),
             ))),
-            Ok(IncomingLine::Ended) | Err(mpsc::RecvTimeoutError::Disconnected) => Err(self.ended()),
+            Ok(IncomingLine::Ended) | Err(mpsc::RecvTimeoutError::Disconnected) => Err(Some(self.ended())),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(None),
         }
     }
@@ -388,7 +388,7 @@ impl DriverLink {
 
     /// The words of a link that ended: those of `ssh` when it wrote any, and
     /// otherwise the plain sentence of a closed link with the status of `ssh`.
-    fn ended(&mut self) -> Option<AttachedHostFailure> {
+    fn ended(&mut self) -> AttachedHostFailure {
         let code = self.wait_for_exit();
         let tail = self.stderr_tail();
         self.close();
@@ -399,7 +399,7 @@ impl DriverLink {
                 tail
             };
             self.end_words = Some(reason.clone());
-            return Some(AttachedHostFailure::no_driver(&self.attached(), &reason));
+            return AttachedHostFailure::no_driver(&self.attached(), &reason);
         }
         let words = if tail.is_empty() {
             match code {
@@ -415,9 +415,9 @@ impl DriverLink {
             // network that a laptop left, or a server that ended the session.
             // The words of `ssh` say nothing at `LogLevel=ERROR`, so this is
             // the sentence that the log and the panel keep.
-            return Some(AttachedHostFailure::connection_lost(&self.attached(), &words));
+            return AttachedHostFailure::connection_lost(&self.attached(), &words);
         }
-        Some(AttachedHostFailure::unreachable(&self.attached(), &words))
+        AttachedHostFailure::unreachable(&self.attached(), &words)
     }
 
     /// The words of the end of this link, when it ended.

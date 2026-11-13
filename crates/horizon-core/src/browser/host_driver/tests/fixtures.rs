@@ -316,8 +316,8 @@ impl Wire {
     }
 
     /// The next message of the session that this test waits for.
-    pub(crate) fn wait_for(&self, want: &str, wait: Duration) -> HostDriverReply {
-        let deadline = Instant::now() + wait;
+    pub(crate) fn wait_for(&self, want: &str, bound: Duration) -> HostDriverReply {
+        let deadline = Instant::now() + bound;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             let Some(reply) = self.next(left) else {

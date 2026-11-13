@@ -247,7 +247,7 @@ fn the_idle_bound_of_a_host_entry_is_minutes_and_off_without_it() {
             .collect::<Vec<_>>(),
     )
     .expect("a host with an idle bound");
-    assert_eq!(bounded.idle_stop(), Some(Duration::from_secs(120 * 60)));
+    assert_eq!(bounded.idle_stop(), Some(Duration::from_hours(2)));
     assert!(bounded.session_arguments().contains("--idle-stop 120"));
     for arguments in [
         &["--idle-stop", "0"][..],
