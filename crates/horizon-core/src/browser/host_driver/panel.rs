@@ -370,13 +370,24 @@ fn serve(
             }
             Ok((command, queued_at)) => {
                 let method = request_method(&command);
-                if let Some(request) = request_of(command) {
-                    probe.queued(queued_at);
-                    probe.taken();
-                    let written = link.request(&request);
-                    probe.written(method);
-                    if written.is_err() {
-                        return PumpOutcome::Lost(None);
+                let unsupported = unsupported_words(&command);
+                match request_of(command) {
+                    Some(request) => {
+                        probe.queued(queued_at);
+                        probe.taken();
+                        let written = link.request(&request);
+                        probe.written(method);
+                        if written.is_err() {
+                            return PumpOutcome::Lost(None);
+                        }
+                    }
+                    // A command that this link cannot carry is a fact of a page
+                    // of another machine, and the person reads why.
+                    None => {
+                        if let Some(words) = unsupported {
+                            let _ = events.send(HostDriverEvent::Note(words.to_string()));
+                            wake(waker);
+                        }
                     }
                 }
             }
@@ -549,6 +560,29 @@ fn update_manifest(
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => manifest.initialize(panel_local_id, state),
         Err(error) => Err(error),
+    }
+}
+
+/// The words of a command that a page of another machine cannot take.
+fn unsupported_words(command: &BrowserCommand) -> Option<&'static str> {
+    match command {
+        BrowserCommand::DropFiles { .. } => Some(
+            "this page runs on the browser host, so it cannot take files of this computer: open the file dialog of the page there",
+        ),
+        BrowserCommand::Video { .. } => {
+            Some("a recording of the page of a browser host is not served yet: use a screen recording of that machine")
+        }
+        BrowserCommand::Orientation { .. }
+        | BrowserCommand::NativeSelectChoose { .. }
+        | BrowserCommand::NativeSelectDismiss => Some("this operation of the page of a browser host is not served yet"),
+        BrowserCommand::Input(_)
+        | BrowserCommand::Navigate(_)
+        | BrowserCommand::Reload
+        | BrowserCommand::Back
+        | BrowserCommand::Forward
+        | BrowserCommand::SetViewport { .. }
+        | BrowserCommand::HandoffDone
+        | BrowserCommand::Stop => None,
     }
 }
 

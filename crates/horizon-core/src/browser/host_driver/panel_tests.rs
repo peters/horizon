@@ -171,6 +171,22 @@ fn the_link_of_the_panel_carries_the_input_of_the_person_and_the_operations_of_a
 }
 
 #[test]
+fn a_command_of_the_page_that_a_host_cannot_carry_says_why() {
+    let mut panel = BrowserPanelState::lost_host_driver_for_tests(
+        &host(BrowserHostEngine::Firefox),
+        "https://example.test/",
+        "the link dropped",
+    );
+    panel.apply_host_driver_event_for_tests(HostDriverEvent::Note(
+        "this page runs on the browser host, so it cannot take files of this computer".to_string(),
+    ));
+    assert_eq!(
+        panel.remote_status.as_deref(),
+        Some("this page runs on the browser host, so it cannot take files of this computer")
+    );
+}
+
+#[test]
 fn a_chromium_host_does_not_start_the_driver_of_a_firefox() {
     let chromium = host(BrowserHostEngine::Chromium);
     assert!(
