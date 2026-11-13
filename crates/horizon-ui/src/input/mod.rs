@@ -9,9 +9,9 @@ mod winit_keyboard;
 
 pub(crate) use ime_commit::ImeCommitNormalizer;
 pub(crate) use keyboard::cut_chord_is_control_character;
+pub(crate) use keyboard::translate_key_event_on;
 pub use keyboard::{
-    KeyEventContext, KeyIdentity, KeyTranslation, paste_bytes, should_defer_textual_key,
-    translate_key_event_with_physical, translate_text_event,
+    KeyEventContext, KeyIdentity, KeyTranslation, paste_bytes, should_defer_textual_key, translate_text_event,
 };
 pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, wheel_action};
 pub(crate) use terminal_local::{TerminalLocalCommand, terminal_local_command};
@@ -34,7 +34,7 @@ pub struct PointerButtons {
 mod tests {
     use super::{
         GridPoint, PointerButtons, WheelAction, mouse_button_report, mouse_motion_report, paste_bytes,
-        translate_key_event_with_physical, translate_text_event, wheel_action,
+        translate_text_event, wheel_action,
     };
     use alacritty_terminal::term::TermMode;
     use egui::{Key, Modifiers, MouseWheelUnit, PointerButton, Vec2};
@@ -46,9 +46,10 @@ mod tests {
         modifiers: Modifiers,
         mode: TermMode,
     ) -> Option<super::KeyTranslation> {
-        translate_key_event_with_physical(
+        super::keyboard::translate_key_event_on(
             super::KeyIdentity::new(key, None, None),
             super::KeyEventContext::new(pressed, repeat, modifiers, mode),
+            cfg!(target_os = "macos"),
         )
     }
 

@@ -234,13 +234,29 @@ fn pressed_keys(events: &[TerminalInputEvent]) -> impl Iterator<Item = &Terminal
     })
 }
 
-#[derive(Default)]
 struct KeyboardInputForwarder {
+    macos: bool,
     suppressed_text: VecDeque<String>,
     deferred_text_key: Option<DeferredTextKey>,
 }
 
+impl Default for KeyboardInputForwarder {
+    fn default() -> Self {
+        Self::for_system(cfg!(target_os = "macos"))
+    }
+}
+
 impl KeyboardInputForwarder {
+    /// The forwarder of the system that `macos` names, so that a test reads the
+    /// keys of both systems on either one.
+    fn for_system(macos: bool) -> Self {
+        Self {
+            macos,
+            suppressed_text: VecDeque::new(),
+            deferred_text_key: None,
+        }
+    }
+
     fn on_text(&mut self, text: &str, mode: TermMode) -> InputEmission {
         if let Some(mut deferred) = self.deferred_text_key.take() {
             if let Some(actual_text) = deferred.synthetic_text.as_deref() {
@@ -303,9 +319,10 @@ impl KeyboardInputForwarder {
                 }
             } else if !pressed && deferred.matches(*key, *physical_key) {
                 deferred.release_seen = true;
-                deferred.release_translation = input::translate_key_event_with_physical(
+                deferred.release_translation = input::translate_key_event_on(
                     key_identity,
                     input::KeyEventContext::new(false, *repeat, *modifiers, mode),
+                    self.macos,
                 );
                 return emission;
             } else if !deferred.matches(*key, *physical_key) {
@@ -314,7 +331,7 @@ impl KeyboardInputForwarder {
             }
         }
 
-        if let Some(translation) = input::translate_key_event_with_physical(key_identity, context) {
+        if let Some(translation) = input::translate_key_event_on(key_identity, context, self.macos) {
             if *pressed
                 && translation.suppress_text.is_some()
                 && (modifiers.alt
@@ -770,38 +787,91 @@ mod tests {
     /// The events that a Mac reports for the Option key of a Norwegian layout,
     /// taken from a trace of that system: `(key, physical key, the text of the
     /// key without modifiers, the character that the layout composes)`.
-    const OPTION_COMPOSED_ON_A_MAC: [(Key, Key, &str, &str); 4] = [
+    const OPTION_COMPOSED_ON_A_MAC: [(Key, Key, &str, &str); 5] = [
         (Key::Pipe, Key::Num7, "7", "|"),
         (Key::OpenBracket, Key::Num8, "8", "["),
         (Key::CloseBracket, Key::Num9, "9", "]"),
         (Key::Quote, Key::Backslash, "@", "'"),
+        (Key::B, Key::B, "b", "∫"),
     ];
+
+    /// The events that a Linux system reports for a chord of Alt and Shift on a
+    /// US layout: `(key, physical key, the text of the key without modifiers,
+    /// the text of the chord)`. The toolkit reports the shifted symbol as a key
+    /// of its own when it has one, and the physical key otherwise.
+    const ALT_SHIFT_ON_LINUX: [(Key, Key, &str, &str); 10] = [
+        (Key::Questionmark, Key::Slash, "/", "?"),
+        (Key::Exclamationmark, Key::Num1, "1", "!"),
+        (Key::Colon, Key::Semicolon, ";", ":"),
+        (Key::Pipe, Key::Backslash, "\\", "|"),
+        (Key::OpenCurlyBracket, Key::OpenBracket, "[", "{"),
+        (Key::CloseCurlyBracket, Key::CloseBracket, "]", "}"),
+        (Key::Plus, Key::Equals, "=", "+"),
+        (Key::Minus, Key::Minus, "-", "_"),
+        (Key::Comma, Key::Comma, ",", "<"),
+        (Key::Period, Key::Period, ".", ">"),
+    ];
+
+    /// The press, the text that follows it and the release of one chord with
+    /// Alt, and with Shift when `shift` is set.
+    fn chord_events(
+        key: Key,
+        physical_key: Key,
+        key_without_modifiers_text: &str,
+        text: &str,
+        shift: bool,
+    ) -> Vec<TerminalInputEvent> {
+        let modifiers = Modifiers {
+            alt: true,
+            shift,
+            ..Modifiers::NONE
+        };
+        vec![
+            key_event(
+                key,
+                Some(physical_key),
+                Some(key_without_modifiers_text),
+                true,
+                false,
+                modifiers,
+            ),
+            text_event(text),
+            key_event(
+                key,
+                Some(physical_key),
+                Some(key_without_modifiers_text),
+                false,
+                false,
+                modifiers,
+            ),
+        ]
+    }
+
+    /// The Alt key of Linux stays the Meta key for every chord of Shift, also
+    /// where the toolkit reports the shifted symbol as a key of its own. These
+    /// are the bytes of the head before the rule of Option: the text of a symbol
+    /// with Shift is not printable text, so the Meta path of these chords writes
+    /// no `ESC` on either head, and the text of the key reaches the terminal.
+    #[test]
+    fn alt_with_shift_keeps_the_bytes_of_linux() {
+        for (key, physical_key, without_modifiers, text) in ALT_SHIFT_ON_LINUX {
+            let events = chord_events(key, physical_key, without_modifiers, text, true);
+
+            assert_eq!(
+                forward_bytes_on(&events, TermMode::NONE, false),
+                text.as_bytes(),
+                "Alt+Shift with {key:?} gives {text} alone on Linux, as it did before the rule of Option"
+            );
+        }
+    }
 
     #[test]
     fn option_composed_symbols_reach_the_pty_as_their_own_character() {
         for (key, physical_key, without_option, composed) in OPTION_COMPOSED_ON_A_MAC {
-            let events = vec![
-                key_event(
-                    key,
-                    Some(physical_key),
-                    Some(without_option),
-                    true,
-                    false,
-                    Modifiers::ALT,
-                ),
-                text_event(composed),
-                key_event(
-                    key,
-                    Some(physical_key),
-                    Some(without_option),
-                    false,
-                    false,
-                    Modifiers::ALT,
-                ),
-            ];
+            let events = chord_events(key, physical_key, without_option, composed, false);
 
             assert_eq!(
-                forward_bytes(&events, TermMode::NONE),
+                forward_bytes_on(&events, TermMode::NONE, true),
                 composed.as_bytes(),
                 "{composed} is the character of the layout, not Meta and {key:?}"
             );
@@ -810,29 +880,51 @@ mod tests {
 
     #[test]
     fn option_without_a_composed_character_stays_the_meta_key() {
-        let events = vec![
-            key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::ALT),
-            text_event("a"),
-            key_event(Key::A, Some(Key::A), Some("a"), false, false, Modifiers::ALT),
-        ];
+        let events = chord_events(Key::A, Key::A, "a", "a", false);
 
-        assert_eq!(forward_bytes(&events, TermMode::NONE), b"\x1ba");
+        assert_eq!(forward_bytes_on(&events, TermMode::NONE, true), b"\x1ba");
     }
 
     #[test]
     fn option_with_shift_keeps_a_letter_on_the_meta_path() {
-        let modifiers = Modifiers {
-            alt: true,
-            shift: true,
-            ..Modifiers::NONE
-        };
-        let events = vec![
-            key_event(Key::A, Some(Key::A), Some("a"), true, false, modifiers),
-            text_event("A"),
-            key_event(Key::A, Some(Key::A), Some("a"), false, false, modifiers),
-        ];
+        let events = chord_events(Key::A, Key::A, "a", "A", true);
 
-        assert_eq!(forward_bytes(&events, TermMode::NONE), b"\x1bA");
+        assert_eq!(forward_bytes_on(&events, TermMode::NONE, true), b"\x1bA");
+    }
+
+    /// The layout composes a character for Option and Shift together as well, so
+    /// the terminal takes that character: Option+Shift+7 is `\` on a Norwegian
+    /// layout.
+    #[test]
+    fn option_with_shift_composes_a_symbol_of_the_layout() {
+        let events = chord_events(Key::Backslash, Key::Num7, "7", "\\", true);
+
+        assert_eq!(forward_bytes_on(&events, TermMode::NONE, true), b"\\");
+    }
+
+    /// The kitty keyboard modes read the key before the rule of Option, so they
+    /// report the same bytes on both systems.
+    #[test]
+    fn a_kitty_mode_reports_alt_with_shift_as_it_did() {
+        let events = chord_events(Key::Questionmark, Key::Slash, "/", "?", true);
+        let letter = chord_events(Key::A, Key::A, "a", "A", true);
+
+        for macos in [true, false] {
+            assert_eq!(
+                forward_bytes_on(
+                    &events,
+                    TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES | TermMode::REPORT_ALTERNATE_KEYS,
+                    macos,
+                ),
+                b"?",
+                "a symbolic key of Alt and Shift reports its text in a kitty mode, macos={macos}"
+            );
+            assert_eq!(
+                forward_bytes_on(&letter, TermMode::REPORT_ALL_KEYS_AS_ESC, macos),
+                b"\x1b[97;4u",
+                "a letter of Alt and Shift reports its kitty sequence, macos={macos}"
+            );
+        }
     }
 
     /// Same scenario as above but in non-kitty mode: the text event
@@ -1022,7 +1114,11 @@ mod tests {
     }
 
     fn forward_bytes(events: &[TerminalInputEvent], mode: TermMode) -> Vec<u8> {
-        let mut forwarder = KeyboardInputForwarder::default();
+        forward_bytes_on(events, mode, cfg!(target_os = "macos"))
+    }
+
+    fn forward_bytes_on(events: &[TerminalInputEvent], mode: TermMode, macos: bool) -> Vec<u8> {
+        let mut forwarder = KeyboardInputForwarder::for_system(macos);
         let mut bytes = Vec::new();
 
         for event in events {

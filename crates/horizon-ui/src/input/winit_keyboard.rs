@@ -527,7 +527,7 @@ mod tests {
         let terminal = terminal_input_events(&events, aligned);
         assert_eq!(terminal[0].key_without_modifiers_text.as_deref(), Some("æ"));
         assert!(
-            super::super::translate_key_event_with_physical(
+            super::super::translate_key_event_on(
                 super::super::KeyIdentity::new(
                     Key::F19,
                     Some(Key::F19),
@@ -539,6 +539,7 @@ mod tests {
                     Modifiers::NONE,
                     alacritty_terminal::term::TermMode::NONE
                 ),
+                cfg!(target_os = "macos"),
             )
             .is_none(),
             "physical fallback must not emit an additional function-key sequence"

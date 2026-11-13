@@ -56,16 +56,9 @@ pub struct KeyTranslation {
     pub suppress_text: Option<String>,
 }
 
-pub fn translate_key_event_with_physical(
-    key_identity: KeyIdentity<'_>,
-    context: KeyEventContext,
-) -> Option<KeyTranslation> {
-    translate_key_event_on(key_identity, context, cfg!(target_os = "macos"))
-}
-
-/// [`translate_key_event_with_physical`] for the system that `macos` names, so a
-/// test runs the rules of both systems on either one.
-pub(super) fn translate_key_event_on(
+/// The key rules for the system that `macos` names, so a test runs the rules of
+/// both systems on either one. Production passes the system of the build.
+pub(crate) fn translate_key_event_on(
     key_identity: KeyIdentity<'_>,
     context: KeyEventContext,
     macos: bool,
