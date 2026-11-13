@@ -608,25 +608,40 @@ mod tests {
         let plain = text_runs(&grid_shapes_in_canvas(1.0, &metrics));
         let small = text_runs(&grid_shapes_in_canvas(0.67, &metrics));
         let big = text_runs(&grid_shapes_in_canvas(1.3, &metrics));
-
         assert!(!plain.is_empty(), "the grid paints its text");
+
         // The layer transform scales the shapes of the pass, so the origin of a
-        // run is read back in the coordinates of the canvas.
+        // run is read back in the coordinates of the canvas. The colours of a
+        // cell come from the global theme, which another test may flip between
+        // two cells of a pass, so a run may split in two: the cells of the grid
+        // are what this test is about, not the batch.
         let origins = |runs: &[(Pos2, f32)], zoom: f32| {
             runs.iter()
                 .map(|(pos, _)| [pos.x / zoom, pos.y / zoom])
                 .collect::<Vec<[f32; 2]>>()
         };
-        let expected = origins(&plain, 1.0);
-        for (runs, zoom) in [(&small, 0.67), (&big, 1.3)] {
+        for (runs, zoom) in [(&plain, 1.0), (&small, 0.67), (&big, 1.3)] {
             let found = origins(runs, zoom);
-            assert_eq!(found.len(), expected.len());
-            for (found, expected) in found.iter().zip(&expected) {
+            for origin in &found {
+                let column = origin[0] / metrics.char_width;
+                let line = origin[1] / metrics.line_height;
                 assert!(
-                    (found[0] - expected[0]).abs() < 0.01 && (found[1] - expected[1]).abs() < 0.01,
-                    "a cell is where the grid puts it: {found:?} against {expected:?} at {zoom}"
+                    (column - column.round()).abs() < 0.01 && (line - line.round()).abs() < 0.01,
+                    "a run starts on a cell of the grid: {origin:?} is column {column} of line {line} at {zoom}"
                 );
             }
+            assert!(
+                found
+                    .iter()
+                    .any(|origin| origin[0].abs() < 0.01 && origin[1].abs() < 0.01),
+                "the first cell carries text at {zoom}: {found:?}"
+            );
+            assert!(
+                found
+                    .iter()
+                    .any(|origin| origin[0].abs() < 0.01 && (origin[1] - metrics.line_height).abs() < 0.01),
+                "the first cell of the second line carries text at {zoom}: {found:?}"
+            );
         }
         assert!(
             (plain[0].1 - 13.0).abs() < f32::EPSILON,
