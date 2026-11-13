@@ -14,10 +14,17 @@
 # The entrypoint exits non-zero, with one line, when Chromium does not answer on
 # the bridge port within 20 seconds. `docker ps` then shows the container as
 # exited, and the wrapper on the host reports that line.
+#
+# With BM_ENGINE=firefox the container starts no display and no Chromium: Firefox
+# runs headless, started by the driver of Horizon that this computer runs inside
+# the container (`docker exec -i -e HOME=/profile <container>
+# /opt/horizon/horizon --browser-host-driver`). The container then only keeps the
+# profile mount and stays up.
 
 set -eu
 
 BM_PROFILE_DIR=${BM_PROFILE_DIR:-/profile}
+BM_ENGINE=${BM_ENGINE:-chromium}
 BM_DISPLAY=${BM_DISPLAY:-99}
 BM_SCREEN=${BM_SCREEN:-1920x1080x24}
 BM_WINDOW_SIZE=${BM_WINDOW_SIZE:-1600,900}
@@ -90,6 +97,16 @@ if [ -e "$DISPLAY_LOCK" ] || [ -e "$DISPLAY_SOCKET" ]; then
         rm -f "$DISPLAY_LOCK" "$DISPLAY_SOCKET"
         log "removed the display files of an earlier run of $DISPLAY"
     fi
+fi
+
+# The firefox engine needs no display: the driver of Horizon starts a headless
+# Firefox, and the profile folder is the mounted one.
+if [ "$BM_ENGINE" = firefox ]; then
+    log "the firefox engine runs headless; the driver of Horizon starts it inside this container"
+    log "profile ${BM_PROFILE_DIR}"
+    while :; do
+        sleep 3600
+    done
 fi
 
 Xvfb "$DISPLAY" -screen 0 "$BM_SCREEN" -nolisten tcp -ac >"$DISPLAY_LOG" 2>&1 &

@@ -12,15 +12,20 @@
 # unless --rebuild is given, and starts the container only when it is stopped.
 #
 # Usage:
-#   sh setup.sh [--profile NAME] [--image IMAGE] [--rebuild] [--force]
+#   sh setup.sh [--profile NAME] [--image IMAGE] [--engine ENGINE] [--horizon PATH]
+#               [--rebuild] [--force]
 #
-# The last line of the output is:
+# The last line of the output is, for Chromium:
 #   browser-machine ready profile=<name> port=<n>
+# and for Firefox:
+#   browser-machine ready profile=<name> engine=firefox command=<what to write in the settings>
 
 set -eu
 
 IMAGE=horizon-browser-machine:local
 PROFILE=default
+ENGINE=chromium
+HORIZON=
 REBUILD=0
 FORCE=0
 WRAPPER_DIR=/usr/local/bin
@@ -39,10 +44,13 @@ die() {
 
 usage() {
     cat >&2 <<'EOF'
-usage: sh setup.sh [--profile NAME] [--image IMAGE] [--rebuild] [--force]
+usage: sh setup.sh [--profile NAME] [--image IMAGE] [--engine ENGINE] [--horizon PATH]
+                   [--rebuild] [--force]
 
   --profile NAME  profile of the browser machine to prepare (a-z, 0-9, '-')
   --image IMAGE   image tag to build and run (default horizon-browser-machine:local)
+  --engine ENGINE chromium (default) or firefox; firefox needs --horizon
+  --horizon PATH  the horizon binary of this system and CPU, copied into the image
   --rebuild       build the image again, also when it exists
   --force         continue on a machine that already has a Chromium program
 EOF
@@ -58,6 +66,16 @@ while [ "$#" -gt 0 ]; do
         --image)
             [ "$#" -ge 2 ] || die "--image needs a tag"
             IMAGE=$2
+            shift 2
+            ;;
+        --engine)
+            [ "$#" -ge 2 ] || die "--engine needs an engine"
+            ENGINE=$2
+            shift 2
+            ;;
+        --horizon)
+            [ "$#" -ge 2 ] || die "--horizon needs a path"
+            HORIZON=$2
             shift 2
             ;;
         --rebuild)
@@ -84,6 +102,14 @@ case $PROFILE in
 esac
 if [ "${#PROFILE}" -gt 40 ]; then
     die "the profile name '$PROFILE' is longer than 40 characters"
+fi
+
+case $ENGINE in
+    chromium | firefox) : ;;
+    *) die "the engine '$ENGINE' is not one engine of this image: chromium or firefox" ;;
+esac
+if [ "$ENGINE" = firefox ] && [ -z "$HORIZON" ]; then
+    die "the firefox engine runs a driver of Horizon inside this container, so name its binary with --horizon <path>"
 fi
 
 # 1. This recipe is Linux only: the image is a Linux image, docker.io is the
@@ -147,10 +173,25 @@ if [ -n "$shadowed" ]; then
     [ "$FORCE" -eq 1 ] || die "this machine needs no browser machine"
 fi
 
-# 4. The image, built from the two files that sit beside this script.
+# 4. The image, built from the files that sit beside this script and, for the
+#    firefox engine, from the horizon binary as the fifth input.
 for required in Dockerfile entrypoint.sh horizon-browser-wrapper.sh; do
-    [ -f "$HERE/$required" ] || die "$HERE/$required is missing: copy Dockerfile, entrypoint.sh, horizon-browser-wrapper.sh and setup.sh to one folder"
+    [ -f "$HERE/$required" ] ||
+        die "$HERE/$required is missing: copy Dockerfile, entrypoint.sh, horizon-browser-wrapper.sh and setup.sh to one folder"
 done
+
+# The driver of a Firefox host runs inside this container, so the image carries
+# the binary. It matches the system and CPU of the destination, which is where it
+# runs; an empty placeholder keeps a Chromium image buildable without one.
+if [ -n "$HORIZON" ]; then
+    [ -f "$HORIZON" ] || die "no file at $HORIZON"
+    [ -x "$HORIZON" ] || die "$HORIZON is not executable"
+    install -m 0755 "$HORIZON" "$HERE/horizon"
+    log "copied $HORIZON beside the Dockerfile as the driver of this container"
+elif [ ! -f "$HERE/horizon" ]; then
+    : >"$HERE/horizon"
+    chmod 0755 "$HERE/horizon"
+fi
 
 existing=$(docker inspect --format '{{.State.Running}}' "hz-bvm-$PROFILE" 2>/dev/null || true)
 if docker image inspect "$IMAGE" >/dev/null 2>&1 && [ "$REBUILD" -eq 0 ]; then
@@ -165,7 +206,12 @@ else
 fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "the image $IMAGE is not built"
 
-# 5. The wrapper, under the first browser name that Horizon looks for.
+# 5. The wrapper, under the first browser name that Horizon looks for. The
+#    firefox engine needs none: its browser runs behind the driver of the
+#    container, and the person names that command in the settings.
+if [ "$ENGINE" = firefox ]; then
+    log "the firefox engine starts no wrapper: the settings of Horizon name the driver command below"
+else
 mkdir -p "$WRAPPER_DIR"
 install -m 0755 "$HERE/horizon-browser-wrapper.sh" "$WRAPPER_DIR/$WRAPPER_NAME"
 log "installed $WRAPPER_DIR/$WRAPPER_NAME"
@@ -180,6 +226,29 @@ if [ "$resolved" != "$WRAPPER_DIR/$WRAPPER_NAME" ]; then
     [ "$FORCE" -eq 1 ] || die "the wrapper is not the first $WRAPPER_NAME on the PATH"
 fi
 log "the non-interactive PATH must start with $WRAPPER_DIR; this shell has PATH=$PATH"
+fi
+
+if [ "$ENGINE" = firefox ]; then
+    # 6a. The container of the firefox engine: no display, no Chromium, one
+    #     profile mount. The driver runs inside it on demand, with the home of
+    #     the person set to the mount, so a profile, its downloads and its page
+    #     outlive both the link and the container.
+    profile_dir="$HOME/.horizon/browser-profiles/$PROFILE"
+    mkdir -p "$profile_dir"
+    chmod 0700 "$profile_dir" 2>/dev/null || true
+    docker rm -f "hz-bvm-$PROFILE" >/dev/null 2>&1 || true
+    log "starting the browser machine of the profile $PROFILE (folder $profile_dir)"
+    docker run --detach --name "hz-bvm-$PROFILE" \
+        --env "BM_ENGINE=firefox" \
+        --env "BM_PROFILE_DIR=/profile" \
+        --mount "type=bind,source=$profile_dir,target=/profile" \
+        "$IMAGE" >/dev/null
+    command_line="docker exec -i -e HOME=/profile hz-bvm-$PROFILE /opt/horizon/horizon --browser-host-driver"
+    log "the driver of that container is: $command_line --profile $PROFILE --engine firefox"
+    log "write 'browser_host.command' as: $command_line"
+    printf 'browser-machine ready profile=%s engine=firefox command=%s\n' "$PROFILE" "$command_line"
+    exit 0
+fi
 
 # 6. Start the container through the same wrapper that Horizon runs, so the
 #    setup proves the start path and not a second copy of it.

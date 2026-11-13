@@ -1,18 +1,27 @@
 # Browser machine
 
-A browser machine is one Chromium in a container on a Linux machine. Horizon
-browser panels use it over the SSH tunnel of that machine. Four files, beside
-this reference, make it:
+A browser machine is one browser in a container on a Linux machine. Horizon
+browser panels use it over SSH to that machine. Two engines are served: Chromium
+through a `DevTools` endpoint on the loopback of the machine, and Firefox behind a
+driver of Horizon that runs inside the container. Four files, beside this
+reference, make it, and the firefox engine adds the horizon binary as a fifth
+input:
 
 | File | Job |
 |---|---|
 | `browser-machine/Dockerfile` | The image: Chromium, a virtual display, a window manager and a loopback bridge |
 | `browser-machine/entrypoint.sh` | Starts the display, the window manager, the bridge and Chromium, and keeps them together |
 | `browser-machine/horizon-browser-wrapper.sh` | Installed as `google-chrome` on the destination, so Horizon finds a browser and gets a container |
-| `browser-machine/setup.sh` | Installs Docker, builds the image, installs the wrapper and starts the container |
+| `browser-machine/setup.sh` | Installs Docker, builds the image, installs the wrapper and starts the container; also prepares the firefox engine |
 
 An agent copies these four files from this skill directory to the destination.
 Do not type them again and do not write them with a here-document.
+
+For the firefox engine, copy the horizon binary of this computer as a fifth
+input, and name the command that the setup prints as `browser_host.command`: the
+driver of Horizon runs inside the container, so that machine needs no horizon of
+its own outside it. The binary must be built for the system and the CPU of the
+destination.
 
 ## When to use it
 
@@ -62,6 +71,18 @@ scp browser-machine/Dockerfile browser-machine/entrypoint.sh \
 ssh <target> 'sh setup.sh --profile <profile>'
 ```
 
+For the firefox engine, copy the horizon binary of this computer as well, and
+name it:
+
+```sh
+scp "$(command -v horizon)" <target>:horizon
+ssh <target> 'sh setup.sh --profile <profile> --engine firefox --horizon horizon'
+```
+
+The setup then ends with a `command=` value instead of a `port=` value. Write it
+as `browser_host.command` in step 4, and set the engine of the entry to Firefox.
+The horizon binary must be built for the system and the CPU of the destination.
+
 The setup installs `docker.io` when Docker is missing, builds the image, installs
 the wrapper as `/usr/local/bin/google-chrome` and starts the container through
 that wrapper. A second run builds nothing and starts no second container. The
@@ -103,6 +124,8 @@ Only the person can set this, in Settings (**Ctrl+Shift+,**) → **General** →
 |---|---|
 | SSH target | `bvm-1` |
 | Profile | `<profile>` |
+| Engine | Chromium, or Firefox with Horizon on that machine |
+| Driver program | `docker exec -i -e HOME=/profile hz-bvm-<profile> /opt/horizon/horizon --browser-host-driver`, for the firefox engine only |
 
 `ssh_target` is the `Host` name of step 3, not the address. The change applies at
 the next start of Horizon.
