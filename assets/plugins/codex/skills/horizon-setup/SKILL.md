@@ -420,7 +420,7 @@ For `link: away`, draw this card instead, and name the cause that `reason` gave:
 {"components": [
   {"type": "heading", "text": "The server did not answer",
    "subtitle": "The machine has the server, and this computer cannot reach it yet.",
-   "badge": {"text": "Not linked", "tone": "error"}},
+   "badge": {"text": "Not linked", "tone": "danger"}},
   {"type": "text", "text": "<the sentence of reason>"},
   {"type": "text", "text": "The sidebar says Server away. The log of Horizon holds the words of the attempt."},
   {"type": "buttons", "items": [

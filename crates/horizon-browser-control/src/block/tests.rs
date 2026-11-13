@@ -1134,8 +1134,8 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
 
     assert_eq!(
         setup.len(),
-        15,
-        "the wizard ships the card of each step and the failure card"
+        16,
+        "the wizard ships the card of each step, the failure card of a step, and the card of a link that is away"
     );
     assert_eq!(
         machines.len(),
@@ -1166,6 +1166,7 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
             "Where does the server run?",
             "Setting up the server",
             "The server is ready",
+            "The server did not answer",
             "Add another computer",
             "A browser that stays signed in",
             "Preparing the browser",
