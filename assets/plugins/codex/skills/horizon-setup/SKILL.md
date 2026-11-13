@@ -34,9 +34,9 @@ what the person presses.
 
 ## The one card of the flow
 
-Make one card at the start, titled `Set up`, and change it with `update` at every
-step. The person reads one card that changes, not a pile of cards. Two
-exceptions:
+Make one card at the start, titled `Set up`, keep the `panel_id` that `create`
+answers, and change the card with `update` at every step. The person reads one
+card that changes, not a pile of cards. Two exceptions:
 
 - The machine that stays has a card of its own, titled with its name. That card
   stays after the Set up card closes.
@@ -155,8 +155,11 @@ that cannot be chosen, whose second line names the command that signs in.
 ```
 
 Keep the order of the rows and the state of each row as the read answered them.
-Mark the provider that the person should take first `selected: true`. `Look again`
-runs the read again and updates the card. `Back` returns to the first card.
+Mark the provider that the person should take first `selected: true`. A press on
+a row of a provider that can rent continues with the card of the size and the
+place, with that provider. A press on a row that cannot be chosen never arrives.
+`Look again` runs the read again and updates the card. `Back` returns to the
+first card.
 
 ### 2. How big, and where?
 
