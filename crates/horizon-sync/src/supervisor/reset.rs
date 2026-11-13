@@ -33,9 +33,9 @@ use horizon_core::{AtomicFile, Machine};
 use serde::{Deserialize, Serialize};
 
 use super::SyncHandle;
-use super::pull::{merged_bindings, now_millis};
+use super::pull::{now_millis, view_bindings};
 use super::state::SyncState;
-use super::view::merged_records;
+use super::view::view_records;
 use crate::error::SyncError;
 use crate::intent::Op;
 use crate::store::Changes;
@@ -177,9 +177,9 @@ fn keep(handle: &SyncHandle, cause: Cause, seen: u64, answer: u64) -> (Kept, Str
     let (records, owned, bindings, directory, settings_path) = {
         let state = handle.lock();
         (
-            merged_records(&state),
+            view_records(&state),
             state.owned.clone(),
-            merged_bindings(&state),
+            view_bindings(&state),
             state.mirror_file.parent().map(Path::to_path_buf),
             state.settings_path.clone(),
         )

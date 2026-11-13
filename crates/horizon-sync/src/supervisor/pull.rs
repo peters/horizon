@@ -296,8 +296,12 @@ pub(super) fn seed_local(state: &mut SyncState) -> Result<(), SyncError> {
     Ok(())
 }
 
-/// One secret of an answer of changes, with the decision that this computer made
-/// about its own value. It is read from the answer, so the body of the pull is
+/// The key bindings of the state with its waiting intents applied: the bindings
+/// that the server gave, and the ones that this computer wrote and the server did
+/// not answer yet.
+///
+/// This is what the mirror file holds, and the seed of a first link is not one of
+/// them, so the first pull compares it with the server.
 pub(super) fn merged_bindings(state: &SyncState) -> BTreeMap<String, String> {
     let mut merged = state.bindings.clone();
     for intent in state.client.pending() {
@@ -311,6 +315,21 @@ pub(super) fn merged_bindings(state: &SyncState) -> BTreeMap<String, String> {
                 }
             }
         }
+    }
+    merged
+}
+
+/// The key bindings that the person sees: the ones above, and, until the first
+/// answer of the server decides what it already holds, the bindings that this
+/// computer kept before its first link.
+///
+/// A key binding is the name of a key of this home, and a link that never answers
+/// must not take it away: without this answer a machine of the list loses its key
+/// at the moment that the person links the computer to a server.
+pub(super) fn view_bindings(state: &SyncState) -> BTreeMap<String, String> {
+    let mut merged = merged_bindings(state);
+    for (machine, key) in &state.local_bindings {
+        merged.entry(machine.clone()).or_insert_with(|| key.clone());
     }
     merged
 }

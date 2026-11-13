@@ -44,10 +44,9 @@ use std::{
 };
 
 use horizon_browser_control::ssh_forward::ssh_command;
-use horizon_core::SecretTarget;
 use horizon_core::machines::{LoadedMachines, MachineBindings, MachineStore};
 use horizon_core::secret_store::{self, SecretStore};
-use horizon_core::{Machine, MachineError};
+use horizon_core::{Machine, MachineError, SecretTarget};
 
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
@@ -56,7 +55,7 @@ use crate::refusal::{LinkRefusal, RefusalCell, of_exit_code};
 use connect::{Halt, Opened};
 use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, SETTINGS_MIRROR_FILE, device_name};
 use link::{End, LinkParts, serve_link};
-use pull::{accept_hello, merged_bindings, now_millis};
+use pull::{accept_hello, now_millis, view_bindings};
 use view::records_of;
 
 mod connect;
@@ -736,7 +735,7 @@ impl MachineStore for SyncedMachineStore {
     fn load(&self) -> Result<LoadedMachines, MachineError> {
         let mut state = self.handle.lock();
         let records = records_of(&mut state);
-        let keys = merged_bindings(&state).into_iter().collect();
+        let keys = view_bindings(&state).into_iter().collect();
         Ok(LoadedMachines { records, keys })
     }
 

@@ -603,6 +603,89 @@ fn the_queue_of_a_computer_survives_its_restart_while_the_server_is_away() {
 }
 
 #[test]
+fn a_first_link_that_no_server_answers_keeps_the_machines_of_this_computer() {
+    let home = tempfile::tempdir().expect("a directory");
+    let machines_dir = home.path().join("machines");
+    fs::create_dir_all(&machines_dir).expect("the machine directory");
+    let registry = horizon_core::MachineRegistry::new(machines_dir.clone());
+    let file_store = horizon_core::Machines::with_records(registry.clone(), vec![machine("rented-1", "203.0.113.30")])
+        .with_key("rented-1", "horizon-rented-1");
+    file_store.save().expect("the list of one computer");
+
+    // The person presses `Link` on a server that never answers: the child of the
+    // link ends at once, as `ssh` does when no address answers.
+    let stand_in_dir = machines_dir.join("stand-in");
+    let keys = horizon_core::MachineKeys::new(stand_in_dir.join("machine-keys"));
+    let mut config = SupervisorConfig::for_server(
+        "server-vm",
+        "/opt/horizon --server-link",
+        &machines_dir,
+        keys_only(keys),
+    )
+    .expect("the settings of the link");
+    config.program = failing_stand_in(
+        &stand_in_dir,
+        "ssh: connect to host server-vm port 22: Connection refused",
+        255,
+    );
+    config.bounds = LinkBounds {
+        request: Duration::from_millis(200),
+        wait: Duration::from_millis(400),
+    };
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+    let store = SyncedMachineStore::new(supervisor.handle().clone());
+    let mut computer = Computer {
+        machines_dir: machines_dir.clone(),
+        supervisor: Some(supervisor),
+        store,
+    };
+
+    eventually("the first attempt of a link that no server answers", || {
+        matches!(computer.state(), LinkState::Away { .. }).then_some(())
+    });
+    let loaded = computer.store.load().expect("the list of this computer");
+    assert_eq!(
+        loaded
+            .records
+            .into_iter()
+            .map(|machine| machine.name)
+            .collect::<Vec<_>>(),
+        vec!["rented-1".to_string()],
+        "a link that never answered keeps the machine list of this computer"
+    );
+    assert_eq!(
+        loaded.keys,
+        vec![("rented-1".to_string(), "horizon-rented-1".to_string())],
+        "and the key that this computer binds to the machine"
+    );
+
+    // The list of the sidebar reads the store of the link, and it writes the
+    // binding file of this computer as the store answers it.
+    let list = horizon_core::Machines::from_store(&registry, std::sync::Arc::new(computer.store.clone()))
+        .expect("the list that the sidebar loads");
+    assert_eq!(list.records().len(), 1, "the sidebar still holds the machine");
+    assert_eq!(list.key("rented-1"), Some("horizon-rented-1"));
+    let bindings = fs::read_to_string(machines_dir.join("keys.json")).expect("the binding file");
+    assert!(
+        bindings.contains("horizon-rented-1"),
+        "a link that never answered does not erase the key binding of this computer: {bindings}"
+    );
+
+    // The seed is not written as a record of the server, so the first pull of a
+    // server that answers still compares it and sends what the server lacks.
+    let mirror: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(machines_dir.join("server-mirror.json")).expect("the mirror"))
+            .expect("the mirror of the link");
+    assert_eq!(mirror["seeded"], serde_json::Value::Bool(false), "{mirror}");
+    assert_eq!(
+        mirror["machines"].as_array().map(Vec::len),
+        Some(0),
+        "the mirror holds no seed as a record of the server: {mirror}"
+    );
+    computer.stop();
+}
+
+#[test]
 fn the_first_link_keeps_the_local_records_that_the_server_lacks() {
     let home = tempfile::tempdir().expect("a directory");
     let mut server = Server::start(&home.path().join("server"));
@@ -623,11 +706,25 @@ fn the_first_link_keeps_the_local_records_that_the_server_lacks() {
     let file_store = horizon_core::Machines::with_records(
         registry,
         vec![machine("own", "203.0.113.20"), machine("shared", "203.0.113.21")],
-    );
+    )
+    .with_key("own", "own-key");
+    fs::create_dir_all(machines_dir.join("machine-keys")).expect("the key folder");
     file_store.save().expect("the list before the server");
 
     let mut upgrading = Computer::start(&machines_dir, &server.socket);
     eventually("the local record at the server", || server.has("own").then_some(()));
+    // The key that this computer binds to its own machine follows the machine to
+    // the server, so the other computers of the person use the same key name.
+    assert!(
+        server
+            .store
+            .pull(0, "")
+            .expect("the rows of the server")
+            .rows
+            .iter()
+            .any(|row| row.kind == "binding" && row.id == "own" && !row.deleted),
+        "the key binding of the first link reaches the server"
+    );
     eventually("the first link at both computers", || {
         let names = upgrading.names();
         (names.contains(&"own".to_string()) && names.contains(&"shared".to_string())).then_some(())

@@ -377,3 +377,72 @@ fn the_machine_list_of_the_home_belongs_to_every_workspace() {
         "the machines are the person's, not one workspace's: {answer:?}"
     );
 }
+
+/// A first link to a server that never answers keeps the machine and the key
+/// binding that this computer held before the press: the sidebar of the person
+/// does not empty itself at `Link`, and the key binding stays on its disk.
+#[test]
+fn a_first_link_to_an_away_server_keeps_the_machine_list_of_this_computer() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+    answered(
+        &mut app,
+        &ctx,
+        &root,
+        set("build-1", "203.0.113.10", Some("build-1"), None),
+    );
+
+    // The press on `Link` of the card: the entry names a server, and the link of
+    // it starts with a stand-in `ssh` that no address answers.
+    let stand_in = horizon_core::stand_in_program_in(
+        temp.path(),
+        "ssh",
+        "printf 'ssh: connect to host server-vm port 22: Connection refused\\n' >&2\nexit 255",
+    )
+    .expect("the stand-in ssh");
+    app.link_child = Some(stand_in.to_string_lossy().into_owned());
+    app.template_config.server = horizon_core::ServerConfig {
+        ssh_target: Some("server-vm".to_owned()),
+        command: Some("/opt/horizon --server-link".to_owned()),
+        ..horizon_core::ServerConfig::default()
+    };
+    app.load_machines(&ctx);
+    settle_machine_load(&mut app);
+
+    let sync = app.server_sync.as_ref().expect("the link of the new entry started");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while sync.state_code() != "away" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first attempt of the link ends: {}",
+            sync.state_code()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        app.machine_list.records().len(),
+        1,
+        "the machine of the person stays in the list while the server is away"
+    );
+    assert_eq!(
+        app.machine_list.find("build-1").map(|machine| machine.host.as_str()),
+        Some("203.0.113.10"),
+        "and it is the record that this computer wrote"
+    );
+    assert_eq!(
+        app.machine_list.key("build-1"),
+        Some("build-1"),
+        "the key of the machine stays bound to it"
+    );
+    let bindings = fs::read_to_string(
+        MachineRegistry::from_home(app.session_store.home())
+            .root()
+            .join("keys.json"),
+    )
+    .expect("the binding file");
+    assert!(
+        bindings.contains("\"build-1\": \"build-1\""),
+        "a link that never answered does not erase the key binding of this computer: {bindings}"
+    );
+}
