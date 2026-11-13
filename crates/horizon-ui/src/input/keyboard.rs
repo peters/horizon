@@ -124,6 +124,11 @@ pub fn translate_key_event_with_physical(
     if context.modifiers.alt
         && let Some(text) = text
     {
+        if option_composed_character(key_identity, &text) {
+            // The Option key asked the layout for this character, so it is the
+            // character of the layout and reaches the terminal as text.
+            return None;
+        }
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.push(b'\x1b');
         bytes.extend_from_slice(text.as_bytes());
@@ -384,6 +389,32 @@ pub(super) fn printable_text(key: Key, modifiers: Modifiers) -> Option<String> {
     }?;
 
     Some(symbol.to_owned())
+}
+
+/// Whether the Option key made the layout compose a character of its own.
+///
+/// A Mac reports the Option key of the keyboard as `alt`. Some layouts compose
+/// a character for Option, such as `|` from Option+7 on a Norwegian layout.
+/// That character, and not the Meta sequence `ESC` and the key, is what the
+/// person typed. Option composes nothing when it yields the character that the
+/// same key gives without modifiers, and that case remains Meta.
+///
+/// The text of a key without modifiers ignores Shift, so a letter that differs
+/// from it in case alone is not a composition of Option.
+fn option_composed_character(key_identity: KeyIdentity<'_>, text: &str) -> bool {
+    let base = key_identity
+        .key_without_modifiers_text
+        .filter(|base| !base.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| printable_text(key_identity.physical_key.unwrap_or(key_identity.key), Modifiers::NONE));
+
+    base.is_some_and(|base| !same_ignoring_case(&base, text))
+}
+
+fn same_ignoring_case(left: &str, right: &str) -> bool {
+    left.chars()
+        .flat_map(char::to_lowercase)
+        .eq(right.chars().flat_map(char::to_lowercase))
 }
 
 pub(super) fn is_control_character(text: &str) -> bool {

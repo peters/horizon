@@ -765,6 +765,74 @@ mod tests {
         assert_eq!(bytes, b"@");
     }
 
+    /// The events that a Mac reports for the Option key of a Norwegian layout,
+    /// taken from a trace of that system: `(key, physical key, the text of the
+    /// key without modifiers, the character that the layout composes)`.
+    const OPTION_COMPOSED_ON_A_MAC: [(Key, Key, &str, &str); 4] = [
+        (Key::Pipe, Key::Num7, "7", "|"),
+        (Key::OpenBracket, Key::Num8, "8", "["),
+        (Key::CloseBracket, Key::Num9, "9", "]"),
+        (Key::Quote, Key::Backslash, "@", "'"),
+    ];
+
+    #[test]
+    fn option_composed_symbols_reach_the_pty_as_their_own_character() {
+        for (key, physical_key, without_option, composed) in OPTION_COMPOSED_ON_A_MAC {
+            let events = vec![
+                key_event(
+                    key,
+                    Some(physical_key),
+                    Some(without_option),
+                    true,
+                    false,
+                    Modifiers::ALT,
+                ),
+                text_event(composed),
+                key_event(
+                    key,
+                    Some(physical_key),
+                    Some(without_option),
+                    false,
+                    false,
+                    Modifiers::ALT,
+                ),
+            ];
+
+            assert_eq!(
+                forward_bytes(&events, TermMode::NONE),
+                composed.as_bytes(),
+                "{composed} is the character of the layout, not Meta and {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn option_without_a_composed_character_stays_the_meta_key() {
+        let events = vec![
+            key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::ALT),
+            text_event("a"),
+            key_event(Key::A, Some(Key::A), Some("a"), false, false, Modifiers::ALT),
+        ];
+
+        assert_eq!(forward_bytes(&events, TermMode::NONE), b"\x1ba");
+    }
+
+    #[test]
+    fn option_with_shift_keeps_a_letter_on_the_meta_path() {
+        let modifiers = Modifiers {
+            alt: true,
+            shift: true,
+            ..Modifiers::NONE
+        };
+        let events = vec![
+            key_event(Key::A, Some(Key::A), Some("a"), true, false, modifiers),
+            text_event("A"),
+            key_event(Key::A, Some(Key::A), Some("a"), false, false, modifiers),
+        ];
+
+        assert_eq!(forward_bytes(&events, TermMode::NONE), b"\x1bA");
+    }
+
     /// Same scenario as above but in non-kitty mode: the text event
     /// should pass through as raw "@" with no preceding "2".
     #[test]
