@@ -18,6 +18,8 @@ const CHROME_HEIGHT: f32 = 30.0;
 /// The URL bar keeps at least this much width even when an owner chip is
 /// present on a narrow panel.
 const URL_MIN_WIDTH: f32 = 120.0;
+/// The size of the address of the page, in screen points.
+const URL_FONT_SIZE: f32 = 11.5;
 const VIDEO_QUEUE_REJECTED: &str = "browser command queue is full; video command was not queued";
 
 /// Draw the top strip. Returns whether the URL bar has focus and whether
@@ -413,6 +415,14 @@ fn url_bar(
     let was_focused = ui.memory(|memory| memory.focused() == Some(id));
     // Keep the buffer in sync with the live URL while unfocused.
     sync_url_buffer(&mut state.url_buffer, browser.display_url(), was_focused);
+    // The panel of a browser is a panel of the canvas, so its address is under
+    // the canvas zoom: it is laid out at the size of the screen, like the text
+    // of every other panel.
+    let font = egui::FontId::monospace(URL_FONT_SIZE);
+    let mut layouter = |ui: &Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+        let job = egui::text::LayoutJob::simple(buffer.as_str().to_owned(), font.clone(), theme::FG(), wrap_width);
+        crate::zoom_text::layout_job(ui.painter(), job)
+    };
     let response = ui.add_enabled(
         interactive,
         TextEdit::singleline(&mut state.url_buffer)
@@ -420,7 +430,8 @@ fn url_bar(
             .hint_text("Enter address")
             .desired_width(max_width)
             .min_size(vec2(if browser.is_remote() { URL_MIN_WIDTH } else { 0.0 }, 0.0))
-            .font(egui::FontId::monospace(11.5)),
+            .font(egui::FontId::monospace(URL_FONT_SIZE))
+            .layouter(&mut layouter),
     );
     // Focusing selects the stable canonical URL without rewriting it. Page
     // interaction can move focus away from the field, and that transition

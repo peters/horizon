@@ -288,11 +288,8 @@ pub(crate) fn configure_fonts() -> egui::FontDefinitions {
     );
     // The two faces of the interface itself, hinted for even stems at the screen
     // sizes that the interface has.
-    for (name, horizontal_fit) in [(FONT_INTER, false), (FONT_JETBRAINS_MONO, true)] {
-        let hinted = fonts
-            .font_data
-            .remove(name)
-            .map(|font| hinted((*font).clone(), horizontal_fit).into());
+    for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
+        let hinted = fonts.font_data.remove(name).map(|font| hinted((*font).clone()).into());
         if let Some(font) = hinted {
             fonts.font_data.insert(name.to_owned(), font);
         }
@@ -346,21 +343,20 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
 /// place it is drawn. With the bins off, one glyph has one picture at any pen
 /// position, and a stem is the column that the hinter made of it.
 ///
-/// The horizontal fit of the hinter is the half that decides whether the stems
-/// of one word are equally thick, and it also makes the ink of a glyph up to a
-/// pixel wider than its advance. A line of a panel is measured and cut by that
-/// ink, so the interface text keeps the fit off: advances and ink stay the
-/// values of the unhinted font and no label wraps because of hinting. The
-/// terminal takes the fit: its cells, its cursor and its box drawing come from
-/// the advances alone, so the fit only makes the stems of every cell equal and
-/// keeps the box drawing on the edges of its cell.
-fn hinted(font: egui::FontData, horizontal_fit: bool) -> egui::FontData {
+/// The horizontal fit of the hinter is off for both faces, so that every glyph
+/// keeps the ink and the advance that the unhinted face has. This rasteriser
+/// makes the ink of Inter lighter and wider with the fit on: the stem of an
+/// `l` at 12.5 points is two columns of a quarter ink instead of one column
+/// and two fading edges, while the advances do not change at all. On `JetBrains Mono` the
+/// fit changes neither the ink nor the advance, so the terminal keeps the same
+/// cells with the fit off and one rule covers both faces.
+fn hinted(font: egui::FontData) -> egui::FontData {
     font.tweak(egui::epaint::text::FontTweak {
         hinting: Some(true),
         hinting_target: egui::epaint::text::HintingTarget::Smooth(egui::epaint::text::SmoothHinting {
             light: false,
             symmetric_rendering: true,
-            preserve_linear_metrics: !horizontal_fit,
+            preserve_linear_metrics: true,
         }),
         subpixel_binning: Some(false),
         ..egui::epaint::text::FontTweak::default()
@@ -431,18 +427,19 @@ mod tests {
             };
             smooth
         };
-        let ui = smooth(FONT_INTER);
-        assert!(!ui.light, "the interface text fits its stems to the pixel");
-        assert!(
-            ui.preserve_linear_metrics,
-            "a line of a panel is cut by the ink of its glyphs, so the interface text keeps the unhinted advance and ink"
-        );
-        let terminal = smooth(FONT_JETBRAINS_MONO);
-        assert!(!terminal.light, "the terminal fits its stems to the pixel");
-        assert!(
-            !terminal.preserve_linear_metrics,
-            "the cells of the terminal come from the advances, so its text takes the horizontal fit"
-        );
+        for name in [FONT_INTER, FONT_JETBRAINS_MONO] {
+            let face = smooth(name);
+            assert!(!face.light, "{name} fits its stems to the pixel");
+            assert!(
+                face.preserve_linear_metrics,
+                "{name} keeps the ink and the advance of the unhinted face: the horizontal fit makes its stems lighter and wider"
+            );
+            assert_eq!(
+                fonts.font_data[name].tweak.subpixel_binning,
+                Some(false),
+                "{name} draws one picture of a glyph at any pen position"
+            );
+        }
         assert_eq!(
             fonts.font_data[FONT_NOTO_CJK].tweak.hinting, None,
             "a fallback face keeps the default hinting"

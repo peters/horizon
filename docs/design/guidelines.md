@@ -392,13 +392,16 @@ asks for a weight: `typeface::rich` for a stock widget and `typeface::format` or
 below means such a weight.
 
 Both faces of the interface ask for normal hinting (`FontTweak::hinting_target`).
-A stem at 9 to 14 screen points then lands on a pixel. The horizontal fit of
-the hinter is the other half, and it also widens the ink of a glyph by up to a
-pixel beyond its advance. The interface text keeps that fit off, because a line
-of a panel is cut by that ink. The terminal takes the fit: its cells, its
-cursor and its box drawing come from the advances alone, so the fit only makes
-the stems of every cell equally thick. A fallback face keeps the default
-hinting.
+A stem at 9 to 14 screen points then lands on a pixel. A fallback face keeps
+the default hinting.
+
+Both faces keep the horizontal fit of the hinter off
+(`SmoothHinting::preserve_linear_metrics`), so every glyph keeps the ink and
+the advance of the unhinted face. This rasteriser makes the ink of Inter
+lighter and wider with the fit on: the stem of a 12.5 point `l` is then two
+columns of a quarter ink instead of one column and two fading edges. On
+JetBrains Mono the fit changes neither the ink nor the advance at 13 and 12.25
+points, so the terminal keeps its cells either way. One rule covers both faces.
 
 Both faces turn the sub-pixel bins of the rasteriser off
 (`FontTweak::subpixel_binning`). With the bins on, the toolkit rasterises a
@@ -448,6 +451,24 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   atlas when it passes 80 % fill, so the pictures of a long zoom session cannot
   fill it.
 - Zoom 1 takes the plain path. The look of a display of scale 1 does not change.
+
+### Text of the canvas that a stock widget still draws
+
+A stock widget of the toolkit draws its own text through the fonts of the
+context, so this text is scaled by the canvas zoom and not laid out for the
+screen size. These parts still draw that text:
+
+| Part | What a fix would take |
+|---|---|
+| The address field of a browser panel | Done: the panel gives `TextEdit` a layouter, as the editor does |
+| The placeholder of a browser panel: its state line and the note under it | Paint both lines with `zoom_text` inside the centred area, and keep the response for the tooltip |
+| The notice strip of a terminal, and the banners of a browser panel | Paint the sentence with `zoom_text`; the buttons beside it need a painted button of their own |
+| The mode bar and the preview of the editor | Paint the bar with `zoom_text`; the preview is markdown through the toolkit |
+| The overlays of a device panel, and every popup of a panel | A popup is its own layer; the canvas transform would have to reach it first |
+
+An overlay or a popup that is not under the canvas transform is already sharp,
+so the fix is not to add the transform to it. The list above is the set of parts
+that are under the transform and still take the toolkit's font size.
 
 The cell grid of a terminal stays a logical grid: its columns and rows are the
 values of zoom 1 and only the view scales them, so a zoom never resizes the

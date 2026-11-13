@@ -147,6 +147,24 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 
    Result: the text is sharp there too.
 
+### 6.9 CT-STOCK — The text of the parts that a stock widget draws
+
+1. Open a browser panel and read its address field at zoom 1.0.
+
+   Result: the address is sharp.
+
+2. Zoom the canvas to 0.67 and back to 1.0.
+
+   Result: the address keeps its size at every zoom, and its letters are not a
+   stretched copy of the address of zoom 1.
+
+3. Read the state line of the placeholder of the panel and the sentence of the
+   notice strip of a terminal.
+
+   Result: these lines are still drawn at the size of the interface, so they
+   are smaller and softer than the address. This is a known gap and not a
+   failure of the procedure.
+
 ### 6.8 CT-PAN — The text after a pan that stops between pixels
 
 1. Pan the canvas with the middle mouse button by a short distance, and stop.
@@ -170,6 +188,7 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 - A wrapped paragraph breaks at the same words at every zoom, and the line
   count of every component of a card, of a title bar and of a workspace label
   is the line count of zoom 1.
+- The address field of a browser panel is laid out for the screen size.
 - The window repaints once after a zoom settles, and not while it is still.
 
 ## 8. Cleanup
