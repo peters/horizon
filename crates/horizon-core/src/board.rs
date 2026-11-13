@@ -487,6 +487,12 @@ impl Board {
         let mut browser_shutdown_signals = Vec::new();
 
         for panel in &mut self.panels {
+            // The program of the panel gets the hangup of its terminal. A
+            // program that outlives the hangup is watched here, so the join of
+            // its event loop cannot hold the exit without a bound.
+            if let Some(child) = panel.terminal().and_then(crate::terminal::Terminal::hanging_child) {
+                crate::panel::watch_a_program_at_the_end(child, &panel.title);
+            }
             if let Some(terminal) = panel.terminal_mut()
                 && terminal.begin_work_shutdown(&completed)
             {

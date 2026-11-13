@@ -2,6 +2,7 @@ use crate::panel::{PanelKind, PanelOptions};
 
 mod alignment;
 mod core;
+mod exit_bounds;
 mod layout;
 mod machine_restore;
 mod panel_working_directory;

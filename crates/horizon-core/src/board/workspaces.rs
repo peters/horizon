@@ -353,6 +353,12 @@ impl Board {
         // This avoids blocking the UI thread — the child process is cleaned
         // up asynchronously in the background.
         let mut panel = removed_panel?;
+        // A closed panel gets the same hangup and the same two steps as the
+        // programs of the exit, so a program that ignores the hangup cannot run
+        // on after the panel is gone.
+        if let Some(child) = panel.terminal().and_then(crate::terminal::Terminal::hanging_child) {
+            crate::panel::watch_a_program_at_the_end(child, &panel.title);
+        }
         // The buffer that leaves keeps no dirty mark to clear, so its text goes
         // to the coordination worker with the panel that held it.
         if let Some(save) = panel.take_pending_editor_write() {

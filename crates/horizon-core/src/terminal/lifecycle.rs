@@ -244,6 +244,23 @@ impl Terminal {
     /// `None` while the identity is not known yet, which no caller can mistake
     /// for a proof of ownership. The caller that compares the value with the
     /// system runs that read off the UI thread.
+    /// The process that this terminal started, while it still runs, with the
+    /// value that tells it from a later process that took the same id.
+    ///
+    /// A caller that ends a panel closes the master of this terminal, which
+    /// sends the hangup to the process group. This value reaches the program
+    /// when the hangup does not end it.
+    #[must_use]
+    pub(crate) fn hanging_child(&self) -> Option<crate::process::HangingChild> {
+        if self.child_exited || self.shutdown_complete.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(crate::process::HangingChild::new(
+            self.child_pid?,
+            std::sync::Arc::clone(&self.child_start_time),
+        ))
+    }
+
     pub(crate) fn owned_process(&self) -> Option<crate::process::OwnedProcess> {
         if !self.work_continuation.owns_process
             || self.child_exited

@@ -119,6 +119,39 @@ pub(crate) struct OwnedProcess {
     pub(crate) start_time: String,
 }
 
+/// The process that a terminal started, while it still runs.
+///
+/// The start time fills itself, so a frame reads this value and a worker reads
+/// the identity that tells the process from a later one with the same id.
+#[derive(Clone)]
+pub(crate) struct HangingChild {
+    pub(crate) pid: u32,
+    start_time: Arc<OnceLock<Option<String>>>,
+}
+
+impl HangingChild {
+    #[must_use]
+    pub(crate) fn new(pid: u32, start_time: Arc<OnceLock<Option<String>>>) -> Self {
+        Self { pid, start_time }
+    }
+
+    /// Whether the id still names the process that this value recorded, and not
+    /// one that the system gave the same id after it. `false` while the start
+    /// time is not known yet, so no signal reaches an id that this value cannot
+    /// name.
+    #[must_use]
+    pub(crate) fn still_names_its_process(&self) -> bool {
+        let Some(start_time) = self.start_time.get().cloned().flatten() else {
+            return false;
+        };
+        OwnedProcess {
+            pid: self.pid,
+            start_time,
+        }
+        .still_names_this_process()
+    }
+}
+
 impl OwnedProcess {
     /// Whether the id still names the process that this value recorded, and not
     /// one that the system gave the same id after it.
