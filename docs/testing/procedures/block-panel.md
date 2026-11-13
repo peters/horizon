@@ -543,9 +543,11 @@ every step on the fixture display that the native VNC Device panel shows.
    while it can. Where the badge would leave it less than that, the badge takes a
    row of its own under the second line and starts at the left edge of the
    heading. A heading that is still too long for its room, a long label and a
-   long value truncate with an ellipsis, body text wraps, and nothing overlaps or
-   leaves the card. The buttons stay inside the card and the destructive button
-   keeps the right edge.
+   long value wrap to the lines that they need and the pair grows with them, body
+   text wraps, and nothing overlaps or leaves the card. A value of one line keeps
+   the right edge of its row; a value of more lines starts at the left edge of
+   its column. The buttons stay inside the card and the destructive button keeps
+   the right edge.
 
 7. Drag the bottom edge of the card up until the card is shorter than its
    content.

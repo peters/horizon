@@ -453,7 +453,10 @@ A document holds components in draw order, and only these components:
   optional `tone`. The badge is drawn on the title row, on the right.
 - `text`: `text`. Body text; the only text that may hold line breaks.
 - `kv`: `rows` with `label`, `value` and optional `mono`. A `mono` value is
-  drawn in the monospace family: use it for an address, a command or a hash.
+  drawn in the monospace family: use it for an address, a command or a hash. A
+  value keeps the lines that its words need, so write the sentence in full and
+  do not shorten it for the card; the column of labels takes at most 40% of the
+  row.
 - `badge`: `text` and optional `tone`. A badge on a row of its own.
 - `progress`: `label`, `percent` and optional `detail`, drawn on the right of
   the label row.
@@ -470,7 +473,9 @@ A document holds components in draw order, and only these components:
   `Ready` with tone `ok`. A row with `disabled: true` is drawn with a dashed
   outline and a softer title, says in its subtitle what is missing, and sends no
   click. `layout: pills` draws the titles of the rows as one line of small
-  pills, for a short choice such as a place; a pill is a row for the click.
+  pills, for a short choice such as a place; a pill is a row for the click. The
+  title and the subtitle of a row of `layout: rows` keep the lines that their
+  words need, and a long subtitle takes the lines it needs instead of a cut.
 - `caption`: `text`. One short line above a group of rows, such as `Size` or
   `Place`. Horizon draws it in upper case, small and dim.
 - `steps`: `steps` with `label`, optional `state` (`done`, `now` or `waiting`,

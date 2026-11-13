@@ -56,8 +56,12 @@ pub(super) const BADGE_OUTLINE_ALPHA: u8 = 90;
 pub(super) const KV_RADIUS: u8 = 10;
 /// Space on both sides inside the inset box.
 pub(super) const KV_PAD_SIDE: f32 = 12.0;
-/// Height of one pair.
+/// Height of one pair that holds one line of text.
 pub(super) const KV_ROW_HEIGHT: f32 = 34.0;
+/// Space above and below the text of a pair. A pair of one line keeps
+/// [`KV_ROW_HEIGHT`]; a pair whose label or value needs more lines grows by the
+/// height of those lines.
+pub(super) const KV_ROW_PAD_Y: f32 = 8.0;
 /// Thickness of the line between two pairs.
 pub(super) const KV_SEPARATOR: f32 = 0.5;
 /// Alpha of the line between two pairs.

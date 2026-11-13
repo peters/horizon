@@ -5,11 +5,13 @@ use egui::epaint::Shape;
 use horizon_browser_control::block::{BlockDocument, Button, Component, ListLayout, Selection, Tone};
 use horizon_core::{CardFrames as HostFrames, CardRuntime};
 
-use crate::block_widget::metrics::BODY_PAD_SIDE;
+use crate::block_widget::metrics::{BODY_PAD_SIDE, KV_PAD_SIDE, KV_ROW_HEIGHT, KV_ROW_PAD_Y};
 use crate::theme;
 
 use super::{CardFrames, Owner, card_nodes, card_nodes_in, disabled_state, every_component, one_button};
-use crate::block_widget::{AGENT_GONE_LINE, AGENT_GONE_TITLE, CLICKS_REFUSED_LINE, CLICKS_REFUSED_TITLE, EMPTY_CARD};
+use crate::block_widget::{
+    AGENT_GONE_LINE, AGENT_GONE_TITLE, CLICKS_REFUSED_LINE, CLICKS_REFUSED_TITLE, EMPTY_CARD, default_card_size,
+};
 
 /// Whether the pass painted a rectangle outline of `width` in `color`.
 fn painted_outline(output: &egui::FullOutput, width: f32, color: Color32) -> bool {
@@ -410,5 +412,185 @@ fn a_card_that_horizon_owns_says_so_and_shows_no_frame_of_a_gone_agent() {
     assert!(
         !texts.iter().any(|text| text == AGENT_GONE_TITLE),
         "a card of Horizon's own claims no gone agent: {texts:?}"
+    );
+}
+
+/// The document of a card that holds one `kv` of `rows`.
+fn kv_document(rows: &[(&str, &str)]) -> BlockDocument {
+    BlockDocument {
+        components: vec![Component::Kv {
+            rows: rows
+                .iter()
+                .map(|(label, value)| horizon_browser_control::block::KvRow {
+                    label: (*label).to_string(),
+                    value: (*value).to_string(),
+                    mono: false,
+                })
+                .collect(),
+        }],
+    }
+}
+
+/// The pass of a card 420 points wide that holds one `kv` of `rows`.
+fn kv_card(rows: &[(&str, &str)]) -> Vec<egui::epaint::ClippedShape> {
+    let document = kv_document(rows);
+    let (output, _) = CardFrames::new().pass_in(420.0, &document, &mut CardRuntime::default(), Owner::Listening);
+    output
+}
+
+/// The text shape that drew `text` in a pass.
+fn text_of<'a>(output: &'a [egui::epaint::ClippedShape], text: &str) -> &'a egui::epaint::TextShape {
+    output
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text() == text => Some(shape),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the card drew {text}"))
+}
+
+/// The right edge of the values of a card: the card width less the padding of
+/// the body and of the inset box.
+fn value_right() -> f32 {
+    420.0 - f32::from(BODY_PAD_SIDE) - KV_PAD_SIDE
+}
+
+#[test]
+fn a_long_value_keeps_every_line_and_starts_at_its_own_column() {
+    let cost = "0.012 EUR / hour, including the IPv4 address of the machine and its traffic";
+    let output = kv_card(&[("Cost", cost), ("Session", "helsinki-1")]);
+
+    let value = text_of(&output, cost);
+    assert!(!value.galley.elided, "the value is not cut: {value:?}");
+    assert!(
+        value.galley.rows.len() >= 2,
+        "the value wraps to the lines it needs: {:?}",
+        value.galley.rows.len()
+    );
+    let label = text_of(&output, "Cost");
+    assert!(
+        value.pos.x > label.pos.x,
+        "the value starts in its own column, to the right of the label"
+    );
+    assert!(
+        value.pos.x + value.galley.size().x <= value_right() + 0.5,
+        "the value ends at or before the right edge of the row: {} against {}",
+        value.pos.x + value.galley.size().x,
+        value_right()
+    );
+    // The row grew with its value, so the pair under it starts below it.
+    let next = text_of(&output, "helsinki-1");
+    let row_bottom = label.pos.y - KV_ROW_PAD_Y + KV_ROW_HEIGHT;
+    assert!(
+        next.pos.y > row_bottom,
+        "the next pair starts below the pair that the long value made taller: {} against {row_bottom}",
+        next.pos.y
+    );
+}
+
+#[test]
+fn a_short_value_keeps_the_right_edge_of_its_row() {
+    let output = kv_card(&[("Cost", "0.012 EUR / hour")]);
+
+    let value = text_of(&output, "0.012 EUR / hour");
+    assert_eq!(value.galley.rows.len(), 1, "one line stays one line");
+    assert!(
+        (value.pos.x + value.galley.size().x - value_right()).abs() < 0.5,
+        "the value keeps the right edge of its row: {} against {}",
+        value.pos.x + value.galley.size().x,
+        value_right()
+    );
+}
+
+#[test]
+fn a_value_of_several_lines_starts_at_one_left_edge() {
+    let first = "The temporary directory of the machine is not writable by the program that the step started.";
+    let second = "The provider program answered nothing at all, so the machine was never created for you.";
+    let output = kv_card(&[("What failed", first), ("Undone", second)]);
+
+    let one = text_of(&output, first);
+    let two = text_of(&output, second);
+    assert!(one.galley.rows.len() >= 2 && two.galley.rows.len() >= 2);
+    assert!(
+        (one.pos.x - two.pos.x).abs() < 0.5,
+        "two long values start at the same left edge: {} against {}",
+        one.pos.x,
+        two.pos.x
+    );
+}
+
+#[test]
+fn a_long_label_wraps_in_its_column_and_leaves_the_value_its_room() {
+    let label = "The machine that this browser panel runs on";
+    let output = kv_card(&[(label, "helsinki-1")]);
+
+    let drawn = text_of(&output, label);
+    assert!(!drawn.galley.elided, "the label is not cut: {drawn:?}");
+    let value = text_of(&output, "helsinki-1");
+    assert!(
+        (value.pos.x + value.galley.size().x - value_right()).abs() < 0.5,
+        "the value keeps the right edge of its row beside a long label"
+    );
+    assert!(
+        value.pos.x > drawn.pos.x,
+        "the label keeps its own column, and the value keeps the rest of the row"
+    );
+}
+
+#[test]
+fn the_height_estimate_of_a_new_card_counts_the_lines_of_a_value() {
+    let long = default_card_size(&kv_document(&[(
+        "What failed",
+        "The temporary directory of the machine is not writable by the program that the step started.",
+    )]))[1];
+    let short = default_card_size(&kv_document(&[("Cost", "0.012 EUR / hour")]))[1];
+
+    assert!(
+        long > short,
+        "a value of three lines opens a taller card than a value of one line: {long} against {short}"
+    );
+}
+
+/// The pass of a card 420 points wide that holds one list of `rows`.
+fn list_card(rows: &[(&str, &str)]) -> Vec<egui::epaint::ClippedShape> {
+    let document = BlockDocument {
+        components: vec![Component::List {
+            selection: Selection::None,
+            rows: rows
+                .iter()
+                .map(|(title, subtitle)| horizon_browser_control::block::ListRow {
+                    id: title.to_lowercase().replace(' ', "-"),
+                    title: (*title).to_string(),
+                    subtitle: Some((*subtitle).to_string()),
+                    tone: None,
+                    selected: false,
+                    value: None,
+                    badge: None,
+                    disabled: false,
+                })
+                .collect(),
+            layout: ListLayout::Rows,
+        }],
+    };
+    let (output, _) = CardFrames::new().pass_in(420.0, &document, &mut CardRuntime::default(), Owner::Listening);
+    output
+}
+
+#[test]
+fn a_long_second_line_of_a_row_wraps_instead_of_being_cut() {
+    let reason = "The machine must stay on while another computer of yours needs the server that it keeps.";
+    let output = list_card(&[("This computer", reason), ("helsinki-1", "A machine of your list.")]);
+
+    let subtitle = text_of(&output, reason);
+    assert!(!subtitle.galley.elided, "the second line is not cut: {subtitle:?}");
+    assert!(
+        subtitle.galley.rows.len() >= 2,
+        "the second line wraps to the lines it needs: {:?}",
+        subtitle.galley.rows.len()
+    );
+    let next = text_of(&output, "helsinki-1");
+    assert!(
+        next.pos.y > subtitle.pos.y + subtitle.galley.size().y,
+        "the row grew with its second line, so the next row starts below it"
     );
 }

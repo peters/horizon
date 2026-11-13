@@ -665,11 +665,22 @@ the rules from the modules beside it.
   `alpha(colour, 90)` and carries a filled dot. The neutral tone is a raised
   pill: `PANEL_BG_ALT` fill, `BORDER_SUBTLE` outline, `FG_SOFT` text and no dot.
 - Label and value box (`kv`): `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, radius
-  10, 12 of horizontal inset. Each pair is 34 high: label 12.5 `FG_SOFT` on the
-  left, value 12.5 `FG` on the right, or monospace 12 when the agent marks the
-  value `mono`. A 0.5 px `alpha(BORDER_SUBTLE, 179)` line separates two pairs.
-  A value takes at most 65% of the row and the label the rest; both truncate.
+  10, 12 of horizontal inset. A pair is at least 34 high: label 12.5 `FG_SOFT`
+  at the top left, value 12.5 `FG` or monospace 12 when the agent marks the
+  value `mono`, 8 of space above and below the text. A 0.5 px
+  `alpha(BORDER_SUBTLE, 179)` line separates two pairs. The box keeps one
+  column of labels, as wide as its widest label and at most 40% of the row, and
+  the value takes the rest. Both halves keep the lines that their words need: a
+  value of one line keeps the right edge of its row, and a value of more lines
+  starts at the left edge of the value column, where its lines line up. A pair
+  grows with its taller half, so no word of a pair is cut.
 - Body text: 12.5 `FG_SOFT`, line height 1.5 x the size, wrapped.
+- One line, cut with an ellipsis when it does not fit, because each names a
+  control or a state and not a sentence: a link label and the host under it, a
+  badge text, a button label, a caption, the label and the time of a step, the
+  state chip and the footer. The heading, its second line, body text, both
+  halves of a `kv` pair and both lines of a list row take the lines that their
+  words need.
 - List: rows radius 8, 6 apart. A row is 10 above and below its text, 12 of
   horizontal inset, and a 14 px radio mark 12 left of the text. Unselected:
   `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, hollow mark in `BORDER_STRONG`.
@@ -679,7 +690,9 @@ the rules from the modules beside it.
   `blend(BG_ELEVATED, ACCENT, 0.09)` fill and the same mark in
   `alpha(ACCENT, 120)`. Hover on a live row:
   `blend(PANEL_BG_ALT, ACCENT, 0.10)`. Title 13 `FG`, second line 11.5 in
-  `FG_SOFT` or in the tone colour of that row.
+  `FG_SOFT` or in the tone colour of that row. The title and the second line
+  keep the lines that their words need, and the row grows with them; the value
+  or the badge keeps the right edge of the row.
 - Progress: label row 11.5 `FG_SOFT`, label on the left and the detail on the
   right, then 6, then a bar 4 high, radius 2, track `PANEL_BG_ALT`, fill
   `ACCENT` at the percentage of the width.

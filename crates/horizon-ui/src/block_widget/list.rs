@@ -119,21 +119,26 @@ fn show_row(
     let text_width = (width - text_x - LIST_ROW_PAD_SIDE - LIST_ROW_OUTLINE - edge.width).max(0.0);
 
     let title_colour = if row.disabled { theme::FG_SOFT() } else { theme::FG() };
-    let title = text::line(
+    // The text of a row keeps the lines that its words need: a row is a choice
+    // and a name with its reason, and neither loses a word to the edge of the
+    // card. The row grows with them, and its value or badge keeps the right edge.
+    let title = text::wrapped(
         ui.painter(),
         &row.title,
         &FontId::proportional(LIST_TITLE_FONT),
         title_colour,
         text_width,
+        None,
     );
     let subtitle_colour = row.tone.map_or_else(theme::FG_SOFT, tones::text);
     let subtitle = row.subtitle.as_ref().map(|subtitle| {
-        text::line(
+        text::wrapped(
             ui.painter(),
             subtitle,
             &FontId::proportional(LIST_SUBTITLE_FONT),
             subtitle_colour,
             text_width,
+            None,
         )
     });
 

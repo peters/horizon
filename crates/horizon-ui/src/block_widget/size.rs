@@ -12,9 +12,10 @@ use horizon_browser_control::block::{BlockDocument, Component, ListLayout};
 use super::metrics::{
     BADGE_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_TOP, BUTTON_HEIGHT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
     CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT,
-    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y,
-    LIST_SUBTITLE_FONT, LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT,
-    PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, count,
+    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_VALUE_FONT, LIST_LINE_GAP,
+    LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT,
+    PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT,
+    TEXT_LINE_HEIGHT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
@@ -32,6 +33,16 @@ const SUBTITLE_CHARS_PER_LINE: usize = TEXT_CHARS_PER_LINE;
 const PILL_CHARS_PER_LINE: usize = 34;
 /// The characters of padding that one pill spends around its title.
 const PILL_CHARS_OF_PADDING: usize = 3;
+/// Characters of the title of a list row that fit on one line. A row keeps the
+/// lines that its name needs, and the first measured pass corrects the estimate.
+const LIST_TITLE_CHARS_PER_LINE: usize = 38;
+/// Characters of the second line of a list row that fit on one line.
+const LIST_SUBTITLE_CHARS_PER_LINE: usize = 42;
+/// Characters of the value of a key and value row that fit on one line. The
+/// value takes the room that the column of labels leaves, which is about this
+/// many characters of the proportional face; the first measured pass corrects
+/// the estimate.
+const KV_VALUE_CHARS_PER_LINE: usize = 45;
 /// Height of one line of the proportional face, as a multiple of its size.
 const LINE_FACTOR: f32 = 1.35;
 
@@ -113,7 +124,16 @@ fn component_height(component: &Component) -> f32 {
             let lines = lines.sum::<usize>().max(1);
             count(lines) * TEXT_FONT * TEXT_LINE_HEIGHT
         }
-        Component::Kv { rows } => count(rows.len()) * KV_ROW_HEIGHT,
+        Component::Kv { rows } => rows
+            .iter()
+            .map(|row| {
+                // A value keeps the lines that its words need, and the pair grows
+                // with them; a label is short by design and stays on one line.
+                let lines = row.value.chars().count().div_ceil(KV_VALUE_CHARS_PER_LINE).max(1);
+                let value = count(lines) * KV_VALUE_FONT * LINE_FACTOR;
+                (value + 2.0 * KV_ROW_PAD_Y).max(KV_ROW_HEIGHT)
+            })
+            .sum::<f32>(),
         Component::Badge { .. } => BADGE_HEIGHT,
         Component::Progress { .. } => PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT,
         Component::Divider => 1.0,
@@ -137,9 +157,11 @@ fn component_height(component: &Component) -> f32 {
             let heights: f32 = rows
                 .iter()
                 .map(|row| {
-                    let mut height = 2.0 * LIST_ROW_PAD_Y + LIST_TITLE_FONT * LINE_FACTOR;
-                    if row.subtitle.is_some() {
-                        height += LIST_LINE_GAP + LIST_SUBTITLE_FONT * LINE_FACTOR;
+                    let title = row.title.chars().count().div_ceil(LIST_TITLE_CHARS_PER_LINE).max(1);
+                    let mut height = 2.0 * LIST_ROW_PAD_Y + count(title) * LIST_TITLE_FONT * LINE_FACTOR;
+                    if let Some(subtitle) = row.subtitle.as_ref() {
+                        let lines = subtitle.chars().count().div_ceil(LIST_SUBTITLE_CHARS_PER_LINE).max(1);
+                        height += LIST_LINE_GAP + count(lines) * LIST_SUBTITLE_FONT * LINE_FACTOR;
                     }
                     height
                 })
