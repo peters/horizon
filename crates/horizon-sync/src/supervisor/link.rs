@@ -17,9 +17,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::refusal::{LinkRefusal, RefusalCell};
+
 use super::pull::{accept_pushed, apply_changes};
+use super::questions::{ServerReply, ServerRequest};
 use super::secrets::fill_secrets;
-use super::state::{ServerReply, ServerRequest};
 use super::{LINK_SLICE, LinkBounds, SupervisorConfig, SyncHandle, logged_out};
 use crate::frame::write_frame;
 use crate::protocol::Frame;
@@ -68,6 +70,9 @@ struct Link<'a> {
     /// The first request of a link is a pull: the server answers it at once, while a
     /// wait stays open at its bound when nothing changed yet.
     first: bool,
+    /// The reason that this attempt leaves for the window, when a bound of this
+    /// loop names one.
+    refusal: &'a RefusalCell,
     /// The one question that waits for its answer.
     question: Asked,
 }
@@ -157,9 +162,7 @@ impl Link<'_> {
                 true
             }
             Err(reply) => {
-                let _ = reply.send(ServerReply::Failed(
-                    "This computer has no link to the server now.".to_owned(),
-                ));
+                let _ = reply.send(ServerReply::Failed(super::questions::NO_LINK_SENTENCE.to_owned()));
                 true
             }
         }
@@ -304,6 +307,9 @@ impl Link<'_> {
                 bound_secs = answer_due.as_secs(),
                 "the link did not answer a wait in time, so it is lost"
             );
+            // The link was open, so the far side answered keepalives while its
+            // program stayed silent: that is the reason that a person reads.
+            self.refusal.set(LinkRefusal::Silent);
             return Some(End::Link);
         }
         None
@@ -320,6 +326,7 @@ pub(super) struct LinkParts<'a> {
     pub(super) answers: &'a Receiver<Frame>,
     pub(super) kicked: &'a Receiver<()>,
     pub(super) asked: &'a Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>,
+    pub(super) refusal: &'a RefusalCell,
 }
 
 /// Serves one open link with the transport and the channels of `parts`.
@@ -333,6 +340,7 @@ pub(super) fn serve_link(parts: LinkParts<'_>) -> End {
         answers,
         kicked,
         asked,
+        refusal,
     } = parts;
     Link {
         config,
@@ -347,6 +355,7 @@ pub(super) fn serve_link(parts: LinkParts<'_>) -> End {
         asking_from: 0,
         sending: None,
         first: true,
+        refusal,
         question: Asked::default(),
     }
     .serve()
@@ -499,6 +508,7 @@ mod tests {
             asking_from: 0,
             sending: None,
             first: false,
+            refusal: &RefusalCell::default(),
             question: Asked::default(),
         };
 

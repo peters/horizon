@@ -226,6 +226,9 @@ impl Board {
         panel.visible = visible;
         panel.move_to(layout_position);
         panel.resize_layout(layout_size);
+        if let Some(wake) = &self.output_wake {
+            panel.attach_output_wake(wake);
+        }
         self.panels.push(panel);
 
         if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace) {

@@ -1,4 +1,5 @@
 mod cwd;
+mod echo;
 mod lifecycle;
 pub(crate) mod spawn;
 mod work_resume;

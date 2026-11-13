@@ -142,6 +142,8 @@ fn expected_args(key: &MachineKeyRef) -> Vec<String> {
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
         "-o".to_string(),
+        "ConnectTimeout=10".to_string(),
+        "-o".to_string(),
         "ServerAliveInterval=15".to_string(),
         "-o".to_string(),
         "ServerAliveCountMax=1".to_string(),

@@ -26,51 +26,13 @@ use super::files::{
     read_settings_mirror, seed_records, write_mirror, write_settings_mirror,
 };
 use super::pull::{merged_bindings, mirror_of};
+use super::questions::{NO_LINK_SENTENCE, ServerReply, ServerRequest};
 use super::secrets::local_machine_keys;
 use super::view::records_of;
 use super::{SyncError, queue_error};
 use crate::client::{Client, LinkState};
 use crate::intent::Op;
-use crate::protocol::{DeviceRow, Invited};
-
-/// One question that the window or a worker asks the server.
-///
-/// The supervisor sends it on the open link, so a computer that reaches its
-/// server over `ssh` can ask the same questions as one that joined it with a
-/// code. The answer comes back on a channel that the caller polls, so no frame
-/// waits for the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ServerRequest {
-    /// One invitation for another computer.
-    Invite,
-    /// The list of the computers of this server.
-    Devices,
-    /// The removal of one computer.
-    Remove(String),
-}
-
-/// The answer to one [`ServerRequest`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ServerReply {
-    /// One invitation, with its code, its link and the time that it still lives.
-    Invited(Invited),
-    /// The computers of this server, and the time of the server that answered.
-    Devices {
-        /// The rows, in name order.
-        rows: Vec<DeviceRow>,
-        /// The time of the server when it answered.
-        now_millis: u64,
-    },
-    /// The removal of one computer: whether the server held it.
-    Removed {
-        /// The name of the computer.
-        device: String,
-        /// Whether the server held that computer.
-        removed: bool,
-    },
-    /// The question did not reach its answer, with one sentence for the person.
-    Failed(String),
-}
+use crate::refusal::LinkRefusal;
 
 /// What a frame of the window reads about the link: the state, the names that
 /// wait for the server, the records that only the server gave, the key names of
@@ -82,6 +44,8 @@ pub enum ServerReply {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinkSnapshot {
     state: LinkState,
+    /// Why the last attempt did not open the link, when one failed.
+    refusal: Option<LinkRefusal>,
     device: String,
     pending: BTreeSet<String>,
     foreign: BTreeSet<String>,
@@ -133,6 +97,14 @@ impl SettingsSyncView {
 }
 
 impl LinkSnapshot {
+    /// Why the last attempt at the link did not open it, when one failed. The
+    /// sidebar line `Server away` carries it as a hover and the Server tab shows it
+    /// under its state.
+    #[must_use]
+    pub fn refusal(&self) -> Option<LinkRefusal> {
+        self.refusal
+    }
+
     /// The state of the link.
     #[must_use]
     pub fn state(&self) -> &LinkState {
@@ -286,6 +258,9 @@ pub(crate) struct SyncState {
     /// link times the bound of that request from this instant, so a reader that
     /// measures the same bound measures it from the same instant.
     pub(crate) request_since: Option<Instant>,
+    /// Why the last attempt at the link did not open it, as the sidebar line and
+    /// the Server tab show it. It is cleared when an attempt opens the link.
+    pub(crate) last_refusal: Option<LinkRefusal>,
     /// The instant of the request that the link that ended last was waiting for,
     /// published with the `Away` state of that link. A reader that measures the
     /// bound of a lost link reads the instant that the link itself timed, and not
@@ -330,6 +305,7 @@ impl SyncState {
             .all(|(section, row)| self.settings_applied.get(section) == Some(&row.version));
         LinkSnapshot {
             state: self.client.state().clone(),
+            refusal: self.last_refusal,
             device: self.client.device().to_owned(),
             pending,
             foreign,
@@ -471,6 +447,7 @@ impl SyncHandle {
                 refused_secrets: BTreeSet::new(),
                 request_since: None,
                 lost_request_since: None,
+                last_refusal: None,
             })),
             view: Arc::new(Mutex::new(Arc::new(LinkSnapshot::default()))),
             notices: Arc::new(Mutex::new(Vec::new())),
@@ -816,6 +793,15 @@ impl SyncHandle {
     #[must_use]
     pub fn ask(&self, request: ServerRequest) -> mpsc::Receiver<ServerReply> {
         let (reply, answers) = mpsc::channel();
+        // A question travels on the link that the supervisor holds. The
+        // supervisor reads one only while its link is open, so a link that is
+        // away answers here at once instead of leaving the button of the Server
+        // tab disabled until an attempt happens to succeed.
+        if !self.snapshot().state().carries_questions() {
+            tracing::debug!("a question of the window was refused: this computer has no open link");
+            let _ = reply.send(ServerReply::Failed(NO_LINK_SENTENCE.to_owned()));
+            return answers;
+        }
         if self.requests.send((request, reply)).is_err() {
             tracing::debug!("the link ended before a question reached it");
         }

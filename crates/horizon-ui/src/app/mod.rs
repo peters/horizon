@@ -352,6 +352,9 @@ pub struct HorizonApp {
     pub(in crate::app) server_sync: Option<server_sync::ServerSync>,
     canvas_grid_cache: CanvasGridCache,
     frame_stats: FrameStats,
+    /// The callback that asks this window for the frame that shows the echo of a
+    /// key press in a terminal panel.
+    output_wake: horizon_core::OutputWake,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     held_navigation_keys: Vec<horizon_core::ShortcutBinding>,

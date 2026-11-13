@@ -332,10 +332,12 @@ before that link; they are no proof of who wrote a value.
   the log, one bounded line at a time, and is never stored.
 - **Every request of the link has a bound.** The server answers a push and a pull
   at once, and one that no answer reached after 20 seconds ends the link. A wait
-  stays open at the 50 seconds of the server, so its answer is due after 65
-  seconds. A link that reaches its bound is killed, reaped and reported `away`,
-  and the next attempt starts on the delays of a lost link. A byte stream that
-  stays open and answers nothing is therefore not a link that a computer keeps.
+  stays open at the 15 seconds of the server, so its answer is due after 21
+  seconds; a server of an older version holds its 50 seconds, and such a link
+  keeps the 65-second bound of the computer. A link that reaches its bound is
+  killed, reaped and reported `away`, and the next attempt starts on the delays
+  of a lost link. A byte stream that stays open and answers nothing is therefore
+  not a link that a computer keeps.
 - **The relay of a link ends with its socket.** `horizon --server-link` returns
   as soon as the socket of the server ends or its read or write fails, and its
   entry ends the process there. A server that stops therefore ends the mode of

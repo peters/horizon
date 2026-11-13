@@ -17,8 +17,8 @@ use std::{
 use horizon_core::Machine;
 use horizon_core::machines::MachineStore;
 use horizon_sync::{
-    LinkBounds, LinkState, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore,
-    run_server_on_unix_socket,
+    Client, IntentResult, LinkBounds, LinkRefusal, LinkState, MAX_INTENTS_PER_PUSH, Outcome, PushReply, ServerReply,
+    ServerRequest, SocketServer, Store, Supervisor, SupervisorConfig, SyncedMachineStore, run_server_on_unix_socket,
 };
 
 /// The time a test gives a change to travel through a link and a store.
@@ -140,7 +140,7 @@ def read_frame():
 hello = read_frame()
 if hello is None:
     sys.exit(0)
-body = json.dumps({'hello_ok': {'protocol': 1, 'store': 'silent-store', 'now_millis': 0}}).encode()
+body = json.dumps({'hello_ok': {'protocol': int(sys.argv[2]), 'store': 'silent-store', 'now_millis': 0}}).encode()
 sys.stdout.buffer.write(struct.pack('>I', len(body)) + body)
 sys.stdout.buffer.flush()
 while True:
@@ -153,8 +153,26 @@ fn silent_stand_in(directory: &Path, starts: &Path) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("silent.py");
     fs::write(&relay, SILENT_RELAY).expect("the silent relay of the stand-in");
-    let script = format!("exec /usr/bin/env python3 '{}' '{}'", relay.display(), starts.display());
+    let script = format!(
+        "exec /usr/bin/env python3 '{}' '{}' '{}'",
+        relay.display(),
+        starts.display(),
+        horizon_sync::SERVER_PROTOCOL_VERSION
+    );
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the silent stand-in ssh");
+    program.to_string_lossy().into_owned()
+}
+
+/// A stand-in `ssh` that writes one line to its standard error, as `ssh` writes
+/// the line of the failure that it met, and ends with `code`.
+fn failing_stand_in(directory: &Path, line: &str, code: i32) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let script = if line.trim().is_empty() {
+        format!("exit {code}")
+    } else {
+        format!("printf '%s\\n' '{line}' >&2\nexit {code}")
+    };
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
 }
 
@@ -799,12 +817,77 @@ fn a_link_that_stops_answering_is_reported_away_at_its_bound() {
         "a silent link is lost by itself and not by a later attempt: {lost:?}"
     );
 
+    // B15: the reason that the window shows. The link was open, so `ssh` answered
+    // its keepalives while the program of the server stayed silent.
+    eventually("the reason of the silent link", || {
+        (supervisor.handle().snapshot().refusal() == Some(LinkRefusal::Silent)).then_some(())
+    });
+
     // The child of the lost link is ended, and the next attempt starts another
     // one: a child that nobody reaped would stay beside the zombie of the last.
     eventually("the second start of the stand-in", || {
         (start_count(&starts_file) >= 2).then_some(())
     });
     supervisor.stop();
+}
+
+/// B15: an attempt that did not open the link leaves the reason that a person
+/// reads, so `Server away` is not the same three words for a refused address, a
+/// name that does not resolve, a key that changed, a refused login and a far side
+/// without the command of the link.
+#[test]
+fn a_link_that_did_not_open_names_the_reason_of_its_last_attempt() {
+    let home = tempfile::tempdir().expect("a directory");
+    for (line, code, expected) in [
+        (
+            "ssh: connect to host 203.0.113.10 port 22: Connection timed out",
+            255,
+            LinkRefusal::Address,
+        ),
+        (
+            "ssh: Could not resolve hostname vps.example: Name or service not known",
+            255,
+            LinkRefusal::Name,
+        ),
+        (
+            "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!",
+            255,
+            LinkRefusal::HostKey,
+        ),
+        (
+            "deploy@203.0.113.10: Permission denied (publickey).",
+            255,
+            LinkRefusal::Login,
+        ),
+        ("", 127, LinkRefusal::Command),
+    ] {
+        let machines_dir = home.path().join(format!("machines-{}", expected.code()));
+        fs::create_dir_all(&machines_dir).expect("the machine directory");
+        let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+        let mut config = SupervisorConfig::for_server(
+            "server-vm",
+            "/opt/horizon --server-link",
+            &machines_dir,
+            keys_only(keys),
+        )
+        .expect("the settings of the link");
+        config.program = failing_stand_in(&home.path().join(format!("stand-in-{}", expected.code())), line, code);
+        let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+        let handle = supervisor.handle().clone();
+
+        let reason = eventually("the reason of the failed attempt", || handle.snapshot().refusal());
+        assert_eq!(reason, expected, "the window names the reason of `{line}`");
+        assert!(
+            matches!(handle.state(), LinkState::Away { .. }),
+            "a reason travels with the state that a person reads"
+        );
+        assert_eq!(
+            horizon_sync::of_ssh_line(line),
+            (!line.trim().is_empty()).then_some(expected),
+            "the words of the child are what names the reason"
+        );
+        supervisor.stop();
+    }
 }
 
 /// The state of a computer that is idle when the server goes: it must learn that
@@ -861,4 +944,149 @@ fn a_computer_that_is_idle_learns_that_the_server_is_gone_and_catches_up() {
     a.stop();
     b.stop();
     server.stop();
+}
+
+/// B4: a question of the Server tab answers at once while the link is away. The
+/// window reads one only inside an open link, so a question asked during a cut
+/// waited for an attempt that the delays of a lost link decide: the sentence of
+/// `Add a computer` stood there and its button stayed disabled.
+#[test]
+fn a_question_of_the_window_answers_at_once_when_the_server_is_away() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &server.socket);
+    in_step(&a);
+
+    server.stop();
+    eventually("the link that learns that the server is away", || {
+        matches!(a.state(), LinkState::Away { .. }).then_some(())
+    });
+
+    for request in [
+        ServerRequest::Invite,
+        ServerRequest::Devices,
+        ServerRequest::Remove("mbp-7c1".to_owned()),
+    ] {
+        let asked = a.handle().ask(request.clone());
+        let answer = asked
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap_or_else(|error| panic!("{request:?} answered no sentence: {error}"));
+        assert_eq!(
+            answer,
+            ServerReply::Failed("This computer has no link to the server now.".to_owned()),
+            "{request:?} answers the sentence of the Server tab at once"
+        );
+    }
+
+    a.stop();
+    server.stop();
+}
+
+/// A stand-in `ssh` that never greets: the far side is a program that says
+/// nothing, so the link of the test is away for as long as the test runs.
+fn sleeping_stand_in(directory: &Path) -> String {
+    fs::create_dir_all(directory).expect("the directory of the stand-in");
+    let program = horizon_core::stand_in_program_in(directory, "ssh", "sleep 600").expect("the stand-in ssh");
+    program.to_string_lossy().into_owned()
+}
+
+/// B16: the queue of a computer that is away for hours. The audit found no cap and
+/// asked for the numbers that a cap would be chosen from, so this test holds ten
+/// thousand intents and measures the file, the read of a start and the drain.
+///
+/// The numbers say that no cap is needed at this volume. The file stays at a few
+/// megabytes, a start reads it in a moment, and the drain leaves in pushes of at
+/// most [`MAX_INTENTS_PER_PUSH`] intents, so one push never grows past its frame.
+/// A cap would refuse a change that a person made while the server was away, and
+/// that loses the change instead of holding it. The count of what waits is already
+/// in the sidebar (`Server away · N pending`) and on each row of the machine list,
+/// so the person sees the queue grow without a second line.
+#[test]
+fn the_queue_of_a_computer_that_is_away_for_hours_needs_no_cap() {
+    const INTENTS: usize = 10_000;
+
+    let home = tempfile::tempdir().expect("a directory");
+    let machines_dir = home.path().join("machines");
+    fs::create_dir_all(&machines_dir).expect("the machine directory");
+    let keys = horizon_core::MachineKeys::new(machines_dir.join("machine-keys"));
+    let mut config = SupervisorConfig::for_server(
+        "server-vm",
+        "/opt/horizon --server-link",
+        &machines_dir,
+        keys_only(keys),
+    )
+    .expect("the settings of the link");
+    config.program = sleeping_stand_in(&home.path().join("stand-in"));
+    let queue_file = config.queue_file.clone();
+    let device = config.device.clone();
+    let supervisor = Supervisor::start(config, || {}).expect("the supervisor");
+    let store = SyncedMachineStore::new(supervisor.handle().clone());
+
+    // One save of the whole machine list, as the sidebar and an agent's operation
+    // write it: ten thousand records that the server does not hold yet.
+    let records: Vec<Machine> = (0..INTENTS)
+        .map(|index| machine(&format!("build-{index:05}"), "203.0.113.10"))
+        .collect();
+    let saved_at = Instant::now();
+    store.save(&records).expect("the intents of one save");
+    let saved = saved_at.elapsed();
+
+    // The link of the test never greets, so this computer stops with its queue
+    // whole. A start then reads the file with no second writer on it.
+    supervisor.stop();
+
+    let bytes = fs::metadata(&queue_file).expect("the queue file").len();
+    let started = Instant::now();
+    let mut client = Client::open(queue_file, &device).expect("the queue of a start");
+    let loaded = started.elapsed();
+    assert_eq!(
+        client.pending().len(),
+        INTENTS,
+        "every change that waits for an away server is held whole"
+    );
+
+    let mut chunks = 0;
+    let mut drained = 0;
+    let drain_at = Instant::now();
+    while let Some(chunk) = client.next_push() {
+        assert!(
+            chunk.len() <= MAX_INTENTS_PER_PUSH,
+            "one push holds at most {MAX_INTENTS_PER_PUSH} intents"
+        );
+        let last = chunk.last().expect("a push of at least one intent").id;
+        let reply = PushReply {
+            results: chunk
+                .iter()
+                .map(|intent| IntentResult {
+                    id: intent.id,
+                    outcome: Outcome::Applied { index: intent.id },
+                })
+                .collect(),
+            next_expected: last.saturating_add(1),
+        };
+        client.accept_push(&reply).expect("the answer of a push");
+        drained += chunk.len();
+        chunks += 1;
+        assert!(chunks <= INTENTS, "the drain ends in one push for each chunk");
+    }
+    let drain = drain_at.elapsed();
+
+    assert_eq!(drained, INTENTS, "the drain leaves no change behind");
+    assert_eq!(
+        chunks,
+        INTENTS.div_ceil(MAX_INTENTS_PER_PUSH),
+        "the drain is chunked by the bound of one push"
+    );
+    assert!(
+        bytes < 8 * 1024 * 1024,
+        "{INTENTS} intents are {bytes} bytes, and a start reads them"
+    );
+    // The bound is generous on purpose: this is a measurement of a queue at ten
+    // thousand intents, and a computer that does other work at the same time
+    // writes and syncs the file at a slower pace. The finding would be a drain
+    // that takes minutes, because that is when a person would see a stuck queue.
+    assert!(
+        saved < Duration::from_secs(120) && loaded < Duration::from_secs(5) && drain < Duration::from_secs(120),
+        "the save took {saved:?}, a start read {bytes} bytes in {loaded:?} and the drain took {drain:?}"
+    );
 }

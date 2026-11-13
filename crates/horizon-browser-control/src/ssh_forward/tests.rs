@@ -214,6 +214,36 @@ fn the_forward_names_one_loopback_forward_and_exits_on_a_failed_bind() {
     assert_eq!(args.last().map(String::as_str), Some("browser-vm"));
 }
 
+/// B13: the two `ssh` children of this crate leave multiplexing to the person, as
+/// a panel does. The link of a server and the endpoint reads take the shared
+/// transport, and the forward of a browser takes its own option list; neither may
+/// name `ControlMaster`, `ControlPath`, `ControlPersist` or `-S`, because that
+/// decides for all of the person's sessions. A person who shares one connection
+/// over a link of a third of a second therefore gets that sharing here too.
+#[test]
+fn the_children_of_the_browser_control_take_no_multiplexing_decision() {
+    let _serial = serial();
+    let link = ssh_command("ssh", "server-vm", "/opt/horizon --server-link");
+    let forward = forward_command("ssh", "browser-vm", 41000, 9222);
+    for (kind, command) in [("the link of a server", link), ("the forward of a browser", forward)] {
+        let args: Vec<String> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        for argument in &args {
+            let lower = argument.to_ascii_lowercase();
+            assert!(
+                !lower.contains("controlmaster") && !lower.contains("controlpath") && !lower.contains("controlpersist"),
+                "{kind} names no multiplexing option of its own: {args:?}"
+            );
+        }
+        assert!(
+            !args.iter().any(|argument| argument == "-S"),
+            "{kind} passes no -S master path: {args:?}"
+        );
+    }
+}
+
 #[test]
 fn the_browser_command_starts_the_profile_of_that_machine_after_a_stale_endpoint() {
     let _serial = serial();

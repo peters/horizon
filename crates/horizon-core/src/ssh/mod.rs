@@ -10,10 +10,14 @@ pub use machine_keys::{MachineKey, MachineKeyError, MachineKeyRef, MachineKeys};
 
 use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
 
-/// How long the connect of a machine terminal may take, in seconds. The delays of
-/// the reconnect of a lost link start at three seconds, so an attempt that hangs
-/// in the connect must end long before the system default of two minutes.
-const MACHINE_CONNECT_TIMEOUT_SECS: u16 = 10;
+/// How long the connect of any ssh child of Horizon may take, in seconds.
+///
+/// `ServerAliveInterval` only covers a link whose ssh protocol is up. During the
+/// TCP connect and the key exchange the system default decides, and it is about
+/// two minutes on Linux and 75 seconds on macOS; the delays of the reconnect of a
+/// lost link start at three seconds, so an attempt into a link that is gone must
+/// end long before that.
+const CONNECT_TIMEOUT_SECS: u16 = 10;
 
 /// How often an open connection of a machine terminal asks the machine to answer,
 /// in seconds.
@@ -108,7 +112,7 @@ impl SshConnection {
 
     #[must_use]
     pub fn to_command_args(&self) -> Vec<String> {
-        let mut args = self.base_transport_args(false);
+        let mut args = self.base_transport_args(false, CONNECT_TIMEOUT_SECS);
         args.push(self.transport_target());
 
         if let Some(remote_command) = non_empty(self.remote_command.as_deref()) {
@@ -120,15 +124,14 @@ impl SshConnection {
 
     #[must_use]
     pub fn ssh_transport_args(&self) -> Vec<String> {
-        let mut args = self.base_transport_args(true);
+        let mut args = self.base_transport_args(true, CONNECT_TIMEOUT_SECS);
         args.push(self.transport_target());
         args
     }
 
     #[must_use]
     pub fn ssh_probe_transport_args(&self, connect_timeout_secs: u16) -> Vec<String> {
-        let mut args = self.base_transport_args(true);
-        args.extend(["-o".to_string(), format!("ConnectTimeout={connect_timeout_secs}")]);
+        let mut args = self.base_transport_args(true, connect_timeout_secs);
         args.push(self.transport_target());
         args
     }
@@ -152,7 +155,7 @@ impl SshConnection {
         self.display_label()
     }
 
-    fn base_transport_args(&self, batch_mode: bool) -> Vec<String> {
+    fn base_transport_args(&self, batch_mode: bool, connect_timeout_secs: u16) -> Vec<String> {
         let mut args = Vec::new();
 
         if let Some(port) = self.port {
@@ -171,7 +174,7 @@ impl SshConnection {
             args.extend(key.ssh_option_args());
         }
 
-        args.extend(keepalive_args(self.machine_terminal));
+        args.extend(keepalive_args(self.machine_terminal, connect_timeout_secs));
         args.extend(self.extra_args.iter().cloned());
         args
     }
@@ -185,22 +188,27 @@ impl SshConnection {
 /// person names another value. A machine terminal is the case that needs them
 /// most: a network that drops packets keeps a connect open until the system ends
 /// it, and a person who presses a key in the panel then has nothing to hurry.
-fn keepalive_args(machine_terminal: bool) -> Vec<String> {
+fn keepalive_args(machine_terminal: bool, connect_timeout_secs: u16) -> Vec<String> {
     if machine_terminal {
         return vec![
             "-o".to_string(),
-            format!("ConnectTimeout={MACHINE_CONNECT_TIMEOUT_SECS}"),
+            format!("ConnectTimeout={connect_timeout_secs}"),
             "-o".to_string(),
             format!("ServerAliveInterval={MACHINE_SERVER_ALIVE_INTERVAL_SECS}"),
             "-o".to_string(),
             format!("ServerAliveCountMax={MACHINE_SERVER_ALIVE_COUNT_MAX}"),
         ];
     }
-    default_keepalive_args()
+    default_keepalive_args(connect_timeout_secs)
 }
 
-fn default_keepalive_args() -> Vec<String> {
+/// The options of a connection that is not a machine terminal: a plain SSH panel,
+/// the terminal that an agent opens, the upload and the `-W` forward of a device.
+/// None of them may wait for the system default of a connect.
+fn default_keepalive_args(connect_timeout_secs: u16) -> Vec<String> {
     vec![
+        "-o".to_string(),
+        format!("ConnectTimeout={connect_timeout_secs}"),
         "-o".to_string(),
         "ServerAliveInterval=15".to_string(),
         "-o".to_string(),
@@ -272,6 +280,8 @@ mod tests {
                 "UserKnownHostsFile=/home/peters/.horizon/machine-keys/w666f6c64657231/build-1.known_hosts".to_string(),
                 "-o".to_string(),
                 "StrictHostKeyChecking=accept-new".to_string(),
+                "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
                 "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
@@ -347,6 +357,8 @@ mod tests {
             agent_terminal("lab-1", None, None, None),
             vec![
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
@@ -358,6 +370,8 @@ mod tests {
             vec![
                 "-p".to_string(),
                 "2222".to_string(),
+                "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
                 "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
@@ -383,8 +397,8 @@ mod tests {
         );
         assert_eq!(
             args.iter().filter(|argument| argument.starts_with("-o")).count(),
-            2,
-            "an agent adds no ssh option: {args:?}"
+            3,
+            "an agent adds no ssh option of its own: {args:?}"
         );
     }
 
@@ -418,8 +432,9 @@ mod tests {
             "a machine attempt ends in ten seconds and an open one in fifteen"
         );
         assert!(
-            !plain.iter().any(|argument| argument == "ConnectTimeout=10"),
-            "a plain ssh panel keeps the bounds of today: {plain:?}"
+            plain.iter().any(|argument| argument == "ConnectTimeout=10")
+                && !plain.iter().any(|argument| argument == "ServerAliveCountMax=3"),
+            "a plain ssh panel bounds its connect too, with its own keepalive: {plain:?}"
         );
         assert!(
             args.iter().position(|argument| argument == "ConnectTimeout=10")
@@ -475,6 +490,8 @@ mod tests {
                 "-J".to_string(),
                 "bastion".to_string(),
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
@@ -508,6 +525,8 @@ mod tests {
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
@@ -540,6 +559,8 @@ mod tests {
             connection.to_command_args(),
             vec![
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
@@ -567,6 +588,8 @@ mod tests {
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
                 "-o".to_string(),
+                "ConnectTimeout=10".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
@@ -588,13 +611,154 @@ mod tests {
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
                 "-o".to_string(),
+                "ConnectTimeout=5".to_string(),
+                "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
                 "ServerAliveCountMax=1".to_string(),
-                "-o".to_string(),
-                "ConnectTimeout=5".to_string(),
                 "prod".to_string(),
-            ]
+            ],
+            "the bound of the probe replaces the default one: ssh reads the first value"
         );
+    }
+
+    /// B6: every kind of ssh child that Horizon starts names a connect bound, so an
+    /// attempt into a link that is gone ends in ten seconds instead of the two
+    /// minutes of the system default. The four kinds are the plain panel, the
+    /// terminal that an agent opens for a host outside the machine list, the upload
+    /// and the `-W` forward of a device viewer.
+    /// B13: multiplexing is a decision of the person. At a round trip of a third
+    /// of a second a handshake costs seconds, so five panels cost five of them
+    /// unless the person shares one connection. An `ssh` child of Horizon that
+    /// named `ControlMaster`, `ControlPath` or `-S` would decide for all of the
+    /// person's sessions, and `-S none` would switch a master of the person off
+    /// for one panel. This test names the arguments of every child instead, so no
+    /// later option list takes the choice away.
+    #[test]
+    fn no_ssh_child_of_horizon_switches_the_multiplexing_of_the_person_off() {
+        let route = TerminalRoute {
+            host: "lab-1".into(),
+            user: Some("deploy".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, None).expect("the route is accepted");
+        let plain_panel = SshConnection {
+            host: "lab-1".to_string(),
+            remote_command: Some("tmux new -A -s work".to_string()),
+            ..SshConnection::default()
+        };
+        let with_person_options = SshConnection {
+            extra_args: vec![
+                "-o".to_string(),
+                "ControlMaster=auto".to_string(),
+                "-o".to_string(),
+                "ControlPath=~/.ssh/horizon-%C".to_string(),
+            ],
+            ..plain_panel.clone()
+        };
+        let children = [
+            ("the plain SSH panel", plain_panel.to_command_args()),
+            (
+                "the terminal of an agent",
+                SshConnection::for_agent_terminal(&checked).to_command_args(),
+            ),
+            ("the upload", plain_panel.ssh_transport_args()),
+            ("the upload probe", plain_panel.ssh_probe_transport_args(5)),
+            (
+                "the stdio forward of a device",
+                plain_panel.stdio_forward_args("127.0.0.1:5900"),
+            ),
+        ];
+        for (kind, args) in children {
+            for argument in &args {
+                let lower = argument.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("controlmaster")
+                        && !lower.contains("controlpath")
+                        && !lower.contains("controlpersist"),
+                    "{kind} names no multiplexing option of its own: {args:?}"
+                );
+            }
+            assert!(
+                !args.iter().any(|argument| argument == "-S"),
+                "{kind} passes no -S master path: {args:?}"
+            );
+        }
+        // The options of the person come after the options of Horizon, so a panel
+        // uses the master that they set. Every multiplexing word of the line is
+        // theirs and none is Horizon's.
+        let person_options = ["ControlMaster=auto", "ControlPath=~/.ssh/horizon-%C"];
+        let with_person = with_person_options.to_command_args();
+        assert!(
+            with_person.iter().any(|argument| argument == person_options[0]),
+            "an option of the person still reaches the child: {with_person:?}"
+        );
+        for argument in &with_person {
+            let lower = argument.to_ascii_lowercase();
+            if lower.contains("controlmaster") || lower.contains("controlpath") || lower.contains("controlpersist") {
+                assert!(
+                    person_options.contains(&argument.as_str()),
+                    "Horizon adds no multiplexing option of its own: {argument}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_ssh_child_of_horizon_bounds_its_connect() {
+        let route = TerminalRoute {
+            host: "lab-1".into(),
+            user: Some("deploy".into()),
+            port: None,
+        };
+        let checked = block_terminal::check(&route, None).expect("the route is accepted");
+        let plain_panel = SshConnection {
+            host: "lab-1".to_string(),
+            remote_command: Some("tmux new -A -s work".to_string()),
+            ..SshConnection::default()
+        };
+        let upload = plain_panel.clone();
+        let forward = plain_panel.clone();
+        let children = [
+            (
+                "the plain SSH panel",
+                plain_panel.to_command_args(),
+                "ConnectTimeout=10",
+            ),
+            (
+                "the terminal of an agent",
+                SshConnection::for_agent_terminal(&checked).to_command_args(),
+                "ConnectTimeout=10",
+            ),
+            ("the upload", upload.ssh_transport_args(), "ConnectTimeout=10"),
+            (
+                "the upload probe",
+                upload.ssh_probe_transport_args(5),
+                "ConnectTimeout=5",
+            ),
+            (
+                "the stdio forward of a device",
+                forward.stdio_forward_args("127.0.0.1:5900"),
+                "ConnectTimeout=10",
+            ),
+        ];
+        for (kind, args, expected) in children {
+            let bound = args
+                .iter()
+                .position(|argument| argument.starts_with("ConnectTimeout="))
+                .map(|at| args[at].clone());
+            assert_eq!(
+                bound.as_deref(),
+                Some(expected),
+                "{kind} names its connect bound: {args:?}"
+            );
+            assert_eq!(
+                args.iter()
+                    .filter(|argument| argument.starts_with("ConnectTimeout="))
+                    .count(),
+                1,
+                "{kind} names one connect bound, so the first value is the whole rule: {args:?}"
+            );
+        }
     }
 }

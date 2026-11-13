@@ -32,6 +32,9 @@ pub(crate) fn handle_terminal_keyboard_input(
     let Some(terminal) = panel.terminal_mut() else {
         return false;
     };
+    // The clock of the latency lines, taken once for every key event that this
+    // frame handles. It is `None` while the switch is off.
+    let key_at = terminal.press_clock();
     let mode = terminal.mode();
     let mut forwarder = KeyboardInputForwarder::default();
     let mut ime_enabled = terminal_ime_enabled(ui, terminal_id);
@@ -53,13 +56,13 @@ pub(crate) fn handle_terminal_keyboard_input(
                     terminal.clear_selection();
                 }
                 if !emission.bytes.is_empty() {
-                    terminal.write_input(&emission.bytes);
+                    write_keys(terminal, key_at, &emission.bytes);
                 }
             }
             egui::Event::Paste(text) => {
                 terminal.clear_selection();
                 let bytes = input::paste_bytes(text, mode, true);
-                terminal.write_input(&bytes);
+                write_keys(terminal, key_at, &bytes);
             }
             // A terminal takes text, so a clipboard image becomes a private PNG
             // file and its path is pasted when the worker has written it.
@@ -68,7 +71,7 @@ pub(crate) fn handle_terminal_keyboard_input(
             }
             egui::Event::Copy => {
                 if event.is_plain_ctrl_c_copy_command() {
-                    terminal.write_input(&[3]);
+                    write_keys(terminal, key_at, &[3]);
                 } else if let Some(text) = take_selection_for_copy(terminal) {
                     primary_selection.copy(&text);
                     crate::clipboard::copy_text(text);
@@ -79,7 +82,7 @@ pub(crate) fn handle_terminal_keyboard_input(
                     primary_selection.copy(&text);
                     crate::clipboard::copy_text(text);
                 }
-                terminal.write_input(&[24]);
+                write_keys(terminal, key_at, &[24]);
             }
             // A clipboard or scrollback chord belongs to the terminal window,
             // not to the program in the PTY. Every press, repeat and release of
@@ -100,7 +103,7 @@ pub(crate) fn handle_terminal_keyboard_input(
                 } else {
                     let emission = forwarder.on_key(event, mode);
                     if !emission.bytes.is_empty() {
-                        terminal.write_input(&emission.bytes);
+                        write_keys(terminal, key_at, &emission.bytes);
                     }
                 }
             }
@@ -110,12 +113,32 @@ pub(crate) fn handle_terminal_keyboard_input(
 
     let emission = forwarder.finish();
     if !emission.bytes.is_empty() {
-        terminal.write_input(&emission.bytes);
+        write_keys(terminal, key_at, &emission.bytes);
     }
 
     store_terminal_ime_enabled(ui, terminal_id, ime_enabled);
 
     false
+}
+
+/// Writes the bytes of one input of a person into the terminal of this panel.
+///
+/// `key_at` is the time that the frame took the key event, so the opt-in latency
+/// line of that press starts where the person's key reached the window.
+///
+/// The write arms the echo of a panel that this frame draws, before the bytes of
+/// the press leave, so the echo asks for the next frame instead of waiting for
+/// the idle poll of the window. Only bytes that reach the PTY arm that wake, so a
+/// chord that the window handles and output that nobody typed wait as before.
+fn write_keys(terminal: &horizon_core::Terminal, key_at: Option<std::time::Instant>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    terminal.arm_output_wake();
+    terminal.write_input(bytes);
+    if let Some(key_at) = key_at {
+        terminal.note_key_press(key_at, bytes.len());
+    }
 }
 
 /// Run a chord that the terminal window owns. Nothing here reaches the PTY.
@@ -176,11 +199,21 @@ fn disconnected_ssh_reconnect_requested(
         // A panel that waits for its next attempt has no shell to type into, so
         // any key asks for the connection now instead of waiting.
         Some(SshConnectionStatus::Reconnecting) => pressed_keys(events).next().is_some(),
-        // An attempt of a machine terminal that reaches no machine has nothing to
-        // type into either: any key ends that attempt and starts a new one at
-        // once. A network that drops packets keeps the connect open for minutes,
-        // so the person must be able to hurry the panel.
-        Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).next().is_some(),
+        // An attempt of a machine terminal runs its own `ssh`, so the text that a
+        // person types during `Connecting...` goes into that attempt and reaches
+        // the shell when the link is up. Only the two keys that ask for something
+        // end the attempt: `Esc` stops it and `Enter` says "do it now". A letter
+        // never ends it, because a person who types ahead on a link of 300 ms
+        // would otherwise keep cancelling a connect that is only slow.
+        Some(SshConnectionStatus::Connecting) if machine_tied => pressed_keys(events).any(|input_event| {
+            matches!(
+                &input_event.event,
+                egui::Event::Key {
+                    key: Key::Enter | Key::Escape,
+                    ..
+                }
+            )
+        }),
         Some(SshConnectionStatus::Connecting | SshConnectionStatus::Connected) | None => false,
     }
 }
@@ -505,11 +538,12 @@ mod tests {
     }
 
     #[test]
-    fn a_key_ends_the_attempt_of_a_machine_terminal_that_is_in_flight() {
-        // The connect of a machine terminal hangs in a network that drops its
-        // packets, so the panel is `connecting` and the key of the person has
-        // nothing to type into.
-        assert!(disconnected_ssh_reconnect_requested(
+    fn typing_in_a_machine_terminal_that_connects_keeps_the_attempt() {
+        // A letter of a person who types ahead goes into the attempt that runs, so
+        // it reaches the shell when the link is up. At a round trip of 300 ms a
+        // connect takes seconds, and a person who types during it must not cancel
+        // it again and again.
+        assert!(!disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
             Some(SshConnectionStatus::Connecting),
             true,
@@ -520,16 +554,58 @@ mod tests {
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 true,
-                &[key_event(Key::A, Some(Key::A), Some("a"), true, true, Modifiers::NONE)],
+                &[key_event(
+                    Key::Space,
+                    Some(Key::Space),
+                    Some(" "),
+                    true,
+                    false,
+                    Modifiers::NONE
+                )],
             ),
-            "a held key starts one attempt, not one for each repeat"
+            "a space is text too"
         );
+    }
+
+    #[test]
+    fn escape_or_enter_ends_the_attempt_of_a_machine_terminal_that_is_in_flight() {
+        // `Esc` and `Enter` are the two keys that ask for something, so they also
+        // end an attempt that a person does not want to wait for. The rule cannot
+        // depend on the time, because the same key would then do different things
+        // under the hands of the person.
+        for key in [Key::Escape, Key::Enter] {
+            assert!(
+                disconnected_ssh_reconnect_requested(
+                    PanelKind::Ssh,
+                    Some(SshConnectionStatus::Connecting),
+                    true,
+                    &[key_event(key, Some(key), None, true, false, Modifiers::NONE)],
+                ),
+                "{key:?} asks for the attempt now"
+            );
+            assert!(
+                !disconnected_ssh_reconnect_requested(
+                    PanelKind::Ssh,
+                    Some(SshConnectionStatus::Connecting),
+                    true,
+                    &[key_event(key, Some(key), None, true, true, Modifiers::NONE)],
+                ),
+                "a held {key:?} starts one attempt, not one for each repeat"
+            );
+        }
         assert!(
             !disconnected_ssh_reconnect_requested(
                 PanelKind::Ssh,
                 Some(SshConnectionStatus::Connecting),
                 false,
-                &[key_event(Key::A, Some(Key::A), Some("a"), true, false, Modifiers::NONE)],
+                &[key_event(
+                    Key::Escape,
+                    Some(Key::Escape),
+                    None,
+                    true,
+                    false,
+                    Modifiers::NONE
+                )],
             ),
             "a plain ssh panel that runs a silent command keeps its attempt"
         );

@@ -52,6 +52,7 @@ use horizon_core::{Machine, MachineError};
 use crate::error::SyncError;
 use crate::frame::{read_frame, write_frame};
 use crate::protocol::Frame;
+use crate::refusal::{LinkRefusal, RefusalCell, of_exit_code};
 use connect::{Halt, Opened};
 use files::{MIRROR_FILE, MIRROR_FORMAT, QUEUE_FILE, SETTINGS_MIRROR_FILE, device_name};
 use link::{End, LinkParts, serve_link};
@@ -62,14 +63,16 @@ mod connect;
 mod files;
 mod link;
 mod pull;
+mod questions;
 mod secrets;
 mod settings;
 mod state;
 mod view;
 
+pub use questions::{ServerReply, ServerRequest};
 pub use settings::SyncedSettings;
 pub(crate) use state::SyncState;
-pub use state::{LinkSnapshot, ServerReply, ServerRequest, SettingsSyncView, SyncHandle};
+pub use state::{LinkSnapshot, SettingsSyncView, SyncHandle};
 
 /// How long one turn of the supervisor waits for a frame or for local work.
 const LINK_SLICE: Duration = Duration::from_millis(100);
@@ -83,14 +86,21 @@ const HELLO_BOUND: Duration = Duration::from_secs(20);
 /// again.
 pub const REQUEST_BOUND: Duration = Duration::from_secs(20);
 /// The margin that a wait may take over the bound of the server itself. A wait of
-/// the server stays open for [`crate::server::WAIT_BOUND`] (50 seconds) and then
-/// answers with the changes that it has, so its answer is not due at any shorter
-/// time.
-pub const WAIT_ANSWER_MARGIN: Duration = Duration::from_secs(15);
+/// the server stays open for [`crate::server::WAIT_BOUND`] (fifteen seconds) and
+/// then answers with the changes that it has, so its answer is not due at any
+/// shorter time. The margin holds one round trip of the slowest link that this
+/// product targets and the schedule of a busy computer, and it keeps the answer of
+/// a wait due after the answer of a push and a pull.
+pub const WAIT_ANSWER_MARGIN: Duration = Duration::from_secs(6);
 /// How long a wait of this computer may stay open before the link is lost. It is
 /// the bound of the server plus [`WAIT_ANSWER_MARGIN`], and a test keeps the two
-/// in step.
-pub const WAIT_ANSWER_BOUND: Duration = Duration::from_secs(65);
+/// in step. An idle link therefore proves that it is alive within about twenty
+/// seconds, and a server program that stopped answering is read as away then.
+pub const WAIT_ANSWER_BOUND: Duration = Duration::from_secs(21);
+/// How long a wait of a server of an older version may stay open. Such a server
+/// holds an idle wait for fifty seconds, and this computer cannot hurry it, so its
+/// answer is due at that bound plus the margin that this version used.
+pub const LEGACY_WAIT_ANSWER_BOUND: Duration = Duration::from_secs(65);
 /// The longest line of the standard error of `ssh` that is logged.
 pub(super) const MAX_STDERR_LINE: usize = 400;
 
@@ -116,6 +126,26 @@ impl LinkBounds {
         request: REQUEST_BOUND,
         wait: WAIT_ANSWER_BOUND,
     };
+
+    /// The bounds of one link whose server answered `server_protocol` in its
+    /// greeting.
+    ///
+    /// A server of [`crate::protocol::SERVER_PROTOCOL_VERSION`] or later answers an
+    /// idle wait at its own short bound, so this computer may treat a silent answer
+    /// as a lost link then. A server of an older version holds an idle wait for
+    /// fifty seconds, and a shorter bound here would end a healthy link for ever:
+    /// such a server keeps [`LEGACY_WAIT_ANSWER_BOUND`].
+    #[must_use]
+    pub fn of_server(self, server_protocol: u32) -> Self {
+        Self {
+            request: self.request,
+            wait: if server_protocol >= crate::protocol::SERVER_PROTOCOL_VERSION {
+                self.wait
+            } else {
+                LEGACY_WAIT_ANSWER_BOUND
+            },
+        }
+    }
 }
 
 impl Default for LinkBounds {
@@ -193,6 +223,11 @@ pub struct SupervisorConfig {
     /// The bounds of the requests of the link. A test replaces them so it sees a
     /// link that went silent within a second instead of a minute.
     pub bounds: LinkBounds,
+    /// Where a TCP link asks for the addresses of the name of the server. The
+    /// resolver of this computer has no bound, so the link asks through
+    /// [`crate::LinkLookup`] with a bound of its own. A test replaces it, so no test
+    /// of a name reads the resolver of this computer.
+    pub lookup: crate::LinkLookup,
 }
 
 impl SupervisorConfig {
@@ -242,6 +277,7 @@ impl SupervisorConfig {
             program: horizon_browser_control::ssh_forward::ssh_program(),
             address: None,
             token_store: None,
+            lookup: crate::LinkLookup::system(),
             device,
             queue_file: directory.join(QUEUE_FILE),
             mirror_file: directory.join(MIRROR_FILE),
@@ -377,17 +413,32 @@ fn run(
     let mut attempt: u32 = 1;
     while !stop.load(Ordering::SeqCst) {
         let started = Instant::now();
-        let end = match connect(config, handle, stop, halt_slot) {
-            Ok((mut input, answers)) => serve_link(LinkParts {
-                config,
-                handle,
-                stop,
-                bounds: &config.bounds,
-                input: &mut input,
-                answers: &answers,
-                kicked,
-                asked,
-            }),
+        // The reason of this attempt: the words of the child, the error of a
+        // socket and the loop of the link write it, and the window reads it when
+        // the attempt is over.
+        let refusal = RefusalCell::default();
+        let end = match connect(config, handle, stop, halt_slot, &refusal) {
+            Ok(greeted) => {
+                let Greeted {
+                    mut input,
+                    answers,
+                    server_protocol,
+                } = greeted;
+                // An idle wait is proven alive at the bound of the server that
+                // answered the greeting, and that bound is shorter from version 5.
+                let bounds = config.bounds.of_server(server_protocol);
+                serve_link(LinkParts {
+                    config,
+                    handle,
+                    stop,
+                    bounds: &bounds,
+                    input: &mut input,
+                    answers: &answers,
+                    kicked,
+                    asked,
+                    refusal: &refusal,
+                })
+            }
             Err(failed) => {
                 let reason = &failed.reason;
                 tracing::warn!(%reason, "the link to the Horizon server did not open");
@@ -395,7 +446,15 @@ fn run(
             }
         };
         halt(halt_slot);
-        reap(halt_slot);
+        let exit_code = reap(halt_slot);
+        // A question that the link that just ended did not ask waits for no
+        // attempt that may never come: the window reads the same sentence that a
+        // question of a link that is away reads.
+        answer_unasked(asked);
+        let reason = refusal
+            .get()
+            .or_else(|| exit_code.and_then(of_exit_code))
+            .unwrap_or(LinkRefusal::Other);
         if end == End::LoggedOut {
             // The server removed this computer, or does not know its token. The
             // token is gone and no retry can bring it back, so the link waits for
@@ -411,6 +470,7 @@ fn run(
         {
             let mut state = handle.lock();
             state.client.away();
+            state.last_refusal = Some(reason);
             // The request of the link that ended waits for no answer any more. Its
             // start stays with the `Away` state, so a reader that measures the bound
             // of this lost link measures the instant that this link timed.
@@ -464,6 +524,14 @@ impl FailedLink {
     }
 }
 
+/// The halves of a link that the server greeted: the side that this computer
+/// writes, the answers that it reads, and the protocol version of that server.
+struct Greeted {
+    input: Box<dyn Write + Send>,
+    answers: Receiver<Frame>,
+    server_protocol: u32,
+}
+
 /// Starts one transport and its reader, sends the hello, and answers the two
 /// halves of the link once the server greeted this computer.
 fn connect(
@@ -471,7 +539,8 @@ fn connect(
     handle: &SyncHandle,
     stop: &AtomicBool,
     halt_slot: &Arc<Mutex<Option<Halt>>>,
-) -> Result<(Box<dyn Write + Send>, Receiver<Frame>), FailedLink> {
+    refusal: &RefusalCell,
+) -> Result<Greeted, FailedLink> {
     // A TCP link reads the token row of this computer, and an `ssh` link leaves
     // the program to the machine terminal of the person. Both run here, on the
     // worker thread of the link.
@@ -482,10 +551,10 @@ fn connect(
             .into());
     }
     let opened = if let Some(address) = config.tcp_address() {
-        connect::tcp(address)?
+        connect::tcp(address, &config.lookup, refusal)?
     } else {
         let mut command = config.command_line();
-        connect::ssh(&mut command, &config.program)?
+        connect::ssh(&mut command, &config.program, refusal)?
     };
     let Opened {
         writer,
@@ -514,7 +583,11 @@ fn connect(
         match incoming.recv_timeout(LINK_SLICE) {
             Ok(Frame::HelloOk(answer)) => {
                 accept_hello(handle, &answer)?;
-                return Ok((input, incoming));
+                return Ok(Greeted {
+                    input,
+                    answers: incoming,
+                    server_protocol: answer.protocol,
+                });
             }
             Ok(Frame::Error(error)) => {
                 let code = error.code;
@@ -533,6 +606,7 @@ fn connect(
             }
             Ok(_) => return Err("the server answered the hello with another frame".to_owned().into()),
             Err(RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
+                refusal.set(LinkRefusal::Silent);
                 return Err("the server did not answer the hello in time".to_owned().into());
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -606,6 +680,14 @@ fn sleep(delay: Duration, stop: &AtomicBool, kicked: &Receiver<()>) -> bool {
     false
 }
 
+/// Answers every question that no link asked, so the Server tab ends its wait at
+/// once instead of at the truth of a channel that only an open link reads.
+fn answer_unasked(asked: &Receiver<(ServerRequest, mpsc::Sender<ServerReply>)>) {
+    while let Ok((_, reply)) = asked.try_recv() {
+        let _ = reply.send(ServerReply::Failed(questions::NO_LINK_SENTENCE.to_owned()));
+    }
+}
+
 /// Ends the transport of the link, so a read that waits returns.
 fn halt(halt_slot: &Arc<Mutex<Option<Halt>>>) {
     let mut slot = halt_slot.lock().unwrap_or_else(PoisonError::into_inner);
@@ -614,12 +696,11 @@ fn halt(halt_slot: &Arc<Mutex<Option<Halt>>>) {
     }
 }
 
-/// Waits for the child of the link that ended, so no zombie stays behind.
-fn reap(halt_slot: &Arc<Mutex<Option<Halt>>>) {
+/// Waits for the child of the link that ended, so no zombie stays behind, and
+/// answers the exit status that names a reason of its own.
+fn reap(halt_slot: &Arc<Mutex<Option<Halt>>>) -> Option<i32> {
     let halt = halt_slot.lock().unwrap_or_else(PoisonError::into_inner).take();
-    if let Some(halt) = halt {
-        halt.reap();
-    }
+    halt.and_then(Halt::reap)
 }
 
 fn queue_error(error: &SyncError) -> MachineError {
@@ -809,6 +890,63 @@ mod tests {
         assert!(
             handle.take_notices().is_empty(),
             "a store that this computer already took says nothing"
+        );
+    }
+
+    /// B7: an idle link proves that it is alive at the bound of the server that
+    /// answered the greeting, and a silent server program is read as away within
+    /// about twenty seconds. A server of an older version holds its wait for fifty
+    /// seconds, so this computer keeps the longer bound for it: a shorter one would
+    /// end a healthy link again and again.
+    #[test]
+    fn an_idle_link_is_proven_alive_at_the_bound_of_the_server_that_it_reached() {
+        let modern = LinkBounds::STANDARD.of_server(crate::protocol::SERVER_PROTOCOL_VERSION);
+        assert_eq!(modern.wait, WAIT_ANSWER_BOUND);
+        assert!(
+            modern.wait <= Duration::from_secs(21),
+            "an idle link is proven within about 20 seconds"
+        );
+        assert_eq!(
+            LinkBounds::STANDARD
+                .of_server(crate::protocol::SERVER_PROTOCOL_VERSION + 1)
+                .wait,
+            WAIT_ANSWER_BOUND,
+            "a later server speaks the same bound"
+        );
+        for older in [1, 2, 3, 4] {
+            assert_eq!(
+                LinkBounds::STANDARD.of_server(older).wait,
+                LEGACY_WAIT_ANSWER_BOUND,
+                "a server of protocol {older} holds its wait for fifty seconds"
+            );
+        }
+        assert_eq!(
+            modern.request, REQUEST_BOUND,
+            "the bound of a push and a pull does not depend on the server"
+        );
+
+        // The traffic of an idle computer: one wait and one answer of changes for
+        // every bound of the server, and each frame is small.
+        let wait = serde_json::to_string(&Frame::Wait(crate::protocol::Wait { since: 4_194_304 }))
+            .expect("the wait of an idle link");
+        let changes = serde_json::to_string(&Frame::Changes(crate::store::Changes {
+            index: 4_194_304,
+            reset: false,
+            rows: Vec::new(),
+        }))
+        .expect("the answer of an idle wait");
+        // The frame of a link is its length as four bytes and then its JSON.
+        let round = wait.len() + changes.len() + 8;
+        let per_minute = round * (60 / usize::try_from(crate::server::WAIT_BOUND.as_secs()).expect("seconds"));
+        assert_eq!(
+            per_minute,
+            348,
+            "an idle computer sends {round} bytes for every {} seconds, {per_minute} bytes a minute",
+            crate::server::WAIT_BOUND.as_secs()
+        );
+        assert!(
+            per_minute < 4096,
+            "an idle link costs less than four kilobytes a minute: {per_minute}"
         );
     }
 

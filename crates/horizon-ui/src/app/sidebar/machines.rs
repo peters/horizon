@@ -121,6 +121,10 @@ pub(in crate::app) struct MachineRows {
     /// The line of the link to the server, built once for its state, or `None`
     /// when this Horizon keeps its machine list on this computer alone.
     server_line: Option<String>,
+    /// Why the last attempt at the link did not open it, for the hover of the
+    /// line. It is a fixed sentence of `horizon-sync`, so it carries no address
+    /// and no secret.
+    server_reason: Option<&'static str>,
     read_from: Option<u64>,
 }
 
@@ -133,6 +137,11 @@ impl MachineRows {
     /// The state line of the link to the server, when the settings name one.
     pub(in crate::app) fn server_line(&self) -> Option<&str> {
         self.server_line.as_deref()
+    }
+
+    /// Why the last attempt at that link did not open it, when one failed.
+    pub(in crate::app) fn server_reason(&self) -> Option<&'static str> {
+        self.server_reason
     }
 
     /// What the rows were read from, so a test can see that nothing was read
@@ -174,10 +183,14 @@ impl HorizonApp {
             })
             .collect();
         // The line is built on the frame that the state changes and on no other.
-        let server_line = self.server_sync.as_ref().map(|sync| sync.line().text());
+        let (server_line, server_reason) = self.server_sync.as_ref().map_or((None, None), |sync| {
+            let line = sync.line();
+            (Some(line.text()), line.refusal())
+        });
         self.machine_rows = MachineRows {
             rows,
             server_line,
+            server_reason,
             read_from: Some(read_from),
         };
     }
@@ -256,9 +269,10 @@ impl HorizonApp {
             });
         }
         if let Some(line) = rows.server_line() {
+            let reason = rows.server_reason();
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
-                ui.label(text::line(
+                let painted = ui.label(text::line(
                     ui,
                     line,
                     11.0,
@@ -266,6 +280,11 @@ impl HorizonApp {
                     text::secondary(),
                     ui.available_width() - 18.0,
                 ));
+                // `Server away` is the same three words for every reason, so the
+                // reason of the last attempt is here, where the line is.
+                if let Some(reason) = reason {
+                    painted.on_hover_text(reason);
+                }
             });
             ui.add_space(2.0);
         }

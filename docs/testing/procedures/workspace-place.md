@@ -346,42 +346,55 @@ reported.
    Result: The line holds `-o ConnectTimeout=10`, `-o ServerAliveInterval=5` and
    `-o ServerAliveCountMax=3`.
 
-8. Cut the link again with the rule of step 2, and press one key while the mark
-   reads `Connecting...` of an attempt that does not end.
+8. Cut the link with the rule of step 2. Type `echo ahead` while the mark reads
+   `Connecting...`.
 
-   Result: The mark reads `Connecting...` for the new attempt at once. The attempt
-   that hung ended: no `ssh` child of it stays in the list of step 7.
+   Result: No new attempt starts. The mark stays `Connecting...`, the list of
+   step 7 holds one `ssh` child of this attempt, and the text went into that
+   child.
 
-9. Restore the link: start the loopback SSH server again, or remove the firewall
-   rule of step 2.
+9. Remove the rule of step 2.
 
-   Result: Within 30 seconds the mark reads `Connected` in green, and the last
-   output is still `lost-link`. No output of the session was lost, and the body
-   never went blank while the attempts ran.
+   Result: Within 30 seconds the mark reads `Connected` in green. The line
+   `echo ahead` is at the prompt of the session, and `Enter` runs it now: the
+   attempt kept the text that the person typed while it ran.
 
-10. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
+10. Cut the link with the rule of step 2 again, and press `Esc` while the mark
+    reads `Connecting...`.
+
+    Result: The attempt ends and the next one starts at once, so the mark reads
+    `Connecting...` for the new attempt. No `ssh` child of the ended attempt
+    stays in the list of step 7.
+
+11. Remove the rule of step 2.
+
+    Result: Within 30 seconds the mark reads `Connected` in green, and the last
+    output is still `lost-link`. No output of the session was lost, and the body
+    never went blank while the attempts ran.
+
+12. Run `echo again`, then run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
     ls` in the second terminal.
 
-   Result: The command runs on the machine, and the session of the panel is the
-   one before the cut. No second session exists.
+    Result: The command runs on the machine, and the session of the panel is the
+    one before the cut. No second session exists.
 
-11. Type `exit` in the shell of the panel.
+13. Type `exit` in the shell of the panel.
 
-   Result: The tmux session ends, the mark reads `Disconnected` in red, and it
-   stays `Disconnected` for at least 30 seconds. Horizon does not start the
-   command again, because a new `tmux new-session -A` would make an empty
-   session without the person.
+    Result: The tmux session ends, the mark reads `Disconnected` in red, and it
+    stays `Disconnected` for at least 30 seconds. Horizon does not start the
+    command again, because a new `tmux new-session -A` would make an empty
+    session without the person.
 
-12. Press the shortcut for a new terminal in the workspace, run one command in
+14. Press the shortcut for a new terminal in the workspace, run one command in
     it, and cut the link again as in step 2. When the mark reads
     `Reconnecting`, close the panel with its titlebar close button.
 
     Result: The panel goes away, Horizon shows no error dialog, and Horizon
     starts no further attempt.
 
-13. Restore the link as in step 9.
+15. Remove the rule of step 2.
 
-    Result: The machine answers again, and the `tmux ls` command of step 10 lists
+    Result: The machine answers again, and the `tmux ls` command of step 12 lists
     no session of the two panels that ended.
 
 ## 7. Known behaviour
@@ -438,12 +451,20 @@ so the delays above run on a dead network. ssh reads the first value of an optio
 that it meets, and the value of a command line comes before the value of a
 configuration file, so these three options decide for the connection that Horizon
 starts, also when the ssh config of the person names other values. A plain SSH
-panel of the remote hosts chooser keeps the values of today, 15 and 1.
+panel of the remote hosts chooser holds `-o ConnectTimeout=10`,
+`-o ServerAliveInterval=15` and `-o ServerAliveCountMax=1` now, and so do an
+upload and the `ssh -W` forward of a Device panel: no child of Horizon waits for
+the connect timeout of the system.
 
 A key press in a machine terminal whose attempt is in flight, which is the state
-`Connecting`, ends that attempt and starts the next one at once, as a key press in
-a panel that waits for its attempt does. Horizon kills and reaps the child of the
-ended attempt, so no process of the dead network stays.
+`Connecting`, does not end that attempt: the text goes into the running ssh child
+and reaches the shell when the link is up. Only two keys end the attempt, `Esc`
+and `Enter`, and the next one starts at once. A letter never ends an attempt,
+because a person who types ahead on a link of a round trip of 300 ms would
+otherwise keep cancelling a connect that is only slow. A key press in a panel
+that waits for its attempt, which is the state `Reconnecting`, still connects at
+once. Horizon kills and reaps the child of an attempt that it ends, so no process
+of the dead network stays.
 
 ### KB6 — A known list of panels follows the place
 
@@ -466,8 +487,9 @@ before the workspace had a place.
 - A lost link of a terminal of the machine reconnects by itself, without a key
   press, and the panel attaches to the same session with its output.
 - A machine terminal holds `ConnectTimeout=10`, `ServerAliveInterval=5` and
-  `ServerAliveCountMax=3`, and a key press in a panel whose attempt is in flight
-  ends that attempt and starts a new one at once.
+  `ServerAliveCountMax=3`. A letter in a panel whose attempt is in flight does
+  not end that attempt and reaches the shell after the connect, and `Esc` and
+  `Enter` end it and start a new one at once.
 - A session that ended does not reconnect, and a panel that a person closed
   starts no attempt.
 - Two workspaces on one machine hold two sessions.

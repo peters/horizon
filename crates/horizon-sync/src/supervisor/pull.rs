@@ -329,6 +329,9 @@ pub(super) fn mirror_of(state: &SyncState) -> MirrorFile {
 pub(super) fn accept_hello(handle: &SyncHandle, answer: &HelloOk) -> Result<(), String> {
     let mut state = handle.lock();
     let seen = state.client.store().map(str::to_owned);
+    // This attempt reached the server, so the reason of the attempt before it is
+    // no longer the reason of the link.
+    state.last_refusal = None;
     state
         .client
         .accept_hello(answer)

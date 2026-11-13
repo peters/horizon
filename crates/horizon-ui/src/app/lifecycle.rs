@@ -60,6 +60,10 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        // A terminal panel that a person typed into asks for the frame that paints
+        // the echo of that key, so the answer of a far machine appears in the next
+        // frame instead of the next idle poll of the window.
+        self.board.attach_output_wake(&self.output_wake);
         self.poll_saved_session_deletion(ctx);
         let input_blocked = self.host_dialog_open()
             || super::panels::session_picker_panel(ctx).is_some_and(|panel| self.board.panel(panel).is_some());

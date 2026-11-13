@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
@@ -36,6 +38,23 @@ printf 'TAIL-MARKER\n'
 while IFS= read -r byte; do :; done
 exit 0
 "#;
+
+// The fixture echoes every byte that a person types, as a shell of this
+// computer does, and prints nothing else after its ready line.
+const ECHO_CHILD_ARGS: &str = "printf 'READY'; exec cat";
+
+// A program that prints without end, which a frame must not follow.
+const CHATTY_CHILD_ARGS: &str = "i=0\nwhile :; do printf 'row-%s\\n' \"$i\"; i=$((i + 1)); sleep 0.005; done";
+
+/// A wake of the window that counts its requests instead of drawing a frame.
+fn counting_wake() -> (Arc<AtomicUsize>, horizon_core::OutputWake) {
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    let wake: horizon_core::OutputWake = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    (wakes, wake)
+}
 
 struct TerminalHarness {
     ctx: Context,
@@ -406,4 +425,66 @@ fn shift_page_and_home_end_scroll_the_scrollback_without_touching_the_program() 
         egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
     )]);
     assert_eq!(scrollback(&harness), 1, "a control arrow scrolls a single line");
+}
+
+#[test]
+fn the_echo_of_a_key_press_asks_for_its_frame_and_paints_it() {
+    let mut harness = TerminalHarness::with_child(ECHO_CHILD_ARGS);
+    harness.wait_for_text("READY");
+    let (wakes, wake) = counting_wake();
+    harness.panel.attach_output_wake(&wake);
+    // The frame that takes the key needs the focus of the terminal first.
+    harness.frame_with_events(Vec::new());
+
+    harness.frame_with_events(vec![Event::Text("a".to_owned())]);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while wakes.load(Ordering::Relaxed) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the echo of a key press must ask for its own frame"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(wakes.load(Ordering::Relaxed), 1, "one key press asks for one frame");
+
+    // The frame that the wake asked for drains the echo and paints it.
+    harness.panel.process_output();
+    harness.frame_with_events(Vec::new());
+    assert!(
+        harness.text().contains("READYa"),
+        "the echo of the key press is painted:\n{}",
+        harness.text()
+    );
+}
+
+#[test]
+fn a_terminal_that_prints_without_end_asks_for_no_frame_of_its_own() {
+    // The bound of a terminal that nobody types into is the output poll of the
+    // window: a frame every 16 ms while output arrives, and 100, 250, 500 and
+    // 1 000 ms while the panel is quiet. A wake of the panel would break it.
+    let mut harness = TerminalHarness::with_child(CHATTY_CHILD_ARGS);
+    let (wakes, wake) = counting_wake();
+    harness.panel.attach_output_wake(&wake);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut printed = 0_usize;
+    while printed < 10 {
+        harness.panel.process_output();
+        if harness.panel.had_recent_output() {
+            printed += 1;
+        }
+        harness.frame_with_events(Vec::new());
+        assert!(
+            Instant::now() < deadline,
+            "the fixture must print through the window: {printed} polls, screen:\n{}",
+            harness.text()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        0,
+        "output that no key press of a person waits for asks for no frame"
+    );
 }

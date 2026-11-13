@@ -46,6 +46,9 @@ const SMALL_SIZE: f32 = 11.0;
 pub(in crate::app) struct ServerView {
     /// The state line of the sidebar.
     pub(in crate::app) line: String,
+    /// Why the last attempt did not open the link, when one failed. The state line
+    /// says `Server away` for every reason, so this line says which one it is.
+    pub(in crate::app) refusal: Option<String>,
     /// The name of this computer on the server, when it has one.
     pub(in crate::app) device: String,
     /// Whether this computer holds a link to its server.
@@ -418,6 +421,9 @@ fn render_state_line(ui: &mut Ui, view: &ServerView) {
         theme::FG_SOFT()
     };
     ui.label(egui::RichText::new(&view.line).color(color).size(TEXT_SIZE));
+    if let Some(refusal) = &view.refusal {
+        ui.label(egui::RichText::new(refusal).color(theme::FG_DIM()).size(SMALL_SIZE));
+    }
     if let Some(settings) = &view.settings {
         ui.label(egui::RichText::new(settings).color(color).size(SMALL_SIZE));
     }
@@ -821,6 +827,7 @@ mod tests {
         });
         let view = ServerView {
             line: "Server: in step".to_owned(),
+            refusal: None,
             device: "laptop-a".to_owned(),
             linked: true,
             logged_out: false,
@@ -850,6 +857,7 @@ mod tests {
             let mut state = ServerTabState::default();
             let view = ServerView {
                 line: line.to_owned(),
+                refusal: None,
                 device: "window-b".to_owned(),
                 linked: false,
                 logged_out: true,
@@ -903,6 +911,7 @@ mod tests {
         };
         let view = ServerView {
             line: "Server: in step".to_owned(),
+            refusal: None,
             device: "window-b".to_owned(),
             linked: true,
             logged_out: false,

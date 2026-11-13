@@ -30,6 +30,14 @@ const FONT_JETBRAINS_MONO: &str = "jetbrains-mono";
 const FONT_NOTO_CJK: &str = "noto-sans-cjk-sc";
 const FONT_NOTO_SYMBOLS: &str = "noto-sans-symbols-2";
 
+/// The callback that asks this window for the frame that shows the echo of a
+/// person's key press in a terminal panel. The window owns it once, so every
+/// terminal panel shares one closure.
+fn terminal_output_wake(ctx: &Context) -> horizon_core::OutputWake {
+    let ctx = ctx.clone();
+    std::sync::Arc::new(move || ctx.request_repaint())
+}
+
 struct AppBootstrap {
     config_path: PathBuf,
     session_store: SessionStore,
@@ -39,6 +47,7 @@ struct AppBootstrap {
     config_last_mtime: Option<std::time::SystemTime>,
     shortcuts: AppShortcuts,
     action_commands_cache: Vec<CommandEntry>,
+    output_wake: horizon_core::OutputWake,
 }
 
 impl HorizonApp {
@@ -98,6 +107,7 @@ impl HorizonApp {
             config_last_mtime,
             shortcuts,
             action_commands_cache,
+            output_wake: terminal_output_wake(egui_ctx),
         };
         let mut app = Self::initial_state(config, bootstrap);
         // The hotkey of speech input comes with the settings of this start, so it
@@ -139,6 +149,7 @@ impl HorizonApp {
             config_last_mtime,
             shortcuts,
             action_commands_cache,
+            output_wake,
         }: AppBootstrap,
     ) -> Self {
         Self {
@@ -165,8 +176,8 @@ impl HorizonApp {
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
             machine_epoch: 0, machine_load_rx: None, server_sync: None,
-            canvas_grid_cache: CanvasGridCache::default(),
-            frame_stats: FrameStats::default(),
+            canvas_grid_cache: CanvasGridCache::default(), frame_stats: FrameStats::default(),
+            output_wake,
             workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true, sidebar_drag_workspace: None,

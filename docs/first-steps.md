@@ -272,7 +272,16 @@ Codex and Grok panels.
 Device panels need a source build from `main`. A Device panel needs a VNC target in the configuration. See
 [Watch an app over VNC](../README.md#watch-an-app-over-vnc).
 
+## Work from a place far away
+
+A link with a round trip of 200 to 350 ms, packet loss or a changing address
+changes what Horizon can do without your help. Read
+[remote connections](remote-connections.md): the `~/.ssh/config` lines that share
+one connection between panels, what each line gives, the limits of a shared
+connection, and what Horizon does by itself after a cut.
+
 ## Get help
 
 - [Platform support](platform-support.md)
+- [Remote connections](remote-connections.md)
 - [README](../README.md)
