@@ -458,7 +458,12 @@ fn paint_working_indicator(
 #[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
     let font = egui::FontId::proportional(13.0);
-    let job = single_line_label_job(title, &font, panel_title_color(focused), max_width);
+    let mut job = single_line_label_job(title, &font, panel_title_color(focused), max_width);
+    if focused {
+        for section in &mut job.sections {
+            section.format.coords = crate::typeface::Weight::Semibold.coords();
+        }
+    }
     let galley = painter.layout_job(job);
     let text_height = galley.size().y;
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);

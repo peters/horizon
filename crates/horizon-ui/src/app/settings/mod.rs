@@ -637,7 +637,12 @@ fn render_settings_panel(
                 panel_state.has_changes,
                 panel_state.conflict.as_deref(),
             );
-            ui.label(egui::RichText::new("Settings").color(theme::FG()).size(18.0).strong());
+            ui.label(crate::typeface::rich(
+                "Settings",
+                18.0,
+                theme::FG(),
+                crate::typeface::Weight::Semibold,
+            ));
             ui.add_space(16.0);
 
             render_tab_bar(ui, editor);
@@ -869,7 +874,12 @@ fn action_row(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui), actions: i
 
 fn section_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(title).color(theme::FG_SOFT()).size(13.0).strong());
+    ui.label(crate::typeface::rich(
+        title,
+        13.0,
+        theme::FG_SOFT(),
+        crate::typeface::Weight::Semibold,
+    ));
     ui.add_space(6.0);
 }
 

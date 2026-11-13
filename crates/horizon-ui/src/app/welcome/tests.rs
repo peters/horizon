@@ -5,6 +5,7 @@ use egui::Context;
 use super::{HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, WelcomeTile, page_top, welcome_page_shows};
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
+use crate::typeface::Weight;
 
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
@@ -135,6 +136,52 @@ fn the_page_shows_only_on_an_empty_board() {
     assert!(!welcome_page_shows(1, 0, true), "a workspace ends the first start");
     assert!(!welcome_page_shows(1, 1, true));
     assert!(!welcome_page_shows(0, 0, false), "a dialog covers the page");
+}
+
+/// The weight that a text was laid out with, as the value of its `wght` axis.
+fn weight_of(shape: &egui::epaint::TextShape) -> Option<f32> {
+    shape
+        .galley
+        .job
+        .sections
+        .first()
+        .and_then(|section| section.format.coords.as_ref().first().map(|(_, value)| *value))
+}
+
+/// A text of the page is painted once, in the weight of the mockup.
+fn painted_weights(shapes: &[egui::epaint::ClippedShape], text: &str) -> Vec<Option<f32>> {
+    fn walk(shape: &egui::Shape, text: &str, out: &mut Vec<Option<f32>>) {
+        match shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => out.push(weight_of(shape)),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, text, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, text, &mut out);
+    }
+    out
+}
+
+#[test]
+fn the_heading_is_painted_once_in_its_own_weight() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    let shapes = frame_shapes(&ctx, &mut app);
+
+    let heading = painted_weights(&shapes, HEADING);
+    assert_eq!(heading.len(), 1, "one heading, not a second pass of it: {heading:?}");
+    assert_eq!(heading[0], Some(Weight::Black.wght()));
+
+    let title = painted_weights(&shapes, WelcomeTile::ALL[0].title());
+    assert_eq!(title, vec![Some(Weight::Bold.wght())]);
+    let press = painted_weights(&shapes, WelcomeTile::ALL[0].action());
+    assert_eq!(press, vec![Some(Weight::Semibold.wght())]);
 }
 
 #[test]

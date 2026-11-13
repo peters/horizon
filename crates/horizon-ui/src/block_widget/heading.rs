@@ -6,6 +6,7 @@ use egui::{FontId, Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
 use horizon_browser_control::block::Badge;
 
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::badge;
 use super::metrics::{
@@ -71,7 +72,7 @@ pub(super) fn show(
         _ => width,
     };
 
-    let title = text::wrapped(ui.painter(), text, &font, theme::FG(), text_width, None);
+    let title = text::wrapped_weight(ui.painter(), text, &font, theme::FG(), text_width, None, Weight::Bold);
     let title_height = title.size().y;
     // The second line says what the card is for, so it takes every line that
     // its words need inside the room that the card has, and the height of the

@@ -48,12 +48,12 @@ impl HorizonApp {
                 .max_rect(layout.brand_rect)
                 .layout(Layout::left_to_right(Align::Center)),
             |ui| {
-                ui.label(
-                    egui::RichText::new(branding::APP_NAME)
-                        .color(theme::FG())
-                        .size(14.0)
-                        .strong(),
-                );
+                ui.label(crate::typeface::rich(
+                    branding::APP_NAME,
+                    14.0,
+                    theme::FG(),
+                    crate::typeface::Weight::Semibold,
+                ));
                 if layout.show_tagline {
                     ui.add_space(ROOT_TOOLBAR_BUTTON_GAP);
                     ui.label(

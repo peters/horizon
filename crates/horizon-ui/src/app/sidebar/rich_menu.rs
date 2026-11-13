@@ -59,7 +59,15 @@ pub(in crate::app) fn row(
         }
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.add_space((height - TEXT_HEIGHT) / 2.0);
-        ui.add(egui::Label::new(RichText::new(title).size(13.5).strong().color(theme::FG())).selectable(false));
+        ui.add(
+            egui::Label::new(crate::typeface::rich(
+                title,
+                13.5,
+                theme::FG(),
+                crate::typeface::Weight::Semibold,
+            ))
+            .selectable(false),
+        );
         ui.add(
             egui::Label::new(RichText::new(detail).size(11.5).color(theme::FG_SOFT()))
                 .truncate()
@@ -102,12 +110,12 @@ pub(in crate::app) fn caption(ui: &mut Ui, text: &str) {
     ui.horizontal(|ui| {
         ui.add_space(10.0);
         ui.add(
-            egui::Label::new(
-                RichText::new(text.to_uppercase())
-                    .size(10.5)
-                    .strong()
-                    .color(theme::FG_DIM()),
-            )
+            egui::Label::new(crate::typeface::rich(
+                text.to_uppercase(),
+                10.5,
+                theme::FG_DIM(),
+                crate::typeface::Weight::Black,
+            ))
             .selectable(false),
         );
     });

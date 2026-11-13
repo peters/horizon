@@ -8,12 +8,13 @@ use egui::{Color32, FontId, Galley, TextFormat};
 use horizon_core::{Attention, PanelKind, PresetConfig, agent_definition};
 
 use crate::theme;
+use crate::typeface::Weight;
 
-/// Inter weights of the sidebar.
-pub(super) const REGULAR: f32 = 400.0;
-pub(super) const MEDIUM: f32 = 500.0;
-pub(super) const SEMIBOLD: f32 = 620.0;
-pub(super) const BOLD: f32 = 700.0;
+/// Inter weights of the sidebar, named by the one weight enum of the interface.
+pub(super) const REGULAR: f32 = Weight::Regular.wght();
+pub(super) const MEDIUM: f32 = Weight::Medium.wght();
+pub(super) const SEMIBOLD: f32 = Weight::Semibold.wght();
+pub(super) const BOLD: f32 = Weight::Black.wght();
 
 /// One line of `text` in Inter at `weight`, cut with an ellipsis at `max_width`.
 pub(super) fn line(ui: &egui::Ui, text: &str, size: f32, weight: f32, color: Color32, max_width: f32) -> Arc<Galley> {

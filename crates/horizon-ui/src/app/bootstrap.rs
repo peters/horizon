@@ -273,7 +273,7 @@ fn spawn_remote_browser_credentials(config: &Config, home: &horizon_core::Horizo
     workbench
 }
 
-fn configure_fonts() -> egui::FontDefinitions {
+pub(crate) fn configure_fonts() -> egui::FontDefinitions {
     let mut fonts = egui::FontDefinitions::default();
 
     insert_font_data(

@@ -7,15 +7,31 @@
 
 use std::sync::Arc;
 
-use egui::text::{LayoutJob, TextFormat, TextWrapping};
+use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, FontId, Galley, Painter};
 
 use crate::text::single_line_label_job;
+use crate::typeface::{self, Weight};
 
 /// One line of `text`, elided with an ellipsis when it is wider than
 /// `max_width`.
 pub(super) fn line(painter: &Painter, text: &str, font: &FontId, color: Color32, max_width: f32) -> Arc<Galley> {
-    let job = single_line_label_job(text, font, color, max_width);
+    line_weight(painter, text, font, color, max_width, Weight::Regular)
+}
+
+/// [`line`] at `weight`.
+pub(super) fn line_weight(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    weight: Weight,
+) -> Arc<Galley> {
+    let mut job = single_line_label_job(text, font, color, max_width);
+    for section in &mut job.sections {
+        section.format.coords = weight.coords();
+    }
     painter.layout_job(job)
 }
 
@@ -29,6 +45,19 @@ pub(super) fn wrapped(
     max_width: f32,
     line_height: Option<f32>,
 ) -> Arc<Galley> {
+    wrapped_weight(painter, text, font, color, max_width, line_height, Weight::Regular)
+}
+
+/// [`wrapped`] at `weight`.
+pub(super) fn wrapped_weight(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    line_height: Option<f32>,
+    weight: Weight,
+) -> Arc<Galley> {
     let mut job = LayoutJob {
         wrap: TextWrapping {
             max_width: max_width.max(0.0),
@@ -36,16 +65,11 @@ pub(super) fn wrapped(
         },
         ..LayoutJob::default()
     };
-    job.append(
-        text,
-        0.0,
-        TextFormat {
-            font_id: font.clone(),
-            color,
-            line_height,
-            ..TextFormat::default()
-        },
-    );
+    job.append(text, 0.0, {
+        let mut format = typeface::format(font, color, weight);
+        format.line_height = line_height;
+        format
+    });
     painter.layout_job(job)
 }
 
@@ -58,10 +82,12 @@ pub(super) fn spaced_line(
     color: Color32,
     max_width: f32,
     tracking: f32,
+    weight: Weight,
 ) -> Arc<Galley> {
     let mut job = single_line_label_job(&text.to_uppercase(), font, color, max_width);
     for section in &mut job.sections {
         section.format.extra_letter_spacing = tracking;
+        section.format.coords = weight.coords();
     }
     painter.layout_job(job)
 }

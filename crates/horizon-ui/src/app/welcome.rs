@@ -26,6 +26,7 @@ use egui::{
 };
 
 use crate::theme;
+use crate::typeface::{self, Weight};
 
 use self::layout::{ROW_GAP, TILE_GAP, tile_width, welcome_columns};
 use super::HorizonApp;
@@ -74,10 +75,6 @@ const TILE_RADIUS: u8 = 16;
 const TILE_OUTLINE: f32 = 1.0;
 /// The width of the ring that says where the keyboard is.
 const FOCUS_RING: f32 = 2.0;
-/// How far a second pass of the heading stands to the right of the first, in
-/// whole points: the bundled face has one weight, and the two passes together
-/// give the heavy heading of the mockup.
-const HEAVY_OFFSET: f32 = 0.6;
 /// The half-height of the chevron of the press of a tile.
 const CHEVRON: f32 = 5.0;
 /// The space between the press text and its chevron.
@@ -363,15 +360,16 @@ fn paint_page(
 /// Paints the heading and its line, and answers the top of the tiles.
 fn paint_heading(painter: &Painter, content: Rect, metrics: WelcomeMetrics, y: f32) -> f32 {
     let center = content.center().x;
-    let heading = painter.layout_no_wrap(HEADING.to_owned(), FontId::proportional(HEADING_FONT), theme::FG());
+    let heading = painter.layout_job(heading_job(HEADING, HEADING_FONT, theme::FG(), Weight::Black));
     let left = center - heading.size().x * 0.5;
-    paint_heavy(painter, Pos2::new(left, y), heading);
+    painter.galley(Pos2::new(left, y), heading, theme::FG());
     let lead_top = y + metrics.heading_height + HEADING_GAP;
     let lead = painter.layout_job(centred_job(
         LEAD,
         &FontId::proportional(LEAD_FONT),
         theme::FG_SOFT(),
         HEADING_MAX_WIDTH.min(content.width().max(1.0)),
+        Weight::Regular,
     ));
     // The rows of a centred job stand around its own origin, so the galley is
     // drawn on the middle line of the page.
@@ -379,19 +377,17 @@ fn paint_heading(painter: &Painter, content: Rect, metrics: WelcomeMetrics, y: f
     lead_top + metrics.lead_height + HEADING_BLOCK_GAP - HEADING_GAP
 }
 
-/// Paints one line with the weight of a heading of the mockup.
-///
-/// The bundled face carries one weight, so the line is painted twice by a hair
-/// instead of once: the page asks for a strong heading and no second face is
-/// bundled for it.
-fn paint_heavy(painter: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>) {
-    painter.galley(pos, galley.clone(), theme::FG());
-    painter.galley(pos + Vec2::new(HEAVY_OFFSET, 0.0), galley, theme::FG());
+/// One line of `text` at `size` and `weight`, as the mockups draw it.
+fn heading_job(text: &str, size: f32, color: Color32, weight: Weight) -> egui::text::LayoutJob {
+    egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        typeface::format(&FontId::proportional(size), color, weight),
+    )
 }
 
 /// The text of the page wrapped to `max_width` with every row centred, as the
 /// line under the heading of the mockup is.
-fn centred_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> egui::text::LayoutJob {
+fn centred_job(text: &str, font: &FontId, color: Color32, max_width: f32, weight: Weight) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob {
         halign: egui::Align::Center,
         wrap: egui::text::TextWrapping {
@@ -400,15 +396,7 @@ fn centred_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> egu
         },
         ..egui::text::LayoutJob::default()
     };
-    job.append(
-        text,
-        0.0,
-        egui::text::TextFormat {
-            font_id: font.clone(),
-            color,
-            ..egui::text::TextFormat::default()
-        },
-    );
+    job.append(text, 0.0, typeface::format(font, color, weight));
     job
 }
 
@@ -456,12 +444,13 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
     painter.add(drawing.clone());
 
     let mut y = band.max.y + TILE_INNER_GAP;
-    let headline = painter.layout(
-        tile.title().to_owned(),
-        FontId::proportional(TITLE_FONT),
+    let headline = painter.layout_job(centred_job(
+        tile.title(),
+        &FontId::proportional(TITLE_FONT),
         theme::FG(),
         inner.width(),
-    );
+        Weight::Bold,
+    ));
     painter.galley(Pos2::new(inner.min.x, y), headline.clone(), theme::FG());
     y += headline.size().y + TILE_INNER_GAP;
     let sentence = painter.layout(
@@ -480,7 +469,7 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
 /// where it goes.
 fn paint_action(painter: &Painter, inner: Rect, tile: WelcomeTile) {
     let colour = action_colour();
-    let action = painter.layout_no_wrap(tile.action().to_owned(), FontId::proportional(ACTION_FONT), colour);
+    let action = painter.layout_job(heading_job(tile.action(), ACTION_FONT, colour, Weight::Semibold));
     let top = inner.max.y - action.size().y;
     let width = action.size().x;
     painter.galley(Pos2::new(inner.min.x, top), action, colour);

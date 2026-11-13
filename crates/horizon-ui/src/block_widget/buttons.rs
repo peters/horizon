@@ -9,6 +9,7 @@ use egui::{CornerRadius, CursorIcon, FontId, Pos2, Rect, Role, Sense, Stroke, St
 use horizon_browser_control::block::{Button, Tone};
 
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, BUTTON_RADIUS, count};
 use super::{CardView, text, tones};
@@ -36,7 +37,10 @@ pub(super) fn show(
         .map(|(item, button)| {
             let is_primary = primary == Some((component, item));
             let pad = if is_primary { BUTTON_PAD_PRIMARY } else { BUTTON_PAD };
-            (is_primary, (label_width(ui, &button.label) + 2.0 * pad).min(available))
+            (
+                is_primary,
+                (label_width(ui, &button.label, is_primary) + 2.0 * pad).min(available),
+            )
         })
         .collect();
 
@@ -168,17 +172,25 @@ pub(super) fn drawn_tone(tone: Tone, is_primary: bool) -> Tone {
     }
 }
 
-/// The width the label of `text` needs at the button font.
-fn label_width(ui: &Ui, label: &str) -> f32 {
-    text::line(
+/// The width the label of `text` needs at the button font, in the weight that
+/// the button is drawn at.
+fn label_width(ui: &Ui, label: &str, is_primary: bool) -> f32 {
+    text::line_weight(
         ui.painter(),
         label,
         &FontId::proportional(BUTTON_FONT),
         theme::FG(),
         f32::INFINITY,
+        button_weight(is_primary),
     )
     .size()
     .x
+}
+
+/// The weight of a button label: the primary one of a card is heavier, as the
+/// approved card mockups draw it.
+fn button_weight(is_primary: bool) -> Weight {
+    if is_primary { Weight::Semibold } else { Weight::Regular }
 }
 
 /// Draw one button and, when the person presses it, record the click.
@@ -199,12 +211,13 @@ fn draw_button(ui: &mut Ui, button: &Button, rect: Rect, is_primary: bool, view:
     let radius = CornerRadius::same(BUTTON_RADIUS);
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
-    let label = text::line(
+    let label = text::line_weight(
         ui.painter(),
         &button.label,
         &FontId::proportional(BUTTON_FONT),
         colours.text,
         (rect.width() - 2.0 * BUTTON_PAD).max(0.0),
+        button_weight(is_primary),
     );
     let height = label.size().y;
     let width = label.size().x;

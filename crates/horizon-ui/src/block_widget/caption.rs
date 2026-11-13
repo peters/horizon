@@ -7,6 +7,7 @@
 use egui::{FontId, Role, Sense, Ui, Vec2, WidgetInfo};
 
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::metrics::{CAPTION_FONT, CAPTION_TRACKING};
 use super::text;
@@ -20,6 +21,7 @@ pub(super) fn show(ui: &mut Ui, _index: usize, text: &str) {
         theme::FG_DIM(),
         ui.available_width(),
         CAPTION_TRACKING,
+        Weight::Black,
     );
     let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), galley.size().y), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));

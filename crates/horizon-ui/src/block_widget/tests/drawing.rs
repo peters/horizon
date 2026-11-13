@@ -7,6 +7,7 @@ use horizon_core::{CardFrames as HostFrames, CardRuntime};
 
 use crate::block_widget::metrics::{BODY_PAD_SIDE, KV_PAD_SIDE, KV_ROW_HEIGHT, KV_ROW_PAD_Y};
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::{CardFrames, Owner, card_nodes, card_nodes_in, disabled_state, every_component, one_button};
 use crate::block_widget::{
@@ -27,6 +28,58 @@ fn painted_dot(output: &egui::FullOutput, color: Color32) -> bool {
         Shape::Circle(circle) => circle.fill == color && circle.fill.a() > 0,
         _ => false,
     })
+}
+
+/// The `wght` coordinate of every text of a pass whose words are `text`.
+fn painted_weights(output: &egui::FullOutput, text: &str) -> Vec<Option<f32>> {
+    fn walk(shape: &Shape, text: &str, out: &mut Vec<Option<f32>>) {
+        match shape {
+            Shape::Text(shape) if shape.galley.text() == text => out.push(
+                shape
+                    .galley
+                    .job
+                    .sections
+                    .first()
+                    .and_then(|section| section.format.coords.as_ref().first().map(|(_, value)| *value)),
+            ),
+            Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, text, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, text, &mut out);
+    }
+    out
+}
+
+/// The weights of the approved card mockups reach the glyphs that the card
+/// paints: the heading is heavy, a caption is the heaviest, and the row title
+/// and the primary button label stand above the body text.
+#[test]
+fn the_weights_of_the_mockups_reach_the_painted_card() {
+    let frames = CardFrames::new();
+    let mut card = CardRuntime::default();
+    let output = frames.paint(&every_component(), &mut card, Owner::Listening);
+
+    assert_eq!(painted_weights(&output, "build-1"), vec![Some(Weight::Bold.wght())]);
+    assert_eq!(
+        painted_weights(&output, "Hetzner · Helsinki"),
+        vec![Some(Weight::Regular.wght())],
+        "the second line of a heading stays regular"
+    );
+    assert_eq!(painted_weights(&output, "PLACE"), vec![Some(Weight::Black.wght())]);
+    assert_eq!(
+        painted_weights(&output, "CX22 - 2 vCPU"),
+        vec![Some(Weight::Semibold.wght())],
+        "a row title stands above the body text"
+    );
+    assert_eq!(painted_weights(&output, "Connect"), vec![Some(Weight::Semibold.wght())]);
+    assert_eq!(painted_weights(&output, "Stop"), vec![Some(Weight::Regular.wght())]);
 }
 
 #[test]

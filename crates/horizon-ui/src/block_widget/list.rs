@@ -11,6 +11,7 @@ use egui::{
 use horizon_browser_control::block::{ListLayout, ListRow, Selection};
 
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::badge;
 use super::metrics::{
@@ -122,13 +123,14 @@ fn show_row(
     // The text of a row keeps the lines that its words need: a row is a choice
     // and a name with its reason, and neither loses a word to the edge of the
     // card. The row grows with them, and its value or badge keeps the right edge.
-    let title = text::wrapped(
+    let title = text::wrapped_weight(
         ui.painter(),
         &row.title,
         &FontId::proportional(LIST_TITLE_FONT),
         title_colour,
         text_width,
         None,
+        Weight::Semibold,
     );
     let subtitle_colour = row.tone.map_or_else(theme::FG_SOFT, tones::text);
     let subtitle = row.subtitle.as_ref().map(|subtitle| {

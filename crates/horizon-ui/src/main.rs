@@ -31,6 +31,7 @@ mod terminal_widget;
 mod test_egui;
 mod text;
 mod theme;
+mod typeface;
 
 use std::fmt::Write as _;
 

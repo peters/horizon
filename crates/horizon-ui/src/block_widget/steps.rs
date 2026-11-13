@@ -9,6 +9,7 @@ use egui::{FontId, Pos2, Rect, Role, Sense, Stroke, Ui, Vec2, WidgetInfo};
 use horizon_browser_control::block::{Step, StepState};
 
 use crate::theme;
+use crate::typeface::Weight;
 
 use super::metrics::{STEP_FONT, STEP_GAP, STEP_MARK, STEP_MARK_GAP, STEP_MARK_RING, STEP_TIME_FONT, STEP_TIME_GAP};
 use super::text;
@@ -37,12 +38,13 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
         .map(|at| text::line(ui.painter(), at, &time_font, theme::FG_DIM(), (width * 0.5).max(0.0)));
     let time_width = time.as_ref().map_or(0.0, |galley| galley.size().x + STEP_TIME_GAP);
     let colour = line_colour(step.state);
-    let label = text::line(
+    let label = text::line_weight(
         ui.painter(),
         &step.label,
         &text_font,
         colour,
         (width - STEP_MARK - STEP_MARK_GAP - time_width).max(0.0),
+        step_weight(step.state),
     );
     let height = label
         .size()
@@ -78,6 +80,15 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
 
 /// The colour of the line of a step: a step that runs or finished reads as the
 /// foreground, a step that waits stays soft.
+/// The weight of a step label: the step that is under way is the one the
+/// approved card mockups draw heavier.
+fn step_weight(state: StepState) -> Weight {
+    match state {
+        StepState::Now => Weight::Semibold,
+        StepState::Done | StepState::Waiting => Weight::Regular,
+    }
+}
+
 fn line_colour(state: StepState) -> egui::Color32 {
     match state {
         StepState::Done | StepState::Now => theme::FG(),
