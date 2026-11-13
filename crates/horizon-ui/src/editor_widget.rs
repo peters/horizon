@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use egui::containers::scroll_area::ScrollBarVisibility;
 use egui::{Align, Color32, CornerRadius, FontId, Id, Layout, Pos2, Rect, RichText, ScrollArea, TextEdit, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -5,6 +7,7 @@ use horizon_core::{MarkdownEditor, Panel, PanelId, PreviewMode, ShortcutBinding}
 
 use crate::app::shortcuts::shortcut_pressed;
 use crate::theme;
+use crate::zoom_text;
 
 const FONT_SIZE: f32 = 14.0;
 const MODE_BAR_HEIGHT: f32 = 28.0;
@@ -167,7 +170,22 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
             let row_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(FONT_SIZE)));
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let desired_rows = (viewport.height() / row_height).ceil().max(1.0) as usize;
-            let output = markdown_text_edit(&mut editor.text, viewport.size(), desired_rows, editor_id).show(ui);
+            let font = FontId::monospace(FONT_SIZE);
+            let mut layouter = move |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+                let job =
+                    egui::text::LayoutJob::simple(buffer.as_str().to_owned(), font.clone(), theme::FG(), wrap_width);
+                // The editor is a panel of the canvas, so its text is under the
+                // canvas zoom: it is laid out at the size of the screen.
+                zoom_text::layout_job(ui.painter(), job)
+            };
+            let output = markdown_text_edit(
+                &mut editor.text,
+                viewport.size(),
+                desired_rows,
+                editor_id,
+                &mut layouter,
+            )
+            .show(ui);
             if output.response.changed() {
                 editor.dirty = true;
             }
@@ -176,10 +194,17 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
     Some(output.inner)
 }
 
-fn markdown_text_edit(text: &mut String, min_size: Vec2, desired_rows: usize, id: Id) -> TextEdit<'_> {
+fn markdown_text_edit<'a>(
+    text: &'a mut String,
+    min_size: Vec2,
+    desired_rows: usize,
+    id: Id,
+    layouter: &'a mut dyn FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> Arc<egui::Galley>,
+) -> TextEdit<'a> {
     TextEdit::multiline(text)
         .id(id)
         .font(FontId::monospace(FONT_SIZE))
+        .layouter(layouter)
         .desired_width(f32::INFINITY)
         .desired_rows(desired_rows)
         .min_size(min_size)

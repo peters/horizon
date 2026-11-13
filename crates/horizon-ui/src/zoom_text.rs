@@ -24,8 +24,9 @@ use std::time::{Duration, Instant};
 
 use egui::emath::TSTransform;
 use egui::epaint::TextShape;
+use egui::epaint::text::FontsView;
 use egui::text::LayoutJob;
-use egui::{Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, ViewportId};
+use egui::{Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, Shape, ViewportId};
 
 /// The step of the ladder of screen font sizes, in points.
 pub(crate) const SCREEN_SIZE_QUANTUM: f32 = 0.25;
@@ -177,6 +178,11 @@ impl ZoomText {
         Self { ctx, glyph }
     }
 
+    /// The zoom whose glyph pictures this frame uses.
+    pub(crate) fn glyph_zoom(&self) -> f32 {
+        self.glyph
+    }
+
     /// Whether the glyph pictures are the ones of zoom 1: then this module does
     /// nothing and the painter draws exactly what it drew before.
     pub(crate) fn is_logical(&self) -> bool {
@@ -285,6 +291,27 @@ pub(crate) fn text(painter: &Painter, pos: Pos2, anchor: Align2, text: &str, fon
     let rect = anchor.anchor_size(pos, galley.size());
     painter.galley(rect.min, galley, color);
     rect
+}
+
+/// One text run of the terminal: `text` at the screen size, drawn from `pos`.
+///
+/// `font` is already the size of the screen, from [`ZoomText::font`]: the
+/// rasteriser of the caller holds the lock of the context, so this path cannot
+/// ask the state of the zoom for anything.
+pub(crate) fn text_shape(
+    fonts: &mut FontsView<'_>,
+    pos: Pos2,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    zoom: &ZoomText,
+) -> Shape {
+    if zoom.is_logical() {
+        return Shape::text(fonts, pos, Align2::LEFT_TOP, text, font.clone(), color);
+    }
+    let galley = fonts.layout_no_wrap(text.to_owned(), font.clone(), color);
+    let galley = sharpen(galley, zoom.inverse());
+    Shape::Text(TextShape::new(pos, galley, color))
 }
 
 /// A galley whose glyph offsets are divided by `inverse`'s reciprocal, so that

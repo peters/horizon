@@ -5,6 +5,7 @@ use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor};
 use egui::{Color32, CornerRadius, Pos2, Rect, Shape, StrokeKind, Vec2};
 
 use crate::theme;
+use crate::zoom_text::{self, ZoomText};
 
 use super::layout::{GridMetrics, usize_to_f32};
 
@@ -33,10 +34,12 @@ struct GridCacheKey {
     char_width_bits: u32,
     line_height_bits: u32,
     display_offset: usize,
+    /// The zoom whose glyph pictures the shapes of the cache hold.
+    glyph_bits: u32,
 }
 
 impl GridCacheKey {
-    fn new(rect: Rect, display_offset: usize, metrics: &GridMetrics) -> Self {
+    fn new(rect: Rect, display_offset: usize, metrics: &GridMetrics, glyph_zoom: f32) -> Self {
         Self {
             rect_min_x_bits: rect.min.x.to_bits(),
             rect_min_y_bits: rect.min.y.to_bits(),
@@ -45,6 +48,7 @@ impl GridCacheKey {
             char_width_bits: metrics.char_width.to_bits(),
             line_height_bits: metrics.line_height.to_bits(),
             display_offset,
+            glyph_bits: glyph_zoom.to_bits(),
         }
     }
 }
@@ -74,7 +78,8 @@ pub(super) fn render_grid(
     allow_grid_cache: bool,
 ) {
     let painter = ui.painter_at(rect);
-    let key = GridCacheKey::new(rect, content.display_offset, metrics);
+    let zoom = ZoomText::of(&painter);
+    let key = GridCacheKey::new(rect, content.display_offset, metrics, zoom.glyph_zoom());
     let has_selection = content.selection.is_some();
 
     if let Some(grid_cache) = grid_cache {
@@ -87,7 +92,7 @@ pub(super) fn render_grid(
         {
             grid_cache.rebuilds += 1;
         }
-        let shapes = build_grid_shapes(ui, rect, content, metrics);
+        let shapes = build_grid_shapes(ui, rect, content, metrics, &zoom);
         if has_selection {
             // Copy/cut clear the model selection outside this render pass, and
             // the cache key tracks only geometry and scroll offset. Retaining
@@ -104,15 +109,24 @@ pub(super) fn render_grid(
         return;
     }
 
-    painter.extend(build_grid_shapes(ui, rect, content, metrics));
+    painter.extend(build_grid_shapes(ui, rect, content, metrics, &zoom));
 }
 
 #[profiling::function]
-fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, metrics: &GridMetrics) -> Vec<Shape> {
+fn build_grid_shapes(
+    ui: &egui::Ui,
+    rect: Rect,
+    content: RenderableContent<'_>,
+    metrics: &GridMetrics,
+    zoom: &ZoomText,
+) -> Vec<Shape> {
     // Text runs can legitimately span cells whose background changes later in the line.
     // Keep backgrounds in a separate layer so those later fills never paint over glyphs.
     let mut background_shapes = Vec::new();
     let mut foreground_shapes = Vec::new();
+    // The size of the screen that the glyphs of this grid are made for. It is
+    // asked before the lock of the rasteriser is taken.
+    let cell_font = zoom.font(&metrics.font_id);
 
     ui.fonts_mut(|fonts| {
         let mut text_run: Option<TextRun> = None;
@@ -163,7 +177,7 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                     continue;
                 }
 
-                flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
+                flush_text_run(fonts, &mut foreground_shapes, &cell_font, zoom, &mut text_run);
                 if ch != ' ' {
                     let mut text = String::with_capacity(64);
                     text.push(ch);
@@ -179,25 +193,25 @@ fn build_grid_shapes(ui: &egui::Ui, rect: Rect, content: RenderableContent<'_>, 
                 continue;
             }
 
-            flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
+            flush_text_run(fonts, &mut foreground_shapes, &cell_font, zoom, &mut text_run);
 
             if let Some(text) = cell_text(indexed.cell)
                 && !text.is_empty()
             {
-                foreground_shapes.push(Shape::text(
+                foreground_shapes.push(zoom_text::text_shape(
                     fonts,
                     Pos2::new(x, y),
-                    egui::Align2::LEFT_TOP,
-                    text,
-                    metrics.font_id.clone(),
+                    &text,
+                    &cell_font,
                     fg,
+                    zoom,
                 ));
             }
 
             append_cell_decoration(&mut foreground_shapes, cell_rect, indexed.cell, content.colors, fg);
         }
 
-        flush_text_run(fonts, &mut foreground_shapes, metrics, &mut text_run);
+        flush_text_run(fonts, &mut foreground_shapes, &cell_font, zoom, &mut text_run);
         flush_background_run(&mut background_shapes, &mut background_run);
     });
 
@@ -350,7 +364,8 @@ fn cell_is_spacer(cell: &Cell) -> bool {
 fn flush_text_run(
     fonts: &mut egui::epaint::text::FontsView<'_>,
     shapes: &mut Vec<Shape>,
-    metrics: &GridMetrics,
+    font: &egui::FontId,
+    zoom: &ZoomText,
     run: &mut Option<TextRun>,
 ) {
     let Some(run) = run.take() else {
@@ -360,13 +375,13 @@ fn flush_text_run(
         return;
     }
 
-    shapes.push(Shape::text(
+    shapes.push(zoom_text::text_shape(
         fonts,
         Pos2::new(run.x, run.y),
-        egui::Align2::LEFT_TOP,
-        run.text,
-        metrics.font_id.clone(),
+        &run.text,
+        font,
         run.fg,
+        zoom,
     ));
 }
 
@@ -547,6 +562,84 @@ mod tests {
                 });
             })
             .discard_textures();
+    }
+
+    /// The shapes of one grid pass inside the layer of a canvas at `zoom`, in a
+    /// fresh context so that the frame is the first one its state sees.
+    fn grid_shapes_in_canvas(zoom: f32, metrics: &GridMetrics) -> Vec<Shape> {
+        let ctx = egui::Context::default();
+        let term = test_term_with_text("hello world\r\nabc");
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(96.0, 64.0));
+        let output = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
+                ui.ctx()
+                    .set_transform_layer(layer, egui::emath::TSTransform::from_scaling(zoom));
+                let child = egui::Ui::new(
+                    ui.ctx().clone(),
+                    egui::Id::unique("grid"),
+                    egui::UiBuilder::new().layer_id(layer).max_rect(rect),
+                );
+                render_grid(&child, rect, term.renderable_content(), metrics, None, false);
+            })
+            .discard_textures();
+        output.shapes.into_iter().map(|clipped| clipped.shape).collect()
+    }
+
+    /// The position and the glyph size of every text run of a shape list.
+    fn text_runs(shapes: &[Shape]) -> Vec<(Pos2, f32)> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some((text.pos, text.galley.job.sections[0].format.font_id.size)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_grid_keeps_its_cells_and_makes_its_glyphs_for_the_zoom() {
+        let metrics = GridMetrics {
+            char_width: 8.0,
+            line_height: 16.0,
+            font_id: FontId::monospace(13.0),
+        };
+
+        let plain = text_runs(&grid_shapes_in_canvas(1.0, &metrics));
+        let small = text_runs(&grid_shapes_in_canvas(0.67, &metrics));
+        let big = text_runs(&grid_shapes_in_canvas(1.3, &metrics));
+
+        assert!(!plain.is_empty(), "the grid paints its text");
+        // The layer transform scales the shapes of the pass, so the origin of a
+        // run is read back in the coordinates of the canvas.
+        let origins = |runs: &[(Pos2, f32)], zoom: f32| {
+            runs.iter()
+                .map(|(pos, _)| [pos.x / zoom, pos.y / zoom])
+                .collect::<Vec<[f32; 2]>>()
+        };
+        let expected = origins(&plain, 1.0);
+        for (runs, zoom) in [(&small, 0.67), (&big, 1.3)] {
+            let found = origins(runs, zoom);
+            assert_eq!(found.len(), expected.len());
+            for (found, expected) in found.iter().zip(&expected) {
+                assert!(
+                    (found[0] - expected[0]).abs() < 0.01 && (found[1] - expected[1]).abs() < 0.01,
+                    "a cell is where the grid puts it: {found:?} against {expected:?} at {zoom}"
+                );
+            }
+        }
+        assert!(
+            (plain[0].1 - 13.0).abs() < f32::EPSILON,
+            "zoom 1 keeps the terminal font"
+        );
+        assert!(
+            (small[0].1 - 8.75).abs() < f32::EPSILON,
+            "0.67 of 13 points is 8.71, on the ladder 8.75"
+        );
+        assert!(
+            (big[0].1 - 17.0).abs() < f32::EPSILON,
+            "1.3 of 13 points is 16.9, on the ladder 17.0"
+        );
     }
 
     #[test]
