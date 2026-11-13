@@ -32,6 +32,7 @@ mod test_egui;
 mod text;
 mod theme;
 mod typeface;
+mod zoom_text;
 
 use std::fmt::Write as _;
 

@@ -464,7 +464,7 @@ fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y:
             section.format.coords = crate::typeface::Weight::Semibold.coords();
         }
     }
-    let galley = painter.layout_job(job);
+    let galley = crate::zoom_text::layout_job(painter, job);
     let text_height = galley.size().y;
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
 }
@@ -589,7 +589,9 @@ fn paint_ssh_status_badge(
     } else {
         close_rect.min.x - 8.0
     };
-    let text_width = painter.layout_no_wrap(badge_text.clone(), font.clone(), color).size().x;
+    let text_width = crate::zoom_text::layout_no_wrap(painter, badge_text.clone(), font.clone(), color)
+        .size()
+        .x;
     let badge_width = text_width + 16.0;
     let badge_height = 18.0;
     let badge_left = (badge_right - badge_width).max(titlebar_rect.min.x + 60.0);
@@ -668,8 +670,14 @@ pub(super) fn show_inline_rename_editor(
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
+    let name_font = font.clone();
+    let mut layouter = move |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+        let job = egui::text::LayoutJob::simple(buffer.as_str().to_owned(), name_font.clone(), theme::FG(), wrap_width);
+        crate::zoom_text::layout_job(ui.painter(), job)
+    };
     let edit = egui::TextEdit::singleline(buffer)
         .font(font)
+        .layouter(&mut layouter)
         .text_color(theme::FG())
         .frame(egui::Frame::NONE)
         .desired_width(rect.width())

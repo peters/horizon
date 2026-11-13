@@ -81,7 +81,7 @@ pub(super) fn paint_workspace_label(
         if is_active { theme::FG() } else { theme::FG_SOFT() },
         max_text_width,
     );
-    let galley = painter.layout_job(job);
+    let galley = crate::zoom_text::layout_job(painter, job);
     painter.galley(
         Pos2::new(text_x, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -112,18 +112,20 @@ pub(super) fn paint_empty_workspace_hint(ui: &mut egui::Ui, rect: Rect, label_re
     let painter = ui.painter();
     let copy_pos = Pos2::new(rect.min.x + 18.0, label_rect.max.y + 22.0);
 
-    painter.text(
+    crate::zoom_text::text(
+        painter,
         copy_pos,
         egui::Align2::LEFT_TOP,
         "Drag this workspace anywhere on the board.",
-        egui::FontId::proportional(12.0),
+        &egui::FontId::proportional(12.0),
         theme::alpha(theme::FG_SOFT(), 210),
     );
-    painter.text(
+    crate::zoom_text::text(
+        painter,
         copy_pos + Vec2::new(0.0, 20.0),
         egui::Align2::LEFT_TOP,
         "New terminals will land inside this frame.",
-        egui::FontId::proportional(10.5),
+        &egui::FontId::proportional(10.5),
         theme::alpha(theme::blend(theme::FG_DIM(), color, 0.18), 196),
     );
 }
