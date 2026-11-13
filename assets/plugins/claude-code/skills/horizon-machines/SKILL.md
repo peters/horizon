@@ -139,8 +139,10 @@ The exact documents are under [Card documents](#card-documents).
 
 Make one card. Put a `list` with `selection: single`, one row per provider, and
 mark the best choice with `selected: true`. The best row is a provider that step
-1 proves and that can rent; a row that cannot rent gets `tone: warn` and the
-reason. Add `Continue` with tone `primary` and `Cancel`, then wait for a click.
+1 proves and that can rent: it carries the badge `Ready` with tone `ok`. A
+provider that cannot rent is a row with `disabled: true`, whose second line names
+the command that signs in, in the same words as the card of `horizon-setup`. Add
+`Continue` with tone `primary` and `Cancel`, then wait for a click.
 
 Pick the machine name now: `[a-z0-9-]{1,40}`, with no leading or trailing `-`,
 for example `build-1`. The name is the card title, the key name, the
@@ -150,8 +152,12 @@ for example `build-1`. The name is the card title, the key name, the
 
 Ask in the same way on the same card: replace the list with the regions and keep
 `Continue` and `Cancel`. Keep at most 8 rows, mark the sensible first choice
-`selected: true`, and show no price. Then ask for the machine type, again with at
-most 8 rows. The click carries the chosen rows in `selected`.
+`selected: true`, and draw the regions as `layout: pills` under the caption
+`Place` when they are short names. Then ask for the machine type, again with at
+most 8 rows under the caption `Size`, and put the list price of each type in its
+`value` as the provider CLI answered it in this run, such as
+`0.0079 EUR / hour`. A type whose price the CLI does not answer holds
+`price not read`. The click carries the chosen rows in `selected`.
 
 ### 4. Make the key and rent
 
@@ -175,11 +181,27 @@ in your notes to delete later.
 
 ### 5. Wait for SSH and prepare the machine
 
-A rent is not ready when the create command returns. Update the card to a
-`progress` component that says what you wait for, such as
-`{"type": "progress", "label": "Waiting for SSH", "percent": 10}`, then connect
-with the machine key and the one form below. Use the `user` of the provider
-reference; add `-p <port>` only where the reference names a port.
+A rent is not ready when the create command returns. Update the card to the step
+list of this work, with the time of each finished step and `now` for the step
+that runs, as the card of `horizon-setup` draws it:
+
+```json
+{"components": [
+  {"type": "heading", "text": "Renting the machine", "subtitle": "Small, Helsinki, Hetzner.",
+   "badge": {"text": "Working", "tone": "info"}},
+  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 5"},
+  {"type": "steps", "steps": [
+    {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
+    {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
+    {"label": "Wait for SSH with the machine key", "state": "now", "at": "now"},
+    {"label": "Check tmux on the machine"},
+    {"label": "Add the machine to Machines"}]},
+  {"type": "buttons", "items": [{"id": "stop", "label": "Stop and delete the machine", "tone": "danger"}]}
+]}
+```
+
+Then connect with the machine key and the one form below. Use the `user` of the
+provider reference; add `-p <port>` only where the reference names a port.
 
 ```
 ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
@@ -241,9 +263,20 @@ Update the card. The heading is the name, the subtitle is the provider and the
 region, and the badge is the state that the CLI reports: `Running` with `ok` when
 the machine answers, `Starting` with `info`, `Stopped` with `warn`, and `danger`
 with the provider's own words when a command failed. Give `kv` rows for Type,
-Address, Session and Rented at, and draw the address and the session name in
-`mono`. Then give `Connect` with tone `primary`, `Stop`, and `Delete` in `danger`.
-When the machine is stopped, draw `Start` instead of `Stop`.
+Address, Session, Rented at and Cost, draw the address and the session name in
+`mono`, and give the cost as the provider's list price that you read. Then give
+`Connect` with tone `primary`, `Put the Horizon server here`, `Add a browser`,
+`Stop`, and `Delete` in `danger`. When the machine is stopped, draw `Start`
+instead of `Stop`.
+
+The two buttons that name Horizon hand the work to the skill `horizon-setup`,
+with that goal and this machine as its place:
+
+- `Put the Horizon server here` continues with the goal `server` on this machine.
+- `Add a browser` continues with the goal `browser` on this machine.
+
+Read that skill before you draw them, and let it write the cards of those flows.
+Tell the person in a `text` line that the two buttons belong to Set up.
 
 ### 7. Listen
 
@@ -399,12 +432,14 @@ Choose the provider:
 {"components": [
   {"type": "heading", "text": "New machine", "subtitle": "Which cloud?"},
   {"type": "list", "selection": "single", "rows": [
-    {"id": "provider.hetzner", "title": "Hetzner", "subtitle": "hcloud 1.69.0, signed in", "selected": true},
-    {"id": "provider.azure", "title": "Azure", "subtitle": "az is not installed", "tone": "warn"},
-    {"id": "provider.gcp", "title": "GCP", "subtitle": "no active gcloud account", "tone": "warn"},
-    {"id": "provider.runpod", "title": "RunPod", "subtitle": "runpodctl 2.14.0, signed in"},
-    {"id": "provider.aws", "title": "AWS", "subtitle": "ec2:RunInstances is denied", "tone": "warn"}]},
-  {"type": "text", "text": "Hetzner and RunPod can rent now. RunPod has a GPU box."},
+    {"id": "provider.hetzner", "title": "Hetzner", "subtitle": "Signed in with hcloud",
+     "badge": {"text": "Ready", "tone": "ok"}, "selected": true},
+    {"id": "provider.azure", "title": "Azure", "subtitle": "Not signed in. Run az login", "disabled": true},
+    {"id": "provider.gcp", "title": "Google Cloud", "subtitle": "Not signed in. Run gcloud auth login", "disabled": true},
+    {"id": "provider.runpod", "title": "RunPod", "subtitle": "GPU machines. No RUNPOD_API_KEY is stored",
+     "disabled": true},
+    {"id": "provider.aws", "title": "AWS", "subtitle": "No profile found. Run aws configure sso", "disabled": true}]},
+  {"type": "text", "text": "Hetzner can rent now. The other providers need the command of their line first."},
   {"type": "buttons", "items": [
     {"id": "continue", "label": "Continue", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
 ```
@@ -420,9 +455,11 @@ The machine runs. The person may connect, stop or delete it:
     {"label": "Address", "value": "203.0.113.10", "mono": true},
     {"label": "Session", "value": "build-1", "mono": true},
     {"label": "Rented at", "value": "2026-11-10 19:53 UTC"}]},
-  {"type": "text", "text": "Connect gives a shell. Port 22 is open to your address only."},
+  {"type": "text", "text": "Connect gives a shell. Port 22 is open to your address only. The two buttons below belong to Set up."},
   {"type": "buttons", "items": [
     {"id": "connect", "label": "Connect", "tone": "primary"},
+    {"id": "server_here", "label": "Put the Horizon server here"},
+    {"id": "browser_here", "label": "Add a browser"},
     {"id": "stop", "label": "Stop"}, {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 
@@ -451,7 +488,10 @@ After the delete and the key removal, update the card to this document:
 
 ## Rules
 
-- Show no price on a card. If the person asks for a price, answer in the terminal.
+- A price on a card is the provider's value read in this run, in the row `value`
+  of the machine type or in the `Cost` row of the machine card. Never write a
+  price from memory or from a reference file, and write `price not read` when the
+  CLI answers none. A price that you did not read is a false claim.
 - Your own connections use the form of step 5, with the two paths that
   `machine_key` answered. Put no credential, token or private key text in a
   command line, a log or a card.

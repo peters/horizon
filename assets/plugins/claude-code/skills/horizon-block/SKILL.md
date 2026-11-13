@@ -18,8 +18,8 @@ panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`,
-`machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys` and
-`delete_machine_key`.
+`machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`,
+`delete_machine_key`, `server_link_request` and `browser_host_request`.
 
 ## Create a card
 
@@ -374,6 +374,47 @@ ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
 The person's own ssh never needs this file: `open_terminal` with `key` builds
 the same options itself, and the person types in that panel.
 
+## Ask the person for a setting
+
+Two settings of Horizon decide where the machine list, the keys and the settings
+of the person go. An agent states one change and only the person confirms it:
+`server_link_request` names the computer that runs the Horizon server, and
+`browser_host_request` names the machine whose browser serves the new browser
+panels. Horizon draws its own card for the question, in the calling workspace,
+and you can press nothing.
+
+```json
+{"operation": "server_link_request", "ssh_target": "server-vm",
+ "command": "/home/person/bin/horizon --server-link"}
+```
+
+```json
+{"operation": "browser_host_request", "ssh_target": "browser-vm",
+ "profile": "work", "engine": "chromium"}
+```
+
+- The fields pass the rule of the settings field that stores them before a card
+  exists: `ssh_target` is one SSH name, `command` is one command of letters,
+  digits and `._:/=@+-`, and `profile` is 1 to 40 characters of `a-z`, `0-9` and
+  `-`. A request that fails the rule is `invalid_request` and draws no card.
+- `command` is optional. Without it the link runs `horizon --server-link`.
+- `engine` is `chromium` or `firefox`. Only Chromium runs on another machine, so
+  `firefox` is `engine_unavailable` and draws no card.
+- The card states the values exactly as the settings will hold them, and Horizon
+  trims the target and the command before it writes them.
+- The answer is `server_link` or `browser_host`, with `answer`: `confirmed`,
+  `declined` or `timed_out`. A `confirmed` `server_link` also carries `start`:
+  `linked` when the running Horizon follows the new entry now, or
+  `restart_needed` when the person starts Horizon again one time.
+- The wait is five minutes, and the card goes away with the wait. A second
+  request while one waits is `request_pending`. A person who closes the card
+  pressed neither button, so the answer is `timed_out`.
+- The browser host entry applies at the next start of Horizon. Say so on your
+  own card after a `confirmed` answer.
+- Never read a settings file and never write one: this operation is the only
+  path from an agent to these two settings, and only a press of the person moves
+  it.
+
 ## The document
 
 A document holds components in draw order, and only these components:
@@ -564,6 +605,10 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - `invalid_request`: `open_terminal` named both `ssh` and `machine`, neither, or
   one of `ssh`, `key` and `remote_command` together with `machine`. Pass one
   target and let the record hold the rest.
+- `request_pending`: this Horizon already asks the person about a setting. Wait
+  for that card to be answered or closed, or read its answer first.
+- `engine_unavailable`: a browser host runs Chromium only. Firefox on another
+  machine is not built yet.
 - `invalid_machine_name`: the machine name breaks the key name rule. The message
   names it.
 - `invalid_session_name`: the tmux session name breaks its rule. The message
@@ -579,8 +624,8 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   incomplete, `ssh-keygen` is missing or failed, or Horizon could not read or
   delete it.
 - `request_expired`: Horizon did not apply the request in 10 seconds, or in the
-  10 seconds and the wait that a `next_click` asks for. Call `list` before you
-  retry, because the change may have completed.
+  10 seconds and the wait that a `next_click` or a setting request asks for. Call
+  `list` before you retry, because the change may have completed.
 - `host_timeout`: Horizon did not answer within 15 seconds, or within the wait
   of a `next_click` plus 5 seconds. Call `list` before you retry a mutation;
   older Horizon hosts do not support cards.
@@ -594,6 +639,9 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - The selection of a row is Horizon state, not a click of its own: it reaches
   the agent with the next click, and it starts at the row the document marks
   `selected`.
+- A setting request holds one card of Horizon, not a card of the agent. You
+  cannot change it, hide it or close it, and no click of it reaches you: only the
+  answer of the request does.
 - A wait without `panel_id` covers every card that the agent owns now, also one
   that it creates while the wait runs.
 - A click reaches an agent at most once. There is no replay, and the queue of a
