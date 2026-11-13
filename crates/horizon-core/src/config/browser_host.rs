@@ -4,10 +4,10 @@
 //! is then the ordinary browser panel, whose Chromium runs on that machine over a
 //! loopback SSH forward. This module owns the entry and the rule of a target and
 //! a profile; the tunnel lives in `horizon-browser-control::ssh_forward` and the
-//! panel in `crate::browser::attached_host`. The settings window edits the entry,
-//! and a change of it applies at the next start.
-
-use std::sync::OnceLock;
+//! panel in `crate::browser::attached_host`. The settings window and the card of
+//! `browser_host_request` edit the entry, and a change of it serves every browser
+//! panel that is created after it: the host of this app reads the entry of the
+//! settings in memory and hands it to the create, so no start is needed.
 
 use serde::{Deserialize, Serialize};
 
@@ -129,28 +129,6 @@ pub fn valid_driver_command(command: &str) -> bool {
         && !command.starts_with(' ')
         && !command.ends_with(' ')
         && !command.contains("  ")
-}
-
-/// The browser host of this Horizon process, read once from the settings store
-/// at start.
-///
-/// A panel resolves its launch arguments on the UI thread, and a restore of a
-/// saved panel takes the same path, so the value is held here instead of reading
-/// the store again on each spawn. A change of the entry applies at the next
-/// start, as the agent integration that writes the same entry does.
-static BROWSER_HOST: OnceLock<Option<BrowserHostConfig>> = OnceLock::new();
-
-/// Set the browser host that the settings name. The first call wins, and it is
-/// the start of Horizon that makes it.
-pub fn configure_browser_host(browser_host: Option<BrowserHostConfig>) {
-    let _ = BROWSER_HOST.set(browser_host);
-}
-
-/// The browser host that the settings named at start, or `None` when a browser
-/// panel of this Horizon runs on this computer.
-#[must_use]
-pub fn browser_host() -> Option<&'static BrowserHostConfig> {
-    BROWSER_HOST.get().and_then(Option::as_ref)
 }
 
 impl BrowserHostConfig {

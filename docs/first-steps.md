@@ -257,7 +257,9 @@ drawn, and a row says `price not read` when the provider answered no price.
 Two changes need your press on a card that Horizon draws itself: the server
 entry and the browser host. An agent cannot press those cards. When you press
 `Link`, Horizon writes the entry and starts the link at once, so you do not start
-Horizon again. A browser host entry applies at the next start of Horizon.
+Horizon again. A browser host entry serves each browser panel that you open after
+the press, so that change needs no start either. A browser panel that is open
+keeps its browser until you close it.
 
 When a step fails, the card says what failed, what was undone and what is left,
 with `Try again` and `Stop`. A secret, such as a token or a private key, never

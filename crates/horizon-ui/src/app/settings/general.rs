@@ -167,8 +167,8 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
 }
 
 /// The entry that says which machine serves the browser panels, and the pointer to
-/// the tab that holds the server of the machine list. Both apply at the next
-/// start.
+/// the tab that holds the server of the machine list. The browser host serves the
+/// panels that a create makes after the change.
 fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     super::section_heading(ui, "Browser host");
@@ -176,7 +176,8 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
         super::dim_label(
             ui,
             "Browser panels open in that profile of that machine over SSH. A blank SSH target and no \
-             machine keep the browser panels of this computer. A change applies at the next start.",
+             machine keep the browser panels of this computer. A change serves each browser panel that \
+             you open after it; a panel that is open now keeps its browser until you close it.",
         );
         ui.add_space(8.0);
 

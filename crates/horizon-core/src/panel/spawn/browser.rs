@@ -47,12 +47,8 @@ pub(super) fn restored_browser_mode(
 pub(super) fn browser_spawn_mode(
     mode: BrowserSpawnMode,
     browser_host: Option<&crate::BrowserHostConfig>,
-    follows_browser_host: bool,
     login: Option<SshConnection>,
 ) -> Result<BrowserSpawnMode> {
-    if !follows_browser_host {
-        return Ok(mode);
-    }
     let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
         return Ok(mode);
     };

@@ -1,7 +1,7 @@
 use horizon_core::{Config, RuntimeState, StartupDecision};
 
 use super::{SettingsAction, SettingsStatus};
-use crate::app::test_support::{run_app_frame, test_app_with_startup};
+use crate::app::test_support::{browser_panel_options, run_app_frame, test_app_with_startup};
 
 #[test]
 fn a_changed_store_reaches_the_window_through_the_settings_worker() {
@@ -484,4 +484,36 @@ fn a_chosen_desktop_notification_reaches_the_draft() {
     assert!(document.contains("\"notifications\": \"off\""), "{document}");
     let read = Config::from_json(&document).expect("the settings of the draft");
     assert_eq!(read.features.notifications, NotificationSetting::Off);
+}
+
+/// A save of the browser host of the Settings window serves the very next
+/// browser panel of this run, and it needs no start.
+#[test]
+fn a_save_of_the_browser_host_serves_the_next_browser_panel() {
+    let (_temp, _ctx, mut app) = test_app_with_startup(ephemeral());
+    app.toggle_settings();
+    if let Some(editor) = app.settings.as_mut() {
+        editor.config.browser_host.ssh_target = Some("browser-vm".to_owned());
+        editor.config.browser_host.profile = Some("work".to_owned());
+        editor.dirty = true;
+    }
+
+    app.save_settings();
+    app.wait_for_settings_io();
+
+    let workspace = app.board.ensure_workspace();
+    let panel = app
+        .create_panel_with_options_beside(browser_panel_options(&app, true), workspace, None)
+        .expect("a browser panel");
+    let browser = app
+        .board
+        .panel(panel)
+        .and_then(|panel| panel.browser())
+        .expect("a browser panel");
+    assert_eq!(
+        browser.attached_host_target(),
+        Some("browser-vm"),
+        "the panel that the person opened after the save uses the host of the save"
+    );
+    assert_eq!(browser.attached_host_profile(), Some("work"));
 }

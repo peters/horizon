@@ -438,8 +438,9 @@ and you can press nothing.
 - The wait is five minutes, and the card goes away with the wait. A second
   request while one waits is `request_pending`. A person who closes the card
   pressed neither button, so the answer is `timed_out`.
-- The browser host entry applies at the next start of Horizon. Say so on your
-  own card after a `confirmed` answer.
+- A `confirmed` browser host entry serves every browser panel that a create
+  makes after the answer, and no start of Horizon is needed. A panel that was
+  open before the answer keeps its browser. Say that on your own card.
 - Never read a settings file and never write one: this operation is the only
   path from an agent to these two settings, and only a press of the person moves
   it.

@@ -8,34 +8,51 @@
 //!
 //! The record is what this computer already holds in memory and the key binding is
 //! a name that resolves to the key folder, so this reads no file and runs on the
-//! frame that creates the panel. Every panel of a person and every panel of an
-//! agent takes this one path, so no create starts an `ssh` that would ask a machine
-//! of the list for a key that it does not have.
+//! frame that creates the panel. The entry is the one that the settings hold now,
+//! because the app keeps them in memory, so a panel that is created after a
+//! confirmed change uses that host at once and no start is needed. Every panel of
+//! a person and every panel of an agent takes this one path, so no create starts
+//! an `ssh` that would ask a machine of the list for a key that it does not have.
 
 use horizon_core::{BrowserHostConfig, MachineKeys, PanelKind, PanelOptions, SshConnection};
 
 use super::HorizonApp;
 
 impl HorizonApp {
-    /// Gives a browser panel that follows the browser host of this run the login
-    /// of the machine that the entry names.
+    /// Gives a browser panel that follows the browser host of this run the entry of
+    /// the settings and, when it names a machine of the list, the login of that
+    /// machine.
     ///
-    /// A panel of another kind, a panel that names its own target, and a browser
-    /// host of the SSH configuration of the person change nothing.
+    /// The entry is the one that the settings hold now, in memory, so a panel that
+    /// is created after a confirmed change uses that host without a new start. A
+    /// panel of another kind, a panel that names its own target, and a saved panel
+    /// change nothing.
     ///
     /// # Errors
     /// One sentence when the entry names a machine that the machine list of this
     /// computer does not hold, or whose key this computer does not hold: a create
     /// that says why is better than a panel that fails later without the reason.
     pub(in crate::app) fn resolve_browser_host_login(&self, options: &mut PanelOptions) -> Result<(), String> {
-        match horizon_core::browser_host() {
+        match self.followed_browser_host(options) {
             Some(browser_host) => self.apply_browser_host_login(browser_host, options),
             None => Ok(()),
         }
     }
 
+    /// The browser host that a create of `options` follows, as the settings hold it
+    /// now, or `None` for a panel that keeps its own browser.
+    ///
+    /// The entry travels to the create in the options, because the spawn of a panel
+    /// runs in `horizon-core` and receives no settings.
+    fn followed_browser_host(&self, options: &PanelOptions) -> Option<&BrowserHostConfig> {
+        if options.kind != PanelKind::Browser || !options.follows_browser_host || options.browser_host.is_some() {
+            return None;
+        }
+        Some(&self.template_config.browser_host)
+    }
+
     /// [`Self::resolve_browser_host_login`] for one entry, which is a parameter so
-    /// that a test reads no process-wide setting.
+    /// that a test names the entry that it judges.
     fn apply_browser_host_login(
         &self,
         browser_host: &BrowserHostConfig,
@@ -44,6 +61,7 @@ impl HorizonApp {
         if options.kind != PanelKind::Browser || !options.follows_browser_host || options.browser_host.is_some() {
             return Ok(());
         }
+        options.browser_host_entry = Some(browser_host.clone());
         let Some(machine) = browser_host.machine() else {
             return Ok(());
         };

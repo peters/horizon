@@ -52,6 +52,27 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
     run_app_frame_with_input(ctx, app, RawInput::default());
 }
 
+/// The options of a browser panel of a test: a program that never starts, so the
+/// panel starts no browser and a test judges the route that the host chose.
+///
+/// `follows_browser_host` is the choice of the caller that the real create makes:
+/// the preset picker and an agent's create follow the browser host of the
+/// settings, and a saved panel or a page of a local profile does not.
+pub(super) fn browser_panel_options(app: &HorizonApp, follows_browser_host: bool) -> horizon_core::PanelOptions {
+    let root = app.session_store.home().root();
+    horizon_core::PanelOptions {
+        kind: PanelKind::Browser,
+        command: Some("https://example.test/".to_owned()),
+        follows_browser_host,
+        browser_config: Some(horizon_core::browser::BrowserConfig {
+            command: Some(root.join("no-browser").to_string_lossy().into_owned()),
+            profile_root: Some(root.join("browser-profiles")),
+            ..horizon_core::browser::BrowserConfig::default()
+        }),
+        ..horizon_core::PanelOptions::default()
+    }
+}
+
 /// Runs one frame of the window and answers the visuals that its panels drew with.
 ///
 /// The root ui of a frame takes the style of the theme that was active when the

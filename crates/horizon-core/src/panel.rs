@@ -189,6 +189,12 @@ pub struct PanelOptions {
     /// it: a page that an agent asks for, a page of a local profile that a panel
     /// duplicates and a saved panel keep the backend that their caller chose.
     pub follows_browser_host: bool,
+    /// The browser host entry that the settings hold now, for a panel that
+    /// follows it. The host of this app reads the entry of the settings in
+    /// memory and writes it here when it creates the panel, so a panel that is
+    /// created after a confirmed change uses that host at once, without a new
+    /// start. `None` keeps the local browser.
+    pub browser_host_entry: Option<crate::BrowserHostConfig>,
     /// Run the browser panel at a remote grid with this prepared request
     /// instead of launching a local browser.
     pub remote_session: Option<horizon_browser::RemoteSessionRequest>,
@@ -247,6 +253,7 @@ impl Default for PanelOptions {
             browser_config: None,
             browser_session_id: None,
             follows_browser_host: false,
+            browser_host_entry: None,
             remote_session: None,
             remote_target: None,
             browser_host: None,

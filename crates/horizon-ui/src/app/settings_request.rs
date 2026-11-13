@@ -15,9 +15,9 @@
 //! Settings window before any card is drawn.
 //!
 //! The store write runs on the settings worker, as the save of the Settings
-//! window does, so no frame waits for a disk. A confirmed server entry also
-//! starts the link of it now, as a join does; the browser host entry applies at
-//! the next start, as the Settings window states.
+//! window does, so no frame waits for a disk. A confirmed entry serves this run
+//! at once: a server entry starts its link as a join does, and a browser host
+//! entry is the host of every browser panel that a create makes after the press.
 
 use std::path::{Path, PathBuf};
 
@@ -68,8 +68,9 @@ pub(in crate::app) const LINK_ANSWER_BOUND: std::time::Duration = std::time::Dur
 /// panels use, in the words of the Settings window. A Firefox host runs a driver
 /// of Horizon beside its browser, so that machine needs the same Horizon.
 pub(in crate::app) const BROWSER_USES: &str = "Browser panels open in that profile of that machine, over SSH. A Firefox host runs Firefox and geckodriver and needs a horizon binary of the same version on that machine; a Chromium host needs a Chromium program there and no horizon.";
-/// The line of the browser card that says when the entry applies.
-pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the next start of Horizon.";
+/// The line of the browser card that says when the entry serves a panel: the
+/// panels that a create makes after the press, and never the open ones.
+pub(in crate::app) const BROWSER_APPLIES: &str = "Browser panels that you open after this use that host. A panel that is open now keeps its browser until you close it.";
 
 /// The host that the card asks about, as the request named it and as the store
 /// will hold it: an SSH target of the person, or a machine of the machine list.
@@ -331,8 +332,10 @@ impl HorizonApp {
         Ok(EntryStart::Linked)
     }
 
-    /// Writes `browser_host` of this computer, which the browser panels read at
-    /// the next start of Horizon, as the Settings window states.
+    /// Writes `browser_host` of this computer and applies it to this run, as the
+    /// save of the Settings window does: the entry is the entry of the settings
+    /// that this app holds, so every browser panel that a create makes after this
+    /// press uses that host.
     ///
     /// The card names the whole entry: an address or a machine that an earlier
     /// entry wrote does not survive it, because a browser host names one route.
@@ -734,7 +737,7 @@ fn browser_document(entry: &ServerEntry, profile: &str, engine: BrowserHostEngin
                 text: BROWSER_USES.to_owned(),
             },
             Component::Text {
-                text: BROWSER_NEXT_START.to_owned(),
+                text: BROWSER_APPLIES.to_owned(),
             },
             Component::Buttons {
                 items: vec![

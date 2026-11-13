@@ -436,10 +436,11 @@ computer.
   from the other users of that machine.
 
 You cannot set the `browser_host` entry yourself: it belongs to the settings of
-the person, and a change applies at the next start of Horizon. When no panel
-runs on another machine, the tools of the panels of this computer are the same
-tools, and a panel of another machine appears in `browser_list` like any other
-panel.
+the person. A change of it serves the browser panel that `browser_create` makes
+after it, and no start of Horizon is needed; a panel that is already open keeps
+the browser that it has. When no panel runs on another machine, the tools of the
+panels of this computer are the same tools, and a panel of another machine
+appears in `browser_list` like any other panel.
 
 ## Actions, attachments, and screenshots
 

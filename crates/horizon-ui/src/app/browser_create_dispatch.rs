@@ -95,10 +95,13 @@ impl HorizonApp {
             return;
         }
         let backend = request.backend.unwrap_or(self.template_config.browser.backend);
-        // A panel that follows the browser host runs in the Chromium of that
-        // machine, so an engine that the host does not have is refused here
-        // instead of opening a panel that never attaches.
-        if let Some(reason) = browser_host_backend_refusal(backend) {
+        // A panel that follows the browser host runs in the browser of that machine.
+        // A create that names an engine the host does not run is refused here
+        // instead of opening a panel that never attaches; a create that names no
+        // engine takes the engine of the host.
+        if let Some(named) = request.backend
+            && let Some(reason) = self.browser_host_backend_refusal(named)
+        {
             fail_create(
                 &mut self.browser_create_host.io,
                 &request,
@@ -350,8 +353,13 @@ fn browser_create_options(
 
 /// The reason that this Horizon refuses a create of `backend`, when its settings
 /// name a browser host that serves the engine of its own profile and no other.
-fn browser_host_backend_refusal(backend: BackendKind) -> Option<&'static str> {
-    horizon_core::browser_host().and_then(|host| host.backend_refusal(backend))
+///
+/// The entry is the one that the settings hold now, so a host that the person
+/// confirmed a moment ago decides this create too.
+impl HorizonApp {
+    fn browser_host_backend_refusal(&self, backend: BackendKind) -> Option<&'static str> {
+        self.template_config.browser_host.backend_refusal(backend)
+    }
 }
 
 #[cfg(test)]

@@ -131,14 +131,14 @@ Only the person can set this, in Settings (**Ctrl+Shift+,**) → **General** →
 | Engine | Chromium, or Firefox with Horizon on that machine |
 | Driver program | `docker exec -i -e HOME=/profile hz-bvm-<profile> /opt/horizon/horizon --browser-host-driver`, for the firefox engine only |
 
-`ssh_target` is the `Host` name of step 3, not the address. The change applies at
-the next start of Horizon.
+`ssh_target` is the `Host` name of step 3, not the address. The press on the card
+of the request serves the next browser panel at once, so the person opens the
+panel without a start of Horizon.
 
 ### 5. Let the person open a browser panel
 
-Tell the person to start Horizon and to open a browser panel. The panel starts
-the container when it is stopped, and it writes the endpoint file. A fresh
-container can take 20 seconds.
+Tell the person to open a browser panel. The panel starts the container when it is
+stopped, and it writes the endpoint file. A fresh container can take 20 seconds.
 
 ## How the DevTools port is published
 

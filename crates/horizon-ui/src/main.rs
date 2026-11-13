@@ -125,10 +125,9 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
 
     let agent_integrations = AgentIntegrations::from_environment();
-    let browser_host = plugin_install::browser_host_setting(&resolved_config_path);
-    horizon_core::configure_browser_host(browser_host.clone());
     // The machine list of this start follows one server, or stays on this
-    // computer. The entry travels to the app beside the browser host.
+    // computer. The browser host needs no value here: the app reads the entry of
+    // the settings that it holds, so a change of it serves the next panel.
     horizon_core::configure_server(plugin_install::server_setting(&resolved_config_path));
     let _agent_plugin_host = agent_integrations.install_plugins(horizon_home);
     if let Some(command) = cli_args.command.as_ref() {

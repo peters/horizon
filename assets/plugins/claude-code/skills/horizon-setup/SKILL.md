@@ -588,9 +588,13 @@ The engine of the press decides the steps:
 
 The last step needs the press of the person: call `browser_host_request` with the
 machine of the list or the SSH target, the profile and the engine, and wait while
-Horizon draws its own card. A press on `Stop and undo` on a Firefox flow removes
-the copied binary beside the files and the container of this flow, and the card
-says what was removed and what is left.
+Horizon draws its own card. The press serves the next browser panel at once, so no
+panel needs a start of Horizon: when the answer says `confirmed`, open the panel
+of that browser with `browser_create` beside this card and name no `backend`,
+because the host serves the engine of its profile. A panel that was open before
+the press keeps its own browser. A press on `Stop and undo` on a Firefox flow
+removes the copied binary beside the files and the container of this flow, and the
+card says what was removed and what is left.
 
 ### 3. The browser is ready
 
@@ -605,7 +609,7 @@ says what was removed and what is left.
     {"label": "Profile", "value": "work", "mono": true},
     {"label": "New browser panels", "value": "use this browser"},
     {"label": "Downloads", "value": "stay on that machine"}]},
-  {"type": "text", "text": "New browser panels use it after the next start of Horizon. Settings, General, Browser host shows the same."},
+  {"type": "text", "text": "New browser panels use that browser now. Settings, General, Browser host shows the same."},
   {"type": "buttons", "items": [
     {"id": "open_panel", "label": "Open a browser panel", "tone": "primary"},
     {"id": "use_this_computer", "label": "Use this computer again"},
@@ -713,6 +717,8 @@ credential in the panel.
   native `<select>`, with one sentence each in the panel.
 - A card cannot draw a QR code, a picture or a table. The invitation of another
   computer stays in Settings, Server, and the card names that place.
-- The browser host entry applies at the next start of Horizon. The card says so.
+- The browser host entry serves each browser panel that a create makes after the
+  press, and no start of Horizon is needed. A panel that is open keeps its
+  browser until the person closes it and opens another one.
 - One card holds the flow. An agent owns at most eight cards in one workspace, so
   keep the flow in the Set up card and the card of the machine that stays.

@@ -666,10 +666,16 @@ machine costs.
 7. Press `Use it`, then read **Settings**, **General**, **Browser host**.
 
    Result: The SSH target and the profile hold the values of the card. The card
-   of the flow says that new browser panels use it after the next start of
-   Horizon. `~/.horizon/settings.before-server.<time>.json` is unchanged.
+   of the flow says that new browser panels use that browser now.
+   `~/.horizon/settings.before-server.<time>.json` is unchanged.
 
-8. Ask the agent for `browser_host_request` with `machine` set to a machine of
+8. Ask the agent to open a browser panel, and read the panel.
+
+   Result: The panel draws its page with the browser of the machine. Horizon was
+   not started again. A browser panel that was open before the press of `Use it`
+   still draws with the browser of this computer.
+
+9. Ask the agent for `browser_host_request` with `machine` set to a machine of
    the list, the profile `work` and the engine `firefox`, and press `Use it`.
 
    Result: The card says `Use the browser on the machine <name> for new browser

@@ -5,8 +5,8 @@ use std::sync::{Mutex, PoisonError};
 
 use horizon_core::browser::manifest;
 use horizon_core::{
-    BrowserHostConfig, Config, HorizonHome, ServerConfig, browser_mcp_args, browser_mcp_executable, codex_home_dir,
-    grok_home_dir, user_home_dir,
+    Config, HorizonHome, ServerConfig, browser_mcp_args, browser_mcp_executable, codex_home_dir, grok_home_dir,
+    user_home_dir,
 };
 
 mod grok_mcp;
@@ -378,11 +378,6 @@ struct AgentMcpEntry<'a> {
 ///
 /// A settings store that cannot be read gives `None` here: the start reads it
 /// again, and a store of another version is the report of that read.
-pub(crate) fn browser_host_setting(config_path: &Path) -> Option<BrowserHostConfig> {
-    let config = Config::read(config_path).ok().flatten()?;
-    config.browser_host.names_host().then_some(config.browser_host)
-}
-
 /// The server that the settings name, for the start that follows it.
 pub(crate) fn server_setting(config_path: &Path) -> Option<ServerConfig> {
     let config = Config::read(config_path).ok().flatten()?;

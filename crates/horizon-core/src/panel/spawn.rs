@@ -300,7 +300,10 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
         PanelKind::Browser => {
             let command = opts.command.take();
             let browser_config = opts.browser_config.take();
-            let follows_browser_host = opts.follows_browser_host;
+            // A panel that follows the browser host of the settings takes the entry
+            // that this app read for it, and no caller sets the entry of a panel of
+            // its own.
+            let browser_host = opts.browser_host_entry.take().filter(|_| opts.follows_browser_host);
             let remote = match (opts.remote_session.take(), opts.remote_target.take()) {
                 (Some(request), _) => BrowserSpawnMode::Remote(Box::new(request)),
                 (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
@@ -310,12 +313,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             // it. The host of today's settings does not decide a saved panel, and a
             // live page cannot move between machines.
             let remote = restored_browser_mode(remote, opts.browser_host.take())?;
-            let remote = browser_spawn_mode(
-                remote,
-                crate::browser_host(),
-                follows_browser_host,
-                opts.ssh_connection.take(),
-            )?;
+            let remote = browser_spawn_mode(remote, browser_host.as_ref(), opts.ssh_connection.take())?;
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_browser(seed, command, browser_config, remote)
         }
@@ -468,7 +466,7 @@ fn spawn_browser(
             .as_deref()
             .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
     });
-    let browser_config = browser_config.unwrap_or_default();
+    let mut browser_config = browser_config.unwrap_or_default();
     let browser = match mode {
         BrowserSpawnMode::Local(session_id) => crate::browser::BrowserPanelState::start_with_session(
             seed.local_id.clone(),
@@ -488,31 +486,20 @@ fn spawn_browser(
             target,
             initial_url.clone(),
         ),
-        // A panel of a browser host returns at once: the forward to that machine
-        // opens on a worker thread of the panel, and a host that never answers is
-        // a state of the panel.
-        BrowserSpawnMode::AttachedHost(host) | BrowserSpawnMode::RestoredHost(host) => {
+        // A panel that follows the browser host of the settings takes the engine of
+        // that host, because the host serves the browser of its profile: a person
+        // who names a Firefox host gets Firefox pages, whatever the backend of the
+        // browser preset said. A saved panel keeps the engine that it saved, and a
+        // mismatch there is a page that this computer cannot open.
+        BrowserSpawnMode::AttachedHost(host) => {
+            browser_config.backend = host.engine().backend();
+            browser_of_host(seed.local_id.clone(), &browser_config, initial_url.clone(), &host)
+        }
+        BrowserSpawnMode::RestoredHost(host) => {
             if let Some(reason) = crate::browser::attached_host_backend_refusal(host.engine(), browser_config.backend) {
                 return Err(crate::error::Error::Config(reason.to_string()));
             }
-            if host.engine() == crate::config::BrowserHostEngine::Firefox {
-                // The Firefox of that machine runs behind the driver of Horizon
-                // that this computer starts there, so its page is a page of a
-                // driver and not one of a `DevTools` port.
-                crate::browser::BrowserPanelState::start_host_driver(
-                    seed.local_id.clone(),
-                    &browser_config,
-                    initial_url.clone(),
-                    &host,
-                )
-            } else {
-                crate::browser::BrowserPanelState::start_attached_host(
-                    seed.local_id.clone(),
-                    &browser_config,
-                    initial_url.clone(),
-                    &host,
-                )
-            }
+            browser_of_host(seed.local_id.clone(), &browser_config, initial_url.clone(), &host)
         }
     };
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
@@ -525,6 +512,26 @@ fn spawn_browser(
         None,
         has_custom_name,
     ))
+}
+
+/// The browser of a panel whose pages the browser of `host` carries.
+///
+/// Both calls return at once: the link to that machine opens on a worker thread
+/// of the panel, and a host that never answers is a state of the panel.
+fn browser_of_host(
+    local_id: String,
+    browser_config: &crate::browser::BrowserConfig,
+    initial_url: Option<String>,
+    host: &crate::browser::AttachedHost,
+) -> crate::browser::BrowserPanelState {
+    if host.engine() == crate::config::BrowserHostEngine::Firefox {
+        // The Firefox of that machine runs behind the driver of Horizon that this
+        // computer starts there, so its page is a page of a driver and not one of a
+        // `DevTools` port.
+        crate::browser::BrowserPanelState::start_host_driver(local_id, browser_config, initial_url, host)
+    } else {
+        crate::browser::BrowserPanelState::start_attached_host(local_id, browser_config, initial_url, host)
+    }
 }
 
 pub(super) fn resolve_launch_command(
@@ -1458,7 +1465,7 @@ mod tests {
     #[test]
     fn a_named_browser_host_routes_a_new_panel_to_that_host_and_its_profile() {
         let host = browser_host("browser-vm", Some("mail"));
-        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true, None).expect("one SSH name");
+        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), None).expect("one SSH name");
         let BrowserSpawnMode::AttachedHost(attached) = mode else {
             panic!("a named host routes the panel to that host");
         };
@@ -1472,7 +1479,6 @@ mod tests {
         let unnamed = browser_spawn_mode(
             BrowserSpawnMode::Local(None),
             Some(&browser_host("browser-vm", None)),
-            true,
             None,
         )
         .expect("one SSH name");
@@ -1487,12 +1493,8 @@ mod tests {
 
     #[test]
     fn no_named_browser_host_keeps_the_spawn_path_of_the_local_browser() {
-        assert!(
-            crate::browser_host().is_none(),
-            "no test of this binary names a browser host at start"
-        );
         for entry in [None, Some(crate::BrowserHostConfig::default())] {
-            let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), entry.as_ref(), true, None)
+            let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), entry.as_ref(), None)
                 .expect("the local path never refuses");
             assert!(
                 matches!(mode, BrowserSpawnMode::Local(None)),
@@ -1558,7 +1560,6 @@ mod tests {
         let mode = browser_spawn_mode(
             BrowserSpawnMode::Local(None),
             Some(&machine_browser_host()),
-            true,
             Some(login.clone()),
         )
         .expect("the login of the machine");
@@ -1584,8 +1585,7 @@ mod tests {
         // A caller that resolved no login cannot reach such a machine: it holds no
         // key of the person, so the create says why instead of starting an `ssh` that
         // would ask for a password.
-        let Err(error) = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&machine_browser_host()), true, None)
-        else {
+        let Err(error) = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&machine_browser_host()), None) else {
             panic!("a machine of the list without a login was accepted");
         };
         assert!(error.to_string().contains("names the machine helsinki-1"), "{error}");
@@ -1622,21 +1622,12 @@ mod tests {
             kind: PanelKind::Browser,
             ..crate::runtime_state::PanelState::default()
         };
+        let saved_options = saved.to_panel_options(&crate::browser::BrowserConfig::default());
         assert!(
-            !saved
-                .to_panel_options(&crate::browser::BrowserConfig::default())
-                .follows_browser_host,
+            !saved_options.follows_browser_host && saved_options.browser_host_entry.is_none(),
             "a saved panel asks for no browser host"
         );
-        let restored = browser_spawn_mode(
-            BrowserSpawnMode::Local(None),
-            Some(&host),
-            saved
-                .to_panel_options(&crate::browser::BrowserConfig::default())
-                .follows_browser_host,
-            None,
-        )
-        .expect("the saved mode");
+        let restored = browser_spawn_mode(BrowserSpawnMode::Local(None), None, None).expect("the saved mode");
         assert!(
             matches!(restored, BrowserSpawnMode::Local(None)),
             "a saved panel comes back on the backend it saved"
@@ -1645,7 +1636,6 @@ mod tests {
         let shared = browser_spawn_mode(
             BrowserSpawnMode::Local(Some("profile-page-1".to_string())),
             Some(&host),
-            true,
             None,
         )
         .expect("the mode of a duplicated page");
@@ -1657,7 +1647,6 @@ mod tests {
         let provider = browser_spawn_mode(
             BrowserSpawnMode::RestoredRemote("target".to_string()),
             Some(&host),
-            true,
             None,
         )
         .expect("the restored remote mode");
@@ -1718,7 +1707,7 @@ mod tests {
     #[test]
     fn an_agent_browser_create_follows_the_named_host() {
         let host = browser_host("browser-vm", Some("mail"));
-        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true, None).expect("the agent route");
+        let mode = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), None).expect("the agent route");
         let BrowserSpawnMode::AttachedHost(attached) = mode else {
             panic!("the page of an agent runs on the Chromium of the host");
         };
@@ -1729,7 +1718,7 @@ mod tests {
     #[test]
     fn a_target_that_ssh_would_read_as_an_option_never_reaches_a_panel() {
         let host = browser_host("-oProxyCommand=touch /tmp/horizon-spawn-test", None);
-        let error = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), true, None)
+        let error = browser_spawn_mode(BrowserSpawnMode::Local(None), Some(&host), None)
             .err()
             .expect("a target that ssh reads as an option is refused");
         assert!(error.to_string().contains("one SSH name"), "{error}");

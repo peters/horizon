@@ -10,7 +10,7 @@ use horizon_core::browser::manifest;
 use horizon_core::{BrowserHostConfig, Config, PanelKind, RuntimeState, StartupDecision};
 
 use super::*;
-use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+use crate::app::test_support::{browser_panel_options, editor_workspace_state, test_app_with_startup};
 
 type TestApp = (tempfile::TempDir, Context, HorizonApp);
 
@@ -422,7 +422,7 @@ fn the_card_of_a_browser_host_states_the_profile_and_the_engine() {
         "Chromium",
         "work",
         BROWSER_USES,
-        BROWSER_NEXT_START,
+        BROWSER_APPLIES,
         "Use it",
         "Not now",
     ] {
@@ -722,7 +722,7 @@ fn the_cards_of_both_settings_are_valid_and_name_their_change() {
             [
                 "Use the browser on browser-vm for new browser panels?",
                 BROWSER_USES,
-                BROWSER_NEXT_START,
+                BROWSER_APPLIES,
                 "Use it",
                 "Not now",
             ],
@@ -742,4 +742,135 @@ fn the_cards_of_both_settings_are_valid_and_name_their_change() {
             "a setting card opens no page"
         );
     }
+}
+
+/// The browser of the machine that a card confirmed serves every browser panel
+/// that a create makes after the press, on both create paths, and an open panel
+/// keeps the browser that it has.
+#[test]
+fn a_pressed_use_it_serves_every_browser_panel_that_a_create_makes_after_it() {
+    let (_temp, ctx, mut app) = app();
+    let workspace = app.board.panels[0].workspace_id;
+    // A panel that is open before the press keeps the browser of this computer.
+    let open = app
+        .create_panel_with_options_beside(browser_panel_options(&app, true), workspace, None)
+        .expect("a local browser panel");
+    assert!(
+        !browser_of(&app, open).is_attached(),
+        "the panel that the person opened before the press runs here"
+    );
+
+    let request = request(&app, browser("browser-vm", "work", None));
+    assert!(app.apply_block_request_waiting(&request, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+
+    let person = app
+        .create_panel_with_options_beside(browser_panel_options(&app, true), workspace, None)
+        .expect("a browser panel of the person");
+    assert_attached(&app, person);
+
+    let agent = app
+        .create_agent_child_panel(browser_panel_options(&app, true), workspace, person)
+        .expect("a browser panel of an agent");
+    assert_attached(&app, agent);
+
+    let still_local = browser_of(&app, open);
+    assert!(
+        !still_local.is_attached(),
+        "the press moves no panel that was open before it"
+    );
+    assert_eq!(still_local.attached_host_target(), None);
+}
+
+/// The engine and the route of the confirmed entry decide the panel: a Firefox
+/// host of an SSH target and a Chromium host of a machine of the list both serve
+/// the panels that a create makes after the press.
+#[test]
+fn a_pressed_use_it_serves_a_firefox_host_and_a_machine_of_the_list() {
+    let (_temp, ctx, mut app) = app();
+    let workspace = app.board.panels[0].workspace_id;
+    plant_machine(&mut app, "rented-1");
+    let on_machine_card = request(&app, browser_on_machine("rented-1", "work"));
+    assert!(app.apply_block_request_waiting(&on_machine_card, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+
+    let rented = app
+        .create_panel_with_options_beside(browser_panel_options(&app, true), workspace, None)
+        .expect("a browser panel of a machine of the list");
+    let of_machine = browser_of(&app, rented);
+    assert_eq!(
+        of_machine.attached_host_target(),
+        Some("peters@10.0.0.5"),
+        "the panel reaches the machine at its address and its user"
+    );
+    assert_eq!(of_machine.attached_host_profile(), Some("work"));
+    assert!(
+        of_machine.attached_host_login().is_some(),
+        "the connect carries the machine key of this computer"
+    );
+
+    let firefox_card = request(&app, browser("browser-vm", "mail", Some(BrowserEngine::Firefox)));
+    assert!(app.apply_block_request_waiting(&firefox_card, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+
+    let firefox = app
+        .create_agent_child_panel(browser_panel_options(&app, true), workspace, rented)
+        .expect("a browser panel of a Firefox host");
+    let driver = browser_of(&app, firefox);
+    assert!(
+        driver.is_host_driver(),
+        "the page of a Firefox host runs behind its driver"
+    );
+    assert_eq!(driver.host_driver_target(), Some("browser-vm"));
+    assert_eq!(driver.host_driver_profile(), Some("mail"));
+}
+
+/// The browser of a panel of this test board.
+fn browser_of(app: &HorizonApp, panel: horizon_core::PanelId) -> &horizon_core::browser::BrowserPanelState {
+    app.board
+        .panel(panel)
+        .and_then(|panel| panel.browser())
+        .expect("a browser panel")
+}
+
+/// The panel runs on the Chromium of the host that the press confirmed.
+fn assert_attached(app: &HorizonApp, panel: horizon_core::PanelId) {
+    let browser = browser_of(app, panel);
+    assert!(browser.is_attached(), "the panel runs on the browser of its host");
+    assert_eq!(browser.attached_host_target(), Some("browser-vm"));
+    assert_eq!(browser.attached_host_profile(), Some("work"));
+}
+
+/// Writes the record of `name` and the key that this computer binds to it into the
+/// machine list of `app`.
+fn plant_machine(app: &mut HorizonApp, name: &str) {
+    use horizon_core::machines::{MachineRegistry, Machines};
+    use horizon_core::{Machine, MachineKeys};
+    let registry = MachineRegistry::from_home(app.session_store.home());
+    let list = Machines::load(registry.clone()).expect("the machine list of this computer");
+    let (list, _) = list
+        .with_record(
+            Machine {
+                name: name.to_owned(),
+                host: "10.0.0.5".to_owned(),
+                user: Some("peters".to_owned()),
+                ..Machine::default()
+            },
+            Some(name),
+        )
+        .expect("a new record");
+    list.save().expect("the record is written");
+    app.machine_list = Machines::load(registry).expect("the machine list of this computer");
+    let directory = MachineKeys::from_home(app.session_store.home()).key_directory();
+    std::fs::create_dir_all(&directory).expect("the key directory");
+    std::fs::write(directory.join(name), "-----BEGIN OPENSSH PRIVATE KEY-----\n").expect("the key");
 }

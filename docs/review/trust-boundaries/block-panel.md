@@ -109,9 +109,10 @@ and the settings of the person go, so `server_link_request` and
   its own reason in the sidebar and in the Server tab.
 - **Only two fields of one entry change:** the SSH target and the command of
   `server`, or the SSH target and the profile of `browser_host`. The address of a
-  join and every other field of the entry stay as the store holds them. The
-  browser host applies at the next start of Horizon, which the card says, because
-  the browser panels of this run read the entry of their start.
+  join and every other field of the entry stay as the store holds them. A
+  confirmed browser host entry serves the browser panels that a create makes
+  after the press of this run, which the card says, and a panel that is already
+  open keeps its browser.
 - **Does not guarantee:** that the target answers. Horizon writes the entry and
   starts the link; the link reports its own reason when the server is away, in
   the sidebar and in the Server tab. A press is not a proof that the person read
