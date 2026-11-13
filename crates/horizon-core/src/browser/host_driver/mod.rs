@@ -142,6 +142,49 @@ impl HostDriverEngine {
     }
 }
 
+/// The socket of the session of `profile` under `home`, for a test that serves
+/// the session of a browser host where a host would.
+///
+/// The panel of a browser host is tested through a real child of this binary,
+/// and that child reads the socket of its session from the home of its process.
+#[doc(hidden)]
+#[must_use]
+pub fn session_socket_in(home: &Path, profile: &str, engine: HostDriverEngine) -> Option<std::path::PathBuf> {
+    paths::socket_path_in(home, profile, engine.as_str()).ok()
+}
+
+/// Serve the session of a browser host over `listener` on a page of a test.
+///
+/// A test of the panel uses this beside the real child of its binary: the child
+/// is the link of a host, this thread is the session and its page, and no
+/// browser of this machine takes part.
+#[doc(hidden)]
+pub fn serve_test_session(
+    listener: std::os::unix::net::UnixListener,
+    socket: std::path::PathBuf,
+    profile: String,
+    slot: std::sync::Arc<horizon_browser::FrameSlot>,
+) -> std::thread::JoinHandle<i32> {
+    std::thread::spawn(move || {
+        let Ok(options) = HostDriverOptions::new(profile, HostDriverEngine::Firefox) else {
+            return 2;
+        };
+        let _ = listener.set_nonblocking(true);
+        let rules = LinkRules {
+            take_over: LINK_TAKE_OVER,
+            silent: LINK_SILENT,
+            idle_stop: None,
+        };
+        let start = move |_options: &HostDriverOptions| {
+            Ok(session::HostSession::over_page(
+                Box::new(session::IdlePage),
+                std::sync::Arc::clone(&slot),
+            ))
+        };
+        serve_links(&listener, &options, &socket, rules, start)
+    })
+}
+
 /// The settings of one driver of a browser host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostDriverOptions {

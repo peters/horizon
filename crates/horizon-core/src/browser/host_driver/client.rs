@@ -44,6 +44,9 @@ const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// The exit code of a shell that found no program of that name.
 const COMMAND_NOT_FOUND_EXIT: i32 = 127;
 
+/// The exit code of `ssh` when the connection itself failed.
+const SSH_CONNECTION_FAILURE: i32 = 255;
+
 /// The driver of a browser host: where it runs, and the program that this
 /// computer starts there.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -176,6 +179,13 @@ pub(super) struct DriverLink {
     initial_page: Option<horizon_browser::host_driver::HostDriverPage>,
     /// The frames this link acknowledged, so no frame is acknowledged twice.
     acknowledged: Option<u64>,
+    /// The words of the end of this link, when it ended: what `ssh` said and
+    /// its status. A reason that a person reads has words, also when `ssh`
+    /// wrote none.
+    end_words: Option<String>,
+    /// Whether the driver greeted this link. A connection that never greeted
+    /// and one that worked before it ended are different reasons for a person.
+    greeted: bool,
     /// The largest wait of the pass that just ended, for a stall line.
     pass_wait: Option<(&'static str, Duration)>,
     frames: u64,
@@ -231,10 +241,13 @@ impl DriverLink {
             },
             initial_page: None,
             acknowledged: None,
+            end_words: None,
+            greeted: false,
             pass_wait: None,
             frames: 0,
         };
         link.handshake(host.engine(), quality)?;
+        link.greeted = true;
         Ok(link)
     }
 
@@ -313,10 +326,13 @@ impl DriverLink {
             },
             initial_page: None,
             acknowledged: None,
+            end_words: None,
+            greeted: false,
             pass_wait: None,
             frames: 0,
         };
         link.handshake(host.engine(), quality)?;
+        link.greeted = true;
         Ok(link)
     }
 
@@ -366,12 +382,12 @@ impl DriverLink {
     }
 
     /// The host of this link, for the words of a failure.
-    fn attached(&self) -> crate::browser::AttachedHost {
+    pub(super) fn attached(&self) -> crate::browser::AttachedHost {
         self.attached.clone()
     }
 
     /// The words of a link that ended: those of `ssh` when it wrote any, and
-    /// otherwise the plain sentence of a closed link.
+    /// otherwise the plain sentence of a closed link with the status of `ssh`.
     fn ended(&mut self) -> Option<AttachedHostFailure> {
         let code = self.wait_for_exit();
         let tail = self.stderr_tail();
@@ -382,13 +398,31 @@ impl DriverLink {
             } else {
                 tail
             };
+            self.end_words = Some(reason.clone());
             return Some(AttachedHostFailure::no_driver(&self.attached(), &reason));
         }
-        if tail.is_empty() {
-            None
+        let words = if tail.is_empty() {
+            match code {
+                Some(code) => format!("the script of the link ended with status {code} and wrote no words"),
+                None => "the script of the link ended and wrote no words".to_string(),
+            }
         } else {
-            Some(AttachedHostFailure::unreachable(&self.attached(), &tail))
+            tail
+        };
+        self.end_words = Some(words.clone());
+        if code == Some(SSH_CONNECTION_FAILURE) && self.greeted {
+            // The connection itself failed: a host that stopped answering, a
+            // network that a laptop left, or a server that ended the session.
+            // The words of `ssh` say nothing at `LogLevel=ERROR`, so this is
+            // the sentence that the log and the panel keep.
+            return Some(AttachedHostFailure::connection_lost(&self.attached(), &words));
         }
+        Some(AttachedHostFailure::unreachable(&self.attached(), &words))
+    }
+
+    /// The words of the end of this link, when it ended.
+    pub(super) fn end_words(&self) -> Option<&str> {
+        self.end_words.as_deref()
     }
 
     fn wait_for_exit(&mut self) -> Option<i32> {

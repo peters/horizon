@@ -273,11 +273,26 @@ fn run(
                         let _ = events.send(HostDriverEvent::Stopped);
                         return;
                     }
-                    PumpOutcome::Lost(reason) => {
+                    PumpOutcome::Lost(lost) => {
+                        if let LostLink::Refused(failure) = lost {
+                            // A refusal is work on the host, so no attempt
+                            // repeats it. The panel shows the words of the
+                            // driver.
+                            tracing::warn!(
+                                code = failure.code(),
+                                target = host.ssh_target(),
+                                profile = host.profile(),
+                                detail = failure.detail().unwrap_or_default(),
+                                "the driver of a browser host refused the link of this panel"
+                            );
+                            let _ = events.send(HostDriverEvent::Failed(failure));
+                            wake(&waker);
+                            return;
+                        }
                         tracing::info!(
                             target = host.ssh_target(),
                             profile = host.profile(),
-                            reason = reason.as_deref().unwrap_or_default(),
+                            reason = lost.words(),
                             "the link to the browser host driver is lost, so the panel attaches again"
                         );
                     }
@@ -338,14 +353,38 @@ fn wait_unless_stopped(stop: &AtomicBool, wait: Duration) -> bool {
 }
 
 /// Why the pump of one link ended.
-enum PumpOutcome {
+pub(super) enum PumpOutcome {
     Stopped,
-    Lost(Option<String>),
+    Lost(LostLink),
+}
+
+/// Why one link of a panel ended, with the words that a person reads.
+pub(super) enum LostLink {
+    /// The link ended, and these are its words: what `ssh` wrote, its status,
+    /// or the sentence of a link that ended without words. The worker attaches
+    /// again by itself after this reason, because the browser of the host kept
+    /// the page.
+    Ended(String),
+    /// This computer could not write a request, so the link is gone.
+    Unwritable(String),
+    /// The driver refused and ended the link after its greeting: its words name
+    /// the work on the host, so a person reads them and no attempt repeats them.
+    Refused(AttachedHostFailure),
+}
+
+impl LostLink {
+    /// The words of the reason, for the log of a lost link.
+    fn words(&self) -> &str {
+        match self {
+            Self::Ended(words) | Self::Unwritable(words) => words,
+            Self::Refused(failure) => failure.message(),
+        }
+    }
 }
 
 /// One live link: the commands of the panel out, the answers of the driver in.
 #[allow(clippy::too_many_arguments)]
-fn serve(
+pub(super) fn serve(
     link: &mut DriverLink,
     panel_local_id: &str,
     frame_slot: &FrameSlot,
@@ -377,8 +416,8 @@ fn serve(
                         probe.taken();
                         let written = link.request(&request);
                         probe.written(method);
-                        if written.is_err() {
-                            return PumpOutcome::Lost(None);
+                        if let Err(words) = written {
+                            return PumpOutcome::Lost(LostLink::Unwritable(words));
                         }
                     }
                     // A command that this link cannot carry is a fact of a page
@@ -406,15 +445,15 @@ fn serve(
                         }),
                     actions: signals.actions,
                 };
-                if link.request(&HostDriverRequest::Signals { signals }).is_err() {
-                    return PumpOutcome::Lost(None);
+                if let Err(words) = link.request(&HostDriverRequest::Signals { signals }) {
+                    return PumpOutcome::Lost(LostLink::Unwritable(words));
                 }
             }
         }
         match link.recv(Duration::ZERO) {
             Ok(reply) => {
                 let received_at = Instant::now();
-                if !apply_reply(
+                match apply_reply(
                     link,
                     reply,
                     panel_local_id,
@@ -425,13 +464,19 @@ fn serve(
                     probe,
                     received_at,
                 ) {
-                    return PumpOutcome::Lost(None);
+                    ReplyOutcome::Continue => {}
+                    ReplyOutcome::Lost(lost) => return PumpOutcome::Lost(lost),
                 }
             }
             Err(None) => {}
             Err(Some(failure)) => {
-                let _ = events.send(HostDriverEvent::Failed(failure));
-                return PumpOutcome::Lost(None);
+                if failure.kind() == crate::browser::AttachedHostFailureKind::Refused {
+                    return PumpOutcome::Lost(LostLink::Refused(failure));
+                }
+                return PumpOutcome::Lost(LostLink::Ended(
+                    link.end_words()
+                        .map_or_else(|| failure.message().to_string(), str::to_string),
+                ));
             }
         }
         if probe.enabled() {
@@ -463,7 +508,13 @@ fn request_method(command: &BrowserCommand) -> &'static str {
     }
 }
 
-/// Apply one answer of the driver. Returns whether the link may go on.
+/// What an answer of the driver did to its link.
+enum ReplyOutcome {
+    Continue,
+    Lost(LostLink),
+}
+
+/// Apply one answer of the driver. Answers a lost link when this answer ends it.
 #[allow(clippy::too_many_arguments)]
 fn apply_reply(
     link: &mut DriverLink,
@@ -475,7 +526,7 @@ fn apply_reply(
     manifest: &ManifestCoordination,
     probe: &mut super::latency::LinkProbe,
     received_at: Instant,
-) -> bool {
+) -> ReplyOutcome {
     match reply {
         HostDriverReply::Frame(frame) => {
             let decoded_at = Instant::now();
@@ -489,9 +540,9 @@ fn apply_reply(
                 true,
             );
             if let Some(ack) = ack
-                && link.request(&ack).is_err()
+                && let Err(words) = link.request(&ack)
             {
-                return false;
+                return ReplyOutcome::Lost(LostLink::Unwritable(words));
             }
             wake(waker);
         }
@@ -499,9 +550,16 @@ fn apply_reply(
             let _ = events.send(HostDriverEvent::Page(page));
             wake(waker);
         }
-        HostDriverReply::Refusal { message, fatal, .. } => {
+        HostDriverReply::Refusal { code, message, fatal } => {
             if fatal {
-                return false;
+                // The driver ended the link with its own words, so the panel
+                // shows them and no attempt repeats a refusal that needs work on
+                // the host.
+                return ReplyOutcome::Lost(LostLink::Refused(AttachedHostFailure::refused(
+                    &link.attached(),
+                    &code,
+                    &message,
+                )));
             }
             let _ = events.send(HostDriverEvent::Note(message));
             wake(waker);
@@ -524,27 +582,37 @@ fn apply_reply(
             };
             // A manifest that this computer cannot write is a reason to stop a
             // link: an agent would drive a page whose owner nobody records.
-            if update_manifest(manifest, panel_local_id, &state).is_err() {
-                return false;
+            if let Err(error) = update_manifest(manifest, panel_local_id, &state) {
+                return ReplyOutcome::Lost(LostLink::Ended(format!(
+                    "the manifest of this computer did not take the state of the page: {error}"
+                )));
             }
         }
         HostDriverReply::Action(result) => {
-            if manifest.complete_action(panel_local_id, &result.result).is_err() {
-                return false;
+            if let Err(error) = manifest.complete_action(panel_local_id, &result.result) {
+                return ReplyOutcome::Lost(LostLink::Ended(format!(
+                    "the manifest of this computer did not take the result of an agent: {error}"
+                )));
             }
         }
         HostDriverReply::Audit(entry) => {
-            if manifest.record_action(panel_local_id, &entry).is_err() {
-                return false;
+            if let Err(error) = manifest.record_action(panel_local_id, &entry) {
+                return ReplyOutcome::Lost(LostLink::Ended(format!(
+                    "the manifest of this computer did not take the record of an agent: {error}"
+                )));
             }
         }
         HostDriverReply::HandoffAck { request_id } => {
             let _ = manifest.acknowledge_handoff(panel_local_id, &request_id);
         }
         HostDriverReply::Welcome(_) => {}
-        HostDriverReply::Closed => return false,
+        HostDriverReply::Closed => {
+            return ReplyOutcome::Lost(LostLink::Ended(
+                "the driver of the browser host ended the session of this profile".to_string(),
+            ));
+        }
     }
-    true
+    ReplyOutcome::Continue
 }
 
 /// Write the state of the page of the host into the manifest of this computer.
@@ -799,8 +867,10 @@ impl BrowserPanelState {
                 if attempt > 0 {
                     // An automatic attempt after a lost link: the page is either
                     // the one the person had or a new one, and a new one keeps
-                    // nothing of the old.
-                    self.apply_page_attached(resumed);
+                    // nothing of the old. The page of the host driver is the
+                    // page of the session of that machine, and the welcome of
+                    // the link says which page this link came back to.
+                    self.page_resumed = resumed;
                     self.note_page_state_lost();
                 }
                 if resumed {
@@ -860,7 +930,9 @@ impl BrowserPanelState {
     }
 
     /// A link that ended: the panel keeps the page that it had, says why, and
-    /// the worker attaches again by itself.
+    /// the worker attaches again by itself. An unreachable host and a lost
+    /// connection are both a link that the worker replaces, as a Chromium panel
+    /// does with its automatic attempt.
     fn host_driver_lost(&mut self, failure: &AttachedHostFailure) {
         let kept = self.host_driver.as_ref().is_some_and(HostDriverSlot::reached_page);
         tracing::warn!(
@@ -875,7 +947,13 @@ impl BrowserPanelState {
         }
         self.frame_slot.clear();
         self.loading = false;
-        if kept && failure.kind() == crate::browser::AttachedHostFailureKind::Unreachable {
+        if kept
+            && matches!(
+                failure.kind(),
+                crate::browser::AttachedHostFailureKind::Unreachable
+                    | crate::browser::AttachedHostFailureKind::ConnectionLost
+            )
+        {
             // The worker tries again by itself; the panel says that the page is
             // kept until it does.
             self.remote_status = Some(failure.message().to_string());

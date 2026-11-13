@@ -125,6 +125,25 @@ pub(super) trait HostPage: Send {
     fn shutdown(&mut self);
 }
 
+/// A page that accepts every command of a link and reports nothing.
+///
+/// It is the page of a session of a test: the panel of a browser host is driven
+/// through a real child of this binary and the session of a test beside it, so
+/// the rules of a link are tested on a machine that has no Firefox.
+pub(super) struct IdlePage;
+
+impl HostPage for IdlePage {
+    fn send(&self, _command: BrowserCommand) -> bool {
+        true
+    }
+
+    fn next_event(&self) -> Option<BrowserEvent> {
+        None
+    }
+
+    fn shutdown(&mut self) {}
+}
+
 /// The browser of this machine behind a host session.
 struct LocalPage {
     session: Option<Box<BrowserSession>>,
@@ -232,7 +251,6 @@ impl HostSession {
     }
 
     /// A session over a page of a test, which holds no browser of its own.
-    #[cfg(test)]
     pub(super) fn over_page(page: Box<dyn HostPage>, slot: Arc<FrameSlot>) -> Self {
         let (sender, outbox) = mpsc::channel();
         Self {
@@ -515,6 +533,23 @@ fn greeting_refusal(sentence: &str) -> LinkOutcome {
     }
 }
 
+/// The name of one request, for the trace of a link.
+fn request_name(request: &HostDriverRequest) -> &'static str {
+    match request {
+        HostDriverRequest::Hello { .. } => "hello",
+        HostDriverRequest::Input { .. } => "input",
+        HostDriverRequest::Navigate { .. } => "navigate",
+        HostDriverRequest::Reload => "reload",
+        HostDriverRequest::Back => "back",
+        HostDriverRequest::Forward => "forward",
+        HostDriverRequest::Viewport { .. } => "viewport",
+        HostDriverRequest::FrameAck { .. } => "frame_ack",
+        HostDriverRequest::Semantic { .. } => "semantic",
+        HostDriverRequest::Signals { .. } => "signals",
+        HostDriverRequest::Close => "close",
+    }
+}
+
 /// Read one request of a link.
 fn request_of(next: Next) -> Step {
     match next {
@@ -601,24 +636,35 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, new_li
             last_line = Instant::now();
         }
         match request_of(next) {
-            Step::Request(request) => match session.apply(request, gate) {
-                LinkOutcome::Continue => {}
-                // A page that is not ready for one request keeps the link: the
-                // person reads the words and the next request can succeed.
-                LinkOutcome::Note { code, message } => {
-                    if link
-                        .send(&HostDriverReply::Refusal {
-                            code,
-                            message,
-                            fatal: false,
-                        })
-                        .is_err()
-                    {
-                        return LinkEnd::of(LinkOutcome::Closed);
-                    }
+            Step::Request(request) => {
+                // Every request but the two that a link repeats (its signals
+                // and the acknowledgement of a picture) reaches the trace, so a
+                // person reads what a link of a panel asked for.
+                let name = request_name(&request);
+                let quiet = matches!(name, "signals" | "frame_ack");
+                let outcome = session.apply(request, gate);
+                if !quiet && outcome == LinkOutcome::Continue {
+                    tracing::debug!(request = name, "a link of a browser host applied a request");
                 }
-                outcome => return LinkEnd::of(outcome),
-            },
+                match outcome {
+                    LinkOutcome::Continue => {}
+                    // A page that is not ready for one request keeps the link: the
+                    // person reads the words and the next request can succeed.
+                    LinkOutcome::Note { code, message } => {
+                        if link
+                            .send(&HostDriverReply::Refusal {
+                                code,
+                                message,
+                                fatal: false,
+                            })
+                            .is_err()
+                        {
+                            return LinkEnd::of(LinkOutcome::Closed);
+                        }
+                    }
+                    outcome => return LinkEnd::of(outcome),
+                }
+            }
             // A silent pass is the normal case of an idle page.
             Step::Silent => {}
             Step::Ended => return LinkEnd::of(LinkOutcome::Closed),

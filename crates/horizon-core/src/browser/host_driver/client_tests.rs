@@ -389,3 +389,74 @@ impl super::session::HostPage for RecordingPage {
 
     fn shutdown(&mut self) {}
 }
+
+/// One line of a welcome for the profile of these tests, as a driver of a
+/// browser host writes it.
+fn welcome_line(page: horizon_browser::host_driver::HostDriverPageState) -> Vec<u8> {
+    let welcome = horizon_browser::host_driver::HostDriverWelcome {
+        version: horizon_browser::host_driver::HOST_DRIVER_VERSION,
+        horizon_version: env!("CARGO_PKG_VERSION").to_string(),
+        system: HostSystem::here(),
+        engine: "firefox".to_string(),
+        profile: "mail".to_string(),
+        page,
+        width: 1000,
+        height: 700,
+        quality: 60,
+    };
+    horizon_browser::host_driver::encode_line(&HostDriverReply::Welcome(welcome)).expect("one line")
+}
+
+fn page_line() -> Vec<u8> {
+    horizon_browser::host_driver::encode_line(&HostDriverReply::Page(
+        horizon_browser::host_driver::HostDriverPage::default(),
+    ))
+    .expect("one line")
+}
+
+#[test]
+fn a_fatal_refusal_after_the_greeting_ends_the_link_with_the_words_of_the_driver() {
+    let refusal = horizon_browser::host_driver::encode_line(&HostDriverReply::Refusal {
+        code: "browser_start".to_string(),
+        message: "the browser of this machine did not start in Firefox: geckodriver was not found on PATH".to_string(),
+        fatal: true,
+    })
+    .expect("one line");
+    let (ours, theirs) = UnixStream::pair().expect("a socket pair");
+    let handle = answering_driver(
+        theirs,
+        vec![
+            welcome_line(horizon_browser::host_driver::HostDriverPageState::New),
+            page_line(),
+            refusal,
+        ],
+    );
+    let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
+    let (_commands, commands) = std::sync::mpsc::channel();
+    let (events, _event_rx) = std::sync::mpsc::channel();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let manifest = horizon_browser_control::manifest::ManifestCoordination::default();
+    let waker = Arc::default();
+    let mut probe = super::latency::LinkProbe::new();
+    let outcome = super::panel::serve(
+        &mut link,
+        "panel-1",
+        &FrameSlot::new(),
+        &commands,
+        &events,
+        &stop,
+        &waker,
+        &manifest,
+        &mut probe,
+    );
+    let super::panel::PumpOutcome::Lost(super::panel::LostLink::Refused(failure)) = outcome else {
+        panic!("a refusal that ends a link reaches the panel as a failure");
+    };
+    assert_eq!(failure.kind(), AttachedHostFailureKind::Refused);
+    assert!(
+        failure.message().contains("geckodriver was not found"),
+        "the words of the driver reach the panel: {}",
+        failure.message()
+    );
+    let _ = handle.join();
+}
