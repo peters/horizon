@@ -176,6 +176,8 @@ pub(super) struct DriverLink {
     initial_page: Option<horizon_browser::host_driver::HostDriverPage>,
     /// The frames this link acknowledged, so no frame is acknowledged twice.
     acknowledged: Option<u64>,
+    /// The largest wait of the pass that just ended, for a stall line.
+    pass_wait: Option<(&'static str, Duration)>,
     frames: u64,
 }
 
@@ -226,6 +228,7 @@ impl DriverLink {
             },
             initial_page: None,
             acknowledged: None,
+            pass_wait: None,
             frames: 0,
         };
         link.handshake(host.engine(), quality)?;
@@ -307,6 +310,7 @@ impl DriverLink {
             },
             initial_page: None,
             acknowledged: None,
+            pass_wait: None,
             frames: 0,
         };
         link.handshake(host.engine(), quality)?;
@@ -320,10 +324,10 @@ impl DriverLink {
         };
         let line = horizon_browser::host_driver::encode_line(request)
             .map_err(|error| format!("this computer could not write a request of the link: {error}"))?;
-        writer
-            .write_all(&line)
-            .and_then(|()| writer.flush())
-            .map_err(|error| format!("the link of the browser host could not take a request: {error}"))
+        let written_from = Instant::now();
+        let written = writer.write_all(&line).and_then(|()| writer.flush());
+        self.note_wait("write", written_from.elapsed());
+        written.map_err(|error| format!("the link of the browser host could not take a request: {error}"))
     }
 
     /// Send one request, and answer the words of a failure.
@@ -419,6 +423,17 @@ impl DriverLink {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
+    }
+
+    /// The largest wait of the pass that just ended, and forget it.
+    pub(super) fn take_pass_wait(&mut self) -> Option<(&'static str, Duration)> {
+        self.pass_wait.take()
+    }
+
+    fn note_wait(&mut self, name: &'static str, waited: Duration) {
+        if self.pass_wait.is_none_or(|(_, largest)| waited > largest) {
+            self.pass_wait = Some((name, waited));
+        }
     }
 
     /// The welcome that the driver gave this link.

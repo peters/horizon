@@ -66,7 +66,7 @@ pub enum HostDriverEvent {
 pub(crate) struct HostDriverSlot {
     host: crate::browser::AttachedHost,
     ssh: Ssh,
-    commands: mpsc::Sender<BrowserCommand>,
+    commands: mpsc::Sender<(BrowserCommand, Instant)>,
     events: mpsc::Receiver<HostDriverEvent>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
     stop: Arc<AtomicBool>,
@@ -150,7 +150,7 @@ impl HostDriverSlot {
 
     /// Send one command of the panel to the driver of the host.
     pub(super) fn send(&self, command: BrowserCommand) -> bool {
-        self.commands.send(command).is_ok()
+        self.commands.send((command, Instant::now())).is_ok()
     }
 
     /// Whether this link takes a command now: the worker exists and has not
@@ -213,7 +213,7 @@ fn run(
     panel_local_id: &str,
     frame_slot: Arc<FrameSlot>,
     quality: u32,
-    commands: mpsc::Receiver<BrowserCommand>,
+    commands: mpsc::Receiver<(BrowserCommand, Instant)>,
     events: mpsc::Sender<HostDriverEvent>,
     stop: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
@@ -239,6 +239,7 @@ fn run(
             }
         };
     let manifest = ManifestCoordination::default();
+    let mut probe = super::latency::LinkProbe::new();
     let mut attempt = 0u32;
     let mut ready_at: Option<Instant> = None;
     loop {
@@ -266,6 +267,7 @@ fn run(
                     &stop,
                     &waker,
                     &manifest,
+                    &mut probe,
                 ) {
                     PumpOutcome::Stopped => {
                         let _ = events.send(HostDriverEvent::Stopped);
@@ -347,26 +349,35 @@ fn serve(
     link: &mut DriverLink,
     panel_local_id: &str,
     frame_slot: &FrameSlot,
-    commands: &mpsc::Receiver<BrowserCommand>,
+    commands: &mpsc::Receiver<(BrowserCommand, Instant)>,
     events: &mpsc::Sender<HostDriverEvent>,
     stop: &AtomicBool,
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
+    probe: &mut super::latency::LinkProbe,
 ) -> PumpOutcome {
     let mut last_signals = Instant::now();
     loop {
+        let pass_started = Instant::now();
         if stop.load(Ordering::Acquire) {
             return PumpOutcome::Stopped;
         }
         // The input of the person, and the operations that the tools of an agent
         // asked for, reach the page of the host in their order.
         match commands.recv_timeout(PASS_WAIT) {
-            Ok(BrowserCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return PumpOutcome::Stopped,
-            Ok(command) => {
-                if let Some(request) = request_of(command)
-                    && link.request(&request).is_err()
-                {
-                    return PumpOutcome::Lost(None);
+            Ok((BrowserCommand::Stop, _)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return PumpOutcome::Stopped;
+            }
+            Ok((command, queued_at)) => {
+                let method = request_method(&command);
+                if let Some(request) = request_of(command) {
+                    probe.queued(queued_at);
+                    probe.taken();
+                    let written = link.request(&request);
+                    probe.written(method);
+                    if written.is_err() {
+                        return PumpOutcome::Lost(None);
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -391,7 +402,18 @@ fn serve(
         }
         match link.recv(Duration::ZERO) {
             Ok(reply) => {
-                if !apply_reply(link, reply, panel_local_id, frame_slot, events, waker, manifest) {
+                let received_at = Instant::now();
+                if !apply_reply(
+                    link,
+                    reply,
+                    panel_local_id,
+                    frame_slot,
+                    events,
+                    waker,
+                    manifest,
+                    probe,
+                    received_at,
+                ) {
                     return PumpOutcome::Lost(None);
                 }
             }
@@ -401,10 +423,37 @@ fn serve(
                 return PumpOutcome::Lost(None);
             }
         }
+        if probe.enabled() {
+            let waited = link.take_pass_wait();
+            probe.stall(
+                pass_started.elapsed(),
+                waited.as_ref().map(|(name, waited)| (*name, *waited)),
+            );
+        }
+    }
+}
+
+/// The name of the wait that one command of the panel writes, for a stall line.
+fn request_method(command: &BrowserCommand) -> &'static str {
+    match command {
+        BrowserCommand::Input(_) => "input",
+        BrowserCommand::Navigate(_) => "navigate",
+        BrowserCommand::Reload => "reload",
+        BrowserCommand::Back => "back",
+        BrowserCommand::Forward => "forward",
+        BrowserCommand::SetViewport { .. } => "viewport",
+        BrowserCommand::DropFiles { .. }
+        | BrowserCommand::Video { .. }
+        | BrowserCommand::Orientation { .. }
+        | BrowserCommand::NativeSelectChoose { .. }
+        | BrowserCommand::NativeSelectDismiss
+        | BrowserCommand::HandoffDone
+        | BrowserCommand::Stop => "other",
     }
 }
 
 /// Apply one answer of the driver. Returns whether the link may go on.
+#[allow(clippy::too_many_arguments)]
 fn apply_reply(
     link: &mut DriverLink,
     reply: HostDriverReply,
@@ -413,10 +462,22 @@ fn apply_reply(
     events: &mpsc::Sender<HostDriverEvent>,
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
+    probe: &mut super::latency::LinkProbe,
+    received_at: Instant,
 ) -> bool {
     match reply {
         HostDriverReply::Frame(frame) => {
-            if let Some(ack) = link.accept_frame(frame_slot, &frame)
+            let decoded_at = Instant::now();
+            let ack = link.accept_frame(frame_slot, &frame);
+            probe.frame_handed(
+                frame.seq,
+                frame.data.len(),
+                (frame.width, frame.height),
+                received_at,
+                decoded_at,
+                true,
+            );
+            if let Some(ack) = ack
                 && link.request(&ack).is_err()
             {
                 return false;

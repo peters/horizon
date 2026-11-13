@@ -37,6 +37,7 @@ pub use client::HostDriverHost;
 #[cfg(test)]
 mod client_tests;
 mod coordination;
+mod latency;
 pub(crate) mod panel;
 #[cfg(test)]
 mod panel_tests;
