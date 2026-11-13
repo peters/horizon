@@ -156,6 +156,9 @@ impl HorizonApp {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(ctx),
+            // The Menu starts Set up without a goal, so its agent asks which of
+            // the four the person wants.
+            ToolbarAction::SetUp => self.press_set_up(ctx, horizon_core::SetupGoal::Choose),
             ToolbarAction::Settings => self.toggle_settings(),
         }
     }

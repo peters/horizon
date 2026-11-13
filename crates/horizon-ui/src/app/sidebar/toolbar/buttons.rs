@@ -47,6 +47,13 @@ const MENU: &[MenuEntry] = &[
         choice: MenuChoice::Action(ToolbarAction::RemoteHosts),
     },
     MenuEntry {
+        group: Some("Get started"),
+        title: "Set up",
+        detail: "Rent a machine, add the Horizon server, or a browser that stays signed in",
+        action: None,
+        choice: MenuChoice::Action(ToolbarAction::SetUp),
+    },
+    MenuEntry {
         group: Some("Horizon"),
         title: "Settings",
         detail: "Theme, shortcuts, agents and features",
@@ -109,6 +116,8 @@ impl HorizonApp {
             ToolbarAction::QuickNav => shortcuts.command_palette.display_label(label),
             ToolbarAction::RemoteHosts => shortcuts.open_remote_hosts.display_label(label),
             ToolbarAction::Sessions => shortcuts.toggle_sessions.display_label(label),
+            // Set up has no key of its own: its row says what it does.
+            ToolbarAction::SetUp => String::new(),
             ToolbarAction::Settings => shortcuts.toggle_settings.display_label(label),
         };
         (!text.is_empty()).then_some(text)
@@ -162,6 +171,60 @@ fn paint_lines(painter: &egui::Painter, center: Pos2, color: egui::Color32) {
                 Pos2::new(center.x + 5.5, center.y + offset),
             ],
             Stroke::new(1.4, color),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MENU;
+    use crate::app::root_chrome::ToolbarAction;
+
+    /// Set up is a row of its own group, above the settings, and it names what
+    /// the wizard does.
+    #[test]
+    fn the_menu_offers_set_up_in_a_group_of_its_own_above_the_settings() {
+        let set_up = MENU
+            .iter()
+            .position(|entry| entry.title == "Set up")
+            .expect("the Menu offers Set up");
+        let settings = MENU
+            .iter()
+            .position(|entry| entry.title == "Settings")
+            .expect("the Menu offers Settings");
+
+        assert_eq!(MENU[set_up].group, Some("Get started"), "the row starts its own group");
+        assert_eq!(
+            MENU[set_up].detail,
+            "Rent a machine, add the Horizon server, or a browser that stays signed in"
+        );
+        assert!(set_up < settings, "Set up sits above Settings");
+        assert!(
+            MENU[set_up + 1..settings].iter().all(|entry| entry.group.is_none()),
+            "its group holds that one row and nothing else"
+        );
+        assert!(
+            MENU[set_up].action.is_none(),
+            "Set up has no key of its own, so its row names its shortcut as none"
+        );
+    }
+
+    /// The row starts Set up without a goal, so its agent asks which of the four
+    /// the person wants.
+    #[test]
+    fn the_menu_row_presses_set_up_without_a_goal() {
+        let (_temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::new(horizon_core::RuntimeState::default()),
+            });
+        app.setup.integrations = false;
+
+        app.perform_toolbar_action(&ctx, ToolbarAction::SetUp);
+
+        assert_eq!(app.setup.goal, horizon_core::SetupGoal::Choose);
+        assert!(
+            app.setup.notice_panel.is_some(),
+            "the row started Set up, which draws its notice without integrations"
         );
     }
 }

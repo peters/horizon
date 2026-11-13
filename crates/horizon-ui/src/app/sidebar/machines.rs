@@ -23,6 +23,14 @@ use super::{SidebarActions, rows};
 
 /// The height of one machine row.
 pub(super) const ROW_HEIGHT: f32 = 38.0;
+/// What the section says above its rows while this Horizon follows no server.
+pub(super) const NO_SERVER: &str = "Server: not set";
+/// What the section says while the list is empty: the way to get a machine.
+pub(super) const NO_MACHINE: &str = "No machines yet. Set up rents one, or adds the Horizon server.";
+/// The title of the control that starts Set up.
+pub(super) const SET_UP: &str = "Set up";
+/// The sentence that the Set up control says in a hover.
+pub(super) const SET_UP_HOVER: &str = "Rent a machine, add the Horizon server, or a browser that stays signed in.";
 /// The side of the state dot in front of a machine name.
 pub(super) const DOT_SIDE: f32 = 9.0;
 /// How long the reason of a refused machine stays in the section.
@@ -238,36 +246,10 @@ impl HorizonApp {
             self.sidebar_notice = None;
             self.sidebar_notice_until = None;
         }
-        // A reason that an action of the person opened nothing stays visible
-        // after the row is forgotten, because it is the reason the person has to
-        // act on. The section appears with its first machine, or with the line of
-        // a server that this Horizon follows: the line says that the list comes
-        // from there before the first machine arrives.
-        if self.machine_rows.rows().is_empty()
-            && self.machine_rows.server_line().is_none()
-            && self.sidebar_notice.is_none()
-            && self.sidebar_sticky_notice.is_none()
-            && self.settings_lost.is_none()
-        {
-            return;
-        }
         // The rows are borrowed out for the pass, because a press changes the
         // actions and the board; nothing in the pass reads the cache again.
         let rows = std::mem::take(&mut self.machine_rows);
-        if !rows.rows().is_empty() || rows.server_line().is_some() {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.add_space(18.0);
-                ui.label(text::line(
-                    ui,
-                    "Machines",
-                    13.0,
-                    text::SEMIBOLD,
-                    theme::FG_SOFT(),
-                    120.0,
-                ));
-            });
-        }
+        Self::render_machines_header(ui, actions, rows.server_line().is_none(), rows.rows().is_empty());
         if let Some(line) = rows.server_line() {
             let reason = rows.server_reason();
             ui.horizontal(|ui| {
@@ -334,6 +316,66 @@ impl HorizonApp {
             });
         }
         ui.add_space(6.0);
+    }
+
+    /// The title of the machine section, its Set up control, the state of the
+    /// link to a server and, while the list is empty, where a machine comes from.
+    ///
+    /// It is here while this Horizon has no machine at all: a person who starts
+    /// with an empty window has to be able to get one.
+    fn render_machines_header(ui: &mut egui::Ui, actions: &mut SidebarActions, no_server: bool, no_machine: bool) {
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_space(18.0);
+            ui.label(text::line(
+                ui,
+                "Machines",
+                13.0,
+                text::SEMIBOLD,
+                theme::FG_SOFT(),
+                120.0,
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(12.0);
+                let control = ui
+                    .add(super::super::util::chrome_button(SET_UP).min_size(Vec2::new(64.0, 24.0)))
+                    .on_hover_text(SET_UP_HOVER);
+                if control.clicked() {
+                    actions.press_set_up = true;
+                }
+            });
+        });
+        if no_server {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                let dot = ui.allocate_space(Vec2::new(7.0, 7.0)).1;
+                ui.painter().circle_filled(dot.center(), 3.5, theme::FG_DIM());
+                ui.add_space(3.0);
+                ui.label(text::line(
+                    ui,
+                    NO_SERVER,
+                    11.0,
+                    text::REGULAR,
+                    text::secondary(),
+                    ui.available_width() - 18.0,
+                ));
+            });
+        }
+        if no_machine {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.label(text::paragraph(
+                    ui,
+                    NO_MACHINE,
+                    11.0,
+                    text::REGULAR,
+                    text::secondary(),
+                    ui.available_width() - 18.0,
+                ));
+            });
+        }
     }
 
     /// Draws one machine row and turns a press on it into an action.

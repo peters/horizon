@@ -24,6 +24,7 @@ pub(super) enum ToolbarAction {
     QuickNav,
     RemoteHosts,
     Sessions,
+    SetUp,
     Settings,
 }
 

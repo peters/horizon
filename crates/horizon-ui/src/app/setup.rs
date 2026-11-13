@@ -27,11 +27,11 @@ use self::notice::ProgramRow;
 #[derive(Default)]
 pub(in crate::app) struct SetupState {
     /// The goal of the last press, which a press on Look again repeats.
-    goal: SetupGoal,
+    pub(in crate::app) goal: SetupGoal,
     /// The panel of the agent that Set up started, while it lives.
     panel: Option<PanelId>,
     /// The notice card that Horizon drew, while it lives.
-    notice_panel: Option<PanelId>,
+    pub(in crate::app) notice_panel: Option<PanelId>,
     /// A search of the agent programs runs on the worker, so a press starts no
     /// second one.
     searching: bool,
@@ -39,7 +39,7 @@ pub(in crate::app) struct SetupState {
     programs: Vec<ProgramRow>,
     /// Whether this run installs its agent integrations, so the agent that Set
     /// up starts has the Horizon skills.
-    integrations: bool,
+    pub(in crate::app) integrations: bool,
 }
 
 impl SetupState {
