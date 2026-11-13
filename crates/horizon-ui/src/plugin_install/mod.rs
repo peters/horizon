@@ -89,9 +89,7 @@ fn install_server_skill(dir: &Path) -> io::Result<()> {
     let parent = dir
         .parent()
         .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
-    let staging = tempfile::Builder::new()
-        .prefix(".horizon-server-")
-        .tempdir_in(parent)?;
+    let staging = tempfile::Builder::new().prefix(".horizon-server-").tempdir_in(parent)?;
     sync_plugin_files(staging.path(), SERVER_SKILL_FILES)?;
     std::fs::rename(staging.path(), dir)
 }
@@ -107,9 +105,7 @@ fn install_setup_skill(dir: &Path) -> io::Result<()> {
     let parent = dir
         .parent()
         .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
-    let staging = tempfile::Builder::new()
-        .prefix(".horizon-setup-")
-        .tempdir_in(parent)?;
+    let staging = tempfile::Builder::new().prefix(".horizon-setup-").tempdir_in(parent)?;
     sync_plugin_files(staging.path(), SETUP_SKILL_FILES)?;
     std::fs::rename(staging.path(), dir)
 }
@@ -827,11 +823,10 @@ mod tests {
     };
     use super::{
         AgentMcpEntry, AgentPluginHostLease, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
-        HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL, HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL,
-        RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
-        abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl,
-        open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills,
-        sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
+        HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL, HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL, RETIRED_NOTIFY_SKILL,
+        RETIRED_NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config,
+        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
+        sync_leased_user_skills, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
