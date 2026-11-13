@@ -11,7 +11,6 @@ use std::time::Duration;
 use horizon_core::SshConnection;
 
 const SSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SSH_PROBE_CONNECT_TIMEOUT_SECS: u16 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LocalUploadFile {

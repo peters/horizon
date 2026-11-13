@@ -19,6 +19,15 @@ use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
 /// end long before that.
 const CONNECT_TIMEOUT_SECS: u16 = 10;
 
+/// How long a probe of an upload or of a listing may take, in seconds.
+///
+/// A probe asks one question about a folder of a machine that a person picked, so
+/// it fails faster than a panel: a stand-in address or a hung forward then reads
+/// as a missing answer instead of a slow upload. It is shorter than the bound of a
+/// child and it lives here, beside that bound, so one module holds the connect
+/// bounds of every ssh child of Horizon.
+pub const PROBE_CONNECT_TIMEOUT_SECS: u16 = 5;
+
 /// How often an open connection of a machine terminal asks the machine to answer,
 /// in seconds.
 const MACHINE_SERVER_ALIVE_INTERVAL_SECS: u16 = 5;
@@ -129,9 +138,12 @@ impl SshConnection {
         args
     }
 
+    /// Arguments of one probe: the batch mode and the shorter bound of
+    /// [`PROBE_CONNECT_TIMEOUT_SECS`], because a probe asks one question and no
+    /// person waits for its answer as they wait for a shell.
     #[must_use]
-    pub fn ssh_probe_transport_args(&self, connect_timeout_secs: u16) -> Vec<String> {
-        let mut args = self.base_transport_args(true, connect_timeout_secs);
+    pub fn ssh_probe_transport_args(&self) -> Vec<String> {
+        let mut args = self.base_transport_args(true, PROBE_CONNECT_TIMEOUT_SECS);
         args.push(self.transport_target());
         args
     }
@@ -242,7 +254,7 @@ fn expand_tilde(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::SshConnection;
+    use super::{PROBE_CONNECT_TIMEOUT_SECS, SshConnection};
     use crate::ssh::MachineKeyRef;
     use horizon_browser_control::manifest::block_terminal::{self, TerminalRoute};
 
@@ -611,12 +623,12 @@ mod tests {
         };
 
         assert_eq!(
-            connection.ssh_probe_transport_args(5),
+            connection.ssh_probe_transport_args(),
             vec![
                 "-o".to_string(),
                 "BatchMode=yes".to_string(),
                 "-o".to_string(),
-                "ConnectTimeout=5".to_string(),
+                format!("ConnectTimeout={PROBE_CONNECT_TIMEOUT_SECS}"),
                 "-o".to_string(),
                 "ServerAliveInterval=15".to_string(),
                 "-o".to_string(),
@@ -627,11 +639,6 @@ mod tests {
         );
     }
 
-    /// B6: every kind of ssh child that Horizon starts names a connect bound, so an
-    /// attempt into a link that is gone ends in ten seconds instead of the two
-    /// minutes of the system default. The four kinds are the plain panel, the
-    /// terminal that an agent opens for a host outside the machine list, the upload
-    /// and the `-W` forward of a device viewer.
     /// B13: multiplexing is a decision of the person. At a round trip of a third
     /// of a second a handshake costs seconds, so five panels cost five of them
     /// unless the person shares one connection. An `ssh` child of Horizon that
@@ -668,7 +675,7 @@ mod tests {
                 SshConnection::for_agent_terminal(&checked).to_command_args(),
             ),
             ("the upload", plain_panel.ssh_transport_args()),
-            ("the upload probe", plain_panel.ssh_probe_transport_args(5)),
+            ("the upload probe", plain_panel.ssh_probe_transport_args()),
             (
                 "the stdio forward of a device",
                 plain_panel.stdio_forward_args("127.0.0.1:5900"),
@@ -709,6 +716,11 @@ mod tests {
         }
     }
 
+    /// B6: every kind of ssh child that Horizon starts names a connect bound, so an
+    /// attempt into a link that is gone ends at its own bound instead of the two
+    /// minutes of the system default. The four kinds are the plain panel, the
+    /// terminal that an agent opens for a host outside the machine list, the upload
+    /// and the `-W` forward of a device viewer.
     #[test]
     fn every_ssh_child_of_horizon_bounds_its_connect() {
         let route = TerminalRoute {
@@ -738,8 +750,8 @@ mod tests {
             ("the upload", upload.ssh_transport_args(), "ConnectTimeout=10"),
             (
                 "the upload probe",
-                upload.ssh_probe_transport_args(5),
-                "ConnectTimeout=5",
+                upload.ssh_probe_transport_args(),
+                &format!("ConnectTimeout={PROBE_CONNECT_TIMEOUT_SECS}"),
             ),
             (
                 "the stdio forward of a device",

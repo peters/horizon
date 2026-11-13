@@ -9,9 +9,8 @@ use std::time::{Duration, Instant};
 use horizon_core::SshConnection;
 
 use super::{
-    LocalUploadFile, RemoteDirectoryListing, SSH_POLL_INTERVAL, SSH_PROBE_CONNECT_TIMEOUT_SECS, UploadControl,
-    UploadMessage, UploadProgressContext, WorkerExit, non_empty_output, poll_upload_control, send_upload_snapshot,
-    wait_for_child,
+    LocalUploadFile, RemoteDirectoryListing, SSH_POLL_INTERVAL, UploadControl, UploadMessage, UploadProgressContext,
+    WorkerExit, non_empty_output, poll_upload_control, send_upload_snapshot, wait_for_child,
 };
 
 const SSH_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -110,7 +109,7 @@ pub(super) fn resolve_remote_directory_cancellable(
     let remote_command = build_remote_shell_command(RESOLVE_REMOTE_DIR_SCRIPT, &[requested_path]);
     let mut command = Command::new("ssh");
     command
-        .args(connection.ssh_probe_transport_args(SSH_PROBE_CONNECT_TIMEOUT_SECS))
+        .args(connection.ssh_probe_transport_args())
         .arg(remote_command);
     let output = run_cancellable_command(command, control_rx)?;
     resolved_directory(&output).map_err(WorkerExit::Failed)
@@ -318,7 +317,7 @@ fn write_file_to_pipe(path: &Path, mut file: File, mut pipe: ChildStdin, events:
 fn run_ssh_script(connection: &SshConnection, script: &str, args: &[&str]) -> Result<String, String> {
     let remote_command = build_remote_shell_command(script, args);
     let output = Command::new("ssh")
-        .args(connection.ssh_probe_transport_args(SSH_PROBE_CONNECT_TIMEOUT_SECS))
+        .args(connection.ssh_probe_transport_args())
         .arg(remote_command)
         .output()
         .map_err(|error| format!("failed to launch ssh probe: {error}"))?;

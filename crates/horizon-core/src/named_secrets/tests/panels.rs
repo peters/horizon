@@ -102,7 +102,7 @@ fn no_command_line_of_a_machine_and_no_machine_environment_carries_a_named_secre
     let mut command_lines = vec![
         connection.to_command_args(),
         connection.ssh_transport_args(),
-        connection.ssh_probe_transport_args(5),
+        connection.ssh_probe_transport_args(),
         SessionKill::over(&connection, "hz-1a2b3c4d-1").args,
     ];
     // The interactive shell of a panel keeps the environment of its own start, and
