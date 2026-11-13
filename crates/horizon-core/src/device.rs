@@ -146,6 +146,22 @@ mod tests {
     };
 
     #[test]
+    fn a_saved_viewer_keeps_the_size_that_the_person_gave_it() {
+        let panel = Panel::spawn(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelOptions {
+                kind: PanelKind::Device,
+                command: Some("127.0.0.1:5900".into()),
+                size: Some([900.0, 700.0]),
+                ..PanelOptions::default()
+            },
+        )
+        .expect("a viewer panel");
+        assert_eq!(panel.layout.size, [900.0, 700.0]);
+    }
+
+    #[test]
     fn device_target_accepts_only_numeric_loopback_endpoints() {
         for value in ["127.0.0.1:5900", "127.0.0.2:65535", "[::1]:5900"] {
             assert!(DeviceViewTarget::parse(value).is_ok(), "{value}");
@@ -180,6 +196,11 @@ mod tests {
         assert!(panel.browser().is_none());
         assert!(!panel.kind.accepts_text_input());
         assert!(!panel.kind.is_agent());
+        assert_eq!(
+            panel.layout.size,
+            crate::DEFAULT_DEVICE_PANEL_SIZE,
+            "a new viewer leaves room for a 16:10 picture beside its rows"
+        );
         assert_eq!(panel.launch_command.as_deref(), Some("127.0.0.1:5900"));
         assert!(panel.device().is_some_and(|device| device.connect_on_start));
         panel.write_input(b"must not launch a shell");

@@ -39,6 +39,18 @@ user, and are refused otherwise, so nothing reaches ssh as an option or a shell
 fragment. Inspect and list report `ssh` for tunnelled viewers, and
 `connection_error` carries ssh's last lines when the tunnel fails.
 
+A viewer whose `endpoint` and `ssh` route do not change reconnects by itself
+after a lost link, with the waits of a terminal of the same link: 3, 6, 12, 24
+and then 30 seconds, and a connection that lasted ten seconds starts the count
+again. While it waits, inspect returns `connection: "reconnecting"`,
+`reconnect.attempt` counted from 1, `reconnect.next_attempt_in_millis` until the
+next attempt, and `connection_error` with the words of the loss. The last image
+stays on screen and `image_displayed` is false. A refusal of a host key is not
+retried: `connection` stays `disconnected` with `connection_failure`. Only a
+person stops the attempts, with the `Stop` control of the viewer; no operation
+stops or starts a reconnect, so do not call `reconnect` for a viewer that is
+`reconnecting`, and wait for its attempt instead.
+
 An untrusted host is a refusal, not an unreachable host. When the tunnel fails
 that way, inspect returns `connection_failure`: `code: "host_not_trusted"` when
 ssh holds no `known_hosts` entry, or `code: "host_key_changed"` when

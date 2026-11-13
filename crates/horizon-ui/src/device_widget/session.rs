@@ -45,6 +45,18 @@ fn route(device: &DevicePanelState) -> Route {
     }
 }
 
+/// The delays of a lost link, as the machine terminals of this application use
+/// them: 3, 6, 12, 24 and then 30 seconds, and a connection that lasted ten
+/// seconds starts the count again. A viewer of a bad link comes back by itself
+/// with the same waits as a terminal of the same link.
+fn reconnect_policy() -> horizon_vnc::Reconnect {
+    horizon_vnc::Reconnect {
+        delays: (1..=4).map(horizon_core::reconnect_delay).collect(),
+        repeat: horizon_core::reconnect_delay(5),
+        reset_after: horizon_core::RECONNECT_RESET_AFTER,
+    }
+}
+
 /// Only native session metadata is kept from the server clipboard; ordinary
 /// clipboard text never replaces it.
 fn is_native_metadata(text: &str) -> bool {
@@ -100,6 +112,7 @@ impl Session {
             route: route(device),
             options,
             keep_server_text: is_native_metadata,
+            reconnect: reconnect_policy(),
         };
         let inner = horizon_vnc::Session::start(config, move |wake| {
             let viewport = *target.lock().unwrap_or_else(PoisonError::into_inner);
@@ -122,6 +135,14 @@ impl Session {
 
     pub(super) fn set_options(&self, options: ViewOptions) {
         self.inner().set_options(options);
+    }
+
+    /// Stop the worker and its automatic attempts. The viewer keeps the last
+    /// image and nothing connects again until a person presses Reconnect.
+    pub(super) fn stop(&mut self) {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.stop();
+        }
     }
 
     pub(super) fn latest_full(&self) -> Option<ColorImage> {

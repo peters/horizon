@@ -28,7 +28,8 @@ impl DriverState {
         selector: Option<&str>,
         max_nodes: u32,
     ) -> Result<Value, BrowserControlFailure> {
-        self.frame_scan_within(link, events, slot, selector, max_nodes, super::super::CALL_TIMEOUT)
+        let budget = self.read_call().budget();
+        self.frame_scan_within(link, events, slot, selector, max_nodes, budget)
     }
 
     pub(in crate::session) fn frame_scan_within(
@@ -376,6 +377,7 @@ mod tests {
         let slot = Arc::new(FrameSlot::default());
         let config = BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "frame-protocol".into(),
             initial_url: None,

@@ -407,11 +407,26 @@ computer.
   its place and its last address, and it reports `attached_host_connection_lost`
   in `failure.code` of `browser_panel`, with the words of the lost connection in
   `failure.message`. A panel that never showed a page does not stay, and its
-  `browser_create` answers that code instead. Read `failure` before you act:
-  the panel has no driver, so every control call fails with
-  `browser_unavailable` until the person presses **Retry** there or starts the
-  panel again. Tell the person the code and the words of the failure; do not
-  create a second panel to replace a panel they can retry.
+  `browser_create` answers that code instead. The panel then connects again by
+  itself, with waits of 3, 6, 12, 24 and then 30 seconds, and it says how long
+  it waits; the browser and the profile of that machine are unchanged, so the
+  next attempt reaches the same browser. An attempt that cannot reach the host
+  continues the waits, and a host key that ssh refuses ends them.
+- A link that comes back drives the same page again: the browser of that machine
+  kept running, so the text that the person typed into a form, its scroll place
+  and the sign-in of a single-page application are still there. That panel
+  reports `link_recovered: { "page_resumed": true }` in `browser_panel` and
+  `browser_list`, and its body says so. When the page target is gone — the
+  browser of that machine restarted, or the page was closed — the attempt opens
+  a new page at the last address, the member is absent, and the body says that
+  the old state is gone. The action journal of the panel has one entry for the
+  lost link and one for the returned page.
+- While the panel waits, its `status` is `reconnecting`, and every control call
+  fails with `browser_unavailable`. A call that was in flight when the link was
+  lost fails with `link_lost` and its message says that the action may or may
+  not have happened; it never returns success. A later call works. Do not create
+  a second panel to replace it, and do not press **Retry** for it: the person
+  may press that to skip a wait.
 - Every local account of that machine can reach the loopback `DevTools` port of
   that browser and use its sign-ins. Never claim that the browser is isolated
   from the other users of that machine.

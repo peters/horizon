@@ -592,6 +592,7 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
     let slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser: BrowserConfig {
             backend,
             headless: backend != BackendKind::SafariWebDriver,
@@ -903,6 +904,7 @@ fn run_chat(backend: BackendKind, root: &Path) {
     let slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser: BrowserConfig {
             backend,
             headless: true,

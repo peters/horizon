@@ -12,11 +12,13 @@ use crate::{AutomationDisclosurePolicy, BrowserConfig};
 use super::shared::{AttachedBrowser, DriverProcess, SharedBrowserSession, SharedDriverReservation};
 
 mod disclosure;
+mod page;
 
 use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
+pub(crate) use page::{caller_page, create_page_target, first_page_target};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -75,10 +77,16 @@ struct DriverConnection {
     ws_url: String,
     target_id: String,
     session_id: String,
+    /// Whether `target_id` is the page the panel drove before a lost link, so
+    /// its state is intact and no startup navigation may run.
+    resumed_page: bool,
     native_user_agent_metadata: Option<serde_json::Value>,
     /// Whether this browser accepted the panel download folder and reports
     /// the downloads it saves there.
     downloads_reporting: bool,
+    /// Why this session reports no downloads, when it knows. The downloads
+    /// answer states it; it is no reason to stop the page.
+    downloads_note: Option<String>,
 }
 
 fn initialize_driver(
@@ -278,11 +286,7 @@ fn initialize_target(
     // A browser of another process already holds the pages of its person: this
     // session takes a page of a sibling only when it created one before, and
     // otherwise creates its own.
-    let existing_target = if chrome.is_shared() || chrome.is_attached() {
-        chrome.registered_target()
-    } else {
-        first_page_target(&mut link, stop_requested)
-    };
+    let (resumed_page, existing_target) = caller_page(config, &chrome, &mut link, stop_requested);
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
@@ -341,11 +345,17 @@ fn initialize_target(
     if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
-    let downloads_reporting = if let Some(directory) = downloads_dir {
-        configure_downloads(&mut link, event_tx, stop_requested, directory)
+    let (downloads_reporting, downloads_note) = if let Some(directory) = downloads_dir {
+        (
+            configure_downloads(&mut link, event_tx, stop_requested, directory),
+            None,
+        )
     } else {
-        let _ = event_tx.send(BrowserEvent::Warning(crate::ATTACHED_DOWNLOADS_GAP.to_string()));
-        false
+        // A refusal or an inapplicable setting is the answer to the downloads
+        // question of this panel, not the failure of the session: the page of
+        // that browser is fine, and a warning here used to replace a ready
+        // page with a fatal error.
+        (false, Some(crate::ATTACHED_DOWNLOADS_GAP.to_string()))
     };
     Some(DriverConnection {
         chrome,
@@ -353,8 +363,10 @@ fn initialize_target(
         ws_url,
         target_id,
         session_id,
+        resumed_page,
         native_user_agent_metadata,
         downloads_reporting,
+        downloads_note,
     })
 }
 
@@ -473,10 +485,15 @@ pub(super) fn run_driver(
                 SharedBrowserSession::profile_id(&reservation.session)
             }),
     );
-    state.set_downloads(crate::downloads::DownloadState::new(
+    let downloads = crate::downloads::DownloadState::new(
         downloads_directory.to_string_lossy().to_string(),
         connection.downloads_reporting,
-    ));
+    );
+    let downloads = match connection.downloads_note.take() {
+        Some(note) => downloads.with_note(note),
+        None => downloads,
+    };
+    state.set_downloads(downloads);
     state.initialize_manifest();
     if !state.attach_setup(
         &mut connection.link,
@@ -484,6 +501,7 @@ pub(super) fn run_driver(
         frame_slot,
         &connection.session_id,
         &connection.target_id,
+        connection.resumed_page,
     ) {
         connection
             .chrome
@@ -492,6 +510,13 @@ pub(super) fn run_driver(
         return;
     }
 
+    if connection.resumed_page {
+        state.audit_session_event(crate::BrowserAuditAction::PageResumed);
+    }
+    let _ = event_tx.send(BrowserEvent::PageAttached {
+        target_id: connection.target_id.clone(),
+        resumed: connection.resumed_page,
+    });
     run_loop(
         &mut state,
         &mut connection.chrome,
@@ -503,42 +528,6 @@ pub(super) fn run_driver(
     connection
         .chrome
         .close_page(&mut connection.link, &connection.target_id);
-}
-
-/// First existing `page` target, if any.
-pub(super) fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
-    let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
-    result
-        .get("targetInfos")
-        .and_then(|t| t.as_array())
-        .and_then(|targets| first_available_page_target_id(targets))
-        .map(str::to_string)
-}
-
-fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str> {
-    targets
-        .iter()
-        .find(|target| {
-            target.get("type").and_then(serde_json::Value::as_str) == Some("page")
-                && !target
-                    .get("attached")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-        })
-        .and_then(|target| target.get("targetId"))
-        .and_then(serde_json::Value::as_str)
-}
-
-/// Create a fresh page target as a fallback (browser opened without one).
-/// `background` opens it in its own window that does not take the focus.
-pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, background: bool) -> Option<String> {
-    let params = if background {
-        serde_json::json!({ "url": "about:blank", "newWindow": true, "background": true })
-    } else {
-        serde_json::json!({ "url": "about:blank" })
-    };
-    let result = call_during_startup(link, stop_requested, "Target.createTarget", &params).ok()?;
-    result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
 }
 
 /// The Chromium switch of the egress record, when the browser profile names one.
@@ -694,7 +683,8 @@ mod tests {
     use crate::frames::FrameSlot;
 
     use super::super::{BrowserSessionConfig, start_session};
-    use super::{build_launch, first_available_page_target_id, profile_dir};
+    use super::page::first_available_page_target_id;
+    use super::{build_launch, profile_dir};
 
     /// Write `body` as the program `name` of `folder`, with the permissions of a
     /// program, so the session under test starts a program that this test wrote.
@@ -781,6 +771,7 @@ mod tests {
         std::fs::create_dir_all(&profiles).expect("a profile folder");
         let session = |command: Option<String>| BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 command,
                 profile_root: Some(profiles.clone()),
@@ -822,6 +813,7 @@ mod tests {
 
         let session = start_session(BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 command: Some(browser.to_string_lossy().into_owned()),
                 profile_root: Some(temp.path().join("profiles")),

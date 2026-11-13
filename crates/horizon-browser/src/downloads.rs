@@ -47,6 +47,8 @@ struct ObservedDownload {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DownloadState {
     directory: String,
+    /// Why this session reports no downloads, when it knows.
+    note: Option<String>,
     /// Whether this session can observe downloads at all. A browser that
     /// cannot is older than the events Horizon reads, or its configuration was
     /// refused.
@@ -59,6 +61,7 @@ impl DownloadState {
     pub(crate) fn new(directory: impl Into<String>, reporting: bool) -> Self {
         Self {
             directory: directory.into(),
+            note: None,
             reporting,
             observed: VecDeque::new(),
             dropped: 0,
@@ -67,6 +70,13 @@ impl DownloadState {
 
     pub(crate) fn reporting(&self) -> bool {
         self.reporting
+    }
+
+    /// State why this session reports no downloads. The downloads answer says
+    /// it; the page keeps running.
+    pub(crate) fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
     }
 
     #[must_use]
@@ -81,6 +91,7 @@ impl DownloadState {
         BrowserDownloadList {
             directory: self.directory.clone(),
             reporting: self.reporting,
+            note: self.note.clone(),
             downloads: self
                 .observed
                 .iter()

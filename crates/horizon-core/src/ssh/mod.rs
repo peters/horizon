@@ -143,6 +143,11 @@ impl SshConnection {
     /// key refuses the forward, so a viewer that connects on its own never
     /// trusts a first-contact key. The key is trusted the usual way first,
     /// for example by opening the host over SSH once.
+    ///
+    /// The connect and the key exchange hold the same bound as a machine
+    /// terminal, so a link whose address is gone ends in ten seconds and the
+    /// viewer tries again instead of waiting for the system default of about
+    /// two minutes.
     #[must_use]
     pub fn stdio_forward_args(&self, remote_endpoint: &str) -> Vec<String> {
         let mut args = vec!["-W".to_string(), remote_endpoint.to_string()];

@@ -638,19 +638,43 @@ fn widest_panel_width(ctx: &egui::Context, app: &mut crate::app::HorizonApp, vie
 fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() {
     use horizon_core::TranscriberKind;
     use horizon_core::named_secrets::{NamedSecretState, NamedSecretWorkbench};
+    use horizon_core::speech::SpeechPlatform;
 
     let mut config = Config::default();
     config.speech.transcriber.kind = TranscriberKind::Service;
+    // The recorder line of the person, because the default of the platform is a
+    // value and not a `cfg!`: a Mac has no recorder of the system, so its default
+    // line is empty and the tab then says that speech input is off. This task is
+    // about the take, so it writes a line that both systems accept.
+    config.speech.recorder = "rec --rate 16000 {file}".to_owned();
     let workbench = NamedSecretWorkbench::new(None, &[]);
     let answer: Result<String, String> = Ok("hei".to_owned());
     let view = super::speech::SpeechView {
         answer: Some(&answer),
         running: false,
+        kept: None,
         secret: NamedSecretState::Present,
     };
     let (changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
 
     assert!(!changed, "drawing the tab changes no value");
+    // The recorder row names the default of the platform of this build: the line
+    // of `pw-record` on Linux, and the statement that a Mac has none instead of an
+    // empty value. Both sentences are values, so this task reads the one of the
+    // system that runs it and the tab states the same on both.
+    let platform = SpeechPlatform::current();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == &platform.default_recorder_sentence()),
+        "the recorder row names the default of {}: {texts:?}",
+        platform.name()
+    );
+    assert!(
+        platform.default_recorder_sentence().contains(platform.name()),
+        "the sentence names the platform that it is about: {}",
+        platform.default_recorder_sentence()
+    );
     assert!(
         texts_hold(&texts, "SPEECH_API_KEY: stored on this computer."),
         "the tab says that this computer holds the key: {texts:?}"
@@ -665,6 +689,12 @@ fn the_speech_tab_says_whether_the_key_is_here_and_shows_the_text_of_its_take() 
             .any(|text| text.contains("goes to the service of the endpoint")),
         "the tab says where a take goes: {texts:?}"
     );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.contains("Shift+R sends the last kept take again")),
+        "the tab names the shortcut that sends a kept take again: {texts:?}"
+    );
 }
 
 #[test]
@@ -678,6 +708,7 @@ fn the_speech_tab_keeps_the_language_empty_and_says_what_an_empty_one_means() {
     let view = super::speech::SpeechView {
         answer: None,
         running: false,
+        kept: None,
         secret: NamedSecretState::NoValue,
     };
     let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);
@@ -703,6 +734,7 @@ fn the_speech_tab_says_that_speech_input_is_off_while_no_transcriber_is_set() {
     let view = super::speech::SpeechView {
         answer: None,
         running: false,
+        kept: None,
         secret: horizon_core::named_secrets::NamedSecretState::NoValue,
     };
     let (_changed, texts) = super::frame_of(|ui| super::speech::render(ui, &mut config, &workbench, &view).changed);

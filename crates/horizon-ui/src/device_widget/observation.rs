@@ -4,7 +4,7 @@ use horizon_core::browser::manifest::{
     self,
     device::{
         Connection, ConnectionFailure, ConnectionFailureCode, Diagnostics, ImageEvidence, ObservedSshHostKey,
-        PanelState, Presentation, SshHostKeyFailure, SshRoute,
+        PanelState, Presentation, Reconnect, SshHostKeyFailure, SshRoute,
     },
 };
 use horizon_vnc::{HostKeyFailure, HostKeyRefusal};
@@ -35,12 +35,30 @@ impl DeviceUiState {
                 self.server.desktop_size = Some(size);
             }
         }
-        let (connection, connection_error, failure) = match &self.status {
-            Status::Stopped => (Connection::Stopped, None, None),
-            Status::Connecting => (Connection::Connecting, None, None),
-            Status::Connected => (Connection::Connected, None, None),
+        let observed_at = manifest::now_millis();
+        let (connection, reconnect, connection_error, failure) = match &self.status {
+            Status::Stopped => (Connection::Stopped, None, None, None),
+            Status::Connecting => (Connection::Connecting, None, None, None),
+            Status::Connected => (Connection::Connected, None, None, None),
+            Status::Reconnecting {
+                attempt,
+                retry_at,
+                message,
+            } => (
+                Connection::Reconnecting,
+                Some(Reconnect {
+                    attempt: *attempt,
+                    next_attempt_in_millis: u64::try_from(
+                        retry_at.saturating_duration_since(Instant::now()).as_millis(),
+                    )
+                    .unwrap_or(u64::MAX),
+                }),
+                Some(message.clone()),
+                None,
+            ),
             Status::Disconnected { message, host_key } => (
                 Connection::Disconnected,
+                None,
                 Some(message.clone()),
                 host_key.as_ref().map(connection_failure),
             ),
@@ -53,7 +71,9 @@ impl DeviceUiState {
             visible && self.image.received && self.image.previous_displayed && connection == Connection::Connected;
         let presentation = match connection {
             Connection::Stopped => Presentation::Stopped,
-            Connection::Connecting => Presentation::Connecting,
+            // A lost link keeps the last image on screen, and nothing of the
+            // current attempt is presented yet.
+            Connection::Connecting | Connection::Reconnecting => Presentation::Connecting,
             Connection::Disconnected => Presentation::Disconnected,
             Connection::Connected if !visible => Presentation::Hidden,
             Connection::Connected if !self.previous_rendered => Presentation::NotRendered,
@@ -80,7 +100,7 @@ impl DeviceUiState {
                 received_frame_sequence: self.image.received_sequence,
             },
             diagnostics: Some(Diagnostics {
-                observed_at_millis: manifest::now_millis(),
+                observed_at_millis: observed_at,
                 connection_generation: self.connection_generation,
                 presentation,
                 sampling_paused: paused,
@@ -91,6 +111,7 @@ impl DeviceUiState {
                 host: self.host.observation(),
             }),
             connection,
+            reconnect,
             connection_error,
             connection_failure: failure,
         }

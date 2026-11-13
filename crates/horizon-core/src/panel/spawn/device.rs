@@ -27,6 +27,7 @@ pub(super) fn spawn_device(
             |connection| format!("Device {}", connection.display_label()),
         )
     });
+    let has_size = seed.size.is_some();
     let mut panel = seed.into_panel(
         title,
         PanelKind::Device,
@@ -41,6 +42,9 @@ pub(super) fn spawn_device(
         None,
         has_custom_name,
     );
+    if !has_size {
+        panel.layout.size = crate::panel::DEFAULT_DEVICE_PANEL_SIZE;
+    }
     // Persisted like an SSH panel's connection so a restart restores the route.
     panel.ssh_connection = ssh_tunnel;
     Ok(panel)

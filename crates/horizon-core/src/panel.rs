@@ -38,6 +38,10 @@ const DEFAULT_CELL_WIDTH: u16 = 8;
 const DEFAULT_CELL_HEIGHT: u16 = 17;
 
 pub const DEFAULT_PANEL_SIZE: [f32; 2] = [520.0, 340.0];
+
+/// A new desktop viewer: the rows above its picture left the generic size's
+/// body about 20 points high, so this keeps a 16:10 picture of 480 by 300.
+pub const DEFAULT_DEVICE_PANEL_SIZE: [f32; 2] = [560.0, 540.0];
 /// Lines of terminal scrollback kept for a shell, SSH, command, or agent panel.
 pub const PANEL_SCROLLBACK_LIMIT: usize = 24_000;
 const DEFAULT_PANEL_SCROLLBACK_LIMIT: usize = PANEL_SCROLLBACK_LIMIT;

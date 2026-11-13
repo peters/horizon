@@ -106,7 +106,7 @@ impl SshTunnel {
         if tail.is_empty() {
             return error;
         }
-        let message = failure_message(&error.to_string(), &tail, host_key.as_ref());
+        let message = failure_message(&error, &tail, host_key.as_ref());
         Error::Tunnel {
             message,
             host_key: host_key.map(Box::new),
@@ -120,17 +120,100 @@ impl Drop for SshTunnel {
     }
 }
 
-/// What a viewer shows for a failed tunnel: the failure, ssh's own lines and,
-/// when ssh refused the host key, the person's next step.
-fn failure_message(error: &str, tail: &str, host_key: Option<&HostKeyFailure>) -> String {
+/// Why a viewer lost its desktop, in the terms a person reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cause {
+    /// The link or the server did not answer in time.
+    TimedOut,
+    /// The computer that runs the desktop refused the connection.
+    Refused,
+    /// The desktop or the stream that carried it ended the connection.
+    Closed,
+    /// ssh does not trust the identity of the computer that runs the desktop.
+    Untrusted,
+}
+
+impl Cause {
+    /// One plain sentence for the cause. The words of ssh follow it, and the
+    /// words of the protocol library stay in the log.
+    const fn sentence(self) -> &'static str {
+        match self {
+            Self::TimedOut => "The desktop link timed out",
+            Self::Refused => "The computer that runs the desktop refused the connection",
+            Self::Closed => "The desktop closed the connection",
+            Self::Untrusted => "The identity of the computer that runs the desktop is not trusted yet",
+        }
+    }
+}
+
+/// Classify the failure from the typed error and from ssh's own lines, which
+/// name a refusal or a timeout when the forwarded stream simply ended.
+fn cause(error: &Error, tail: &str, host_key: Option<&HostKeyFailure>) -> Cause {
+    if host_key.is_some() || tail.contains("Host key verification failed") || tail.contains("host key is known") {
+        return Cause::Untrusted;
+    }
+    let ssh_says_refused = tail.contains("Connection refused") || tail.contains("Permission denied");
+    let ssh_says_timeout = tail.contains("timed out") || tail.contains("Timeout") || tail.contains("not responding");
+    if matches!(error, Error::Timeout) {
+        return Cause::TimedOut;
+    }
+    if ssh_says_refused {
+        Cause::Refused
+    } else if ssh_says_timeout {
+        Cause::TimedOut
+    } else {
+        Cause::Closed
+    }
+}
+
+/// What a viewer shows for a failed tunnel: one plain sentence for the cause,
+/// ssh's own lines and, when ssh refused the host key, the person's next step.
+fn failure_message(error: &Error, tail: &str, host_key: Option<&HostKeyFailure>) -> String {
     let ssh = if tail.starts_with("ssh: ") {
         tail.to_owned()
     } else {
         format!("ssh: {tail}")
     };
+    let sentence = cause(error, tail, host_key).sentence();
+    tracing::debug!(%error, "device tunnel failure, with the words of the protocol");
     match host_key {
-        Some(host_key) => format!("{error}; {ssh} ({})", host_key.advice()),
-        None => format!("{error}; {ssh}"),
+        Some(host_key) => format!("{sentence}; {ssh} ({})", host_key.advice()),
+        None => format!("{sentence}; {ssh}"),
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn a_lost_link_names_its_cause_and_keeps_the_words_of_ssh() {
+        let closed = Error::Closed;
+        assert_eq!(
+            failure_message(&closed, "Timeout, server lab not responding", None),
+            "The desktop link timed out; ssh: Timeout, server lab not responding",
+            "a person reads a cause, and the words of ssh follow it"
+        );
+        assert_eq!(
+            failure_message(&closed, "connect to host lab port 22: Connection refused", None),
+            "The computer that runs the desktop refused the connection; \
+             ssh: connect to host lab port 22: Connection refused"
+        );
+        assert_eq!(
+            failure_message(&closed, "Connection reset by peer", None),
+            "The desktop closed the connection; ssh: Connection reset by peer"
+        );
+        assert!(
+            !failure_message(&closed, "Timeout, server lab not responding", None).contains("VNC client"),
+            "the words of the protocol library stay in the log"
+        );
+    }
+
+    #[test]
+    fn a_library_stop_is_a_closed_connection_and_not_a_sentence_of_the_library() {
+        let error: Error = vnc::VncError::ClientNotRunning.into();
+        assert!(matches!(error, Error::Closed));
+        assert_eq!(error.to_string(), "The desktop closed the connection");
     }
 }
 
@@ -204,8 +287,8 @@ mod tests {
             let error = tunnel.explain(Error::Frame("early end of stream"), None).await;
             assert_eq!(
                 error.to_string(),
-                "early end of stream; ssh: channel 0: open failed: connect failed: Connection refused; \
-                 stdio forwarding failed"
+                "The computer that runs the desktop refused the connection; ssh: channel 0: open failed: \
+                 connect failed: Connection refused; stdio forwarding failed"
             );
         });
     }
@@ -218,7 +301,7 @@ mod tests {
             let error = tunnel.explain(Error::Timeout, None).await;
             assert_eq!(
                 error.to_string(),
-                "connection timed out; ssh: Could not resolve hostname nowhere.invalid: Name or service not known"
+                "The desktop link timed out; ssh: Could not resolve hostname nowhere.invalid: Name or service not known"
             );
         });
     }
@@ -264,7 +347,13 @@ mod tests {
             let mut tunnel = SshTunnel::spawn("sh", &["-c".to_string(), unknown.to_string()]).unwrap();
             let error = tunnel.explain(Error::Frame("early end of stream"), Some(&unreachable_host())).await;
             let text = error.to_string();
-            assert!(text.starts_with("early end of stream; ssh: No ED25519 host key is known"), "{text}");
+            assert!(
+                text.starts_with(
+                    "The identity of the computer that runs the desktop is not trusted yet; \
+                     ssh: No ED25519 host key is known"
+                ),
+                "{text}"
+            );
             assert!(text.contains("[lab]:22 is not in known_hosts"), "{text}");
             assert!(text.contains("standard ssh tooling"), "{text}");
             assert_eq!(
@@ -298,7 +387,8 @@ mod tests {
             assert!(error.host_key_failure().is_none(), "{error}");
             assert_eq!(
                 error.to_string(),
-                "early end of stream; ssh: Host key verification failed."
+                "The identity of the computer that runs the desktop is not trusted yet; \
+                 ssh: Host key verification failed."
             );
         });
     }

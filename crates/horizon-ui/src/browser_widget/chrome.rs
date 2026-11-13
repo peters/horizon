@@ -98,6 +98,16 @@ pub fn show(
         ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
     }
 
+    if browser.page_resumed {
+        ui.label(
+            RichText::new(
+                "The link was lost and this is the same page again: the text, the scroll place and the session are still there.",
+            )
+            .size(10.5)
+            .color(theme::PALETTE_YELLOW()),
+        );
+    }
+
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
         && !browser.frame_slot.file_chooser().supported()
     {

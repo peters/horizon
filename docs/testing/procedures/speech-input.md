@@ -544,6 +544,73 @@ sound socket and the take said `pw-record ended early: error:
 
    Result: The node goes, and the default device of the person did not change.
 
+### 6.17 SI-17 — A slow link keeps the take, and one retry sends it
+
+> **CAUTION:** RUN THIS TASK WITH THE STAND-IN RECORDER OF THE SETUP. Do not start
+> a recorder of this computer, because a recorder opens the microphone.
+
+1. Start a proxy that holds every request for ten seconds and then passes it to
+   the stand-in service of the setup, on a free loopback port:
+
+   ```sh
+   python3 - <<'PY' &
+   import socket, threading, time
+   LISTEN, TO = ("127.0.0.1", <free>), ("127.0.0.1", <stand-in port>)
+   server = socket.create_server(LISTEN)
+   def one(client):
+       time.sleep(10)
+       far = socket.create_connection(TO)
+       def pump(a, b):
+           try:
+               while data := a.recv(65536):
+                   b.sendall(data)
+           except OSError:
+               pass
+       threading.Thread(target=pump, args=(client, far), daemon=True).start()
+       pump(far, client)
+   while True:
+       threading.Thread(target=one, args=(server.accept()[0],), daemon=True).start()
+   PY
+   ```
+
+2. Open **Settings** › **Speech**, select `Service`, and set the endpoint to
+   `http://127.0.0.1:<free>/v1/audio/transcriptions`. Press **Save**.
+
+3. Press and hold `F9` for two seconds, and release it.
+
+   Result: The pill says `Writing…` and then
+   `The transcription service at 127.0.0.1:<free> did not answer in 30 seconds.
+   The take is kept: Ctrl+Shift+R sends it again.` The sentence names no file and
+   no path.
+
+4. Read the folder of the takes:
+
+   ```sh
+   ls -l "$HOME/.horizon/speech"
+   ```
+
+   Result: One file `take-<random>.wav` is there, with the mode `-rw-------`. The
+   take of the person is still on this computer.
+
+5. Open **Settings** › **Speech**.
+
+   Result: The line `The take is kept and can be sent again. ... Shift+R sends it
+   again.` is under the **Try** button, with the button
+   **Send the last kept take again**.
+
+6. Stop the proxy, and press **Send the last kept take again** (or
+   `Ctrl+Shift+R`).
+
+   Result: The process stops, and the tab says `Could not connect to ...` again,
+   and the take stays for another retry. Start the proxy again and press the
+   button once more: the text of the take appears in the panel that had the focus
+   when the first take recorded, and the folder of the takes is empty.
+
+7. Read the folder again.
+
+   Result: The folder holds no file of this take. A take that was sent is
+   deleted, as before.
+
 ## 7. Pass criteria
 
 - One take inserts the text of its transcription with no line break.
@@ -551,7 +618,10 @@ sound socket and the take said `pw-record ended early: error:
   refused key each leave one sentence and one state.
 - A service that cannot be reached is one sentence that names the host and no
   seconds, and the tab **Try** shows that same sentence.
-- No file of a take stays after a success, an error or a cancel.
+- No file of a take stays after a success, a cancel, or a failure that the
+  service answered. A take that a slow link, an away host or a failed TLS
+  handshake did not carry stays, private, for one retry: at most the last three
+  takes, and never longer than one day.
 - A recorder that ignores the interrupt signal ends on the termination signal, and
   its take reaches the service.
 - A recording that its recorder did not close reaches the transcriber with the

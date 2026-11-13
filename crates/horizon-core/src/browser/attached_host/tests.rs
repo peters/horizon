@@ -15,6 +15,9 @@ use super::super::{BrowserConfig, BrowserDrainOutput, BrowserPanelState, Browser
 use super::{AttachedHost, AttachedHostFailureKind, attached_host_backend_refusal, connect};
 
 const DEADLINE: Duration = Duration::from_secs(10);
+/// A lost link waits three seconds before its first automatic attempt, so a
+/// test that waits for that attempt needs a wider bound than a plain connect.
+const RETRY_DEADLINE: Duration = Duration::from_secs(60);
 
 /// One test at a time. A child that another thread of this process forked holds
 /// the open script of this test, and Linux then refuses to execute it
@@ -470,7 +473,7 @@ fn a_connect_that_a_panel_stopped_delivers_no_forward() {
         serve_version(port)
     });
     stop.store(true, std::sync::atomic::Ordering::Release);
-    let outcome = connect(&ssh, &host, &stop);
+    let outcome = connect(&ssh, &host, &stop, true);
     assert!(
         matches!(outcome, super::AttachOutcome::Cancelled),
         "a stopped panel starts no forward"
@@ -566,7 +569,7 @@ fn attached_host_panel_drives_a_real_ssh_target() {
 
     panel.stop();
     let stop = AtomicBool::new(false);
-    match connect(&Ssh::default(), &host, &stop) {
+    match connect(&Ssh::default(), &host, &stop, true) {
         super::AttachOutcome::Connected(_) => {}
         super::AttachOutcome::Failed(failure) => panic!(
             "the remote Chromium must outlive the panel: {} ({})",
@@ -673,4 +676,304 @@ fn a_browser_that_never_showed_a_page_ends_the_panel_of_the_host() {
         "a panel that showed no page keeps no reason of a lost page"
     );
     assert!(panel.has_ended(), "the create reports why no page opened");
+}
+
+#[test]
+fn the_delays_of_a_lost_link_grow_and_a_long_connection_starts_them_again() {
+    use super::next_attempt;
+    assert_eq!(next_attempt(0, None).0, 1);
+    assert_eq!(next_attempt(0, None).1, Duration::from_secs(3));
+    assert_eq!(next_attempt(3, None), (4, Duration::from_secs(24)));
+    assert_eq!(next_attempt(4, None), (5, Duration::from_secs(30)));
+    assert_eq!(next_attempt(9, None), (10, Duration::from_secs(30)));
+    let long_connection = Instant::now()
+        .checked_sub(crate::RECONNECT_RESET_AFTER)
+        .expect("the test machine has been up for ten seconds");
+    assert_eq!(
+        next_attempt(4, Some(long_connection)),
+        (1, Duration::from_secs(3)),
+        "a connection that lasted ten seconds starts the delays again"
+    );
+    assert_eq!(
+        next_attempt(4, Some(Instant::now())),
+        (5, Duration::from_secs(30)),
+        "a link that drops again waits longer"
+    );
+}
+
+/// The events of a session that showed a page and then lost its WebSocket.
+fn lose_the_link(panel: &mut BrowserPanelState) {
+    let mut output = BrowserDrainOutput::default();
+    panel.apply_event(
+        BrowserEvent::UrlChanged("https://example.test/inbox".to_string()),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Ready, &mut output);
+    panel.apply_event(
+        BrowserEvent::Warning(
+            "CDP connection lost: websocket: WebSocket protocol error: Connection reset without closing handshake"
+                .to_string(),
+        ),
+        &mut output,
+    );
+    panel.apply_event(BrowserEvent::Stopped { code: None }, &mut output);
+}
+
+#[test]
+fn a_lost_link_waits_for_the_next_attempt_and_keeps_the_address() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+
+    lose_the_link(&mut panel);
+
+    let (attempt, retry_at) = panel.attached_retry().expect("an automatic attempt");
+    assert_eq!(attempt, 1, "the first attempt after the first loss");
+    assert!(
+        retry_at > Instant::now() && retry_at <= Instant::now() + Duration::from_secs(3),
+        "the attempt starts after the first delay of the link"
+    );
+    assert!(
+        !panel.has_ended(),
+        "a panel that waits for its own attempt has not ended"
+    );
+    assert!(!panel.status.is_alive(), "nothing is connected while it waits");
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the person keeps the address of the page"
+    );
+    assert_eq!(
+        panel.attached_host_failure().map(super::AttachedHostFailure::kind),
+        Some(AttachedHostFailureKind::ConnectionLost),
+        "the reason of the loss stays for the log and for an agent"
+    );
+    assert!(panel.can_retry(), "a person can still ask for the connect now");
+}
+
+#[test]
+fn an_unreachable_attempt_continues_but_a_missing_browser_needs_a_person() {
+    use horizon_browser_control::ssh_forward::SshForwardError;
+
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = BrowserPanelState::attached_host_for_tests(&host, "https://example.test/");
+    lose_the_link(&mut panel);
+    let (first, _) = panel.attached_retry().expect("an automatic attempt");
+
+    // A cut ends the attempt of an unchanged route, so the next one follows.
+    panel.attached_failed(super::AttachedHostFailure::unreachable(
+        &host,
+        "ssh: connect to host browser-vm port 22: Connection timed out",
+    ));
+    let (next, retry_at) = panel.attached_retry().expect("the next attempt");
+    assert_eq!(next, first + 1);
+    assert!(retry_at > Instant::now(), "the next delay starts after the attempt");
+
+    // A machine without Chromium will not heal by itself.
+    panel.attached_failed(super::AttachedHostFailure::from_ssh(
+        &host,
+        &SshForwardError::RemoteCommandFailed {
+            target: "browser-vm".to_string(),
+            code: Some(3),
+            reason: "no chromium".to_string(),
+        },
+    ));
+    assert_eq!(panel.attached_retry(), None, "a person must install that browser");
+    assert!(
+        matches!(panel.status, BrowserStatus::Error { .. }),
+        "the panel keeps the present failure: {:?}",
+        panel.status
+    );
+    assert!(panel.attached_host_failure().is_some());
+}
+
+#[test]
+fn a_lost_link_comes_back_by_itself_and_leaves_the_page_report_to_its_driver() {
+    let _serial = serial();
+    let directory = scratch();
+    let log = directory.path().join("commands.log");
+    let served: Served = Arc::default();
+    let program = stand_in(
+        directory.path(),
+        &log,
+        &format!(
+            "printf '%s\\n' {running}",
+            running = script_text(&endpoint_text(RUNNING_BROWSER))
+        ),
+    );
+    let probe = {
+        let served = Arc::clone(&served);
+        move |port: u16| {
+            lock(&served).push(port);
+            serve_version(port)
+        }
+    };
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel(test_ssh(&program, probe), &host);
+
+    wait_for_connect(&mut panel);
+    assert_eq!(panel.attached_host_failure(), None);
+    // The mock endpoint answers no CDP handshake, so the first session ends as
+    // it would on a lost link, before a page.
+    wait_until(&mut panel, BrowserPanelState::has_ended);
+    assert_eq!(count_port_reads(&log), 1);
+
+    // The person had a page of that browser before the link went away.
+    panel.attached_reached_ready();
+    lose_the_link(&mut panel);
+    let (attempt, retry_at) = panel.attached_retry().expect("an automatic attempt");
+    assert_eq!(attempt, 1);
+    assert!(retry_at > Instant::now());
+    let waiting = Instant::now();
+
+    // No person presses Retry: the panel connects again by itself.
+    let deadline = waiting + RETRY_DEADLINE;
+    while panel.session.is_none() {
+        panel.drain_events();
+        assert!(Instant::now() < deadline, "the automatic attempt never connected");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        waiting.elapsed() >= Duration::from_secs(3),
+        "the attempt waited the first delay of the link"
+    );
+    assert_eq!(
+        count_port_reads(&log),
+        2,
+        "the attempt read the endpoint of that browser again"
+    );
+    assert_eq!(lock(&served).len(), 2, "the attempt opened one fresh forward");
+    assert_eq!(
+        count_start_snippets(&log),
+        0,
+        "the browser of that machine keeps running"
+    );
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the new page opens the address of the one the person had"
+    );
+    assert_eq!(
+        panel.navigation_error, None,
+        "the driver of the new session decides whether the same page came back; this mock endpoint \
+         answers no CDP handshake, so no page report arrives"
+    );
+    assert_eq!(
+        panel.attached_host_failure(),
+        None,
+        "the automatic attempt reached the browser of that machine"
+    );
+    panel.stop();
+}
+
+#[path = "tests/reattach.rs"]
+mod reattach;
+
+#[test]
+fn an_automatic_attempt_does_not_start_a_browser_that_is_gone() {
+    let _serial = serial();
+    let directory = scratch();
+    let log = directory.path().join("commands.log");
+    let served: Served = Arc::default();
+    let probe_calls = Arc::new(Mutex::new(0_usize));
+    let program = stand_in(
+        directory.path(),
+        &log,
+        &format!(
+            "printf '%s\\n' {running}",
+            running = script_text(&endpoint_text(RUNNING_BROWSER))
+        ),
+    );
+    let probe = {
+        let served = Arc::clone(&served);
+        let probe_calls = Arc::clone(&probe_calls);
+        move |port: u16| {
+            let mut calls = lock(&probe_calls);
+            *calls += 1;
+            if *calls > 1 {
+                // The browser of that machine is gone: the forward is up and
+                // nothing answers on the other side of it.
+                return true;
+            }
+            drop(calls);
+            lock(&served).push(port);
+            serve_version(port)
+        }
+    };
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let mut panel = panel(test_ssh(&program, probe), &host);
+
+    wait_for_connect(&mut panel);
+    assert_eq!(panel.attached_host_failure(), None);
+    // The mock endpoint holds no CDP session, so the first session ends the way
+    // a lost link does.
+    wait_until(&mut panel, BrowserPanelState::has_ended);
+
+    // The person had a page of that browser before its link went away.
+    panel.attached_reached_ready();
+    lose_the_link(&mut panel);
+    assert!(panel.attached_retry().is_some(), "the panel waits for its attempt");
+
+    let deadline = Instant::now() + RETRY_DEADLINE;
+    while panel.attached_retry().is_some() {
+        panel.drain_events();
+        assert!(Instant::now() < deadline, "the automatic attempt never finished");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        count_start_snippets(&log),
+        0,
+        "an attempt of its own never starts a browser that nobody asked for"
+    );
+    assert_eq!(
+        panel.attached_host_failure().map(super::AttachedHostFailure::kind),
+        Some(AttachedHostFailureKind::NoEndpoint),
+        "the browser of that machine is gone"
+    );
+    assert!(
+        matches!(panel.status, BrowserStatus::Error { .. }),
+        "the present failure stays with Retry: {:?}",
+        panel.status
+    );
+    assert!(panel.can_retry(), "a person starts that browser with Retry");
+    assert_eq!(
+        panel.display_url(),
+        "https://example.test/inbox",
+        "the panel keeps the address for the page of the browser that Retry starts"
+    );
+    panel.stop();
+}
+
+#[test]
+fn a_slow_answer_of_a_browser_names_the_link_and_the_wait() {
+    let _serial = serial();
+    let host = AttachedHost::new("browser-vm", Some("mail")).expect("one SSH name");
+    let failure = super::AttachedHostFailure::no_endpoint_too_slow(
+        &host,
+        20,
+        "the DevTools port 127.0.0.1:40000 gave no answer within 20 seconds: timed out",
+    );
+    assert_eq!(
+        failure.kind(),
+        AttachedHostFailureKind::NoEndpoint,
+        "an agent branches on the same typed code"
+    );
+    assert!(
+        failure
+            .message()
+            .starts_with("the link to browser-vm did not carry an answer"),
+        "the sentence names the link, not the browser: {}",
+        failure.message()
+    );
+    assert!(
+        failure.message().contains("within 20 seconds") && failure.message().contains("profile mail"),
+        "the sentence holds the wait and the profile: {}",
+        failure.message()
+    );
+    assert!(
+        failure.message().contains("a slow link or a busy machine"),
+        "the sentence says what the wait means: {}",
+        failure.message()
+    );
 }

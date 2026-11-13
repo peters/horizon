@@ -82,9 +82,9 @@ pub use machines::{
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use panel::{
-    DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume,
-    PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
-    current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
+    DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout,
+    PanelOptions, PanelResume, PanelStart, PendingRestart, RestartPreflight, RestartRequest, SshConnectionEnd,
+    StartRequest, browser_actor, current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
 };
 pub use place::{
     AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,

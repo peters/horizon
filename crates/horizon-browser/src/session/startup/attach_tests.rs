@@ -53,6 +53,7 @@ fn borrowed_browser() -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>)
 fn attached_config(endpoint: DevtoolsEndpoint, frame_slot: &Arc<FrameSlot>) -> BrowserSessionConfig {
     BrowserSessionConfig {
         attach: Some(endpoint),
+        resume_target: None,
         browser: BrowserConfig {
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
             profile_root: Some(std::path::PathBuf::from("/nonexistent/horizon-attach-profiles")),
@@ -96,6 +97,8 @@ fn an_attached_session_drives_its_own_page_and_never_stops_the_browser() {
     assert_eq!(connection.target_id, "ours");
     assert_eq!(connection.session_id, "ours-session");
 
+    let downloads_note = connection.downloads_note.clone();
+    assert!(!connection.downloads_reporting);
     connection
         .chrome
         .close_page(&mut connection.link, &connection.target_id);
@@ -151,14 +154,57 @@ fn an_attached_session_drives_its_own_page_and_never_stops_the_browser() {
 
     let seen: Vec<BrowserEvent> = events.try_iter().collect();
     assert!(
-        seen.iter()
-            .any(|event| matches!(event, BrowserEvent::Warning(note) if note == crate::ATTACHED_DOWNLOADS_GAP)),
-        "the panel states that it reports no download: {seen:?}"
+        !seen.iter().any(|event| matches!(event, BrowserEvent::Warning(_))),
+        "a downloads setting that does not apply is no failure of the session: {seen:?}"
     );
     assert!(
         !seen.iter().any(|event| matches!(event, BrowserEvent::Stopped { .. })),
         "the session of a borrowed browser starts without an exit: {seen:?}"
     );
+    assert_eq!(
+        downloads_note.as_deref(),
+        Some(crate::ATTACHED_DOWNLOADS_GAP),
+        "the reason belongs to the downloads answer of this panel"
+    );
+}
+
+#[test]
+fn a_downloads_refusal_is_an_answer_to_the_downloads_question_and_not_a_ready_page_error() {
+    // The order that showed a fatal error for a page that was fine: the
+    // session reached Ready, and a downloads warning arrived after it (a second
+    // panel of the same browser host). The warning replaced Ready with Error,
+    // so the body showed the downloads sentence with Retry instead of the page.
+    let (endpoint, server) = borrowed_browser();
+    let frame_slot = Arc::new(FrameSlot::new());
+    let config = attached_config(endpoint, &frame_slot);
+    let (event_tx, events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+    let mut connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a driver on the borrowed browser");
+
+    let mut downloads = crate::downloads::DownloadState::new("/tmp/panel-downloads", false);
+    if let Some(note) = connection.downloads_note.take() {
+        downloads = downloads.with_note(note);
+    }
+    let list = downloads.list();
+    assert!(!list.reporting, "the answer says that it reports nothing");
+    assert_eq!(
+        list.note.as_deref(),
+        Some(crate::ATTACHED_DOWNLOADS_GAP),
+        "the downloads answer carries the reason, and no event does"
+    );
+    let seen: Vec<BrowserEvent> = events.try_iter().collect();
+    assert!(
+        !seen.iter().any(|event| matches!(event, BrowserEvent::Warning(_))),
+        "the page of that browser is fine, so nothing reports a failure: {seen:?}"
+    );
+
+    connection
+        .chrome
+        .close_page(&mut connection.link, &connection.target_id);
+    drop(connection);
+    let _ = server.join();
 }
 
 #[test]
@@ -381,4 +427,127 @@ fn wait_for_frame(session: &crate::BrowserSession, frame_slot: &FrameSlot, timeo
         std::thread::sleep(Duration::from_millis(50));
     }
     false
+}
+
+/// One loopback CDP browser whose page list is `targets`, and whose
+/// `Target.attachToTarget` answers `session`.
+fn browser_with_targets(targets: &[&str], session: &str) -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind the mock browser");
+    let port = listener.local_addr().expect("mock address").port();
+    let target_infos: Vec<Value> = targets
+        .iter()
+        .map(|target| json!({ "targetId": target, "type": "page", "attached": false }))
+        .collect();
+    let session = session.to_string();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept the mock browser");
+        let mut socket = tungstenite::accept(stream).expect("mock handshake");
+        let mut commands = Vec::new();
+        while let Ok(Message::Text(text)) = socket.read() {
+            let command: Value = serde_json::from_str(&text).expect("command JSON");
+            let result = match command["method"].as_str() {
+                Some("Target.getTargets") => json!({ "targetInfos": target_infos }),
+                Some("Target.attachToTarget") => json!({ "sessionId": session }),
+                Some("Target.createTarget") => json!({ "targetId": "a-new-page" }),
+                Some("Target.closeTarget") => json!({ "success": true }),
+                _ => json!({}),
+            };
+            commands.push(command.clone());
+            let reply = json!({ "id": command["id"], "result": result });
+            socket.send(Message::Text(reply.to_string().into())).expect("respond");
+        }
+        commands
+    });
+    let endpoint = DevtoolsEndpoint::from_active_port_file(&format!("41000\n{BROWSER_PATH}"), port)
+        .expect("the endpoint of the mock browser");
+    (endpoint, server)
+}
+
+fn attaching(config: &mut BrowserSessionConfig, endpoint: DevtoolsEndpoint) {
+    config.attach = Some(endpoint);
+}
+
+#[test]
+fn a_lost_link_adopts_the_same_page_and_creates_no_target() {
+    let (endpoint, server) = browser_with_targets(&["the-old-page"], "old-session");
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(
+        DevtoolsEndpoint::from_active_port_file(&format!("41000\n{BROWSER_PATH}"), 1).expect("a placeholder endpoint"),
+        &frame_slot,
+    );
+    attaching(&mut config, endpoint);
+    config.resume_target = Some("the-old-page".to_string());
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let mut connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a driver on the page the panel had");
+    assert_eq!(connection.target_id, "the-old-page");
+    assert_eq!(connection.session_id, "old-session");
+    assert!(connection.resumed_page, "the page is the one the panel had");
+    connection
+        .chrome
+        .close_page(&mut connection.link, &connection.target_id);
+    drop(connection);
+    let commands = server.join().expect("the mock browser");
+
+    let methods: Vec<&str> = commands
+        .iter()
+        .filter_map(|command| command["method"].as_str())
+        .collect();
+    assert!(
+        !methods.contains(&"Target.createTarget"),
+        "the same page comes back, so no page is opened: {methods:?}"
+    );
+    let attached: Vec<&Value> = commands
+        .iter()
+        .filter(|command| command["method"] == "Target.attachToTarget")
+        .collect();
+    assert_eq!(attached.len(), 1, "{methods:?}");
+    assert_eq!(attached[0]["params"]["targetId"], "the-old-page");
+    assert_eq!(attached[0]["params"]["flatten"], true);
+}
+
+#[test]
+fn a_resume_target_that_is_gone_opens_a_new_page_and_says_so() {
+    let (endpoint, server) = browser_with_targets(&["a-page-of-the-person"], "new-session");
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(
+        DevtoolsEndpoint::from_active_port_file(&format!("41000\n{BROWSER_PATH}"), 1).expect("a placeholder endpoint"),
+        &frame_slot,
+    );
+    attaching(&mut config, endpoint);
+    config.resume_target = Some("the-page-of-a-browser-that-restarted".to_string());
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let mut connection =
+        initialize_driver(&config, &event_tx, &stop_requested, &control, None).expect("a driver on a new page");
+    assert_eq!(connection.target_id, "a-new-page");
+    assert!(
+        !connection.resumed_page,
+        "a gone page cannot keep its state, so the session reports a new page"
+    );
+    connection
+        .chrome
+        .close_page(&mut connection.link, &connection.target_id);
+    drop(connection);
+    let commands = server.join().expect("the mock browser");
+
+    let methods: Vec<&str> = commands
+        .iter()
+        .filter_map(|command| command["method"].as_str())
+        .collect();
+    assert!(
+        methods.contains(&"Target.createTarget"),
+        "the fallback opens a page of the last address: {methods:?}"
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command["params"]["targetId"] == "a-page-of-the-person"),
+        "the page of the person is left alone: {commands:?}"
+    );
 }

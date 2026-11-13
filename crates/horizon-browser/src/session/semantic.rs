@@ -171,7 +171,8 @@ impl DriverState {
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        self.semantic_query_within(link, event_tx, frame_slot, selector, max_results, super::CALL_TIMEOUT)
+        let budget = self.read_call().budget();
+        self.semantic_query_within(link, event_tx, frame_slot, selector, max_results, budget)
     }
 
     /// A selector scan that does not register references: for judging a wait
@@ -482,7 +483,8 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         expression: &str,
     ) -> Result<Value, BrowserControlFailure> {
-        self.evaluate_json_within(link, event_tx, frame_slot, expression, super::CALL_TIMEOUT)
+        let budget = self.read_call().budget();
+        self.evaluate_json_within(link, event_tx, frame_slot, expression, budget)
     }
 
     pub(super) fn evaluate_json_within(
@@ -494,19 +496,7 @@ impl DriverState {
         timeout: std::time::Duration,
     ) -> Result<Value, BrowserControlFailure> {
         let result = self
-            .send_page_command_within(
-                link,
-                event_tx,
-                frame_slot,
-                "Runtime.evaluate",
-                &json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                    "userGesture": true,
-                }),
-                timeout,
-            )
+            .read_script(link, event_tx, frame_slot, expression, timeout)
             .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
         if let Some(exception) = result.get("exceptionDetails") {
             let message = exception
@@ -521,6 +511,36 @@ impl DriverState {
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "CDP returned no evaluation result"))?;
         let value = remote.get("value").cloned().unwrap_or(Value::Null);
         bounded_control_value(value)
+    }
+
+    /// One read script of the page. A read changes nothing, so a browser that
+    /// another computer runs and that answered nothing inside the budget of the
+    /// call is asked one more time before the read fails.
+    fn read_script(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        expression: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value, crate::cdp::CdpError> {
+        let params = json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": true,
+            "userGesture": true,
+        });
+        let call = self.read_call();
+        match self.send_page_command_within(link, event_tx, frame_slot, "Runtime.evaluate", &params, timeout) {
+            Err(error) if call.retries(&error) => {
+                tracing::debug!(
+                    target: "browser",
+                    "a read of a far browser timed out and is sent once more"
+                );
+                self.send_page_command_within(link, event_tx, frame_slot, "Runtime.evaluate", &params, timeout)
+            }
+            result => result,
+        }
     }
 
     pub(super) fn capture_teach_fingerprint(

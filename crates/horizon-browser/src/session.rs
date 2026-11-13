@@ -24,6 +24,8 @@
 //! - the screencast is implicitly terminated by navigation, so it is
 //!   restarted on every top-level `Page.frameNavigated`.
 
+mod address;
+mod call;
 mod clipboard;
 mod command_queue;
 mod commands;
@@ -120,6 +122,13 @@ pub enum BrowserEvent {
     },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
+    /// The page this session drives. `resumed` says that it is the page the
+    /// panel drove before a lost link came back, so the page keeps what it
+    /// had; `false` says that the page is new and the previous state is gone.
+    PageAttached {
+        target_id: String,
+        resumed: bool,
+    },
     /// Allocation, expiry and release facts for a remote session.
     RemoteSession(crate::RemoteSessionEvent),
 }
@@ -152,6 +161,12 @@ pub struct BrowserSessionConfig {
     /// removes no profile folder, sets no download behavior, closes only the
     /// page it created and never the browser.
     pub attach: Option<crate::DevtoolsEndpoint>,
+    /// The page target that this panel drove before its link was lost. A
+    /// session with a resume target adopts that page instead of creating one,
+    /// and it does not navigate: the page still holds the text the person
+    /// typed into it, its scroll place and its session. A target that is gone
+    /// falls back to a new page of `initial_url`.
+    pub resume_target: Option<String>,
 }
 
 /// The panel-side handle to a running driver.
@@ -178,7 +193,7 @@ pub struct BrowserSession {
 }
 
 const WS_URL_TIMEOUT: Duration = Duration::from_secs(15);
-const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) use call::CALL_TIMEOUT;
 const RESTART_BACKOFF: Duration = Duration::from_millis(250);
 const RESTART_BACKOFF_CAP: Duration = Duration::from_secs(1);
 const MAX_RESTART_ATTEMPTS: u32 = 8;
@@ -199,6 +214,10 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
+/// How often a painting page re-reads its scroll geometry: four times a second
+/// is enough for an overlay, and a request per picture would put a message pair
+/// on the same link as every frame.
+const SCROLLBAR_LAYOUT_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -416,6 +435,7 @@ fn run_loop(
     event_tx: &BrowserEventSender,
 ) {
     loop {
+        let pass_started = Instant::now();
         // 1. Commands from the UI.
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
             state.flush_http_response_bodies(link, event_tx, frame_slot);
@@ -453,6 +473,7 @@ fn run_loop(
             // session is not worth the state surgery; surface the
             // failure and stop — the panel offers Retry.
             tracing::warn!(target: "browser", "cdp connection lost: {error}");
+            state.audit_session_event(crate::BrowserAuditAction::LinkLost);
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
             state.settle_pending_wait_for_shutdown(Instant::now());
             let _ = chrome.kill();
@@ -508,6 +529,7 @@ fn run_loop(
             break;
         }
 
+        crate::latency::report_blocked_pass(link, pass_started);
         std::thread::sleep(Duration::from_millis(5));
     }
     state.finish_pending_resize("browser_unavailable", "browser session stopped");
@@ -527,6 +549,12 @@ struct ScrollbarLayoutCache {
     layout: Option<PageScrollState>,
     request_id: Option<u64>,
     refresh_at: Option<Instant>,
+    /// Size of the picture that the last layout read described, so a resize is
+    /// a reason to read again and an unchanged picture is not.
+    frame_size: Option<(u32, u32)>,
+    /// A picture arrived since the last layout answer, so the page still paints
+    /// and the next slow read is due.
+    painted_since_refresh: bool,
 }
 
 impl ScrollbarLayoutCache {
@@ -535,6 +563,8 @@ impl ScrollbarLayoutCache {
             layout: None,
             request_id: None,
             refresh_at: Some(Instant::now()),
+            frame_size: None,
+            painted_since_refresh: false,
         }
     }
 }
@@ -551,6 +581,9 @@ struct DriverState {
     native_user_agent_metadata: Option<serde_json::Value>,
     session_id: Option<String>,
     target_id: Option<String>,
+    /// Whether this session adopted the page the panel had before a lost
+    /// link, so the page keeps its state and no startup navigation runs.
+    resumed_page: bool,
     main_frame_id: Option<String>,
     pending_resize: Option<viewport::PendingResize>,
     viewport_policy: viewport::ViewportPolicy,
@@ -583,6 +616,8 @@ struct DriverState {
     navigate_request_id: Option<u64>,
     /// In-flight `Page.startScreencast` request, for the same reason.
     screencast_request_id: Option<u64>,
+    /// In-flight `Target.getTargetInfo` question, which never blocks the loop.
+    title_request_id: Option<u64>,
     clipboard: ClipboardState,
     native_select: NativeSelectState,
     file_chooser: file_chooser::ChooserState,
@@ -667,6 +702,7 @@ impl DriverState {
             native_user_agent_metadata,
             session_id: None,
             target_id: None,
+            resumed_page: false,
             main_frame_id: None,
             pending_resize: None,
             viewport_policy: viewport::ViewportPolicy::new([config.width, config.height]),
@@ -686,6 +722,7 @@ impl DriverState {
             top_frame_navigating: false,
             navigate_request_id: None,
             screencast_request_id: None,
+            title_request_id: None,
             clipboard: ClipboardState::default(),
             native_select: NativeSelectState::default(),
             file_chooser: file_chooser::ChooserState::default(),
@@ -744,7 +781,7 @@ impl DriverState {
         session: Option<&str>,
     ) -> Result<serde_json::Value, crate::cdp::CdpError> {
         let stop_requested = Arc::clone(&self.stop_requested);
-        let outcome = link.call_and_drain_until(CALL_TIMEOUT, method, params, session, || {
+        let outcome = link.call_and_drain_until(self.call_budget(), method, params, session, || {
             stop_requested.load(Ordering::Acquire)
         });
         for message in outcome.drained {
@@ -753,50 +790,16 @@ impl DriverState {
         outcome.result
     }
 
-    /// Freeze an in-flight navigation, route every event received while that
-    /// happens, then ask the target for its authoritative committed URL.
-    fn capture_final_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
-        if let Some(session_id) = self.session_id.clone() {
-            let outcome = link.call_and_drain(
-                Duration::from_secs(1),
-                "Page.stopLoading",
-                &serde_json::json!({}),
-                Some(session_id.as_str()),
-            );
-            for message in outcome.drained {
-                self.handle_message(link, event_tx, frame_slot, message);
-            }
-        }
-        if self.navigation_failed {
-            return;
-        }
-        let Some(target_id) = self.target_id.clone() else {
-            return;
-        };
-        let outcome = link.call_and_drain(
-            Duration::from_secs(1),
-            "Target.getTargetInfo",
-            &serde_json::json!({ "targetId": target_id }),
-            None,
-        );
-        for message in outcome.drained {
-            self.handle_message(link, event_tx, frame_slot, message);
-        }
-        let Some(target_url) = outcome.result.ok().and_then(|result| {
-            result
-                .pointer("/targetInfo/url")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        }) else {
-            return;
-        };
-        let url = normalized_committed_url(&target_url).to_string();
-        if self.url != url {
-            self.url = url;
-            self.manifest_dirty = true;
-            self.write_manifest(true);
-        }
-        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+    /// The budget of one protocol call of this session: the loopback budget, or
+    /// the larger one of a browser that another process or another computer runs.
+    pub(super) fn call_budget(&self) -> Duration {
+        call::Call::of(&self.config, call::Kind::Change).budget()
+    }
+
+    /// One read of this session: it holds the budget of this browser, and a
+    /// timeout of a far browser is sent once more.
+    pub(super) fn read_call(&self) -> call::Call {
+        call::Call::of(&self.config, call::Kind::Read)
     }
 
     fn send_page_command(
@@ -807,7 +810,8 @@ impl DriverState {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, CdpError> {
-        self.send_page_command_within(link, event_tx, frame_slot, method, params, CALL_TIMEOUT)
+        let budget = self.call_budget();
+        self.send_page_command_within(link, event_tx, frame_slot, method, params, budget)
     }
 
     /// A page-session command that may block the driver for at most `timeout`.
@@ -983,14 +987,6 @@ impl DriverState {
     }
 }
 
-fn normalized_committed_url(url: &str) -> &str {
-    if url.is_empty() || url == "about:blank" {
-        ""
-    } else {
-        url
-    }
-}
-
 fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mut HashMap<u64, String>, session: &str) {
     requested.remove(session);
     inflight.retain(|_, tracked| tracked != session);
@@ -1000,13 +996,6 @@ fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mu
 mod tests {
     use super::*;
     use crate::input::is_user_activity;
-
-    #[test]
-    fn blank_target_is_an_empty_committed_url() {
-        assert_eq!(normalized_committed_url("about:blank"), "");
-        assert_eq!(normalized_committed_url(""), "");
-        assert_eq!(normalized_committed_url("https://example.com"), "https://example.com");
-    }
 
     #[test]
     fn page_controls_count_as_user_steering_but_system_controls_do_not() {

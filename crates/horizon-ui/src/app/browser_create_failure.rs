@@ -21,7 +21,9 @@ pub(super) fn terminal_create_failure(
     browser: &horizon_core::browser::BrowserPanelState,
 ) -> Option<(&'static str, String)> {
     match &browser.status {
-        BrowserStatus::Starting | BrowserStatus::Ready => None,
+        // A panel that waits for an automatic attempt has no terminal outcome
+        // yet; the create deadline still bounds the wait.
+        BrowserStatus::Starting | BrowserStatus::Ready | BrowserStatus::Reconnecting { .. } => None,
         BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } => {
             // A browser host names its own typed failures: the agent reads why
             // its panel did not reach that machine's browser, with the words of

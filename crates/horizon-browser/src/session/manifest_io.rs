@@ -101,6 +101,25 @@ impl DriverState {
         self.audit_command(new_action_id(), actor, BrowserAuditStatus::Dispatched, command);
     }
 
+    /// Record a session-level fact that no command and no agent asked for, such
+    /// as a lost link and the page that came back. The journal of a panel stays
+    /// complete: a person reading it sees why the page stopped and that it
+    /// returned.
+    pub(super) fn audit_session_event(&self, action: BrowserAuditAction) {
+        let Some(coordination) = self.config.coordination.as_ref() else {
+            return;
+        };
+        let entry = BrowserAuditEntry::new(
+            new_action_id(),
+            BrowserAuditActor::System,
+            BrowserAuditStatus::Completed,
+            action,
+        );
+        if let Err(error) = coordination.record_action(&self.config.panel_local_id, &entry) {
+            tracing::warn!(target: "browser", "failed to append browser action audit: {error}");
+        }
+    }
+
     pub(super) fn audit_agent_action(&self, request: &AgentAction, status: BrowserAuditStatus) {
         let Some(coordination) = self.config.coordination.as_ref() else {
             return;
@@ -238,6 +257,7 @@ impl DriverState {
             automation_disclosure: self.disclosure_status(),
             browser_ws: self.browser_ws.clone(),
             target_id: self.target_id.clone().unwrap_or_default(),
+            page_resumed: self.resumed_page,
             url: self.url.clone(),
             title: self.title.clone(),
             remote_target: None,

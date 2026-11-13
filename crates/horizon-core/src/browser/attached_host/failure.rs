@@ -146,6 +146,22 @@ impl AttachedHostFailure {
         }
     }
 
+    /// The endpoint of that browser answered nothing inside its bound. The
+    /// browser may be well; the forward it answers through is what took too
+    /// long, so this sentence names the link and says what to expect.
+    pub(super) fn no_endpoint_too_slow(host: &AttachedHost, seconds: u64, reason: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::NoEndpoint,
+            detail: None,
+            message: format!(
+                "the link to {} did not carry an answer from the DevTools port of its browser in the profile {} within {seconds} {}: {reason}; a slow link or a busy machine delays that answer, so use Retry",
+                host.ssh_target(),
+                host.profile(),
+                if seconds == 1 { "second" } else { "seconds" }
+            ),
+        }
+    }
+
     /// The failure of a panel whose browser answered and then stopped. The
     /// panel says one plain sentence, because the words of a lost WebSocket do
     /// not help the person; the log and an agent keep those words.

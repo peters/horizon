@@ -317,6 +317,7 @@ mod tests {
     fn authenticated_state() -> DriverState {
         let config = super::super::BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: crate::BrowserConfig::default(),
             panel_local_id: "auth-test".into(),
             initial_url: None,

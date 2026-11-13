@@ -34,6 +34,7 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser: BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             profile_root: Some(profiles.path().to_path_buf()),

@@ -366,6 +366,7 @@ pub(in crate::webdriver::session) mod tests {
         let request = fixture_remote_request(classic);
         let config = BrowserSessionConfig {
             attach: None,
+            resume_target: None,
             browser: BrowserConfig {
                 backend: BackendKind::FirefoxBidi,
                 ..BrowserConfig::default()

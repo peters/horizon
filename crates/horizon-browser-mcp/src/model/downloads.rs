@@ -105,6 +105,11 @@ impl DownloadsOutput {
 /// Tell the caller what this report does and does not prove.
 fn next_step(downloads: &BrowserDownloadList) -> String {
     if !downloads.reporting {
+        if let Some(note) = &downloads.note {
+            return format!(
+                "{note}. An empty list does not mean that nothing was saved. The page's own destination holds any file it saved."
+            );
+        }
         return format!(
             "This session did not confirm that it observes downloads, so an empty list does not mean nothing was saved. The page's own destination holds any file it saved; open a local Chromium or Firefox panel to report downloads into {}.",
             downloads.directory
@@ -134,6 +139,7 @@ mod tests {
         BrowserDownloadList {
             directory: "/home/alice/Horizon/downloads".to_string(),
             reporting,
+            note: None,
             downloads,
             dropped: 3,
         }
@@ -195,6 +201,7 @@ mod tests {
         let list = |rows: Vec<BrowserDownload>| BrowserDownloadList {
             directory: "/home/alice/Downloads/Horizon/panel".to_string(),
             reporting: true,
+            note: None,
             downloads: rows,
             dropped: 0,
         };

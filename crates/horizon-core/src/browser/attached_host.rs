@@ -29,7 +29,9 @@ pub use failure::{AttachedHostFailure, AttachedHostFailureKind};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::{RECONNECT_RESET_AFTER, reconnect_delay};
 
 use horizon_browser::{BackendKind, BrowserEventWaker, DevtoolsEndpoint};
 use horizon_browser_control::ssh_forward::{
@@ -48,6 +50,16 @@ const START_DEADLINE: Duration = Duration::from_secs(45);
 /// The name of the profile that the browser host uses when the settings name
 /// none.
 pub const DEFAULT_HOST_PROFILE: &str = "default";
+
+/// What a panel says after it opened a page again by itself. The browser of that
+/// machine kept the page of its own accord, but a new connection to it starts a
+/// new page, so what the person typed into the old one is gone.
+pub const PAGE_STATE_LOST: &str = "The link was lost, so this page is new: text that you had typed into it, its scroll position and its session are gone.";
+
+/// How long one wait of an automatic attempt may hold the worker before it looks
+/// at the stop flag again, so a panel that closes during the wait starts no
+/// `ssh` call.
+const RETRY_POLL: Duration = Duration::from_millis(50);
 
 /// The Chromium of another machine that serves the pages of a panel, and the
 /// profile of that Chromium.
@@ -118,8 +130,13 @@ enum AttachOutcome {
 }
 
 /// Read the endpoint of the browser of `host`, reuse that browser through a new
-/// forward, and start it when it is gone.
-fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool) -> AttachOutcome {
+/// forward, and start it when it is gone and `may_start_browser` allows it.
+///
+/// An automatic attempt after a lost link never starts a browser: the browser of
+/// that machine kept running behind the link, so a browser that does not answer
+/// is a browser that a person must ask for with Retry. An attempt of its own must
+/// not start one that nobody asked for.
+fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool, may_start_browser: bool) -> AttachOutcome {
     if stop.load(Ordering::Acquire) {
         return AttachOutcome::Cancelled;
     }
@@ -134,12 +151,18 @@ fn connect(ssh: &Ssh, host: &AttachedHost, stop: &AtomicBool) -> AttachOutcome {
     if let Some(remote_port) = port_of(&endpoint_text) {
         match forward_to(ssh, host, remote_port) {
             Ok(browser) => return AttachOutcome::Connected(browser),
+            Err(failure) if !may_start_browser => return AttachOutcome::Failed(failure),
             Err(failure) => tracing::info!(
                 code = failure.code(),
                 profile = host.profile(),
                 "the endpoint that the browser host wrote names no browser, so this connect starts one"
             ),
         }
+    } else if !may_start_browser {
+        return AttachOutcome::Failed(AttachedHostFailure::no_endpoint(
+            host,
+            "it wrote no DevTools endpoint, so its browser is not running",
+        ));
     }
     let started = match ssh.run_remote(target, &remote_browser_command(host.profile(), false), START_DEADLINE) {
         Ok(text) => text,
@@ -170,8 +193,12 @@ fn forward_to(ssh: &Ssh, host: &AttachedHost, remote_port: u16) -> Result<Attach
         local_port = forward.local_port(),
         "the browser of a browser host answers through a loopback forward"
     );
-    let endpoint = DevtoolsEndpoint::from_port(forward.local_port())
-        .map_err(|error| AttachedHostFailure::no_endpoint(host, &error.to_string()))?;
+    let endpoint = DevtoolsEndpoint::from_port(forward.local_port()).map_err(|error| match error.waited_out() {
+        // A bound that passed over a fresh forward is the link of that machine,
+        // not a browser that gave the wrong answer.
+        Some(seconds) => AttachedHostFailure::no_endpoint_too_slow(host, seconds, &error.to_string()),
+        None => AttachedHostFailure::no_endpoint(host, &error.to_string()),
+    })?;
     Ok(AttachedBrowser { forward, endpoint })
 }
 
@@ -196,12 +223,25 @@ pub(super) struct AttachedHostSlot {
     /// Tells a running connect that its panel stopped, so no `ssh` call starts
     /// for a panel that is gone.
     stop: Arc<AtomicBool>,
+    /// The automatic attempts that this panel has made since its last page, so
+    /// a link that drops again waits longer.
+    attempts: u32,
+    /// When the last session reached its page. A connection that lasted long
+    /// enough starts the delays again, as a machine terminal's does.
+    ready_at: Option<Instant>,
 }
 
 impl AttachedHostSlot {
     /// Start the worker thread that connects to `host`. The call returns at
     /// once; the outcome arrives as a state of the panel.
     fn connecting(ssh: Ssh, host: AttachedHost) -> Self {
+        Self::connecting_after(ssh, host, Duration::ZERO, 0)
+    }
+
+    /// Start the worker thread that connects to `host` after `after`, as
+    /// automatic attempt `attempt`. The call returns at once, and the wait runs
+    /// on that worker, so no frame waits for it.
+    fn connecting_after(ssh: Ssh, host: AttachedHost, after: Duration, attempt: u32) -> Self {
         let (sender, pending) = mpsc::channel();
         let waker: Arc<Mutex<Option<BrowserEventWaker>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
@@ -218,11 +258,16 @@ impl AttachedHostSlot {
             failure: None,
             reached_ready: false,
             stop,
+            attempts: attempt,
+            ready_at: None,
         };
         let worker = std::thread::Builder::new()
             .name("browser-attach".to_string())
             .spawn(move || {
-                let outcome = connect(&worker_ssh, &worker_host, &worker_stop);
+                if !wait_before_start(&worker_stop, after) {
+                    return;
+                }
+                let outcome = connect(&worker_ssh, &worker_host, &worker_stop, attempt == 0);
                 // A panel that stopped drops its receiver first, so this send
                 // fails and its forward dies with the outcome.
                 if sender.send(outcome).is_ok()
@@ -260,6 +305,34 @@ impl AttachedHostSlot {
 
 fn lock<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Wait `after` on the worker of an automatic attempt, and give up when the
+/// panel stops during the wait. Returns whether the connect may start.
+fn wait_before_start(stop: &AtomicBool, after: Duration) -> bool {
+    let deadline = Instant::now() + after;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        std::thread::sleep(remaining.min(RETRY_POLL));
+    }
+}
+
+/// The next automatic attempt of a panel that lost its link, with its delay. A
+/// connection that lasted [`RECONNECT_RESET_AFTER`] starts the delays again, as
+/// a machine terminal of the same link does.
+fn next_attempt(attempts: u32, ready_at: Option<Instant>) -> (u32, Duration) {
+    let attempts = match ready_at {
+        Some(ready_at) if ready_at.elapsed() >= RECONNECT_RESET_AFTER => 0,
+        _ => attempts,
+    };
+    let attempt = attempts.saturating_add(1);
+    (attempt, reconnect_delay(attempt))
 }
 
 /// The reason that a panel which follows a browser host cannot serve a page of
@@ -347,6 +420,8 @@ impl BrowserPanelState {
             // No connect runs for this slot, so a stop finds it stopped and no
             // `ssh` call starts for it.
             stop: Arc::new(AtomicBool::new(true)),
+            attempts: 0,
+            ready_at: None,
         });
         state
     }
@@ -381,6 +456,13 @@ impl BrowserPanelState {
         self.attached.as_ref().map(|slot| slot.host.profile())
     }
 
+    /// The page target that the next lost link resumes, when the panel drives a
+    /// browser of another computer and its driver reported the page.
+    #[must_use]
+    pub fn attached_page_target(&self) -> Option<&str> {
+        self.attached_page_target.as_deref()
+    }
+
     /// Why the last connect of this panel failed. `None` while it is connected
     /// or still connecting.
     #[must_use]
@@ -412,6 +494,7 @@ impl BrowserPanelState {
         drop(slot);
         self.frame_slot.clear();
         self.navigation_error = None;
+        self.page_resumed = false;
         self.attach_endpoint = None;
         self.loading = true;
         self.status = BrowserStatus::Starting;
@@ -421,6 +504,65 @@ impl BrowserPanelState {
         }
         self.remote_status = Some(slot.note());
         self.attached = Some(slot);
+    }
+
+    /// The automatic attempt that this panel waits for after a lost link, with
+    /// the instant of that attempt.
+    #[must_use]
+    pub fn attached_retry(&self) -> Option<(u32, Instant)> {
+        match &self.status {
+            BrowserStatus::Reconnecting { attempt, retry_at } => Some((*attempt, *retry_at)),
+            _ => None,
+        }
+    }
+
+    /// Replace the connect of a panel that lost its link with the next automatic
+    /// attempt, and report that attempt as the state of the panel. The browser
+    /// of that machine keeps running, so the attempt reads its endpoint and
+    /// opens the last address again in a new page.
+    fn start_automatic_attempt(&mut self, failure: Option<AttachedHostFailure>) {
+        let Some(slot) = self.attached.as_mut() else {
+            return;
+        };
+        let (attempt, after) = next_attempt(slot.attempts, slot.ready_at);
+        if slot.stop.load(Ordering::Acquire) {
+            // This panel has no connect to replace, so nothing may start an
+            // `ssh` call for it. The attempt stays the state of the panel.
+            slot.attempts = attempt;
+            slot.failure = failure;
+            self.status = BrowserStatus::Reconnecting {
+                attempt,
+                retry_at: Instant::now() + after,
+            };
+            return;
+        }
+        let host = slot.host().clone();
+        let ssh = slot.ssh.clone();
+        let slot = self.attached.take();
+        // Dropping the old slot ends its forward and drops its receiver, so a
+        // connect that is still running cannot deliver while this attempt waits.
+        drop(slot);
+        let mut next = AttachedHostSlot::connecting_after(ssh, host, after, attempt);
+        next.failure.clone_from(&failure);
+        if let Some(failure) = &failure {
+            tracing::warn!(
+                code = failure.code(),
+                target = next.host.ssh_target(),
+                profile = next.host.profile(),
+                attempt,
+                after = ?after,
+                "the link to a browser host is lost, so the panel tries again by itself"
+            );
+        }
+        self.attach_endpoint = None;
+        self.frame_slot.clear();
+        self.loading = true;
+        self.remote_status = Some(next.note());
+        self.status = BrowserStatus::Reconnecting {
+            attempt,
+            retry_at: Instant::now() + after,
+        };
+        self.attached = Some(next);
     }
 
     /// Stop the connect and the forward of this panel, and keep the host that it
@@ -484,6 +626,16 @@ impl BrowserPanelState {
     }
 
     fn attached_failed(&mut self, failure: AttachedHostFailure) {
+        // An automatic attempt that could not reach the host continues the
+        // sequence: a cut ends every attempt, and the browser of that machine is
+        // still there behind the link. Another reason needs a person, so it ends
+        // at the present failure with Retry.
+        if failure.kind() == AttachedHostFailureKind::Unreachable
+            && self.attached.as_ref().is_some_and(|slot| slot.attempts > 0)
+        {
+            self.start_automatic_attempt(Some(failure));
+            return;
+        }
         tracing::warn!(
             code = failure.code(),
             target = self.attached_host_target().unwrap_or_default(),
@@ -513,18 +665,40 @@ impl BrowserPanelState {
             .is_some_and(|slot| slot.failure.is_some() && slot.reached_ready)
     }
 
+    /// The driver bound a page target. On an automatic attempt the page is
+    /// either the one the person already had — the browser of that machine kept
+    /// running behind the lost link, so its text, its scroll place and its
+    /// session are still there — or a new page, and then the panel says that
+    /// the old state is gone.
+    pub(super) fn apply_page_attached(&mut self, resumed: bool) {
+        if !self.is_attached() {
+            return;
+        }
+        let automatic = self.attached.as_ref().is_some_and(|slot| slot.attempts > 0);
+        if !automatic {
+            return;
+        }
+        self.page_resumed = resumed;
+        self.navigation_error = (!resumed).then(|| PAGE_STATE_LOST.to_string());
+    }
+
     /// Remember that the session of this connect showed a page, so a later lost
     /// link is a page that the person had.
     pub(super) fn attached_reached_ready(&mut self) {
         if let Some(slot) = self.attached.as_mut() {
             slot.reached_ready = true;
+            slot.ready_at = Some(Instant::now());
         }
     }
 
-    /// Put a panel that lost the browser of its host into the failure state of a
-    /// connect that never reached it, in the words of the lost connection. A
+    /// Put a panel that lost the browser of its host into the state of the
+    /// automatic attempt that follows, in the words of the lost connection. A
     /// panel that never showed a page ends as it did before: its create reports
     /// the failure, so nothing stays for a page the person never read.
+    ///
+    /// The endpoint and the SSH route of this panel did not change, so the
+    /// attempt reaches the same browser again and opens the last address in a
+    /// new page.
     pub(super) fn attached_lost_after_ready(&mut self, reason: &str) {
         let Some(host) = self
             .attached
@@ -534,7 +708,7 @@ impl BrowserPanelState {
         else {
             return;
         };
-        self.attached_failed(AttachedHostFailure::connection_lost(&host, reason));
+        self.start_automatic_attempt(Some(AttachedHostFailure::connection_lost(&host, reason)));
     }
 
     pub(super) fn needs_attached_waker(&self) -> bool {

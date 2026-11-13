@@ -140,6 +140,24 @@ pub enum Connection {
     Connecting,
     Connected,
     Disconnected,
+    /// The viewer lost its link and waits for the next attempt that it makes by
+    /// itself. `reconnect` names that attempt and the time until it starts; the
+    /// retained image stays on screen. A person's `Stop` ends the attempts and
+    /// answers `stopped`.
+    Reconnecting,
+}
+
+/// The automatic attempt of a viewer that lost its link and whose SSH route and
+/// endpoint did not change. A refusal of the SSH host key is never retried, so a
+/// `host_not_trusted` or `host_key_changed` failure stays `disconnected`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub struct Reconnect {
+    /// The number of the attempt that comes next, counted from 1 in this
+    /// viewer. A connection that lasted ten seconds starts the count again.
+    pub attempt: u32,
+    /// Milliseconds from [`Diagnostics::observed_at_millis`] until that attempt
+    /// starts. The wait only grows up to 30 seconds.
+    pub next_attempt_in_millis: u64,
 }
 
 /// An SSH host whose loopback holds the VNC server. Horizon runs `ssh -W`
@@ -381,6 +399,11 @@ pub struct PanelState {
     pub visible: bool,
     pub owned_by_caller: bool,
     pub connection: Connection,
+    /// The next automatic attempt, while `connection` is `reconnecting`. When
+    /// the browser and the target of this panel still exist, the panel
+    /// connects again without a person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reconnect: Option<Reconnect>,
     pub connection_error: Option<String>,
     /// Typed cause of a failed connection; absent when Horizon cannot name one.
     /// A `host_not_trusted` or `host_key_changed` code needs a person, not a retry.

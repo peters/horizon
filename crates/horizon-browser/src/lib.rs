@@ -24,6 +24,7 @@ pub use file_chooser::{FileChooserAnswer, FileChooserHandle, FileChooserRequest,
 pub use semantic_files::FileAcceptPolicy;
 mod http_auth;
 pub mod input;
+pub mod latency;
 pub mod lookup;
 mod native_select;
 mod navigation;

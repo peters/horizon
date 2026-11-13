@@ -108,6 +108,13 @@ pub struct BrowserPanelState {
     /// for the moment between a finished connect and the session of that
     /// browser.
     attach_endpoint: Option<horizon_browser::DevtoolsEndpoint>,
+    /// The page target of the browser host that this panel drives, as the
+    /// driver reported it. A lost link passes it back as the resume target, so
+    /// the same page comes back with the text the person typed into it.
+    attached_page_target: Option<String>,
+    /// The link came back to the same page: the body says so and no page state
+    /// was lost.
+    pub page_resumed: bool,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -143,6 +150,7 @@ impl BrowserPanelState {
     pub fn has_ended(&self) -> bool {
         !self.attached_kept_after()
             && !self.status.is_alive()
+            && !self.status.is_reconnecting()
             && self.session.is_none()
             && self.pending_relaunch.is_none()
     }
@@ -178,6 +186,8 @@ impl BrowserPanelState {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -244,6 +254,8 @@ impl BrowserPanelState {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -388,6 +400,9 @@ impl BrowserPanelState {
         self.frame_slot.file_chooser().register_consumer();
         let session_config = session::BrowserSessionConfig {
             attach: self.take_attach_endpoint(),
+            // Only a panel that drives a browser of another computer can adopt
+            // the page it had: that browser kept running behind the link.
+            resume_target: self.attached_page_target.clone().filter(|_| self.is_attached()),
             browser,
             panel_local_id: self.panel_local_id.clone(),
             // A navigation typed while the driver was absent takes precedence
@@ -796,6 +811,11 @@ impl BrowserPanelState {
                 self.status = BrowserStatus::Error { message };
                 output.had_output = true;
             }
+            BrowserEvent::PageAttached { target_id, resumed } => {
+                self.attached_page_target = Some(target_id);
+                self.apply_page_attached(resumed);
+                output.had_output = true;
+            }
             BrowserEvent::OrientationChanged(view) => {
                 self.apply_orientation_view(view);
                 output.had_output = true;
@@ -898,6 +918,9 @@ impl BrowserPanelState {
         if url != "about:blank" {
             self.pending_user_navigation = None;
         }
+        // A page that navigated no longer reports the page that came back after
+        // a lost link; the person is looking at a new document.
+        self.page_resumed = false;
         self.url = Some(url);
         self.navigation_error = None;
         output.url_changed = true;
@@ -1057,6 +1080,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1107,6 +1132,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1151,6 +1178,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1203,6 +1232,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1272,6 +1303,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1368,6 +1401,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1414,6 +1449,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1459,6 +1496,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1507,6 +1546,8 @@ mod tests {
             remote: None,
             attached: None,
             attach_endpoint: None,
+            attached_page_target: None,
+            page_resumed: false,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,

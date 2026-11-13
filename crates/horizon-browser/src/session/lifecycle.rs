@@ -25,6 +25,14 @@ impl DriverState {
         })
     }
 
+    /// Bind this session to the page target `target`.
+    ///
+    /// `resume` says that this page is the one the panel drove before a lost
+    /// link. Then the page keeps its state and no startup navigation runs.
+    ///
+    /// The setup below runs for both cases and is written once: the reattach
+    /// sets the same listeners, the same viewport and the same screencast as a
+    /// new session, because a new driver thread owns none of them.
     pub(super) fn attach_setup(
         &mut self,
         link: &mut CdpLink,
@@ -32,7 +40,9 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         session: &str,
         target: &str,
+        resume: bool,
     ) -> bool {
+        self.resumed_page = resume;
         if self.session_id.as_deref() != Some(session) {
             self.retire_http_auth_session(link);
             self.reset_clipboard_tracking();
@@ -123,7 +133,8 @@ impl DriverState {
         // Never expose the internal metadata-bootstrap page in a screencast.
         // Native automation-flag suppression and any UA override are already
         // active before this first caller-supplied navigation can execute
-        // page author script.
+        // page author script. A resumed page keeps the document it had, so a
+        // navigation here would throw away exactly what the person typed.
         self.navigate_initial_url(link, event_tx, frame_slot);
         // A page that loaded before we attached (restart case) already has
         // its title; a fresh about:blank fetch returns empty and is skipped.
@@ -282,8 +293,11 @@ impl DriverState {
         true
     }
 
+    /// Open the first page of a new session. A resumed page keeps the document
+    /// it already held: a navigation here would throw away the text the person
+    /// typed into it, its scroll place and its session.
     fn navigate_initial_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
-        if self.initial_navigated {
+        if self.initial_navigated || self.resumed_page {
             return;
         }
         self.initial_navigated = true;
@@ -570,6 +584,7 @@ mod tests {
                 let mut state = super::DriverState::new(
                     &crate::BrowserSessionConfig {
                         attach: None,
+                        resume_target: None,
                         browser: crate::BrowserConfig::default(),
                         panel_local_id: "capture-test".into(),
                         initial_url: None,

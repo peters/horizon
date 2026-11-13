@@ -15,8 +15,8 @@ use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailur
 use crate::navigation::AgentActionExecution;
 
 use super::{
-    BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
-    VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
+    BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_REFRESH_INTERVAL,
+    SCROLLBAR_LAYOUT_RETRY_DELAY, VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
 };
 
 impl DriverState {
@@ -104,6 +104,7 @@ impl DriverState {
                 continue;
             }
             let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
+            let result = result.map_err(|failure| Self::failure_when_link_lost(link, failure));
             self.complete_agent_action(&request, result);
             if stop {
                 return true;
@@ -246,6 +247,7 @@ impl DriverState {
         let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
         let probe_input = input.clone();
         let (method, params) = input.cdp();
+        let traced = frame_slot.take_action();
         let session = self.session_id.clone().ok_or_else(|| {
             BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
         })?;
@@ -254,6 +256,9 @@ impl DriverState {
                 frame_slot.store_teach_failure("input_failed", &error.to_string(), frame_slot.teach_generation());
             }
             return Err(BrowserControlFailure::new("input_failed", error.to_string()));
+        }
+        if let Some(action) = traced {
+            frame_slot.note_action_written(action, method);
         }
         self.note_native_select_input(link, event_tx, frame_slot, &probe_input);
         if let Some(capture) = teach_capture
@@ -270,6 +275,22 @@ impl DriverState {
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
         Ok(false)
+    }
+
+    /// A call that failed because the link to the browser went away says so, so
+    /// an agent reads a lost link and not a socket error, and never reads a
+    /// lost link as a completed action.
+    fn failure_when_link_lost(link: &CdpLink, failure: BrowserControlFailure) -> BrowserControlFailure {
+        if !link.link_lost() {
+            return failure;
+        }
+        BrowserControlFailure::new(
+            "link_lost",
+            format!(
+                "the link to the browser was lost during this action, so it may or may not have happened;                  the panel connects again by itself and a later call works: {}",
+                failure.message
+            ),
+        )
     }
 
     fn page_command_failure(
@@ -450,6 +471,16 @@ impl DriverState {
         }
     }
 
+    /// The answer arrived: a page that painted since the last read is still
+    /// moving, so the next slow read is due; a still page costs nothing.
+    pub(super) fn note_scrollbar_layout_answer(&mut self) {
+        if !self.scrollbar_layout.painted_since_refresh {
+            return;
+        }
+        self.scrollbar_layout.painted_since_refresh = false;
+        self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_REFRESH_INTERVAL);
+    }
+
     pub(super) fn handle_scrollbar_layout_response(
         &mut self,
         id: u64,
@@ -476,6 +507,7 @@ impl DriverState {
         if frame_slot.publish_page_scroll_state(layout) {
             event_tx.wake_ui();
         }
+        self.note_scrollbar_layout_answer();
         true
     }
 
@@ -493,9 +525,20 @@ impl DriverState {
                 event_tx.wake_ui();
             }
         }
-        // Screencast frames arrive when the page paints, including DOM-driven
-        // height changes that leave scrollY unchanged. Refresh layout metrics
-        // on that cadence so the overlay and hit box follow content size.
+        // A picture is not a reason to ask the browser for its geometry: on a
+        // far link that request shares the socket with the pictures and its
+        // answer wakes the UI again. The slow cadence below keeps a painting
+        // page current, and a size change or a scroll command asks at once.
+        self.scrollbar_layout.painted_since_refresh = true;
+    }
+
+    /// One decoded picture of `size`: a new size means the page reflowed, so
+    /// its scroll geometry must be read again.
+    pub(super) fn note_frame_size_for_layout(&mut self, size: (u32, u32)) {
+        if self.scrollbar_layout.frame_size == Some(size) {
+            return;
+        }
+        self.scrollbar_layout.frame_size = Some(size);
         self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
     }
 
@@ -729,10 +772,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
+    use std::time::Duration;
 
     use crate::frames::FrameSlot;
     use crate::session::{BrowserEventSender, BrowserEventWake, CommittedUrl};
-    use crate::{BrowserConfig, PageScrollState, session::BrowserSessionConfig};
+    use crate::{BrowserConfig, BrowserControlFailure, PageScrollState, session::BrowserSessionConfig};
 
     use super::DriverState;
 
@@ -740,6 +784,7 @@ mod tests {
         DriverState::new(
             &BrowserSessionConfig {
                 attach: None,
+                resume_target: None,
                 browser: BrowserConfig::default(),
                 panel_local_id: "panel-1".to_string(),
                 initial_url: None,
@@ -1005,7 +1050,58 @@ mod tests {
     }
 
     #[test]
-    fn screencast_activity_refreshes_cached_layout_metrics() {
+    fn a_call_that_failed_because_the_link_went_away_says_so() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mock");
+            let socket = tungstenite::accept(stream).expect("mock handshake");
+            // The link goes away while the action waits for an answer.
+            drop(socket);
+        });
+        let mut link = crate::cdp::CdpLink::connect(&format!("ws://{address}/")).expect("connect mock");
+        let _state = driver_state();
+
+        let refused = DriverState::failure_when_link_lost(
+            &link,
+            BrowserControlFailure::new("protocol_error", "cdp error -32000: refused"),
+        );
+        assert_eq!(
+            refused.code, "protocol_error",
+            "a link that still answers keeps the words of the browser"
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !link.link_lost() && std::time::Instant::now() < deadline {
+            let _ = link.read_one();
+        }
+        assert!(link.link_lost(), "the closed link reports its loss");
+        let lost = DriverState::failure_when_link_lost(
+            &link,
+            BrowserControlFailure::new(
+                "protocol_error",
+                "websocket: Connection reset without closing handshake",
+            ),
+        );
+        assert_eq!(lost.code, "link_lost");
+        assert!(
+            lost.message.contains("may or may not have happened"),
+            "{}",
+            lost.message
+        );
+        assert!(
+            lost.message.contains("a later call works"),
+            "the agent reads that the panel recovers: {}",
+            lost.message
+        );
+        drop(link);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn screencast_activity_updates_the_scroll_offset_without_a_request() {
         let mut state = driver_state();
         let events = test_events();
         let frame_slot = Arc::clone(&state.config.frame_slot);
@@ -1014,7 +1110,11 @@ mod tests {
 
         state.note_screencast_scroll_offset(Some(80.0), &frame_slot, &events);
 
-        assert!(state.scrollbar_layout.refresh_at.is_some());
+        assert!(
+            state.scrollbar_layout.refresh_at.is_none(),
+            "a picture is not a reason to ask for the geometry again"
+        );
+        assert!(state.scrollbar_layout.painted_since_refresh);
         let layout = state.scrollbar_layout.layout.expect("cached layout");
         assert!((layout.scroll_y - 80.0).abs() < f32::EPSILON);
     }

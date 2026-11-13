@@ -4,6 +4,7 @@
 #[cfg(any(test, feature = "test-support"))]
 mod fixture;
 mod host_key;
+mod retry;
 mod tunnel;
 mod worker;
 
@@ -26,6 +27,7 @@ use crate::{Error, Frame, InputEvent, Region, ViewOptions};
 #[cfg(any(test, feature = "test-support"))]
 pub use fixture::SentInput;
 pub use host_key::{HostKeyFailure, HostKeyRefusal, ObservedHostKey, UnobservedReason};
+pub use retry::Reconnect;
 
 /// How the session reaches the VNC server.
 #[derive(Clone, Debug)]
@@ -74,16 +76,22 @@ pub struct Config {
     /// Which server clipboard texts [`Updates::server_text`] keeps. A text
     /// that this refuses causes no wake and does not replace a kept text.
     pub keep_server_text: fn(&str) -> bool,
+    /// Whether a lost connection is tried again, and after how long. The
+    /// default retries nothing: a viewer that connects once and stays stopped
+    /// is what a caller without a policy asks for.
+    pub reconnect: Reconnect,
 }
 
 impl Config {
-    /// Default view options, and every server clipboard text is kept.
+    /// Default view options, every server clipboard text is kept, and a lost
+    /// connection is not retried.
     #[must_use]
     pub fn new(route: Route) -> Self {
         Self {
             route,
             options: ViewOptions::default(),
             keep_server_text: |_| true,
+            reconnect: Reconnect::default(),
         }
     }
 }
@@ -101,6 +109,15 @@ pub enum Status {
     Disconnected {
         message: String,
         host_key: Option<HostKeyFailure>,
+    },
+    /// The connection was lost and the session waits to try it again, as
+    /// attempt `attempt`. `retry_at` is the instant of that attempt, and
+    /// `message` is why the last connection ended, so a viewer shows both from
+    /// one state.
+    Reconnecting {
+        attempt: u32,
+        retry_at: Instant,
+        message: String,
     },
 }
 
@@ -283,6 +300,7 @@ impl Session {
         let (stop, cancelled) = oneshot::channel();
         let (input, mut input_events) = mpsc::unbounded_channel();
         let route = config.route;
+        let reconnect = config.reconnect;
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -291,15 +309,20 @@ impl Session {
                     runtime.block_on(async {
                         // Dropping the connection future and its runtime cancels every
                         // decoder/socket task, including a stalled handshake or read.
-                        tokio::select! {
-                            _ = cancelled => Ok(()),
-                            result = worker::connection(route, &worker_shared, &retained, &mut input_events) => result,
-                        }
+                        worker::session(
+                            route,
+                            &worker_shared,
+                            &retained,
+                            &mut input_events,
+                            &reconnect,
+                            cancelled,
+                        )
+                        .await
                     })
                 });
             let status = match result {
-                Ok(Ok(())) => Status::Stopped,
-                Ok(Err(error)) => Status::from_error(&error),
+                Ok(None) => Status::Stopped,
+                Ok(Some(error)) => Status::from_error(&error),
                 Err(error) => Status::disconnected(error.to_string()),
             };
             worker_live.store(false, Ordering::Release);
@@ -412,6 +435,14 @@ impl Session {
     #[must_use]
     pub fn stream_evidence(&self) -> StreamEvidence {
         self.shared.lock().stream
+    }
+
+    /// Stop the worker and its retries. The status becomes [`Status::Stopped`]
+    /// and nothing connects again for this session.
+    pub fn stop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
     }
 }
 

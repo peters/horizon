@@ -39,21 +39,21 @@ const TARGET: PanelId = PanelId(7);
 const PATIENCE: Duration = Duration::from_secs(20);
 
 /// A home of one test, its clock and its worker.
-struct Take {
-    home: tempfile::TempDir,
-    clock: Arc<TestClock>,
-    input: SpeechInput,
+pub(super) struct Take {
+    pub(super) home: tempfile::TempDir,
+    pub(super) clock: Arc<TestClock>,
+    pub(super) input: SpeechInput,
     children: Vec<Child>,
 }
 
 impl Take {
     /// A take of the bounds of the code, whose clock only the test moves.
-    fn new(keys: Arc<dyn SpeechKeyStore>) -> Self {
+    pub(super) fn new(keys: Arc<dyn SpeechKeyStore>) -> Self {
         Self::with_bounds(keys, TakeBounds::default())
     }
 
     /// A take of the bounds of `bounds`, whose clock only the test moves.
-    fn with_bounds(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds) -> Self {
+    pub(super) fn with_bounds(keys: Arc<dyn SpeechKeyStore>, bounds: TakeBounds) -> Self {
         let home = tempfile::tempdir().expect("a home of a test");
         let clock = Arc::new(TestClock::new());
         let worker = SpeechWorker::new(home.path().to_path_buf(), keys)
@@ -67,7 +67,7 @@ impl Take {
         }
     }
 
-    fn folder(&self) -> PathBuf {
+    pub(super) fn folder(&self) -> PathBuf {
         self.home.path().join(TAKE_FOLDER)
     }
 
@@ -77,13 +77,13 @@ impl Take {
     /// the shell reads it. A test thread that forks while another test writes a
     /// script cannot then make that script refuse its own start with `ETXTBSY`; the
     /// supervisor of a recorder runs the command line as its program.
-    fn script(&self, name: &str, body: &str) -> String {
+    pub(super) fn script(&self, name: &str, body: &str) -> String {
         let body = body.strip_prefix("#!/bin/sh\n").unwrap_or(body);
         crate::util::stand_in_shell_in(self.home.path(), name, body.trim_end_matches('\n')).expect("a script of a test")
     }
 
     /// A file that a recorder copies, so a take holds the bytes of a recording.
-    fn prepared(&self) -> PathBuf {
+    pub(super) fn prepared(&self) -> PathBuf {
         let path = self.home.path().join("prepared.wav");
         let mut bytes = b"RIFF$\x00\x00\x00WAVEfmt ".to_vec();
         bytes.extend_from_slice(&[0u8; 64]);
@@ -108,7 +108,7 @@ impl Take {
 
     /// A recorder that copies the prepared file, writes its own pid and waits for
     /// its signal until it ends.
-    fn recorder(&self, name: &str, prepared: &Path) -> CommandLine {
+    pub(super) fn recorder(&self, name: &str, prepared: &Path) -> CommandLine {
         let pid = self.pid_file(name);
         let program = self.script(
             name,
@@ -149,7 +149,7 @@ impl Take {
 
     /// Wait until `ready` answers, and report what the worker said when it does
     /// not.
-    fn wait_for(&self, what: &str, mut ready: impl FnMut() -> bool) {
+    pub(super) fn wait_for(&self, what: &str, mut ready: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
         let mut seen = Vec::new();
         while !ready() {
@@ -167,7 +167,7 @@ impl Take {
     /// Wait until the recorder of `name` runs: it wrote its own pid and the file of
     /// the take holds the bytes that it copied. Only then may a test move the clock,
     /// because a bound of the take may not pass a program that has not started.
-    fn wait_for_recorder(&self, name: &str) {
+    pub(super) fn wait_for_recorder(&self, name: &str) {
         self.wait_for("the recorder", || self.pid_file(name).exists() && self.file_bytes() > 0);
     }
 
@@ -181,7 +181,7 @@ impl Take {
     }
 
     /// One event of one of `wanted`, or a failure that names what the worker said.
-    fn wait_for_event(&self, wanted: &[&str]) -> Vec<SpeechEventKind> {
+    pub(super) fn wait_for_event(&self, wanted: &[&str]) -> Vec<SpeechEventKind> {
         self.wait_for_event_on(None, wanted)
     }
 
@@ -205,6 +205,7 @@ impl Take {
                     SpeechEventKind::Writing => "writing",
                     SpeechEventKind::Text(_) => "text",
                     SpeechEventKind::Failed(_) => "failed",
+                    SpeechEventKind::Kept(_) => "kept",
                     SpeechEventKind::Dropped => "dropped",
                 };
                 if wanted.contains(&named) {
@@ -212,7 +213,7 @@ impl Take {
                     if seen.len() == wanted.len() {
                         return seen;
                     }
-                } else if let SpeechEventKind::Failed(message) = &kind {
+                } else if let SpeechEventKind::Failed(message) | SpeechEventKind::Kept(message) = &kind {
                     panic!("the worker says {message:?} and not {wanted:?}");
                 }
             }
@@ -253,7 +254,7 @@ impl Take {
             .collect()
     }
 
-    fn files(&self) -> Vec<String> {
+    pub(super) fn files(&self) -> Vec<String> {
         fs::read_dir(self.folder())
             .map(|entries| {
                 entries
@@ -284,12 +285,12 @@ impl Drop for Take {
     }
 }
 
-fn plan(recorder: CommandLine, transcriber: Transcriber) -> TakePlan {
+pub(super) fn plan(recorder: CommandLine, transcriber: Transcriber) -> TakePlan {
     TakePlan { recorder, transcriber }
 }
 
 /// A command that records that it ran and answers one text.
-fn transcriber_script(take: &Take, answer: &str) -> (CommandLine, PathBuf) {
+pub(super) fn transcriber_script(take: &Take, answer: &str) -> (CommandLine, PathBuf) {
     let marker = take.home.path().join("transcribed.txt");
     let program = take.script(
         "transcriber",
@@ -676,12 +677,18 @@ fn a_transcriber_command_that_does_not_answer_hits_its_bound() {
     take.wait_for_recorder("rec");
     take.clock.advance(Duration::from_secs(1));
     take.input.end();
-    let events = take.wait_for_event(&["failed"]);
-    let SpeechEventKind::Failed(message) = &events[0] else {
-        panic!("a failure: {events:?}");
+    // A command that a slow machine did not answer in time says nothing about
+    // the take, so the file stays for one retry.
+    let events = take.wait_for_event(&["kept"]);
+    let SpeechEventKind::Kept(message) = &events[0] else {
+        panic!("a kept take: {events:?}");
     };
     assert!(message.contains("did not answer in 0 seconds"), "{message}");
-    take.wait_for("the delete of the file", || take.files().is_empty());
+    assert_eq!(
+        take.files().len(),
+        1,
+        "the take of a transcriber that timed out is kept"
+    );
 }
 
 #[test]
@@ -719,23 +726,52 @@ fn the_folder_and_the_file_of_a_take_are_private() {
 }
 
 #[test]
-fn every_file_that_an_earlier_take_left_is_deleted_at_the_start() {
+fn a_start_keeps_the_three_newest_takes_of_a_day_and_sweeps_the_rest() {
     let home = tempfile::tempdir().expect("a home of a test");
     let folder = home.path().join(TAKE_FOLDER);
     fs::create_dir_all(&folder).expect("the folder of the takes");
-    let stale = folder.join("take-0000.wav");
-    fs::write(&stale, b"stale").expect("a stale file");
-    let clock = Arc::new(TestClock::new());
-    let worker = SpeechWorker::new(home.path().to_path_buf(), Arc::new(()) as Arc<dyn SpeechKeyStore>).with_clock(
-        Arc::clone(&clock) as Arc<dyn super::super::Clock>,
-        TakeBounds::default(),
-    );
+    // Five takes that a person could send again, oldest first.
+    for index in 0..5_u64 {
+        let path = folder.join(format!("take-000{index}.wav"));
+        fs::write(&path, b"kept").expect("a kept take");
+        let modified = std::time::SystemTime::now() - Duration::from_secs(60 * (5 - index));
+        let file = fs::File::options().write(true).open(&path).expect("the file");
+        file.set_modified(modified).expect("the age of a take");
+    }
+    // One take of two days ago, and one file that is no take at all.
+    let old = folder.join("take-old.wav");
+    fs::write(&old, b"old").expect("an old take");
+    fs::File::options()
+        .write(true)
+        .open(&old)
+        .expect("the file")
+        .set_modified(std::time::SystemTime::now() - Duration::from_hours(48))
+        .expect("the age of an old take");
+    let other = home.path().join("notes.txt");
+    fs::write(&other, b"not a take").expect("another file");
+
+    let worker = SpeechWorker::new(home.path().to_path_buf(), Arc::new(()) as Arc<dyn SpeechKeyStore>);
     let _input = SpeechInput::start(worker);
     let deadline = Instant::now() + PATIENCE;
-    while stale.exists() {
-        assert!(Instant::now() < deadline, "the stale file of a take stays");
+    while old.exists() || folder.join("take-0000.wav").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the start of the window never swept the takes"
+        );
         std::thread::sleep(Duration::from_millis(2));
     }
+    let mut left: Vec<String> = fs::read_dir(&folder)
+        .expect("the folder")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec!["take-0002.wav", "take-0003.wav", "take-0004.wav"],
+        "the folder keeps the three newest takes of the last day"
+    );
+    assert!(other.exists(), "a file that is no take is left alone");
 }
 
 #[test]

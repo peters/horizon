@@ -130,6 +130,7 @@ fn start(backend: BackendKind) -> (BrowserSession, Arc<FrameSlot>, tempfile::Tem
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         attach: None,
+        resume_target: None,
         browser: BrowserConfig {
             backend,
             profile_root: Some(temp.path().join("profiles")),
