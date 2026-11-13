@@ -390,7 +390,11 @@ mod tests {
         let mut terminal = spawn_test_terminal();
         terminal.request_shutdown();
         terminal.begin_async_join();
-        assert!(terminal.wait_for_shutdown(Duration::ZERO));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !terminal.pty_released() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(terminal.pty_released(), "the join of the event loop released the PTY");
         assert!(terminal.shutdown_with_timeout(Duration::ZERO));
     }
 
