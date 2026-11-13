@@ -237,6 +237,32 @@ Horizon skills, so Set up does not start. The card then says: `Agent
 integrations are off, so the agent has no Horizon skills. Start Horizon without
 HORIZON_AGENT_INTEGRATIONS=off.`
 
+### What each choice of Set up does, and what it costs
+
+Set up draws one card beside the panel of your agent and changes that card at
+each step. You press a row or a button on the card, or you write what you want in
+the panel of the agent.
+
+| Your choice | What Set up does | What it costs |
+|---|---|---|
+| `Work on a bigger machine` | Rents a machine in your own account at your provider, opens a terminal on it, and adds it to Machines in the sidebar. | The price of the provider, from the press on `Rent this machine` until `Delete`. A stopped machine still costs its disk. |
+| `Use Horizon on all your computers` | Puts the Horizon server on this computer or on a machine, and links this computer to it. | Nothing on this computer. On a rented machine, the price of that machine. |
+| `A browser that stays signed in` | Installs one Chromium on a machine that stays on, with one profile, and makes it the browser of your new browser panels. | Nothing on this computer. On a rented machine, the price of that machine. |
+| `Join a server that you already have` | Links this computer to a Horizon server that runs, so your machine list, your machine keys and your settings follow it. | Nothing. |
+
+Nothing is rented and no setting changes before you press the button that says
+so. A price on a card is the value that the provider answered when the card was
+drawn, and a row says `price not read` when the provider answered no price.
+
+Two changes need your press on a card that Horizon draws itself: the server
+entry and the browser host. An agent cannot press those cards. When you press
+`Link`, Horizon writes the entry and starts the link at once, so you do not start
+Horizon again. A browser host entry applies at the next start of Horizon.
+
+When a step fails, the card says what failed, what was undone and what is left,
+with `Try again` and `Stop`. A secret, such as a token or a private key, never
+appears on a card or in the panel of the agent.
+
 ## Use the board
 
 On macOS, use Cmd instead of Ctrl in each step of this procedure. A shell

@@ -18,10 +18,18 @@ that Set up starts an agent panel with the goal of the press in its first
 message. It also makes sure that Set up draws its own notice when no agent can
 start, that the notice explains an integration switch that is off, that a second
 press shows the panel of the first press and starts no second one, and that the
-machine section of the sidebar and the Menu offer Set up. The last task uses a
-stand-in agent to draw the four cards of the Set up mock-up, so the new parts of
-a card are visible: a value at the right edge of a row, a badge on a row, a row
-that cannot be chosen, a caption, a row of pills and a list of steps.
+machine section of the sidebar and the Menu offer Set up. The last tasks of the
+first part use a stand-in agent to draw the four cards of the Set up mock-up, so
+the new parts of a card are visible: a value at the right edge of a row, a badge
+on a row, a row that cannot be chosen, a caption, a row of pills and a list of
+steps.
+
+The second part tests the agent side of the wizard with a real agent: the flow of
+each goal of the skill `horizon-setup`, the two settings that only the person
+confirms, and the failure card. One task set of that part needs no money: a
+stand-in provider program answers the calls of the Hetzner CLI and makes
+nothing. The other tasks of the second part rent a machine, and they cost what a
+small machine costs while it runs.
 
 ## 2. Applicability
 
@@ -29,16 +37,35 @@ that cannot be chosen, a caption, a row of pills and a list of steps.
 - Platforms: Linux and macOS. On macOS, use Cmd instead of Ctrl in each step.
 - Watch the candidate live through a native VNC Device panel in your own
   Horizon workspace, as `AGENTS.md` requires.
-- This procedure does not test the agent side of the wizard. The skill
-  `horizon-setup` and the cards that a real agent draws in step 6.7 are a later
-  part.
-- This procedure rents no machine and reaches no provider.
+- The first part of this procedure tests no agent side of the wizard. The skill
+  `horizon-setup` and the cards that a real agent draws in the second part,
+  tasks 6.8 to 6.12, are its own tasks.
+- Task 6.8 rents no machine and reaches no provider: its provider program is a
+  stand-in of this repository. Tasks 6.9 to 6.11 rent a machine at the provider
+  of the person, and they cost money. Task 6.12 rents nothing.
 
 ## 3. Safety
 
-No step in this procedure deletes data, sends a secret, changes access or rents
-compute. The stand-in agent of task 6.6 draws cards only, and it answers a press
-with one line of text.
+No step of the first part of this procedure deletes data, sends a secret, changes
+access or rents compute. The stand-in agent of task 6.7 draws cards only, and it
+answers a press with one line of text.
+
+Task 6.8 rents nothing: its provider program is a stand-in that makes nothing.
+
+> **CAUTION: TASK 6.9 RENTS A MACHINE AT THE PROVIDER OF THE PERSON.** The person
+> pays that provider from the press on `Rent this machine` until the delete. Use
+> the smallest machine, and run task 6.9 only after the person agrees to the
+> cost.
+
+> **CAUTION: THE DELETE OF TASK 6.9 DELETES THE MACHINE AND ITS DISK.** It ends
+> the cost. A machine that the delete does not reach keeps costing money: read
+> the list of the provider after the delete.
+
+Task 6.10 puts the Horizon server on a computer of the person. On this computer
+it costs nothing and it changes no access. On a rented machine it costs what that
+machine costs. Task 6.11 writes the browser host entry of the settings, and task
+6.12 writes the server entry of the settings: both ask the person on a card of
+Horizon before they write anything.
 
 ## 4. Equipment and preconditions
 
@@ -54,6 +81,13 @@ with one line of text.
   `<state-tiles>` for the tile presses, and an empty folder `<state-cards>` for
   the stand-in agent.
 - An empty work folder `<work>`.
+- An empty folder `<state-agent>` for the second part, with the work folder
+  `<work-agent>` inside it: `<work-agent>` is `<state-agent>/data/work-agent`,
+  because the fixture binds the state folder and not a folder beside it.
+- For tasks 6.10 to 6.12: an agent preset that the settings name first, an SSH
+  login of this computer to the server computer of task 6.10, and the empty
+  folder `<state-server>` with its work folder
+  `<state-server>/data/work-server`.
 
 ## 5. Setup
 
@@ -396,6 +430,256 @@ the panel of `Stand-in agent` shows its short form.
    Result: The panel of `Stand-in agent` gains one line for each close and
    stays in the workspace.
 
+## 6.8 F08 — The rent flow with a real agent and a stand-in provider
+
+This task set needs no money. The provider program is a stand-in: it answers the
+calls of the Hetzner CLI in fixed text, it rents no machine and it reaches no
+network. The agent is real, and it follows the skill `horizon-setup`.
+
+1. Make the private `PATH` of the stand-in, with the copy of this repository:
+
+   ```sh
+   mkdir -p <work-agent>/bin
+   cp <repo>/scripts/device-smoke/hcloud-standin.sh <work-agent>/bin/hcloud
+   chmod 755 <work-agent>/bin/hcloud
+   ```
+
+   Result: `<work-agent>/bin/hcloud` is an executable file, and
+   `<work-agent>/bin/hcloud version` prints `hcloud 1.69.0`.
+
+2. Start the fixture with that folder in front of the `PATH` of the run:
+
+   ```sh
+   PATH=<work-agent>/bin:$PATH python3 scripts/device-smoke/serve.py \
+     --horizon <candidate> --native-view --state <state-agent>
+   ```
+
+   Open the live view as in setup step 4. Result: The fixture prints its JSON
+   line, and the panel that it opens has the stand-in on its `PATH`.
+
+3. Press `Set up` in the machine section of the sidebar.
+
+   Result: An agent panel opens with the first message
+   `Use the horizon-setup skill. The person pressed Set up. Goal: choose.` A card
+   appears beside it, and the card says `What do you want to do?` with the badge
+   `Step 1`. The card holds the rows `Work on a bigger machine`,
+   `Use Horizon on all your computers` and `A browser that stays signed in`, and
+   the line under them offers the join. The card holds no button.
+
+4. Press the row `Work on a bigger machine`.
+
+   Result: The same card changes to `Where do you rent?` with the badge
+   `Step 2 of 4`. The row `Hetzner` carries the badge `Ready`, and the rows
+   `Google Cloud`, `AWS` and `RunPod` have a dashed outline and name the command
+   that signs in. The button `Look again` stands beside `Back`.
+
+5. Press `Look again`, then press the row `Hetzner`.
+
+   Result: The card keeps the rows of the read, and `Hetzner` takes the selected
+   look. The card then changes to `How big, and where?` with the badge
+   `Step 3 of 4`, the caption `SIZE`, three sizes, the caption `PLACE` and the
+   pills of the places. Each size row holds `price not read` at its right edge,
+   because the stand-in answers no price. The button says `Rent this machine`.
+
+6. Press `Rent this machine`.
+
+   Result: The card changes to `Renting the machine` with the badge `Working`, a
+   bar and five steps, and the agent's panel says what it does. The step list
+   moves: the machine key, the create, the wait for SSH. The card holds the
+   button `Stop and delete the machine`.
+
+7. Wait up to four minutes.
+
+   Result: The wait for SSH fails, because no machine answers at `127.0.0.1`
+   with the key that Horizon made. The card changes to
+   `The step did not finish`, with the badge `Needs you`, the row `What failed`
+   in one plain sentence, the row `Undone` and the row `Left`, and the buttons
+   `Try again` and `Stop`. No terminal text stands on the card.
+
+8. Press `Stop`.
+
+   Result: The agent deletes the resources of the flow with the stand-in: the
+   server, its firewall and its key. The card says that nothing of the flow is
+   left, and `<work-agent>/bin/hcloud-standin.record` is gone.
+
+9. Read `<work-agent>/bin/hcloud server list --quiet`.
+
+   Result: The header row stands alone, so the stand-in holds no machine.
+
+10. In the Machine section of the sidebar, read the line under `Machines`.
+
+    Result: No machine of this task stands there, and the line `Server: not set`
+    is unchanged.
+
+## 6.9 F09 — The rent flow with a real provider, with money
+
+> **CAUTION: THIS TASK RENTS A MACHINE AND COSTS MONEY.** Ask the person first.
+> Use the smallest machine and the nearest place.
+
+1. Repeat steps 1 to 5 of task 6.8 on `<state-rent>`, without the stand-in
+   `PATH`, at the provider of the person.
+
+   Result: The row of that provider carries the badge `Ready`, and each size row
+   carries the list price that the provider CLI answered in this run, such as
+   `0.0079 EUR / hour`. No row says `price not read` when the CLI answers a
+   price.
+
+2. Press `Rent this machine`.
+
+   Result: The card changes to `Renting the machine`, and the steps finish one
+   after another with their times. The machine appears in the Machines section of
+   the sidebar with its provider line.
+
+3. Press `Connect` on the card of the machine.
+
+   Result: A terminal panel opens beside the card, with the tmux session of the
+   machine. The prompt of the machine answers.
+
+4. Press `Put the Horizon server here`.
+
+   Result: The card changes to `Where does the server run?` of task 6.10, with
+   this machine selected.
+
+5. Press `Delete` on the card of the machine, then the confirm button.
+
+   > **CAUTION: THIS STEP DELETES THE MACHINE AND ITS DISK.**
+
+   Result: The card says `Deleted`, the machine leaves the Machines section, and
+   the provider CLI answers an empty list for the tag `horizon-managed=true`.
+
+## 6.10 F10 — The server flow with a real agent
+
+This task costs nothing on this computer. On a rented machine it costs what that
+machine costs.
+
+1. Repeat step 3 of task 6.8 on `<state-server`. Press the row
+   `Use Horizon on all your computers`.
+
+   Result: The card says `Where does the server run?` with the badge
+   `Step 2 of 4`, the row `This computer`, one row for each machine of the list,
+   and the row `A new rented machine`. The button names the selected place, such
+   as `Set up on this computer`.
+
+2. Press `Set up on this computer`.
+
+   Result: The card says `Setting up the server`, with the badge `Working` and
+   five steps. The steps that copy the binary and install the service finish,
+   with their times.
+
+3. Read the service of the server on this computer:
+
+   ```sh
+   systemctl --user status horizon-server        # Linux
+   launchctl print "gui/$(id -u)/net.horizon.server" | head -20   # macOS
+   ```
+
+   Result: The service is `active (running)` or `running`, and the server home
+   `~/.horizon-server` holds `server.sqlite`, `secret.key` and `server.sock`.
+
+4. Examine the card after the last step.
+
+   Result: A card of Horizon appears beside the agent panel, and it says
+   `Link this computer to the Horizon server on <target>?` with the two rows of
+   the entry and the buttons `Link` and `Not now`.
+
+5. Press `Not now`.
+
+   Result: The card of Horizon goes away, and the card of the flow says that this
+   computer does not follow the server yet. The file
+   `~/.horizon/settings.before-server.<time>.json` does not exist.
+
+6. Press `Add another computer`, then `Done`.
+
+   Result: The card names Settings, Server for the QR code of the invitation and
+   the list of the computers. The Set up card closes.
+
+7. Stop the service of this computer, and remove the server home that this task
+   made, when the person agrees:
+
+   ```sh
+   systemctl --user disable --now horizon-server     # Linux
+   launchctl bootout "gui/$(id -u)/net.horizon.server"   # macOS
+   ```
+
+   > **CAUTION: THE SERVER HOME HOLDS EVERY MACHINE KEY AND EVERY PROVIDER VALUE
+   > OF THIS COMPUTER.** Remove `~/.horizon-server` only when this test made it
+   > and no computer follows it.
+
+## 6.11 F11 — The browser flow with a real agent
+
+1. Start the fixture on `<state-browser>` with the browser machine of this
+   repository, as that task procedure says.
+
+2. Press `Set up`, then the row `A browser that stays signed in`.
+
+   Result: The card says `A browser that stays signed in` with the badge
+   `Step 2 of 4`, the caption `BROWSER` and the two engine rows. `Chromium`
+   carries the badge `Ready`, and `Firefox` cannot be chosen: it has a dashed
+   outline and the badge `To build`.
+
+3. Press the row `Firefox`.
+
+   Result: Nothing changes on the card, and the agent's panel gains no line.
+
+4. Press the button that names the place, such as
+   `Put the browser on helsinki-1`.
+
+   Result: The card says `Preparing the browser` with the badge `Working` and
+   five steps. The steps that copy the files and install the container finish,
+   with their times.
+
+5. Examine the card after the last step.
+
+   Result: A card of Horizon says
+   `Use the browser on <target> for new browser panels?` with the engine, the
+   profile and the SSH target, and the buttons `Use it` and `Not now`.
+
+6. Press `Use it`, then read **Settings**, **General**, **Browser host**.
+
+   Result: The SSH target and the profile hold the values of the card. The card
+   of the flow says that new browser panels use it after the next start of
+   Horizon. `~/.horizon/settings.before-server.<time>.json` is unchanged.
+
+## 6.12 F12 — The join flow with a real agent
+
+This task rents nothing.
+
+1. On the computer that runs the server, read the SSH name that `ssh` resolves
+   there, such as `server-vm`.
+
+2. Start the fixture on `<state-join>`. Press `Set up` in the machine section,
+   then write in the agent panel: `join my server`.
+
+   Result: The card says `Join a server that you already have` with the badge
+   `Step 2 of 4`, the machines of the list as rows, the hosts of the SSH
+   configuration as rows, and the line that offers to write the SSH name in the
+   panel.
+
+3. Write the SSH name in the agent panel.
+
+   Result: A card of Horizon says
+   `Link this computer to the Horizon server on <name>?` with the two rows
+   `Server target` and `Command` and the buttons `Link` and `Not now`.
+
+4. Press `Not now`.
+
+   Result: The card of Horizon goes away. The agent's card says that nothing was
+   written, and `Settings`, `Server` shows no server.
+
+5. Write the SSH name in the agent panel again, and press `Link`.
+
+   Result: The card of Horizon goes away, and the card of the flow says
+   `The server is ready`. The sidebar line changes to `Server: in step` without a
+   second start of Horizon, and the machine list of this computer shows the
+   machines of the server.
+
+6. Press `Close`.
+
+   Result: The Set up card closes. The machine list of the server stays.
+
+7. Take the server entry out of **Settings**, **Server**, so this task changes
+   nothing that the person keeps.
+
 ## 7. Pass criteria
 
 - The first start page shows its heading, the four tiles and the row of keys,
@@ -409,6 +693,17 @@ the panel of `Stand-in agent` shows its short form.
 - The four cards of task 6.7 draw the value, the badge, the row that cannot be
   chosen, the caption, the pills and the steps, and a press on a row that cannot
   be chosen or on a step reaches no agent.
+- A real agent draws the cards of each goal in the words of task 6.8 and tasks
+  6.10 to 6.12, and one card holds the flow.
+- The rent flow stops at the failure card when SSH does not answer, and the card
+  names what failed, what was undone and what is left.
+- A price on a card is the provider's value of this run, and `price not read`
+  when the CLI answers none.
+- The two cards of Horizon ask the person for the server entry and for the
+  browser host, they write nothing before the press, and `Not now` writes
+  nothing.
+- A confirmed server entry starts the link of the run, and the sidebar reads
+  `Server: in step` without a second start.
 
 ## 8. Cleanup
 
@@ -424,6 +719,11 @@ the panel of `Stand-in agent` shows its short form.
 3. Remove `<work>` and the four state folders.
 
    Result: The folders are gone.
+
+4. Remove `<state-agent>`, `<state-rent>`, `<state-server>`, `<state-browser>`
+   and `<state-join>` with their work folders.
+
+   Result: The folders are gone, and no `hcloud-standin.record` is left.
 
 ## 9. Record of results
 
