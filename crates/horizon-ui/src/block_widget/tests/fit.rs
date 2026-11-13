@@ -85,6 +85,7 @@ fn drawn_text(output: &egui::FullOutput, text: &str) -> (Pos2, Rect) {
 fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (egui::FullOutput, f32) {
     let body = card_body(panel);
     let mut opened_link = None;
+    let mut pressed = None;
     let ctx = egui::Context::default();
     let output = ctx
         .run_ui(
@@ -102,11 +103,13 @@ fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (
                             card,
                             revision: 3,
                             agent_present: Owner::Listening.present(),
+                            host_owned: false,
                             interactive: true,
                             now_millis: 1_000,
                             owner_name: Owner::Listening.name(),
                             updated_at_millis: 1_790_883_960_000,
                             opened_link: &mut opened_link,
+                            pressed: &mut pressed,
                         },
                     );
                 });

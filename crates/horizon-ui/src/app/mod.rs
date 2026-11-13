@@ -76,6 +76,7 @@ mod session_kill;
 mod session_manager;
 mod settings;
 mod settings_io;
+mod setup;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
@@ -478,6 +479,9 @@ pub struct HorizonApp {
     /// Speech input: the hotkey, the take that the worker thread runs, and the
     /// state mark of the panel of that take.
     speech: speech::SpeechUi,
+    /// Set up: the panel of its agent, its search of the agent programs and the
+    /// notice that Horizon draws when it cannot start one.
+    setup: setup::SetupState,
 }
 
 fn resolve_shortcuts(config: &Config) -> AppShortcuts {

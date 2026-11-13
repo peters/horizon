@@ -11,6 +11,13 @@ use crate::plugin_install::{self, AgentPluginHostGuard};
 
 const ENV: &str = "HORIZON_AGENT_INTEGRATIONS";
 
+/// Whether this run installs its agent integrations, as the start of this
+/// process reads the switch. A window reads it to say why an agent has no
+/// Horizon skills; an unusable value stopped the start already.
+pub(crate) fn installed_now() -> bool {
+    enabled().unwrap_or(true)
+}
+
 pub(crate) struct AgentIntegrations {
     enabled: bool,
 }

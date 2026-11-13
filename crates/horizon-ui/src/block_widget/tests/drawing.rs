@@ -377,3 +377,38 @@ fn a_step_reports_its_own_state_to_a_reader_as_its_line() {
         "a step is one node"
     );
 }
+
+#[test]
+fn a_card_that_horizon_owns_says_so_and_shows_no_frame_of_a_gone_agent() {
+    use crate::block_widget::footer::HOST_DRAWN;
+
+    let document = one_button();
+    let mut card = CardRuntime::default();
+    let frames = CardFrames::new();
+    let nodes = card_nodes(&document, Owner::Listening);
+    assert!(nodes.iter().any(|(text, _)| text == "Connect"), "{nodes:?}");
+
+    let output = frames.run_as_host(&document, &mut card, super::card_input());
+    assert_eq!(
+        card.frames(),
+        HostFrames::default(),
+        "the notice of Horizon needs no frame of a gone agent"
+    );
+    let texts: Vec<String> = output
+        .output
+        .platform_output
+        .accesskit_update
+        .expect("an accessibility tree")
+        .nodes
+        .into_iter()
+        .filter_map(|(_, node)| node.label().or_else(|| node.value()).map(str::to_owned))
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == HOST_DRAWN),
+        "the footer says that Horizon drew this card: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == AGENT_GONE_TITLE),
+        "a card of Horizon's own claims no gone agent: {texts:?}"
+    );
+}

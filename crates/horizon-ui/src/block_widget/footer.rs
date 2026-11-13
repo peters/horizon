@@ -16,6 +16,8 @@ use super::metrics::{FOOTER_FONT, FOOTER_PAD_SIDE};
 const OWNER_PREFIX: &str = "Card drawn by the agent";
 /// What the footer says when the owner's panel is gone.
 const NO_OWNER: &str = "Card drawn by an agent";
+/// What the footer says for a card that Horizon drew itself.
+pub(super) const HOST_DRAWN: &str = "Notice of Horizon, not of an agent";
 
 /// The left half of the footer for an owner, as a borrowed slice.
 pub(super) fn drawn_by(owner_name: Option<&str>) -> (&'static str, Option<&str>) {
@@ -41,6 +43,7 @@ pub(super) fn show(ui: &mut Ui, rect: Rect, view: &mut CardView<'_>) {
     );
     let updated = view.card.updated_label(view.revision, view.updated_at_millis);
     let owner_name = view.owner_name;
+    let host_owned = view.host_owned;
 
     let mut footer = ui.new_child(
         UiBuilder::new()
@@ -48,10 +51,14 @@ pub(super) fn show(ui: &mut Ui, rect: Rect, view: &mut CardView<'_>) {
             .layout(Layout::left_to_right(Align::Center)),
     );
     footer.spacing_mut().item_spacing.x = 4.0;
-    let (prefix, name) = drawn_by(owner_name);
-    footer.label(RichText::new(prefix).size(FOOTER_FONT).color(theme::FG_SOFT()));
-    if let Some(name) = name {
-        footer.label(RichText::new(name).size(FOOTER_FONT).color(theme::FG_SOFT()));
+    if host_owned {
+        footer.label(RichText::new(HOST_DRAWN).size(FOOTER_FONT).color(theme::FG_SOFT()));
+    } else {
+        let (prefix, name) = drawn_by(owner_name);
+        footer.label(RichText::new(prefix).size(FOOTER_FONT).color(theme::FG_SOFT()));
+        if let Some(name) = name {
+            footer.label(RichText::new(name).size(FOOTER_FONT).color(theme::FG_SOFT()));
+        }
     }
     footer.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.label(RichText::new(updated).size(FOOTER_FONT).color(theme::FG_SOFT()));

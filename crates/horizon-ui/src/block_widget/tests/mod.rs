@@ -64,11 +64,13 @@ fn with_events(events: Vec<egui::Event>) -> egui::RawInput {
     }
 }
 
-/// One pass of a card body: what it painted, and the address of the link the
-/// person pressed in it.
-struct Pass {
-    output: egui::FullOutput,
+/// One pass of a card body: what it painted, and what its controls asked of the
+/// host: the address of a link and the id of a button of a card that Horizon
+/// owns.
+pub(super) struct Pass {
+    pub(super) output: egui::FullOutput,
     opened_link: Option<String>,
+    pressed: Option<String>,
 }
 
 /// A card body drawn for several passes in one egui context, so a press and a
@@ -133,6 +135,40 @@ impl CardFrames {
         self.run_with_interactivity(document, card, owner, input, true)
     }
 
+    /// One pass of the card that Horizon drew itself, as the id of the button
+    /// the person pressed in it.
+    pub(super) fn press_host(&self, document: &BlockDocument, card: &mut CardRuntime, label: &str) -> Option<String> {
+        // The card of Horizon draws no frame of a gone agent, so its buttons
+        // sit where the host pass put them, not where an agent's card would.
+        let drawn = self.run_as_host(document, card, card_input());
+        let nodes = drawn
+            .output
+            .platform_output
+            .accesskit_update
+            .expect("a card of Horizon builds an accessibility tree")
+            .nodes;
+        let position = center_of(&nodes, label);
+        let button = |pressed: bool| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut passed = self.run_as_host(document, card, with_events(vec![egui::Event::PointerMoved(position)]));
+        for pass in [
+            self.run_as_host(document, card, with_events(vec![button(true)])),
+            self.run_as_host(document, card, with_events(vec![button(false)])),
+        ] {
+            passed.pressed = passed.pressed.or(pass.pressed);
+        }
+        passed.pressed
+    }
+
+    /// One pass of a card that Horizon owns, with `input` in it.
+    pub(super) fn run_as_host(&self, document: &BlockDocument, card: &mut CardRuntime, input: egui::RawInput) -> Pass {
+        self.run_with_host(document, card, Owner::Gone, input, true, true)
+    }
+
     /// One pass of a card that a host dialog does (`false`) or does not cover.
     fn run_with_interactivity(
         &self,
@@ -142,7 +178,22 @@ impl CardFrames {
         input: egui::RawInput,
         interactive: bool,
     ) -> Pass {
+        self.run_with_host(document, card, owner, input, interactive, false)
+    }
+
+    /// One pass of a card, either of an agent (`host_owned` false) or of
+    /// Horizon itself.
+    fn run_with_host(
+        &self,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+        input: egui::RawInput,
+        interactive: bool,
+        host_owned: bool,
+    ) -> Pass {
         let mut opened_link = None;
+        let mut pressed = None;
         let output = self
             .ctx
             .run_ui(input, |ui| {
@@ -154,16 +205,22 @@ impl CardFrames {
                         card,
                         revision: 3,
                         agent_present: owner.present(),
+                        host_owned,
                         interactive,
                         now_millis: 1_000,
                         owner_name: owner.name(),
                         updated_at_millis: 1_790_883_960_000,
                         opened_link: &mut opened_link,
+                        pressed: &mut pressed,
                     },
                 );
             })
             .discard_textures();
-        Pass { output, opened_link }
+        Pass {
+            output,
+            opened_link,
+            pressed,
+        }
     }
 
     /// A press and a release on the widget labelled `label`, as the address it

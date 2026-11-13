@@ -215,8 +215,14 @@ fn draw_button(ui: &mut Ui, button: &Button, rect: Rect, is_primary: bool, view:
     );
 
     if enabled && response.clicked() {
-        let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
-        view.card.press(&button.id, revision, document, now_millis);
+        if view.host_owned {
+            // A card of Horizon's own has no agent to read a click, so the press
+            // is the host's command.
+            *view.pressed = Some(button.id.clone());
+        } else {
+            let (document, revision, now_millis) = (view.document, view.revision, view.now_millis);
+            view.card.press(&button.id, revision, document, now_millis);
+        }
         ui.ctx().request_repaint();
     }
 }

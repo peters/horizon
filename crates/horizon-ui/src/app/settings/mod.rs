@@ -196,6 +196,17 @@ impl HorizonApp {
         }
     }
 
+    /// Opens the settings, on the Presets tab: where the person changes which
+    /// agent Set up starts.
+    pub(super) fn open_settings_presets(&mut self) {
+        if self.settings.is_none() {
+            self.toggle_settings();
+        }
+        if let Some(editor) = self.settings.as_mut() {
+            editor.active_tab = SettingsTab::Presets;
+        }
+    }
+
     pub(super) fn render_settings(&mut self, ui: &mut egui::Ui) {
         // The answers of the server that arrived since the last frame land in the
         // tab before it draws, so a frame with nothing to read allocates nothing.

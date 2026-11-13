@@ -107,6 +107,15 @@ impl HorizonApp {
         })
     }
 
+    /// Whether Horizon wrote the document of this card itself, so its buttons
+    /// are Horizon's controls and no agent reads a press on them.
+    pub(in crate::app) fn card_host_owned(&self, panel_id: PanelId) -> bool {
+        self.board
+            .panel(panel_id)
+            .and_then(|panel| panel.block())
+            .is_some_and(|block| block.owner_actor.is_none())
+    }
+
     /// Whether an agent panel of a card's owner is in its workspace, so its
     /// buttons and rows are live.
     pub(in crate::app) fn card_agent_present(&self, panel_id: PanelId) -> bool {

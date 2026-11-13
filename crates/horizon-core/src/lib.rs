@@ -36,6 +36,7 @@ pub mod secret_store;
 pub mod server_link;
 mod session_store;
 pub mod settings_sync;
+pub mod setup;
 mod shortcuts;
 pub mod speech;
 mod ssh;
@@ -111,6 +112,9 @@ pub use server_link::{JoinLink, LinkError, ServerAddress, allows_address, check_
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,
+};
+pub use setup::{
+    SETUP_SKILL, SetupAgent, SetupGoal, first_installed, first_message_args, setup_agents, takes_first_message,
 };
 pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 pub use ssh::{

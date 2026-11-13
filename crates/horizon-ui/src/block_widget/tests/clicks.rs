@@ -130,3 +130,20 @@ fn a_pill_of_a_pills_list_is_the_selection_like_a_row_is() {
     assert_eq!(click.component_id, "place.falkenstein");
     assert_eq!(click.selected, vec!["place.falkenstein".to_owned()]);
 }
+
+#[test]
+fn a_card_that_horizon_owns_takes_its_press_for_the_host() {
+    let document = one_button();
+    let mut card = CardRuntime::default();
+    let pressed = CardFrames::new().press_host(&document, &mut card, "Connect");
+
+    assert_eq!(
+        pressed,
+        Some("connect".to_owned()),
+        "the host reads the id of the button that the person pressed"
+    );
+    assert!(
+        card.take_click(1_000).is_none(),
+        "a card of Horizon's own has no agent to read a click"
+    );
+}

@@ -172,8 +172,12 @@ struct PanelBodyContext<'a> {
     card_runtime: Option<&'a mut horizon_core::CardRuntime>,
     /// The address of the link a card's person pressed in this pass.
     card_opened_link: &'a mut Option<String>,
+    /// The id of the button a person pressed in a card that Horizon owns.
+    card_pressed: &'a mut Option<String>,
     /// An agent panel of the card's owner is in its workspace.
     card_agent_present: bool,
+    /// Horizon wrote the document of this card, so no agent reads its presses.
+    card_host_owned: bool,
     /// Display name of the agent that owns the card, while it is present.
     card_owner_name: Option<&'a str>,
     browser_shortcuts: Option<&'a AppShortcuts>,
@@ -216,11 +220,13 @@ fn show_panel_body_contents(
                     card,
                     revision: block.revision,
                     agent_present: body_context.card_agent_present,
+                    host_owned: body_context.card_host_owned,
                     interactive,
                     now_millis: horizon_browser_control::manifest::now_millis(),
                     owner_name: body_context.card_owner_name,
                     updated_at_millis: block.updated_at_millis,
                     opened_link,
+                    pressed: body_context.card_pressed,
                 },
             );
             false
@@ -406,10 +412,12 @@ impl HorizonApp {
                     |ui| {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
+                        let mut card_pressed = None;
                         let claim_editor_focus = true;
                         let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
                         let card_agent_present = self.card_agent_present(panel_id);
+                        let card_host_owned = self.card_host_owned(panel_id);
                         let card_owner_name = self.card_owner_name(panel_id);
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -452,7 +460,9 @@ impl HorizonApp {
                                     device_ui_state: device_state,
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
+                                    card_pressed: &mut card_pressed,
                                     card_agent_present,
+                                    card_host_owned,
                                     card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings: &all_shortcut_bindings,
@@ -469,6 +479,9 @@ impl HorizonApp {
                         }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ui.ctx(), panel_id, &url);
+                        }
+                        if let Some(id) = card_pressed {
+                            self.press_host_card_button(ui.ctx(), panel_id, &id);
                         }
                         self.paint_speech_mark(&ui.painter_at(rect), panel_id, rect);
                     },
@@ -792,9 +805,11 @@ impl HorizonApp {
                     |ui| {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
+                        let mut card_pressed = None;
                         let claim_editor_focus = snapshot.is_focused;
                         let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let card_agent_present = self.card_agent_present(panel_id);
+                        let card_host_owned = self.card_host_owned(panel_id);
                         let card_owner_name = self.card_owner_name(panel_id);
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
@@ -844,7 +859,9 @@ impl HorizonApp {
                                     device_ui_state: device_state,
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
+                                    card_pressed: &mut card_pressed,
                                     card_agent_present,
+                                    card_host_owned,
                                     card_owner_name,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings,
@@ -867,6 +884,9 @@ impl HorizonApp {
                         }
                         if let Some(url) = card_opened_link {
                             self.open_card_link(ctx, panel_id, &url);
+                        }
+                        if let Some(id) = card_pressed {
+                            self.press_host_card_button(ctx, panel_id, &id);
                         }
                     },
                 );

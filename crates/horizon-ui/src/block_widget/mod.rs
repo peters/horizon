@@ -63,6 +63,9 @@ pub(crate) struct CardView<'a> {
     pub(crate) revision: u64,
     /// An agent panel of the owner is in the card's workspace.
     pub(crate) agent_present: bool,
+    /// Horizon wrote this document itself, so its buttons are Horizon's own
+    /// controls and no agent reads a press on them.
+    pub(crate) host_owned: bool,
     /// No host dialog covers the card, so a press counts.
     pub(crate) interactive: bool,
     /// Wall-clock time of this frame, in milliseconds.
@@ -76,6 +79,9 @@ pub(crate) struct CardView<'a> {
     /// shows a live link. The host reads it after the pass that drew the card,
     /// opens the page in a browser panel and records no click.
     pub(crate) opened_link: &'a mut Option<String>,
+    /// The id of the button the person pressed in a card that Horizon owns. The
+    /// host reads it after the pass and does what that button says.
+    pub(crate) pressed: &'a mut Option<String>,
 }
 
 impl CardView<'_> {
@@ -99,7 +105,7 @@ pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
     // A list that the person has not selected in takes the row its document
     // selects, whatever brought the document here: create, update or a restart.
     view.card.apply_default_selection(view.document);
-    let enabled = view.agent_present && view.interactive;
+    let enabled = (view.agent_present || view.host_owned) && view.interactive;
     let full = ui.max_rect();
     let footer_top = (full.max.y - metrics::FOOTER_HEIGHT).max(full.min.y);
     let content = Rect::from_min_max(full.min, Pos2::new(full.max.x, footer_top));
@@ -140,13 +146,13 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     // room too: the host fits the card when this set changes, not only when the
     // document does.
     view.card.observe_frames(CardFrames {
-        agent_gone: !view.agent_present,
+        agent_gone: !view.agent_present && !view.host_owned,
         clicks_refused: refused,
         link_refused,
     });
     let primary = primary_button(view.document);
     let mut first = true;
-    if !view.agent_present {
+    if !view.agent_present && !view.host_owned {
         status::show(ui, "agent_gone", Tone::Warn, AGENT_GONE_TITLE, AGENT_GONE_LINE);
         first = false;
     }
