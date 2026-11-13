@@ -8,6 +8,7 @@ mod resize;
 mod screen_replay;
 mod selection;
 mod support;
+mod wake;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -39,6 +40,8 @@ use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
 use self::support::{ColorLookup, replay_terminal_bytes};
+pub use self::wake::OutputWake;
+use self::wake::OutputWakeState;
 
 type TerminalPty = tty::Pty;
 
@@ -126,6 +129,8 @@ struct TerminalEventProxy {
     exit_only: bool,
     /// The key presses of a person that this output answers, for the opt-in lines.
     latency: Arc<latency::Probe>,
+    /// The frame that a person's echo asks for.
+    output_wake: Arc<OutputWakeState>,
     // Both the grid and event loop retain trust through detached/asynchronous teardown.
     _ssh_trust: TerminalSshTrust,
 }
@@ -137,11 +142,17 @@ struct TerminalSshTrust {
 }
 
 impl TerminalEventProxy {
-    fn new(event_tx: mpsc::Sender<Event>, ssh_trust: TerminalSshTrust, latency: Arc<latency::Probe>) -> Self {
+    fn new(
+        event_tx: mpsc::Sender<Event>,
+        ssh_trust: TerminalSshTrust,
+        latency: Arc<latency::Probe>,
+        output_wake: Arc<OutputWakeState>,
+    ) -> Self {
         Self {
             event_tx,
             exit_only: false,
             latency,
+            output_wake,
             _ssh_trust: ssh_trust,
         }
     }
@@ -151,6 +162,7 @@ impl TerminalEventProxy {
             event_tx,
             exit_only: true,
             latency: Arc::new(latency::Probe::new()),
+            output_wake: Arc::new(OutputWakeState::default()),
             _ssh_trust: TerminalSshTrust::default(),
         }
     }
@@ -159,7 +171,12 @@ impl TerminalEventProxy {
     /// test that needs a terminal.
     #[cfg(test)]
     fn for_tests(event_tx: mpsc::Sender<Event>) -> Self {
-        Self::new(event_tx, TerminalSshTrust::default(), Arc::new(latency::Probe::new()))
+        Self::new(
+            event_tx,
+            TerminalSshTrust::default(),
+            Arc::new(latency::Probe::new()),
+            Arc::new(OutputWakeState::default()),
+        )
     }
 }
 
@@ -171,6 +188,7 @@ impl EventListener for TerminalEventProxy {
         if matches!(event, Event::Wakeup) {
             // The event loop read bytes, which may be the echo of a person's key.
             self.latency.output_read();
+            self.output_wake.wake_on_output();
         }
         let _ = self.event_tx.send(event);
     }
@@ -213,6 +231,7 @@ pub struct Terminal {
     event_sender: EventLoopSender,
     event_rx: mpsc::Receiver<Event>,
     latency: Arc<latency::Probe>,
+    output_wake: Arc<OutputWakeState>,
     event_loop_handle: Option<JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>>,
     child_pid: Option<u32>,
     #[cfg(target_os = "linux")]

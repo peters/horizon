@@ -125,10 +125,16 @@ pub(crate) fn handle_terminal_keyboard_input(
 ///
 /// `key_at` is the time that the frame took the key event, so the opt-in latency
 /// line of that press starts where the person's key reached the window.
+///
+/// The write arms the echo of a panel that this frame draws, before the bytes of
+/// the press leave, so the echo asks for the next frame instead of waiting for
+/// the idle poll of the window. Only bytes that reach the PTY arm that wake, so a
+/// chord that the window handles and output that nobody typed wait as before.
 fn write_keys(terminal: &horizon_core::Terminal, key_at: Option<std::time::Instant>, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
+    terminal.arm_output_wake();
     terminal.write_input(bytes);
     if let Some(key_at) = key_at {
         terminal.note_key_press(key_at, bytes.len());

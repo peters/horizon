@@ -115,7 +115,9 @@ pub use ssh::{
     DiscoveredSshHost, MachineKey, MachineKeyError, MachineKeyRef, MachineKeys, SshConnection, SshConnectionStatus,
     discover_ssh_hosts,
 };
-pub use terminal::{ClipboardTarget, ClipboardWrite, CwdReader, PROGRAM_BOUND, Terminal, open_url, read_cwd};
+pub use terminal::{
+    ClipboardTarget, ClipboardWrite, CwdReader, OutputWake, PROGRAM_BOUND, Terminal, open_url, read_cwd,
+};
 pub use transcript::PanelTranscript;
 pub use transcript::warm_script_support;
 pub use util::{spawn_stand_in, stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};

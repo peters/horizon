@@ -1,7 +1,8 @@
 use super::{
-    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, PendingClipboard, PtyOptions,
-    ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-    TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc, replay_terminal_bytes, term, tty,
+    Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
+    PendingClipboard, PtyOptions, ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions,
+    TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc,
+    replay_terminal_bytes, term, tty,
 };
 
 impl Terminal {
@@ -53,7 +54,8 @@ impl Terminal {
         let replay_bytes = options.replay_bytes;
         let (event_tx, event_rx) = mpsc::channel();
         let latency = Arc::new(latency::Probe::new());
-        let event_loop_proxy = TerminalEventProxy::new(event_tx, trust, Arc::clone(&latency));
+        let output_wake = Arc::new(OutputWakeState::default());
+        let event_loop_proxy = TerminalEventProxy::new(event_tx, trust, Arc::clone(&latency), Arc::clone(&output_wake));
         let term_proxy = event_loop_proxy.clone();
 
         tty::setup_env();
@@ -101,6 +103,7 @@ impl Terminal {
             event_sender,
             event_rx,
             latency,
+            output_wake,
             event_loop_handle,
             #[cfg(target_os = "linux")]
             child_start_time,
@@ -138,6 +141,28 @@ impl Terminal {
     /// Forward pointer motion without treating a hover as a user decision.
     pub fn write_pointer_motion(&self, bytes: &[u8]) {
         self.write_protocol(bytes);
+    }
+
+    /// Takes the callback that asks the window for the frame which shows new
+    /// output of this terminal. The first callback of a panel stays, because a
+    /// panel keeps the viewport that drew it.
+    pub fn attach_output_wake(&self, wake: &OutputWake) {
+        self.output_wake.attach(wake);
+    }
+
+    /// A person's key press waits for its echo, so the first output after it asks
+    /// the window for the frame that paints the echo. The input of this panel
+    /// arms the wake before it writes, so a local shell that echoes in
+    /// microseconds is painted in the same frame.
+    pub fn arm_output_wake(&self) {
+        self.output_wake.arm();
+    }
+
+    /// Whether the frame that just ran drew this terminal. A terminal that no
+    /// frame draws arms no wake, so the output of a panel that a person cannot
+    /// see never makes the window repaint.
+    pub fn note_drawn(&self, drawn: bool) {
+        self.output_wake.set_drawn(drawn);
     }
 
     /// The time that this frame took a key event, while the latency lines of this
@@ -356,6 +381,6 @@ mod tests;
 #[cfg(test)]
 mod snapshot_tests;
 
-// The latency lines run against a real PTY.
+// The latency lines and the wake of a key press run against a real PTY.
 #[cfg(all(test, unix))]
 mod latency_tests;

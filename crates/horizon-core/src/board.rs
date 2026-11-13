@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
 use crate::runtime_state::{PanelState, RuntimeState};
+use crate::terminal::OutputWake;
 use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
@@ -114,6 +115,9 @@ pub struct Board {
     pending_editor_saves: Vec<EditorSave>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
+    /// The wake of the window, kept so a panel that this session creates later
+    /// reaches the frame that shows its echo.
+    output_wake: Option<OutputWake>,
     next_panel_id: u64,
     next_workspace_id: u64,
 }
@@ -162,6 +166,7 @@ impl Board {
             pending_editor_saves: Vec::new(),
             focused: None,
             active_workspace: None,
+            output_wake: None,
             next_panel_id: 1,
             next_workspace_id: 1,
         }
@@ -602,6 +607,21 @@ impl Board {
                     recovery: signal.remote_recovery(),
                 });
             }
+        }
+    }
+
+    /// Gives every terminal panel the callback that asks the window for the
+    /// frame which shows its echo, and keeps it for the panels that this session
+    /// creates later.
+    ///
+    /// A panel keeps the first callback that it took, so a frame may call this
+    /// for every panel of the board without cost beyond one check per panel.
+    pub fn attach_output_wake(&mut self, wake: &OutputWake) {
+        if self.output_wake.is_none() {
+            self.output_wake = Some(Arc::clone(wake));
+        }
+        for panel in &self.panels {
+            panel.attach_output_wake(wake);
         }
     }
 

@@ -131,6 +131,10 @@ impl<'a> TerminalView<'a> {
         let drag_active = interaction.body.dragged() || interaction.scrollbar.dragged();
 
         let on_screen = ui.is_rect_visible(interaction.layout.outer);
+        // The echo of a key press asks for a frame only for a panel that a
+        // frame draws, so a person who cannot see the panel never makes the
+        // window repaint for its output.
+        self.panel.note_drawn(on_screen);
         if on_screen && let Some(terminal) = self.panel.terminal_mut() {
             let history_size = terminal.history_size();
             let scrollbar_highlighted = interaction.scrollbar.hovered() || interaction.scrollbar.dragged();
@@ -178,6 +182,10 @@ impl<'a> TerminalView<'a> {
         self.show_link_notice(ui, interaction.layout.body, interactive, keyboard.reconnect_requested);
 
         if interactive && has_terminal_focus {
+            // The bytes of a key press arm the echo of this panel, so the first
+            // output after them asks for the next frame instead of waiting for
+            // the idle poll of the window. Output that nobody typed arms nothing,
+            // so a program that prints without end never drives the window.
             *keyboard.reconnect_requested |= handle_terminal_keyboard_input(
                 ui,
                 interaction.body.id,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use egui::Shape;
@@ -190,5 +192,74 @@ fn offscreen_terminal_query_requests_a_fast_repaint() {
     assert!(
         drain_until_text(&mut app, panel_id, "ANSWERED"),
         "an answered terminal query must request a fast repaint"
+    );
+}
+
+#[test]
+fn the_window_asks_for_its_own_frame_when_the_answer_of_a_key_press_arrives() {
+    let (temp, ctx, mut app) = offscreen_test_app();
+    // The wake of this window counts its own calls and asks for the frame, as the
+    // wake of a window does. It replaces the wake of the start before the first
+    // frame, because a panel keeps the first wake that it takes.
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    let wake: horizon_core::OutputWake = {
+        let ctx = ctx.clone();
+        Arc::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            ctx.request_repaint();
+        })
+    };
+    app.output_wake = wake;
+    // The far shell answers every line well after the idle poll of the window fell
+    // due, so only a wake of its panel can bring the frame that shows the answer.
+    let panel_id = spawn_script(
+        &mut app,
+        &temp,
+        r#"stty -echo; printf 'READY'; while IFS= read -r line; do sleep 1.5; printf 'ECHO-%s' "$line"; done"#,
+    );
+    drain_until_text(&mut app, panel_id, "READY");
+    app.board.panel_mut(panel_id).expect("panel").layout.position = [40.0, 60.0];
+    app.board.focused = Some(panel_id);
+    app.canvas_view = horizon_core::CanvasViewState::default();
+    for _ in 0..3 {
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    }
+    assert!(
+        app.panel_screen_rects.contains_key(&panel_id),
+        "the panel of the key press must be on screen"
+    );
+
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events.push(egui::Event::Text("a\n".to_owned()));
+    run_app_frame_with_input(&ctx, &mut app, input);
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        0,
+        "no awake of the window before the answer"
+    );
+    assert!(
+        !panel_text(&app, panel_id).contains("ECHO-a"),
+        "the answer must still be on its way: {}",
+        panel_text(&app, panel_id)
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while wakes.load(Ordering::Relaxed) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the answer of a key press must ask for its own frame instead of the idle poll: grid={:?}",
+            panel_text(&app, panel_id)
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let mut text = String::new();
+    for shape in run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None)).shapes {
+        append_text(&shape.shape, &mut text);
+    }
+    assert!(
+        text.contains("ECHO-a"),
+        "the frame that the wake asked for paints the answer of the key press:\n{text}"
     );
 }

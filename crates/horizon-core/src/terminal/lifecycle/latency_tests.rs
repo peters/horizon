@@ -1,6 +1,8 @@
-//! The opt-in latency lines of a key press, against real PTYs.
+//! The opt-in latency lines and the wake of a person's echo, against real PTYs.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use super::{Terminal, TerminalSpawnOptions};
@@ -106,5 +108,64 @@ fn a_key_press_writes_no_line_while_its_switch_is_off() {
     assert!(
         terminal.latency.take_lines().is_empty(),
         "a key press writes no line while the switch is off"
+    );
+}
+
+fn counting_wake() -> (Arc<AtomicUsize>, crate::OutputWake) {
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    let wake: crate::OutputWake = Arc::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    (wakes, wake)
+}
+
+#[test]
+fn the_echo_of_a_key_press_asks_for_one_frame() {
+    let mut terminal = spawn("/bin/cat", &[]);
+    let (wakes, wake) = counting_wake();
+    terminal.attach_output_wake(&wake);
+    // The frames of the window draw this panel, so its echo may ask for one.
+    terminal.note_drawn(true);
+
+    terminal.arm_output_wake();
+    terminal.write_input(b"x");
+    drain_until_output(&mut terminal);
+
+    assert_eq!(wakes.load(Ordering::Relaxed), 1, "the echo of a key asks for its frame");
+    terminal.write_input(b"y");
+    drain_until_output(&mut terminal);
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        1,
+        "output that no key press of a person waits for asks for no frame"
+    );
+}
+
+#[test]
+fn a_panel_that_prints_all_the_time_keeps_the_output_poll_and_asks_for_no_frame() {
+    // The bound of a panel that nobody types into is the 16 ms output poll of
+    // `finalize_frame`. A wake of its own would break that bound.
+    let mut terminal = spawn("/bin/sh", &["-c", "while :; do printf 'row\\n'; sleep 0.005; done"]);
+    let (wakes, wake) = counting_wake();
+    terminal.attach_output_wake(&wake);
+    // The panel is on screen and drawn by the frames of the window, so only the
+    // missing key press can keep its output from asking for a frame.
+    terminal.note_drawn(true);
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut drains = 0_usize;
+    while Instant::now() < deadline {
+        if terminal.process_events() {
+            drains += 1;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    assert!(drains > 10, "the panel printed throughout the window: {drains}");
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        0,
+        "output that no key press of a person waits for asks for no frame"
     );
 }
