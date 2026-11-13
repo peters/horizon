@@ -349,7 +349,7 @@ fn browser_create_options(
 }
 
 /// The reason that this Horizon refuses a create of `backend`, when its settings
-/// name a browser host that serves Chromium only.
+/// name a browser host that serves the engine of its own profile and no other.
 fn browser_host_backend_refusal(backend: BackendKind) -> Option<&'static str> {
     horizon_core::browser_host().and_then(|host| host.backend_refusal(backend))
 }

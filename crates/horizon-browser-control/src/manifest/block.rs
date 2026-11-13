@@ -266,7 +266,8 @@ pub enum BrowserEngine {
     /// Chromium, which runs on another machine through the SSH tunnel of
     /// Horizon.
     Chromium,
-    /// Firefox, which a browser host does not serve yet.
+    /// Firefox, which runs behind a driver of Horizon on that machine. That
+    /// machine needs Firefox, geckodriver and the same version of Horizon.
     Firefox,
 }
 

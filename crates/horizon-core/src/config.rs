@@ -20,7 +20,9 @@ mod secrets;
 mod server;
 mod speech;
 
-pub use browser_host::{BrowserHostConfig, browser_host, browser_mcp_args, configure_browser_host};
+pub use browser_host::{
+    BrowserHostConfig, BrowserHostEngine, browser_host, browser_mcp_args, configure_browser_host, valid_driver_command,
+};
 use presets::default_presets;
 pub use presets::{PresetConfig, preset_named};
 pub(crate) use presets::{

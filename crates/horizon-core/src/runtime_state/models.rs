@@ -397,6 +397,14 @@ pub struct BrowserHostState {
     pub ssh_target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The engine of that machine. A saved panel comes back on it, because its
+    /// page cannot move to another engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<crate::config::BrowserHostEngine>,
+    /// The program that starts the driver of that machine, when the entry named
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

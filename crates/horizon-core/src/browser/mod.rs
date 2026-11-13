@@ -105,6 +105,9 @@ pub struct BrowserPanelState {
     /// The machine that runs the Chromium of this panel, with the forward that
     /// carries its `DevTools` port; `None` for a browser of this computer.
     attached: Option<attached_host::AttachedHostSlot>,
+    /// The link to the driver that runs beside the Firefox of a browser host;
+    /// `None` for a panel of this computer and for a Chromium host.
+    host_driver: Option<host_driver::panel::HostDriverSlot>,
     /// The endpoint of the connect that the next session drives. It exists only
     /// for the moment between a finished connect and the session of that
     /// browser.
@@ -150,6 +153,7 @@ impl BrowserPanelState {
     #[must_use]
     pub fn has_ended(&self) -> bool {
         !self.attached_kept_after()
+            && !self.host_driver_kept_after()
             && !self.status.is_alive()
             && !self.status.is_reconnecting()
             && self.session.is_none()
@@ -186,6 +190,7 @@ impl BrowserPanelState {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -254,6 +259,7 @@ impl BrowserPanelState {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -273,6 +279,10 @@ impl BrowserPanelState {
     /// browser returns the user to where they were rather than the panel's
     /// initial URL.
     pub fn relaunch(&mut self) {
+        if self.is_host_driver() {
+            self.relaunch_host_driver();
+            return;
+        }
         if self.is_attached() {
             self.relaunch_attached();
             return;
@@ -481,6 +491,9 @@ impl BrowserPanelState {
 
     #[must_use]
     pub fn needs_event_waker(&self) -> bool {
+        if self.is_host_driver() {
+            return self.host_driver_waker_needed();
+        }
         if self.is_attached() {
             return self.needs_attached_waker();
         }
@@ -488,6 +501,10 @@ impl BrowserPanelState {
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {
+        if self.is_host_driver() {
+            self.set_host_driver_waker(callback);
+            return;
+        }
         if self.is_attached() {
             self.set_attached_waker(callback);
             return;
@@ -500,6 +517,9 @@ impl BrowserPanelState {
     /// Live local driver or remote channel. A handle can outlive its receiver.
     #[must_use]
     pub fn can_accept_commands(&self) -> bool {
+        if self.is_host_driver() {
+            return self.host_driver_takes_commands();
+        }
         self.session.as_deref().is_some_and(BrowserSession::can_accept_commands)
     }
 
@@ -518,7 +538,11 @@ impl BrowserPanelState {
         // driver accepted them; pointer moves and wheel events do not
         // navigate on their own.
         let may_navigate = page::command_may_navigate(&command);
-        let accepted = self.session.as_ref().is_some_and(|session| session.send(command));
+        let accepted = if self.is_host_driver() {
+            self.send_host_driver_command(command)
+        } else {
+            self.session.as_ref().is_some_and(|session| session.send(command))
+        };
         if accepted && may_navigate {
             self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -575,6 +599,7 @@ impl BrowserPanelState {
     /// released.
     pub fn stop(&mut self) {
         self.shutdown_attached();
+        self.shutdown_host_driver();
         self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
         // would otherwise relaunch Chrome after the caller stopped it.
@@ -592,6 +617,7 @@ impl BrowserPanelState {
     /// lock.
     pub fn request_shutdown(&mut self) {
         self.shutdown_attached();
+        self.shutdown_host_driver();
         self.clear_remote_identity();
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
@@ -654,6 +680,11 @@ impl BrowserPanelState {
     /// process and profile, making Retry safe. Polling is non-blocking so the
     /// recovery placeholder cannot freeze the UI.
     pub fn retry_ready(&mut self) -> bool {
+        if self.is_host_driver() {
+            // The browser of the other machine owns its own profile, so a Retry
+            // starts a link and waits for no local teardown.
+            return true;
+        }
         let Some(signal) = &self.teardown_signal else {
             return true;
         };
@@ -669,6 +700,12 @@ impl BrowserPanelState {
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
         let orientation_expired = self.expire_orientation_pending();
+        if self.poll_host_driver() {
+            return BrowserDrainOutput {
+                had_output: true,
+                ..BrowserDrainOutput::default()
+            };
+        }
         if self.poll_attached() {
             return BrowserDrainOutput {
                 had_output: true,
@@ -1080,6 +1117,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1132,6 +1170,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1178,6 +1217,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1232,6 +1272,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1303,6 +1344,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1401,6 +1443,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1449,6 +1492,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1496,6 +1540,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
@@ -1546,6 +1591,7 @@ mod tests {
             orientation_queue_rejection: None,
             remote: None,
             attached: None,
+            host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,

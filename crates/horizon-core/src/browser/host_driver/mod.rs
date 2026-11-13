@@ -32,7 +32,14 @@
 //! `<home>/.horizon/browser-profiles/<profile>`, its downloads, its log and its
 //! socket. This computer never reads or prepares one of them.
 
+pub(crate) mod client;
+pub use client::HostDriverHost;
+#[cfg(test)]
+mod client_tests;
 mod coordination;
+pub(crate) mod panel;
+#[cfg(test)]
+mod panel_tests;
 mod paths;
 mod session;
 #[cfg(test)]

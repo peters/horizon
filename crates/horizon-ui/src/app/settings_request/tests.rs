@@ -77,6 +77,18 @@ fn asking_card(app: &mut HorizonApp) -> String {
     card.local_id.clone()
 }
 
+/// The words of the card that asks the person.
+fn card_text(app: &mut HorizonApp, card: &str) -> String {
+    let id = app.board.panel_id_by_local_id(card).expect("the card of the request");
+    let document = app
+        .board
+        .panel(id)
+        .and_then(|panel| panel.block())
+        .map(|block| block.document.clone())
+        .expect("the document of the card");
+    format!("{document:?}")
+}
+
 fn code(outcome: &Outcome) -> &str {
     match outcome {
         Outcome::Failed { code, .. } => code,
@@ -312,19 +324,33 @@ fn a_press_on_use_it_writes_the_browser_host_of_this_computer() {
 }
 
 #[test]
-fn firefox_on_another_machine_is_refused_and_draws_no_card() {
-    let (_temp, ctx, mut app) = app();
-    let outcome = app.apply_block_request(
-        &request(&app, browser("browser-vm", "work", Some(BrowserEngine::Firefox))),
-        &ctx,
-    );
-    assert_eq!(code(&outcome), ENGINE_UNAVAILABLE);
-    assert!(message(&outcome).contains("Chromium"), "{outcome:?}");
+fn firefox_on_another_machine_asks_the_person_and_stores_the_engine() {
+    let (temp, ctx, mut app) = app();
+    let root = temp.path().join("block-panel-requests");
+    std::fs::create_dir_all(&root).expect("the queue directory");
+    let request = request(&app, browser("browser-vm", "work", Some(BrowserEngine::Firefox)));
+    assert!(app.apply_block_request_in(&request, &root, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let text = card_text(&mut app, &card);
     assert!(
-        !app.settings_request.is_waiting(),
-        "no card asks a question it cannot finish"
+        text.contains("Firefox, with Horizon on that machine"),
+        "the card names the engine and what that machine needs: {text}"
     );
-    assert_eq!(stored(&mut app).browser_host, BrowserHostConfig::default());
+    assert!(
+        text.contains("geckodriver") && text.contains("horizon binary"),
+        "the card says what a Firefox host needs: {text}"
+    );
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+    let after = stored(&mut app);
+    assert_eq!(after.browser_host.ssh_target.as_deref(), Some("browser-vm"));
+    assert_eq!(after.browser_host.profile.as_deref(), Some("work"));
+    assert_eq!(
+        after.browser_host.engine,
+        horizon_core::BrowserHostEngine::Firefox,
+        "the engine of the person's answer is written with the entry"
+    );
 }
 
 #[test]

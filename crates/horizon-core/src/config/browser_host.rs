@@ -26,6 +26,101 @@ pub struct BrowserHostConfig {
     /// `browser_create` that names no target opens in this profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Engine of that machine: its Chromium through the `DevTools` port, or its
+    /// Firefox through the driver of Horizon that runs beside it.
+    #[serde(default, skip_serializing_if = "engine_is_default")]
+    pub engine: BrowserHostEngine,
+    /// Program that starts the driver of that machine, when the default does not
+    /// fit. A non-interactive `ssh` reads a short `PATH`, so a person can write
+    /// the whole path of the binary here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+/// The engine of the browser of a browser host.
+///
+/// A Chromium host is reached through its `DevTools` port and one SSH forward. A
+/// Firefox host runs a driver of Horizon beside its browser
+/// (`horizon --browser-host-driver`), because its `WebDriver` port refuses a
+/// foreign host port and every picture is one screenshot.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub enum BrowserHostEngine {
+    /// The Chromium of that machine, through its `DevTools` port.
+    #[default]
+    #[serde(rename = "chromium")]
+    Chromium,
+    /// The Firefox of that machine, through the driver of Horizon that runs
+    /// beside it.
+    #[serde(rename = "firefox")]
+    Firefox,
+}
+
+impl BrowserHostEngine {
+    /// The name of the engine in the settings store and on a command line.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Chromium => "chromium",
+            Self::Firefox => "firefox",
+        }
+    }
+
+    /// The backend of a browser panel that this engine serves.
+    #[must_use]
+    pub const fn backend(self) -> crate::browser::BackendKind {
+        match self {
+            Self::Chromium => crate::browser::BackendKind::ChromiumCdp,
+            Self::Firefox => crate::browser::BackendKind::FirefoxBidi,
+        }
+    }
+
+    /// Whether this is the engine of an entry that names none.
+    #[must_use]
+    pub const fn is_default(self) -> bool {
+        matches!(self, Self::Chromium)
+    }
+
+    /// The engine of the driver of this host, for a host that runs a driver.
+    #[must_use]
+    pub const fn driver(self) -> Option<crate::browser::host_driver::HostDriverEngine> {
+        match self {
+            Self::Chromium => None,
+            Self::Firefox => Some(crate::browser::host_driver::HostDriverEngine::Firefox),
+        }
+    }
+}
+
+/// Whether an entry names no engine, so it writes none: an entry of Chromium is
+/// the one that every older settings file already names.
+///
+/// It takes a reference because that is what a serialized field asks.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn engine_is_default(engine: &BrowserHostEngine) -> bool {
+    engine.is_default()
+}
+
+/// Longest command that starts the driver of a browser host, as one line that
+/// the remote shell of `ssh` passes as one program.
+pub const MAX_DRIVER_COMMAND_LEN: usize = 200;
+
+/// The characters that a command of a browser host driver may hold. Every one of
+/// them passes the remote shell of `ssh` without a quote, so the entry needs no
+/// shell rule of its own and no value can start a second command.
+const DRIVER_COMMAND_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._:/=@+-";
+
+/// Whether `command` is one line that `ssh` passes to the remote shell as this
+/// program alone: the allowed characters, no leading or trailing space and no
+/// two spaces in a row.
+#[must_use]
+pub fn valid_driver_command(command: &str) -> bool {
+    !command.is_empty()
+        && command.len() <= MAX_DRIVER_COMMAND_LEN
+        && command
+            .chars()
+            .all(|character| DRIVER_COMMAND_CHARS.contains(character))
+        && !command.starts_with(' ')
+        && !command.ends_with(' ')
+        && !command.contains("  ")
 }
 
 /// The browser host of this Horizon process, read once from the settings store
@@ -84,13 +179,31 @@ impl BrowserHostConfig {
             .filter(|profile| !profile.is_empty())
     }
 
+    /// The engine of the browser of the host, when the entry names one. An
+    /// entry that names no host has no engine either.
+    #[must_use]
+    pub const fn engine(&self) -> BrowserHostEngine {
+        self.engine
+    }
+
+    /// The command that starts the driver of the host, without the surrounding
+    /// spaces that a person can type.
+    #[must_use]
+    pub fn driver_command(&self) -> Option<&str> {
+        self.command
+            .as_deref()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+    }
+
     /// The reason that a create of `backend` is refused while this entry names a
-    /// host: that machine runs the Chromium of its profile, so it serves no
-    /// Firefox and no Safari page. An entry that names no host refuses nothing.
+    /// host: that machine runs the engine of its profile, so it serves no page
+    /// of another engine, and it never serves Safari. An entry that names no
+    /// host refuses nothing.
     #[must_use]
     pub fn backend_refusal(&self, backend: crate::browser::BackendKind) -> Option<&'static str> {
         self.names_host()
-            .then(|| crate::browser::attached_host_backend_refusal(backend))
+            .then(|| crate::browser::attached_host_backend_refusal(self.engine, backend))
             .flatten()
     }
 
@@ -121,6 +234,18 @@ impl BrowserHostConfig {
         } else if self.profile().is_some() {
             return Err(Error::Config(
                 "browser_host.profile names a profile of a host, so browser_host.ssh_target is required".into(),
+            ));
+        }
+        if let Some(command) = self.driver_command()
+            && !valid_driver_command(command)
+        {
+            return Err(Error::Config(format!(
+                "browser_host.command must be 1 to {MAX_DRIVER_COMMAND_LEN} characters of letters, digits and `._:/=@+-`, with single spaces between words"
+            )));
+        }
+        if self.command.is_some() && !self.names_host() {
+            return Err(Error::Config(
+                "browser_host.command names the program of a host, so browser_host.ssh_target is required".into(),
             ));
         }
         if let Some(profile) = self.profile()
@@ -161,6 +286,15 @@ mod tests {
         BrowserHostConfig {
             ssh_target: ssh_target.map(str::to_string),
             profile: profile.map(str::to_string),
+            ..BrowserHostConfig::default()
+        }
+    }
+
+    fn firefox_entry(ssh_target: &str) -> BrowserHostConfig {
+        BrowserHostConfig {
+            ssh_target: Some(ssh_target.to_string()),
+            engine: super::BrowserHostEngine::Firefox,
+            ..BrowserHostConfig::default()
         }
     }
 
@@ -206,15 +340,79 @@ mod tests {
     }
 
     #[test]
-    fn a_named_host_serves_chromium_and_refuses_the_other_engines() {
+    fn the_engine_of_a_host_names_its_backend_and_its_driver() {
+        use super::BrowserHostEngine;
+        assert_eq!(BrowserHostEngine::default(), BrowserHostEngine::Chromium);
+        assert_eq!(BrowserHostEngine::Chromium.as_str(), "chromium");
+        assert_eq!(BrowserHostEngine::Firefox.as_str(), "firefox");
+        assert_eq!(
+            BrowserHostEngine::Firefox.backend(),
+            crate::browser::BackendKind::FirefoxBidi
+        );
+        assert!(BrowserHostEngine::Chromium.is_default());
+        assert!(!BrowserHostEngine::Firefox.is_default());
+        assert!(
+            BrowserHostEngine::Chromium.driver().is_none(),
+            "a Chromium host needs no driver"
+        );
+        assert_eq!(
+            BrowserHostEngine::Firefox.driver(),
+            Some(crate::browser::host_driver::HostDriverEngine::Firefox)
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserHostEngine::Firefox).ok().as_deref(),
+            Some("\"firefox\"")
+        );
+    }
+
+    #[test]
+    fn the_command_of_a_driver_is_one_line_that_ssh_passes_as_one_program() {
+        for command in [
+            "horizon --browser-host-driver",
+            "/opt/horizon/bin/horizon --browser-host-driver",
+            "/home/x/my_tools/horizon --browser-host-driver",
+            "/Applications/Horizon.app/Contents/MacOS/horizon --browser-host-driver",
+        ] {
+            assert!(super::valid_driver_command(command), "{command}");
+        }
+        for command in [
+            "",
+            " horizon --browser-host-driver",
+            "horizon  --browser-host-driver",
+            "horizon --browser-host-driver; rm -rf /",
+            "horizon --browser-host-driver && id",
+            "horizon $(id)",
+            "horizon `id`",
+        ] {
+            assert!(!super::valid_driver_command(command), "{command}");
+        }
+        assert!(!super::valid_driver_command(
+            &"h".repeat(super::MAX_DRIVER_COMMAND_LEN + 1)
+        ));
+    }
+
+    #[test]
+    fn a_named_host_serves_its_engine_and_refuses_the_others() {
         use crate::browser::BackendKind;
         let named = entry(Some("browser-vm"), None);
+        assert_eq!(named.engine(), super::BrowserHostEngine::Chromium);
         assert_eq!(named.backend_refusal(BackendKind::ChromiumCdp), None);
         for backend in [BackendKind::FirefoxBidi, BackendKind::SafariWebDriver] {
             let reason = named.backend_refusal(backend).expect("a refusal");
-            assert!(reason.contains("Chromium only"), "{reason}");
+            assert!(reason.contains("Chromium"), "{reason}");
+        }
+
+        let firefox = firefox_entry("browser-vm");
+        assert_eq!(firefox.backend_refusal(BackendKind::FirefoxBidi), None);
+        for backend in [BackendKind::ChromiumCdp, BackendKind::SafariWebDriver] {
+            let reason = firefox.backend_refusal(backend).expect("a refusal");
+            assert!(reason.contains("runs Firefox"), "the words of a Firefox host: {reason}");
         }
         let absent = BrowserHostConfig::default();
+        assert!(
+            absent.driver_command().is_none(),
+            "an entry that names no host names no driver command"
+        );
         for backend in [
             BackendKind::ChromiumCdp,
             BackendKind::FirefoxBidi,
@@ -256,6 +454,67 @@ mod tests {
             let error = entry(Some("browser-vm"), Some(profile)).validate().expect_err(profile);
             assert!(error.to_string().contains("browser_host.profile"), "{error}");
         }
+    }
+
+    #[test]
+    fn the_engine_and_the_command_of_a_host_round_trip_and_are_checked() {
+        let firefox = BrowserHostConfig {
+            ssh_target: Some("browser-vm".to_string()),
+            profile: Some("mail".to_string()),
+            engine: super::BrowserHostEngine::Firefox,
+            command: Some("/opt/horizon/bin/horizon --browser-host-driver".to_string()),
+        };
+        assert!(firefox.validate().is_ok());
+        assert_eq!(
+            firefox.driver_command(),
+            Some("/opt/horizon/bin/horizon --browser-host-driver")
+        );
+        let document = crate::Config {
+            browser_host: firefox.clone(),
+            ..crate::Config::default()
+        }
+        .to_json()
+        .expect("serialize");
+        assert!(document.contains("\"engine\": \"firefox\""), "{document}");
+        assert!(
+            document.contains("\"command\": \"/opt/horizon/bin/horizon"),
+            "{document}"
+        );
+        assert_eq!(
+            crate::Config::from_json(&document).expect("parse").browser_host,
+            firefox
+        );
+
+        let default_engine = entry(Some("browser-vm"), None);
+        let document = crate::Config {
+            browser_host: default_engine,
+            ..crate::Config::default()
+        }
+        .to_json()
+        .expect("serialize");
+        assert!(
+            !document.contains("\"engine\""),
+            "a Chromium entry writes no engine: {document}"
+        );
+
+        for command in [
+            "horizon --browser-host-driver; id",
+            "horizon $(id)",
+            "horizon  --browser-host-driver",
+        ] {
+            let broken = BrowserHostConfig {
+                command: Some(command.to_string()),
+                ..firefox_entry("browser-vm")
+            };
+            let error = broken.validate().expect_err(command);
+            assert!(error.to_string().contains("browser_host.command"), "{error}");
+        }
+        let orphan = BrowserHostConfig {
+            command: Some("horizon --browser-host-driver".to_string()),
+            ..BrowserHostConfig::default()
+        };
+        let error = orphan.validate().expect_err("a command without a host");
+        assert!(error.to_string().contains("ssh_target is required"), "{error}");
     }
 
     #[test]

@@ -474,7 +474,12 @@ fn restored_browser_mode(
 ) -> Result<BrowserSpawnMode> {
     match (browser_host, mode) {
         (Some(host), BrowserSpawnMode::Local(None)) => Ok(BrowserSpawnMode::RestoredHost(
-            crate::browser::AttachedHost::new(host.ssh_target, host.profile.as_deref())?,
+            crate::browser::AttachedHost::with_engine(
+                host.ssh_target,
+                host.profile.as_deref(),
+                host.engine.unwrap_or_default(),
+                host.command.as_deref(),
+            )?,
         )),
         (_, mode) => Ok(mode),
     }
@@ -494,8 +499,12 @@ fn browser_spawn_mode(
     if !matches!(mode, BrowserSpawnMode::Local(None)) {
         return Ok(mode);
     }
-    let host =
-        crate::browser::AttachedHost::new(browser_host.ssh_target().unwrap_or_default(), browser_host.profile())?;
+    let host = crate::browser::AttachedHost::with_engine(
+        browser_host.ssh_target().unwrap_or_default(),
+        browser_host.profile(),
+        browser_host.engine(),
+        browser_host.driver_command(),
+    )?;
     Ok(BrowserSpawnMode::AttachedHost(host))
 }
 
@@ -538,15 +547,27 @@ fn spawn_browser(
         // opens on a worker thread of the panel, and a host that never answers is
         // a state of the panel.
         BrowserSpawnMode::AttachedHost(host) | BrowserSpawnMode::RestoredHost(host) => {
-            if let Some(reason) = crate::browser::attached_host_backend_refusal(browser_config.backend) {
+            if let Some(reason) = crate::browser::attached_host_backend_refusal(host.engine(), browser_config.backend) {
                 return Err(crate::error::Error::Config(reason.to_string()));
             }
-            crate::browser::BrowserPanelState::start_attached_host(
-                seed.local_id.clone(),
-                &browser_config,
-                initial_url.clone(),
-                &host,
-            )
+            if host.engine() == crate::config::BrowserHostEngine::Firefox {
+                // The Firefox of that machine runs behind the driver of Horizon
+                // that this computer starts there, so its page is a page of a
+                // driver and not one of a `DevTools` port.
+                crate::browser::BrowserPanelState::start_host_driver(
+                    seed.local_id.clone(),
+                    &browser_config,
+                    initial_url.clone(),
+                    &host,
+                )
+            } else {
+                crate::browser::BrowserPanelState::start_attached_host(
+                    seed.local_id.clone(),
+                    &browser_config,
+                    initial_url.clone(),
+                    &host,
+                )
+            }
         }
     };
     tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
@@ -1399,6 +1420,7 @@ mod tests {
         crate::BrowserHostConfig {
             ssh_target: Some(ssh_target.to_string()),
             profile: profile.map(str::to_string),
+            ..crate::BrowserHostConfig::default()
         }
     }
 
@@ -1530,6 +1552,7 @@ mod tests {
             Some(crate::runtime_state::BrowserHostState {
                 ssh_target: "browser-vm".to_string(),
                 profile: Some("signed-in".to_string()),
+                ..crate::runtime_state::BrowserHostState::default()
             }),
         )
         .expect("the restored host mode");
@@ -1547,6 +1570,7 @@ mod tests {
             Some(crate::runtime_state::BrowserHostState {
                 ssh_target: "-oProxyCommand=evil".to_string(),
                 profile: None,
+                ..crate::runtime_state::BrowserHostState::default()
             }),
         );
         assert!(refused.is_err(), "a target that ssh reads as an option is refused");
@@ -1559,6 +1583,7 @@ mod tests {
             Some(crate::runtime_state::BrowserHostState {
                 ssh_target: "browser-vm".to_string(),
                 profile: None,
+                ..crate::runtime_state::BrowserHostState::default()
             }),
         )
         .expect("the mode of a restored shared page");

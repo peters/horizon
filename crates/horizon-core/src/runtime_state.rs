@@ -29,20 +29,31 @@ pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_ses
 /// What a saved panel records about its browser: the profile it used, the
 /// backend that served it, and the browser host of another machine when one
 /// served the page, so a restart puts the panel back on that host and profile.
+/// The browser host and profile that served a panel, so a restart puts it back
+/// on that machine, that profile and that engine.
+fn browser_host_state(browser: &crate::browser::BrowserPanelState) -> Option<BrowserHostState> {
+    if browser.is_host_driver() {
+        let attached = browser.attached_host_state()?;
+        return Some(attached);
+    }
+    let ssh_target = browser.attached_host_target()?;
+    Some(BrowserHostState {
+        ssh_target: ssh_target.to_string(),
+        profile: browser.attached_host_profile().map(str::to_string),
+        engine: None,
+        command: None,
+    })
+}
+
 pub(crate) fn browser_profile_state(browser: &crate::browser::BrowserPanelState, hidden: bool) -> BrowserProfileState {
-    let host = browser
-        .attached_host_target()
-        .map(|ssh_target| (ssh_target, browser.attached_host_profile()));
+    let host = browser_host_state(browser);
     BrowserProfileState {
         session_id: browser.shared_profile_id().map(str::to_string),
         root: browser.profile_root_for_persistence().map(Path::to_path_buf),
         backend: Some(browser.backend()),
         hidden,
         remote_target: browser.remote_target().map(str::to_string),
-        host: host.map(|(ssh_target, profile)| BrowserHostState {
-            ssh_target: ssh_target.to_string(),
-            profile: profile.map(str::to_string),
-        }),
+        host,
     }
 }
 

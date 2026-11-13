@@ -40,6 +40,10 @@ use horizon_browser_control::ssh_forward::{
 
 use super::{BrowserPanelState, BrowserStatus};
 
+/// The version of the link of a browser host driver, as the panel reports it in
+/// the words of a mismatch.
+pub(super) const HOST_LINK_VERSION: u32 = horizon_browser::host_driver::HOST_DRIVER_VERSION;
+
 /// Bound of the read of the endpoint file of the browser host, which is one
 /// `ssh` call with the connect and the authentication in it.
 const PORT_READ_DEADLINE: Duration = Duration::from_secs(20);
@@ -67,6 +71,10 @@ const RETRY_POLL: Duration = Duration::from_millis(50);
 pub struct AttachedHost {
     ssh_target: String,
     profile: String,
+    engine: crate::config::BrowserHostEngine,
+    /// The program that starts the driver of that machine, when the entry names
+    /// one. Only a Firefox host runs a driver.
+    command: Option<String>,
 }
 
 impl AttachedHost {
@@ -96,7 +104,72 @@ impl AttachedHost {
         Ok(Self {
             ssh_target,
             profile: profile.to_string(),
+            engine: crate::config::BrowserHostEngine::Chromium,
+            command: None,
         })
+    }
+
+    /// The host at `ssh_target` with `profile` and the engine that the entry
+    /// names, with the command that starts the driver of that engine when the
+    /// entry names one.
+    ///
+    /// # Errors
+    /// See [`Self::new`], and a command that `ssh` would read as more than one
+    /// program.
+    pub fn with_engine(
+        ssh_target: impl Into<String>,
+        profile: Option<&str>,
+        engine: crate::config::BrowserHostEngine,
+        command: Option<&str>,
+    ) -> crate::error::Result<Self> {
+        let mut host = Self::new(ssh_target, profile)?;
+        host.engine = engine;
+        if let Some(command) = command.map(str::trim).filter(|command| !command.is_empty()) {
+            if !crate::config::valid_driver_command(command) {
+                return Err(crate::error::Error::Config(format!(
+                    "`{command}` is not one command of a browser host driver: letters, digits and `._:/=@+-`, with single spaces between words"
+                )));
+            }
+            host.command = Some(command.to_string());
+        }
+        Ok(host)
+    }
+
+    /// The engine of the browser of that machine.
+    #[must_use]
+    pub const fn engine(&self) -> crate::config::BrowserHostEngine {
+        self.engine
+    }
+
+    /// The program that starts the driver of that machine, when the entry names
+    /// one.
+    #[must_use]
+    pub fn command(&self) -> Option<&str> {
+        self.command.as_deref()
+    }
+
+    /// The driver of that machine, when its engine is one that runs a driver.
+    #[must_use]
+    pub fn driver(&self) -> Option<crate::browser::host_driver::HostDriverHost> {
+        let engine = self.engine.driver()?;
+        crate::browser::host_driver::HostDriverHost::new(
+            self.ssh_target.clone(),
+            self.profile.clone(),
+            engine,
+            self.command.as_deref(),
+        )
+        .ok()
+    }
+
+    /// A host that stands only in the words of a failure, when the identity that
+    /// the person typed is not one that `ssh` takes.
+    pub(crate) fn for_words() -> Self {
+        Self {
+            ssh_target: "the browser host".to_string(),
+            profile: DEFAULT_HOST_PROFILE.to_string(),
+            engine: crate::config::BrowserHostEngine::Chromium,
+            command: None,
+        }
     }
 
     /// The SSH target of the host, as `ssh` resolves it.
@@ -336,14 +409,24 @@ fn next_attempt(attempts: u32, ready_at: Option<Instant>) -> (u32, Duration) {
 }
 
 /// The reason that a panel which follows a browser host cannot serve a page of
-/// `backend`: that host runs Chromium only, so its profile is not a Firefox or a
-/// Safari profile.
+/// `backend`: that host runs one engine in its profile, so it serves no page of
+/// another engine, and it never serves Safari.
 #[must_use]
-pub const fn attached_host_backend_refusal(backend: BackendKind) -> Option<&'static str> {
-    match backend {
-        BackendKind::ChromiumCdp => None,
-        BackendKind::FirefoxBidi | BackendKind::SafariWebDriver => Some(
-            "a browser host serves Chromium only: the page of that host runs in the Chromium of its profile, so run this panel on the browser of this computer instead",
+pub const fn attached_host_backend_refusal(
+    engine: crate::config::BrowserHostEngine,
+    backend: BackendKind,
+) -> Option<&'static str> {
+    match (engine, backend) {
+        (crate::config::BrowserHostEngine::Chromium, BackendKind::ChromiumCdp)
+        | (crate::config::BrowserHostEngine::Firefox, BackendKind::FirefoxBidi) => None,
+        (crate::config::BrowserHostEngine::Chromium, _) => Some(
+            "the browser host runs Chromium: the page of that host is the page of the Chromium of its profile, so set the engine of the browser host to Firefox for a Firefox panel",
+        ),
+        (crate::config::BrowserHostEngine::Firefox, BackendKind::SafariWebDriver) => Some(
+            "the browser host runs Firefox: a browser host serves no Safari page, so run a Safari panel on the Safari of this computer",
+        ),
+        (crate::config::BrowserHostEngine::Firefox, _) => Some(
+            "the browser host runs Firefox: the page of that host is the page of the Firefox of its profile, so set the engine of the browser host to Chromium for a Chromium panel",
         ),
     }
 }

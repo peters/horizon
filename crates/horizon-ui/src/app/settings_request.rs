@@ -29,7 +29,8 @@ use horizon_browser_control::manifest::block::{
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::now_millis;
 use horizon_core::{
-    BlockPanelState, BrowserHostConfig, Config, DEFAULT_LINK_COMMAND, PanelId, PanelKind, PanelOptions, ServerConfig,
+    BlockPanelState, BrowserHostConfig, BrowserHostEngine, Config, DEFAULT_LINK_COMMAND, PanelId, PanelKind,
+    PanelOptions, ServerConfig,
 };
 
 use super::HorizonApp;
@@ -48,18 +49,15 @@ pub(in crate::app) const DECLINE: &str = "decline";
 
 /// Refusal code of a second setting request while one waits for the person.
 pub(in crate::app) const REQUEST_PENDING: &str = "request_pending";
-/// Refusal code of an engine that a browser host does not run.
-pub(in crate::app) const ENGINE_UNAVAILABLE: &str = "engine_unavailable";
-
 /// The line under the button row of the server card, after the two statements
 /// of what the link changes.
 pub(in crate::app) const SERVER_SENT: &str = "Your machine list, the machine keys and your settings are sent there.";
 /// The second line of the server card: what Horizon does before the first link.
 pub(in crate::app) const SERVER_KEPT: &str = "The settings of this computer are kept aside in a dated file first.";
 /// The line of the browser card that says which profile of which browser the new
-/// panels use, in the words of the Settings window.
-pub(in crate::app) const BROWSER_USES: &str =
-    "Browser panels open in that profile of Chromium on that machine, over SSH.";
+/// panels use, in the words of the Settings window. A Firefox host runs a driver
+/// of Horizon beside its browser, so that machine needs the same Horizon.
+pub(in crate::app) const BROWSER_USES: &str = "Browser panels open in that profile of that machine, over SSH. A Firefox host runs Firefox and geckodriver and needs a horizon binary of the same version on that machine; a Chromium host needs a Chromium program there and no horizon.";
 /// The line of the browser card that says when the entry applies.
 pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the next start of Horizon.";
 
@@ -69,8 +67,12 @@ pub(in crate::app) const BROWSER_NEXT_START: &str = "The change applies at the n
 enum Asked {
     /// The SSH target and the command of the server entry.
     ServerLink { ssh_target: String, command: String },
-    /// The SSH target and the profile of the browser host entry.
-    BrowserHost { ssh_target: String, profile: String },
+    /// The SSH target, the profile and the engine of the browser host entry.
+    BrowserHost {
+        ssh_target: String,
+        profile: String,
+        engine: BrowserHostEngine,
+    },
 }
 
 /// One card of Horizon that asks the person about a setting, and the request that
@@ -230,12 +232,15 @@ impl HorizonApp {
                         start: Some(start),
                     })
             }
-            Asked::BrowserHost { ssh_target, profile } => {
-                self.write_browser_host_entry(ssh_target, profile)
-                    .map(|()| Outcome::BrowserHost {
-                        answer: Answer::Confirmed,
-                    })
-            }
+            Asked::BrowserHost {
+                ssh_target,
+                profile,
+                engine,
+            } => self
+                .write_browser_host_entry(ssh_target, profile, *engine)
+                .map(|()| Outcome::BrowserHost {
+                    answer: Answer::Confirmed,
+                }),
         };
         written.unwrap_or_else(|message| Outcome::failed(block_machines::INVALID_REQUEST, &message))
     }
@@ -259,12 +264,19 @@ impl HorizonApp {
 
     /// Writes `browser_host` of this computer, which the browser panels read at
     /// the next start of Horizon, as the Settings window states.
-    fn write_browser_host_entry(&mut self, ssh_target: &str, profile: &str) -> Result<(), String> {
+    fn write_browser_host_entry(
+        &mut self,
+        ssh_target: &str,
+        profile: &str,
+        engine: BrowserHostEngine,
+    ) -> Result<(), String> {
         let before = self.stored_config();
         let mut stored = before.clone();
         stored.browser_host = BrowserHostConfig {
             ssh_target: Some(ssh_target.to_owned()),
             profile: Some(profile.to_owned()),
+            engine,
+            ..stored.browser_host
         };
         stored.validate().map_err(|error| error.to_string())?;
         self.save_setting(&before, stored);
@@ -370,15 +382,15 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
         } => {
             let target = ssh_target.trim();
             let profile = profile.trim();
-            if engine.is_some_and(|engine| engine != BrowserEngine::Chromium) {
-                return Err(Outcome::failed(
-                    ENGINE_UNAVAILABLE,
-                    "A browser host runs Chromium only. Firefox on another machine is not built yet: set up the browser on Chromium, or use a Firefox of this computer.",
-                ));
-            }
+            let engine = match engine.unwrap_or(BrowserEngine::Chromium) {
+                BrowserEngine::Chromium => BrowserHostEngine::Chromium,
+                BrowserEngine::Firefox => BrowserHostEngine::Firefox,
+            };
             let entry = BrowserHostConfig {
                 ssh_target: Some(target.to_owned()),
                 profile: Some(profile.to_owned()),
+                engine,
+                ..BrowserHostConfig::default()
             };
             entry
                 .validate()
@@ -386,8 +398,9 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
             let asked = Asked::BrowserHost {
                 ssh_target: target.to_owned(),
                 profile: profile.to_owned(),
+                engine,
             };
-            Ok((asked, BROWSER_TITLE, browser_document(target, profile)))
+            Ok((asked, BROWSER_TITLE, browser_document(target, profile, engine)))
         }
         _ => Err(Outcome::failed(
             block_machines::INVALID_REQUEST,
@@ -446,7 +459,7 @@ fn server_document(ssh_target: &str, command: &str) -> BlockDocument {
 
 /// The card that asks the person to use the browser of another machine for new
 /// browser panels, with the target, the profile and the engine.
-fn browser_document(ssh_target: &str, profile: &str) -> BlockDocument {
+fn browser_document(ssh_target: &str, profile: &str, engine: BrowserHostEngine) -> BlockDocument {
     BlockDocument {
         components: vec![
             Component::Heading {
@@ -458,7 +471,10 @@ fn browser_document(ssh_target: &str, profile: &str) -> BlockDocument {
                 rows: vec![
                     KvRow {
                         label: "Browser".to_owned(),
-                        value: "Chromium".to_owned(),
+                        value: match engine {
+                            BrowserHostEngine::Chromium => "Chromium".to_owned(),
+                            BrowserHostEngine::Firefox => "Firefox, with Horizon on that machine".to_owned(),
+                        },
                         mono: false,
                     },
                     KvRow {

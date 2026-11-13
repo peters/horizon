@@ -13,6 +13,7 @@ use horizon_browser_control::ssh_forward::Ssh;
 
 use super::super::{BrowserConfig, BrowserDrainOutput, BrowserPanelState, BrowserStatus};
 use super::{AttachedHost, AttachedHostFailureKind, attached_host_backend_refusal, connect};
+use crate::config::BrowserHostEngine;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 /// A lost link waits three seconds before its first automatic attempt, so a
@@ -189,12 +190,30 @@ fn a_host_needs_one_ssh_name_and_one_profile_under_the_host_rule() {
 }
 
 #[test]
-fn a_browser_host_serves_chromium_only() {
+fn a_browser_host_serves_the_engine_of_its_profile_only() {
     let _serial = serial();
-    assert_eq!(attached_host_backend_refusal(BackendKind::ChromiumCdp), None);
+    assert_eq!(
+        attached_host_backend_refusal(BrowserHostEngine::Chromium, BackendKind::ChromiumCdp),
+        None
+    );
+    assert_eq!(
+        attached_host_backend_refusal(BrowserHostEngine::Firefox, BackendKind::FirefoxBidi),
+        None
+    );
     for backend in [BackendKind::FirefoxBidi, BackendKind::SafariWebDriver] {
-        let reason = attached_host_backend_refusal(backend).expect("a refusal");
-        assert!(reason.contains("Chromium only"), "{reason}");
+        let reason = attached_host_backend_refusal(BrowserHostEngine::Chromium, backend).expect("a refusal");
+        assert!(
+            reason.contains("runs Chromium") && reason.contains("set the engine"),
+            "{reason}"
+        );
+    }
+    for backend in [BackendKind::ChromiumCdp, BackendKind::SafariWebDriver] {
+        let reason = attached_host_backend_refusal(BrowserHostEngine::Firefox, backend).expect("a refusal");
+        assert!(reason.contains("runs Firefox"), "{reason}");
+        assert!(
+            reason.contains("set the engine") || reason.contains("serves no Safari"),
+            "the words say what a person can do: {reason}"
+        );
     }
 }
 

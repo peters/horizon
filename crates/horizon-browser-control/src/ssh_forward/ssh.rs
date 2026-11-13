@@ -44,6 +44,13 @@ impl Ssh {
         })
     }
 
+    /// The program that this value runs, for a caller that needs a child of its
+    /// own: a link that stays open for the life of a panel is not one command.
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
     /// Run one command on `target` and give its standard output.
     ///
     /// # Errors

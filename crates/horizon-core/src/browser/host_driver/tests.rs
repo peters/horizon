@@ -26,10 +26,21 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// A page of a test: it records what the wire asked for and reports what the
 /// test tells it to report.
-struct FakePage {
-    commands: Arc<Mutex<Vec<BrowserCommand>>>,
-    events: Arc<Mutex<VecDeque<BrowserEvent>>>,
-    accepts: bool,
+pub(super) struct FakePage {
+    pub(super) commands: Arc<Mutex<Vec<BrowserCommand>>>,
+    pub(super) events: Arc<Mutex<VecDeque<BrowserEvent>>>,
+    pub(super) accepts: bool,
+}
+
+impl FakePage {
+    /// A page that accepts every command of the wire and reports nothing.
+    pub(super) fn silent() -> Self {
+        Self {
+            commands: Arc::default(),
+            events: Arc::default(),
+            accepts: true,
+        }
+    }
 }
 
 impl HostPage for FakePage {

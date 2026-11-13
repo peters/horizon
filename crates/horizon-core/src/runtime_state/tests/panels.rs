@@ -387,6 +387,7 @@ fn a_persisted_browser_host_restores_the_panel_on_that_host_and_profile() {
             host: Some(crate::runtime_state::BrowserHostState {
                 ssh_target: "browser-vm".to_string(),
                 profile: Some("signed-in".to_string()),
+                ..crate::runtime_state::BrowserHostState::default()
             }),
         }),
         ..PanelState::default()

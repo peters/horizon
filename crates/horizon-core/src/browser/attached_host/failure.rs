@@ -31,6 +31,18 @@ pub enum AttachedHostFailureKind {
     /// The browser answered when the panel connected and then stopped, so the
     /// page of that panel lost its connection.
     ConnectionLost,
+    /// That machine has no `horizon` program, or not this one, so the driver of
+    /// its browser never started.
+    NoDriver,
+    /// The driver on that machine speaks another version of the link, or is
+    /// another Horizon build.
+    NotThisVersion,
+    /// The driver runs on another system or CPU, so a copy of this computer's
+    /// binary is not the program that runs there.
+    OtherSystem,
+    /// The driver of that machine refused the link in its own words: its
+    /// browser, its driver program or its profile needs work there.
+    Refused,
 }
 
 impl AttachedHostFailureKind {
@@ -43,6 +55,10 @@ impl AttachedHostFailureKind {
             Self::NotStarted => "attached_host_not_started",
             Self::NoEndpoint => "attached_host_no_endpoint",
             Self::ConnectionLost => "attached_host_connection_lost",
+            Self::NoDriver => "attached_host_no_driver",
+            Self::NotThisVersion => "attached_host_version",
+            Self::OtherSystem => "attached_host_system",
+            Self::Refused => "attached_host_refused",
         }
     }
 }
@@ -100,7 +116,7 @@ impl AttachedHostFailure {
         }
     }
 
-    pub(super) fn unreachable(host: &AttachedHost, reason: &str) -> Self {
+    pub(crate) fn unreachable(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::Unreachable,
             detail: None,
@@ -165,7 +181,7 @@ impl AttachedHostFailure {
     /// The failure of a panel whose browser answered and then stopped. The
     /// panel says one plain sentence, because the words of a lost WebSocket do
     /// not help the person; the log and an agent keep those words.
-    pub(super) fn connection_lost(host: &AttachedHost, reason: &str) -> Self {
+    pub(crate) fn connection_lost(host: &AttachedHost, reason: &str) -> Self {
         Self {
             kind: AttachedHostFailureKind::ConnectionLost,
             message: format!(
@@ -199,8 +215,59 @@ impl AttachedHostFailure {
         }
     }
 
+    /// The failure of a driver link whose command on the host is no `horizon`:
+    /// `ssh` answers with the exit code of a shell that found no program.
+    pub(crate) fn no_driver(host: &AttachedHost, reason: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::NoDriver,
+            message: format!(
+                "{} runs no horizon for the driver of its browser in the profile {}: {reason}; copy the horizon binary of this computer to that machine, or name its path in Settings, then use Retry",
+                host.ssh_target(),
+                host.profile()
+            ),
+            detail: None,
+        }
+    }
+
+    /// The failure of a link whose other end speaks another version of it.
+    pub(crate) fn version_mismatch(host: &AttachedHost, protocol: u32, host_version: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::NotThisVersion,
+            message: format!(
+                "the driver of {} in the profile {} is Horizon {host_version} and speaks version {protocol} of the browser host link, and this computer speaks version {}: copy the horizon binary of this computer to that machine, then use Retry",
+                host.ssh_target(),
+                host.profile(),
+                super::HOST_LINK_VERSION
+            ),
+            detail: None,
+        }
+    }
+
+    /// The failure of a link whose driver runs on another system or CPU.
+    pub(crate) fn other_system(_host: &AttachedHost, words: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::OtherSystem,
+            message: format!("{words}; then use Retry"),
+            detail: None,
+        }
+    }
+
+    /// The failure of a driver of that machine that refused the link in its own
+    /// words.
+    pub(crate) fn refused(host: &AttachedHost, code: &str, message: &str) -> Self {
+        Self {
+            kind: AttachedHostFailureKind::Refused,
+            message: format!(
+                "the driver of {} in the profile {} refused the link: {message}; fix that on the machine of the host, then use Retry",
+                host.ssh_target(),
+                host.profile()
+            ),
+            detail: Some(format!("{code}: {message}")),
+        }
+    }
+
     /// The failure of a connect whose worker ended without an outcome.
-    pub(super) fn closed(host: &AttachedHost) -> Self {
+    pub(crate) fn closed(host: &AttachedHost) -> Self {
         Self::unreachable(host, "the connect ended before it named a browser")
     }
 }

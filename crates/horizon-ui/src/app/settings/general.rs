@@ -1,6 +1,6 @@
 use egui::Ui;
 use horizon_core::notify::NotificationSetting;
-use horizon_core::{AppearanceTheme, Config};
+use horizon_core::{AppearanceTheme, BrowserHostEngine, Config};
 
 use crate::theme;
 
@@ -175,8 +175,8 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     super::section_card(ui, |ui| {
         super::dim_label(
             ui,
-            "Browser panels open in that profile of Chromium on that machine, over SSH. A blank SSH \
-             target keeps the browser panels of this computer. A change applies at the next start.",
+            "Browser panels open in that profile of that machine over SSH. A blank SSH target keeps \
+             the browser panels of this computer. A change applies at the next start.",
         );
         ui.add_space(8.0);
 
@@ -201,7 +201,38 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
                     "settings_browser_host_profile",
                 );
                 ui.end_row();
+
+                ui.label(egui::RichText::new("Engine").color(theme::FG_SOFT()).size(12.0));
+                egui::ComboBox::from_id_salt("settings_browser_host_engine")
+                    .selected_text(browser_host_engine_label(config.browser_host.engine))
+                    .show_ui(ui, |ui| {
+                        for engine in [BrowserHostEngine::Chromium, BrowserHostEngine::Firefox] {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut config.browser_host.engine,
+                                    engine,
+                                    browser_host_engine_label(engine),
+                                )
+                                .changed();
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(egui::RichText::new("Driver program").color(theme::FG_SOFT()).size(12.0));
+                changed |= super::optional_text_field(
+                    ui,
+                    &mut config.browser_host.command,
+                    "horizon --browser-host-driver",
+                    "settings_browser_host_command",
+                );
+                ui.end_row();
             });
+        ui.add_space(6.0);
+        super::dim_label(
+            ui,
+            "A Firefox host runs Firefox and geckodriver and needs a horizon binary of the same version \
+             on that machine. Chromium needs a Chromium program there and no horizon.",
+        );
         super::validation_notice(ui, config.browser_host.validate());
     });
 
@@ -214,6 +245,14 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
         );
     });
     changed
+}
+
+/// The name of one engine of a browser host, as the settings window writes it.
+fn browser_host_engine_label(engine: BrowserHostEngine) -> &'static str {
+    match engine {
+        BrowserHostEngine::Chromium => "Chromium",
+        BrowserHostEngine::Firefox => "Firefox, with Horizon on that machine",
+    }
 }
 
 /// One field that a person may leave blank, and writes back only when the text
