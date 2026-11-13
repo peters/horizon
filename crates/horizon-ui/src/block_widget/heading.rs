@@ -1,5 +1,6 @@
-//! The heading of a card: one strong line, an optional second line and an
-//! optional badge that shares the heading row or takes one of its own.
+//! The heading of a card: one strong line that takes the lines its words need,
+//! an optional second line and an optional badge that shares the heading row or
+//! takes one of its own.
 
 use egui::{FontId, Pos2, Rect, Role, Sense, Ui, Vec2, WidgetInfo};
 use horizon_browser_control::block::Badge;
@@ -70,7 +71,7 @@ pub(super) fn show(
         _ => width,
     };
 
-    let title = text::line(ui.painter(), text, &font, theme::FG(), text_width);
+    let title = text::wrapped(ui.painter(), text, &font, theme::FG(), text_width, None);
     let title_height = title.size().y;
     // The second line says what the card is for, so it takes every line that
     // its words need inside the room that the card has, and the height of the

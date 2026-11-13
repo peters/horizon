@@ -192,9 +192,8 @@ fn notice_document() -> BlockDocument {
     }
 }
 
-/// The text shape that drew the second line of a heading, in a pass of the
-/// card that `document` draws.
-fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui::epaint::TextShape {
+/// The text shape that drew `text` in a pass of the card that `document` draws.
+fn text_shape<'a>(output: &'a egui::FullOutput, text: &str) -> &'a egui::epaint::TextShape {
     let mut found = None;
     for clipped in &output.shapes {
         fn walk<'a>(shape: &'a egui::Shape, text: &str, out: &mut Option<&'a egui::epaint::TextShape>) {
@@ -208,12 +207,96 @@ fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui:
                 _ => {}
             }
         }
-        walk(&clipped.shape, subtitle, &mut found);
+        walk(&clipped.shape, text, &mut found);
         if found.is_some() {
             break;
         }
     }
-    found.unwrap_or_else(|| panic!("the card drew the second line of its heading"))
+    found.unwrap_or_else(|| panic!("the card drew {text:?}"))
+}
+
+/// The text shape that drew the second line of a heading, in a pass of the
+/// card that `document` draws.
+fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui::epaint::TextShape {
+    text_shape(output, subtitle)
+}
+
+/// The heading of the question card that Horizon drew in the live run, and the
+/// two buttons of it.
+fn question_document(heading: &str) -> BlockDocument {
+    BlockDocument {
+        components: vec![
+            Component::Heading {
+                text: heading.to_string(),
+                subtitle: None,
+                badge: None,
+            },
+            Component::Kv {
+                rows: vec![KvRow {
+                    label: "Server target".to_string(),
+                    value: "root@204.0.113.56".to_string(),
+                    mono: true,
+                }],
+            },
+            Component::Buttons {
+                items: vec![
+                    button("link", "Link", Tone::Primary),
+                    button("not_now", "Not now", Tone::Neutral),
+                ],
+            },
+        ],
+    }
+}
+
+#[test]
+fn the_heading_of_a_card_wraps_instead_of_ending_in_an_ellipsis() {
+    // The live card cut this heading at `... the Horizon server o…`: a heading
+    // that names its target must show all of it.
+    let heading = "Link this computer to the Horizon server on root@204.0.113.56?";
+    let document = question_document(heading);
+    let mut card = CardRuntime::default();
+
+    let (output, measured) = draw_card(card_panel(560.0), &document, &mut card);
+
+    let drawn = text_shape(&output, heading);
+    assert!(
+        drawn.galley.rows.len() >= 2,
+        "the heading takes the lines that its words need: {:?}",
+        drawn.galley.rows.len()
+    );
+    assert!(!drawn.galley.elided, "no word of the heading is dropped");
+    let body = card_body(card_panel(560.0));
+    let ink = Rect::from_min_size(drawn.pos, drawn.galley.size());
+    assert!(
+        ink.max.x <= body.max.x + 0.5,
+        "the heading stays inside the card: {ink:?} against {body:?}"
+    );
+
+    // The card that the fitted height gives holds the whole heading and its
+    // buttons above the footer.
+    let height = fitted_card_height(measured, false, CARD_MIN_HEIGHT, CARD_HEIGHT_LIMITS);
+    let panel = card_panel(height);
+    let (fitted, remeasured) = draw_card(panel, &document, &mut card);
+    let room = card_body(panel).height() - FOOTER_HEIGHT;
+    assert!(
+        remeasured <= room + 0.5,
+        "the fitted card holds its content without a scroll area: {remeasured} against {room}"
+    );
+    let wrapped = text_shape(&fitted, heading);
+    assert!(!wrapped.galley.elided, "the fitted card drops no word either");
+}
+
+/// The estimate of a card of a heading that needs two lines counts both.
+#[test]
+fn the_height_estimate_of_a_heading_counts_its_lines() {
+    let short = question_document("Link this computer?");
+    let long = question_document("Link this computer to the Horizon server on root@204.0.113.56?");
+    let short = crate::block_widget::default_card_size(&short)[1];
+    let long = crate::block_widget::default_card_size(&long)[1];
+    assert!(
+        long > short,
+        "a heading of two lines asks for a taller card: {long} against {short}"
+    );
 }
 
 #[test]

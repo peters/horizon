@@ -20,6 +20,10 @@ use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
 /// Characters of body text that fit on one line at the card width.
 const TEXT_CHARS_PER_LINE: usize = 58;
+/// Characters of the heading that fit on one line at the card width. The heading
+/// is drawn in a larger face than the body text, so the line holds fewer of
+/// them.
+const HEADING_CHARS_PER_LINE: usize = 38;
 /// Characters of the second line under a heading that fit on one line at the
 /// card width. The line is drawn in the size of the body text, so it holds the
 /// same number of characters.
@@ -87,8 +91,12 @@ pub(crate) fn default_card_size(document: &BlockDocument) -> [f32; 2] {
 /// The height one component needs.
 fn component_height(component: &Component) -> f32 {
     match component {
-        Component::Heading { subtitle, badge, .. } => {
-            let mut height = HEADING_FONT * LINE_FACTOR;
+        Component::Heading { text, subtitle, badge } => {
+            // A heading names the card, so it takes every line that its words need
+            // and the estimate counts them; the badge keeps the top right of the
+            // first line.
+            let lines = text.chars().count().div_ceil(HEADING_CHARS_PER_LINE).max(1);
+            let mut height = count(lines) * HEADING_FONT * LINE_FACTOR;
             if let Some(subtitle) = subtitle {
                 let lines = subtitle.chars().count().div_ceil(SUBTITLE_CHARS_PER_LINE).max(1);
                 height += HEADING_SUBTITLE_GAP + count(lines) * HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT;
