@@ -78,7 +78,7 @@ mod session_manager;
 mod settings;
 mod settings_io;
 mod settings_request;
-mod setup;
+pub(crate) mod setup;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;

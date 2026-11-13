@@ -27,13 +27,13 @@ pub(super) const OPEN_PRESETS: &str = "open_presets";
 
 /// One agent program that Set up looked for, and whether this computer has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ProgramRow {
+pub(crate) struct ProgramRow {
     /// The name of the agent, as Horizon shows it elsewhere.
-    pub(super) name: String,
+    pub(crate) name: String,
     /// The program that Horizon looks for.
-    pub(super) program: String,
+    pub(crate) program: String,
     /// Whether the program of this computer is an executable file.
-    pub(super) found: bool,
+    pub(crate) found: bool,
 }
 
 impl ProgramRow {
@@ -48,7 +48,7 @@ impl ProgramRow {
 ///
 /// Every text here is fixed, so the notice passes the rules of a card document
 /// like an agent's own document does.
-pub(super) fn document(rows: &[ProgramRow], integrations: bool) -> BlockDocument {
+pub(crate) fn document(rows: &[ProgramRow], integrations: bool) -> BlockDocument {
     let subtitle = if integrations { NO_PROGRAM } else { INTEGRATIONS_OFF };
     let line = if integrations { INSTALL_LINE } else { SWITCH_LINE };
     let mut pairs: Vec<KvRow> = rows

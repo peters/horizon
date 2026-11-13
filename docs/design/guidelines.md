@@ -431,9 +431,16 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   line, a title and three terminal runs at zoom 0.67 and 0.94 with a fractional
   pan offset and asserts that every glyph corner is within 0.01 of a whole
   device pixel and that no glyph picture is stretched.
-- The layout stays the layout of zoom 1. The wrap width, the line height, the
+- The layout stays the layout of zoom 1. The rectangle, the line height, the
   cell grid of a terminal and the height estimate of a card are the values of
-  zoom 1.
+  zoom 1, so a part of a card keeps its size and its height at every zoom.
+- The lines of a text are the lines of zoom 1. A job of this toolkit breaks its
+  lines on the pixel-rounded position of a glyph, so a text can break at one
+  zoom and not at another. `layout_job` therefore lays the job out at the sizes
+  of zoom 1 first, takes the text of each of its rows, and lays those rows out
+  as one no-wrap line each at the screen size. A line that zoom 1 elided keeps
+  its elision and does not grow back. The terminal, which lays one run out at a
+  time, has no wrap width and needs none of this.
 - The screen sizes are quarter points. A zoom that moves keeps the pictures of
   the zoom at which the gesture started for 120 ms, then makes the pictures of
   the new size once and asks for one frame. A still window asks for no frame.

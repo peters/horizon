@@ -11,7 +11,7 @@
 //! The search for the agent programs reads folders, so it runs on the
 //! coordination worker and no frame waits for it.
 
-mod notice;
+pub(crate) mod notice;
 
 use egui::Context;
 use horizon_browser_control::manifest::now_millis;

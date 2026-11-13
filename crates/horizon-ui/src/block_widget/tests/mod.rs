@@ -8,6 +8,7 @@
 mod clicks;
 mod drawing;
 mod fit;
+mod lines;
 mod link;
 mod rules;
 
@@ -89,6 +90,42 @@ impl CardFrames {
     /// One pass, as the shapes it painted.
     pub(super) fn paint(&self, document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> egui::FullOutput {
         self.run(document, card, owner, card_input()).output
+    }
+
+    /// [`Self::paint`] with the card drawn under a canvas zoom, as a card of the
+    /// board is drawn.
+    pub(super) fn paint_at(
+        &self,
+        zoom: f32,
+        document: &BlockDocument,
+        card: &mut CardRuntime,
+        owner: Owner,
+    ) -> egui::FullOutput {
+        let mut opened_link = None;
+        let mut pressed = None;
+        let transform = egui::emath::TSTransform::from_scaling(zoom);
+        self.ctx
+            .run_ui(card_input(), |ui| {
+                ui.ctx().set_transform_layer(ui.layer_id(), transform);
+                show(
+                    ui,
+                    PanelId(7),
+                    CardView {
+                        document,
+                        card,
+                        revision: 3,
+                        agent_present: owner.present(),
+                        host_owned: false,
+                        interactive: true,
+                        now_millis: 1_000,
+                        owner_name: owner.name(),
+                        updated_at_millis: 1_790_883_960_000,
+                        opened_link: &mut opened_link,
+                        pressed: &mut pressed,
+                    },
+                );
+            })
+            .discard_textures()
     }
 
     /// One pass, as an accessibility tree, with the events of that pass.

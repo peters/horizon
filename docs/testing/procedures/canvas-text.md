@@ -134,6 +134,13 @@ fixture keeps its state in its own folder and touches no real Horizon home.
    Result: a wrapped paragraph of a card breaks at the same words at both
    zooms. No word moves to another line.
 
+2. Repeat the zoom with a card that holds a long row of a label column, and
+   with a card whose text is elided at one zoom.
+
+   Result: the line count of every component is the count of 100 %. An elided
+   line keeps the words that it shows at 100 %, and its ellipsis stays in the
+   same place. The height of a card does not change with the zoom.
+
 ### 6.7 CT-SCALE2 — A display of scale 2
 
 1. Repeat CT-094 on a display of scale 2.
@@ -160,7 +167,9 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 - The same text at the same pixel size has the same columns of ink at every
   zoom. A stem does not become two soft columns when the canvas moves.
 - The weights of section 6.1 and 6.4 hold at every zoom.
-- A wrapped paragraph breaks at the same words at every zoom.
+- A wrapped paragraph breaks at the same words at every zoom, and the line
+  count of every component of a card, of a title bar and of a workspace label
+  is the line count of zoom 1.
 - The window repaints once after a zoom settles, and not while it is still.
 
 ## 8. Cleanup

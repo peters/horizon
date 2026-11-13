@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use egui::emath::TSTransform;
 use egui::epaint::TextShape;
 use egui::epaint::text::FontsView;
-use egui::text::LayoutJob;
-use egui::{Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, Shape, ViewportId};
+use egui::text::{ByteIndex, LayoutJob, LayoutSection, TextFormat, TextWrapping};
+use egui::{Align, Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, Shape, ViewportId};
 
 /// The step of the ladder of screen font sizes, in points.
 pub(crate) const SCREEN_SIZE_QUANTUM: f32 = 0.25;
@@ -217,35 +217,138 @@ impl ZoomText {
         1.0 / self.glyph
     }
 
-    /// `job` laid out for the screen: every size, every tracking value and the
-    /// wrap width multiplied by the one factor that the first size gives.
-    ///
-    /// Advances grow linearly with the font size in this toolkit, so this job
-    /// breaks its lines at the same words as the job of zoom 1.
-    pub(crate) fn screen_job(&self, mut job: LayoutJob) -> LayoutJob {
-        if self.is_logical() {
-            return job;
-        }
-        let Some(first) = job.sections.first() else {
-            return job;
-        };
-        let logical = first.format.font_id.size;
+    /// `format` at the size of the screen.
+    fn screen_format(&self, format: &TextFormat) -> TextFormat {
+        let logical = format.font_id.size;
         let factor = if logical > 0.0 {
             self.screen_size(logical) / logical
         } else {
             self.glyph
         };
-        for section in &mut job.sections {
-            let format = &mut section.format;
-            format.font_id.size = self.screen_size(format.font_id.size);
-            format.extra_letter_spacing *= factor;
-            if let Some(line_height) = format.line_height.as_mut() {
-                *line_height *= factor;
+        let mut screen = format.clone();
+        screen.font_id.size = self.screen_size(logical);
+        screen.extra_letter_spacing *= factor;
+        if let Some(line_height) = screen.line_height.as_mut() {
+            *line_height *= factor;
+        }
+        screen
+    }
+
+    /// `job` laid out for the screen with the line breaks of `logical`, the
+    /// layout of zoom 1.
+    ///
+    /// A job of this toolkit breaks its lines on the pixel-rounded position of
+    /// a glyph, so a text can break at one zoom and not at another even though
+    /// its advances grow with its size. The breaks of a text are therefore the
+    /// breaks of zoom 1: this job names one line per row of that layout and
+    /// takes no wrap width, so the screen layout follows those lines.
+    pub(crate) fn kept_lines(&self, job: &LayoutJob, logical: &Galley) -> LayoutJob {
+        let mut kept = if logical.elided || logical.rows.len() > 1 {
+            self.lines_of(job, logical)
+        } else {
+            // One line that the logical layout did not cut: the text is the
+            // text of the job, and only its sizes move to the screen.
+            let mut kept = job.clone();
+            for section in &mut kept.sections {
+                section.format = self.screen_format(&section.format);
+            }
+            kept
+        };
+        kept.wrap = TextWrapping {
+            max_width: f32::INFINITY,
+            max_rows: usize::MAX,
+            ..TextWrapping::default()
+        };
+        kept.break_on_newline = true;
+        kept.halign = Align::LEFT;
+        kept.justify = false;
+        kept
+    }
+
+    /// The text of `logical` as one row per line, in the formats of `job`.
+    fn lines_of(&self, job: &LayoutJob, logical: &Galley) -> LayoutJob {
+        let mut text = String::new();
+        let mut sections: Vec<LayoutSection> = Vec::new();
+        // The section of the job that the open section of the new job copies.
+        let mut from = usize::MAX;
+        let mut source = Source::new(job);
+        for (index, placed) in logical.rows.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            for glyph in &placed.row.glyphs {
+                let section = source.take(glyph.chr);
+                if section != from {
+                    from = section;
+                    sections.push(LayoutSection {
+                        leading_space: 0.0,
+                        byte_range: ByteIndex(text.len())..ByteIndex(text.len()),
+                        format: self.screen_format(&job.sections[section].format),
+                    });
+                }
+                text.push(glyph.chr);
+                if let Some(open) = sections.last_mut() {
+                    open.byte_range.end = ByteIndex(text.len());
+                }
             }
         }
-        job.wrap.max_width *= factor;
-        job
+        // A row without a glyph opens no section, so the last one must reach
+        // the end of the text.
+        if let Some(last) = sections.last_mut() {
+            last.byte_range.end = ByteIndex(text.len());
+        }
+        LayoutJob {
+            text,
+            sections,
+            wrap: TextWrapping::default(),
+            first_row_min_height: job.first_row_min_height,
+            break_on_newline: true,
+            halign: Align::LEFT,
+            justify: false,
+            round_output_to_gui: job.round_output_to_gui,
+            keep_trailing_whitespace: job.keep_trailing_whitespace,
+        }
     }
+}
+
+/// The place of a character of the text of a job, so that the row of a layout
+/// keeps the format that the job gave it.
+struct Source<'a> {
+    job: &'a LayoutJob,
+    /// The byte of the text of the job that the next row character is at.
+    byte: usize,
+}
+
+impl<'a> Source<'a> {
+    fn new(job: &'a LayoutJob) -> Self {
+        Self { job, byte: 0 }
+    }
+
+    /// The section of `chr` in the text of the job, and the walk past it. A
+    /// break eats the whitespace that it breaks at, and an elision adds a
+    /// character that the text does not have.
+    fn take(&mut self, chr: char) -> usize {
+        let text = &self.job.text;
+        while let Some(current) = text[self.byte..].chars().next() {
+            if current == chr || !current.is_whitespace() {
+                break;
+            }
+            self.byte += current.len_utf8();
+        }
+        let section = section_at(self.job, self.byte);
+        if text[self.byte..].starts_with(chr) {
+            self.byte += chr.len_utf8();
+        }
+        section
+    }
+}
+
+/// The index of the section of `job` that holds `byte`.
+fn section_at(job: &LayoutJob, byte: usize) -> usize {
+    job.sections
+        .iter()
+        .position(|section| section.byte_range.contains(&ByteIndex(byte)))
+        .unwrap_or_else(|| job.sections.len().saturating_sub(1))
 }
 
 /// The scale of the layer that `painter` draws in, which is 1.0 for the text
@@ -258,15 +361,21 @@ pub(crate) fn layer_scale(painter: &Painter) -> f32 {
         .map_or(1.0, |transform| transform.scaling)
 }
 
-/// `job` laid out with the glyph pictures of the screen size, and with its
-/// offsets divided by the zoom of those pictures.
+/// `job` laid out with the glyph pictures of the screen size, on the lines of
+/// zoom 1, and with its offsets divided by the zoom of those pictures.
+///
+/// The rectangle of the galley is the rectangle of zoom 1, so a part that is
+/// laid out around this text keeps the size and the height of zoom 1.
 pub(crate) fn layout_job(painter: &Painter, job: LayoutJob) -> Arc<Galley> {
     let zoom = ZoomText::of(painter);
     if zoom.is_logical() {
         return painter.layout_job(job);
     }
-    let galley = painter.layout_job(zoom.screen_job(job));
-    sharpen(galley, zoom.inverse())
+    let logical = painter.layout_job(job.clone());
+    let galley = painter.layout_job(zoom.kept_lines(&job, &logical));
+    let mut galley = sharpen(galley, zoom.inverse());
+    Arc::make_mut(&mut galley).rect = logical.rect;
+    galley
 }
 
 /// `text` on one line at the screen size.
@@ -606,6 +715,115 @@ mod tests {
         });
         for shape in runs {
             painter.add(shape);
+        }
+    }
+
+    /// The words of every row of `galley`, in order.
+    fn row_words(galley: &egui::Galley) -> Vec<String> {
+        galley
+            .rows
+            .iter()
+            .map(|placed| {
+                placed
+                    .row
+                    .glyphs
+                    .iter()
+                    .map(|glyph| glyph.chr)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// The jobs of the three shapes of text that a card, a title and a label
+    /// take: a paragraph, a line that a narrow column elides, and a job of two
+    /// formats.
+    fn tight_jobs() -> Vec<(&'static str, LayoutJob)> {
+        let font = FontId::proportional(12.5);
+        let mut paragraph = LayoutJob::single_section(
+            "The machine was created at the provider and the agent is waiting for it.".to_owned(),
+            TextFormat {
+                font_id: font.clone(),
+                color: Color32::WHITE,
+                ..TextFormat::default()
+            },
+        );
+        paragraph.wrap = TextWrapping {
+            max_width: 150.0,
+            ..TextWrapping::default()
+        };
+        let elided = crate::text::single_line_label_job(
+            "Agent integrations are off, so the agent has no Horizon skills.",
+            &font,
+            Color32::WHITE,
+            96.0,
+        );
+        let mut two_formats = LayoutJob::default();
+        two_formats.append(
+            "Set up needs an agent ",
+            0.0,
+            TextFormat {
+                font_id: FontId::proportional(15.0),
+                color: Color32::WHITE,
+                ..TextFormat::default()
+            },
+        );
+        two_formats.append(
+            "and the agent is waiting for the machine that it asked for",
+            0.0,
+            TextFormat {
+                font_id: FontId::proportional(11.0),
+                color: Color32::WHITE,
+                ..TextFormat::default()
+            },
+        );
+        two_formats.wrap = TextWrapping {
+            max_width: 130.0,
+            ..TextWrapping::default()
+        };
+        vec![
+            ("a paragraph", paragraph),
+            ("an elided line", elided),
+            ("two formats", two_formats),
+        ]
+    }
+
+    /// A text breaks its lines where the layout of zoom 1 breaks them, at every
+    /// zoom between 0.5 and 2.0: the screen layout follows the lines that zoom
+    /// 1 made instead of deciding them again.
+    #[test]
+    fn a_text_keeps_the_lines_of_zoom_one_at_forty_zooms() {
+        use crate::test_egui::with_canvas_transform;
+
+        let rows_at = |zoom: f32, name: &str, job: &LayoutJob| -> Vec<String> {
+            let ctx = Context::default();
+            let transform = egui::emath::TSTransform {
+                scaling: zoom,
+                translation: egui::vec2(13.7, 21.3),
+            };
+            let galley =
+                with_canvas_transform(&ctx, transform, |ui| layout_job(ui.painter(), job.clone())).expect("one frame");
+            let rows = row_words(&galley);
+            assert!(!rows.is_empty(), "{name} at zoom {zoom} has a row");
+            rows
+        };
+
+        for (name, job) in tight_jobs() {
+            let expected = rows_at(1.0, name, &job);
+            assert!(
+                expected.len() > 1 || expected[0].contains('\u{2026}'),
+                "{name} wraps or elides at zoom 1: {expected:?}"
+            );
+            for step in 0..40 {
+                #[allow(clippy::cast_precision_loss)]
+                let zoom = 0.5 + step as f32 * (1.5 / 39.0);
+                assert_eq!(
+                    rows_at(zoom, name, &job),
+                    expected,
+                    "{name} breaks at the words of zoom 1 at zoom {zoom}"
+                );
+            }
         }
     }
 
