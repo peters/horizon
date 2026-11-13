@@ -1862,6 +1862,7 @@ dependencies = [
  "horizon-browser-protocol",
  "horizon-browser-routines",
  "horizon-terminal",
+ "jpeg-encoder",
  "libc",
  "profiling",
  "qrcodegen",
