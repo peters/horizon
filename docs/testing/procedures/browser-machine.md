@@ -126,6 +126,12 @@ a panel after the container stops.
 
    Result: the entry is in the settings store, and the start of Horizon reads it.
 
+   A machine that is in the machine list of Horizon needs no step 6 and no
+   **SSH target**: an agent writes the entry with `browser_host_request` and
+   `machine` set to the name of that machine, or the person leaves that route in
+   the same section of Settings. The connect then uses the address, the user and
+   the machine key that a terminal of the machine uses.
+
 ## 6. Tasks
 
 ### 6.1 BM-1 — a browser panel drives the Chromium of the machine

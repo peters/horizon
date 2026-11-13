@@ -206,7 +206,7 @@ store writes, so a new section without a decision fails it.
 | `features` | Shared | |
 | `browser` | Shared | |
 | `remote_hosts` | Shared | One list of remote hosts. |
-| `browser_host` | Shared | One browser host. A computer that cannot reach that host shows the notice that it already shows. |
+| `browser_host` | Shared | One browser host: its SSH target or a machine of the machine list, one profile, one engine and the program of its driver. A computer that cannot reach that host shows the notice that it already shows. |
 | `server` | Local | How this computer reaches the server. |
 | `secrets` | Shared | The names of the named secrets. A value is a row of `secrets.sqlite`, and the values follow the server as sealed secrets of their own. |
 | `speech` | Shared | One recorder line and one transcriber. A recorder that this computer does not have fails its take with the sentence that it already says, and an empty line turns speech off with its sentence. |

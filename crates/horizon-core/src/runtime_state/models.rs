@@ -405,6 +405,12 @@ pub struct BrowserHostState {
     /// one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The login of a machine of the machine list, when the entry named one, so a
+    /// saved panel comes back through the machine key of Horizon and not through
+    /// the SSH configuration of the person. A live page cannot move to another
+    /// machine, and a host of the person's own configuration records none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<crate::ssh::SshConnection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

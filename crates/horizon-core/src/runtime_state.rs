@@ -42,6 +42,7 @@ fn browser_host_state(browser: &crate::browser::BrowserPanelState) -> Option<Bro
         profile: browser.attached_host_profile().map(str::to_string),
         engine: None,
         command: None,
+        login: browser.attached_host_login().cloned(),
     })
 }
 

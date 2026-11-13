@@ -22,6 +22,14 @@ pub struct BrowserHostConfig {
     /// or an address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
+    /// The name of a machine of the machine list that runs the browser of the
+    /// browser panels. The connect then uses the address, the user, the port, the
+    /// key file and the known-hosts file of a terminal of that machine, because a
+    /// machine that Horizon rented holds the machine key of Horizon and no key of
+    /// the person. It names a machine and never a route, so a machine whose
+    /// address changes keeps one entry here. Give one of this and `ssh_target`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     /// Profile of that machine whose pages the browser panels use. A
     /// `browser_create` that names no target opens in this profile.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,9 +164,19 @@ impl BrowserHostConfig {
     /// before this entry existed.
     #[must_use]
     pub fn names_host(&self) -> bool {
-        self.ssh_target
+        self.ssh_target()
+            .or_else(|| self.machine())
+            .is_some_and(|host| !host.is_empty())
+    }
+
+    /// The machine of the list that runs the browser of the panels, without the
+    /// surrounding spaces that a person can type.
+    #[must_use]
+    pub fn machine(&self) -> Option<&str> {
+        self.machine
             .as_deref()
-            .is_some_and(|target| !target.trim().is_empty())
+            .map(str::trim)
+            .filter(|machine| !machine.is_empty())
     }
 
     /// The SSH target, without the surrounding spaces that a person can type.
@@ -209,9 +227,20 @@ impl BrowserHostConfig {
 
     /// # Errors
     /// Rejects an SSH target that `ssh` would read as an option or that holds a
-    /// control character, a profile that the profile-name rule does not accept,
-    /// and a profile without an SSH target.
+    /// control character, a machine name that breaks the rule of a machine, an
+    /// entry that names both, a profile that the profile-name rule does not
+    /// accept, and a profile without a host.
     pub fn validate(&self) -> Result<()> {
+        if let Some(machine) = self.machine() {
+            crate::machines::machine_name(machine)
+                .map_err(|error| Error::Config(format!("browser_host.machine: {error}")))?;
+            if self.ssh_target().is_some() {
+                return Err(Error::Config(
+                    "browser_host.machine and browser_host.ssh_target name one host twice; keep the machine of the list or the SSH target"
+                        .into(),
+                ));
+            }
+        }
         if let Some(target) = self.ssh_target() {
             if target.len() > Self::MAX_SSH_TARGET_LEN {
                 return Err(Error::Config(format!(
@@ -231,9 +260,10 @@ impl BrowserHostConfig {
                     "browser_host.ssh_target must not hold a control character".into(),
                 ));
             }
-        } else if self.profile().is_some() {
+        } else if self.profile().is_some() && self.machine().is_none() {
             return Err(Error::Config(
-                "browser_host.profile names a profile of a host, so browser_host.ssh_target is required".into(),
+                "browser_host.profile names a profile of a host, so browser_host.ssh_target or browser_host.machine is required"
+                    .into(),
             ));
         }
         if let Some(command) = self.driver_command()
@@ -245,7 +275,8 @@ impl BrowserHostConfig {
         }
         if self.command.is_some() && !self.names_host() {
             return Err(Error::Config(
-                "browser_host.command names the program of a host, so browser_host.ssh_target is required".into(),
+                "browser_host.command names the program of a host, so browser_host.ssh_target or browser_host.machine is required"
+                    .into(),
             ));
         }
         if let Some(profile) = self.profile()
@@ -442,7 +473,7 @@ mod tests {
     #[test]
     fn a_profile_without_a_host_and_a_profile_off_the_host_rule_are_rejected() {
         let error = entry(None, Some("mail")).validate().expect_err("a profile alone");
-        assert!(error.to_string().contains("ssh_target is required"), "{error}");
+        assert!(error.to_string().contains("is required"), "{error}");
         for profile in ["Mail", "-mail", "mail-", "mail_box", "", "a".repeat(41).as_str()] {
             if profile.is_empty() {
                 assert!(
@@ -463,6 +494,7 @@ mod tests {
             profile: Some("mail".to_string()),
             engine: super::BrowserHostEngine::Firefox,
             command: Some("/opt/horizon/bin/horizon --browser-host-driver".to_string()),
+            machine: None,
         };
         assert!(firefox.validate().is_ok());
         assert_eq!(
@@ -514,7 +546,60 @@ mod tests {
             ..BrowserHostConfig::default()
         };
         let error = orphan.validate().expect_err("a command without a host");
-        assert!(error.to_string().contains("ssh_target is required"), "{error}");
+        assert!(error.to_string().contains("is required"), "{error}");
+    }
+
+    /// A browser host of a rented machine names the machine of the list: the
+    /// connect then uses the machine key of Horizon, which is the only login that
+    /// such a machine has.
+    #[test]
+    fn a_browser_host_names_a_machine_of_the_list_or_an_ssh_target_and_never_both() {
+        let on_machine = BrowserHostConfig {
+            machine: Some("helsinki-1".to_string()),
+            profile: Some("work".to_string()),
+            ..BrowserHostConfig::default()
+        };
+        assert!(on_machine.validate().is_ok(), "{:?}", on_machine.validate());
+        assert!(on_machine.names_host(), "a machine is a host of the browser panels");
+        assert_eq!(on_machine.machine(), Some("helsinki-1"));
+        assert_eq!(on_machine.ssh_target(), None);
+
+        let both = BrowserHostConfig {
+            ssh_target: Some("browser-vm".to_string()),
+            ..on_machine.clone()
+        };
+        let error = both.validate().expect_err("both routes");
+        assert!(error.to_string().contains("name one host twice"), "{error}");
+
+        let broken = BrowserHostConfig {
+            machine: Some("-oProxyCommand=evil".to_string()),
+            ..on_machine.clone()
+        };
+        let error = broken.validate().expect_err("a machine name that is an option");
+        assert!(error.to_string().contains("browser_host.machine"), "{error}");
+
+        let profile_only = BrowserHostConfig {
+            profile: Some("work".to_string()),
+            ..BrowserHostConfig::default()
+        };
+        let error = profile_only.validate().expect_err("a profile without a host");
+        assert!(
+            error.to_string().contains("browser_host.machine is required"),
+            "{error}"
+        );
+
+        let document = crate::Config {
+            browser_host: on_machine.clone(),
+            ..crate::Config::default()
+        }
+        .to_json()
+        .expect("serialize");
+        assert!(document.contains("\"machine\": \"helsinki-1\""), "{document}");
+        assert!(!document.contains("ssh_target"), "one route is written: {document}");
+        assert_eq!(
+            crate::Config::from_json(&document).expect("parse").browser_host,
+            on_machine
+        );
     }
 
     #[test]

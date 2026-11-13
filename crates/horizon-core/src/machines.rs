@@ -102,6 +102,35 @@ impl From<horizon_browser_control::manifest::block_terminal::TerminalRefusal> fo
     }
 }
 
+/// The SSH login of the machine `name` of `machines`, with the machine key that
+/// this computer binds to it: the address, the user, the port, the key file and
+/// the known-hosts file of a terminal of that machine.
+///
+/// A machine that Horizon rented holds the public key of Horizon and no key of
+/// the person, so a caller that must reach one of those uses this login and never
+/// the SSH configuration of the person. The record and the key name are what
+/// this computer holds in memory, so this reads no file and runs on any thread.
+///
+/// # Errors
+/// One sentence for a machine that the list does not hold, and one whose route
+/// the rule of an SSH terminal refuses.
+pub fn login_of(
+    machines: &Machines,
+    keys: &crate::ssh::MachineKeys,
+    name: &str,
+) -> Result<crate::ssh::SshConnection, MachineError> {
+    let record = machines.find(name).ok_or_else(|| {
+        unavailable(format!(
+            "The machine list of this computer has no machine {name}. Add it with machine_set, or name the SSH target instead."
+        ))
+    })?;
+    let terminal = record.checked_terminal()?;
+    Ok(match machines.key(&record.name) {
+        Some(key) => crate::ssh::SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
+        None => crate::ssh::SshConnection::for_agent_terminal(&terminal),
+    })
+}
+
 /// `records` in name order, so the sidebar and `machines` report one order.
 fn in_name_order(mut records: Vec<Machine>) -> Vec<Machine> {
     records.sort_by(|left, right| left.name.cmp(&right.name));

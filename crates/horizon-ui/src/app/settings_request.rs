@@ -97,9 +97,9 @@ impl ServerEntry {
 enum Asked {
     /// The server entry and the command that the link runs there.
     ServerLink { entry: ServerEntry, command: String },
-    /// The SSH target, the profile and the engine of the browser host entry.
+    /// The browser host entry, the profile and the engine of it.
     BrowserHost {
-        ssh_target: String,
+        entry: ServerEntry,
         profile: String,
         engine: BrowserHostEngine,
     },
@@ -295,13 +295,9 @@ impl HorizonApp {
                 }
                 Err(message) => self.answer_setting(waiting, refused(message)),
             },
-            Asked::BrowserHost {
-                ssh_target,
-                profile,
-                engine,
-            } => {
+            Asked::BrowserHost { entry, profile, engine } => {
                 let outcome = self
-                    .write_browser_host_entry(ssh_target, profile, *engine)
+                    .write_browser_host_entry(entry, profile, *engine)
                     .map_or_else(refused, |()| Outcome::BrowserHost {
                         answer: Answer::Confirmed,
                     });
@@ -336,16 +332,24 @@ impl HorizonApp {
 
     /// Writes `browser_host` of this computer, which the browser panels read at
     /// the next start of Horizon, as the Settings window states.
+    ///
+    /// The card names the whole entry: an address or a machine that an earlier
+    /// entry wrote does not survive it, because a browser host names one route.
     fn write_browser_host_entry(
         &mut self,
-        ssh_target: &str,
+        entry: &ServerEntry,
         profile: &str,
         engine: BrowserHostEngine,
     ) -> Result<(), String> {
         let before = self.stored_config();
         let mut stored = before.clone();
+        let (ssh_target, machine) = match entry {
+            ServerEntry::Target(target) => (Some(target.clone()), None),
+            ServerEntry::Machine(machine) => (None, Some(machine.clone())),
+        };
         stored.browser_host = BrowserHostConfig {
-            ssh_target: Some(ssh_target.to_owned()),
+            ssh_target,
+            machine,
             profile: Some(profile.to_owned()),
             engine,
             ..stored.browser_host
@@ -503,24 +507,12 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
             machine,
             command,
         } => {
-            let target = ssh_target.as_deref().map(str::trim).filter(|target| !target.is_empty());
-            let named = machine.as_deref().map(str::trim).filter(|machine| !machine.is_empty());
-            let (ssh_target, machine_name) = match (target, named) {
-                (Some(target), None) => (Some(target), None),
-                (None, Some(machine)) => (None, Some(machine)),
-                (Some(_), Some(_)) => {
-                    return Err(Outcome::failed(
-                        block_machines::INVALID_REQUEST,
-                        "A server link request names one server: give `machine` for a machine of the list, or `ssh_target` for a computer of the person, and not both",
-                    ));
-                }
-                (None, None) => {
-                    return Err(Outcome::failed(
-                        block_machines::INVALID_REQUEST,
-                        "A server link request names no server: give `machine` with the name of a machine of the list, or `ssh_target` with an SSH target",
-                    ));
-                }
-            };
+            let (ssh_target, machine_name) = one_host(
+                ssh_target.as_deref(),
+                machine.as_deref(),
+                "A server link request",
+                "server",
+            )?;
             let command = command.as_deref().map_or(DEFAULT_LINK_COMMAND, str::trim);
             let entry = ServerConfig {
                 ssh_target: ssh_target.map(str::to_owned),
@@ -531,10 +523,7 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
             entry
                 .validate()
                 .map_err(|error| Outcome::failed(block_machines::INVALID_REQUEST, &error.to_string()))?;
-            let entry = match machine_name {
-                Some(machine) => ServerEntry::Machine(machine.to_owned()),
-                None => ServerEntry::Target(ssh_target.unwrap_or_default().to_owned()),
-            };
+            let entry = named_entry(ssh_target, machine_name);
             let document = server_document(&entry, command);
             Ok((
                 Asked::ServerLink {
@@ -547,17 +536,24 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
         }
         Operation::BrowserHostRequest {
             ssh_target,
+            machine,
             profile,
             engine,
         } => {
-            let target = ssh_target.trim();
+            let (ssh_target, machine_name) = one_host(
+                ssh_target.as_deref(),
+                machine.as_deref(),
+                "A browser host request",
+                "host",
+            )?;
             let profile = profile.trim();
             let engine = match engine.unwrap_or(BrowserEngine::Chromium) {
                 BrowserEngine::Chromium => BrowserHostEngine::Chromium,
                 BrowserEngine::Firefox => BrowserHostEngine::Firefox,
             };
             let entry = BrowserHostConfig {
-                ssh_target: Some(target.to_owned()),
+                ssh_target: ssh_target.map(str::to_owned),
+                machine: machine_name.map(str::to_owned),
                 profile: Some(profile.to_owned()),
                 engine,
                 ..BrowserHostConfig::default()
@@ -565,17 +561,55 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
             entry
                 .validate()
                 .map_err(|error| Outcome::failed(block_machines::INVALID_REQUEST, &error.to_string()))?;
+            let entry = named_entry(ssh_target, machine_name);
+            let document = browser_document(&entry, profile, engine);
             let asked = Asked::BrowserHost {
-                ssh_target: target.to_owned(),
+                entry,
                 profile: profile.to_owned(),
                 engine,
             };
-            Ok((asked, BROWSER_TITLE, browser_document(target, profile, engine)))
+            Ok((asked, BROWSER_TITLE, document))
         }
         _ => Err(Outcome::failed(
             block_machines::INVALID_REQUEST,
             "This operation asks no setting of this computer",
         )),
+    }
+}
+
+/// The one host that a request names: an SSH target of the person, or a machine of
+/// the machine list, and never both and never none.
+fn one_host<'a>(
+    ssh_target: Option<&'a str>,
+    machine: Option<&'a str>,
+    request: &str,
+    host: &str,
+) -> Result<(Option<&'a str>, Option<&'a str>), Outcome> {
+    let target = ssh_target.map(str::trim).filter(|target| !target.is_empty());
+    let named = machine.map(str::trim).filter(|machine| !machine.is_empty());
+    match (target, named) {
+        (Some(target), None) => Ok((Some(target), None)),
+        (None, Some(machine)) => Ok((None, Some(machine))),
+        (Some(_), Some(_)) => Err(Outcome::failed(
+            block_machines::INVALID_REQUEST,
+            &format!(
+                "{request} names one {host}: give `machine` for a machine of the list, or `ssh_target` for a computer of the person, and not both"
+            ),
+        )),
+        (None, None) => Err(Outcome::failed(
+            block_machines::INVALID_REQUEST,
+            &format!(
+                "{request} names no {host}: give `machine` with the name of a machine of the list, or `ssh_target` with an SSH target"
+            ),
+        )),
+    }
+}
+
+/// The host of a card, from the one route that its request named.
+fn named_entry(ssh_target: Option<&str>, machine: Option<&str>) -> ServerEntry {
+    match machine {
+        Some(machine) => ServerEntry::Machine(machine.to_owned()),
+        None => ServerEntry::Target(ssh_target.unwrap_or_default().to_owned()),
     }
 }
 
@@ -646,37 +680,55 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
 }
 
 /// The card that asks the person to use the browser of another machine for new
-/// browser panels, with the target, the profile and the engine.
-fn browser_document(ssh_target: &str, profile: &str, engine: BrowserHostEngine) -> BlockDocument {
+/// browser panels, with the host, the profile and the engine.
+///
+/// A host on a machine of the list states the machine, and the row that says which
+/// login the connect uses: that machine holds the machine key of Horizon, so the
+/// person cannot reach it with their own SSH configuration.
+fn browser_document(entry: &ServerEntry, profile: &str, engine: BrowserHostEngine) -> BlockDocument {
+    let on_machine = matches!(entry, ServerEntry::Machine(_));
+    let mut rows = vec![
+        KvRow {
+            label: "Browser".to_owned(),
+            value: match engine {
+                BrowserHostEngine::Chromium => "Chromium".to_owned(),
+                BrowserHostEngine::Firefox => "Firefox, with Horizon on that machine".to_owned(),
+            },
+            mono: false,
+        },
+        KvRow {
+            label: "Profile".to_owned(),
+            value: profile.to_owned(),
+            mono: true,
+        },
+        KvRow {
+            label: match entry {
+                ServerEntry::Target(_) => "SSH target".to_owned(),
+                ServerEntry::Machine(_) => "Machine".to_owned(),
+            },
+            value: entry.label().to_owned(),
+            mono: true,
+        },
+    ];
+    if on_machine {
+        rows.push(KvRow {
+            label: "SSH from".to_owned(),
+            value: "the machine key of this computer".to_owned(),
+            mono: false,
+        });
+    }
+    let host = match entry {
+        ServerEntry::Target(target) => target.clone(),
+        ServerEntry::Machine(machine) => format!("the machine {machine}"),
+    };
     BlockDocument {
         components: vec![
             Component::Heading {
-                text: format!("Use the browser on {ssh_target} for new browser panels?"),
+                text: format!("Use the browser on {host} for new browser panels?"),
                 subtitle: None,
                 badge: None,
             },
-            Component::Kv {
-                rows: vec![
-                    KvRow {
-                        label: "Browser".to_owned(),
-                        value: match engine {
-                            BrowserHostEngine::Chromium => "Chromium".to_owned(),
-                            BrowserHostEngine::Firefox => "Firefox, with Horizon on that machine".to_owned(),
-                        },
-                        mono: false,
-                    },
-                    KvRow {
-                        label: "Profile".to_owned(),
-                        value: profile.to_owned(),
-                        mono: true,
-                    },
-                    KvRow {
-                        label: "SSH target".to_owned(),
-                        value: ssh_target.to_owned(),
-                        mono: true,
-                    },
-                ],
-            },
+            Component::Kv { rows },
             Component::Text {
                 text: BROWSER_USES.to_owned(),
             },

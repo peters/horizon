@@ -23,7 +23,7 @@ use horizon_browser::host_driver::{
     HostDriverFrame, HostDriverReply, HostDriverRequest, HostDriverWelcome, HostSystem, MAX_HOST_DRIVER_LINE_BYTES,
     read_line as read_wire_line,
 };
-use horizon_browser_control::ssh_forward::{Ssh, ssh_command, valid_profile, valid_target};
+use horizon_browser_control::ssh_forward::{Ssh, ssh_command_with_options, valid_profile, valid_target};
 
 use super::HostDriverEngine;
 use crate::browser::attached_host::{AttachedHostFailure, HOST_LINK_VERSION};
@@ -190,7 +190,10 @@ impl DriverLink {
     /// another system, or the driver refused the link in its words.
     pub(super) fn open(ssh: &Ssh, host: &HostDriverHost, quality: u32) -> Result<Self, AttachedHostFailure> {
         let attached = host.as_attached();
-        let mut command = ssh_command(ssh.program(), host.ssh_target(), &host.remote_command());
+        // The login options of a machine of the machine list stand in front of the
+        // target, so a machine that Horizon rented answers with its own key.
+        let mut command =
+            ssh_command_with_options(ssh.program(), ssh.options(), host.ssh_target(), &host.remote_command());
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

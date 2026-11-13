@@ -134,7 +134,7 @@ impl HostDriverSlot {
         slot
     }
 
-    pub(super) fn host(&self) -> &crate::browser::AttachedHost {
+    pub(crate) fn host(&self) -> &crate::browser::AttachedHost {
         &self.host
     }
 
@@ -645,6 +645,9 @@ impl BrowserPanelState {
         state.loading = true;
         let requested_url = initial_url.map(|url| horizon_browser::normalize_navigation_target(&url));
         state.requested_url.clone_from(&requested_url);
+        // The link of a Firefox host runs over the SSH of its machine: a machine
+        // of the machine list answers with its own key.
+        let ssh = ssh.with_options(host.login_options());
         let slot = HostDriverSlot::connecting(
             ssh,
             host.clone(),
@@ -757,6 +760,9 @@ impl BrowserPanelState {
         self.loading = true;
         self.status = BrowserStatus::Starting;
         let target = self.relaunch_target();
+        // The link of a Firefox host runs over the SSH of its machine: a machine
+        // of the machine list answers with its own key.
+        let ssh = ssh.with_options(host.login_options());
         let slot = HostDriverSlot::connecting(
             ssh,
             host.clone(),
@@ -928,6 +934,7 @@ impl BrowserPanelState {
                 profile: Some(slot.host().profile().to_string()),
                 engine: Some(slot.host().engine()),
                 command: slot.host().command().map(str::to_string),
+                login: slot.host().login().cloned(),
             })
     }
 }

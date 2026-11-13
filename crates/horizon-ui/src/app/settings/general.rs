@@ -175,8 +175,8 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     super::section_card(ui, |ui| {
         super::dim_label(
             ui,
-            "Browser panels open in that profile of that machine over SSH. A blank SSH target keeps \
-             the browser panels of this computer. A change applies at the next start.",
+            "Browser panels open in that profile of that machine over SSH. A blank SSH target and no \
+             machine keep the browser panels of this computer. A change applies at the next start.",
         );
         ui.add_space(8.0);
 
@@ -184,6 +184,29 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
             .num_columns(2)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
+                // A machine of the list is named by that machine, and the connect uses
+                // the login of a terminal of it. The person leaves that route here to
+                // name an SSH target instead.
+                if let Some(machine) = config.browser_host.machine().map(str::to_owned) {
+                    ui.label(egui::RichText::new("Machine").color(theme::FG_SOFT()).size(12.0));
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(&machine).color(theme::FG()).size(12.0));
+                        super::dim_label(
+                            ui,
+                            "The connect uses the address, the user and the machine key that a terminal of \
+                             that machine uses.",
+                        );
+                        if ui
+                            .add(crate::app::util::chrome_button("Use an SSH target instead"))
+                            .clicked()
+                        {
+                            config.browser_host.machine = None;
+                            changed = true;
+                        }
+                    });
+                    ui.end_row();
+                }
+
                 ui.label(egui::RichText::new("SSH target").color(theme::FG_SOFT()).size(12.0));
                 changed |= super::optional_text_field(
                     ui,

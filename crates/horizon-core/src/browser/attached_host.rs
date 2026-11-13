@@ -75,6 +75,11 @@ pub struct AttachedHost {
     /// The program that starts the driver of that machine, when the entry names
     /// one. Only a Firefox host runs a driver.
     command: Option<String>,
+    /// The login of a machine of the machine list, when the entry names one: the
+    /// port, the key file and the known-hosts file of a terminal of that machine.
+    /// A machine that Horizon rented holds the machine key of Horizon and no key
+    /// of the person, so every `ssh` of the panel takes these options.
+    login: Option<crate::ssh::SshConnection>,
 }
 
 impl AttachedHost {
@@ -106,6 +111,7 @@ impl AttachedHost {
             profile: profile.to_string(),
             engine: crate::config::BrowserHostEngine::Chromium,
             command: None,
+            login: None,
         })
     }
 
@@ -133,6 +139,34 @@ impl AttachedHost {
             host.command = Some(command.to_string());
         }
         Ok(host)
+    }
+
+    /// The same host reached with the login of a machine of the machine list, so
+    /// its address, its user, its port, its key file and its known-hosts file come
+    /// from the record and from the machine key of this computer. The SSH target
+    /// becomes the address and the user of that login, which is what `ssh` reads
+    /// and what the words of the panel name.
+    #[must_use]
+    pub fn with_login(mut self, login: crate::ssh::SshConnection) -> Self {
+        self.ssh_target = login.transport_target();
+        self.login = Some(login);
+        self
+    }
+
+    /// The login options of the machine of the list, and none for a host of the
+    /// SSH configuration of the person.
+    #[must_use]
+    pub fn login_options(&self) -> Vec<String> {
+        self.login
+            .as_ref()
+            .map(crate::ssh::SshConnection::login_option_args)
+            .unwrap_or_default()
+    }
+
+    /// The login of the machine of the list, when the entry names one.
+    #[must_use]
+    pub fn login(&self) -> Option<&crate::ssh::SshConnection> {
+        self.login.as_ref()
     }
 
     /// The engine of the browser of that machine.
@@ -169,6 +203,7 @@ impl AttachedHost {
             profile: DEFAULT_HOST_PROFILE.to_string(),
             engine: crate::config::BrowserHostEngine::Chromium,
             command: None,
+            login: None,
         }
     }
 
@@ -468,6 +503,9 @@ impl BrowserPanelState {
         state.loading = true;
         let requested_url = initial_url.map(|url| horizon_browser::normalize_navigation_target(&url));
         state.requested_url.clone_from(&requested_url);
+        // Every call of this panel carries the login of the machine of the list,
+        // so a machine that Horizon rented answers with its own key.
+        let ssh = ssh.with_options(host.login_options());
         let slot = AttachedHostSlot::connecting(ssh, host.clone());
         if let Some(failure) = slot.failure.clone() {
             state.attached_failed(failure);
@@ -531,6 +569,18 @@ impl BrowserPanelState {
     #[must_use]
     pub fn attached_host_target(&self) -> Option<&str> {
         self.attached.as_ref().map(|slot| slot.host.ssh_target())
+    }
+
+    /// The login of the machine of the list that served this panel, when the
+    /// entry named one. A host of the person's own SSH configuration answers
+    /// none.
+    #[must_use]
+    pub fn attached_host_login(&self) -> Option<&crate::ssh::SshConnection> {
+        match (&self.attached, &self.host_driver) {
+            (Some(slot), _) => slot.host.login(),
+            (None, Some(slot)) => slot.host().login(),
+            (None, None) => None,
+        }
     }
 
     /// The profile of the Chromium of this panel on that machine.

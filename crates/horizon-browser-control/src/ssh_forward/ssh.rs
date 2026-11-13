@@ -2,9 +2,9 @@
 //!
 //! This computer reads the endpoint of the browser machine and starts the
 //! forward of that machine with the same `ssh`. The value below carries that
-//! program and the bounds of one call, so a caller hands one value down and a
-//! test replaces the program, the bound and the readiness probe at once,
-//! instead of opening a connection.
+//! program, the login options of the machine and the bounds of one call, so a
+//! caller hands one value down and a test replaces the program, the bound and
+//! the readiness probe at once, instead of opening a connection.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +16,10 @@ use super::{READY_DEADLINE, REMOTE_OUTPUT_LIMIT, SshForward, SshForwardError, ac
 #[derive(Clone)]
 pub struct Ssh {
     program: String,
+    /// The login options of a machine of the machine list: its port, its key file,
+    /// its known-hosts file and no agent. A browser host of the person's own SSH
+    /// configuration leaves them empty, so `ssh` reads that configuration.
+    options: Vec<String>,
     forward_deadline: Duration,
     probe: Arc<dyn Fn(u16) -> bool + Send + Sync>,
 }
@@ -24,6 +28,7 @@ impl Default for Ssh {
     fn default() -> Self {
         Self {
             program: ssh_program(),
+            options: Vec::new(),
             forward_deadline: READY_DEADLINE,
             probe: Arc::new(accepts_connection),
         }
@@ -39,9 +44,14 @@ impl Ssh {
     /// start, it ends before the forward listens (a refused host key names
     /// itself in the reason), or no connection arrives in time.
     pub fn start_forward(&self, target: &str, remote_port: u16) -> Result<SshForward, SshForwardError> {
-        SshForward::start_with(target, remote_port, &self.program, self.forward_deadline, |port| {
-            (self.probe)(port)
-        })
+        SshForward::start_with(
+            target,
+            remote_port,
+            &self.program,
+            &self.options,
+            self.forward_deadline,
+            |port| (self.probe)(port),
+        )
     }
 
     /// The program that this value runs, for a caller that needs a child of its
@@ -51,6 +61,12 @@ impl Ssh {
         &self.program
     }
 
+    /// The login options that every call of this value hands to `ssh`.
+    #[must_use]
+    pub fn options(&self) -> &[String] {
+        &self.options
+    }
+
     /// Run one command on `target` and give its standard output.
     ///
     /// # Errors
@@ -58,7 +74,14 @@ impl Ssh {
     /// start or fails (its own words are the reason), or the command writes
     /// nothing before `deadline`.
     pub fn run_remote(&self, target: &str, command: &str, deadline: Duration) -> Result<String, SshForwardError> {
-        run_remote_with(target, command, &self.program, REMOTE_OUTPUT_LIMIT, deadline)
+        run_remote_with(
+            target,
+            command,
+            &self.program,
+            &self.options,
+            REMOTE_OUTPUT_LIMIT,
+            deadline,
+        )
     }
 
     /// The settings of a connect that a test drives: another `ssh` program.
@@ -66,6 +89,15 @@ impl Ssh {
     #[must_use]
     pub fn with_program(mut self, program: impl Into<String>) -> Self {
         self.program = program.into();
+        self
+    }
+
+    /// The same `ssh` with the login options of a machine of the machine list, so
+    /// every call of it uses the port, the key file and the known-hosts file of
+    /// that machine instead of the configuration of the person.
+    #[must_use]
+    pub fn with_options(mut self, options: Vec<String>) -> Self {
+        self.options = options;
         self
     }
 

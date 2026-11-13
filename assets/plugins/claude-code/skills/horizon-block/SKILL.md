@@ -398,6 +398,11 @@ and you can press nothing.
  "profile": "work", "engine": "chromium"}
 ```
 
+```json
+{"operation": "browser_host_request", "machine": "helsinki-1",
+ "profile": "work", "engine": "firefox"}
+```
+
 - The fields pass the rule of the settings field that stores them before a card
   exists: `ssh_target` is one SSH name, `machine` is the name of one machine of
   `machines`, `command` is one command of letters, digits and `._:/=@+-`, and
@@ -410,8 +415,16 @@ and you can press nothing.
   computer of the person takes `ssh_target`. A request that names both, or
   neither, is `invalid_request`.
 - `command` is optional. Without it the link runs `horizon --server-link`.
-- `engine` is `chromium` or `firefox`. Only Chromium runs on another machine, so
-  `firefox` is `engine_unavailable` and draws no card.
+- A browser host on a machine that Horizon rented takes `machine` and no
+  `ssh_target`, as the server link does: the connect then uses the address, the
+  user, the port, the key file and the known-hosts file of a terminal of that
+  machine. A request that names both, or neither, is `invalid_request`.
+- `engine` is `chromium` or `firefox`. A Firefox host runs Firefox, geckodriver
+  and a `horizon` binary of the same version, because a driver of Horizon beside
+  that browser carries the page: name the program with `browser_host.command`
+  when the default does not fit. Its picture arrives as compressed frames, so it
+  is slower than Chromium. A Chromium host needs a Chromium program there and no
+  horizon.
 - The card states the values exactly as the settings will hold them, and Horizon
   trims the target and the command before it writes them.
 - The answer is `server_link` or `browser_host`, with `answer`: `confirmed`,
@@ -623,8 +636,9 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   target and let the record hold the rest.
 - `request_pending`: this Horizon already asks the person about a setting. Wait
   for that card to be answered or closed, or read its answer first.
-- `engine_unavailable`: a browser host runs Chromium only. Firefox on another
-  machine is not built yet.
+- `engine_unavailable`: the browser host of the settings serves the engine of
+  its profile and no other. The message says which engine the host runs, and the
+  person changes the engine in Settings, General, Browser host.
 - `invalid_machine_name`: the machine name breaks the key name rule. The message
   names it.
 - `invalid_session_name`: the tmux session name breaks its rule. The message

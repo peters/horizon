@@ -87,9 +87,21 @@ fn settle_link(app: &mut HorizonApp) {
 
 fn browser(ssh_target: &str, profile: &str, engine: Option<BrowserEngine>) -> Operation {
     Operation::BrowserHostRequest {
-        ssh_target: ssh_target.to_owned(),
+        ssh_target: Some(ssh_target.to_owned()),
+        machine: None,
         profile: profile.to_owned(),
         engine,
+    }
+}
+
+/// A browser host of a machine of the machine list, which answers to the machine
+/// key of Horizon alone.
+fn browser_on_machine(machine: &str, profile: &str) -> Operation {
+    Operation::BrowserHostRequest {
+        ssh_target: None,
+        machine: Some(machine.to_owned()),
+        profile: profile.to_owned(),
+        engine: None,
     }
 }
 
@@ -438,6 +450,82 @@ fn a_press_on_use_it_writes_the_browser_host_of_this_computer() {
     assert_eq!(after.browser_host.ssh_target.as_deref(), Some("browser-vm"));
     assert_eq!(after.browser_host.profile.as_deref(), Some("work"));
     assert!(!after.server.names_server(), "the browser card writes no server entry");
+}
+
+/// A browser host on a machine of the list states the machine and the key that the
+/// connect uses, and it stores the name of the machine and no SSH target.
+#[test]
+fn a_browser_host_on_a_machine_of_the_list_states_the_machine_and_stores_its_name() {
+    let (temp, ctx, mut app) = app();
+    let root = temp.path().join("block-panel-requests");
+    std::fs::create_dir_all(&root).expect("the queue directory");
+    // An entry of an earlier press names an SSH target, which this card replaces.
+    let mut before = stored(&mut app);
+    before.browser_host.ssh_target = Some("browser-vm".to_owned());
+    before.browser_host.profile = Some("work".to_owned());
+    app.settings_io.save_config(app.config_path.clone(), before, Vec::new());
+    app.wait_for_settings_io();
+    let request = request(&app, browser_on_machine("rented-1", "work"));
+    assert!(app.apply_block_request_in(&request, &root, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let text = card_text(&mut app, &card);
+    for word in [
+        "Use the browser on the machine rented-1 for new browser panels?",
+        "Machine",
+        "rented-1",
+        "the machine key of this computer",
+        "work",
+    ] {
+        assert!(text.contains(word), "the card says {word}: {text}");
+    }
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+
+    let after = stored(&mut app);
+    assert_eq!(
+        after.browser_host.machine.as_deref(),
+        Some("rented-1"),
+        "the card stores the machine of the list"
+    );
+    assert_eq!(
+        after.browser_host.ssh_target, None,
+        "the card names one route, so the target of the earlier entry does not survive it"
+    );
+    assert_eq!(after.browser_host.profile.as_deref(), Some("work"));
+    assert!(
+        after.browser_host.validate().is_ok(),
+        "the stored entry passes the rule of the settings: {:?}",
+        after.browser_host.validate()
+    );
+}
+
+#[test]
+fn a_browser_host_request_that_names_two_hosts_or_none_draws_no_card() {
+    let (_temp, ctx, mut app) = app();
+    let none = Operation::BrowserHostRequest {
+        ssh_target: None,
+        machine: None,
+        profile: "work".to_owned(),
+        engine: None,
+    };
+    let outcome = app.apply_block_request(&request(&app, none), &ctx);
+    assert_eq!(code(&outcome), block_machines::INVALID_REQUEST);
+    assert!(message(&outcome).contains("names no host"), "{outcome:?}");
+
+    let both = Operation::BrowserHostRequest {
+        ssh_target: Some("browser-vm".to_owned()),
+        machine: Some("rented-1".to_owned()),
+        profile: "work".to_owned(),
+        engine: None,
+    };
+    let outcome = app.apply_block_request(&request(&app, both), &ctx);
+    assert_eq!(code(&outcome), block_machines::INVALID_REQUEST);
+    assert!(message(&outcome).contains("names one host"), "{outcome:?}");
+    assert!(
+        app.settings_request.waiting.is_none(),
+        "a request that names its host twice draws no card"
+    );
 }
 
 #[test]

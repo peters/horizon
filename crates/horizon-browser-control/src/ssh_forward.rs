@@ -121,7 +121,14 @@ impl SshForward {
     /// itself in the reason), or no connection arrives within
     /// [`READY_DEADLINE`].
     pub fn start(target: &str, remote_port: u16) -> Result<Self, SshForwardError> {
-        Self::start_with(target, remote_port, &ssh_program(), READY_DEADLINE, accepts_connection)
+        Self::start_with(
+            target,
+            remote_port,
+            &ssh_program(),
+            &[],
+            READY_DEADLINE,
+            accepts_connection,
+        )
     }
 
     /// The loopback port of this computer that the forward listens on.
@@ -131,10 +138,13 @@ impl SshForward {
     }
 
     /// [`Self::start`] with the program and the deadline of a test.
+    /// [`Self::start`] with the login options of a machine of the machine list,
+    /// the program and the deadline of a test.
     fn start_with(
         target: &str,
         remote_port: u16,
         program: &str,
+        options: &[String],
         ready_deadline: Duration,
         mut is_ready: impl FnMut(u16) -> bool,
     ) -> Result<Self, SshForwardError> {
@@ -149,7 +159,7 @@ impl SshForward {
         }
         let mut attempt = 1;
         loop {
-            let error = match Self::start_once(target, remote_port, program, ready_deadline, &mut is_ready) {
+            let error = match Self::start_once(target, remote_port, program, options, ready_deadline, &mut is_ready) {
                 Ok(forward) => return Ok(forward),
                 Err(error) => error,
             };
@@ -164,11 +174,12 @@ impl SshForward {
         target: &str,
         remote_port: u16,
         program: &str,
+        options: &[String],
         ready_deadline: Duration,
         is_ready: &mut impl FnMut(u16) -> bool,
     ) -> Result<Self, SshForwardError> {
         let local_port = free_loopback_port(target)?;
-        let mut child = forward_command(program, target, local_port, remote_port)
+        let mut child = forward_command(program, options, target, local_port, remote_port)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -243,7 +254,10 @@ fn accepts_connection(port: u16) -> bool {
 /// nothing interactive: no terminal, a bounded connect and keepalive, and an
 /// exit when the far side refuses the forward. A forward that `ssh` could not
 /// establish would otherwise look like a slow host.
-fn forward_command(program: &str, target: &str, local_port: u16, remote_port: u16) -> Command {
+///
+/// `options` are the login options of a machine of the machine list: the port,
+/// the key file and the known-hosts file of a terminal of it.
+fn forward_command(program: &str, options: &[String], target: &str, local_port: u16, remote_port: u16) -> Command {
     let mut command = Command::new(program);
     command.args([
         "-N".to_string(),
@@ -262,8 +276,9 @@ fn forward_command(program: &str, target: &str, local_port: u16, remote_port: u1
         format!("ServerAliveInterval={SERVER_ALIVE_INTERVAL_SECONDS}"),
         "-o".to_string(),
         format!("ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}"),
-        target.to_string(),
     ]);
+    command.args(options);
+    command.arg(target);
     command
 }
 
@@ -343,13 +358,14 @@ fn silent_reason(tail: &Arc<Mutex<Vec<String>>>) -> String {
 /// `target` is not one SSH name, `ssh` cannot start or fails (its words are the
 /// reason), or the command writes nothing before `deadline`.
 pub fn run_remote(target: &str, command: &str, deadline: Duration) -> Result<String, SshForwardError> {
-    run_remote_with(target, command, &ssh_program(), REMOTE_OUTPUT_LIMIT, deadline)
+    run_remote_with(target, command, &ssh_program(), &[], REMOTE_OUTPUT_LIMIT, deadline)
 }
 
 fn run_remote_with(
     target: &str,
     command: &str,
     program: &str,
+    options: &[String],
     limit: u64,
     deadline: Duration,
 ) -> Result<String, SshForwardError> {
@@ -359,7 +375,12 @@ fn run_remote_with(
             target: target.to_string(),
         });
     }
-    let output = run_bounded(ssh_command(program, target, command), limit, deadline).map_err(|error| {
+    let output = run_bounded(
+        ssh_command_with_options(program, options, target, command),
+        limit,
+        deadline,
+    )
+    .map_err(|error| {
         if error.kind() == io::ErrorKind::TimedOut {
             return SshForwardError::RemoteNoAnswer {
                 target: target.to_string(),

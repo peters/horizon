@@ -227,15 +227,25 @@ pub enum Operation {
         command: Option<String>,
     },
     /// Ask the person to make the browser of one machine the browser of new
-    /// browser panels. Horizon draws a card of its own that states the target,
-    /// the profile and the engine, and it writes `browser_host` of the settings
-    /// only when the person presses `Use it`. The answer is `browser_host` with
-    /// the person's answer. Only Chromium runs on another machine, so Firefox is
+    /// browser panels. Horizon draws a card of its own that states the host, the
+    /// profile and the engine, and it writes `browser_host` of the settings only
+    /// when the person presses `Use it`. The answer is `browser_host` with the
+    /// person's answer. Only Chromium runs on another machine, so Firefox is
     /// refused with `engine_unavailable` and no card is drawn.
     BrowserHostRequest {
         /// The SSH target, as the settings field `browser_host.ssh_target`
-        /// takes it: the `Host` name of the SSH configuration, one word.
-        ssh_target: String,
+        /// takes it: the `Host` name of the SSH configuration, one word. Give one
+        /// of this and `machine`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssh_target: Option<String>,
+        /// The name of a machine of the machine list that runs the browser, as
+        /// `machines` reports it. The connect then uses the address, the user, the
+        /// port, the key file and the known-hosts file of a terminal of that
+        /// machine, so a machine that Horizon rented is reachable: it holds the
+        /// public key of Horizon and no key of the person. Give one of this and
+        /// `ssh_target`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
         /// The profile of that machine, 1 to 40 characters of `a-z`, `0-9` and
         /// `-`, with a letter or a digit at each end.
         profile: String,
@@ -1324,7 +1334,8 @@ mod tests {
         assert_eq!(
             browser,
             Operation::BrowserHostRequest {
-                ssh_target: "browser-vm".into(),
+                ssh_target: Some("browser-vm".into()),
+                machine: None,
                 profile: "work".into(),
                 engine: Some(BrowserEngine::Chromium),
             }
@@ -1336,6 +1347,22 @@ mod tests {
             }))
             .is_err(),
             "an engine outside the two known ones is refused"
+        );
+        let on_machine = serde_json::from_value::<Operation>(serde_json::json!({
+            "operation": "browser_host_request",
+            "machine": "rented-1",
+            "profile": "work"
+        }))
+        .expect("a browser host of a machine of the list parses");
+        assert_eq!(
+            on_machine,
+            Operation::BrowserHostRequest {
+                ssh_target: None,
+                machine: Some("rented-1".into()),
+                profile: "work".into(),
+                engine: None,
+            },
+            "a browser host of a rented machine carries no SSH target, and its connect uses that machine's login"
         );
         for unknown in [
             serde_json::json!({
@@ -1427,7 +1454,8 @@ mod tests {
                 command: None,
             },
             Operation::BrowserHostRequest {
-                ssh_target: "browser-vm".into(),
+                ssh_target: Some("browser-vm".into()),
+                machine: None,
                 profile: "work".into(),
                 engine: None,
             },

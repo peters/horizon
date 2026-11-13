@@ -7,7 +7,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use super::remote_browser::{REMOTE_BROWSER_INSTALLATIONS, REMOTE_BROWSER_NAMES};
-use super::transport::{failure_reason, quote, ssh_command};
+use super::transport::{failure_reason, quote, ssh_command, ssh_command_with_options};
 use super::{
     Ssh, SshForward, SshForwardError, accepts_connection, forward_command, remote_browser_command, remote_port_command,
     run_remote_with, valid_profile,
@@ -71,14 +71,15 @@ fn a_target_that_ssh_reads_as_an_option_is_refused_before_a_connection() {
     let _serial = serial();
     let directory = scratch();
     let program = stand_in(directory.path(), "exit 1");
-    let Err(error) = SshForward::start_with("-oProxyCommand=evil", 9222, &program, DEADLINE, accepts_connection) else {
+    let Err(error) = SshForward::start_with("-oProxyCommand=evil", 9222, &program, &[], DEADLINE, accepts_connection)
+    else {
         panic!("a target that ssh reads as an option was accepted");
     };
     assert!(
         matches!(&error, SshForwardError::InvalidTarget { target } if target == "-oProxyCommand=evil"),
         "{error}"
     );
-    let refused = SshForward::start_with("browser-vm", 0, &program, DEADLINE, accepts_connection)
+    let refused = SshForward::start_with("browser-vm", 0, &program, &[], DEADLINE, accepts_connection)
         .expect_err("a port that no forward can take");
     assert!(matches!(refused, SshForwardError::InvalidPort { port: 0 }), "{refused}");
 }
@@ -91,7 +92,7 @@ fn an_ssh_that_refuses_the_host_key_keeps_its_own_words() {
         directory.path(),
         "printf '%s\\n' 'Host key verification failed.' >&2\nexit 255",
     );
-    let Err(error) = SshForward::start_with("browser-vm", 9222, &program, DEADLINE, accepts_connection) else {
+    let Err(error) = SshForward::start_with("browser-vm", 9222, &program, &[], DEADLINE, accepts_connection) else {
         panic!("an ssh that ended was accepted as a forward");
     };
     assert!(
@@ -113,6 +114,7 @@ fn a_forward_that_never_takes_a_connection_ends_on_its_deadline() {
         "browser-vm",
         9222,
         &program,
+        &[],
         Duration::from_millis(200),
         accepts_connection,
     ) else {
@@ -137,7 +139,7 @@ fn a_ready_forward_is_reaped_with_its_child_when_it_drops() {
         &format!("printf '%s' \"$$\" > {}\nexec sleep 60", quoted(&pid_file)),
     );
     let mut probed = Vec::new();
-    let forward = SshForward::start_with("browser-vm", 9222, &program, DEADLINE, |port| {
+    let forward = SshForward::start_with("browser-vm", 9222, &program, &[], DEADLINE, |port| {
         probed.push(port);
         true
     })
@@ -166,7 +168,7 @@ fn a_local_port_that_another_process_took_is_tried_once_more() {
         ),
     );
     let mut seen: Vec<u16> = Vec::new();
-    let forward = SshForward::start_with("browser-vm", 9222, &program, DEADLINE, |port| {
+    let forward = SshForward::start_with("browser-vm", 9222, &program, &[], DEADLINE, |port| {
         seen.push(port);
         seen.iter().any(|other| *other != port)
     })
@@ -184,7 +186,7 @@ fn a_local_port_that_another_process_took_is_tried_once_more() {
 #[test]
 fn the_forward_names_one_loopback_forward_and_exits_on_a_failed_bind() {
     let _serial = serial();
-    let command = forward_command("ssh", "browser-vm", 41000, 9222);
+    let command = forward_command("ssh", &[], "browser-vm", 41000, 9222);
     let args: Vec<String> = command
         .get_args()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -224,7 +226,7 @@ fn the_forward_names_one_loopback_forward_and_exits_on_a_failed_bind() {
 fn the_children_of_the_browser_control_take_no_multiplexing_decision() {
     let _serial = serial();
     let link = ssh_command("ssh", "server-vm", "/opt/horizon --server-link");
-    let forward = forward_command("ssh", "browser-vm", 41000, 9222);
+    let forward = forward_command("ssh", &[], "browser-vm", 41000, 9222);
     for (kind, command) in [("the link of a server", link), ("the forward of a browser", forward)] {
         let args: Vec<String> = command
             .get_args()
@@ -242,6 +244,53 @@ fn the_children_of_the_browser_control_take_no_multiplexing_decision() {
             "{kind} passes no -S master path: {args:?}"
         );
     }
+}
+
+/// A browser host that names a machine of the machine list is reached with the
+/// key of that machine, so every `ssh` of a connect puts the login options of the
+/// machine in front of the target, where `ssh` reads its options.
+#[test]
+fn the_login_of_a_machine_stands_in_front_of_the_target_of_both_calls() {
+    let _serial = serial();
+    let options: Vec<String> = [
+        "-p",
+        "2222",
+        "-i",
+        "/home/person/.horizon/machine-keys/helsinki-1/id_ed25519",
+        "-o",
+        "IdentitiesOnly=yes",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let forward = forward_command("ssh", &options, "peters@127.0.0.1", 41000, 9222);
+    let read = ssh_command_with_options("ssh", &options, "peters@127.0.0.1", "cat x");
+    for (kind, command) in [
+        ("the forward of a browser", forward),
+        ("a read on a browser host", read),
+    ] {
+        let args: Vec<String> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        let target = args
+            .iter()
+            .position(|argument| argument == "peters@127.0.0.1")
+            .unwrap_or_else(|| panic!("{kind} names its target: {args:?}"));
+        for option in &options {
+            let at = args
+                .iter()
+                .position(|argument| argument == option)
+                .unwrap_or_else(|| panic!("{kind} takes {option}: {args:?}"));
+            assert!(at < target, "{kind} puts {option} in front of the target: {args:?}");
+        }
+    }
+    let ssh = Ssh::default().with_options(options.clone());
+    assert_eq!(
+        ssh.options(),
+        options.as_slice(),
+        "the value hands the login to every call"
+    );
 }
 
 #[test]
@@ -365,7 +414,7 @@ fn a_command_on_the_remote_machine_gives_its_standard_output() {
     let _serial = serial();
     let directory = scratch();
     let program = stand_in(directory.path(), "printf '%s\\n' '41000' '/devtools/browser/6a0c1f'");
-    let answer = run_remote_with("browser-vm", "cat \"$HOME/x\"", &program, 1024, DEADLINE)
+    let answer = run_remote_with("browser-vm", "cat \"$HOME/x\"", &program, &[], 1024, DEADLINE)
         .expect("the answer of the remote command");
     assert_eq!(answer, "41000\n/devtools/browser/6a0c1f\n");
 }
@@ -378,7 +427,8 @@ fn a_command_on_the_remote_machine_that_fails_names_its_own_words() {
         directory.path(),
         "printf '%s\\n' 'cat: cannot open DevToolsActivePort' >&2\nexit 1",
     );
-    let error = run_remote_with("browser-vm", "cat nope", &program, 1024, DEADLINE).expect_err("a command that failed");
+    let error =
+        run_remote_with("browser-vm", "cat nope", &program, &[], 1024, DEADLINE).expect_err("a command that failed");
     assert!(
         matches!(&error, SshForwardError::RemoteCommandFailed { target, .. } if target == "browser-vm"),
         "{error}"
@@ -391,8 +441,15 @@ fn a_command_on_the_remote_machine_that_never_answers_ends_on_its_deadline() {
     let _serial = serial();
     let directory = scratch();
     let program = stand_in(directory.path(), "exec sleep 60");
-    let error = run_remote_with("browser-vm", "cat nope", &program, 1024, Duration::from_millis(200))
-        .expect_err("a command that never answered");
+    let error = run_remote_with(
+        "browser-vm",
+        "cat nope",
+        &program,
+        &[],
+        1024,
+        Duration::from_millis(200),
+    )
+    .expect_err("a command that never answered");
     assert!(
         matches!(&error, SshForwardError::RemoteNoAnswer { target, .. } if target == "browser-vm"),
         "{error}"

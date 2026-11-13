@@ -159,7 +159,38 @@ second home folder; use one of them.
    Result: one `latency frame` line and one `latency action` line of that press,
    with `received_us` larger than `written_us`.
 
-### 6.4 F4 — each refusal gives its words
+### 6.4 F3b — a browser host on a machine of the machine list
+
+A machine of the list answers to the machine key of this computer and to no key
+of the person, so this lane proves that a browser panel of such a machine opens
+with that key.
+
+1. Put a machine in the list with an agent: `machine_set` with its name, its
+   address and its user, and `machine_key` with the same name.
+
+   Result: `machines` reports the machine, and the machine list of the sidebar
+   shows its row.
+
+2. Ask for `browser_host_request` with `machine` set to the name of that machine,
+   `profile` `work` and `engine` `firefox`. Press **Use it** on the card, and
+   start Horizon again.
+
+   Result: the card names the row **Machine**, the key and the profile, and
+   Settings → General → Browser host shows the same machine. The section shows no
+   **SSH target**.
+
+3. Open a Browser panel.
+
+   Result: the panel paints the Firefox of that machine through the driver of
+   Horizon there, and the log holds `ssh` arguments with `-i` and the key file of
+   that machine, and no key of this computer.
+
+4. Remove the key of the machine from this Horizon home, and open a panel again.
+
+   Result: the panel says that the machine key is not on this computer, and it
+   names the machine.
+
+### 6.5 F4 — each refusal gives its words
 
 1. Write a target of a host that has no `horizon`, such as
    `fftest@127.0.0.1` with **Driver program** set to `/home/fftest/missing`, and
@@ -179,7 +210,7 @@ second home folder; use one of them.
    Result: the panel gives the words of the engine: the browser did not start,
    and `geckodriver` is named.
 
-### 6.5 F5 — the agent tools reach the page of the host
+### 6.6 F5 — the agent tools reach the page of the host
 
 1. Start an agent panel of this computer, and ask it to take a snapshot of the
    browser panel and to click a link of the page.
@@ -195,6 +226,8 @@ second home folder; use one of them.
 - Each refusal names what is missing on the host, in one sentence, and offers
   **Retry**.
 - The latency lines of a press exist and are in order.
+- A browser host on a machine of the machine list opens a panel with the machine
+  key of this computer, and no key of the person.
 
 ## 8. Cleanup
 

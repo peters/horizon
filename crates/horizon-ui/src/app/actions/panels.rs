@@ -66,6 +66,13 @@ impl HorizonApp {
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
         let kind = options.kind;
+        // A browser panel of a machine of the list takes the login of that machine,
+        // so its browser answers to the machine key of this computer.
+        if let Err(reason) = self.resolve_browser_host_login(&mut options) {
+            let error = horizon_core::Error::Config(reason);
+            self.notice_panel_creation_failure(kind, &error);
+            return Err(error);
+        }
         let created = self.placed_options(options, workspace_id).and_then(|options| {
             match beside.filter(|panel| self.board.panel(*panel).is_some()) {
                 Some(beside) => self.board.create_panel_beside_waiting(options, workspace_id, beside),
@@ -161,6 +168,11 @@ impl HorizonApp {
         workspace: WorkspaceId,
         beside: PanelId,
     ) -> horizon_core::Result<PanelId> {
+        let mut options = options;
+        // An agent's create of a browser panel of a machine of the list takes the
+        // login of that machine, as a panel of the person does.
+        self.resolve_browser_host_login(&mut options)
+            .map_err(horizon_core::Error::Config)?;
         self.board.create_panel_beside_waiting(options, workspace, beside)
     }
 
