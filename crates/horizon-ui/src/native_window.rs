@@ -145,6 +145,39 @@ impl NativeWindowLiveness {
     }
 }
 
+/// What the exit says when the native root window is already gone.
+///
+/// A Mac quits the app from its own menu, with Cmd+Q: the system ends the
+/// process before any window asks to close, so the window is gone before
+/// Horizon reads the exit. The exit cleanup of the app still runs, without the
+/// closing window, and this is the usual way to quit there. On Linux a window
+/// that disappears without a close request is not the usual way, and the line
+/// says so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootDestroyedLine {
+    AppQuit,
+    OutsideCloseFlow,
+}
+
+impl RootDestroyedLine {
+    const fn for_system(macos: bool) -> Self {
+        if macos { Self::AppQuit } else { Self::OutsideCloseFlow }
+    }
+
+    fn write(self, window_id: winit::window::WindowId) {
+        match self {
+            Self::AppQuit => tracing::info!(
+                ?window_id,
+                "the Mac quit the app; the exit cleanup runs without the closing window"
+            ),
+            Self::OutsideCloseFlow => tracing::warn!(
+                ?window_id,
+                "root native window was destroyed outside the normal close flow; exiting cleanly"
+            ),
+        }
+    }
+}
+
 impl KeyboardAwareApp<'_> {
     /// Feed any pending native pinch into the normal window-event path. The
     /// Wayland bridge owns no thread, so this must run every loop iteration
@@ -260,10 +293,7 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         }
         match self.native_window_liveness.classify(window_id, &event) {
             NativeWindowEventAction::RootDestroyed => {
-                tracing::warn!(
-                    ?window_id,
-                    "root native window was destroyed outside the normal close flow; exiting cleanly"
-                );
+                RootDestroyedLine::for_system(cfg!(target_os = "macos")).write(window_id);
                 event_loop.exit();
                 return;
             }
@@ -422,6 +452,20 @@ mod tests {
     use winit::event::WindowEvent;
 
     use super::{NativeWindowEventAction, NativeWindowLiveness};
+
+    #[test]
+    fn the_line_of_a_quit_names_what_the_system_did() {
+        assert_eq!(
+            super::RootDestroyedLine::for_system(true),
+            super::RootDestroyedLine::AppQuit,
+            "the usual quit of a Mac is not a warning"
+        );
+        assert_eq!(
+            super::RootDestroyedLine::for_system(false),
+            super::RootDestroyedLine::OutsideCloseFlow,
+            "a window that vanishes on Linux stays outside the close flow"
+        );
+    }
 
     #[test]
     fn native_window_destruction_stops_later_event_dispatch() {
