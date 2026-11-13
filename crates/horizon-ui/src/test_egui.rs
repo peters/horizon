@@ -51,13 +51,24 @@ fn accesskit_nodes(
 #[cfg(test)]
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn with_canvas_layer<R>(ctx: &egui::Context, zoom: f32, add: impl FnOnce(&egui::Ui) -> R) -> Option<R> {
+    with_canvas_transform(ctx, egui::emath::TSTransform::from_scaling(zoom), add)
+}
+
+/// [`with_canvas_layer`] with the whole transform of the canvas: the zoom and
+/// the pan offset that moves it.
+#[cfg(test)]
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn with_canvas_transform<R>(
+    ctx: &egui::Context,
+    transform: egui::emath::TSTransform,
+    add: impl FnOnce(&egui::Ui) -> R,
+) -> Option<R> {
     let mut answer = None;
     let mut add = Some(add);
     let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
     let _ = ctx
         .run_ui(egui::RawInput::default(), |ui| {
-            ui.ctx()
-                .set_transform_layer(layer, egui::emath::TSTransform::from_scaling(zoom));
+            ui.ctx().set_transform_layer(layer, transform);
             let layer_ui = egui::UiBuilder::new()
                 .layer_id(layer)
                 .max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0)));

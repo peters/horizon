@@ -329,12 +329,22 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
         .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
 }
 
-/// The hinting of the two faces that the interface draws its own text in.
+/// The rasterising of the two faces that the interface draws its own text in.
 ///
 /// Both faces are hinted true-type faces that the interface draws at 9 to 14
 /// screen points, where an unhinted stem can land anywhere between two pixels
 /// and the stem beside it lands somewhere else: that is the uneven weight that
 /// a person reads as a blurry line. Normal hinting grid-fits a stem to a pixel.
+///
+/// The sub-pixel bins of the rasteriser are the other half, and they are the
+/// larger half. With the bins on, the toolkit draws a glyph at the quarter
+/// pixel that its pen position falls on, so one letter of a run is a picture
+/// with its stem in one column and the next letter is a picture with the same
+/// stem in two columns at half ink: the grey double that a reader sees as a
+/// soft stem. The toolkit then rounds the ink of every glyph to a whole device
+/// pixel anyway, so the bins only buy a picture that no longer matches the
+/// place it is drawn. With the bins off, one glyph has one picture at any pen
+/// position, and a stem is the column that the hinter made of it.
 ///
 /// The horizontal fit of the hinter is the half that decides whether the stems
 /// of one word are equally thick, and it also makes the ink of a glyph up to a
@@ -352,6 +362,7 @@ fn hinted(font: egui::FontData, horizontal_fit: bool) -> egui::FontData {
             symmetric_rendering: true,
             preserve_linear_metrics: !horizontal_fit,
         }),
+        subpixel_binning: Some(false),
         ..egui::epaint::text::FontTweak::default()
     })
 }
@@ -436,6 +447,41 @@ mod tests {
             fonts.font_data[FONT_NOTO_CJK].tweak.hinting, None,
             "a fallback face keeps the default hinting"
         );
+    }
+
+    /// One glyph has one picture at any pen position, so its stem cannot land
+    /// in one column for one letter and in two columns at half ink for the
+    /// next: the grey double of a sub-pixel bin.
+    #[test]
+    fn a_glyph_has_one_picture_at_any_pen_position() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(configure_fonts());
+        let mut reports = Vec::new();
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                for font in [egui::FontId::monospace(13.0), egui::FontId::proportional(12.5)] {
+                    let galley = ui
+                        .painter()
+                        .layout_no_wrap("llllilil".to_owned(), font.clone(), egui::Color32::WHITE);
+                    let glyphs = &galley.rows[0].row.glyphs;
+                    let pictures: Vec<([u16; 2], [u16; 2])> = glyphs
+                        .iter()
+                        .filter(|glyph| glyph.chr == 'l')
+                        .map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max))
+                        .collect();
+                    reports.push((font, pictures));
+                }
+            })
+            .discard_textures();
+        for (font, pictures) in reports {
+            assert!(pictures.len() >= 3, "{} draws several l", font.family);
+            let first = pictures[0];
+            assert!(
+                pictures.iter().all(|picture| *picture == first),
+                "the pen position of {} must not change its picture: {pictures:?}",
+                font.family
+            );
+        }
     }
 
     #[test]

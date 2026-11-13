@@ -543,6 +543,166 @@ mod tests {
         );
     }
 
+    /// The size of the glyph atlas of its context, in texels.
+    #[allow(
+        clippy::redundant_closure_for_method_calls,
+        reason = "Context::fonts wants a higher-ranked closure, so the method path does not compile"
+    )]
+    fn atlas_size(ctx: &Context) -> [f32; 2] {
+        let [width, height] = ctx.fonts(|fonts| fonts.font_image_size());
+        #[allow(clippy::cast_precision_loss)]
+        [width as f32, height as f32]
+    }
+
+    /// A line of a card, a title of a panel and three runs of a terminal grid,
+    /// drawn in the pass of a canvas at `zoom`.
+    fn draw_canvas_text(child: &egui::Ui, zoom_text: &ZoomText, zoom: f32) {
+        let painter = child.painter();
+        let mut job = LayoutJob::single_section(
+            "build-1 and the machine it runs on".to_owned(),
+            TextFormat {
+                font_id: FontId::proportional(11.0),
+                color: Color32::WHITE,
+                ..TextFormat::default()
+            },
+        );
+        job.wrap.max_width = 400.0;
+        let card = layout_job(painter, job);
+        assert!(card.size().x > 0.0 && card.size().y > 0.0);
+        painter.galley(egui::pos2(40.3, 60.7), card, Color32::WHITE);
+
+        let title = super::text(
+            painter,
+            egui::pos2(40.3, 160.7),
+            egui::Align2::LEFT_TOP,
+            "Device input test",
+            &FontId::proportional(13.0),
+            Color32::WHITE,
+        );
+        assert!(title.width() > 0.0);
+
+        // The cell origins of the zoom, which a zoom of 0.94 leaves between
+        // two device pixels.
+        let cell = zoom_text.font(&FontId::monospace(13.0));
+        let char_width = 7.8 * zoom;
+        let line_height = 16.9 * zoom;
+        let runs = child.fonts_mut(|fonts| {
+            ["The quick brown fox", "jumps over", "0123456789 {}[]|"]
+                .into_iter()
+                .enumerate()
+                .map(|(run, text)| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let run = run as f32;
+                    super::text_shape(
+                        fonts,
+                        egui::pos2(40.0 + run * char_width * 3.0, 200.0 + run * line_height),
+                        text,
+                        &cell,
+                        Color32::WHITE,
+                        zoom_text,
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        for shape in runs {
+            painter.add(shape);
+        }
+    }
+
+    /// One pass of the canvas at `zoom` and the display scale of the test, with
+    /// a pan offset that leaves the text between two whole pixels.
+    fn canvas_quads(pixels_per_point: f32, zoom: f32) -> (usize, f32, f32) {
+        use egui::emath::TSTransform;
+
+        let ctx = Context::default();
+        ctx.set_fonts(crate::app::bootstrap::configure_fonts());
+        let transform = TSTransform {
+            scaling: zoom,
+            translation: egui::vec2(13.7, 21.3),
+        };
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(pixels_per_point),
+                ..egui::ViewportInfo::default()
+            },
+        );
+        let output = ctx.run_ui(input, |ui| {
+            assert!(
+                (ui.ctx().pixels_per_point() - pixels_per_point).abs() < f32::EPSILON,
+                "the pass draws at the display scale of the test"
+            );
+            ctx.set_transform_layer(layer, transform);
+            let layer_ui = egui::UiBuilder::new()
+                .layer_id(layer)
+                .max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0)));
+            let child = egui::Ui::new(ctx.clone(), egui::Id::unique("canvas ui"), layer_ui);
+            let painter = child.painter();
+            let zoom_text = ZoomText::of(painter);
+            assert!(
+                (zoom_text.glyph_zoom() - zoom).abs() < f32::EPSILON,
+                "the first frame takes the glyph pictures of its zoom"
+            );
+
+            draw_canvas_text(&child, &zoom_text, zoom);
+        });
+        let shapes = output.shapes.clone();
+        let _ = crate::test_egui::DiscardTextures::discard_textures(output);
+        let primitives = ctx.tessellate(shapes, pixels_per_point);
+        let [atlas_width, atlas_height] = atlas_size(&ctx);
+        assert!(atlas_width > 0.0 && atlas_height > 0.0);
+        let mut quads = 0_usize;
+        let mut worst_phase: f32 = 0.0;
+        let mut worst_stretch: f32 = 0.0;
+        for primitive in &primitives {
+            let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
+                continue;
+            };
+            for quad in mesh.vertices.chunks(4) {
+                let [a, b, c, d] = [quad[0], quad[1], quad[2], quad[3]];
+                quads += 1;
+                for vertex in [a, b, c, d] {
+                    for value in [vertex.pos.x, vertex.pos.y] {
+                        let device = value * pixels_per_point;
+                        worst_phase = worst_phase.max((device - device.round()).abs());
+                    }
+                }
+                // The quad covers the texels of its glyph picture, so the
+                // picture is drawn at the size that it was made for.
+                let width = (b.pos.x - a.pos.x).abs() * pixels_per_point;
+                let texels = (b.uv.x - a.uv.x).abs() * atlas_width;
+                let height = (c.pos.y - b.pos.y).abs() * pixels_per_point;
+                let rows = (c.uv.y - b.uv.y).abs() * atlas_height;
+                worst_stretch = worst_stretch.max((width - texels).abs()).max((height - rows).abs());
+            }
+        }
+        (quads, worst_phase, worst_stretch)
+    }
+
+    /// At rest, the corners of every glyph quad of the canvas sit on whole
+    /// device pixels and cover as many pixels as their glyph has texels, so a
+    /// stem of one pixel is one pixel and no letter is resampled: a card line,
+    /// a title of a panel and three terminal runs, at display scale 1 and 2.
+    #[test]
+    fn the_glyph_quads_of_the_canvas_sit_on_whole_device_pixels() {
+        for pixels_per_point in [1.0_f32, 2.0] {
+            for zoom in [0.94_f32, 0.67] {
+                let (quads, worst_phase, worst_stretch) = canvas_quads(pixels_per_point, zoom);
+                assert!(quads > 60, "the pass draws the three kinds of text: {quads} quads");
+                assert!(
+                    worst_phase <= 0.01,
+                    "at zoom {zoom} and display scale {pixels_per_point} a glyph corner is {worst_phase} device pixels from a whole pixel"
+                );
+                assert!(
+                    worst_stretch <= 0.01,
+                    "at zoom {zoom} and display scale {pixels_per_point} a glyph picture is stretched by {worst_stretch} device pixels"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_paint_path_keeps_at_most_one_ladders_worth_of_sizes() {
         let ctx = Context::default();

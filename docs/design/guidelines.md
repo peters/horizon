@@ -400,6 +400,16 @@ cursor and its box drawing come from the advances alone, so the fit only makes
 the stems of every cell equally thick. A fallback face keeps the default
 hinting.
 
+Both faces turn the sub-pixel bins of the rasteriser off
+(`FontTweak::subpixel_binning`). With the bins on, the toolkit rasterises a
+glyph at the quarter pixel of its pen position, so one letter of a run gets a
+picture with its stem in one column and the next letter a picture with the same
+stem in two columns at half ink. That grey double is what a reader sees as a
+soft stem, and it appears at every zoom, including 100 %. The toolkit rounds
+the ink of every glyph to a whole device pixel anyway, so the bins only buy a
+picture that no longer matches the place it is drawn. With the bins off, one
+glyph has one picture at any pen position.
+
 ### Text under the canvas zoom
 
 The canvas is one layer under a scale transform. A text shape under a layer
@@ -412,11 +422,18 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   that it takes on the screen and hand the painter the glyph offsets of that
   size, divided by the zoom that made the pictures. One glyph texel then meets
   one pixel.
+- A glyph corner of the canvas sits on a whole device pixel at rest, at every
+  zoom and at either display scale. The toolkit moves a shape into the frame of
+  the window before it rounds a text position, so the line origin lands on the
+  window's pixel grid. Each glyph offset is a whole pixel of the screen size,
+  divided by the zoom that made its picture and multiplied back by the layer
+  transform of that same zoom. `zoom_text` has a test that tessellates a card
+  line, a title and three terminal runs at zoom 0.67 and 0.94 with a fractional
+  pan offset and asserts that every glyph corner is within 0.01 of a whole
+  device pixel and that no glyph picture is stretched.
 - The layout stays the layout of zoom 1. The wrap width, the line height, the
   cell grid of a terminal and the height estimate of a card are the values of
-  zoom 1. `layout_job` multiplies every size, every tracking value and the wrap
-  width by one factor. Font advances grow linearly with the font size, so a
-  paragraph breaks at the words of zoom 1 at every zoom.
+  zoom 1.
 - The screen sizes are quarter points. A zoom that moves keeps the pictures of
   the zoom at which the gesture started for 120 ms, then makes the pictures of
   the new size once and asks for one frame. A still window asks for no frame.
@@ -424,6 +441,17 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   atlas when it passes 80 % fill, so the pictures of a long zoom session cannot
   fill it.
 - Zoom 1 takes the plain path. The look of a display of scale 1 does not change.
+
+The cell grid of a terminal stays a logical grid: its columns and rows are the
+values of zoom 1 and only the view scales them, so a zoom never resizes the
+shell. The runs of a grid are drawn at the screen size, and each run origin is
+rounded to the same whole pixel grid as every other text. The cell size is not
+rounded to whole pixels, because a column would then be up to half a pixel
+away from its share of the panel: at zoom 0.94 a cell of 7.80 points is 7.33
+device pixels, and 80 whole-pixel columns would be 560 pixels wide against
+586.9, and 30 rows of 16 would overflow the 476.6 that they have. A run keeps
+the letter spacing that zoom 1 has, where the advance of 7.80 points already
+puts glyphs on rounded device pixels with the same sub-pixel remainder.
 
 ### Scale
 

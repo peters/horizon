@@ -97,6 +97,12 @@ fixture keeps its state in its own folder and touches no real Horizon home.
    the underlines of the terminal sit on their cells. A character of two cells
    keeps two cells.
 
+3. Look at the stems of the terminal at four times enlargement.
+
+   Result: a stem is one column of ink, or the antialiasing that the font
+   itself has at that size. The same letter has the same columns wherever it
+   stands in a line. No letter shows a second copy of its stem in grey.
+
 ### 6.4 CT-150 — The text at a zoom of 1.5
 
 1. Zoom the canvas in with the wheel until the window shows the zoom of about
@@ -134,10 +140,25 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 
    Result: the text is sharp there too.
 
+### 6.8 CT-PAN — The text after a pan that stops between pixels
+
+1. Pan the canvas with the middle mouse button by a short distance, and stop.
+
+   Result: the text of the cards and of the terminals is as sharp as before the
+   pan. The letters do not change their columns. The text moves with its panel
+   by whole pixels.
+
+2. Zoom one step out with `Ctrl+Minus` and repeat the pan.
+
+   Result: the text is as sharp as at 100 %, and a stem is not wider than the
+   stem of the same text at 100 %.
+
 ## 7. Pass criteria
 
 - The text of the card, the title bar, the workspace label and the terminal is
   sharp at the zooms 0.67, 0.94, 1.0 and 1.5.
+- The same text at the same pixel size has the same columns of ink at every
+  zoom. A stem does not become two soft columns when the canvas moves.
 - The weights of section 6.1 and 6.4 hold at every zoom.
 - A wrapped paragraph breaks at the same words at every zoom.
 - The window repaints once after a zoom settles, and not while it is still.
