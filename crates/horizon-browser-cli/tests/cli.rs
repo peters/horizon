@@ -717,32 +717,22 @@ fn assert_stdin_deadline_result(
 #[cfg(unix)]
 #[test]
 fn interrupt_persists_cancelled_partial_report_and_exit_130() {
-    let mut attempts = 0;
-    let (_root, output) = loop {
-        attempts += 1;
-        let root = tempfile::tempdir().expect("isolated root");
-        let (plan, manifest_path) = write_blocking_plan(root.path());
-        let mut child = browser_cli()
-            .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "30"])
-            .env("HOME", root.path())
-            .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
-            .env("RUST_LOG", "off")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn cancellable browser job");
-        wait_for_manifest_action(&mut child, &manifest_path);
-        send_interrupt(child.id());
-        wait_for_exit(&mut child, "cancelled browser job");
-        let output = child.wait_with_output().expect("collect cancelled browser job");
-        // After an interrupt the job gives its report one second, then exits 130 without
-        // it. A starved job can miss that grace; such a run tests nothing about the report.
-        if output.status.code() == Some(130) && output.stdout.is_empty() && attempts < 3 {
-            continue;
-        }
-        break (root, output);
-    };
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let mut child = browser_cli()
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "30"])
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn cancellable browser job");
+    wait_for_manifest_action(&mut child, &manifest_path);
+    send_interrupt(child.id());
+    wait_for_exit(&mut child, "cancelled browser job");
+    let output = child.wait_with_output().expect("collect cancelled browser job");
 
     assert_eq!(output.status.code(), Some(130));
     assert!(
@@ -984,8 +974,13 @@ fn run_waits_for_hand_back_before_finishing_a_handoff_step() {
     )
     .expect("write wait handoff plan");
 
+    // The job's own deadline stays out of this test's race: the answer to the
+    // hand-off arrives when this thread and the job both get a turn, and a loaded
+    // machine makes that later than any short deadline. What the test proves is the
+    // order (the step ends after the hand-back), and `JOB_PROGRESS_GUARD` below is
+    // the only clock in it.
     let mut child = browser_cli()
-        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "10"])
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "600"])
         .env("HOME", home.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
