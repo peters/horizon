@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-ui/src/editor_widget.rs,crates/horizon-ui/src/editor_widget/**,docs/testing/procedures/markdown-preview.md"
+applyTo: "crates/horizon-ui/src/editor_widget.rs,crates/horizon-ui/src/editor_widget/**,crates/horizon-ui/Cargo.toml,docs/testing/procedures/markdown-preview.md"
 ---
 
 # Trust boundary of the pictures of a markdown preview
@@ -19,10 +19,11 @@ the person did not write. The text decides the path of every picture, the
 number of pictures and the content of every file that the preview reads.
 
 - **The preview makes no network request for a picture.** The application
-  installs one image loader, and it answers only the private scheme of the
-  preview. No loader of this application reads `http:`, `https:` or `data:`
-  bytes. A picture with a scheme other than `file:`, and a protocol-relative
-  path, becomes one line of text and never a request.
+  installs one texture loader, and it answers only the private scheme of the
+  preview. No byte loader, image loader or other texture loader of this
+  application reads `http:`, `https:` or `data:` bytes. A picture with a scheme
+  other than `file:`, and a protocol-relative path, becomes one line of text and
+  never a request.
 - **The preview reads a regular file only.** The worker opens the file and
   reads the file type of the open handle. A pipe, a device such as
   `/dev/zero`, a folder and a socket are refused before the first read. A path
@@ -35,8 +36,8 @@ number of pictures and the content of every file that the preview reads.
 - **The decoded picture has a bound on its pixels.** The worker reads the size
   from the header of the file, with a limit of 16 777 216 pixels, and refuses a
   larger picture before the decode. A small file cannot ask for a large
-  allocation. The decoder also gets the same limit, so it refuses a picture
-  that its header did not state.
+  allocation. The decoder also receives a bound on its allocation, so it refuses
+  a picture that its header did not state.
 - **The preview decodes the formats that the workspace already decodes.** They
   are PNG and JPEG, the formats that the clipboard of the editor and the image
   transfer already decode. The preview decodes no SVG and no picture format of
@@ -55,10 +56,12 @@ number of pictures and the content of every file that the preview reads.
 - **The number of pictures of one note is bounded.** The preview loads at most
   32 pictures of one note. A 33rd picture becomes one line of text and no file
   is opened for it.
-- **The memory of the pictures of a note is bounded and ends with the panel.**
-  The decoded pictures of one note share a budget of 16 777 216 pixels, and the
-  oldest picture leaves the budget first. The panel keeps the identifiers of its
-  pictures and drops its cache and its textures when it closes.
+- **The memory of the pictures on screen is bounded and ends with the panel.**
+  The pictures on screen share a budget of 67 108 864 pixels. A picture that does
+  not fit the budget shows the `Too many pictures in this note` line and is not
+  decoded. The panel keeps the identifiers of its pictures and drops its cache
+  and its textures when it closes, so a closed panel frees the memory that its
+  pictures hold.
 
 ## The line that replaces a picture
 
