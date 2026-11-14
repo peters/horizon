@@ -175,6 +175,13 @@ words what each answer writes and where:
 ]}
 ```
 
+The coordinator now waits for that press with `next_click`, with no `panel_id`
+and a bound, and it ends its turn only after it read the answer: the card stands
+until the person presses a button, and a coordinator that leaves the turn leaves
+the press for nobody. When the wait answers `timed_out`, it calls `next_click`
+again and writes one line in its panel, such as
+`t12: the card waits for the person: a push is the person's`.
+
 After the press, and only then:
 
 - `Push the branch` writes the branch to the remote of the repository:
@@ -183,6 +190,11 @@ After the press, and only then:
   the rules of `AGENTS.md` of that repository: its title, its body, and whether
   it is a draft. Read that section before you write the body, and write the body
   from the evidence of the plan.
+- Write no word in the body that closes the issue: no `Closes #1987`, no `Fixes`
+  and no `Resolves`, and none of their forms. The body names the issue as a plain
+  reference, such as `Issue #1987`, unless `AGENTS.md` of that repository asks
+  for the closing word. The person closes the issue, and a merged pull request
+  that closes an issue by itself takes that decision from them.
 - `Keep it local` writes nothing. The card says that the branch stays in the
   worktree and that the person can push it later.
 
@@ -238,9 +250,12 @@ the body of the comment in the document of a card that also offers a push.
 1. Draw one card with the heading `Comment on issue #1987`, one `text`
    component with the words of the comment, one `caption` that names where it
    goes, and the buttons `Post the comment` with tone `primary` and `Cancel`.
-2. On `Post the comment`, run `gh issue comment <number> --repo <owner>/<repo>
+2. Wait for the press with `next_click`, as the card of the push does: the
+   comment waits until the person presses one of the two buttons, and a
+   `timed_out` is another wait.
+3. On `Post the comment`, run `gh issue comment <number> --repo <owner>/<repo>
    --body-file <file>`, with the body in a file of the plan folder.
-3. On `Cancel`, close the card and write nothing. The plan goes on.
+4. On `Cancel`, close the card and write nothing. The plan goes on.
 
 The same rule holds for a label, a reviewer and a milestone: each one is its own
 button, its own press, and its own line in the history.

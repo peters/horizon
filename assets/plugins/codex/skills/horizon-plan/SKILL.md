@@ -600,6 +600,28 @@ wait an hour while the card says that the plan runs. A helper follows the same
 rule and writes its question into its progress note, where the coordinator reads
 it and draws it on the card.
 
+### Wait for the answer of your own callout
+
+A question that stands on the card is a question that the coordinator waits for.
+After it draws a callout with buttons that asks the person, it calls `next_click`
+with no `panel_id` and a bound, and it never ends its turn while that callout
+stands unanswered: an answer that nobody reads reaches nobody, and the card stays
+on the screen of the person with a button that does nothing.
+
+- When the wait ends with `timed_out`, call `next_click` again, with the same
+  fields. A question waits as long as the card stands.
+- Write one line in the panel of the coordinator, such as
+  `t5: the card waits for the person: I signed in`, so a reader of that terminal
+  knows where the plan is while the wait runs.
+- Read the press and go on with the state that the button names. Do not redraw
+  the card with the same question, and do not ask a second question while the
+  first one stands.
+- A press of `Stop`, of `Close` or of a button that closes the card ends the
+  wait: the plan stops, or the plan file stays as it is, and the coordinator
+  writes that line into the history.
+
+The coordinator ends its turn only when no callout of its own waits for an answer.
+
 After the go, ask nothing between the todos. The coordinator decides every other
 question itself and writes the decision into the history. A row of state
 `needs_you` is allowed for one of these decisions only:
