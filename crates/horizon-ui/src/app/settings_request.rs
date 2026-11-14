@@ -99,11 +99,13 @@ impl ServerEntry {
 enum Asked {
     /// The server entry and the command that the link runs there.
     ServerLink { entry: ServerEntry, command: String },
-    /// The browser host entry, the profile and the engine of it.
+    /// The browser host entry, the profile, the engine of it and the program
+    /// that starts the driver of that machine.
     BrowserHost {
         entry: ServerEntry,
         profile: String,
         engine: BrowserHostEngine,
+        command: Option<String>,
     },
 }
 
@@ -297,9 +299,14 @@ impl HorizonApp {
                 }
                 Err(message) => self.answer_setting(waiting, refused(message)),
             },
-            Asked::BrowserHost { entry, profile, engine } => {
+            Asked::BrowserHost {
+                entry,
+                profile,
+                engine,
+                command,
+            } => {
                 let outcome = self
-                    .write_browser_host_entry(entry, profile, *engine)
+                    .write_browser_host_entry(entry, profile, *engine, command.as_deref())
                     .map_or_else(refused, |()| Outcome::BrowserHost {
                         answer: Answer::Confirmed,
                     });
@@ -344,6 +351,7 @@ impl HorizonApp {
         entry: &ServerEntry,
         profile: &str,
         engine: BrowserHostEngine,
+        command: Option<&str>,
     ) -> Result<(), String> {
         let before = self.stored_config();
         let mut stored = before.clone();
@@ -356,7 +364,9 @@ impl HorizonApp {
             machine,
             profile: Some(profile.to_owned()),
             engine,
-            ..stored.browser_host
+            // The command is the one that the card stated, and a Chromium host
+            // names no driver, so its entry carries no command of an earlier one.
+            command: command.map(str::to_owned),
         };
         stored.validate().map_err(|error| error.to_string())?;
         self.save_setting(&before, stored);
@@ -543,6 +553,7 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
             machine,
             profile,
             engine,
+            command,
         } => {
             let (ssh_target, machine_name) = one_host(
                 ssh_target.as_deref(),
@@ -555,22 +566,34 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
                 BrowserEngine::Chromium => BrowserHostEngine::Chromium,
                 BrowserEngine::Firefox => BrowserHostEngine::Firefox,
             };
+            // The command starts the driver of a Firefox host. A Chromium host
+            // answers its `DevTools` port and runs no driver here, so a command
+            // beside it names a program that nobody would start.
+            let command = command.as_deref().map(str::trim).filter(|command| !command.is_empty());
+            if command.is_some() && engine == BrowserHostEngine::Chromium {
+                return Err(Outcome::failed(
+                    block_machines::INVALID_REQUEST,
+                    "A browser host request with a command needs engine firefox: the command starts the driver of a \
+                     Firefox host, and a Chromium host needs no driver and no Horizon on that machine",
+                ));
+            }
             let entry = BrowserHostConfig {
                 ssh_target: ssh_target.map(str::to_owned),
                 machine: machine_name.map(str::to_owned),
                 profile: Some(profile.to_owned()),
                 engine,
-                ..BrowserHostConfig::default()
+                command: command.map(str::to_owned),
             };
             entry
                 .validate()
                 .map_err(|error| Outcome::failed(block_machines::INVALID_REQUEST, &error.to_string()))?;
             let entry = named_entry(ssh_target, machine_name);
-            let document = browser_document(&entry, profile, engine);
+            let document = browser_document(&entry, profile, engine, command);
             let asked = Asked::BrowserHost {
                 entry,
                 profile: profile.to_owned(),
                 engine,
+                command: command.map(str::to_owned),
             };
             Ok((asked, BROWSER_TITLE, document))
         }
@@ -689,7 +712,12 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
 /// A host on a machine of the list states the machine, and the row that says which
 /// login the connect uses: that machine holds the machine key of Horizon, so the
 /// person cannot reach it with their own SSH configuration.
-fn browser_document(entry: &ServerEntry, profile: &str, engine: BrowserHostEngine) -> BlockDocument {
+fn browser_document(
+    entry: &ServerEntry,
+    profile: &str,
+    engine: BrowserHostEngine,
+    command: Option<&str>,
+) -> BlockDocument {
     let on_machine = matches!(entry, ServerEntry::Machine(_));
     let mut rows = vec![
         KvRow {
@@ -714,6 +742,15 @@ fn browser_document(entry: &ServerEntry, profile: &str, engine: BrowserHostEngin
             mono: true,
         },
     ];
+    if let Some(command) = command {
+        // The row states the program exactly as the store will hold it, because
+        // a person reads it again in Settings, General, Browser host.
+        rows.push(KvRow {
+            label: "Driver command".to_owned(),
+            value: command.to_owned(),
+            mono: true,
+        });
+    }
     if on_machine {
         rows.push(KvRow {
             label: "SSH from".to_owned(),

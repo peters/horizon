@@ -403,6 +403,12 @@ and you can press nothing.
  "profile": "work", "engine": "firefox"}
 ```
 
+```json
+{"operation": "browser_host_request", "machine": "helsinki-1",
+ "profile": "work", "engine": "firefox",
+ "command": "docker exec -i -e HOME=/profile hz-bvm-work /opt/horizon/horizon --browser-host-driver"}
+```
+
 - The fields pass the rule of the settings field that stores them before a card
   exists: `ssh_target` is one SSH name, `machine` is the name of one machine of
   `machines`, `command` is one command of letters, digits and `._:/=@+-`, and
@@ -421,10 +427,15 @@ and you can press nothing.
   machine. A request that names both, or neither, is `invalid_request`.
 - `engine` is `chromium` or `firefox`. A Firefox host runs Firefox, geckodriver
   and a `horizon` binary of the same version, because a driver of Horizon beside
-  that browser carries the page: name the program with `browser_host.command`
-  when the default does not fit. Its picture arrives as compressed frames, so it
+  that browser carries the page. Its picture arrives as compressed frames, so it
   is slower than Chromium. A Chromium host needs a Chromium program there and no
   horizon.
+- `command` starts the driver of a Firefox host, as `browser_host.command` takes
+  it, and the card holds it in a row `Driver command` exactly as the store will
+  hold it. Without it the host runs `horizon --browser-host-driver`. A command
+  beside `engine` `chromium` is `invalid_request`: a Chromium host answers its
+  `DevTools` port and starts no driver. The first word may be `docker`, which is
+  how a browser machine in a container starts its driver.
 - The card states the values exactly as the settings will hold them, and Horizon
   trims the target and the command before it writes them.
 - The answer is `server_link` or `browser_host`, with `answer`: `confirmed`,

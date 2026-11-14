@@ -254,6 +254,14 @@ pub enum Operation {
         /// The engine of the browser panels; `chromium` when omitted.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         engine: Option<BrowserEngine>,
+        /// The program that starts the driver of that machine, as the settings
+        /// field `browser_host.command` takes it: one line of letters, digits
+        /// and `._:/=@+-` with single spaces between words, at most 200
+        /// characters. Omitted means the default
+        /// `horizon --browser-host-driver`. A Chromium host runs no driver, so a
+        /// command beside it is refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
 }
 
@@ -1340,6 +1348,7 @@ mod tests {
                 machine: None,
                 profile: "work".into(),
                 engine: Some(BrowserEngine::Chromium),
+                command: None,
             }
         );
         assert!(
@@ -1349,6 +1358,24 @@ mod tests {
             }))
             .is_err(),
             "an engine outside the two known ones is refused"
+        );
+        assert_eq!(
+            serde_json::from_value::<Operation>(serde_json::json!({
+                "operation": "browser_host_request",
+                "ssh_target": "browser-vm",
+                "profile": "work",
+                "engine": "firefox",
+                "command": "/opt/horizon/horizon --browser-host-driver"
+            }))
+            .expect("a Firefox host names the program of its driver"),
+            Operation::BrowserHostRequest {
+                ssh_target: Some("browser-vm".into()),
+                machine: None,
+                profile: "work".into(),
+                engine: Some(BrowserEngine::Firefox),
+                command: Some("/opt/horizon/horizon --browser-host-driver".into()),
+            },
+            "the command is the field of the settings that starts the driver"
         );
         let on_machine = serde_json::from_value::<Operation>(serde_json::json!({
             "operation": "browser_host_request",
@@ -1363,6 +1390,7 @@ mod tests {
                 machine: Some("rented-1".into()),
                 profile: "work".into(),
                 engine: None,
+                command: None,
             },
             "a browser host of a rented machine carries no SSH target, and its connect uses that machine's login"
         );
@@ -1372,7 +1400,7 @@ mod tests {
             }),
             serde_json::json!({
                 "operation": "browser_host_request", "ssh_target": "browser-vm", "profile": "work",
-                "command": "chromium"
+                "backend": "chromium"
             }),
         ] {
             assert!(
@@ -1460,6 +1488,7 @@ mod tests {
                 machine: None,
                 profile: "work".into(),
                 engine: None,
+                command: None,
             },
         ] {
             assert_eq!(

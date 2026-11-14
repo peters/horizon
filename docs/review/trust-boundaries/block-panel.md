@@ -76,12 +76,16 @@ and the settings of the person go, so `server_link_request` and
 - **Untrusted: the target, the command, the profile and the engine.** They are
   text from an agent. Horizon checks them with the rule of the settings field
   that stores them (`server.ssh_target`, `server.command`,
-  `browser_host.ssh_target`, `browser_host.profile`) before any card exists: one
-  SSH name without a leading dash, a space or a control character, a command of
-  letters, digits and `._:/=@+-` with single spaces, a profile of 1 to 40
-  characters of `a-z`, `0-9` and `-`. A request that fails the rule is refused
-  with `invalid_request` and draws no card. An engine other than Chromium is
-  `engine_unavailable`, and draws no card.
+  `browser_host.ssh_target`, `browser_host.profile`,
+  `browser_host.command`) before any card exists: one SSH name without a leading
+  dash, a space or a control character, a command of letters, digits and
+  `._:/=@+-` with single spaces, a profile of 1 to 40 characters of `a-z`, `0-9`
+  and `-`. A request that fails the rule is refused with `invalid_request` and
+  draws no card. An engine other than Chromium is `engine_unavailable`, and
+  draws no card. A command beside the Chromium engine is refused as well: a
+  Chromium host answers its `DevTools` port and starts no program here, so a
+  command would name a program that nobody starts and the card would state a
+  value that means nothing.
 - **The card shows the values that the store will hold.** Horizon trims the
   target and the command, stores the trimmed value, and draws that same value in
   the card, so the person reads exactly what is written. The card is Horizon's
@@ -107,12 +111,14 @@ and the settings of the person go, so `server_link_request` and
   and the person starts Horizon again one time. A link that starts and cannot
   reach its server is still `linked`: the entry is in force, and the link says
   its own reason in the sidebar and in the Server tab.
-- **Only two fields of one entry change:** the SSH target and the command of
-  `server`, or the SSH target and the profile of `browser_host`. The address of a
-  join and every other field of the entry stay as the store holds them. A
-  confirmed browser host entry serves the browser panels that a create makes
-  after the press of this run, which the card says, and a panel that is already
-  open keeps its browser.
+- **Only named fields of one entry change:** the SSH target and the command of
+  `server`, or the SSH target, the profile, the engine and the command of
+  `browser_host`. The address of a join and every other field of the entry stay
+  as the store holds them; a browser host entry that names the Chromium engine
+  writes no command, so a command of an earlier entry does not survive a press
+  that names another engine. A confirmed browser host entry serves the browser
+  panels that a create makes after the press of this run, which the card says,
+  and a panel that is already open keeps its browser.
 - **Does not guarantee:** that the target answers. Horizon writes the entry and
   starts the link; the link reports its own reason when the server is away, in
   the sidebar and in the Server tab. A press is not a proof that the person read

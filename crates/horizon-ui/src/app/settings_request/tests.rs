@@ -91,6 +91,18 @@ fn browser(ssh_target: &str, profile: &str, engine: Option<BrowserEngine>) -> Op
         machine: None,
         profile: profile.to_owned(),
         engine,
+        command: None,
+    }
+}
+
+/// A Firefox host whose driver starts with a program of its own.
+fn browser_with_command(ssh_target: &str, profile: &str, command: &str) -> Operation {
+    Operation::BrowserHostRequest {
+        ssh_target: Some(ssh_target.to_owned()),
+        machine: None,
+        profile: profile.to_owned(),
+        engine: Some(BrowserEngine::Firefox),
+        command: Some(command.to_owned()),
     }
 }
 
@@ -102,6 +114,7 @@ fn browser_on_machine(machine: &str, profile: &str) -> Operation {
         machine: Some(machine.to_owned()),
         profile: profile.to_owned(),
         engine: None,
+        command: None,
     }
 }
 
@@ -508,6 +521,7 @@ fn a_browser_host_request_that_names_two_hosts_or_none_draws_no_card() {
         machine: None,
         profile: "work".to_owned(),
         engine: None,
+        command: None,
     };
     let outcome = app.apply_block_request(&request(&app, none), &ctx);
     assert_eq!(code(&outcome), block_machines::INVALID_REQUEST);
@@ -518,6 +532,7 @@ fn a_browser_host_request_that_names_two_hosts_or_none_draws_no_card() {
         machine: Some("rented-1".to_owned()),
         profile: "work".to_owned(),
         engine: None,
+        command: None,
     };
     let outcome = app.apply_block_request(&request(&app, both), &ctx);
     assert_eq!(code(&outcome), block_machines::INVALID_REQUEST);
@@ -556,6 +571,83 @@ fn firefox_on_another_machine_asks_the_person_and_stores_the_engine() {
         horizon_core::BrowserHostEngine::Firefox,
         "the engine of the person's answer is written with the entry"
     );
+}
+
+#[test]
+fn a_driver_command_of_a_firefox_host_is_shown_and_stored_as_the_settings_hold_it() {
+    let (temp, ctx, mut app) = app();
+    let root = temp.path().join("block-panel-requests");
+    std::fs::create_dir_all(&root).expect("the queue directory");
+    let command = "docker exec -i -e HOME=/profile hz-bvm-work /opt/horizon/horizon --browser-host-driver";
+    let request = request(&app, browser_with_command("browser-vm", "work", command));
+    assert!(app.apply_block_request_in(&request, &root, &ctx).is_none());
+    let card = asking_card(&mut app);
+    let text = card_text(&mut app, &card);
+    assert!(
+        text.contains("Driver command"),
+        "the card holds the program of the driver in its own row: {text}"
+    );
+    assert!(
+        text.contains("hz-bvm-work"),
+        "the row states the command exactly as the store will hold it: {text}"
+    );
+
+    let id = app.board.panel_id_by_local_id(&card).expect("the card of the request");
+    app.press_host_card_button(&ctx, id, APPLY);
+    app.settle_browser_host_io();
+    let after = stored(&mut app);
+    assert_eq!(after.browser_host.driver_command(), Some(command));
+    assert_eq!(
+        after.browser_host.engine,
+        horizon_core::BrowserHostEngine::Firefox,
+        "the command belongs to a Firefox host"
+    );
+    assert!(
+        after.browser_host.validate().is_ok(),
+        "the stored entry passes the rule of the settings: {:?}",
+        after.browser_host.validate()
+    );
+}
+
+#[test]
+fn a_command_that_a_chromium_host_cannot_use_is_refused_in_words() {
+    let (_temp, ctx, mut app) = app();
+    let mut operation = browser("browser-vm", "work", Some(BrowserEngine::Chromium));
+    if let Operation::BrowserHostRequest { command, .. } = &mut operation {
+        *command = Some("horizon --browser-host-driver".to_owned());
+    }
+    let outcome = app.apply_block_request(&request(&app, operation), &ctx);
+    assert_eq!(code(&outcome), block_machines::INVALID_REQUEST);
+    assert!(
+        message(&outcome).contains("engine firefox"),
+        "the refusal says which engine a command needs: {outcome:?}"
+    );
+    assert!(
+        app.settings_request.waiting.is_none(),
+        "a command that means nothing draws no card"
+    );
+}
+
+#[test]
+fn a_command_that_the_settings_would_refuse_draws_no_card() {
+    let (_temp, ctx, mut app) = app();
+    for command in [
+        "horizon; rm -rf /",
+        "horizon $(id)",
+        "horizon  --browser-host-driver",
+        &"h".repeat(250),
+    ] {
+        let outcome = app.apply_block_request(
+            &request(&app, browser_with_command("browser-vm", "work", command)),
+            &ctx,
+        );
+        assert_eq!(code(&outcome), block_machines::INVALID_REQUEST, "{command}");
+        assert!(
+            message(&outcome).contains("browser_host.command"),
+            "the refusal names the field of the settings: {outcome:?}"
+        );
+    }
+    assert!(app.settings_request.waiting.is_none());
 }
 
 #[test]
