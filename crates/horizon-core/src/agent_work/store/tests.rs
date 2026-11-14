@@ -592,3 +592,23 @@ fn a_closed_panel_keeps_no_record_and_its_late_hook_writes_nothing() {
         .expect("a later launch");
     assert!(record.is_file());
 }
+
+/// A description of the ledger lock that another holder keeps open for a moment
+/// is not a writer of the ledger: the caller waits for it. A forked child that
+/// inherited the description holds it until its `exec` closes it, and a loaded
+/// machine made that longer than the wait, so a hook read `busy` while the
+/// ledger was free.
+#[test]
+fn a_lock_that_another_description_holds_for_a_moment_is_waited_for() {
+    let fixture = Fixture::new();
+    let held = fixture.store.lock("panel").expect("hold the ledger lock");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        drop(held);
+    });
+    fixture
+        .store
+        .apply_hook("panel", PanelKind::Claude, "host", &fixture.input, 5)
+        .expect("a short holder is waited for, not reported as a busy ledger");
+    release.join().expect("release the lock");
+}

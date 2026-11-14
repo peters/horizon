@@ -40,7 +40,13 @@ pub(super) fn row<R>(ui: &mut Ui, strip: Rect, contents: impl FnOnce(&mut Ui) ->
 /// Shows the sentence of the strip. A narrow panel shortens it instead of
 /// pushing the controls out of the strip.
 pub(super) fn sentence(ui: &mut Ui, text: &str) {
-    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::FG_SOFT()).size(TEXT_SIZE)).truncate());
+    let text = crate::zoom_text::widget_text(ui.painter(), text, font(), theme::FG_SOFT(), Some(ui.available_width()));
+    ui.add(egui::Label::new(text).truncate());
+}
+
+/// The font of the line and of the controls of the strip.
+fn font() -> egui::FontId {
+    egui::FontId::proportional(TEXT_SIZE)
 }
 
 /// Lays the sentence at the left of the strip and its controls at the right,
@@ -57,9 +63,46 @@ pub(super) fn sides<Ret>(ui: &mut Ui, text: &str, controls: impl FnOnce(&mut Ui)
 /// person pressed it in this pass. The caller places the controls in one
 /// right-to-left layout, so the first control that it adds sits at the edge.
 pub(super) fn control(ui: &mut Ui, label: &str, interactive: bool) -> bool {
-    let button = egui::Button::new(egui::RichText::new(label).size(TEXT_SIZE).color(theme::FG_SOFT()))
+    let text = crate::zoom_text::widget_text(ui.painter(), label, font(), theme::FG_SOFT(), None);
+    let button = egui::Button::new(text)
         .fill(theme::PANEL_BG())
         .stroke(egui::Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(10);
     ui.add_enabled(interactive, button).clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zoom_text::measure_canvas_quads;
+
+    /// The sentence and the controls of the strip are made for the screen size of
+    /// the canvas zoom. A stock label and a stock button would be a picture of
+    /// zoom 1 that the layer scales, and `Start again` would blur at a zoom of 67
+    /// percent.
+    #[test]
+    fn the_strip_of_a_panel_is_sharp_at_every_zoom() {
+        for display_scale in [1.0_f32, 2.0] {
+            for zoom in [0.67_f32, 1.0, 1.5] {
+                let (quads, worst_phase, worst_stretch) = measure_canvas_quads(display_scale, zoom, |ui, _| {
+                    let strip = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(420.0, HEIGHT));
+                    row(ui, strip, |ui| {
+                        sides(ui, "The program ended", |ui| {
+                            let _ = control(ui, "Start again", true);
+                            let _ = control(ui, "Close", true);
+                        });
+                    });
+                });
+                assert!(quads > 20, "the strip draws its sentence and its controls: {quads}");
+                assert!(
+                    worst_phase <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph corner sits {worst_phase} device pixels from a whole pixel"
+                );
+                assert!(
+                    worst_stretch <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph picture is stretched by {worst_stretch} device pixels"
+                );
+            }
+        }
+    }
 }

@@ -12,7 +12,14 @@ use super::{HookEvent, SuspendRecord, TranscriptSnapshot, TurnLedger, TurnState}
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 256 * 1024;
-const LOCK_WAIT: Duration = Duration::from_millis(200);
+/// How long a caller waits for a writer of this ledger.
+///
+/// The wait must outlast an inherited copy of the lock. A process that forks
+/// while the lock is held — a panel that starts, a child of a test — keeps this
+/// description open until its own `exec` closes it, and that is not a writer. A
+/// fifth of a second was a race with that copy on a loaded machine, and the
+/// caller then read `work ledger busy` while the ledger was free.
+const LOCK_WAIT: Duration = Duration::from_secs(5);
 const STAGING_PREFIX: &str = ".tmp-";
 
 #[derive(Debug, Deserialize)]

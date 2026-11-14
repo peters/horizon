@@ -74,10 +74,12 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
         .map_err(|source| io_error("could not create isolated browser runtime", &source))?;
     write_private(&schema_path, RESULT_SCHEMA.as_bytes())?;
     let (browser, resolved_backend) = crate::standalone::OwnedHostProcess::start(
-        crate::standalone::StandaloneOptions {
+        &crate::standalone::StandaloneOptions {
             backend: options.backend,
             visible: options.visible,
             keep_alive: false,
+            // The browser of a job belongs to that job and goes with it.
+            profile: None,
         },
         browser_home.path(),
         create_private(&browser_diagnostics_path)?,

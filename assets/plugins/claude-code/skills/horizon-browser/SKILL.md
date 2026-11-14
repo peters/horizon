@@ -395,6 +395,15 @@ the same tools for the remote targets of a host file. It starts no local
 browser, so `browser_create` needs a `target`. Close each session when the task
 ends; the host also releases every session when the MCP client disconnects.
 
+A standalone host of this computer starts its own browser. `--profile <NAME>`
+keeps that browser's folder under the profile root of the runtime, so the next
+job that names the same profile finds the sign-ins and the cookies of the last
+one. The name uses lower-case letters, digits and dashes, and starts and ends
+with a letter or a digit. One job writes one profile: a second job on the same
+name is refused, so close the first job or choose another name. Without
+`--profile`, or with `--profile private`, the job uses a folder that it removes
+when it ends, and every job starts signed out.
+
 A browser panel can drive the Chromium of another machine. Horizon reads the
 settings entry `browser_host`, which names the SSH target of that machine and
 one profile, and the panel then behaves as a panel of this computer: same tools,

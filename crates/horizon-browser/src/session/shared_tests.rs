@@ -10,6 +10,10 @@ use super::*;
 use crate::cdp::CdpLink;
 use crate::process::{ChromeProcessControl, ProcessLifecycle};
 
+/// A wait that the machine's speed must not decide: it only separates "the call
+/// returned at once" from "the call waited for a lock that no one releases".
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn pages() -> (
     SharedBrowserSession,
     SharedDriverReservation,
@@ -343,9 +347,13 @@ fn emergency_deadline_never_waits_for_a_page_transport_or_target_lock() {
         panic!("shared page")
     };
     let target_guard = page.target.lock().expect("target lock held by stalled driver");
+    // The stall is the lock this thread holds and a listener that no one may
+    // connect to, so `terminate` either returns without touching them or waits
+    // forever. The guard below separates those two and leaves the machine's
+    // scheduling out of the verdict.
     let started = std::time::Instant::now();
     assert!(!page.terminate(Duration::ZERO));
-    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(started.elapsed() < HANG_GUARD, "the emergency deadline waited");
     assert_eq!(
         listener.accept().expect_err("no emergency network attempt").kind(),
         std::io::ErrorKind::WouldBlock

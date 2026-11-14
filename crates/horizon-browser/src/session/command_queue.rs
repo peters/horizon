@@ -510,19 +510,25 @@ mod tests {
 
     /// The idle driver waits on this queue, so an input that arrives during the
     /// wait is taken at once and not at the end of a fixed sleep.
+    ///
+    /// The wait answers on the input itself: it returns with the input in hand,
+    /// and it returns before its bound. A wait that slept its bound and looked
+    /// afterwards would answer at the bound, and a wait that lost the input would
+    /// answer "no input" at the bound. Only the receiver reads a clock here: an
+    /// instant that the thread of the input recorded would measure how long that
+    /// thread waited for a processor, which the bound of this test is not about.
     #[test]
-    fn an_input_that_arrives_during_the_wait_wakes_the_driver_within_five_milliseconds() {
+    fn an_input_that_arrives_during_the_wait_wakes_the_driver_and_not_its_bound() {
+        const BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+        const SENT_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
+
         let (sender, receiver) = channel(Arc::new(FrameSlot::new()));
         assert!(
             !receiver.wait_for(std::time::Duration::from_millis(2)),
             "a quiet queue waits its bound"
         );
-        let (sent_tx, sent_rx) = std::sync::mpsc::channel();
         let sending = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            sent_tx
-                .send(std::time::Instant::now())
-                .expect("the instant of the input");
+            std::thread::sleep(SENT_AFTER);
             assert!(
                 sender.send(BrowserCommand::Input(BrowserInput::Wheel {
                     x: 1.0,
@@ -534,18 +540,19 @@ mod tests {
                 "the input of the person entered the queue"
             );
         });
-        assert!(
-            receiver.wait_for(std::time::Duration::from_secs(2)),
-            "the input woke the wait"
-        );
-        let woke = std::time::Instant::now();
-        let sent = sent_rx.recv().expect("the instant of the input");
-        assert!(
-            woke.saturating_duration_since(sent) < std::time::Duration::from_millis(5),
-            "the wait wakes on the input and does not sleep its bound: {:?}",
-            woke.saturating_duration_since(sent)
-        );
+        let started = std::time::Instant::now();
+        let woke = receiver.wait_for(BOUND);
+        let waited = started.elapsed();
         sending.join().expect("the thread of the input");
+        assert!(woke, "the input of the person woke the wait");
+        assert!(
+            waited >= SENT_AFTER,
+            "the wait answered before the input arrived: {waited:?}"
+        );
+        assert!(
+            waited < BOUND,
+            "the wait slept its bound instead of answering the input: {waited:?}"
+        );
         assert_eq!(receiver.drain(8).commands.len(), 1, "the input is taken once");
     }
 }

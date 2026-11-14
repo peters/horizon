@@ -95,10 +95,12 @@ async fn run_io_worker(
     cancellation: &mut CancellationProbe,
     operation: impl FnOnce() -> Result<(), String> + Send + 'static,
 ) -> PersistenceResult {
+    let (started_sender, started_rx) = tokio::sync::oneshot::channel();
     let (sender, mut completion_rx) = tokio::sync::oneshot::channel();
     let worker = std::thread::Builder::new()
         .name(worker_name.to_string())
         .spawn(move || {
+            let _ = started_sender.send(());
             let _ = sender.send(operation());
         });
     let _worker = match worker {
@@ -110,7 +112,12 @@ async fn run_io_worker(
             };
         }
     };
-    let mut interrupted = false;
+    // A worker that the machine has not scheduled yet has written nothing, so its
+    // turn is awaited without a bound: the grace below bounds the work, not the
+    // scheduling. A loaded machine can hold a new thread for longer than the grace,
+    // and the report of the flush would then be lost.
+    let _ = started_rx.await;
+    let mut interrupted = cancellation.is_cancelled();
     let delivery = tokio::select! {
         biased;
         () = cancellation.wait() => {

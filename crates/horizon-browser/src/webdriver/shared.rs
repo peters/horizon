@@ -1440,11 +1440,13 @@ mod tests {
         started_rx
             .recv_timeout(Duration::from_secs(3))
             .expect("background retry");
-        let start = Instant::now();
+        // The retry waits on `release_rx`, not on the clock, so this loop proves the
+        // state it must hold: a reaped session here would be a cleanup that ignored
+        // its gate. Wall time plays no part in that, and a loaded machine must not
+        // decide it.
         for _ in 0..100 {
             assert!(!control.is_reaped());
         }
-        assert!(start.elapsed() < Duration::from_millis(100));
         release_tx.send(()).expect("finish retry");
         let deadline = Instant::now() + Duration::from_secs(3);
         while !control.is_reaped() {

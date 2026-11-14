@@ -30,11 +30,15 @@ const HOST_INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 "#;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StandaloneOptions {
     pub backend: Option<BackendKind>,
     pub visible: bool,
     pub keep_alive: bool,
+    /// The profile that a local browser keeps its folder in, under the profile
+    /// root of this runtime. `None` or `private` is the throwaway folder of the
+    /// job, which is removed with it.
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -60,7 +64,7 @@ pub(crate) struct OwnedSession {
 }
 
 impl OwnedSession {
-    pub(crate) fn start(options: StandaloneOptions, home: &BrowserRuntimePaths) -> Result<Self, StandaloneError> {
+    pub(crate) fn start(options: &StandaloneOptions, home: &BrowserRuntimePaths) -> Result<Self, StandaloneError> {
         let (session, profile_root, panel_id) = start(options, home)?;
         Ok(Self {
             session: Some(session),
@@ -121,7 +125,7 @@ impl OwnedHostProcess {
     /// Returns when the subprocess cannot start, initialize, or publish its
     /// first browser manifest before the startup deadline.
     pub fn start(
-        options: StandaloneOptions,
+        options: &StandaloneOptions,
         home: &Path,
         stderr: File,
     ) -> Result<(Self, BackendKind), StandaloneError> {
@@ -137,6 +141,9 @@ impl OwnedHostProcess {
         }
         if options.visible {
             command.arg("--visible");
+        }
+        if let Some(profile) = &options.profile {
+            command.args(["--profile", profile.as_str()]);
         }
         let mut child = command
             .env("HOME", home)
@@ -260,11 +267,12 @@ impl Drop for OwnedHostProcess {
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     let root = BrowserRuntimePaths::resolve().root().to_path_buf();
     lease::prune_dead_at(&root);
-    let session = OwnedSession::start(options, &BrowserRuntimePaths::resolve())?;
-    let mcp_result = serve_until_host_exit(&root, &session.panel_id, options.keep_alive).await;
+    let keep_alive = options.keep_alive;
+    let session = OwnedSession::start(&options, &BrowserRuntimePaths::resolve())?;
+    let mcp_result = serve_until_host_exit(&root, &session.panel_id, keep_alive).await;
     let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
-    if stopped && options.keep_alive {
+    if stopped && keep_alive {
         lease::remove(&root, &panel_id);
     }
     mcp_result?;
@@ -352,8 +360,51 @@ async fn wait_for_interrupt() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
+/// The folder of the local browser of a standalone job, and the lock that makes
+/// this job its only writer.
+///
+/// A job that names no profile, or `private`, gets the throwaway folder of its
+/// panel id, which the job removes when it ends. A job that names a profile keeps
+/// `browser-profiles/<name>`, so the next job that names it finds the sign-ins and
+/// the cookies of the last one. One folder has one writer: the lock lives as long
+/// as this process and a second job on the same name is refused in words, because
+/// two browsers on one profile corrupt it.
+fn claim_profile(home: &BrowserRuntimePaths, name: &str) -> Result<std::path::PathBuf, StandaloneError> {
+    if !horizon_browser::valid_profile_name(name) {
+        return Err(StandaloneError::Startup(format!(
+            "\"{name}\" is not a profile name: use lower-case letters, digits and dashes, start and end with a letter or a digit, and keep it short"
+        )));
+    }
+    let root = home.root().join("browser-profiles");
+    let directory = root.join(name);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| StandaloneError::Startup(format!("could not create the profile {name}: {error}")))?;
+    let lock_path = root.join(format!(".{name}.lock"));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| StandaloneError::Startup(format!("could not open the lock of the profile {name}: {error}")))?;
+    match lock.try_lock() {
+        Ok(()) => {
+            // The lock belongs to this process: the kernel releases it when the
+            // job ends, so a killed job never leaves a profile that refuses work.
+            std::mem::forget(lock);
+            Ok(directory)
+        }
+        Err(std::fs::TryLockError::WouldBlock) => Err(StandaloneError::Startup(format!(
+            "the profile \"{name}\" is in use by another standalone job; close that job or choose another profile"
+        ))),
+        Err(std::fs::TryLockError::Error(error)) => Err(StandaloneError::Startup(format!(
+            "could not take the lock of the profile {name}: {error}"
+        ))),
+    }
+}
+
 fn start(
-    options: StandaloneOptions,
+    options: &StandaloneOptions,
     home: &BrowserRuntimePaths,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     if options.backend == Some(BackendKind::SafariWebDriver) && !options.visible {
@@ -372,10 +423,14 @@ fn start(
         |backend| vec![backend],
     );
     let mut last_error = None;
+    let profile = options.profile.clone();
     for backend in candidates {
-        match start_backend(home, backend, options.visible, options.keep_alive) {
+        // A profile that another job holds refuses every backend: the failure is
+        // about the folder and not about the browser.
+        match start_backend(home, backend, options.visible, options.keep_alive, profile.as_deref()) {
             Ok(session) => return Ok(session),
             Err(StandaloneError::Shutdown) => return Err(StandaloneError::Shutdown),
+            Err(error @ StandaloneError::Startup(_)) if profile.is_some() => return Err(error),
             Err(error) => last_error = Some(error),
         }
     }
@@ -387,6 +442,7 @@ fn start_backend(
     backend: BackendKind,
     visible: bool,
     keep_alive: bool,
+    profile: Option<&str>,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     let panel_id = standalone_panel_id();
     let mut browser = BrowserConfig {
@@ -397,7 +453,13 @@ fn start_backend(
     if browser.profile_root.is_none() {
         browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
     }
-    let profile_root = browser.panel_profile_dir_with_default_root(&panel_id, &home.root().join("browser-profiles"));
+    let profile_root = match profile.filter(|name| *name != "private") {
+        Some(name) => {
+            browser.profile_root = Some(home.root().join("browser-profiles"));
+            claim_profile(home, name)?
+        }
+        None => browser.panel_profile_dir_with_default_root(&panel_id, &home.root().join("browser-profiles")),
+    };
     let mut pending_lease = if keep_alive {
         Some(lease::PendingLease::publish(
             home.root(),
@@ -642,5 +704,54 @@ mod tests {
         let host = OwnedHostProcess { child, stdin };
 
         assert!(host.shutdown());
+    }
+
+    fn runtime(root: &std::path::Path) -> BrowserRuntimePaths {
+        BrowserRuntimePaths::from_root(root.to_path_buf())
+    }
+
+    /// One folder has one writer. A second job on the same name is refused in
+    /// words instead of writing the same cookies and lock files, and a job on
+    /// another name still runs.
+    #[test]
+    fn a_profile_that_another_job_holds_is_refused_in_words() {
+        let root = tempfile::tempdir().expect("a runtime root");
+        let runtime = runtime(root.path());
+        let first = claim_profile(&runtime, "mail").expect("the first job takes the profile");
+        assert_eq!(first, root.path().join("browser-profiles").join("mail"));
+        assert!(first.is_dir(), "the job keeps the folder of its profile");
+
+        let refused = claim_profile(&runtime, "mail").expect_err("a second job on the same profile");
+        let StandaloneError::Startup(words) = refused else {
+            panic!("a held profile is a startup refusal");
+        };
+        assert!(words.contains("\"mail\""), "{words}");
+        assert!(words.contains("in use by another standalone job"), "{words}");
+
+        claim_profile(&runtime, "work").expect("another name is another profile");
+    }
+
+    /// The name rule of a profile, and `private`, which is the throwaway folder
+    /// and not a profile.
+    #[test]
+    fn only_a_profile_name_names_a_profile() {
+        let root = tempfile::tempdir().expect("a runtime root");
+        let runtime = runtime(root.path());
+        for refused in [
+            "",
+            "Mail",
+            "../mail",
+            "mail/root",
+            "-mail",
+            "mail_box",
+            "mail\n",
+            "private",
+        ] {
+            let error = claim_profile(&runtime, refused).expect_err("a name that is not a profile name");
+            assert!(matches!(error, StandaloneError::Startup(_)), "{refused:?}");
+        }
+        for accepted in ["mail", "work-1", "a"] {
+            claim_profile(&runtime, accepted).unwrap_or_else(|error| panic!("{accepted}: {error}"));
+        }
     }
 }
