@@ -47,7 +47,7 @@ impl MockCdpBrowser {
                 let seen = Arc::clone(&seen);
                 let answer = Arc::clone(&answer);
                 std::thread::spawn(move || {
-                    let _ = serve(stream, port, seen, answer, replace);
+                    let _ = serve(stream, port, &seen, &answer, replace);
                 });
             }
         });
@@ -76,8 +76,8 @@ impl MockCdpBrowser {
 fn serve(
     stream: TcpStream,
     port: u16,
-    log: Arc<Mutex<Vec<Value>>>,
-    answer: Answer,
+    log: &Arc<Mutex<Vec<Value>>>,
+    answer: &Answer,
     replace: Option<&'static str>,
 ) -> std::io::Result<()> {
     // The first line of the request decides: a plain `GET` reads the version
@@ -115,7 +115,6 @@ fn ordinary_answer(command: &Value) -> Value {
         Some("Target.createTarget") => json!({ "targetId": "its-page" }),
         Some("Target.attachToTarget") => json!({ "sessionId": "its-session" }),
         Some("Target.closeTarget") => json!({ "success": true }),
-        Some("Target.disposeBrowserContext") => json!({}),
         Some("Target.getBrowserContexts") => json!({ "browserContextIds": [] }),
         Some("Target.getTargets") => json!({ "targetInfos": [
             { "targetId": "a-page-of-the-profile", "type": "page", "attached": false }

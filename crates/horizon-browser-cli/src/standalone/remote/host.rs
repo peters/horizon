@@ -287,7 +287,7 @@ impl RemoteHost {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             browser,
             panel_local_id: id.clone(),
             initial_url: request.url.clone(),

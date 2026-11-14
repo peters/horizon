@@ -658,7 +658,7 @@ mod tests {
                 attach: None,
                 resume_target: None,
                 resume_context: None,
-                page_isolation: Default::default(),
+                page_isolation: crate::PageIsolationReport::default(),
                 browser: BrowserConfig::default(),
                 panel_local_id: "panel-1".to_string(),
                 initial_url: None,

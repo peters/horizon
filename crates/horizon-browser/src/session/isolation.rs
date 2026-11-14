@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn a_page_that_nothing_proves_isolated_is_never_private() {
-        let report = PageIsolationReport::default();
+        let report = crate::PageIsolationReport::default();
         assert_eq!(report.snapshot(), None, "a session that started says nothing yet");
         assert_eq!(report.isolation(), PageIsolation::Shared);
         assert!(!report.isolation().keeps_nothing());
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(report.snapshot(), Some(PageIsolation::IsolatedContext));
         assert!(report.isolation().keeps_nothing());
 
-        let shared = PageIsolationReport::default();
+        let shared = crate::PageIsolationReport::default();
         shared.publish(PageIsolation::Shared);
         assert_eq!(shared.snapshot(), Some(PageIsolation::Shared));
         assert!(!shared.isolation().keeps_nothing(), "a shared page is no private page");

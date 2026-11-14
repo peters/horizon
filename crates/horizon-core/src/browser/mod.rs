@@ -120,17 +120,15 @@ pub struct BrowserPanelState {
     /// the same page comes back with the text the person typed into it.
     attached_page_target: Option<String>,
     /// The isolated browser context of a private page of a browser host, as the
-    /// driver reported it. A lost link passes it back with the page target, so
-    /// the page comes back inside its own context and never as a page of the
-    /// shared profile.
+    /// driver reported it. A lost link passes it back with the page target, so the
+    /// page comes back inside its own context, never as a page of the profile.
     attached_page_context: Option<String>,
     /// What the session of this panel established about its page: a page of an
-    /// isolated context, a page of a folder of this panel alone, or a page of
-    /// the profile that it named. The label of the panel follows this fact.
+    /// isolated context, of a folder of this panel alone, or of the profile that
+    /// it named. The label of the panel follows this fact.
     page_isolation: horizon_browser::PageIsolationReport,
-    /// What the driver of a browser host established about the page that it
-    /// drives, for the Firefox of that machine, whose page this computer reads
-    /// through the link of its driver rather than through a session of its own.
+    /// What the driver of a Firefox host established about the page that it
+    /// drives, which this computer reads through the link of that driver.
     host_page_keeps_nothing: bool,
     /// The link came back to the same page: the body says so and no page state
     /// was lost.
@@ -212,7 +210,7 @@ impl BrowserPanelState {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -307,7 +305,7 @@ impl BrowserPanelState {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -585,44 +583,6 @@ impl BrowserPanelState {
         self.can_accept_commands()
     }
 
-    /// Queue a command only when the driver session currently exists.
-    #[must_use]
-    pub fn try_send(&self, command: BrowserCommand) -> bool {
-        // A command that is a navigation counts as the navigation of the person,
-        // and it may take a pending startup navigation over. A click or a key
-        // does not: it may navigate, and a person who reads a new panel clicks
-        // it before its first page commits, which made a create answer
-        // `superseded` for the page that it had just loaded.
-        let navigation = page::command_is_a_navigation(&command);
-        let accepted = self.deliver(command);
-        if accepted && navigation {
-            self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        accepted
-    }
-
-    /// Send the first navigation of a panel, which is the address of its create
-    /// and not a navigation of the person, so it never takes that create over.
-    pub(super) fn send_startup_navigation(&self, url: String) -> bool {
-        self.deliver(BrowserCommand::Navigate(url))
-    }
-
-    /// Hand one command to the driver of this panel, whichever lane it runs on.
-    fn deliver(&self, command: BrowserCommand) -> bool {
-        if self.is_host_driver() {
-            self.send_host_driver_command(command)
-        } else {
-            self.session.as_ref().is_some_and(|session| session.send(command))
-        }
-    }
-
-    /// Number of user actions that can navigate (typed URL, back, forward,
-    /// reload, click, key press) on this panel so far.
-    #[must_use]
-    pub fn user_navigation_count(&self) -> u32 {
-        self.user_navigations.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     /// Submit a user-typed navigation and retain it as the display/retry
     /// target until a reachable page commits. Returns `true` when the driver
     /// accepted it; a missing driver is surfaced via `navigation_error`.
@@ -888,9 +848,7 @@ impl BrowserPanelState {
                 resumed,
                 context,
             } => {
-                self.attached_page_target = Some(target_id);
-                self.attached_page_context = context;
-                self.apply_page_attached(resumed);
+                self.bind_page_attached(target_id, resumed, context);
                 output.had_output = true;
             }
             BrowserEvent::OrientationChanged(view) => {
@@ -1163,7 +1121,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1220,7 +1178,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1271,7 +1229,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1330,7 +1288,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1406,7 +1364,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1509,7 +1467,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1562,7 +1520,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1614,7 +1572,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
@@ -1669,7 +1627,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             attached_page_context: None,
-            page_isolation: Default::default(),
+            page_isolation: horizon_browser::PageIsolationReport::default(),
             host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,

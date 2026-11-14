@@ -291,16 +291,32 @@ impl HorizonApp {
 /// worker. A step that fails publishes the failure instead, and so does a
 /// create whose board retired since it was asked for. Says whether the create
 /// was published as ready.
+/// The facts of a finished create that its publication writes: the panel, the
+/// engine that serves it, the orientation of a remote device, and the title of
+/// the page that the person sees.
+pub(super) struct PublishedCreate {
+    pub(super) panel_local_id: String,
+    pub(super) backend: BackendKind,
+    pub(super) orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
+    pub(super) title: String,
+}
+
 pub(super) fn publish_requested_create(
     live: &BoardFence,
-    panel_local_id: &str,
     request: &BrowserCreateRequest,
     workspace: &ManifestWorkspace,
-    backend: BackendKind,
-    orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
-    title: &str,
+    page: &PublishedCreate,
     ready: &BrowserCreateResult,
 ) -> bool {
+    let PublishedCreate {
+        panel_local_id,
+        backend,
+        orientation,
+        title,
+    } = page;
+    let (panel_local_id, backend) = (panel_local_id.as_str(), *backend);
+    let orientation = *orientation;
+    let title = title.as_str();
     let fail = |code, message| {
         record_create_failure(panel_local_id, request, backend, orientation);
         complete_result(&BrowserCreateResult::failed(request, code, message));

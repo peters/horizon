@@ -3,6 +3,8 @@
 
 use horizon_browser::BrowserCommand;
 
+use super::BrowserPanelState;
+
 /// Short human-facing title for a URL (hostname, or a non-empty fallback).
 #[must_use]
 pub fn panel_title_for_url(url: &str) -> String {
@@ -39,6 +41,47 @@ pub(super) fn command_is_a_navigation(command: &BrowserCommand) -> bool {
         command,
         BrowserCommand::Navigate(_) | BrowserCommand::Back | BrowserCommand::Forward | BrowserCommand::Reload
     )
+}
+
+impl BrowserPanelState {
+    /// Queue a command only when the driver session currently exists.
+    #[must_use]
+    pub fn try_send(&self, command: BrowserCommand) -> bool {
+        // A command that is a navigation counts as the navigation of the person,
+        // and it may take a pending startup navigation over. A click or a key
+        // does not: it may navigate, and a person who reads a new panel clicks it
+        // before its first page commits, which made a create answer `superseded`
+        // for the page that it had just loaded.
+        let navigation = command_is_a_navigation(&command);
+        let accepted = self.deliver(command);
+        if accepted && navigation {
+            self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        accepted
+    }
+
+    /// Send the first navigation of a panel, which is the address of its create
+    /// and not a navigation of the person, so it never takes that create over.
+    pub(super) fn send_startup_navigation(&self, url: String) -> bool {
+        self.deliver(BrowserCommand::Navigate(url))
+    }
+
+    /// Hand one command to the driver of this panel, whichever lane it runs on.
+    fn deliver(&self, command: BrowserCommand) -> bool {
+        if self.is_host_driver() {
+            self.send_host_driver_command(command)
+        } else {
+            self.session.as_ref().is_some_and(|session| session.send(command))
+        }
+    }
+
+    /// The navigations of the person on this panel so far: a typed address, back,
+    /// forward and reload. A create of the panel reads this count, so a click on
+    /// the new panel is no navigation of the person.
+    #[must_use]
+    pub fn user_navigation_count(&self) -> u32 {
+        self.user_navigations.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]

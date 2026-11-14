@@ -368,7 +368,7 @@ pub(in crate::webdriver::session) mod tests {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: crate::PageIsolationReport::default(),
             browser: BrowserConfig {
                 backend: BackendKind::FirefoxBidi,
                 ..BrowserConfig::default()

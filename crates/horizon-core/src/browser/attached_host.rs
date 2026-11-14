@@ -622,12 +622,9 @@ impl BrowserPanelState {
             return self
                 .attached_host_profile()
                 .or_else(|| self.host_driver_profile())
-                .map(str::to_string)
-                .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string());
+                .map_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string(), str::to_string);
         }
-        named
-            .map(str::to_string)
-            .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string())
+        named.map_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string(), str::to_string)
     }
 
     /// The profile of the Chromium of this panel on that machine.
@@ -886,6 +883,15 @@ impl BrowserPanelState {
         true
     }
 
+    /// Bind the page that the driver of this panel reported: the target that the
+    /// next lost link resumes, and the isolated context of a private page, which
+    /// that link resumes inside and the close of the page disposes.
+    pub(super) fn bind_page_attached(&mut self, target_id: String, resumed: bool, context: Option<String>) {
+        self.attached_page_target = Some(target_id);
+        self.attached_page_context = context;
+        self.apply_page_attached(resumed);
+    }
+
     /// The driver bound a page target. On an automatic attempt the page is
     /// either the one the person already had — the browser of that machine kept
     /// running behind the lost link, so its text, its scroll place and its
@@ -900,7 +906,7 @@ impl BrowserPanelState {
         // A private page says that its own context went even when a person asked
         // for the attempt: the loss of a context is a fact about privacy, and the
         // page that follows it is a new page.
-        if !automatic && !(private && !resumed) {
+        if !automatic && (!private || resumed) {
             return;
         }
         self.set_page_resumed(resumed);

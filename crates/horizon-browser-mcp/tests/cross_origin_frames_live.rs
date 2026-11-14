@@ -594,7 +594,7 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
         attach: None,
         resume_target: None,
         resume_context: None,
-        page_isolation: Default::default(),
+        page_isolation: horizon_browser::PageIsolationReport::default(),
         browser: BrowserConfig {
             backend,
             headless: backend != BackendKind::SafariWebDriver,
@@ -908,7 +908,7 @@ fn run_chat(backend: BackendKind, root: &Path) {
         attach: None,
         resume_target: None,
         resume_context: None,
-        page_isolation: Default::default(),
+        page_isolation: horizon_browser::PageIsolationReport::default(),
         browser: BrowserConfig {
             backend,
             headless: true,

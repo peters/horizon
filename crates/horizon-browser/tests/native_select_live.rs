@@ -44,7 +44,7 @@ fn run_native_select_live(backend: BackendKind) {
         attach: None,
         resume_target: None,
         resume_context: None,
-        page_isolation: Default::default(),
+        page_isolation: horizon_browser::PageIsolationReport::default(),
         browser: BrowserConfig {
             backend,
             profile_root: Some(temp.path().join("profiles")),

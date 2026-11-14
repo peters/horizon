@@ -412,7 +412,7 @@ fn start_backend(
         attach: None,
         resume_target: None,
         resume_context: None,
-        page_isolation: Default::default(),
+        page_isolation: horizon_browser::PageIsolationReport::default(),
         browser,
         panel_local_id: panel_id.clone(),
         initial_url: None,

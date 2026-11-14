@@ -7,7 +7,7 @@ use horizon_core::browser::{BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId};
 
 use super::HorizonApp;
-use super::browser_create_dispatch::publish_requested_create;
+use super::browser_create_dispatch::{PublishedCreate, publish_requested_create};
 use super::browser_create_failure::{CREATE_TIMEOUT, record_and_complete_failure, terminal_create_failure};
 use super::browser_host_io::{BoardFence, HostIo};
 use super::browser_manifest_stamp::{browser_workspace, host_identity, publish_manifest_host_state};
@@ -470,12 +470,14 @@ fn finish_ready_browser_create(
         move || {
             publish_requested_create(
                 &live,
-                &panel_local_id,
                 &published_request,
                 &workspace,
-                backend,
-                orientation,
-                &title,
+                &PublishedCreate {
+                    panel_local_id,
+                    backend,
+                    orientation,
+                    title,
+                },
                 &result,
             )
         },

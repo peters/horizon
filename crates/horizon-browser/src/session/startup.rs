@@ -15,8 +15,8 @@ mod disclosure;
 mod page;
 
 use super::{
-    BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, PageIsolation,
-    WS_URL_TIMEOUT, private_page_unavailable, run_loop,
+    BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
+    run_loop,
 };
 pub(crate) use page::{create_page_target, create_page_target_in, first_page_target, page_start};
 
@@ -297,14 +297,7 @@ fn initialize_target(
     // shared profile, so the label of the panel is the fact of the session.
     let isolation = page_start(config, &chrome, &mut link, stop_requested);
     config.page_isolation.publish(isolation.isolation);
-    if config.browser.isolated_page && !isolation.isolation.keeps_nothing() {
-        let detail = isolation
-            .refusal
-            .clone()
-            .unwrap_or_else(|| "this session cannot make a browser context of its own".to_string());
-        let _ = event_tx.send(BrowserEvent::Warning(private_page_unavailable(&detail)));
-        let _ = chrome.kill();
-        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+    if page::refuse_private_page(config, &isolation, event_tx, &mut chrome) {
         return None;
     }
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
@@ -801,7 +794,7 @@ mod tests {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: crate::PageIsolationReport::default(),
             browser: BrowserConfig {
                 command,
                 profile_root: Some(profiles.clone()),
@@ -845,7 +838,7 @@ mod tests {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: crate::PageIsolationReport::default(),
             browser: BrowserConfig {
                 command: Some(browser.to_string_lossy().into_owned()),
                 profile_root: Some(temp.path().join("profiles")),

@@ -206,11 +206,6 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    // The session of this lane proves the isolation of its page while it starts:
-    // a private page of a browser of a host is a page of a user context that this
-    // lane creates, and a lane that cannot create one stops before this point. A
-    // page of this computer keeps nothing when it has a folder of its own.
-    config.page_isolation.publish(webdriver_page_isolation(config));
     if !driver.prepare_ready(config, frame_slot, event_tx, stop_requested) {
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
@@ -473,6 +468,11 @@ impl Driver {
             id: session_id,
             capabilities,
         } = session;
+        // This lane proves the isolation of its page as it starts: a private page
+        // of a browser of a host is a page of a user context that this lane
+        // created, and a lane that cannot create one stops before this point. A
+        // private page of this computer keeps a folder of its own.
+        config.page_isolation.publish(webdriver_page_isolation(config));
         let BidiLink {
             bidi,
             context_id,
@@ -805,7 +805,7 @@ mod page_isolation_tests {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: crate::PageIsolationReport::default(),
         }
     }
 

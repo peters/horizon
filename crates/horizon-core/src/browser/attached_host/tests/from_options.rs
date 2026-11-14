@@ -14,9 +14,12 @@ use std::time::{Duration, Instant};
 use horizon_browser::PageIsolation;
 use serde_json::Value;
 
-use super::cdp::MockCdpBrowser;
+#[path = "cdp.rs"]
+mod cdp;
+
 use super::*;
 use crate::{BrowserHostConfig, PanelKind, PanelOptions, browser_panel_of_options};
+use cdp::MockCdpBrowser;
 
 /// The bound of a wait for a command of the session of a panel.
 const COMMAND_DEADLINE: Duration = Duration::from_secs(20);

@@ -997,8 +997,4 @@ fn a_slow_answer_of_a_browser_names_the_link_and_the_wait() {
     );
 }
 
-#[path = "tests/cdp.rs"]
-mod cdp;
-
-#[path = "tests/from_options.rs"]
 mod from_options;

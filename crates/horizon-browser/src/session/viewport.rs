@@ -595,7 +595,7 @@ mod tests {
                 attach: None,
                 resume_target: None,
                 resume_context: None,
-                page_isolation: Default::default(),
+                page_isolation: crate::PageIsolationReport::default(),
                 browser: BrowserConfig {
                     automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
                     ..BrowserConfig::default()

@@ -8,7 +8,9 @@ use std::sync::atomic::AtomicBool;
 use crate::cdp::CdpLink;
 
 use super::super::shared::DriverProcess;
-use super::{BrowserSessionConfig, PageIsolation, call_during_startup};
+use super::{BrowserSessionConfig, call_during_startup};
+use crate::PageIsolation;
+use crate::session::BrowserEventSender;
 
 /// The page this session drives: the one the panel had before a lost link when
 /// it still exists, otherwise the page this browser already gave this process
@@ -236,6 +238,28 @@ pub(crate) fn create_browser_context(link: &mut CdpLink, stop_requested: &Atomic
     .ok_or_else(|| "the browser answered no name for the browser context of this page".to_string())
 }
 
+/// Refuse the private page that the panel asked for, when this session cannot
+/// prove that its page keeps nothing. The panel reads the words and stops, and no
+/// page of the shared profile is opened in its place.
+pub(super) fn refuse_private_page(
+    config: &BrowserSessionConfig,
+    start: &PageStart,
+    event_tx: &BrowserEventSender,
+    chrome: &mut DriverProcess,
+) -> bool {
+    if !config.browser.isolated_page || start.isolation.keeps_nothing() {
+        return false;
+    }
+    let detail = start
+        .refusal
+        .clone()
+        .unwrap_or_else(|| "this session cannot make a browser context of its own".to_string());
+    let _ = event_tx.send(crate::BrowserEvent::Warning(crate::private_page_unavailable(&detail)));
+    let _ = chrome.kill();
+    let _ = event_tx.send(crate::BrowserEvent::Stopped { code: None });
+    true
+}
+
 /// Whether the browser still holds the isolated context `context`, so a private
 /// page of the link before can come back inside it.
 fn context_exists(link: &mut CdpLink, stop_requested: &AtomicBool, context: &str) -> bool {
@@ -323,7 +347,7 @@ mod tests {
             attach: None,
             resume_target: None,
             resume_context: None,
-            page_isolation: Default::default(),
+            page_isolation: crate::PageIsolationReport::default(),
         }
     }
 
