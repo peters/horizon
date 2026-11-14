@@ -414,11 +414,7 @@ fn a_private_page_of_a_profile_is_a_page_that_keeps_nothing() {
         Some(true),
         "the page of a private panel is made in a context that keeps nothing"
     );
-    assert_eq!(
-        session.pages(),
-        2,
-        "both pages are pages of one session of the profile"
-    );
+    assert_eq!(session.pages(), 2, "both pages are pages of one session of the profile");
     // A private page keeps nothing, so its panel never resumes a page.
     private.send(&HostDriverRequest::Close);
     let _ = private.wait_for("end of the session", WAIT);

@@ -18,7 +18,9 @@ use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
-pub(crate) use page::{caller_page, create_browser_context, create_page_target, create_page_target_in, first_page_target};
+pub(crate) use page::{
+    caller_page, create_browser_context, create_page_target, create_page_target_in, first_page_target,
+};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -326,9 +328,9 @@ fn initialize_target(
         return None;
     }
     let background = config.browser.background_windows && !config.browser.headless && !chrome.is_attached();
-    let Some(target_id) = existing_target.or_else(|| {
-        create_page_target_in(&mut link, stop_requested, background, isolated.as_deref())
-    }) else {
+    let Some(target_id) =
+        existing_target.or_else(|| create_page_target_in(&mut link, stop_requested, background, isolated.as_deref()))
+    else {
         if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
             return None;
         }

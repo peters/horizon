@@ -213,10 +213,7 @@ impl SessionPages {
             }
         };
         let end = {
-            let mut page = handle
-                .session
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut page = handle.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             session::serve_page(
                 &mut page,
                 link,
@@ -240,7 +237,11 @@ impl SessionPages {
     pub(super) fn page_ended(&self, page: &str) -> bool {
         let ended = self.pages().remove(page);
         if let Some(PageEntry::Live(handle)) = ended {
-            handle.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner).stop();
+            handle
+                .session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .stop();
         }
         self.pages().is_empty()
     }
@@ -250,7 +251,11 @@ impl SessionPages {
         let pages = std::mem::take(&mut *self.pages());
         for entry in pages.into_values() {
             if let PageEntry::Live(handle) = entry {
-                handle.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner).stop();
+                handle
+                    .session
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .stop();
             }
         }
     }
@@ -272,14 +277,9 @@ pub(super) struct StartPage {
 
 impl StartPage {
     pub(super) fn new(
-        start: impl Fn(&HostDriverOptions, &SharedSessionGroup, bool) -> Result<HostSession, String>
-        + Send
-        + Sync
-        + 'static,
+        start: impl Fn(&HostDriverOptions, &SharedSessionGroup, bool) -> Result<HostSession, String> + Send + Sync + 'static,
     ) -> Self {
-        Self {
-            start: Box::new(start),
-        }
+        Self { start: Box::new(start) }
     }
 
     /// The page of a browser host: a window of the Firefox of the profile, or a

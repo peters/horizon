@@ -347,9 +347,7 @@ impl GroupState {
             .call(Duration::from_secs(5), "browser.createUserContext", &json!({}))
             .result
             .map_err(|error| {
-                format!(
-                    "this Firefox cannot keep a private panel: it refused a user context of its own ({error})"
-                )
+                format!("this Firefox cannot keep a private panel: it refused a user context of its own ({error})")
             })?
             .get("userContext")
             .and_then(Value::as_str)

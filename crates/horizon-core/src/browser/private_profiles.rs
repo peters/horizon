@@ -151,9 +151,7 @@ mod tests {
     /// A folder for a private panel, as this program makes one: under the folder
     /// of the private pages of `root`.
     fn private_folder(root: &Path, name: &str) -> PathBuf {
-        let folder = root
-            .join(horizon_browser::PRIVATE_PROFILES_FOLDER)
-            .join(name);
+        let folder = root.join(horizon_browser::PRIVATE_PROFILES_FOLDER).join(name);
         mark_private_profile(&folder).expect("the mark of a private panel");
         std::fs::create_dir_all(folder.join("firefox")).expect("the folder of the engine");
         std::fs::write(folder.join("firefox").join("cookies.sqlite"), "a sign-in").expect("fixture");
@@ -228,7 +226,11 @@ mod tests {
         let first = private_folder(home.path(), "%panel-1");
         let second = private_folder(configured.path(), "%panel-2");
         let sweep = sweep_private_profiles(
-            &[home.path().to_path_buf(), home.path().to_path_buf(), configured.path().to_path_buf()],
+            &[
+                home.path().to_path_buf(),
+                home.path().to_path_buf(),
+                configured.path().to_path_buf(),
+            ],
             &HashSet::new(),
         );
         assert_eq!(sweep.removed.len(), 2, "one removal for each folder: {sweep:?}");

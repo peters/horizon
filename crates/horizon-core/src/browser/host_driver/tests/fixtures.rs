@@ -15,8 +15,8 @@ use horizon_browser::host_driver::{
 };
 use horizon_browser::{BrowserCommand, BrowserEvent, FrameSlot};
 
-use super::super::session::{HostPage, HostSession, serve_link};
 use super::super::pages::StartPage;
+use super::super::session::{HostPage, HostSession, serve_link};
 use super::super::{HostDriverEngine, HostDriverOptions, Incoming, Link, LinkOutcome, LinkRules, serve_links};
 
 pub(crate) const WAIT: Duration = Duration::from_secs(5);

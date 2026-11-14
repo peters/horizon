@@ -633,9 +633,7 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, hold: 
         // A new link of this same page takes it over when the link that drives it
         // went silent, which is what a dropped link looks like from here.
         if hold.is_some_and(LinkHold::taken_over) {
-            tracing::info!(
-                "a new link of a browser host takes the page over from a link that went silent"
-            );
+            tracing::info!("a new link of a browser host takes the page over from a link that went silent");
             return LinkEnd::of(LinkOutcome::TakeOver);
         }
         session.apply_events();

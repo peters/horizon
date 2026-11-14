@@ -242,11 +242,7 @@ impl BrowserPanelState {
         // under the profile root, and a page that keeps nothing under the folder
         // of the private pages. The saved board names the shared profile, and a
         // panel without one is a private panel.
-        config.profile = Some(
-            session_id
-                .unwrap_or(horizon_browser::PRIVATE_PROFILE)
-                .to_string(),
-        );
+        config.profile = Some(session_id.unwrap_or(horizon_browser::PRIVATE_PROFILE).to_string());
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
         if let Some(profile_id) = session_id {
             shared_session::refuse_unjoinable(&config, profile_id)?;
@@ -993,9 +989,7 @@ fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path
     true
 }
 
-pub use private_profiles::{
-    PrivateProfileSweep, is_private_profile, mark_private_profile, sweep_private_profiles,
-};
+pub use private_profiles::{PrivateProfileSweep, is_private_profile, mark_private_profile, sweep_private_profiles};
 
 pub use horizon_browser::provider_catalog;
 
