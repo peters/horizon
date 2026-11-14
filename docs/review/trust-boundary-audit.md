@@ -105,6 +105,26 @@ boundary pages went away with their features.
 
 ### Browser page input
 
+- [`browser-profiles`](trust-boundaries/browser-profiles.md)
+  (added with the shared profile and the private panel)
+  - Untrusted: the `profile` field of a create, which an agent or a person
+    writes, and the profile name of a saved board; also the pages of a shared
+    profile, which can read its cookies and sign the person out of every site.
+  - Guarantees: a profile name follows one rule of 1 to 40 of `a-z`, `0-9` and
+    `-`, and the reserved word `private` names no profile there, in the
+    settings entry and in the CLI; the folder of a named profile and the folder
+    of a panel never collide; a private panel never joins the group or the
+    folder of a shared profile; the folder of a shared profile is removed by
+    neither the close of a panel nor the delete of a saved session; a create
+    that cannot join the running browser of its profile is refused before the
+    browser starts, with words that name the profile; a private panel on a
+    browser host is refused.
+  - Does not guarantee: isolation between two panels of one shared profile, so
+    a sign-out signs out all of them; one download folder for each profile; the
+    removal of a folder of a per-panel profile of an earlier version; a profile
+    of a browser host, whose folder belongs to that machine; the lock of a
+    browser on another system than Linux, which the engine reports after it
+    starts.
 - [`browser-webauthn`](trust-boundaries/browser-webauthn.md)
   - Untrusted: the page message and the output of the authenticator command.
   - Guarantees: the origin, the `clientDataJSON` and the `crossOrigin` value
