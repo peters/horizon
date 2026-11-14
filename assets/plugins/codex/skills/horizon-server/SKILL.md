@@ -359,10 +359,10 @@ that computer keeps the copies of the keys and the values that it already had.
 
 A move is a new server on another place, then a link of each computer to it. Do
 not move the home with a copy alone: `secret.key` is what makes the values
-readable, and a socket and a lock belong to one run of one server. The procedure
-`docs/testing/procedures/server-move.md` of the Horizon repository gives the
-order, the checks and the undo. Tell the person that this procedure exists, and
-follow the recipe of this skill for each step that it names.
+readable, and a socket and a lock belong to one run of one server. The skill
+`horizon-server-move` gives the whole move: the stop, the copy of the store, the
+check of the store id and the cards of the steps. Use it for a move, and follow
+the recipe of this skill for each step that it names.
 
 ## What costs money
 
