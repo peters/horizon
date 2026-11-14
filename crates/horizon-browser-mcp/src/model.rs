@@ -325,6 +325,21 @@ pub(crate) struct CreateInput {
     pub(crate) timeout_millis: Option<u64>,
 }
 
+impl CreateInput {
+    /// The one refusal of a create that names two fields: a profile of this
+    /// computer and a remote target, because a remote session runs in the profile
+    /// of its provider and this computer keeps no profile of it.
+    pub(crate) fn refusal(&self) -> Option<String> {
+        let target = self.target.as_deref()?.trim();
+        let profile = self.profile.as_deref()?;
+        (!target.is_empty() && !profile.is_empty()).then(|| {
+            format!(
+                "browser_create takes no profile with target: profile names a shared profile of this computer, and target runs the session at the remote target {target}. Leave profile out, or leave target out."
+            )
+        })
+    }
+}
+
 /// A fresh page sharing the source panel's login and website storage.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct DuplicateInput {
@@ -1172,6 +1187,41 @@ mod tests {
             files: None,
             timeout_millis: None,
         }
+    }
+
+    /// A create names a profile of this computer or a remote target, and never
+    /// both: the remote session runs in the profile of its provider, so a
+    /// profile of this computer would be ignored.
+    #[test]
+    fn a_create_refuses_a_profile_together_with_a_remote_target() {
+        let mut create = CreateInput {
+            url: None,
+            backend: None,
+            target: Some("Pixel 8".to_string()),
+            orientation: None,
+            visible: None,
+            profile: Some("work".to_string()),
+            allow_additional: None,
+            timeout_millis: None,
+        };
+        let refusal = create.refusal().expect("the create is refused");
+        assert!(refusal.contains("profile"), "{refusal}");
+        assert!(refusal.contains("target"), "{refusal}");
+        assert!(refusal.contains("Pixel 8"), "the refusal names the target: {refusal}");
+
+        create.target = None;
+        assert_eq!(
+            create.refusal(),
+            None,
+            "a profile of this computer is a create of its own"
+        );
+        create.target = Some("   ".to_string());
+        assert_eq!(create.refusal(), None, "a blank target names no remote target");
+        create.target = Some("Pixel 8".to_string());
+        create.profile = None;
+        assert_eq!(create.refusal(), None, "a remote target alone is a create of its own");
+        create.profile = Some(String::new());
+        assert_eq!(create.refusal(), None, "a blank profile names no profile");
     }
 
     /// A panel answers the profile that its manifest holds, so an agent reads

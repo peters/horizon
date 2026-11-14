@@ -35,7 +35,10 @@ profile `default` and is signed in where the person signed in, so a site that
 needs a sign-in works in a new panel of yours without a new sign-in. Pass
 `profile` to name another shared profile, or `profile: "private"` for a clean
 browser: a private panel is signed in nowhere, reads none of the shared
-sign-ins, and keeps no folder at close. Use `private` when the user asks for a
+sign-ins, and keeps no folder at close. A create names a profile of this
+computer or a remote `target`, never both: a remote session runs in the profile
+of its provider, so a create with both fields is refused with a message that
+names `profile` and `target`, and you leave one of them out. Use `private` when the user asks for a
 site without their sign-in, for example to test a sign-up. The panels of one
 shared profile are pages of one browser: they read the same sign-ins, and a
 sign-out in one signs out all of them. Never sign out of a shared profile
