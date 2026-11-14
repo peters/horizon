@@ -415,6 +415,24 @@ impl SessionOfTest {
         silent: Duration,
         idle_stop: Option<Duration>,
     ) -> Self {
+        Self::start_with_unlinked(
+            profile,
+            take_over,
+            silent,
+            idle_stop,
+            crate::browser::host_driver::pages::PRIVATE_PAGE_UNLINKED,
+        )
+    }
+
+    /// A session whose private page with no link goes after
+    /// `unlinked_private_page`.
+    pub(crate) fn start_with_unlinked(
+        profile: &str,
+        take_over: Duration,
+        silent: Duration,
+        idle_stop: Option<Duration>,
+        unlinked_private_page: Duration,
+    ) -> Self {
         let folder = tempfile::tempdir().expect("a folder of a test");
         let path = folder.path().join("session.sock");
         let listener = std::os::unix::net::UnixListener::bind(&path).expect("a socket of a test");
@@ -463,6 +481,7 @@ impl SessionOfTest {
                     take_over,
                     silent,
                     idle_stop,
+                    unlinked_private_page,
                 },
                 start,
             )

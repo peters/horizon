@@ -191,6 +191,7 @@ pub fn serve_test_session(
             take_over: LINK_TAKE_OVER,
             silent: LINK_SILENT,
             idle_stop: None,
+            unlinked_private_page: pages::PRIVATE_PAGE_UNLINKED,
         };
         let start = pages::StartPage::new(move |_options, _group, _private| {
             Ok(session::HostSession::over_page(
@@ -208,6 +209,7 @@ pub struct HostDriverOptions {
     profile: String,
     engine: HostDriverEngine,
     idle_stop: Option<Duration>,
+    unlinked_private_page: Duration,
 }
 
 /// The name of the profile that a browser host driver uses when no link names
@@ -228,7 +230,32 @@ impl HostDriverOptions {
             profile,
             engine,
             idle_stop: None,
+            unlinked_private_page: pages::PRIVATE_PAGE_UNLINKED,
         })
+    }
+
+    /// Close a private page of this host that no link drove for `seconds`.
+    ///
+    /// The bound of the session is [`pages::PRIVATE_PAGE_UNLINKED`], and this
+    /// option shortens it for a check that cannot wait ten minutes: a probe reads
+    /// the rule of a private page without a clock that no person waits for.
+    ///
+    /// # Errors
+    /// The bound is not 1 second to one day.
+    pub fn with_unlinked_private_page_seconds(mut self, seconds: u64) -> Result<Self> {
+        if seconds == 0 || seconds > MAX_UNLINKED_PRIVATE_PAGE_SECONDS {
+            return Err(Error::Config(format!(
+                "`{seconds}` is not a bound for a private page of a browser host: `--private-unlinked` takes 1 to {MAX_UNLINKED_PRIVATE_PAGE_SECONDS} seconds"
+            )));
+        }
+        self.unlinked_private_page = Duration::from_secs(seconds);
+        Ok(self)
+    }
+
+    /// The bound of a private page with no link in this session.
+    #[must_use]
+    pub const fn unlinked_private_page(&self) -> Duration {
+        self.unlinked_private_page
     }
 
     /// Stop the browser of this host after `minutes` with no link attached.
@@ -251,7 +278,8 @@ impl HostDriverOptions {
     }
 
     /// Read the arguments of `--browser-host-driver`: `--profile <name>`,
-    /// `--engine <engine>` and `--idle-stop <minutes>`, each at most once.
+    /// `--engine <engine>`, `--idle-stop <minutes>` and
+    /// `--private-unlinked <seconds>`, each at most once.
     ///
     /// # Errors
     /// An argument that this mode does not serve, a repeated flag, or a value
@@ -260,6 +288,7 @@ impl HostDriverOptions {
         let mut profile: Option<String> = None;
         let mut engine: Option<HostDriverEngine> = None;
         let mut idle_stop: Option<u32> = None;
+        let mut unlinked_private_page: Option<u64> = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             let flag = argument.to_str().ok_or_else(|| {
@@ -292,6 +321,17 @@ impl HostDriverOptions {
                         return Err(Error::Config("`--idle-stop` is given once".into()));
                     }
                 }
+                "--private-unlinked" => {
+                    let value = value_of(&mut arguments, flag)?;
+                    let seconds = value.trim().parse::<u64>().map_err(|_| {
+                        Error::Config(format!(
+                            "`{value}` is not a number of seconds for the bound of a private page of a browser host"
+                        ))
+                    })?;
+                    if unlinked_private_page.replace(seconds).is_some() {
+                        return Err(Error::Config("`--private-unlinked` is given once".into()));
+                    }
+                }
                 other => {
                     return Err(Error::Config(format!(
                         "`{other}` is not part of the browser host driver mode"
@@ -303,8 +343,12 @@ impl HostDriverOptions {
             profile.unwrap_or_else(|| DEFAULT_HOST_DRIVER_PROFILE.to_string()),
             engine.unwrap_or(HostDriverEngine::Firefox),
         )?;
-        match idle_stop {
-            Some(minutes) => options.with_idle_stop_minutes(minutes),
+        let options = match idle_stop {
+            Some(minutes) => options.with_idle_stop_minutes(minutes)?,
+            None => options,
+        };
+        match unlinked_private_page {
+            Some(seconds) => options.with_unlinked_private_page_seconds(seconds),
             None => Ok(options),
         }
     }
@@ -345,6 +389,10 @@ impl HostDriverOptions {
 
 /// The longest idle bound that a host entry can name, in minutes.
 pub const MAX_IDLE_STOP_MINUTES: u32 = 10_080;
+
+/// The longest bound that a person can give a private page of a browser host with
+/// no link, in seconds.
+pub const MAX_UNLINKED_PRIVATE_PAGE_SECONDS: u64 = 86_400;
 
 fn value_of(arguments: &mut impl Iterator<Item = std::ffi::OsString>, flag: &str) -> Result<String> {
     let value = arguments
@@ -484,6 +532,7 @@ fn serve_session(options: &HostDriverOptions) -> i32 {
         take_over: LINK_TAKE_OVER,
         silent: LINK_SILENT,
         idle_stop: options.idle_stop(),
+        unlinked_private_page: options.unlinked_private_page(),
     };
     serve_links(&listener, options, &socket, rules, pages::StartPage::of_host())
 }
@@ -500,6 +549,8 @@ pub(super) struct LinkRules {
     /// The bound that stops the browser of a session with no link, when the
     /// entry of the host names one.
     pub(super) idle_stop: Option<Duration>,
+    /// The bound of a private page with no link, which the session closes.
+    pub(super) unlinked_private_page: Duration,
 }
 
 /// Serve the links of one session, in the order that this computer asks for
@@ -545,6 +596,15 @@ fn serve_links(
             tracing::info!(
                 profile = options.profile(),
                 "the last page of a browser host session ended, so the session stops its browser"
+            );
+            served.stop_all();
+            cleanup(socket, options);
+            return 0;
+        }
+        if served.close_unlinked_private_pages(Instant::now()) {
+            tracing::info!(
+                profile = options.profile(),
+                "the session of a browser host closed the last page that it had, so it stops its browser"
             );
             served.stop_all();
             cleanup(socket, options);

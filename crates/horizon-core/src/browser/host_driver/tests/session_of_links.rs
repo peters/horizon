@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use horizon_browser::BrowserCommand;
 use horizon_browser::host_driver::{HostDriverPageState, HostDriverReply, HostDriverRequest};
 
-use super::super::pages::MAX_PAGES;
-use super::super::{HostDriverOptions, relay_streams};
+use super::super::pages::{MAX_PAGES, PRIVATE_PAGE_UNLINKED, SessionPages, StartPage};
+use super::super::{HostDriverEngine, HostDriverOptions, LinkRules, relay_streams};
 use super::fixtures::{Collected, SessionOfTest, WAIT, hello, hello_page, lock, never_ends, signals, store};
 
 #[test]
@@ -270,6 +270,38 @@ fn a_session_stops_its_browser_at_the_idle_bound_of_its_entry() {
     assert_eq!(code, 0, "a session that reached its idle bound stops its browser");
 }
 
+/// The bound of a private page with no link is ten minutes, and the option of a
+/// driver shortens it for a check that cannot wait for the rule.
+#[test]
+fn the_private_page_bound_is_ten_minutes_and_an_option_shortens_it() {
+    let options = HostDriverOptions::parse([]).expect("the default of the mode");
+    assert_eq!(
+        options.unlinked_private_page(),
+        PRIVATE_PAGE_UNLINKED,
+        "the session of a browser host closes a private page ten minutes after its link went"
+    );
+    let short = HostDriverOptions::parse(
+        ["--private-unlinked", "20"]
+            .map(std::ffi::OsString::from)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    )
+    .expect("a driver with a short bound");
+    assert_eq!(short.unlinked_private_page(), Duration::from_secs(20));
+    for arguments in [
+        &["--private-unlinked", "0"][..],
+        &["--private-unlinked", "86401"],
+        &["--private-unlinked", "later"],
+        &["--private-unlinked"],
+        &["--private-unlinked", "5", "--private-unlinked", "6"],
+    ] {
+        assert!(
+            HostDriverOptions::parse(arguments.iter().map(std::ffi::OsString::from)).is_err(),
+            "{arguments:?} must be refused"
+        );
+    }
+}
+
 #[test]
 fn the_idle_bound_of_a_host_entry_is_minutes_and_off_without_it() {
     let options = HostDriverOptions::parse([]).expect("the default of the mode");
@@ -461,4 +493,126 @@ fn a_session_refuses_a_page_beyond_the_bound_of_its_pages() {
         "the words name the bound and the way out: {message}"
     );
     assert_eq!(session.pages(), MAX_PAGES, "no page beyond the bound was started");
+}
+
+/// A private page of a session that lost its link goes after the bound of the
+/// session, so its context leaves the browser of the host. A shared page of the
+/// same session stays: a person signed in there.
+#[test]
+fn a_private_page_with_no_link_goes_after_the_bound_and_a_shared_page_stays() {
+    let session = SessionOfTest::start_with_unlinked(
+        "private-bound",
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+        None,
+        Duration::from_millis(300),
+    );
+    let mut private = session.connect();
+    private.send(&hello_page("private-panel", true, 60));
+    assert_eq!(private.welcome(WAIT).page, HostDriverPageState::New);
+    let mut shared = session.connect();
+    shared.send(&hello_page("shared-panel", false, 60));
+    assert_eq!(shared.welcome(WAIT).page, HostDriverPageState::New);
+
+    // Both links go silent, which is what the link of a panel looks like when
+    // Horizon stops, so both pages lose their link.
+    assert!(
+        private.closed(Duration::from_secs(2)),
+        "the session closes a silent link"
+    );
+    assert!(
+        shared.closed(Duration::from_secs(2)),
+        "the session closes a silent link"
+    );
+    std::thread::sleep(Duration::from_millis(700));
+
+    // The private page went with its context, so the link of that panel starts a
+    // page.
+    let mut private_again = session.connect();
+    private_again.send(&hello_page("private-panel", true, 60));
+    assert_eq!(
+        private_again.welcome(WAIT).page,
+        HostDriverPageState::New,
+        "a private page with no link for the bound is closed, and its context goes with it"
+    );
+    // The shared page stays, so the panel that comes back finds its page.
+    let mut shared_again = session.connect();
+    shared_again.send(&hello_page("shared-panel", false, 60));
+    assert_eq!(
+        shared_again.welcome(WAIT).page,
+        HostDriverPageState::Same,
+        "a shared page keeps the rule of today: it waits for the link of its panel"
+    );
+    let code = session.close(&mut shared_again);
+    assert_eq!(code, 0);
+}
+
+/// The bound of a private page with no link reads the clock of its caller, so a
+/// test judges the ten minutes of the rule without waiting for them.
+#[test]
+fn the_bound_of_a_private_page_with_no_link_is_one_constant() {
+    assert_eq!(
+        PRIVATE_PAGE_UNLINKED,
+        Duration::from_secs(600),
+        "a private page of a browser host goes after ten minutes with no link"
+    );
+    let options = HostDriverOptions::new("private-clock", HostDriverEngine::Firefox).expect("the options of a test");
+    let rules = LinkRules {
+        take_over: Duration::from_millis(50),
+        silent: Duration::from_secs(60),
+        idle_stop: None,
+        unlinked_private_page: PRIVATE_PAGE_UNLINKED,
+    };
+    let start = StartPage::new(|_options, _group, _private| {
+        Ok(super::super::session::HostSession::over_page(
+            Box::new(super::fixtures::FakePage::silent()),
+            std::sync::Arc::new(horizon_browser::FrameSlot::new()),
+        ))
+    });
+    let pages = SessionPages::new(options, rules, start);
+    let private = pages.acquire("private-panel", true).expect("a private page");
+    let shared = pages.acquire("shared-panel", false).expect("a shared page");
+    private.hold.release();
+    shared.hold.release();
+    let released_at = Instant::now();
+
+    assert!(
+        !pages.close_unlinked_private_pages(released_at + PRIVATE_PAGE_UNLINKED - Duration::from_secs(1)),
+        "the session closes no page before the bound"
+    );
+    assert!(pages.keeps_page("private-panel"), "the private page waits for a link");
+    assert!(
+        !pages.close_unlinked_private_pages(released_at + PRIVATE_PAGE_UNLINKED),
+        "a shared page keeps the rule of today, so the session has a page left"
+    );
+    assert!(
+        !pages.keeps_page("private-panel"),
+        "the private page and its context go at the bound"
+    );
+    assert!(pages.keeps_page("shared-panel"), "the shared page stays");
+}
+
+/// A private page that a link still drives stays, however long it runs.
+#[test]
+fn a_private_page_with_a_link_keeps_its_context() {
+    let options = HostDriverOptions::new("private-link", HostDriverEngine::Firefox).expect("the options of a test");
+    let rules = LinkRules {
+        take_over: Duration::from_millis(50),
+        silent: Duration::from_secs(60),
+        idle_stop: None,
+        unlinked_private_page: PRIVATE_PAGE_UNLINKED,
+    };
+    let start = StartPage::new(|_options, _group, _private| {
+        Ok(super::super::session::HostSession::over_page(
+            Box::new(super::fixtures::FakePage::silent()),
+            std::sync::Arc::new(horizon_browser::FrameSlot::new()),
+        ))
+    });
+    let pages = SessionPages::new(options, rules, start);
+    let _private = pages.acquire("private-panel", true).expect("a private page");
+    assert!(
+        !pages.close_unlinked_private_pages(Instant::now() + Duration::from_hours(6)),
+        "a page that a link drives keeps its context"
+    );
+    assert!(pages.keeps_page("private-panel"));
 }
