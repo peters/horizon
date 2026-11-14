@@ -81,22 +81,26 @@ fn show_grid(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRo
     let term = theme::BG_ELEVATED();
     let radius = CornerRadius::same(BOARD_RADIUS);
     painter.rect_filled(rect, radius, term);
-    let head = Rect::from_min_size(rect.min, Vec2::new(width, BOARD_HEAD_HEIGHT));
-    let top_corners = CornerRadius {
-        nw: BOARD_RADIUS,
-        ne: BOARD_RADIUS,
-        sw: 0,
-        se: 0,
-    };
-    painter.rect_filled(head, top_corners, theme::PANEL_BG());
-    let lane = Rect::from_min_size(rect.min, Vec2::new(BOARD_HEAD_COLUMN, height));
-    let left_corners = CornerRadius {
-        nw: BOARD_RADIUS,
-        ne: 0,
-        sw: BOARD_RADIUS,
-        se: 0,
-    };
-    painter.rect_filled(lane, left_corners, theme::PANEL_BG());
+    painter.rect_filled(
+        Rect::from_min_size(rect.min, Vec2::new(width, BOARD_HEAD_HEIGHT)),
+        CornerRadius {
+            nw: BOARD_RADIUS,
+            ne: BOARD_RADIUS,
+            sw: 0,
+            se: 0,
+        },
+        theme::PANEL_BG(),
+    );
+    painter.rect_filled(
+        Rect::from_min_size(rect.min, Vec2::new(BOARD_HEAD_COLUMN, height)),
+        CornerRadius {
+            nw: BOARD_RADIUS,
+            ne: 0,
+            sw: BOARD_RADIUS,
+            se: 0,
+        },
+        theme::PANEL_BG(),
+    );
     for (column, wave) in columns.iter().enumerate() {
         if wave.current {
             let cell = Rect::from_min_size(
@@ -176,6 +180,11 @@ fn tallest_cell(items: &[BoardItem], columns: usize, row: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// Paint `galley` with its left edge at `x`, centred on `middle`.
+fn line_at(painter: &egui::Painter, x: f32, middle: f32, galley: &std::sync::Arc<egui::Galley>, colour: Color32) {
+    painter.galley(Pos2::new(x, middle - galley.size().y * 0.5), galley.clone(), colour);
+}
+
 /// One head cell: the tag in a square, the name of the wave, its note and the
 /// value at the right edge.
 fn show_column_head(painter: &egui::Painter, cell: Rect, wave: &BoardColumn) {
@@ -216,14 +225,8 @@ fn show_column_head(painter: &egui::Painter, cell: Rect, wave: &BoardColumn) {
             BOARD_TAG_SIZE,
             Weight::Medium,
         );
-        painter.galley(
-            Pos2::new(
-                square.center().x - galley.size().x * 0.5,
-                square.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            ink,
-        );
+        let offset = square.center() - galley.size() * 0.5;
+        painter.galley(Pos2::new(offset.x, offset.y), galley, ink);
         left += BOARD_TAG_SIZE + BOARD_HEAD_GAP;
     }
     let room = (cell.max.x - BOARD_HEAD_PAD_SIDE - value_width - left).max(0.0);
@@ -696,10 +699,11 @@ fn show_group_head(ui: &mut Ui, wave: &BoardColumn) {
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, &words));
     ui.painter().galley(rect.min, caption, colour);
     if let Some(galley) = value {
-        let size = galley.size();
-        ui.painter().galley(
-            Pos2::new(rect.max.x - size.x, rect.center().y - size.y * 0.5),
-            galley,
+        line_at(
+            ui.painter(),
+            rect.max.x - galley.size().x,
+            rect.center().y,
+            &galley,
             theme::FG_DIM(),
         );
     }
