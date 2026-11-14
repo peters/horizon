@@ -113,7 +113,7 @@ impl HorizonApp {
         // The profile of a local panel: the shared default, a shared profile by
         // name, or a private panel that keeps nothing. A browser host keeps the
         // profile of that machine, so a private panel is refused there.
-        let profile = match horizon_browser::ProfileChoice::parse(request.profile.as_deref()) {
+        let profile = match create_profile(&request) {
             Ok(profile) => profile,
             Err(message) => {
                 fail_create(&mut self.browser_create_host.io, &request, "invalid_profile", &message);
@@ -359,9 +359,12 @@ pub(super) fn publish_requested_create(
 /// instead keeps the backend and the profile of its source.
 fn browser_create_options(
     request: &BrowserCreateRequest,
-    browser_config: horizon_core::browser::BrowserConfig,
+    mut browser_config: horizon_core::browser::BrowserConfig,
     shared_profile: Option<&str>,
 ) -> PanelOptions {
+    // The driver stamps the profile of its panel into the manifest, so an agent
+    // reads the profile of the panel that it controls.
+    browser_config.profile = Some(shared_profile.unwrap_or(horizon_browser::PRIVATE_PROFILE).to_string());
     PanelOptions {
         command: request.url.clone(),
         kind: PanelKind::Browser,
@@ -386,6 +389,13 @@ impl HorizonApp {
     fn browser_host_backend_refusal(&self, backend: BackendKind) -> Option<&'static str> {
         self.template_config.browser_host.backend_refusal(backend)
     }
+}
+
+/// The profile that a create names, or the words of the refusal: the host wire
+/// answers with the field, the rule and the reserved word, exactly as the MCP
+/// layer does, so an agent learns what to change.
+fn create_profile(request: &BrowserCreateRequest) -> Result<horizon_browser::ProfileChoice, String> {
+    horizon_browser::ProfileChoice::parse(request.profile.as_deref())
 }
 
 #[cfg(test)]
@@ -427,6 +437,26 @@ mod tests {
         app.board.panels.push(panel);
         app.board.assign_panel_to_workspace(PanelId(id), workspace);
         local_id
+    }
+
+    #[test]
+    fn a_create_on_the_wire_with_a_refused_profile_names_the_field_and_the_rule() {
+        let mut request = BrowserCreateRequest::for_tests("agent");
+        for refused in ["Private", "my profile", "my_profile"] {
+            request.profile = Some(refused.to_string());
+            let message = match create_profile(&request) {
+                Ok(profile) => panic!("the profile rule refuses {refused:?}: {profile:?}"),
+                Err(message) => message,
+            };
+            assert!(message.contains("profile"), "the answer names the field: {message}");
+            assert!(message.contains("a-z, 0-9"), "the answer names the rule: {message}");
+            assert!(
+                message.contains(horizon_browser::PRIVATE_PROFILE),
+                "the answer names the reserved word: {message}"
+            );
+        }
+        request.profile = Some("work".to_string());
+        assert!(create_profile(&request).is_ok(), "a name that the rule accepts passes");
     }
 
     #[test]

@@ -44,8 +44,9 @@ impl ProfileChoice {
         }
         if !valid_profile_name(name) {
             return Err(format!(
-                "the profile {name:?} is not a browser profile name: use 1 to {MAX_PROFILE_NAME_CHARS} of a-z, 0-9 and -, \
-                 with a letter or a digit at each end, or {PRIVATE_PROFILE:?} for a panel that is not signed in"
+                "the field profile refused {name:?}: use 1 to {MAX_PROFILE_NAME_CHARS} characters of a-z, 0-9 and -, \
+                 with a letter or a digit at each end, or the reserved word {PRIVATE_PROFILE:?} for a panel that is not \
+                 signed in"
             ));
         }
         Ok(Self::Shared(name.to_string()))
@@ -279,8 +280,8 @@ mod tests {
         );
         let refusal = ProfileChoice::parse(Some("../private")).expect_err("a path is no name");
         assert!(
-            refusal.contains("private"),
-            "the refusal names the reserved word: {refusal}"
+            refusal.contains("the field profile") && refusal.contains("private") && refusal.contains("a-z, 0-9"),
+            "the refusal names the field, the rule and the reserved word: {refusal}"
         );
         assert!(
             ProfileChoice::parse(Some("Private")).is_err(),

@@ -137,6 +137,9 @@ pub(super) fn apply_reply(
                 remote_orientation: None,
                 file_chooser: state.file_chooser,
                 passkey_pending: state.passkey_pending,
+                // A browser host of another machine keeps the profile of that
+                // machine, which this computer does not read.
+                profile: None,
             };
             // A manifest that this computer cannot write is a reason to stop a
             // link: an agent would drive a page whose owner nobody records. A

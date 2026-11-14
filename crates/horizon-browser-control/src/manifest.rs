@@ -191,6 +191,12 @@ pub struct BrowserManifest {
     pub audit_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ManifestOwner>,
+    /// The profile that this panel runs in, as the host stamped it: the name of
+    /// a shared profile, whose panels share one sign-in, or `private` for a
+    /// panel that keeps nothing. Absent for a remote device session, whose
+    /// profile belongs to that machine, and on manifests of an older host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Sticky ownership history for exact-allocation recovery. Missing history
     /// from older writers is unknown and cannot authorize admission fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +776,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
             manifest.passkey_pending = state.passkey_pending;
+            manifest.profile.clone_from(&state.profile);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.page_resumed = state.page_resumed;
@@ -793,6 +800,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.remote_orientation = state.remote_orientation;
             manifest.file_chooser = state.file_chooser;
             manifest.passkey_pending = state.passkey_pending;
+            manifest.profile.clone_from(&state.profile);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.page_resumed = state.page_resumed;
@@ -1027,6 +1035,7 @@ mod tests {
             remote_orientation: None,
             file_chooser: horizon_browser::FileChooserStatus::Unsupported,
             passkey_pending: false,
+            profile: None,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             page_resumed: false,

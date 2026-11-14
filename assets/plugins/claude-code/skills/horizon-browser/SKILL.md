@@ -39,7 +39,11 @@ sign-ins, and keeps no folder at close. Use `private` when the user asks for a
 site without their sign-in, for example to test a sign-up. The panels of one
 shared profile are pages of one browser: they read the same sign-ins, and a
 sign-out in one signs out all of them. Never sign out of a shared profile
-unless the user asks for it. `profile: "private"` is refused on a browser host. A create that is still pending counts
+unless the user asks for it. `profile: "private"` is refused on a browser host. Every panel of
+`browser_create`, `browser_list` and `browser_panel` reports `profile`: the
+name of the shared profile that it uses, or `private`. A remote session
+reports none. Use that field to tell which profile a panel's sign-ins belong
+to; a panel whose `profile` is absent was created by an older Horizon. A create that is still pending counts
 as a panel of its engine. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Read `automation_disclosure` on `browser_list` and

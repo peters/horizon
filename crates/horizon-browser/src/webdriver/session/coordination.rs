@@ -277,6 +277,7 @@ impl Driver {
             remote_file_upload: self.file_transfer.is_some(),
             file_chooser: self.config.frame_slot.file_chooser().status(),
             passkey_pending: self.config.frame_slot.passkey_pending(),
+            profile: self.config.browser.profile.clone(),
         }
     }
 

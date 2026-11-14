@@ -33,6 +33,9 @@ pub struct CoordinationState {
     pub file_chooser: crate::FileChooserStatus,
     /// A page's passkey request waits for the external authenticator command.
     pub passkey_pending: bool,
+    /// The profile that this panel runs in: the name of a shared profile, or the
+    /// reserved word of a private panel. Absent for a remote device session.
+    pub profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

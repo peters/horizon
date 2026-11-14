@@ -120,7 +120,7 @@ pub(crate) enum ControlError {
     #[error("{operation}: {reason}")]
     Io {
         operation: &'static str,
-        reason: &'static str,
+        reason: std::borrow::Cow<'static, str>,
         #[source]
         source: io::Error,
     },
@@ -792,21 +792,7 @@ impl BrowserController {
 impl ControlError {
     fn internal_io(operation: &'static str, source: io::Error) -> Self {
         tracing::warn!(operation, error = %source, "browser MCP host coordination failed");
-        let reason = match source.kind() {
-            io::ErrorKind::WouldBlock => {
-                "would block while the user is steering, the action queue is full, or queued attachments leave no staging room"
-            }
-            io::ErrorKind::PermissionDenied if is_ownership_denial(&source) => {
-                "permission denied because browser panel ownership changed"
-            }
-            io::ErrorKind::PermissionDenied => "the operating system denied access to a host coordination file",
-            io::ErrorKind::NotFound => "browser panel is not live",
-            io::ErrorKind::InvalidInput => "invalid browser control input",
-            io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
-            io::ErrorKind::Unsupported => "the browser panel backend does not support this action",
-            io::ErrorKind::TimedOut => "host coordination timed out",
-            _ => "internal host coordination error",
-        };
+        let reason = io_reason(source.kind(), &source);
         Self::Io {
             operation,
             reason,
@@ -817,6 +803,29 @@ impl ControlError {
     fn is_missing_panel(&self) -> bool {
         matches!(self, Self::Io { source, .. } if source.kind() == io::ErrorKind::NotFound)
     }
+}
+
+/// What an answer says about a refused host coordination call.
+///
+/// The words of a refused field are the host's own, so an agent reads which
+/// field broke which rule instead of one sentence that names no field.
+fn io_reason(kind: io::ErrorKind, source: &io::Error) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
+    Cow::Borrowed(match kind {
+        io::ErrorKind::WouldBlock => {
+            "would block while the user is steering, the action queue is full, or queued attachments leave no staging room"
+        }
+        io::ErrorKind::PermissionDenied if is_ownership_denial(source) => {
+            "permission denied because browser panel ownership changed"
+        }
+        io::ErrorKind::PermissionDenied => "the operating system denied access to a host coordination file",
+        io::ErrorKind::NotFound => "browser panel is not live",
+        io::ErrorKind::FileTooLarge => "an attachment exceeds the staging size limit",
+        io::ErrorKind::Unsupported => "the browser panel backend does not support this action",
+        io::ErrorKind::TimedOut => "host coordination timed out",
+        io::ErrorKind::InvalidInput => return Cow::Owned(format!("invalid browser control input: {source}")),
+        _ => "internal host coordination error",
+    })
 }
 
 /// Coordination code refuses a claim, request or workspace with a synthesized
@@ -1053,6 +1062,38 @@ pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) ->
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    /// A create that names a profile the rule refuses answers with the field,
+    /// the rule and the reserved word, so an agent learns what to change.
+    #[test]
+    fn a_create_with_a_refused_profile_names_the_field_the_rule_and_the_word() {
+        for refused in ["Private", "my profile", "my_profile", "-work"] {
+            let parameters = manifest::RemoteCreateParameters {
+                url: None,
+                backend: None,
+                target: None,
+                orientation: None,
+                visible: true,
+                profile: Some(refused.to_string()),
+            };
+            let error = manifest::enqueue_create_oriented(
+                crate::controller::AgentIdentity {
+                    actor: "horizon:agent-a",
+                    host_instance: Some("host-a"),
+                },
+                parameters,
+                std::time::Duration::from_millis(50),
+            )
+            .expect_err("the profile rule refuses this name");
+            let answer = ControlError::internal_io("could not queue browser panel creation", error).to_string();
+            assert!(answer.contains("profile"), "the answer names the field: {answer}");
+            assert!(answer.contains("a-z, 0-9"), "the answer names the rule: {answer}");
+            assert!(
+                answer.contains("private"),
+                "the answer names the reserved word: {answer}"
+            );
+        }
+    }
 
     #[test]
     fn remote_panels_refuse_attachments_before_any_staging() {

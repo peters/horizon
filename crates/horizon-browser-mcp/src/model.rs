@@ -58,6 +58,12 @@ pub(crate) enum ProtocolKind {
 pub(crate) struct BrowserPanel {
     pub(crate) panel_id: String,
     pub(crate) backend: String,
+    /// The profile that this panel runs in: the name of a shared profile, whose
+    /// pages share one sign-in, or `private` for a panel that keeps nothing.
+    /// Absent for a remote device session, whose profile belongs to that
+    /// machine, and on manifests of an older host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) profile: Option<String>,
     /// Established disclosure. `common_signals_minimized` is a native Firefox
     /// flag clear or local Chromium's suppressed automation flag.
     /// `preload_fallback` is the Firefox script getter. Sign-in pages can
@@ -157,6 +163,7 @@ impl BrowserPanel {
         Self {
             panel_id: value.panel_local_id,
             backend: backend_name(value.backend).to_string(),
+            profile: value.profile,
             automation_disclosure: value.automation_disclosure.as_str().to_string(),
             protocol,
             remote_target: value.remote_target,
@@ -1159,6 +1166,28 @@ mod tests {
             files: None,
             timeout_millis: None,
         }
+    }
+
+    /// A panel answers the profile that its manifest holds, so an agent reads
+    /// which profile a panel uses: a shared profile by name, or the private
+    /// panel. A remote session and a manifest of an older host state none.
+    #[test]
+    fn a_panel_reports_the_profile_that_its_manifest_holds() {
+        let panel = |profile: Option<&str>, remote: bool| {
+            BrowserPanel::from_manifest(
+                manifest::BrowserManifest {
+                    profile: profile.map(str::to_string),
+                    remote_target: remote.then(|| "phone".to_string()),
+                    ..manifest::BrowserManifest::default()
+                },
+                "horizon:agent-a",
+            )
+            .profile
+        };
+        assert_eq!(panel(Some("work"), false).as_deref(), Some("work"));
+        assert_eq!(panel(Some("private"), false).as_deref(), Some("private"));
+        assert_eq!(panel(None, true), None, "a remote session names no local profile");
+        assert_eq!(panel(None, false), None, "an older host states no profile");
     }
 
     #[test]

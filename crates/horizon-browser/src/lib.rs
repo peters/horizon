@@ -156,6 +156,12 @@ pub struct BrowserConfig {
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
     pub every_nth_frame: u32,
     pub profile_root: Option<PathBuf>,
+    /// The profile that this panel runs in: the name of a shared profile, whose
+    /// panels share one sign-in, or the reserved word of a private panel that
+    /// keeps nothing. Absent for a remote device session and for a panel whose
+    /// caller states none; each engine derives its own folder from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Parent folder for the per-panel download folders. `None` uses
     /// `Downloads/Horizon` in the home directory, where a person looks for a
     /// download. Each panel saves into its own subfolder of it.
@@ -200,6 +206,7 @@ impl Default for BrowserConfig {
             egress: None,
             quality: 60,
             every_nth_frame: 1,
+            profile: None,
             profile_root: None,
             downloads_root: None,
             video: BrowserVideoCaptureOptions::default(),

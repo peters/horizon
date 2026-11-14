@@ -275,6 +275,7 @@ impl DriverState {
             remote_orientation: None,
             file_chooser: self.config.frame_slot.file_chooser().status(),
             passkey_pending: self.config.frame_slot.passkey_pending(),
+            profile: self.config.browser.profile.clone(),
         }
     }
 }
