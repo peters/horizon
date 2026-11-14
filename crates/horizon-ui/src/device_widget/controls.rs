@@ -2,6 +2,7 @@ use egui::{Label, Ui};
 use horizon_vnc::{Region, ViewOptions};
 
 use super::panel_text;
+use crate::screen_pane;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -43,7 +44,7 @@ impl Controls {
     }
 
     /// The rate and the size limits of the images that the host renders.
-    fn limits(&mut self, ui: &mut Ui) {
+    pub(super) fn limits(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.add(Label::new(panel_text::word(
                 ui,
@@ -51,23 +52,29 @@ impl Controls {
                 panel_text::SMALL,
                 panel_text::fg(),
             )));
-            ui.add(egui::DragValue::new(&mut self.options.max_fps).range(1..=30));
+            screen_pane::add_widget(ui, ("max_fps",), |ui| {
+                ui.add(egui::DragValue::new(&mut self.options.max_fps).range(1..=30))
+            });
             ui.add(Label::new(panel_text::word(
                 ui,
                 "Image limits",
                 panel_text::SMALL,
                 panel_text::fg(),
             )));
-            ui.add(
-                egui::DragValue::new(&mut self.options.max_width)
-                    .range(1..=8192)
-                    .suffix(" px wide"),
-            );
-            ui.add(
-                egui::DragValue::new(&mut self.options.max_height)
-                    .range(1..=8192)
-                    .suffix(" px high"),
-            );
+            screen_pane::add_widget(ui, ("max_width",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.options.max_width)
+                        .range(1..=8192)
+                        .suffix(" px wide"),
+                )
+            });
+            screen_pane::add_widget(ui, ("max_height",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.options.max_height)
+                        .range(1..=8192)
+                        .suffix(" px high"),
+                )
+            });
         });
     }
 
@@ -96,7 +103,7 @@ impl Controls {
 
     /// The crop of the desktop that the host renders, with the word that applies
     /// it once the person is content with the four numbers.
-    fn viewport(&mut self, ui: &mut Ui, desktop: [usize; 2]) {
+    pub(super) fn viewport(&mut self, ui: &mut Ui, desktop: [usize; 2]) {
         let draft = self.draft.get_or_insert(Region {
             x: 0,
             y: 0,
@@ -110,26 +117,34 @@ impl Controls {
                 panel_text::SMALL,
                 panel_text::fg(),
             )));
-            ui.add(
-                egui::DragValue::new(&mut draft.x)
-                    .range(0..=desktop[0].saturating_sub(1))
-                    .prefix("x "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut draft.y)
-                    .range(0..=desktop[1].saturating_sub(1))
-                    .prefix("y "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut draft.width)
-                    .range(1..=desktop[0])
-                    .prefix("w "),
-            );
-            ui.add(
-                egui::DragValue::new(&mut draft.height)
-                    .range(1..=desktop[1])
-                    .prefix("h "),
-            );
+            screen_pane::add_widget(ui, ("viewport_x",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut draft.x)
+                        .range(0..=desktop[0].saturating_sub(1))
+                        .prefix("x "),
+                )
+            });
+            screen_pane::add_widget(ui, ("viewport_y",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut draft.y)
+                        .range(0..=desktop[1].saturating_sub(1))
+                        .prefix("y "),
+                )
+            });
+            screen_pane::add_widget(ui, ("viewport_w",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut draft.width)
+                        .range(1..=desktop[0])
+                        .prefix("w "),
+                )
+            });
+            screen_pane::add_widget(ui, ("viewport_h",), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut draft.height)
+                        .range(1..=desktop[1])
+                        .prefix("h "),
+                )
+            });
             let apply = panel_text::word(ui, "Apply viewport", panel_text::SMALL, panel_text::fg());
             if ui.button(apply).clicked() {
                 let options = ViewOptions {

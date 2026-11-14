@@ -459,6 +459,19 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   it is and its letters stay sharp. The test of a part that takes it tessellates
   the part in a canvas pass at a zoom and asserts that every glyph corner is
   within 0.01 of a whole device pixel and that no picture is stretched.
+- A widget that lays out its own text takes a pane of `screen_pane` instead. A
+  drag value and the markdown viewer draw their text with the fonts of the
+  context, so no galley reaches them and `widget_text` cannot help. A pane is a
+  layer of its own, directly above the layer of its panel, whose transform is
+  the identity: the widget inside it lays its text out at the size that the text
+  has on the screen, and the pane is laid out in the coordinates of the screen
+  at the zoom times the layout of zoom 1. `screen_pane::add_widget` takes the
+  place that such a widget takes in the layout of the panel, reserves it, and
+  draws the widget in a pane over that place, so a row keeps its place, its
+  size and its line at every zoom. The pane can be a couple of points wider than
+  the row of zoom 1 times the zoom, because the glyph advances of the screen
+  size are rounded to the whole device pixel. At zoom 1 the plain path runs and
+  the look of a display of scale 1 does not change.
 
 ### The floor of a Fit of a workspace
 
@@ -493,8 +506,8 @@ screen size. These parts still draw that text:
 | The chrome of a browser panel beside the address field: the engine name, the profile pill, the chip, the elapsed time of a recording, the notice lines and the hand-off banner | Done: they take `zoom_text::widget_text` |
 | The mode bar of the editor | Done: its two modes, its file name and its error line take `zoom_text::widget_text` |
 | The placeholder of a browser panel: its state line and the note under it | Paint both lines with `zoom_text` inside the centred area, and keep the response for the tooltip |
-| The preview of the editor | The preview is markdown through the toolkit. A fix needs the renderer to build a `LayoutJob` per block and to keep its own line breaks, so it is a rewrite of that renderer and not a call site |
-| The rows and the controls of a device panel | About twenty call sites. Most are one line each through `zoom_text::widget_text`; two lines wrap as a paragraph, which needs a wrapped job as well as the elided one |
+| The preview of the editor | Done: round 50 draws it in a pane of `screen_pane` at the size of the screen. An image of a note does not load at any zoom, because the build installs no image loader |
+| The rows and the controls of a device panel | Done: the labels take `panel_text` and therefore `zoom_text::widget_text`, and the seven drag values of the controls draw through `screen_pane::add_widget` |
 | Every popup of a panel | A popup is its own layer; the canvas transform would have to reach it first |
 
 An overlay or a popup that is not under the canvas transform is already sharp,

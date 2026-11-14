@@ -25,6 +25,8 @@ mockups, and that a zoom gesture stays cheap.
   a display of scale 2.
 - This procedure does not test: the Fit zoom rules. It uses the Fit zoom of the
   fixture and does not change it.
+- This procedure does not test an image of a markdown preview: the build
+  installs no image loader, so an image of a note does not load at any zoom.
 
 ## 3. Safety
 
@@ -178,6 +180,37 @@ fixture keeps its state in its own folder and touches no real Horizon home.
    Result: the text is as sharp as at 100 %, and a stem is not wider than the
    stem of the same text at 100 %.
 
+### 6.10 CT-CONTROLS — The numbers of a device panel at a zoom
+
+1. Open a device panel. Open its **View controls** section.
+
+   Result: the row **Maximum fps** shows a number, and the rows of **Image
+   limits** and **Viewport** show their numbers.
+
+2. Zoom the canvas to 0.67 and read the four numbers of the **Viewport** row.
+
+   Result: each number is as sharp as the word beside it. No number is a
+   stretched copy. The row keeps its place and its line.
+
+3. Zoom the canvas to 1.5 and repeat step 2.
+
+   Result: the numbers are sharp, and each number stands as large as its
+   caption times the zoom.
+
+4. Drag the number of **Maximum fps** to the right while the zoom is 0.67.
+
+   Result: the number rises and the panel does not pan. The canvas keeps its
+   place.
+
+5. Click the number of **Maximum fps**, type `7` and press Enter.
+
+   Result: the panel shows 7. The keys went to the number and not to the
+   terminal of a panel.
+
+6. Zoom back to 1.0 and read the rows.
+
+   Result: the rows look exactly as they look without a zoom.
+
 ## 7. Pass criteria
 
 - The text of the card, the title bar, the workspace label and the terminal is
@@ -189,6 +222,8 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   count of every component of a card, of a title bar and of a workspace label
   is the line count of zoom 1.
 - The address field of a browser panel is laid out for the screen size.
+- The numbers of the controls of a device panel are laid out for the screen
+  size, and their rows keep the place and the size of zoom 1.
 - The window repaints once after a zoom settles, and not while it is still.
 
 ## 8. Cleanup

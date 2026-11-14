@@ -24,6 +24,7 @@ mod native_window;
 mod plugin_install;
 mod primary_selection;
 mod remote_hosts_overlay;
+mod screen_pane;
 mod screenshot;
 mod search_overlay;
 mod terminal_widget;

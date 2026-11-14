@@ -6,6 +6,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use horizon_core::{MarkdownEditor, Panel, PanelId, PreviewMode, ShortcutBinding};
 
 use crate::app::shortcuts::shortcut_pressed;
+use crate::screen_pane;
 use crate::theme;
 use crate::zoom_text;
 
@@ -229,9 +230,9 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
     let mut fallback_cache = MarkdownPreviewCache::default();
     let cache = preview_cache.unwrap_or(&mut fallback_cache);
 
-    match preview_scale(ui) {
+    match screen_pane::canvas_scale(ui) {
         Some(scale) => {
-            let mut screen = screen_pane(ui, panel_id, scale);
+            let mut screen = screen_pane::pane(ui, ("editor_preview", panel_id), scale);
             preview_scroll(&mut screen, panel_id, cache, editor);
         }
         None => preview_scroll(ui, panel_id, cache, editor),
@@ -254,59 +255,6 @@ fn preview_scroll(ui: &mut egui::Ui, panel_id: u64, cache: &mut MarkdownPreviewC
             }
             ui.add_space(8.0);
         });
-}
-
-/// The zoom of the canvas that the pane is drawn in, while that zoom is not 100
-/// percent.
-fn preview_scale(ui: &egui::Ui) -> Option<f32> {
-    let scale = ui.ctx().layer_transform_to_global(ui.layer_id())?.scaling;
-    ((scale - 1.0).abs() > 1.0e-3 && scale > 0.0).then_some(scale)
-}
-
-/// A pane of the preview that the canvas zoom draws at the size of the screen.
-///
-/// The markdown viewer takes its font sizes, its spacing and its wrap width
-/// from the [`egui::Ui`] that it draws in, so a stock viewer under the canvas
-/// transform paints a picture of zoom 1 that the layer stretches. This pane is a
-/// layer of its own, directly above its panel, which the zoom does not transform,
-/// and it is laid out in the coordinates of the screen at `scale` times the
-/// layout of zoom 1: the text is made at the size that it has on the screen and
-/// it still breaks at the words of zoom 1.
-fn screen_pane(ui: &egui::Ui, panel_id: u64, scale: f32) -> egui::Ui {
-    let ctx = ui.ctx().clone();
-    let parent = ui.layer_id();
-    let layer = egui::LayerId::new(parent.order, Id::unique(("editor_preview_layer", panel_id)));
-    let transform = ctx
-        .layer_transform_to_global(parent)
-        .unwrap_or(egui::emath::TSTransform::IDENTITY);
-    ctx.set_sublayer(parent, layer);
-    ctx.set_transform_layer(layer, egui::emath::TSTransform::IDENTITY);
-    let builder = egui::UiBuilder::new()
-        .layer_id(layer)
-        .max_rect(transform.mul_rect(ui.max_rect()));
-    let mut screen = egui::Ui::new(ctx, Id::unique(("editor_preview_pane", panel_id)), builder);
-    screen.set_clip_rect(transform.mul_rect(ui.clip_rect()));
-    scale_style(&mut screen, scale);
-    screen
-}
-
-/// The style of `ui` for a layout that is `scale` times the layout of zoom 1.
-///
-/// Every font, every gap and the scrollbar grow by the same factor, so the words
-/// of a paragraph break where they break at zoom 1 and a person reads the same
-/// lines of markdown at every zoom.
-fn scale_style(ui: &mut egui::Ui, scale: f32) {
-    let style = ui.style_mut();
-    for font in style.text_styles.values_mut() {
-        font.size *= scale;
-    }
-    style.spacing.item_spacing *= scale;
-    style.spacing.button_padding *= scale;
-    style.spacing.indent *= scale;
-    style.spacing.interact_size *= scale;
-    style.spacing.scroll.bar_width *= scale;
-    style.spacing.scroll.bar_inner_margin *= scale;
-    style.spacing.scroll.bar_outer_margin *= scale;
 }
 
 #[cfg(test)]
