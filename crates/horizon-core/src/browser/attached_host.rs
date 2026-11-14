@@ -566,6 +566,14 @@ impl BrowserPanelState {
         self.attached.is_some()
     }
 
+    /// Whether the browser of this panel runs on another machine, as the
+    /// Chromium of a browser host or as the Firefox behind the driver of that
+    /// host. A page of such a panel cannot take a file of this computer.
+    #[must_use]
+    pub fn runs_on_browser_host(&self) -> bool {
+        self.is_attached() || self.is_host_driver()
+    }
+
     /// The SSH target of the machine that runs the Chromium of this panel.
     #[must_use]
     pub fn attached_host_target(&self) -> Option<&str> {

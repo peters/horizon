@@ -49,7 +49,7 @@ pub struct Config {
     #[serde(default)]
     pub overlays: OverlaysConfig,
     #[serde(default)]
-    pub canvas: CanvasConfig,
+    pub canvas: crate::view::CanvasConfig,
     #[serde(default)]
     pub features: FeaturesConfig,
     #[serde(default)]
@@ -85,7 +85,7 @@ impl Default for Config {
             appearance: AppearanceConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
-            canvas: CanvasConfig::default(),
+            canvas: crate::view::CanvasConfig::default(),
             features: FeaturesConfig::default(),
             browser: crate::browser::BrowserConfig::default(),
             remote_hosts: RemoteHostsConfig::default(),
@@ -250,32 +250,6 @@ impl Default for OverlaysConfig {
             minimap_height: 180.0,
             minimap_width: 320.0,
         }
-    }
-}
-
-/// The canvas of the window: what a Fit of a workspace may do.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct CanvasConfig {
-    /// The least zoom that a Fit of a workspace chooses, in points of the
-    /// screen for one point of the canvas. A workspace that does not fit at
-    /// this zoom is shown from its top left instead of being made smaller.
-    pub fit_floor_zoom: f32,
-}
-
-impl Default for CanvasConfig {
-    fn default() -> Self {
-        Self {
-            fit_floor_zoom: crate::DEFAULT_FIT_FLOOR_ZOOM,
-        }
-    }
-}
-
-impl CanvasConfig {
-    /// The floor of a Fit, as this entry gives it and as the canvas reads it.
-    #[must_use]
-    pub fn fit_floor(&self) -> f32 {
-        crate::fit_floor_zoom(self.fit_floor_zoom)
     }
 }
 
