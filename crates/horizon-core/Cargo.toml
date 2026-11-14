@@ -53,4 +53,8 @@ rmcp.workspace = true
 tokio = { workspace = true, features = ["io-std", "rt-multi-thread"] }
 horizon-browser = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
+# A mock `DevTools` browser on a loopback port of a test: the attached lane of a
+# browser host drives a page over a WebSocket, so a test of that lane answers it
+# with the same protocol the browser does.
+tungstenite.workspace = true
 

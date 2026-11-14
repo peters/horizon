@@ -24,7 +24,7 @@ pub(crate) fn watch_a_program_at_the_end(
     termination::watch(child, name, completion);
 }
 #[doc(hidden)]
-pub use spawn::{BrowserMachine, browser_machine};
+pub use spawn::{BrowserMachine, browser_machine, browser_panel_of_options};
 pub use spawn::{
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
     prepare_restart,
