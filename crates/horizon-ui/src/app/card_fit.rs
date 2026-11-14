@@ -18,10 +18,10 @@
 
 use egui::Context;
 
-use horizon_core::{PanelId, PanelKind};
+use horizon_core::{Panel, PanelId, PanelKind};
 
 use super::HorizonApp;
-use crate::block_widget::{CARD_HEIGHT_LIMITS, fitted_card_height};
+use crate::block_widget::{CARD_HEIGHT_LIMITS, card_height_limits, fitted_card_height};
 
 impl HorizonApp {
     /// Gives every card panel the height that its content of the current
@@ -58,6 +58,13 @@ impl HorizonApp {
                 continue;
             };
             let hand_resized = card.hand_resized();
+            // The bounds of the height come from the document: a wide card may
+            // grow taller than the narrow card of today.
+            let limits = self
+                .board
+                .panel(id)
+                .and_then(Panel::block)
+                .map_or(CARD_HEIGHT_LIMITS, |state| card_height_limits(&state.document));
             let Some((size, workspace_id)) = self
                 .board
                 .panel(id)
@@ -73,7 +80,7 @@ impl HorizonApp {
             {
                 continue;
             }
-            let fitted = fitted_card_height(measured, hand_resized, size[1], CARD_HEIGHT_LIMITS);
+            let fitted = fitted_card_height(measured, hand_resized, size[1], limits);
             if (fitted - size[1]).abs() > f32::EPSILON {
                 resized |= self.board.resize_panel(id, [size[0], fitted]);
             }

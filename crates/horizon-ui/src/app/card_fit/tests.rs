@@ -23,7 +23,10 @@ fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, H
         .create_panel(
             PanelOptions {
                 kind: PanelKind::Block,
-                block: Some(BlockPanelState::new(BlockDocument { components: Vec::new() })),
+                block: Some(BlockPanelState::new(BlockDocument {
+                    width: None,
+                    components: Vec::new(),
+                })),
                 size: Some([420.0, 220.0]),
                 ..PanelOptions::default()
             },
@@ -87,7 +90,10 @@ fn a_new_document_fits_the_card_again() {
     app.fit_block_cards(&ctx);
 
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
-    let _ = state.replace_document(BlockDocument { components: Vec::new() });
+    let _ = state.replace_document(BlockDocument {
+        width: None,
+        components: Vec::new(),
+    });
     app.panel_render_caches
         .card_runtime
         .entry(id)
@@ -118,7 +124,10 @@ fn a_card_that_the_person_resized_keeps_its_size() {
     );
 
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
-    let _ = state.replace_document(BlockDocument { components: Vec::new() });
+    let _ = state.replace_document(BlockDocument {
+        width: None,
+        components: Vec::new(),
+    });
     app.panel_render_caches
         .card_runtime
         .entry(id)

@@ -369,6 +369,7 @@ mod tests {
 
     fn document(row_ids: &[&str]) -> horizon_browser_control::block::BlockDocument {
         horizon_browser_control::block::BlockDocument {
+            width: None,
             components: vec![
                 Component::Heading {
                     text: "cloud-1".to_owned(),

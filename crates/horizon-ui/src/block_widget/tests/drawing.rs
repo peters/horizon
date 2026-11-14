@@ -137,7 +137,13 @@ fn every_component_draws_in_both_themes_and_every_owner_state() {
 
 #[test]
 fn an_empty_card_says_that_it_is_empty() {
-    let nodes = card_nodes(&BlockDocument { components: Vec::new() }, Owner::Listening);
+    let nodes = card_nodes(
+        &BlockDocument {
+            width: None,
+            components: Vec::new(),
+        },
+        Owner::Listening,
+    );
 
     assert!(
         nodes.iter().any(|(text, _)| text == EMPTY_CARD),
@@ -272,6 +278,7 @@ fn a_gone_owner_keeps_the_selected_row_in_a_dimmed_form() {
 #[test]
 fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
     let document = BlockDocument {
+        width: None,
         components: vec![Component::List {
             selection: Selection::None,
             rows: vec![horizon_browser_control::block::ListRow {
@@ -298,6 +305,7 @@ fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
 #[test]
 fn a_button_without_a_tone_still_draws() {
     let document = BlockDocument {
+        width: None,
         components: vec![Component::Buttons {
             items: vec![Button {
                 id: "later".to_string(),
@@ -318,6 +326,7 @@ fn narrow_heading(
     badge: &str,
 ) -> (Vec<egui::epaint::ClippedShape>, Vec<(String, egui::accesskit::Rect)>) {
     let document = BlockDocument {
+        width: None,
         components: vec![Component::Heading {
             text: "home-mac".to_string(),
             subtitle: subtitle.map(str::to_owned),
@@ -471,6 +480,7 @@ fn a_card_that_horizon_owns_says_so_and_shows_no_frame_of_a_gone_agent() {
 /// The document of a card that holds one `kv` of `rows`.
 fn kv_document(rows: &[(&str, &str)]) -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![Component::Kv {
             rows: rows
                 .iter()
@@ -592,11 +602,14 @@ fn a_long_label_wraps_in_its_column_and_leaves_the_value_its_room() {
 
 #[test]
 fn the_height_estimate_of_a_new_card_counts_the_lines_of_a_value() {
-    let long = default_card_size(&kv_document(&[(
-        "What failed",
-        "The temporary directory of the machine is not writable by the program that the step started.",
-    )]))[1];
-    let short = default_card_size(&kv_document(&[("Cost", "0.012 EUR / hour")]))[1];
+    let long = default_card_size(
+        &kv_document(&[(
+            "What failed",
+            "The temporary directory of the machine is not writable by the program that the step started.",
+        )]),
+        0.0,
+    )[1];
+    let short = default_card_size(&kv_document(&[("Cost", "0.012 EUR / hour")]), 0.0)[1];
 
     assert!(
         long > short,
@@ -607,6 +620,7 @@ fn the_height_estimate_of_a_new_card_counts_the_lines_of_a_value() {
 /// The pass of a card 420 points wide that holds one list of `rows`.
 fn list_card(rows: &[(&str, &str)]) -> Vec<egui::epaint::ClippedShape> {
     let document = BlockDocument {
+        width: None,
         components: vec![Component::List {
             selection: Selection::None,
             rows: rows

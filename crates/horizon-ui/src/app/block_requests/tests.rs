@@ -108,6 +108,110 @@ fn a_created_card_lands_in_the_callers_workspace_without_taking_focus() {
     );
 }
 
+/// The board document that asks for the wide card.
+fn wide_document(heading: &str) -> serde_json::Value {
+    serde_json::json!({
+        "width": "wide",
+        "components": [
+            {"type": "heading", "text": heading},
+            {"type": "board",
+             "columns": [{"label": "Understand", "tag": "1"}, {"label": "Change", "tag": "2"}],
+             "rows": [{"label": "helper-1 · build-1"}],
+             "items": [{"column": 0, "row": 0, "title": "Read the issue", "state": "done"},
+                       {"column": 1, "row": 0, "title": "Change the target", "state": "now"}]}
+        ]
+    })
+}
+
+/// The width of the card panel that `panel_id` names.
+fn card_width(app: &HorizonApp, panel_id: &str) -> f32 {
+    app.board
+        .panel(app.board.panel_id_by_local_id(panel_id).expect("card"))
+        .expect("card")
+        .layout
+        .size[0]
+}
+
+#[test]
+fn an_update_that_asks_for_the_wide_card_widens_the_same_card() {
+    let (_temp, ctx, mut app) = app();
+    let (panel_id, _) = created(app.apply_block_request(
+        &request(
+            &app,
+            Operation::Create {
+                title: Some("Fix the login redirect".into()),
+                document: document("Fix the login redirect"),
+            },
+        ),
+        &ctx,
+    ));
+    let narrow = card_width(&app, &panel_id);
+    assert_eq!(narrow, 420.0, "the narrow card of today");
+
+    let Outcome::Updated { revision, .. } = app.apply_block_request(
+        &request(
+            &app,
+            Operation::Update {
+                panel_id: panel_id.clone(),
+                document: wide_document("Fix the login redirect"),
+            },
+        ),
+        &ctx,
+    ) else {
+        panic!("the update applies");
+    };
+
+    assert_eq!(revision, 2);
+    let wide = card_width(&app, &panel_id);
+    assert!(
+        (1100.0..=2400.0).contains(&wide),
+        "the same card grows to the wide card: {wide}"
+    );
+    let cards = app
+        .workspace_cards(app.board.panels[0].workspace_id)
+        .into_iter()
+        .filter(|panel| card_owner(panel).is_some())
+        .count();
+    assert_eq!(cards, 1, "the task keeps one card");
+}
+
+#[test]
+fn a_card_that_the_person_resized_keeps_its_size_when_the_document_asks_for_the_wide_card() {
+    let (_temp, ctx, mut app) = app();
+    let (panel_id, _) = created(app.apply_block_request(
+        &request(
+            &app,
+            Operation::Create {
+                title: Some("Fix the login redirect".into()),
+                document: document("Fix the login redirect"),
+            },
+        ),
+        &ctx,
+    ));
+    let id = app.board.panel_id_by_local_id(&panel_id).expect("card");
+    let mut runtime = horizon_core::CardRuntime::default();
+    runtime.mark_hand_resized();
+    app.panel_render_caches.card_runtime.insert(id, runtime);
+    let before = card_width(&app, &panel_id);
+
+    let _ = app.apply_block_request(
+        &request(
+            &app,
+            Operation::Update {
+                panel_id: panel_id.clone(),
+                document: wide_document("Fix the login redirect"),
+            },
+        ),
+        &ctx,
+    );
+
+    assert_eq!(
+        card_width(&app, &panel_id),
+        before,
+        "the person's own size outranks the document"
+    );
+}
+
 #[test]
 fn only_the_owner_updates_visibility_and_close() {
     let (_temp, ctx, mut app) = app();

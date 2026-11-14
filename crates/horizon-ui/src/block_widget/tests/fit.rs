@@ -48,6 +48,7 @@ fn button(id: &str, label: &str, tone: Tone) -> Button {
 /// A document that needs more room than the smallest card has.
 fn tall_document() -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![
             Component::Kv {
                 rows: (0..12)
@@ -166,6 +167,7 @@ fn notice_document() -> BlockDocument {
         }))
         .collect();
     BlockDocument {
+        width: None,
         components: vec![
             Component::Heading {
                 text: "Set up needs an agent".to_string(),
@@ -225,6 +227,7 @@ fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui:
 /// two buttons of it.
 fn question_document(heading: &str) -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![
             Component::Heading {
                 text: heading.to_string(),
@@ -291,8 +294,8 @@ fn the_heading_of_a_card_wraps_instead_of_ending_in_an_ellipsis() {
 fn the_height_estimate_of_a_heading_counts_its_lines() {
     let short = question_document("Link this computer?");
     let long = question_document("Link this computer to the Horizon server on root@204.0.113.56?");
-    let short = crate::block_widget::default_card_size(&short)[1];
-    let long = crate::block_widget::default_card_size(&long)[1];
+    let short = crate::block_widget::default_card_size(&short, 0.0)[1];
+    let long = crate::block_widget::default_card_size(&long, 0.0)[1];
     assert!(
         long > short,
         "a heading of two lines asks for a taller card: {long} against {short}"
@@ -333,7 +336,7 @@ fn the_second_line_of_a_heading_wraps_instead_of_ending_in_an_ellipsis() {
 fn a_notice_of_horizon_holds_its_buttons_above_the_footer() {
     let document = notice_document();
     let mut card = CardRuntime::default();
-    let estimated = crate::block_widget::default_card_size(&document)[1];
+    let estimated = crate::block_widget::default_card_size(&document, 0.0)[1];
 
     let (_, measured) = draw_card(card_panel(estimated), &document, &mut card);
     let height = fitted_card_height(measured, false, estimated, CARD_HEIGHT_LIMITS);
@@ -360,6 +363,7 @@ fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
     // One heading and one button row: the card that the live run opened at 220
     // points left an empty band above the footer.
     let mut components = BlockDocument {
+        width: None,
         components: vec![Component::Heading {
             text: "home-mac".to_string(),
             subtitle: None,

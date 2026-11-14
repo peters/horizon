@@ -7,24 +7,25 @@
 //! the thread that draws a frame. The measurement of the first pass is the
 //! truth: the host gives the card the height that fits, once per document.
 
-use horizon_browser_control::block::{BlockDocument, Component, ListLayout};
+use horizon_browser_control::block::{BlockDocument, BoardItem, BoardRow, Component, ListLayout, Width};
 
+use super::board::{cell_height, chip_height};
+use super::form::Form;
 use super::metrics::{
-    BADGE_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_TOP, BUTTON_HEIGHT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
+    BADGE_HEIGHT, BOARD_CELL_GAP, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT,
+    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, BUTTON_GAP, BUTTON_HEIGHT, CALLOUT_CAPTION_GAP, CALLOUT_PAD_Y,
+    CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
     CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT,
-    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_VALUE_FONT, LIST_LINE_GAP,
-    LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT,
-    PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT,
-    TEXT_LINE_HEIGHT, count,
+    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_VALUE_FONT, LINE_FACTOR,
+    LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT, LOG_ROW_GAP, LOG_TEXT_FONT,
+    PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP,
+    STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH,
+    WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
 /// Characters of body text that fit on one line at the card width.
 const TEXT_CHARS_PER_LINE: usize = 58;
-/// Characters of the heading that fit on one line at the card width. The heading
-/// is drawn in a larger face than the body text, so the line holds fewer of
-/// them.
-const HEADING_CHARS_PER_LINE: usize = 38;
 /// Characters of the second line under a heading that fit on one line at the
 /// card width. The line is drawn in the size of the body text, so it holds the
 /// same number of characters.
@@ -43,8 +44,12 @@ const LIST_SUBTITLE_CHARS_PER_LINE: usize = 42;
 /// many characters of the proportional face; the first measured pass corrects
 /// the estimate.
 const KV_VALUE_CHARS_PER_LINE: usize = 45;
-/// Height of one line of the proportional face, as a multiple of its size.
-const LINE_FACTOR: f32 = 1.35;
+/// Characters of the evidence of a board item that fit on one line of the
+/// narrow form, with the place of the item in front of it.
+const NOTE_CHARS_PER_LINE: usize = 40;
+/// Characters of the question of a callout that fit on one line of the narrow
+/// form.
+const CALLOUT_CHARS_PER_LINE: usize = 34;
 
 /// The height a card takes between the panel edge and the body content: the
 /// titlebar, the panel padding above and below the body, and the footer.
@@ -52,6 +57,28 @@ pub(crate) const CARD_CHROME_HEIGHT: f32 = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_P
 
 /// The bounds of a card height that fits its content.
 pub(crate) const CARD_HEIGHT_LIMITS: [f32; 2] = [CARD_MIN_HEIGHT, CARD_MAX_HEIGHT];
+
+/// Whether the document asks for the wide card.
+pub(crate) fn asks_wide(document: &BlockDocument) -> bool {
+    document.width == Some(Width::Wide)
+}
+
+/// The bounds of the height of a card that draws `document`: the wide card may
+/// grow taller, because a board grows with its waves.
+pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
+    let ceiling = if asks_wide(document) {
+        WIDE_CARD_MAX_HEIGHT
+    } else {
+        CARD_MAX_HEIGHT
+    };
+    [CARD_MIN_HEIGHT, ceiling]
+}
+
+/// The width that a wide card opens at: half of the canvas view of that moment,
+/// between the bounds of the wide card.
+pub(crate) fn wide_card_width(canvas_width: f32) -> f32 {
+    (canvas_width * 0.5).clamp(WIDE_CARD_MIN_WIDTH, WIDE_CARD_MAX_WIDTH)
+}
 
 /// The height from the bottom edge of a card to the top of its footer strip:
 /// the panel padding below the body and the strip itself.
@@ -82,40 +109,81 @@ pub(crate) fn fitted_card_height(
         .clamp(limits[0], limits[1])
 }
 
-/// The size a new card of `document` opens at: [`CARD_WIDTH`] wide and the
-/// height its content is estimated to need, between the card limits.
+/// The size a new card of `document` opens at: the width that the document asks
+/// for and the height its content is estimated to need, between the card
+/// limits. A wide card opens at half of the canvas view of `canvas_width`.
 ///
 /// The estimate is provisional: the first pass measures the real content and
 /// [`fitted_card_height`] takes over from it.
-pub(crate) fn default_card_size(document: &BlockDocument) -> [f32; 2] {
-    let body = document
-        .components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| component_height(component) + if index == 0 { 0.0 } else { COMPONENT_GAP })
-        .sum::<f32>();
+pub(crate) fn default_card_size(document: &BlockDocument, canvas_width: f32) -> [f32; 2] {
+    let width = if asks_wide(document) {
+        wide_card_width(canvas_width)
+    } else {
+        CARD_WIDTH
+    };
+    let body_width = width - 2.0 * f32::from(BODY_PAD_SIDE);
+    let form = Form::of(body_width);
+    let body = components_height(document, form, body_width);
     let padding = f32::from(BODY_PAD_TOP) + f32::from(BODY_PAD_BOTTOM);
-    let height = (CARD_CHROME_HEIGHT + padding + body).clamp(CARD_MIN_HEIGHT, CARD_MAX_HEIGHT);
-    [CARD_WIDTH, height]
+    let limits = card_height_limits(document);
+    let height = (CARD_CHROME_HEIGHT + padding + body).clamp(limits[0], limits[1]);
+    [width, height]
+}
+
+/// The height of every component of a document, with the gaps between them.
+fn components_height(document: &BlockDocument, form: Form, width: f32) -> f32 {
+    let mut height = 0.0;
+    let mut index = 0;
+    while index < document.components.len() {
+        if index > 0 {
+            height += COMPONENT_GAP;
+        }
+        let component = &document.components[index];
+        // The wide form of a heading that a progress bar follows draws both in
+        // one row, and that row is as tall as the taller part.
+        if let (Form::Wide, Component::Heading { text, subtitle, badge }, Some(Component::Progress { .. })) =
+            (form, component, document.components.get(index + 1))
+        {
+            let heading = heading_height(text, subtitle.as_deref(), badge.is_some(), WIDE_HEADING_FONT, width);
+            height += heading.max(progress_height());
+            index += 2;
+            continue;
+        }
+        height += component_height(component, form, width);
+        index += 1;
+    }
+    height
+}
+
+/// The height of one heading, at `font` and for `width` points of room.
+fn heading_height(text: &str, subtitle: Option<&str>, badge: bool, font: f32, width: f32) -> f32 {
+    let chars_per_line = (width / (font * 0.5)).floor().max(1.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let chars_per_line = chars_per_line as usize;
+    let lines = text.chars().count().div_ceil(chars_per_line).max(1);
+    let mut height = count(lines) * font * LINE_FACTOR;
+    if let Some(subtitle) = subtitle {
+        let lines = subtitle.chars().count().div_ceil(SUBTITLE_CHARS_PER_LINE).max(1);
+        height += HEADING_SUBTITLE_GAP + count(lines) * HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT;
+    }
+    if badge {
+        height = height.max(BADGE_HEIGHT);
+    }
+    height
+}
+
+fn progress_height() -> f32 {
+    PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT
 }
 
 /// The height one component needs.
-fn component_height(component: &Component) -> f32 {
+fn component_height(component: &Component, form: Form, width: f32) -> f32 {
     match component {
         Component::Heading { text, subtitle, badge } => {
             // A heading names the card, so it takes every line that its words need
             // and the estimate counts them; the badge keeps the top right of the
             // first line.
-            let lines = text.chars().count().div_ceil(HEADING_CHARS_PER_LINE).max(1);
-            let mut height = count(lines) * HEADING_FONT * LINE_FACTOR;
-            if let Some(subtitle) = subtitle {
-                let lines = subtitle.chars().count().div_ceil(SUBTITLE_CHARS_PER_LINE).max(1);
-                height += HEADING_SUBTITLE_GAP + count(lines) * HEADING_SUBTITLE_FONT * HEADING_SUBTITLE_LINE_HEIGHT;
-            }
-            if badge.is_some() {
-                height = height.max(BADGE_HEIGHT);
-            }
-            height
+            heading_height(text, subtitle.as_deref(), badge.is_some(), HEADING_FONT, width)
         }
         Component::Text { text } => {
             let lines = text
@@ -135,7 +203,7 @@ fn component_height(component: &Component) -> f32 {
             })
             .sum::<f32>(),
         Component::Badge { .. } => BADGE_HEIGHT,
-        Component::Progress { .. } => PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT,
+        Component::Progress { .. } => progress_height(),
         Component::Divider => 1.0,
         Component::List {
             rows,
@@ -154,7 +222,9 @@ fn component_height(component: &Component) -> f32 {
             count(lines) * PILL_HEIGHT + count(lines.saturating_sub(1)) * PILL_LINE_GAP
         }
         Component::List { rows, .. } => {
-            let heights: f32 = rows
+            // Every row of one list takes the height of its tallest row, so the
+            // values of the rows keep one right edge.
+            let tallest = rows
                 .iter()
                 .map(|row| {
                     let title = row.title.chars().count().div_ceil(LIST_TITLE_CHARS_PER_LINE).max(1);
@@ -165,8 +235,8 @@ fn component_height(component: &Component) -> f32 {
                     }
                     height
                 })
-                .sum();
-            heights + count(rows.len().saturating_sub(1)) * LIST_ROW_GAP
+                .fold(0.0, f32::max);
+            count(rows.len()) * tallest + count(rows.len().saturating_sub(1)) * LIST_ROW_GAP
         }
         Component::Buttons { items } => {
             if items.is_empty() {
@@ -177,6 +247,14 @@ fn component_height(component: &Component) -> f32 {
         }
         Component::Link { .. } => super::link::height(),
         Component::Caption { .. } => CAPTION_FONT + CAPTION_TRACKING,
+        Component::Board { columns, rows, items } => match form {
+            Form::Wide => board_grid_height(columns.len(), rows.len(), items),
+            Form::Narrow => board_list_height(columns.len(), rows, items),
+        },
+        Component::Callout {
+            caption, text, buttons, ..
+        } => callout_height(caption.is_some(), text, buttons.len(), form),
+        Component::Log { entries } => log_height(entries.len(), form, width),
         Component::Steps { steps } => {
             let heights: f32 = steps
                 .iter()
@@ -189,4 +267,94 @@ fn component_height(component: &Component) -> f32 {
             heights + count(steps.len().saturating_sub(1)) * STEP_GAP
         }
     }
+}
+
+/// The height of the grid of a board: the head row and every body row, which is
+/// as tall as its fullest cell.
+fn board_grid_height(columns: usize, rows: usize, items: &[BoardItem]) -> f32 {
+    let mut height = BOARD_HEAD_HEIGHT;
+    for row in 0..rows {
+        let tallest = (0..columns)
+            .map(|column| {
+                items
+                    .iter()
+                    .filter(|item| item.column == column && item.row == row)
+                    .count()
+            })
+            .max()
+            .unwrap_or(0);
+        height += cell_height(tallest).max(BOARD_ROW_MIN_HEIGHT);
+    }
+    height
+}
+
+/// The height of the list of a board: the caption of every group and its items,
+/// each with the lines that its evidence needs.
+fn board_list_height(columns: usize, rows: &[BoardRow], items: &[BoardItem]) -> f32 {
+    let mut height = 0.0;
+    let mut first = true;
+    for column in 0..columns {
+        let group: Vec<&BoardItem> = items.iter().filter(|item| item.column == column).collect();
+        if group.is_empty() {
+            continue;
+        }
+        if !first {
+            height += BOARD_GROUP_GAP;
+        }
+        first = false;
+        height += CAPTION_FONT + CAPTION_TRACKING + BOARD_GROUP_HEAD_GAP;
+        for item in &group {
+            let place = rows.get(item.row).map_or(0, |row| row.label.chars().count());
+            let note = item.note.as_ref().map_or(0, |note| note.chars().count() + 3);
+            height += chip_height((place + note).div_ceil(NOTE_CHARS_PER_LINE).max(1));
+        }
+        height += count(group.len().saturating_sub(1)) * BOARD_CELL_GAP;
+    }
+    height
+}
+
+/// The height of a callout: one row in the wide form, a stack in the narrow one.
+fn callout_height(caption: bool, text: &str, buttons: usize, form: Form) -> f32 {
+    let head = if caption {
+        CAPTION_FONT + CAPTION_TRACKING + CALLOUT_CAPTION_GAP
+    } else {
+        0.0
+    };
+    let lines = match form {
+        Form::Wide => 1,
+        Form::Narrow => text.chars().count().div_ceil(CALLOUT_CHARS_PER_LINE).max(1),
+    };
+    let body = count(lines) * body_font(form) * LINE_FACTOR;
+    let rows = buttons.max(1);
+    let buttons = match (buttons, form) {
+        (0, _) => 0.0,
+        (_, Form::Wide) => BUTTON_HEIGHT,
+        (_, Form::Narrow) => count(rows) * BUTTON_HEIGHT + count(rows - 1) * BUTTON_GAP,
+    };
+    let content = match form {
+        Form::Wide => (head + body).max(buttons),
+        Form::Narrow => {
+            head + body
+                + if buttons > 0.0 {
+                    CALLOUT_STACK_GAP + buttons
+                } else {
+                    0.0
+                }
+        }
+    };
+    content + 2.0 * CALLOUT_PAD_Y
+}
+
+fn body_font(form: Form) -> f32 {
+    match form {
+        Form::Wide => CALLOUT_TEXT_FONT,
+        Form::Narrow => CALLOUT_STACK_TEXT_FONT,
+    }
+}
+
+/// The height of a log: as many lines as the columns of the form need.
+fn log_height(entries: usize, form: Form, width: f32) -> f32 {
+    let rows = entries.div_ceil(super::log::columns(width, form));
+    let line = LOG_TEXT_FONT * LINE_FACTOR;
+    count(rows) * line + count(rows.saturating_sub(1)) * LOG_ROW_GAP
 }

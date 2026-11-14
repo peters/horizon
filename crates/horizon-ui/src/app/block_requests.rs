@@ -17,7 +17,7 @@ use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
 };
-use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+use horizon_core::{BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::HorizonApp;
 use super::answer_retries::{RefusedAnswer, RefusedAnswers};
@@ -418,7 +418,7 @@ impl HorizonApp {
             );
         }
         let title = title.map(BlockPanelState::normalize_title);
-        let size = crate::block_widget::default_card_size(&document);
+        let size = crate::block_widget::default_card_size(&document, self.canvas_rect(ctx).width());
         let state = BlockPanelState {
             title: title
                 .clone()
@@ -475,11 +475,16 @@ impl HorizonApp {
         let Some(state) = self.board.panel_mut(id).and_then(Panel::block_mut) else {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
+        let was_wide = crate::block_widget::asks_wide(&state.document);
         let revision = state.replace_document(document);
         state.updated_at_millis = manifest::now_millis();
+        let now_wide = crate::block_widget::asks_wide(&state.document);
         // The person keeps a selection only while its row is still drawn.
         if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id) {
             card.retain_selection(&state.document);
+        }
+        if !was_wide && now_wide {
+            self.widen_card(id, ctx);
         }
         self.mark_runtime_dirty();
         ctx.request_repaint();
@@ -487,6 +492,25 @@ impl HorizonApp {
             panel_id: panel_id.to_owned(),
             revision,
         }
+    }
+
+    /// Widens a card whose document now asks for the wide card, unless the
+    /// person resized the card by hand: the person's size outranks the document,
+    /// and the work keeps one card.
+    fn widen_card(&mut self, id: PanelId, ctx: &Context) {
+        let hand_resized = self
+            .panel_render_caches
+            .card_runtime
+            .get(&id)
+            .is_some_and(CardRuntime::hand_resized);
+        let Some(size) = self.board.panel(id).map(|panel| panel.layout.size) else {
+            return;
+        };
+        let width = crate::block_widget::wide_card_width(self.canvas_rect(ctx).width());
+        if hand_resized || width <= size[0] {
+            return;
+        }
+        self.board.resize_panel(id, [width, size[1]]);
     }
 
     fn inspect_card(&mut self, panel_id: &str, actor: ActorPanel, owner: &str) -> Outcome {

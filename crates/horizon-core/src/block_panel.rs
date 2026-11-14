@@ -57,7 +57,10 @@ impl BlockPanelState {
     /// An empty document, which the panel shows as an empty card.
     #[must_use]
     pub fn empty_document() -> BlockDocument {
-        BlockDocument { components: Vec::new() }
+        BlockDocument {
+            width: None,
+            components: Vec::new(),
+        }
     }
 
     /// Store `document` and return the revision that the host assigned to it.
@@ -103,6 +106,7 @@ mod tests {
 
     fn document(text: &str) -> BlockDocument {
         BlockDocument {
+            width: None,
             components: vec![Component::Heading {
                 text: text.to_string(),
                 subtitle: None,

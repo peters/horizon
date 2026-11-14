@@ -65,6 +65,7 @@ pub(crate) fn document(rows: &[ProgramRow], integrations: bool) -> BlockDocument
         mono: true,
     });
     BlockDocument {
+        width: None,
         components: vec![
             Component::Heading {
                 text: TITLE.to_owned(),

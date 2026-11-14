@@ -168,7 +168,7 @@ impl HorizonApp {
             return;
         }
         let workspace_id = self.ensure_workspace_visible(ctx);
-        let size = crate::block_widget::default_card_size(&document);
+        let size = crate::block_widget::default_card_size(&document, self.canvas_rect(ctx).width());
         let state = BlockPanelState {
             title: notice::TITLE.to_owned(),
             document,

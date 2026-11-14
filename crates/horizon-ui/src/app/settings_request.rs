@@ -208,7 +208,7 @@ impl HorizonApp {
         document: BlockDocument,
         ctx: &Context,
     ) -> Result<PanelId, Outcome> {
-        let size = crate::block_widget::default_card_size(&document);
+        let size = crate::block_widget::default_card_size(&document, self.canvas_rect(ctx).width());
         let state = BlockPanelState {
             title: title.to_owned(),
             document,
@@ -679,6 +679,7 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
         });
     }
     let rest = BlockDocument {
+        width: None,
         components: vec![
             Component::Text {
                 text: SERVER_SENT.to_owned(),
@@ -703,7 +704,10 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
         ],
     };
     components.extend(rest.components);
-    BlockDocument { components }
+    BlockDocument {
+        width: None,
+        components,
+    }
 }
 
 /// The card that asks the person to use the browser of another machine for new
@@ -763,6 +767,7 @@ fn browser_document(
         ServerEntry::Machine(machine) => format!("the machine {machine}"),
     };
     BlockDocument {
+        width: None,
         components: vec![
             Component::Heading {
                 text: format!("Use the browser on {host} for new browser panels?"),
