@@ -506,7 +506,7 @@ pub(super) fn serve_link(
 ) -> LinkEnd {
     let end = match greet(link) {
         Ok(greeting) => serve_page(session, link, profile, engine, hold, &greeting),
-        Err(end) => end,
+        Err(end) => *end,
     };
     finish(link, end)
 }
@@ -516,18 +516,21 @@ pub(super) fn serve_link(
 ///
 /// # Errors
 /// The link ended, said nothing for [`GREET_WAIT`], or wrote a greeting that this
-/// wire cannot use. The end carries the words that the person reads.
-pub(super) fn greet(link: &mut Link) -> Result<Greeting, LinkEnd> {
+/// wire cannot use. The end carries the words that the person reads, and it is in
+/// a box because a caller holds it only to write it on the link.
+pub(super) fn greet(link: &mut Link) -> Result<Greeting, Box<LinkEnd>> {
     let greeted_at = Instant::now();
     let request = loop {
         match request_of(link.next(PASS_WAIT)) {
             Step::Request(request) => break request,
             // A link that says nothing for this long is not a panel of this
             // host.
-            Step::Silent if greeted_at.elapsed() >= GREET_WAIT => return Err(LinkEnd::of(LinkOutcome::Closed)),
+            Step::Silent if greeted_at.elapsed() >= GREET_WAIT => {
+                return Err(Box::new(LinkEnd::of(LinkOutcome::Closed)));
+            }
             Step::Silent => {}
-            Step::Ended => return Err(LinkEnd::of(LinkOutcome::Closed)),
-            Step::Refuse(outcome) => return Err(LinkEnd::of(outcome)),
+            Step::Ended => return Err(Box::new(LinkEnd::of(LinkOutcome::Closed))),
+            Step::Refuse(outcome) => return Err(Box::new(LinkEnd::of(outcome))),
         }
     };
     let HostDriverRequest::Hello {
@@ -539,17 +542,17 @@ pub(super) fn greet(link: &mut Link) -> Result<Greeting, LinkEnd> {
         ..
     } = request
     else {
-        return Err(LinkEnd::of(greeting_refusal(
+        return Err(Box::new(LinkEnd::of(greeting_refusal(
             "the first message of a link of a browser host is its greeting",
-        )));
+        ))));
     };
     if version != horizon_browser::host_driver::HOST_DRIVER_VERSION {
-        return Err(LinkEnd::of(LinkOutcome::Answer(
+        return Err(Box::new(LinkEnd::of(LinkOutcome::Answer(
             horizon_browser::host_driver::version_refusal(version),
-        )));
+        ))));
     }
     if let Some(words) = system.copy_refusal(&HostSystem::here()) {
-        return Err(LinkEnd::of(greeting_refusal(&words)));
+        return Err(Box::new(LinkEnd::of(greeting_refusal(&words))));
     }
     Ok(Greeting {
         quality: horizon_browser::host_driver::clamp_quality(quality),

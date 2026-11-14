@@ -536,9 +536,10 @@ fn serve_links(
         }
         let last_page_closed = match events.recv_timeout(ACCEPT_POLL) {
             Ok(SessionEvent::PageClosed { last_page }) => last_page,
-            Ok(SessionEvent::LinkEnded) | Err(mpsc::RecvTimeoutError::Timeout) => false,
-            // Every thread is gone, so nothing of this session can be reached.
-            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            // A link ended, no link said anything, or every thread is gone, so
+            // nothing of this session can be reached.
+            Ok(SessionEvent::LinkEnded)
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => false,
         };
         if last_page_closed {
             tracing::info!(
@@ -594,10 +595,10 @@ fn spawn_link(
                 SessionEvent::LinkEnded
             };
             let _ = events.send(event);
-            counted.fetch_sub(1, Ordering::AcqRel);
+            links.fetch_sub(1, Ordering::AcqRel);
         });
     if spawned.is_err() {
-        links.fetch_sub(1, Ordering::AcqRel);
+        counted.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

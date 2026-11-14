@@ -195,7 +195,7 @@ impl SessionPages {
         let greeting = match session::greet(link) {
             Ok(greeting) => greeting,
             Err(end) => {
-                session::finish(link, end);
+                session::finish(link, *end);
                 return ServedPage { last_page: false };
             }
         };
@@ -272,8 +272,12 @@ pub(super) struct ServedPage {
 /// a test starts a page that it owns and names no browser, so the rules of a link
 /// are tested on a machine that has no Firefox.
 pub(super) struct StartPage {
-    start: Box<dyn Fn(&HostDriverOptions, &SharedSessionGroup, bool) -> Result<HostSession, String> + Send + Sync>,
+    start: StartPageFn,
 }
+
+/// The start of one page of a session of a browser host.
+type StartPageFn =
+    Box<dyn Fn(&HostDriverOptions, &SharedSessionGroup, bool) -> Result<HostSession, String> + Send + Sync>;
 
 impl StartPage {
     pub(super) fn new(

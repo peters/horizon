@@ -60,7 +60,10 @@ pub fn is_private_profile(folder: &Path) -> bool {
 /// `named` holds the folder name of every browser panel that a saved session of
 /// this Horizon home names, in the form that a profile folder uses.
 #[must_use]
-pub fn sweep_private_profiles(roots: &[PathBuf], named: &HashSet<String>) -> PrivateProfileSweep {
+pub fn sweep_private_profiles<S: std::hash::BuildHasher>(
+    roots: &[PathBuf],
+    named: &HashSet<String, S>,
+) -> PrivateProfileSweep {
     let mut sweep = PrivateProfileSweep::default();
     let mut seen = HashSet::new();
     for root in roots {

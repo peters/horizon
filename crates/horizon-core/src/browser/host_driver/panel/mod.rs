@@ -225,6 +225,19 @@ fn lock<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The driver of the host of this panel, or the failure that the panel reads.
+fn driver_of(host: &crate::browser::AttachedHost) -> Result<HostDriverHost, AttachedHostFailure> {
+    let Some(driver) = host.driver() else {
+        return Err(AttachedHostFailure::refused(
+            host,
+            "host_driver_engine",
+            "a Chromium browser host is reached through its DevTools port and needs no driver",
+        ));
+    };
+    HostDriverHost::new(driver.ssh_target(), driver.profile(), driver.engine(), driver.command())
+        .map_err(|error| AttachedHostFailure::refused(host, "host_driver_name", &error.to_string()))
+}
+
 /// The worker of one panel's link: open, serve, attach again.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run(
@@ -240,26 +253,13 @@ fn run(
     close_page: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
 ) {
-    let Some(driver) = host.driver() else {
-        let _ = events.send(HostDriverEvent::Failed(AttachedHostFailure::refused(
-            &host,
-            "host_driver_engine",
-            "a Chromium browser host is reached through its DevTools port and needs no driver",
-        )));
-        return;
+    let driver_host = match driver_of(&host) {
+        Ok(driver_host) => driver_host,
+        Err(failure) => {
+            let _ = events.send(HostDriverEvent::Failed(failure));
+            return;
+        }
     };
-    let driver_host =
-        match HostDriverHost::new(driver.ssh_target(), driver.profile(), driver.engine(), driver.command()) {
-            Ok(driver_host) => driver_host,
-            Err(error) => {
-                let _ = events.send(HostDriverEvent::Failed(AttachedHostFailure::refused(
-                    &host,
-                    "host_driver_name",
-                    &error.to_string(),
-                )));
-                return;
-            }
-        };
     let manifest = ManifestCoordination::default();
     let mut probe = super::latency::LinkProbe::new();
     let mut attempt = 0u32;
