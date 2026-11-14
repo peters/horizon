@@ -57,10 +57,34 @@ fn painted_weights(output: &egui::FullOutput, text: &str) -> Vec<Option<f32>> {
     out
 }
 
+/// The colour of every text of a pass whose words are `text`, in paint order.
+///
+/// A galley paints the colour of its sections; the fallback colour that the
+/// painter is handed only fills a section that names no colour.
+fn painted_colours(output: &egui::FullOutput, text: &str) -> Vec<Color32> {
+    fn walk(shape: &Shape, text: &str, out: &mut Vec<Color32>) {
+        match shape {
+            Shape::Text(shape) if shape.galley.text() == text => {
+                out.extend(shape.galley.job.sections.iter().map(|section| section.format.color));
+            }
+            Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, text, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, text, &mut out);
+    }
+    out
+}
+
 /// The weights of the approved card mockups reach the glyphs that the card
 /// paints: the heading is heavy, a caption is the heaviest, and the row title
-/// and the primary button label stand above the body text.
-#[test]
+/// and the primary button label stand above the body text.#[test]
 fn the_weights_of_the_mockups_reach_the_painted_card() {
     let frames = CardFrames::new();
     let mut card = CardRuntime::default();
@@ -447,11 +471,18 @@ fn a_failed_step_draws_the_cross_of_a_failed_item_in_the_danger_colour() {
     let document = BlockDocument {
         width: None,
         components: vec![Component::Steps {
-            steps: vec![horizon_browser_control::block::Step {
-                label: "Wait for SSH with the machine key".to_string(),
-                state: horizon_browser_control::block::StepState::Failed,
-                at: Some("3 m".to_string()),
-            }],
+            steps: vec![
+                horizon_browser_control::block::Step {
+                    label: "Create the machine at the provider".to_string(),
+                    state: horizon_browser_control::block::StepState::Done,
+                    at: Some("11 s".to_string()),
+                },
+                horizon_browser_control::block::Step {
+                    label: "Wait for SSH with the machine key".to_string(),
+                    state: horizon_browser_control::block::StepState::Failed,
+                    at: Some("3 m".to_string()),
+                },
+            ],
         }],
     };
     let output = CardFrames::new().paint(&document, &mut CardRuntime::default(), Owner::Listening);
@@ -463,6 +494,16 @@ fn a_failed_step_draws_the_cross_of_a_failed_item_in_the_danger_colour() {
         painted_weights(&output, "Wait for SSH with the machine key"),
         vec![Some(400.0)],
         "the label of a failed step keeps the weight of a line"
+    );
+    assert_eq!(
+        painted_colours(&output, "3 m"),
+        vec![theme::PALETTE_RED()],
+        "the time of a failed step carries the danger with its mark"
+    );
+    assert_eq!(
+        painted_colours(&output, "11 s"),
+        vec![theme::FG_DIM()],
+        "the time of a step that finished stays the dim colour of a time"
     );
 }
 

@@ -32,10 +32,13 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
     let width = ui.available_width();
     let text_font = FontId::proportional(STEP_FONT);
     let time_font = FontId::monospace(STEP_TIME_FONT);
+    // The colour of the time is the colour of its format: a galley paints the
+    // colour of its sections, not the fallback that the painter is handed.
+    let time_colour = time_colour(step.state);
     let time = step
         .at
         .as_deref()
-        .map(|at| text::line(ui.painter(), at, &time_font, theme::FG_DIM(), (width * 0.5).max(0.0)));
+        .map(|at| text::line(ui.painter(), at, &time_font, time_colour, (width * 0.5).max(0.0)));
     let time_width = time.as_ref().map_or(0.0, |galley| galley.size().x + STEP_TIME_GAP);
     // The label of a failed step keeps the colour of a line: the cross and the
     // time carry the danger.
@@ -75,7 +78,7 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
         painter.galley(
             Pos2::new(rect.max.x - time_width, rect.center().y - time_height * 0.5),
             galley,
-            time_colour(step.state),
+            time_colour,
         );
     }
 }
