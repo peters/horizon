@@ -12,7 +12,22 @@ use crate::panel::{AFTER_HANGUP, AFTER_TERM, PanelKind, PanelOptions};
 
 /// One board with one terminal panel whose program is `/bin/sh` that runs
 /// `script`.
+///
+/// A script that names `{ready}` gets a path there, and this function waits until
+/// that path exists before it returns. A script whose trap is what a test
+/// measures writes it right after the trap: a hangup that arrives before the shell
+/// installed its trap ends the program, and the test then measures a program that
+/// needed no escalation instead of one that ignored the hangup.
 fn board_that_runs(script: &str) -> (Board, u32) {
+    let ready = std::env::temp_dir().join(format!(
+        "horizon-exit-bounds-{}-{}.ready",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos())
+    ));
+    let waits_for_ready = script.contains("{ready}");
+    let script = script.replace("{ready}", &format!("'{}'", ready.display()));
     let mut board = Board::new();
     let workspace = board.create_workspace("the end of a program");
     let panel = board
@@ -31,6 +46,17 @@ fn board_that_runs(script: &str) -> (Board, u32) {
         .and_then(crate::panel::Panel::terminal)
         .and_then(crate::terminal::Terminal::child_pid)
         .expect("the program of the panel has an id");
+    if waits_for_ready {
+        let deadline = Instant::now() + TEST_BOUND;
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the program of the panel installed the traps that the test measures"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = std::fs::remove_file(&ready);
+    }
     (board, pid)
 }
 
@@ -102,7 +128,7 @@ fn a_program_that_ends_at_the_hangup_ends_at_once() {
 /// the board does not wait for it without a bound.
 #[test]
 fn a_program_that_ignores_the_hangup_and_sigterm_ends_by_sigkill() {
-    let (mut board, pid) = board_that_runs("trap '' HUP TERM; while :; do sleep 0.05; done");
+    let (mut board, pid) = board_that_runs("trap '' HUP TERM; : > {ready}; while :; do sleep 0.05; done");
     let started = Instant::now();
     board.shutdown_terminal_panels();
     let elapsed = started.elapsed();
@@ -125,7 +151,7 @@ fn a_program_that_ignores_the_hangup_and_sigterm_ends_by_sigkill() {
 /// first step, before the second one runs.
 #[test]
 fn a_program_that_ignores_only_the_hangup_ends_by_sigterm() {
-    let (mut board, pid) = board_that_runs("trap '' HUP; while :; do sleep 0.05; done");
+    let (mut board, pid) = board_that_runs("trap '' HUP; : > {ready}; while :; do sleep 0.05; done");
     let started = Instant::now();
     board.shutdown_terminal_panels();
     let elapsed = started.elapsed();
@@ -150,7 +176,7 @@ fn a_program_that_ignores_only_the_hangup_ends_by_sigterm() {
 /// program that ignores the hangup cannot run on after its panel is gone.
 #[test]
 fn a_closed_panel_ends_its_program_with_the_same_steps() {
-    let (mut board, pid) = board_that_runs("trap '' HUP TERM; while :; do sleep 0.05; done");
+    let (mut board, pid) = board_that_runs("trap '' HUP TERM; : > {ready}; while :; do sleep 0.05; done");
     let workspace = board
         .workspaces
         .first()
