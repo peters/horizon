@@ -51,7 +51,7 @@ evidence:
    "detail": "t1 now"},
   {"type": "board",
    "columns": [{"label": "Change", "tag": "1", "current": true}],
-   "rows": [{"label": "coordinator · this computer", "subtitle": "this computer"}],
+   "rows": [{"label": "coordinator · this computer"}],
    "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
               "state": "now", "value": "~20 m",
               "note": "check: cargo test -p auth redirect"}]},
@@ -68,7 +68,7 @@ evidence:
    "detail": "done"},
   {"type": "board",
    "columns": [{"label": "Change", "tag": "1"}],
-   "rows": [{"label": "coordinator · this computer", "subtitle": "this computer"}],
+   "rows": [{"label": "coordinator · this computer"}],
    "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
               "state": "done", "value": "18 m", "note": "12 tests pass"}]},
   {"type": "log", "entries": [
@@ -299,9 +299,10 @@ names, in this order: the coordinator, each helper in the order of `helpers`, an
 
 - `label` is `<who> · <where>`, such as `helper-1 · build-1`. The place stays in
   the label, because the narrow card draws only the label with the evidence.
-- `subtitle` is the kind of the worker: `this computer` for a worker on this
-  computer, `a machine of the list` for a worker on a machine of the list, and
-  `you answer on this card` for the person.
+- `subtitle` holds one fact that the label does not: the kind of the agent
+  program in neutral words, such as `another agent program`, the size of the
+  machine, such as `16 vCPU`, or `you answer on this card` for the person. A row
+  whose label already holds every fact keeps no subtitle.
 
 Write one item for each todo:
 
@@ -354,8 +355,8 @@ The plan, before the go:
      {"label": "Understand", "tag": "1", "value": "~12 m"},
      {"label": "Change", "tag": "2", "note": "in parallel", "value": "~35 m"}],
    "rows": [
-     {"label": "coordinator · this computer", "subtitle": "this computer"},
-     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"}],
+     {"label": "coordinator · this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "16 vCPU"}],
    "items": [
      {"column": 0, "row": 0, "title": "Read the issue and the failing test",
       "value": "~12 m", "note": "check: cargo test -p horizon-ui login_redirect"},
@@ -391,9 +392,9 @@ and the history:
      {"label": "Verify", "tag": "4", "value": "~20 m"},
      {"label": "Report", "tag": "5", "value": "~5 m"}],
    "rows": [
-     {"label": "coordinator · this computer", "subtitle": "this computer"},
-     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"},
-     {"label": "helper-2 · build-2", "subtitle": "a machine of the list"},
+     {"label": "coordinator · this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "16 vCPU"},
+     {"label": "helper-2 · build-2", "subtitle": "32 vCPU"},
      {"label": "You · this computer", "subtitle": "you answer on this card"}],
    "items": [
      {"column": 0, "row": 0, "title": "Read the issue and the failing test",
@@ -452,10 +453,10 @@ person, and the history:
      {"label": "Report", "tag": "7", "value": "5 m"},
      {"label": "Push", "tag": "8", "value": "waits 2 m", "current": true}],
    "rows": [
-     {"label": "coordinator · this computer", "subtitle": "this computer"},
-     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"},
-     {"label": "helper-2 · build-2", "subtitle": "a machine of the list"},
-     {"label": "helper-3 · build-1", "subtitle": "a machine of the list"},
+     {"label": "coordinator · this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "16 vCPU"},
+     {"label": "helper-2 · build-2", "subtitle": "32 vCPU"},
+     {"label": "helper-3 · build-1", "subtitle": "another agent program"},
      {"label": "You · this computer", "subtitle": "you answer on this card"}],
    "items": [
      {"column": 0, "row": 0, "title": "Read the issue and the failing test",
@@ -605,8 +606,8 @@ and its items keep the state that the plan file gives them:
      {"label": "Prepare", "tag": "2", "note": "in parallel", "value": "9 m"},
      {"label": "Change", "tag": "3", "note": "in parallel", "value": "~10 m"}],
    "rows": [
-     {"label": "coordinator · this computer", "subtitle": "this computer"},
-     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"}],
+     {"label": "coordinator · this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "16 vCPU"}],
    "items": [
      {"column": 0, "row": 0, "title": "Read the issue and the failing test",
       "state": "done", "value": "4 m", "note": "1 failing test found"},

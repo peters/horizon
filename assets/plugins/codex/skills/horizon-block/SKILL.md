@@ -556,7 +556,8 @@ A document holds components in draw order, and only these components:
   optional `tag` of at most 12 characters, optional `note`, optional `value`
   and optional `current: true` for the wave that runs now. A row is one worker:
   `label` such as `helper-1 · build-1`, and optional `subtitle` such as
-  `16 vCPU`. An item names its cell with `column` and `row`, counted from 0, and
+  `16 vCPU` that holds one fact the label does not; a row whose label already
+  holds every fact keeps no subtitle. An item names its cell with `column` and `row`, counted from 0, and
   holds `title`, optional `state`, optional `value`, optional `note` for the
   evidence and optional `tag` of at most 12 characters. `state` is `waiting`
   (the default), `now`, `done`, `needs_you` or `failed`, and each state has one
