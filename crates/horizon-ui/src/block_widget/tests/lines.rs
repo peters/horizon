@@ -54,6 +54,12 @@ const SKILLS: [(&str, &str); 5] = [
     ),
 ];
 
+/// Whether one fenced block of a skill is a card document: a document of
+/// components, with or without the width that it asks for.
+fn is_card_document(block: &str) -> bool {
+    block.contains("\"components\"") && (block.starts_with(r#"{"components""#) || block.starts_with(r#"{"width""#))
+}
+
 /// Every fenced JSON block of one skill that is a card document.
 fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
     let mut documents = Vec::new();
@@ -65,7 +71,7 @@ fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
         };
         let block = after[..end].trim();
         rest = &after[end + 3..];
-        if !block.starts_with(r#"{"components""#) {
+        if !is_card_document(block) {
             continue;
         }
         documents.push(parse_document(block).unwrap_or_else(|error| panic!("{skill}: {error}\n{block}")));

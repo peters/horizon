@@ -47,8 +47,15 @@ evidence:
 {"components": [
   {"type": "heading", "text": "Fix the login redirect",
    "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}},
-  {"type": "progress", "label": "1 todo · starting", "percent": 10,
-   "detail": "this computer"},
+  {"type": "progress", "label": "0 of 1 done · 0 needs you", "percent": 0,
+   "detail": "t1 now"},
+  {"type": "board",
+   "columns": [{"label": "Change", "tag": "1", "current": true}],
+   "rows": [{"label": "coordinator · this computer", "subtitle": "this computer"}],
+   "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
+              "state": "now", "value": "~20 m",
+              "note": "check: cargo test -p auth redirect"}]},
+  {"type": "caption", "text": "AGENTS.md · 1 at once · this computer · rent: no"},
   {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}
 ]}
 ```
@@ -57,7 +64,16 @@ evidence:
 {"components": [
   {"type": "heading", "text": "Fix the login redirect",
    "subtitle": "Issue #1987 · this computer", "badge": {"text": "Done", "tone": "ok"}},
-  {"type": "text", "text": "The redirect of the sign-in page names the account address. Check: cargo test -p auth redirect, 12 tests pass. Evidence: check, the same command, .horizon-plan/progress-t1.md."},
+  {"type": "progress", "label": "1 of 1 done · 0 needs you", "percent": 100,
+   "detail": "done"},
+  {"type": "board",
+   "columns": [{"label": "Change", "tag": "1"}],
+   "rows": [{"label": "coordinator · this computer", "subtitle": "this computer"}],
+   "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
+              "state": "done", "value": "18 m", "note": "12 tests pass"}]},
+  {"type": "log", "entries": [
+    {"at": "07:28", "text": "t1 done: 12 tests pass"}]},
+  {"type": "caption", "text": "AGENTS.md · 1 at once · this computer · rent: no"},
   {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}
 ]}
 ```
@@ -116,11 +132,16 @@ not a file of the product.
     {"name": "helper-2", "where": "build-1",
      "command": "<an agent program on that machine>"}
   ],
+  "waves": [
+    {"name": "Understand"},
+    {"name": "Change"}
+  ],
   "todos": [
     {"id": "t1",
      "title": "Read the issue and the failing test",
      "who": "coordinator",
      "where": "this computer",
+     "wave": 1,
      "state": "done",
      "added": false,
      "check": "cargo test -p horizon-ui login_redirect",
@@ -146,6 +167,10 @@ not a file of the product.
   the card exists.
 - `helpers` holds one entry per helper agent, with its name, its place and, on a
   machine, the command of its agent program.
+- `waves` holds 1 to 8 entries, in the order they run, each with a `name` of at
+  most 20 characters such as `Understand` or `Change`. The wave of one row runs
+  before the next one: a wave starts when every todo of the wave before it is
+  done.
 - `todos` holds 1 to 12 entries. `id` is `t1` to `t12`. `who` is `coordinator`,
   a name of `helpers`, or `you` for a todo that waits for the person. `where` is
   `this computer` or the name of a machine. `state` is `waiting`, `now`, `done`,
@@ -202,96 +227,143 @@ When the section is absent, give this block to the person to paste:
 ## The card
 
 Make one card at the start, titled with the task, keep the `panel_id` that
-`create` answers, and change the card with `update`. The person reads one card
-that changes. One agent owns at most eight cards in one workspace.
+`create` answers, and change the card with `update`. One agent owns at most eight
+cards in one workspace.
+
+One task has one card, at every size. The short path draws the same card with a
+board of one column and one row, and a task that grows to a plan updates that
+same card to the wide document. Never make a second card for the same task.
+
+A plan of three or more todos asks for the wide card: `"width": "wide"` beside
+`components`. A task of one or two todos keeps the narrow card of today. The form
+follows the real width of the card, so the same document draws the board as a
+grid on a wide card and as one list on a narrow one.
 
 The parts of the card, in this order:
 
-1. `heading`: `text` is the task. `subtitle` is the issue, when the task has
-one,
-   and the place of the work, for example `Issue #1987 · this computer`. `badge`
-   is the state of the plan: `Plan`, `Running`, `Stopped` or `Done`.
+1. `heading`: `text` is the task. `subtitle` is the issue, when the task has one,
+   and the branch or the place, for example
+   `Issue #1987 · example-org/shop · branch fix-login-redirect`. `badge` is the
+   state of the plan: `Plan`, `Running`, `Stopped` or `Done`.
 2. `progress`: `label` is the summary line, `percent` is the share of the todos
-   that are done, and `detail` names the todo that runs now, for example `t4 now`.
-3. `caption` with `text` `Todos`, then one `list` with `selection` `none` and
-one
-   row for each todo.
-4. The block of a todo that needs the person: a `caption` with `text`
-   `Needs you`, one `text` with the question, and one `buttons` with the answers.
-5. `caption` `History`, then one `list` of the last five events of
-   `history.jsonl`.
-6. `caption` `What is done` with one `text`, and `caption` `What is left` with
-one
-   `text`, when the plan is stopped or done.
-7. One `buttons` row with `Stop`, tone `danger`, last.
+   that are done, and `detail` names the time and the todo that runs now, for
+   example `27 min so far · about 30 left`.
+3. One `callout`, and only one. Before the go it has the tone `neutral`, the
+   `caption` `Nothing starts before Go` and a `text` that says what starts and
+   what it costs, such as `8 todos in 5 waves, on 3 computers. Nothing is
+   rented.`; its answers are `Go` with tone `primary`, `Change the plan` and
+   `Stop` with tone `danger`. While the plan runs and a todo needs the person it
+   has the tone `warn`, the `caption` `Needs you · t5 · waits 3 min`, the
+   question as `text` and the answers of that question. In every other state the
+   card holds no callout at all.
 
-### The row of a todo
+   The question is never under the board and never below the fold: it is the
+   strip above the board. Before the go the callout holds those three buttons,
+   and the card holds no other row of buttons: an id belongs to one button.
+4. `board`: the waves as columns and the workers as rows, as `The board of a
+   plan` says.
+5. `log`: the last five events of `history.jsonl`, each with its time, the newest
+   first.
+6. `caption`: the policy of the repository in one line, such as
+   `AGENTS.md · 2 at once · this computer, build-1 · rent: ask`.
+7. One `buttons` row: `Change the plan`, `Stop` with tone `danger`, and `Show
+   helper terminals` with the id `terminal.helper-1` while a helper runs in a
+   session that `open_terminal` can show.
 
-The row form is `todo · who · where · time`, and the place stays in every state,
-the short path included:
+`Show helper terminals` is the only way that a helper terminal opens: never call
+`open_terminal` while the plan runs, and never leave the person to find the
+session by hand. When the person presses it, open the terminal of each helper
+that runs in a session and answer the press with the panel ids.
 
-```json
-{"id": "t4", "title": "Change the redirect target",
- "subtitle": "helper-2 · build-1", "value": "8 m",
- "badge": {"text": "Now", "tone": "info"}}
-```
+### The board of a plan
 
-- `id` is the id of the todo, so a row and a line of the plan file name the same
-  todo. The rows of a plan take no press: the person answers with the buttons of
-  the block that needs them.
+A column is one wave, in the order of the plan file. A row is one worker: the
+person who does the work and the place where it runs. Every todo names its wave
+and its worker, so one item of the board shows one todo at the place where it
+runs and the wave that runs it. The waves of one row run one after the other;
+the todos of one wave may run at once, as far as `at_once` allows.
+
+Write the columns from `waves` of the plan file:
+
+- `label` is the name of the wave, such as `Understand`.
+- `tag` is the number of the wave, from `1` to `8`.
+- `note` is `in parallel` when the wave holds more than one todo.
+- `value` is the estimate of the wave, such as `~9 m`, or its time when the wave
+  is done, such as `9 m`.
+- `current` is `true` for the wave of the todo that runs now, and for no other
+  column.
+
+Write the rows from the todos, one row for each `who` and `where` that a todo
+names, in this order: the coordinator, each helper in the order of `helpers`, and
+`You` last when a todo waits for the person.
+
+- `label` is `<who> · <where>`, such as `helper-1 · build-1`. The place stays in
+  the label, because the narrow card draws only the label with the evidence.
+- `subtitle` is the kind of the worker: `this computer` for a worker on this
+  computer, `a machine of the list` for a worker on a machine of the list, and
+  `you answer on this card` for the person.
+
+Write one item for each todo:
+
+- `column` is the number of its wave minus one, and `row` is the index of its
+  worker in `rows`.
 - `title` is the todo.
-- `subtitle` is `<who> · <where>`, the coordinator or the helper and `this
-  computer` or the machine name. An added todo starts its subtitle with `added`.
-  A done todo ends its subtitle with the one line of its evidence, such as
-  `12 tests pass`. The place is never left out of these three forms.
-- `value` is the time. Write the time that the plan file measured when the todo
-  started or ended, such as `38 s`, `8 m` or `1 h 12 m`. Write the estimate with
-  `~` in front when the todo waits, such as `~5 m`. Write `waits` for a todo
-  that waits for the person, because nothing runs.
-- `badge` is the state: `Done` with tone `ok`, `Now` with tone `info`, `Waiting`
-  with tone `neutral`, `Needs you` with tone `warn`, `Failed` with tone `danger`.
+- `state` is the state of the todo in the plan file: `waiting`, `now`, `done`,
+  `needs_you` or `failed`.
+- `value` is the time that the plan file measured, such as `8 m`, or the estimate
+  with `~` in front while the todo waits, such as `~5 m`, or `waits 3 m` for a
+  todo that waits for the person.
+- `note` is the evidence of the todo in one line, such as `12 tests pass` or
+  `check: cargo test --workspace`.
+- `tag` is `added` for a todo that came after the go; every other item keeps no
+  tag.
 
-`progress.label` is `<done> of <all> done · <needs> needs you`, for example `3
-of 8 done · 1 needs you`. Write `1 needs you` and `2 need you`, and `0 needs
-you` when no todo waits for the person. `percent` is the rounded share of the
-done todos.
+A cell of the board holds at most four items. When one wave holds more todos of
+one worker than that, split the wave in the plan file; never drop a todo.
 
 ### The bounds of a card
 
-A card holds 64 components, 32 rows in one `list`, 16 steps in one `steps`, 8
+A card holds 64 components, 8 columns and 8 rows of one `board` with 32 items and
+4 items in one cell, 4 answers in one `callout`, 16 entries in one `log`, 8
 buttons in one `buttons`, 24 rows in one `kv`, 512 characters in one text field
-and 32 KiB of serialized document.
+and 32 KiB of serialized document. One board holds one current column, and every
+item names a cell that its columns and rows hold.
 
-A plan of twelve todos, one question and five history lines fits: 10 components of
-64, 17 rows of 32 in the two lists, and no text field near 512 characters.
+A plan of twelve todos in eight waves on five rows, with a question and five
+history lines, fits: 7 components of 64, 12 items of 32, 8 waves of 8, 5 rows of
+8, one item in each of its cells, 3 answers of 4 and 5 entries of 16.
 
-A `steps` component holds `done`, `now` and `waiting` with a short time, up to
-16, and it holds no owner and no place. Use one only for a run whose todos have
-one owner and one place, and never for the card of the plan itself.
-
-### The layouts of 3, 8 and 12 todos
+### The cards of 3, 8 and 12 todos
 
 The plan, before the go:
 
 ```json
-{"components": [
+{"width": "wide", "components": [
   {"type": "heading", "text": "Fix the login redirect",
    "subtitle": "Issue #1987 · this computer", "badge": {"text": "Plan", "tone": "info"}},
   {"type": "progress", "label": "0 of 3 done · 0 needs you", "percent": 0,
    "detail": "no todo runs"},
-  {"type": "caption", "text": "Todos"},
-  {"type": "list", "selection": "none", "rows": [
-    {"id": "t1", "title": "Read the issue and the failing test",
-     "subtitle": "coordinator · this computer", "value": "~12 m", "badge": {"text": "Waiting"}},
-    {"id": "t2", "title": "Change the redirect target",
-     "subtitle": "helper-1 · this computer", "value": "~20 m", "badge": {"text": "Waiting"}},
-    {"id": "t3", "title": "Run the test and the full check",
-     "subtitle": "coordinator · this computer", "value": "~15 m", "badge": {"text": "Waiting"}}]},
-  {"type": "text", "text": "Three todos, two at once, on this computer, as AGENTS.md says. The plan file is in .horizon-plan/ of the worktree, and git ignores it. Nothing outside the worktree changes."},
-  {"type": "buttons", "items": [
-    {"id": "go", "label": "Go", "tone": "primary"},
-    {"id": "change", "label": "Change the plan"},
-    {"id": "stop", "label": "Stop", "tone": "danger"}]}
+  {"type": "callout", "caption": "Nothing starts before Go",
+   "text": "3 todos in 2 waves, on 2 computers. Nothing is rented.",
+   "buttons": [
+     {"id": "go", "label": "Go", "tone": "primary"},
+     {"id": "change", "label": "Change the plan"},
+     {"id": "stop", "label": "Stop", "tone": "danger"}]},
+  {"type": "board",
+   "columns": [
+     {"label": "Understand", "tag": "1", "value": "~12 m"},
+     {"label": "Change", "tag": "2", "note": "in parallel", "value": "~35 m"}],
+   "rows": [
+     {"label": "coordinator · this computer", "subtitle": "this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"}],
+   "items": [
+     {"column": 0, "row": 0, "title": "Read the issue and the failing test",
+      "value": "~12 m", "note": "check: cargo test -p horizon-ui login_redirect"},
+     {"column": 1, "row": 1, "title": "Change the redirect target",
+      "value": "~20 m", "note": "check: cargo test -p horizon-ui"},
+     {"column": 1, "row": 0, "title": "Run the test and the full check",
+      "value": "~15 m", "note": "check: cargo test --workspace"}]},
+  {"type": "caption", "text": "AGENTS.md · 2 at once · this computer, build-1 · rent: no"}
 ]}
 ```
 
@@ -299,103 +371,134 @@ Eight todos, three done under the policy, one added, one that needs the person,
 and the history:
 
 ```json
-{"components": [
+{"width": "wide", "components": [
   {"type": "heading", "text": "Fix the login redirect",
-   "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}},
+   "subtitle": "Issue #1987 · example-org/shop · branch fix-login-redirect",
+   "badge": {"text": "Running", "tone": "info"}},
   {"type": "progress", "label": "3 of 8 done · 1 needs you", "percent": 38,
-   "detail": "t4 now"},
-  {"type": "caption", "text": "Todos"},
-  {"type": "list", "selection": "none", "rows": [
-    {"id": "t1", "title": "Read the issue and the failing test",
-     "subtitle": "coordinator · this computer · 12 tests pass", "value": "4 m",
-     "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t2", "title": "Add the redirect case to the test",
-     "subtitle": "coordinator · this computer · 12 tests pass", "value": "6 m",
-     "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t3", "title": "Check the route table",
-     "subtitle": "helper-1 · build-1 · 9 rows", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t4", "title": "Change the redirect target",
-     "subtitle": "helper-2 · this computer", "value": "8 m", "badge": {"text": "Now", "tone": "info"}},
-    {"id": "t5", "title": "Choose the address of the redirect",
-     "subtitle": "you · this computer", "value": "waits", "badge": {"text": "Needs you", "tone": "warn"}},
-    {"id": "t6", "title": "Update the route notes",
-     "subtitle": "coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}},
-    {"id": "t7", "title": "Run the full check",
-     "subtitle": "coordinator · build-1", "value": "~20 m", "badge": {"text": "Waiting"}},
-    {"id": "t8", "title": "Write the report of the task",
-     "subtitle": "added · coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}}]},
-  {"type": "caption", "text": "Needs you"},
-  {"type": "text", "text": "t5: Which address must the redirect use?"},
+   "detail": "27 min so far · about 30 left"},
+  {"type": "callout", "tone": "warn", "caption": "Needs you · t5 · waits 3 min",
+   "text": "Which address must the redirect use?",
+   "buttons": [
+     {"id": "answer.t5.account", "label": "The account address", "tone": "primary"},
+     {"id": "answer.t5.last", "label": "The last address"},
+     {"id": "answer.t5.skip", "label": "Skip this todo"}]},
+  {"type": "board",
+   "columns": [
+     {"label": "Understand", "tag": "1", "value": "4 m"},
+     {"label": "Prepare", "tag": "2", "note": "in parallel", "value": "~9 m"},
+     {"label": "Change", "tag": "3", "note": "in parallel", "value": "~10 m", "current": true},
+     {"label": "Verify", "tag": "4", "value": "~20 m"},
+     {"label": "Report", "tag": "5", "value": "~5 m"}],
+   "rows": [
+     {"label": "coordinator · this computer", "subtitle": "this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"},
+     {"label": "helper-2 · build-2", "subtitle": "a machine of the list"},
+     {"label": "You · this computer", "subtitle": "you answer on this card"}],
+   "items": [
+     {"column": 0, "row": 0, "title": "Read the issue and the failing test",
+      "state": "done", "value": "4 m", "note": "1 failing test found"},
+     {"column": 1, "row": 1, "title": "Add the redirect case to the test",
+      "state": "done", "value": "6 m", "note": "12 tests pass"},
+     {"column": 1, "row": 2, "title": "Check the route table",
+      "state": "done", "value": "9 m", "note": "9 rows, 1 wrong"},
+     {"column": 2, "row": 1, "title": "Change the redirect target",
+      "state": "now", "value": "8 m", "note": "edits routes/login.rs"},
+     {"column": 2, "row": 3, "title": "Choose the address of the redirect",
+      "state": "needs_you", "value": "waits 3 m", "note": "t4 goes on with the default"},
+     {"column": 2, "row": 0, "title": "Update the route notes",
+      "state": "waiting", "value": "~5 m", "note": "check: docs build"},
+     {"column": 3, "row": 1, "title": "Run the full check",
+      "state": "waiting", "value": "~20 m", "note": "check: cargo test --workspace"},
+     {"column": 4, "row": 0, "title": "Write the report of the task",
+      "state": "waiting", "value": "~5 m", "note": "check: 3 lines and the evidence", "tag": "added"}]},
+  {"type": "log", "entries": [
+    {"at": "07:31", "text": "t3 done on build-2, 9 rows"},
+    {"at": "07:28", "text": "t5 waits for you: the address is your choice"},
+    {"at": "07:26", "text": "t2 done on build-1, 12 tests pass"},
+    {"at": "07:20", "text": "t8 added: the report was missing"},
+    {"at": "07:10", "text": "You pressed Go"}]},
+  {"type": "caption", "text": "AGENTS.md · 2 at once · this computer, build-1, build-2 · rent: ask"},
   {"type": "buttons", "items": [
-    {"id": "answer.t5.account", "label": "The account address", "tone": "primary"},
-    {"id": "answer.t5.last", "label": "The last address"},
-    {"id": "answer.t5.skip", "label": "Skip this todo"}]},
-  {"type": "caption", "text": "History"},
-  {"type": "list", "selection": "none", "rows": [
-    {"id": "h1", "title": "t3 done on build-1, 9 rows", "subtitle": "t3", "value": "07:31"},
-    {"id": "h2", "title": "t2 done, 12 tests pass", "subtitle": "t2", "value": "07:26"},
-    {"id": "h3", "title": "t5 waits for the person", "subtitle": "t5", "value": "07:22"},
-    {"id": "h4", "title": "t8 added: the report was missing", "subtitle": "t8", "value": "07:20"},
-    {"id": "h5", "title": "The person pressed Go", "subtitle": "plan", "value": "07:10"}]},
-  {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}
+    {"id": "change", "label": "Change the plan"},
+    {"id": "stop", "label": "Stop", "tone": "danger"},
+    {"id": "terminal.helper-1", "label": "Show helper terminals"}]}
 ]}
 ```
 
-Twelve todos, eleven done, one that needs the person, and the history:
+Twelve todos in eight waves on five rows, eleven done, one that needs the
+person, and the history:
 
 ```json
-{"components": [
+{"width": "wide", "components": [
   {"type": "heading", "text": "Fix the login redirect",
-   "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}},
+   "subtitle": "Issue #1987 · example-org/shop · branch fix-login-redirect",
+   "badge": {"text": "Running", "tone": "info"}},
   {"type": "progress", "label": "11 of 12 done · 1 needs you", "percent": 92,
-   "detail": "stopped at t12"},
-  {"type": "caption", "text": "Todos"},
-  {"type": "list", "selection": "none", "rows": [
-    {"id": "t1", "title": "Read the issue and the failing test",
-     "subtitle": "coordinator · this computer · 12 tests pass", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t2", "title": "Add the redirect case to the test",
-     "subtitle": "coordinator · this computer · 12 tests pass", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t3", "title": "Check the route table",
-     "subtitle": "helper-1 · build-1 · 9 rows", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t4", "title": "Change the redirect target",
-     "subtitle": "helper-2 · this computer · 12 tests pass", "value": "8 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t5", "title": "Choose the address of the redirect",
-     "subtitle": "you · this computer · the person chose the account address",
-     "value": "2 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t6", "title": "Update the route notes",
-     "subtitle": "coordinator · this computer · the notes name one address",
-     "value": "5 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t7", "title": "Run the full check",
-     "subtitle": "coordinator · build-1 · 412 tests pass", "value": "20 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t8", "title": "Write the report of the task",
-     "subtitle": "added · coordinator · this computer · 4 lines in the PR",
-     "value": "5 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t9", "title": "Read the review of the change",
-     "subtitle": "helper-1 · build-1 · 2 findings", "value": "3 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t10", "title": "Fix the two findings of the review",
-     "subtitle": "coordinator · this computer · 412 tests pass", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t11", "title": "Run the full check again",
-     "subtitle": "coordinator · build-1 · 412 tests pass", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}},
-    {"id": "t12", "title": "Name the branch of the push",
-     "subtitle": "you · this computer", "value": "waits", "badge": {"text": "Needs you", "tone": "warn"}}]},
-  {"type": "caption", "text": "Needs you"},
-  {"type": "text", "text": "t12: May I push the branch fix-login-redirect and open a pull request?"},
+   "detail": "52 min so far · your answer is left"},
+  {"type": "callout", "tone": "warn", "caption": "Needs you · t12 · waits 2 min",
+   "text": "May I push the branch fix-login-redirect and open a pull request?",
+   "buttons": [
+     {"id": "answer.t12.push", "label": "Push and open the PR", "tone": "primary"},
+     {"id": "answer.t12.wait", "label": "Not now"}]},
+  {"type": "board",
+   "columns": [
+     {"label": "Understand", "tag": "1", "value": "4 m"},
+     {"label": "Prepare", "tag": "2", "note": "in parallel", "value": "9 m"},
+     {"label": "Change", "tag": "3", "note": "in parallel", "value": "13 m"},
+     {"label": "Fix", "tag": "4", "value": "7 m"},
+     {"label": "Verify", "tag": "5", "note": "in parallel", "value": "24 m"},
+     {"label": "Review", "tag": "6", "note": "in parallel", "value": "9 m"},
+     {"label": "Report", "tag": "7", "value": "5 m"},
+     {"label": "Push", "tag": "8", "value": "waits 2 m", "current": true}],
+   "rows": [
+     {"label": "coordinator · this computer", "subtitle": "this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"},
+     {"label": "helper-2 · build-2", "subtitle": "a machine of the list"},
+     {"label": "helper-3 · build-1", "subtitle": "a machine of the list"},
+     {"label": "You · this computer", "subtitle": "you answer on this card"}],
+   "items": [
+     {"column": 0, "row": 0, "title": "Read the issue and the failing test",
+      "state": "done", "value": "4 m", "note": "1 failing test found"},
+     {"column": 1, "row": 1, "title": "Add the redirect case to the test",
+      "state": "done", "value": "6 m", "note": "12 tests pass"},
+     {"column": 1, "row": 2, "title": "Check the route table",
+      "state": "done", "value": "3 m", "note": "9 rows, 1 wrong"},
+     {"column": 2, "row": 1, "title": "Change the redirect target",
+      "state": "done", "value": "8 m", "note": "12 tests pass"},
+     {"column": 2, "row": 2, "title": "Update the route notes",
+      "state": "done", "value": "5 m", "note": "the notes name one address"},
+     {"column": 3, "row": 3, "title": "Fix the two findings of the review",
+      "state": "done", "value": "7 m", "note": "412 tests pass"},
+     {"column": 4, "row": 1, "title": "Run the full check",
+      "state": "done", "value": "20 m", "note": "412 tests pass"},
+     {"column": 4, "row": 0, "title": "Write the report of the task",
+      "state": "done", "value": "4 m", "note": "4 lines in the PR", "tag": "added"},
+     {"column": 5, "row": 2, "title": "Read the review of the change",
+      "state": "done", "value": "3 m", "note": "2 findings"},
+     {"column": 5, "row": 0, "title": "Check the two findings",
+      "state": "done", "value": "6 m", "note": "412 tests pass"},
+     {"column": 6, "row": 0, "title": "Write the report of the task",
+      "state": "done", "value": "5 m", "note": "the report is in the PR"},
+     {"column": 7, "row": 4, "title": "Name the branch of the push",
+      "state": "needs_you", "value": "waits 2 m", "note": "your push is your own choice"}]},
+  {"type": "log", "entries": [
+    {"at": "09:12", "text": "t12 waits: a push is the person's"},
+    {"at": "09:08", "text": "t11 done on build-1, 412 tests pass"},
+    {"at": "09:01", "text": "t10 done, the two findings are checked"},
+    {"at": "08:55", "text": "t9 done, 2 findings"},
+    {"at": "08:40", "text": "t8 added by the person in the agent panel"}]},
+  {"type": "caption", "text": "AGENTS.md · 2 at once · this computer, build-1, build-2 · rent: ask"},
   {"type": "buttons", "items": [
-    {"id": "answer.t12.push", "label": "Push and open the PR", "tone": "primary"},
-    {"id": "answer.t12.wait", "label": "Not now"}]},
-  {"type": "caption", "text": "History"},
-  {"type": "list", "selection": "none", "rows": [
-    {"id": "h1", "title": "t12 waits: a push is the person's", "subtitle": "t12", "value": "09:12"},
-    {"id": "h2", "title": "t11 done on build-1, 412 tests pass", "subtitle": "t11", "value": "09:08"},
-    {"id": "h3", "title": "t10 done, the two findings are fixed", "subtitle": "t10", "value": "09:01"},
-    {"id": "h4", "title": "t9 done, 2 findings", "subtitle": "t9", "value": "08:55"},
-    {"id": "h5", "title": "t8 added by the person in the agent panel", "subtitle": "t8", "value": "08:40"}]},
-  {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}
+    {"id": "change", "label": "Change the plan"},
+    {"id": "stop", "label": "Stop", "tone": "danger"},
+    {"id": "terminal.helper-1", "label": "Show helper terminals"}]}
 ]}
 ```
 
-The done card is the same card with the badge `Done`, the summary line at 100
-percent, the two texts `What is done` and `What is left`, and one `buttons` row.
+The done card is the same card with the badge `Done`, no callout, the summary
+line at 100 percent, every item `done`, the log of the last five events, and one
+`buttons` row with `Close` and `Show helper terminals`.
 
 ### How often you change the card
 
@@ -480,23 +583,49 @@ question itself and writes the decision into the history. A row of state
 Everything else goes into the history as one line, such as `t6: the shorter line
 won, no question`.
 
-A plan that cannot reach its goal stops with the state `stopped`, says what is
-done, what is left and why, and asks one question:
+A plan that cannot reach its goal stops with the state `stopped`. Its callout
+says why and asks the one question, its log says what is done and what is left,
+and its items keep the state that the plan file gives them:
 
 ```json
-{"components": [
+{"width": "wide", "components": [
   {"type": "heading", "text": "Fix the login redirect",
    "subtitle": "Issue #1987 · this computer", "badge": {"text": "Stopped", "tone": "warn"}},
   {"type": "progress", "label": "3 of 8 done · 1 needs you", "percent": 38,
    "detail": "stopped at t5"},
-  {"type": "caption", "text": "What is done"},
-  {"type": "text", "text": "Done: the failing test, the redirect case and the route table on build-1."},
-  {"type": "caption", "text": "What is left"},
-  {"type": "text", "text": "Left: t5 to t8. The address of the redirect belongs to you, and no test can choose it. The helper of t4 on build-1 stopped with the link, so nothing of this plan runs."},
+  {"type": "callout", "tone": "warn", "caption": "Needs you · t5 · stopped",
+   "text": "The helper of t4 on build-1 stopped with the link. Continue on this computer?",
+   "buttons": [
+     {"id": "resume", "label": "Continue on this computer", "tone": "primary"},
+     {"id": "answer.t5.account", "label": "The account address"},
+     {"id": "answer.t5.last", "label": "The last address"}]},
+  {"type": "board",
+   "columns": [
+     {"label": "Understand", "tag": "1", "value": "4 m"},
+     {"label": "Prepare", "tag": "2", "note": "in parallel", "value": "9 m"},
+     {"label": "Change", "tag": "3", "note": "in parallel", "value": "~10 m"}],
+   "rows": [
+     {"label": "coordinator · this computer", "subtitle": "this computer"},
+     {"label": "helper-1 · build-1", "subtitle": "a machine of the list"}],
+   "items": [
+     {"column": 0, "row": 0, "title": "Read the issue and the failing test",
+      "state": "done", "value": "4 m", "note": "1 failing test found"},
+     {"column": 1, "row": 1, "title": "Add the redirect case to the test",
+      "state": "done", "value": "6 m", "note": "12 tests pass"},
+     {"column": 1, "row": 0, "title": "Check the route table",
+      "state": "done", "value": "3 m", "note": "9 rows, 1 wrong"},
+     {"column": 2, "row": 1, "title": "Change the redirect target",
+      "state": "failed", "value": "3 m", "note": "the link to build-1 stopped"}]},
+  {"type": "log", "entries": [
+    {"at": "08:02", "text": "t4 failed: the link to build-1 stopped"},
+    {"at": "07:58", "text": "left: t5 to t8, and no test chooses the address"},
+    {"at": "07:52", "text": "t3 done on this computer, 9 rows, 1 wrong"},
+    {"at": "07:48", "text": "t2 done on build-1, 12 tests pass"},
+    {"at": "07:40", "text": "You pressed Go"}]},
+  {"type": "caption", "text": "AGENTS.md · 2 at once · this computer, build-1 · rent: no"},
   {"type": "buttons", "items": [
-    {"id": "answer.t5.account", "label": "The account address", "tone": "primary"},
-    {"id": "answer.t5.last", "label": "The last address"},
-    {"id": "resume", "label": "Continue"}]}
+    {"id": "change", "label": "Change the plan"},
+    {"id": "stop", "label": "Stop", "tone": "danger"}]}
 ]}
 ```
 
@@ -524,9 +653,9 @@ The plan folder holds `history.jsonl`, one event per line:
   the answer in a second line with the same `todo`.
 
 Append one line at each change of a todo, at each question and at each answer.
-Never rewrite a line. The card shows the last five lines under the caption
-`History`, newest first, as a `list` with the words in `title`, the todo in
-`subtitle` and the clock time in `value`.
+Never rewrite a line. The card shows the last five lines as one `log`, newest
+first, with the clock time of the event and its words in one line: `07:31` and
+`t3 done on build-2, 9 rows`.
 
 ## Give a todo to a helper
 

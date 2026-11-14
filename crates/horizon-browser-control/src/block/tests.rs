@@ -1118,6 +1118,12 @@ const SKILL_DOCUMENTS: [(&str, &str); 5] = [
     ),
 ];
 
+/// Whether one fenced block of a skill is a card document: a document of
+/// components, with or without the width that it asks for.
+fn is_card_document(block: &str) -> bool {
+    block.contains("\"components\"") && (block.starts_with(r#"{"components""#) || block.starts_with(r#"{"width""#))
+}
+
 /// Every fenced JSON block of one skill that is a card document.
 fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
     let mut documents = Vec::new();
@@ -1129,27 +1135,12 @@ fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
         };
         let block = after[..end].trim();
         rest = &after[end + 3..];
-        if !block.starts_with(r#"{"components""#) {
+        if !is_card_document(block) {
             continue;
         }
         documents.push(parse_document(block).unwrap_or_else(|error| panic!("{skill}: {error}\n{block}")));
     }
     documents
-}
-
-/// The rows of the `list` under one `caption` of a document, as the plan skill
-/// writes its todos and its history.
-fn rows_under(document: &BlockDocument, caption_text: &str) -> Option<usize> {
-    let start = document.components.iter().position(|component| match component {
-        Component::Caption { text } => text == caption_text,
-        _ => false,
-    })?;
-    document.components[start..]
-        .iter()
-        .find_map(|component| match component {
-            Component::List { rows, .. } => Some(rows.len()),
-            _ => None,
-        })
 }
 
 /// The longest string of one value of a document, in characters.
@@ -1232,7 +1223,7 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     // holds a button or a row that takes one.
     for document in setup.iter().chain(&machines).chain(&plan).chain(&server_move) {
         let takes_a_press = document.components.iter().any(|component| match component {
-            Component::Buttons { items } => !items.is_empty(),
+            Component::Buttons { items } | Component::Callout { buttons: items, .. } => !items.is_empty(),
             Component::List { rows, selection, .. } => {
                 *selection == Selection::Single && rows.iter().any(|row| !row.disabled)
             }
@@ -1284,23 +1275,95 @@ fn every_card_of_a_skill_stays_inside_the_bounds_of_the_host() {
         .filter(|(skill, _)| *skill == "horizon-plan")
         .map(|(_, document)| document)
         .collect();
-    let todos: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "Todos")).collect();
+    let boards: Vec<Option<(usize, usize, usize)>> = plan.iter().map(|document| board_counts(document)).collect();
     assert_eq!(
-        todos,
-        vec![None, None, Some(3), Some(8), Some(12), None, None],
-        "the short path holds no todo list, and the plan cards hold 3, 8 and 12 rows"
+        boards,
+        vec![
+            Some((1, 1, 1)),
+            Some((1, 1, 1)),
+            Some((2, 2, 3)),
+            Some((5, 4, 8)),
+            Some((8, 5, 12)),
+            Some((3, 2, 4)),
+            None,
+        ],
+        "the short path draws a board of one wave and one worker, and the plans hold 3, 8 and 12 items"
     );
-    let history: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "History")).collect();
+    let wide: Vec<bool> = plan
+        .iter()
+        .map(|document| document.width == Some(super::Width::Wide))
+        .collect();
     assert_eq!(
-        history,
-        vec![None, None, None, Some(5), Some(5), None, None],
+        wide,
+        vec![false, false, true, true, true, true, false],
+        "a plan of three or more todos asks for the wide card, and the short path does not"
+    );
+    let logs: Vec<Option<usize>> = plan.iter().map(|document| log_entries(document)).collect();
+    assert_eq!(
+        logs,
+        vec![None, Some(1), None, Some(5), Some(5), Some(5), None],
         "a plan that runs shows the last five events of its history and nothing more"
+    );
+    let answers: Vec<Option<usize>> = plan.iter().map(|document| callout_answers(document)).collect();
+    assert_eq!(
+        answers,
+        vec![None, None, Some(3), Some(3), Some(2), Some(3), None],
+        "the callout of the go holds its three answers, and the card of an older run asks nothing"
     );
     assert_eq!(
         plan[4].components.len(),
-        10,
-        "the card of twelve todos, one question and five history lines holds 10 components of 64"
+        7,
+        "the card of twelve todos, one question and five history lines holds 7 components of 64"
     );
+    assert!(
+        plan[2].components.len() <= BlockDocument::MAX_COMPONENTS,
+        "the largest plan stays inside the bounds of the host"
+    );
+    for document in &plan {
+        for component in &document.components {
+            if let Component::Board { columns, rows, items } = component {
+                assert!(columns.len() <= BlockDocument::MAX_BOARD_COLUMNS);
+                assert!(rows.len() <= BlockDocument::MAX_BOARD_ROWS);
+                assert!(items.len() <= BlockDocument::MAX_BOARD_ITEMS);
+                assert!(columns.iter().filter(|column| column.current).count() <= 1);
+                let widest = items.iter().fold(0_usize, |widest, item| {
+                    let cell = items
+                        .iter()
+                        .filter(|other| other.column == item.column && other.row == item.row)
+                        .count();
+                    widest.max(cell)
+                });
+                assert!(
+                    widest <= BlockDocument::MAX_BOARD_CELL_ITEMS,
+                    "a cell of a card of a skill holds at most four items: {widest}"
+                );
+            }
+        }
+    }
+}
+
+/// The waves, the workers and the items of the first board of `document`.
+fn board_counts(document: &BlockDocument) -> Option<(usize, usize, usize)> {
+    document.components.iter().find_map(|component| match component {
+        Component::Board { columns, rows, items } => Some((columns.len(), rows.len(), items.len())),
+        _ => None,
+    })
+}
+
+/// The entries of the first log of `document`.
+fn log_entries(document: &BlockDocument) -> Option<usize> {
+    document.components.iter().find_map(|component| match component {
+        Component::Log { entries } => Some(entries.len()),
+        _ => None,
+    })
+}
+
+/// The answers of the first callout of `document`.
+fn callout_answers(document: &BlockDocument) -> Option<usize> {
+    document.components.iter().find_map(|component| match component {
+        Component::Callout { buttons, .. } => Some(buttons.len()),
+        _ => None,
+    })
 }
 
 /// One wave of a board, named `Wave <index>` with the tag of its index.
@@ -1589,4 +1652,42 @@ fn a_document_asks_for_the_narrow_card_the_wide_one_or_neither() {
 
     let error = parse_document(&format!(r#"{{"width":"huge","components":[{components}]}}"#)).expect_err("refused");
     assert!(matches!(error, BlockDocumentError::InvalidJson { .. }));
+}
+
+/// The one-line requests of the plan card procedure are valid `block_panel`
+/// requests, and their documents are the cards of the skill. The procedure is an
+/// input of this test: a request that drifts from the rules of a card fails here.
+#[test]
+fn the_requests_of_the_plan_card_procedure_draw_the_cards_of_the_skill() {
+    let procedure = include_str!("../../../../docs/testing/procedures/plan-card.md");
+    let mut documents = Vec::new();
+    for line in procedure.lines() {
+        let Some(request) = line.strip_prefix(r#"{"operation":"#) else {
+            continue;
+        };
+        let request: serde_json::Value =
+            serde_json::from_str(&format!(r#"{{"operation":{request}"#)).expect("a request is one JSON object");
+        let document = request.get("document").expect("a request holds a document");
+        let document = parse_document(&document.to_string())
+            .unwrap_or_else(|error| panic!("the procedure holds a refused card: {error}"));
+        documents.push(document);
+    }
+    assert_eq!(
+        documents.len(),
+        6,
+        "the procedure replays the two cards of the short path, the plan before the go, the plan with a question, the card of twelve todos and the stopped plan"
+    );
+    let boards: Vec<Option<(usize, usize, usize)>> = documents.iter().map(board_counts).collect();
+    assert_eq!(
+        boards,
+        vec![
+            Some((1, 1, 1)),
+            Some((1, 1, 1)),
+            Some((2, 2, 3)),
+            Some((5, 4, 8)),
+            Some((8, 5, 12)),
+            Some((3, 2, 4)),
+        ],
+        "each request draws the board of its task, with one wave for the short path"
+    );
 }
