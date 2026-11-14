@@ -193,6 +193,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-setup/references/workshop.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-setup/references/workshop.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-plan/SKILL.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -263,13 +270,22 @@ pub(super) const SERVER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
-pub(super) const SETUP_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-setup/SKILL.md"
-    )),
-}];
+pub(super) const SETUP_SKILL_FILES: &[EmbeddedFile] = &[
+    EmbeddedFile {
+        relative_path: "SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-setup/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/workshop.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-setup/references/workshop.md"
+        )),
+    },
+];
 
 pub(super) const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",

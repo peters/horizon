@@ -10,12 +10,19 @@ use horizon_browser_control::block::{BlockDocument, Component, parse_document};
 /// The card documents of the bundled skills, from the copy that the build
 /// embeds. The two bundled copies of each skill hold the same bytes, and the
 /// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 6] = [
+const SKILLS: [(&str, &str); 7] = [
     (
         "horizon-setup",
         include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-setup/SKILL.md"
+        )),
+    ),
+    (
+        "horizon-setup/workshop",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-setup/references/workshop.md"
         )),
     ),
     (
@@ -135,4 +142,22 @@ fn every_column_of_a_board_of_the_skills_holds_a_tag_and_a_value() {
             );
         }
     }
+}
+
+/// The first card of Set up is the entry of the whole workshop: this version
+/// adds no tile to the first start page, so the row `choose.workshop` of that
+/// card is the way to the goal `workshop`.
+#[test]
+fn the_first_card_of_set_up_offers_the_whole_workshop_as_a_row() {
+    let offers = skill_cards().iter().any(|(name, document)| {
+        name.starts_with("horizon-setup")
+            && document.components.iter().any(|component| match component {
+                Component::List { rows, .. } => rows.iter().any(|row| row.id == "choose.workshop"),
+                _ => false,
+            })
+    });
+    assert!(
+        offers,
+        "the first card of Set up lists the goal workshop as a row, because the start page has no tile for it"
+    );
 }

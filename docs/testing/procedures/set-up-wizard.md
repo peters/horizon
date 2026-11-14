@@ -722,6 +722,57 @@ This task rents nothing.
 7. Take the server entry out of **Settings**, **Server**, so this task changes
    nothing that the person keeps.
 
+## 6.13 F13 — The whole workshop in one run
+
+This task uses the stand-in agent of task 6.7 and rents nothing: its provider
+program is the stand-in of this repository, and a part that would rent draws its
+price card and stops.
+
+1. Start the fixture on `<state-workshop>` with the stand-in provider of task 6.8
+   on `PATH`. Press `Set up`, and write in the agent panel:
+   `set up my workshop`.
+
+   Result: The card says `Set up my workshop` with the badge `Step 1`, one row
+   for each of the three parts, a badge on each row that reads `Ready`, `Not set
+   up` or `Needs you`, the caption `Nothing is rented and no setting changes
+   before your press.`, and the buttons `Set up the parts that are not ready`,
+   `The server only`, `The browser only`, `The machines only` and `Stop`.
+
+2. Read the three rows of the parts.
+
+   Result: The row of the server names the entry that `server_status` answers,
+   the row of the browser names the browser host entry and the profile of the
+   settings, and the row of the machines names the records of `machines` and the
+   repositories that hold the section `## Horizon machine`.
+
+3. Press `The server only`.
+
+   Result: The card changes to the first card of Goal `server`, and the words of
+   the card are the words of that goal. No second card of Set up is opened.
+
+4. Press `Stop here` on the card between two parts.
+
+   Result: The card says `Your workshop is ready` with the badge `Done`, the
+   rows `Server`, `Browser`, `Machines` and `Cost`, one `text` line with the
+   three things that a person does next, and the button `Close`. The row `Cost`
+   says `nothing is rented` when the run rented nothing.
+
+5. Press `Close`.
+
+   Result: The card closes, and the panel of the agent says one line about the
+   run.
+
+6. Give this line to the stand-in agent of task 6.7, so the entry of the goal is
+   visible without a real agent on the first card:
+
+   ```text
+   {"operation":"create","title":"Set up","document":{"components":[{"type":"heading","text":"What do you want to do?","subtitle":"Choose one. Nothing is rented and nothing is changed before you confirm.","badge":{"text":"Step 1"}},{"type":"list","selection":"single","rows":[{"id":"choose.workshop","title":"Set up my whole workshop","subtitle":"The server, the browser and the machines of your repositories, in one run.","badge":{"text":"3 parts","tone":"info"}},{"id":"choose.rent","title":"Work on a bigger machine","subtitle":"Rent a cloud machine in your own provider account."},{"id":"choose.server","title":"Use Horizon on all your computers","subtitle":"Set up the Horizon server. Machines, keys and settings follow you."},{"id":"choose.browser","title":"A browser that stays signed in","subtitle":"Chromium on a machine that stays on, for you and your agents."}]},{"type":"text","text":"Do you have a server already? Join it from this computer, and write \"join\" in this panel. You can also write to the agent in its panel at any step."}]}}
+   ```
+
+   Result: The first card of Set up lists `Set up my whole workshop` as its first
+   row. The first start page still holds four tiles, and it holds no tile for
+   this goal.
+
 ## 7. Pass criteria
 
 - The first start page shows its heading, the four tiles and the row of keys,
@@ -746,6 +797,12 @@ This task rents nothing.
   nothing.
 - A confirmed server entry starts the link of the run, and the sidebar reads
   `Server: in step` without a second start.
+- Goal `workshop` draws its three parts with their state from the read of this
+  computer, runs the parts in the order of the server, the browser and the
+  machines, and ends with the card of what the workshop holds, its price for each
+  hour and the three things that a person does next.
+- The row `choose.workshop` of the first card of Set up is the entry of that
+  goal, and the first start page holds four tiles.
 
 ## 8. Cleanup
 

@@ -44,6 +44,7 @@ const ASSETS: &[&str] = &[
     "plugins/claude-code/skills/horizon-server/SKILL.md",
     "plugins/claude-code/skills/horizon-server-move/SKILL.md",
     "plugins/claude-code/skills/horizon-setup/SKILL.md",
+    "plugins/claude-code/skills/horizon-setup/references/workshop.md",
     "plugins/claude-code/skills/horizon-speech/SKILL.md",
     "plugins/claude-code/skills/horizon-worktree/SKILL.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
@@ -72,6 +73,7 @@ const ASSETS: &[&str] = &[
     "plugins/codex/skills/horizon-server/SKILL.md",
     "plugins/codex/skills/horizon-server-move/SKILL.md",
     "plugins/codex/skills/horizon-setup/SKILL.md",
+    "plugins/codex/skills/horizon-setup/references/workshop.md",
     "plugins/codex/skills/horizon-speech/SKILL.md",
     "plugins/codex/skills/horizon-worktree/SKILL.md",
 ];

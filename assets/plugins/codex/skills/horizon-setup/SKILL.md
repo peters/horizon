@@ -1,11 +1,12 @@
 ---
 name: horizon-setup
 description: >-
-  Run the Set up wizard for the person, one card per step: rent a cloud machine, put the Horizon
-  server on a computer, add a browser that stays signed in, or join a server that already runs. Use
-  it when Horizon starts an agent with "Use the horizon-setup skill" and a goal, or when the person
-  asks to set up Horizon, to rent a machine for Horizon, to use Horizon on all their computers, to
-  open a browser on another machine, or to join a server.
+  Run the Set up wizard for the person, one card per step: set up the whole workshop, rent a cloud
+  machine, put the Horizon server on a computer, add a browser that stays signed in, or join a
+  server that already runs. Use it when Horizon starts an agent with "Use the horizon-setup skill"
+  and a goal, or when the person asks to set up Horizon, to set up everything for a new computer, to
+  rent a machine for Horizon, to use Horizon on all their computers, to open a browser on another
+  machine, or to join a server.
 ---
 
 # Horizon Set up
@@ -17,9 +18,9 @@ first message:
 Use the horizon-setup skill. The person pressed Set up. Goal: <goal>.
 ```
 
-The goal is `rent`, `server`, `browser`, `join`, or `choose` when the person
-pressed the plain Set up control and not one of the four tiles of the first
-start page. This skill is the script of the wizard for each goal. The work
+The goal is `workshop`, `rent`, `server`, `browser`, `join`, or `choose` when
+the person pressed the plain Set up control and not one of the four tiles of the
+first start page. This skill is the script of the wizard for each goal. The work
 itself belongs to other skills:
 
 - `horizon-block` holds the card contract, `next_click`, the machine records,
@@ -111,6 +112,9 @@ press, and no row starts selected.
    "subtitle": "Choose one. Nothing is rented and nothing is changed before you confirm.",
    "badge": {"text": "Step 1"}},
   {"type": "list", "selection": "single", "rows": [
+    {"id": "choose.workshop", "title": "Set up my whole workshop",
+     "subtitle": "The server, the browser and the machines of your repositories, in one run.",
+     "badge": {"text": "3 parts", "tone": "info"}},
     {"id": "choose.rent", "title": "Work on a bigger machine",
      "subtitle": "Rent a cloud machine in your own provider account."},
     {"id": "choose.server", "title": "Use Horizon on all your computers",
@@ -122,10 +126,28 @@ press, and no row starts selected.
 ```
 
 Write one line in the panel beside the card: `Choose on the card, or write what
-you want here.` A press on `choose.rent` continues with the goal `rent`, a press
-on `choose.server` with `server`, and a press on `choose.browser` with `browser`.
-The words "I have a server", "join", or the name of a server computer continue
-with the goal `join`.
+you want here.` A press on `choose.workshop` continues with the goal `workshop`, a
+press on `choose.rent` with the goal `rent`, a press on `choose.server` with
+`server`, and a press on `choose.browser` with `browser`. The words "I have a
+server", "join", or the name of a server computer continue with the goal `join`.
+
+The first start page of this version holds four tiles and no tile for the whole
+workshop: that row of this first card is the entry of the goal `workshop`, and the
+words "set up my workshop" or "set up everything" start it too.
+
+## Goal `workshop`
+
+The person wants the whole workshop: the server, a browser that stays signed in,
+and machines for the repositories that they work on. The goal runs the three parts
+in this order with one card that changes: the server, the browser, the machines.
+The page [workshop](references/workshop.md) holds the first card with the state of
+each part on this computer, the card between two parts, the rule that a part which
+rents states its own price once, and the end card with what the workshop holds, its
+price for each hour and the three things that a person does next.
+
+The entry of this goal is the row `choose.workshop` of the first card of Goal
+`choose`, and the words "set up my workshop" or "set up everything". The first
+start page of this version keeps its four tiles, and it has no tile for this goal.
 
 ## Goal `rent`
 
