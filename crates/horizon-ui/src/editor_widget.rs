@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use egui::containers::scroll_area::ScrollBarVisibility;
-use egui::{Align, Color32, CornerRadius, FontId, Id, Layout, Pos2, Rect, RichText, ScrollArea, TextEdit, Vec2};
+use egui::{Align, Color32, CornerRadius, FontId, Id, Layout, Pos2, Rect, ScrollArea, TextEdit, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use horizon_core::{MarkdownEditor, Panel, PanelId, PreviewMode, ShortcutBinding};
 
@@ -55,6 +55,15 @@ impl<'a> MarkdownEditorView<'a> {
     }
 }
 
+/// The text of the mode bar at the size it has on the screen of the canvas zoom.
+///
+/// The bar is a panel of the canvas, so a stock label would be a picture of zoom 1
+/// that the layer transform scales: `Preview` and the file name blur at any zoom
+/// but 100 percent. The galley keeps the size and the line of zoom 1.
+fn mode_bar_text(ui: &egui::Ui, text: &str, color: Color32) -> egui::WidgetText {
+    zoom_text::widget_text(ui.painter(), text, FontId::proportional(11.0), color, None)
+}
+
 fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
     let mode_rect = Rect::from_min_size(ui.cursor().min, Vec2::new(ui.available_width(), MODE_BAR_HEIGHT));
     ui.allocate_rect(mode_rect, egui::Sense::hover());
@@ -71,9 +80,7 @@ fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
                 (editor.preview_mode == PreviewMode::Edit, "Edit", PreviewMode::Edit),
                 (preview_active, "Preview", PreviewMode::Preview),
             ] {
-                let text = RichText::new(label)
-                    .size(11.0)
-                    .color(if is_active { theme::FG() } else { theme::FG_DIM() });
+                let text = mode_bar_text(ui, label, if is_active { theme::FG() } else { theme::FG_DIM() });
                 let button = egui::Button::new(text)
                     .fill(if is_active {
                         theme::PANEL_BG_ALT()
@@ -89,23 +96,23 @@ fn render_mode_bar(ui: &mut egui::Ui, editor: &mut MarkdownEditor) -> Rect {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(4.0);
                 if editor.saving {
-                    ui.label(RichText::new("Saving...").size(11.0).color(theme::FG_DIM()));
+                    let saving = mode_bar_text(ui, "Saving...", theme::FG_DIM());
+                    ui.add(egui::Label::new(saving));
                 }
                 if let Some(error) = &editor.error {
-                    ui.label(RichText::new(error).size(11.0).color(theme::PALETTE_RED()));
+                    let text = mode_bar_text(ui, error, theme::PALETTE_RED());
+                    ui.add(egui::Label::new(text));
                 }
                 if let Some(path) = &editor.file_path {
                     let label = path
                         .file_name()
                         .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().to_string());
                     let prefix = if editor.dirty { "* " } else { "" };
-                    ui.label(
-                        RichText::new(format!("{prefix}{label}"))
-                            .size(11.0)
-                            .color(theme::FG_DIM()),
-                    );
+                    let text = mode_bar_text(ui, &format!("{prefix}{label}"), theme::FG_DIM());
+                    ui.add(egui::Label::new(text));
                 } else if editor.dirty {
-                    ui.label(RichText::new("* scratch").size(11.0).color(theme::FG_DIM()));
+                    let scratch = mode_bar_text(ui, "* scratch", theme::FG_DIM());
+                    ui.add(egui::Label::new(scratch));
                 }
             });
         },
@@ -248,6 +255,36 @@ mod tests {
 
     use super::render_edit_pane;
     use crate::theme;
+
+    /// The mode bar is a panel of the canvas, so its two modes and the file name
+    /// are made for the screen size of the zoom. A stock label and a stock button
+    /// draw a picture of zoom 1 that the layer transform scales, and `Preview`
+    /// blurs at a zoom of 67 percent.
+    #[test]
+    fn the_text_of_the_mode_bar_is_made_for_the_screen_size_of_the_zoom() {
+        for display_scale in [1.0_f32, 2.0] {
+            for zoom in [0.67_f32, 1.0, 1.5] {
+                let (quads, worst_phase, worst_stretch) =
+                    crate::zoom_text::measure_canvas_quads(display_scale, zoom, |ui, _| {
+                        for (label, color) in [("Edit", theme::FG_DIM()), ("Preview", theme::FG())] {
+                            let text = super::mode_bar_text(ui, label, color);
+                            ui.add(egui::Button::new(text).corner_radius(4));
+                        }
+                        let name = super::mode_bar_text(ui, "* notes.md", theme::FG_DIM());
+                        ui.add(egui::Label::new(name));
+                    });
+                assert!(quads > 15, "the mode bar draws its text: {quads}");
+                assert!(
+                    worst_phase <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph corner sits {worst_phase} device pixels from a whole pixel"
+                );
+                assert!(
+                    worst_stretch <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph picture is stretched by {worst_stretch} device pixels"
+                );
+            }
+        }
+    }
 
     fn test_editor_panel(text: &str) -> Panel {
         let scratch = tempfile::NamedTempFile::new().expect("temp markdown file");

@@ -26,7 +26,7 @@ use egui::emath::TSTransform;
 use egui::epaint::TextShape;
 use egui::epaint::text::FontsView;
 use egui::text::{ByteIndex, LayoutJob, LayoutSection, TextFormat, TextWrapping};
-use egui::{Align, Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, Shape, ViewportId};
+use egui::{Align, Align2, Color32, Context, FontId, Galley, Id, Painter, Pos2, Rect, Shape, ViewportId, WidgetText};
 
 /// The step of the ladder of screen font sizes, in points.
 pub(crate) const SCREEN_SIZE_QUANTUM: f32 = 0.25;
@@ -402,6 +402,35 @@ pub(crate) fn text(painter: &Painter, pos: Pos2, anchor: Align2, text: &str, fon
     rect
 }
 
+/// `text` as the widget text that a stock label or a stock button takes.
+///
+/// A stock widget lays an [`egui::RichText`] out at the font size of zoom 1, and
+/// the canvas layer then scales the finished picture of every letter. This galley
+/// is laid out at the screen size and keeps the size and the lines of zoom 1, so a
+/// widget that takes it stays where and as large as it is at zoom 1 and its
+/// letters stay sharp at every zoom. `width` is the room the text may take: a text
+/// that does not fit ends with an ellipsis, as the label would shorten it.
+pub(crate) fn widget_text(
+    painter: &Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: Option<f32>,
+) -> WidgetText {
+    let job = match width {
+        Some(width) => crate::text::single_line_label_job(text, &font, color, width),
+        None => LayoutJob::single_section(
+            text.to_owned(),
+            TextFormat {
+                font_id: font,
+                color,
+                ..TextFormat::default()
+            },
+        ),
+    };
+    WidgetText::Galley(layout_job(painter, job))
+}
+
 /// One text run of the terminal: `text` at the screen size, drawn from `pos`.
 ///
 /// `font` is already the size of the screen, from [`ZoomText::font`]: the
@@ -435,6 +464,105 @@ fn sharpen(galley: Arc<Galley>, inverse: f32) -> Arc<Galley> {
     let mut shape = TextShape::new(Pos2::ZERO, galley, Color32::PLACEHOLDER);
     shape.transform(TSTransform::from_scaling(inverse));
     shape.galley
+}
+
+/// The glyph quads of one canvas pass: how many there are, the worst distance of a
+/// quad corner from a whole device pixel, and the worst stretch between a quad and
+/// the texels of its glyph picture.
+///
+/// A place that hands its text to the layout of zoom 1 measures a stretch here,
+/// because the picture was made for that size and the pass draws it at another.
+#[cfg(test)]
+pub(crate) fn measure_canvas_quads(
+    pixels_per_point: f32,
+    zoom: f32,
+    draw: impl FnOnce(&mut egui::Ui, &ZoomText),
+) -> (usize, f32, f32) {
+    use egui::emath::TSTransform;
+
+    let ctx = Context::default();
+    ctx.set_fonts(crate::app::bootstrap::configure_fonts());
+    let transform = TSTransform {
+        scaling: zoom,
+        translation: egui::vec2(13.7, 21.3),
+    };
+    let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
+    let mut input = egui::RawInput::default();
+    input.viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo {
+            native_pixels_per_point: Some(pixels_per_point),
+            ..egui::ViewportInfo::default()
+        },
+    );
+    let mut draw = Some(draw);
+    let output = ctx.run_ui(input, |ui| {
+        assert!(
+            (ui.ctx().pixels_per_point() - pixels_per_point).abs() < f32::EPSILON,
+            "the pass draws at the display scale of the test"
+        );
+        ctx.set_transform_layer(layer, transform);
+        let layer_ui = egui::UiBuilder::new()
+            .layer_id(layer)
+            .max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0)));
+        let mut child = egui::Ui::new(ctx.clone(), egui::Id::unique("canvas ui"), layer_ui);
+        let zoom_text = ZoomText::of(child.painter());
+        assert!(
+            (zoom_text.glyph_zoom() - zoom).abs() < f32::EPSILON,
+            "the first frame takes the glyph pictures of its zoom"
+        );
+        if let Some(draw) = draw.take() {
+            draw(&mut child, &zoom_text);
+        }
+    });
+    let shapes = output.shapes.clone();
+    let _ = crate::test_egui::DiscardTextures::discard_textures(output);
+    let primitives = ctx.tessellate(shapes, pixels_per_point);
+    let [atlas_width, atlas_height] = atlas_size(&ctx);
+    assert!(atlas_width > 0.0 && atlas_height > 0.0);
+    let mut quads = 0_usize;
+    let mut worst_phase: f32 = 0.0;
+    let mut worst_stretch: f32 = 0.0;
+    for primitive in &primitives {
+        let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
+            continue;
+        };
+        for quad in mesh.vertices.chunks(4) {
+            let [a, b, c, d] = [quad[0], quad[1], quad[2], quad[3]];
+            // A filled rectangle has one colour and no glyph picture, so it says
+            // nothing about the size that a picture was made for.
+            let texels = (b.uv.x - a.uv.x).abs() * atlas_width;
+            let rows = (c.uv.y - b.uv.y).abs() * atlas_height;
+            if texels <= 0.0 || rows <= 0.0 {
+                continue;
+            }
+            quads += 1;
+            for vertex in [a, b, c, d] {
+                for value in [vertex.pos.x, vertex.pos.y] {
+                    let device = value * pixels_per_point;
+                    worst_phase = worst_phase.max((device - device.round()).abs());
+                }
+            }
+            // The quad covers the texels of its glyph picture, so the picture is
+            // drawn at the size that it was made for.
+            let width = (b.pos.x - a.pos.x).abs() * pixels_per_point;
+            let height = (c.pos.y - b.pos.y).abs() * pixels_per_point;
+            worst_stretch = worst_stretch.max((width - texels).abs()).max((height - rows).abs());
+        }
+    }
+    (quads, worst_phase, worst_stretch)
+}
+
+/// The size of the glyph atlas of its context, in texels.
+#[cfg(test)]
+#[allow(
+    clippy::redundant_closure_for_method_calls,
+    reason = "Context::fonts wants a higher-ranked closure, so the method path does not compile"
+)]
+pub(crate) fn atlas_size(ctx: &Context) -> [f32; 2] {
+    let [width, height] = ctx.fonts(|fonts| fonts.font_image_size());
+    #[allow(clippy::cast_precision_loss)]
+    [width as f32, height as f32]
 }
 
 #[cfg(test)]
@@ -652,17 +780,6 @@ mod tests {
         );
     }
 
-    /// The size of the glyph atlas of its context, in texels.
-    #[allow(
-        clippy::redundant_closure_for_method_calls,
-        reason = "Context::fonts wants a higher-ranked closure, so the method path does not compile"
-    )]
-    fn atlas_size(ctx: &Context) -> [f32; 2] {
-        let [width, height] = ctx.fonts(|fonts| fonts.font_image_size());
-        #[allow(clippy::cast_precision_loss)]
-        [width as f32, height as f32]
-    }
-
     /// A line of a card, a title of a panel and three runs of a terminal grid,
     /// drawn in the pass of a canvas at `zoom`.
     fn draw_canvas_text(child: &egui::Ui, zoom_text: &ZoomText, zoom: f32) {
@@ -830,73 +947,9 @@ mod tests {
     /// One pass of the canvas at `zoom` and the display scale of the test, with
     /// a pan offset that leaves the text between two whole pixels.
     fn canvas_quads(pixels_per_point: f32, zoom: f32) -> (usize, f32, f32) {
-        use egui::emath::TSTransform;
-
-        let ctx = Context::default();
-        ctx.set_fonts(crate::app::bootstrap::configure_fonts());
-        let transform = TSTransform {
-            scaling: zoom,
-            translation: egui::vec2(13.7, 21.3),
-        };
-        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
-        let mut input = egui::RawInput::default();
-        input.viewports.insert(
-            egui::ViewportId::ROOT,
-            egui::ViewportInfo {
-                native_pixels_per_point: Some(pixels_per_point),
-                ..egui::ViewportInfo::default()
-            },
-        );
-        let output = ctx.run_ui(input, |ui| {
-            assert!(
-                (ui.ctx().pixels_per_point() - pixels_per_point).abs() < f32::EPSILON,
-                "the pass draws at the display scale of the test"
-            );
-            ctx.set_transform_layer(layer, transform);
-            let layer_ui = egui::UiBuilder::new()
-                .layer_id(layer)
-                .max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 900.0)));
-            let child = egui::Ui::new(ctx.clone(), egui::Id::unique("canvas ui"), layer_ui);
-            let painter = child.painter();
-            let zoom_text = ZoomText::of(painter);
-            assert!(
-                (zoom_text.glyph_zoom() - zoom).abs() < f32::EPSILON,
-                "the first frame takes the glyph pictures of its zoom"
-            );
-
-            draw_canvas_text(&child, &zoom_text, zoom);
-        });
-        let shapes = output.shapes.clone();
-        let _ = crate::test_egui::DiscardTextures::discard_textures(output);
-        let primitives = ctx.tessellate(shapes, pixels_per_point);
-        let [atlas_width, atlas_height] = atlas_size(&ctx);
-        assert!(atlas_width > 0.0 && atlas_height > 0.0);
-        let mut quads = 0_usize;
-        let mut worst_phase: f32 = 0.0;
-        let mut worst_stretch: f32 = 0.0;
-        for primitive in &primitives {
-            let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
-                continue;
-            };
-            for quad in mesh.vertices.chunks(4) {
-                let [a, b, c, d] = [quad[0], quad[1], quad[2], quad[3]];
-                quads += 1;
-                for vertex in [a, b, c, d] {
-                    for value in [vertex.pos.x, vertex.pos.y] {
-                        let device = value * pixels_per_point;
-                        worst_phase = worst_phase.max((device - device.round()).abs());
-                    }
-                }
-                // The quad covers the texels of its glyph picture, so the
-                // picture is drawn at the size that it was made for.
-                let width = (b.pos.x - a.pos.x).abs() * pixels_per_point;
-                let texels = (b.uv.x - a.uv.x).abs() * atlas_width;
-                let height = (c.pos.y - b.pos.y).abs() * pixels_per_point;
-                let rows = (c.uv.y - b.uv.y).abs() * atlas_height;
-                worst_stretch = worst_stretch.max((width - texels).abs()).max((height - rows).abs());
-            }
-        }
-        (quads, worst_phase, worst_stretch)
+        super::measure_canvas_quads(pixels_per_point, zoom, |child, zoom_text| {
+            draw_canvas_text(child, zoom_text, zoom);
+        })
     }
 
     /// At rest, the corners of every glyph quad of the canvas sit on whole

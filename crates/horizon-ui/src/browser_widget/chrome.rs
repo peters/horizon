@@ -2,7 +2,7 @@
 //! passkey chip, and the handoff banner.
 
 use egui::{
-    RichText, Role, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo,
+    Role, Stroke, TextEdit, TextWrapMode, Ui, WidgetInfo,
     text::{CCursor, CCursorRange},
     vec2,
 };
@@ -18,6 +18,18 @@ const CHROME_HEIGHT: f32 = 30.0;
 /// The URL bar keeps at least this much width even when an owner chip is
 /// present on a narrow panel.
 const URL_MIN_WIDTH: f32 = 120.0;
+
+/// The text of the chrome at the size it has on the screen of the canvas zoom.
+///
+/// A stock label or button lays its text out at the size of zoom 1, and the layer
+/// transform of the canvas then scales a finished picture of every letter, so the
+/// engine name, the pill and the notice lines blur at any zoom but 100 percent.
+/// The galley keeps the size and the line of zoom 1 and its letters are made for
+/// the screen size, so the row sits where it did and stays sharp. `width` is the
+/// room the text may take; a text that does not fit ends with an ellipsis.
+fn chrome_text(ui: &Ui, text: &str, size: f32, color: egui::Color32, width: Option<f32>) -> egui::WidgetText {
+    crate::zoom_text::widget_text(ui.painter(), text, egui::FontId::proportional(size), color, width)
+}
 /// The size of the address of the page, in screen points.
 const URL_FONT_SIZE: f32 = 11.5;
 const VIDEO_QUEUE_REJECTED: &str = "browser command queue is full; video command was not queued";
@@ -87,7 +99,7 @@ pub fn show(
         if let Some((label, color)) = &chip {
             ui.add_sized(
                 egui::vec2(chip_width, CHROME_HEIGHT),
-                egui::Label::new(RichText::new(label.clone()).size(10.0).color(*color).strong())
+                egui::Label::new(chrome_text(ui, label, 10.0, *color, Some(chip_width)))
                     .wrap_mode(TextWrapMode::Truncate),
             )
             .on_hover_text(label.clone());
@@ -98,18 +110,20 @@ pub fn show(
     super::orientation::status(ui, browser);
 
     if let Some(error) = &browser.navigation_error {
-        ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
+        let text = chrome_text(ui, error, 10.5, theme::PALETTE_RED(), Some(ui.available_width()));
+        ui.add(egui::Label::new(text));
     }
 
     if browser.page_resumed {
-        ui.label(
-            RichText::new(
-                "The link to the browser was lost and this is the same page again: the text, the scroll place and the session \
-                 are still there.",
-            )
-            .size(10.5)
-            .color(theme::PALETTE_YELLOW()),
+        let text = chrome_text(
+            ui,
+            "The link to the browser was lost and this is the same page again: the text, the scroll place and the session \
+             are still there.",
+            10.5,
+            theme::PALETTE_YELLOW(),
+            Some(ui.available_width()),
         );
+        ui.add(egui::Label::new(text));
     }
 
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
@@ -120,7 +134,8 @@ pub fn show(
             page_asked: browser.frame_slot.file_chooser().status().pending(),
         })
     {
-        ui.label(RichText::new(message).size(10.5).color(theme::PALETTE_YELLOW()));
+        let text = chrome_text(ui, &message, 10.5, theme::PALETTE_YELLOW(), Some(ui.available_width()));
+        ui.add(egui::Label::new(text));
     }
     let reason = browser.handoff_reason.clone();
     if let Some(reason) = reason {
@@ -202,9 +217,13 @@ fn picker_enabled(browser: &BrowserPanelState, interactive: bool) -> bool {
 /// The SSH target of the browser host of this panel. The target is the name that
 /// `ssh` resolves, never an endpoint of the host.
 fn remote_host_label(ui: &mut Ui, target: &str) {
-    ui.add(egui::Label::new(
-        RichText::new(target).size(10.0).color(theme::FG_SOFT()),
-    ))
+    ui.add(egui::Label::new(chrome_text(
+        ui,
+        target,
+        10.0,
+        theme::FG_SOFT(),
+        Some(ui.available_width()),
+    )))
     .on_hover_text("This page belongs to a browser host on this SSH target");
 }
 
@@ -252,12 +271,12 @@ impl ProfilePill {
             .text_styles
             .get(&egui::TextStyle::Button)
             .map_or(12.0, |font| font.size);
-        let text = RichText::new(&self.text).size(size);
-        let text = if self.private {
-            text.color(theme::ACCENT()).strong()
+        let color = if self.private {
+            theme::ACCENT()
         } else {
-            text.color(theme::FG_SOFT())
+            theme::FG_SOFT()
         };
+        let text = chrome_text(ui, &self.text, size, color, Some(ui.available_width()));
         egui::Frame::new()
             .fill(theme::PANEL_BG_ALT())
             .corner_radius(6)
@@ -348,11 +367,8 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
     match state {
         Some(BrowserVideoState::Recording) => {
             let elapsed = capture.as_ref().map_or(0, |capture| capture.elapsed_millis);
-            ui.label(
-                RichText::new(format_elapsed(elapsed))
-                    .size(10.5)
-                    .color(theme::PALETTE_RED()),
-            );
+            let text = chrome_text(ui, &format_elapsed(elapsed), 10.5, theme::PALETTE_RED(), None);
+            ui.add(egui::Label::new(text));
             clicked |= video_button(
                 ui,
                 "⏸",
@@ -365,11 +381,14 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
         }
         Some(BrowserVideoState::Paused) => {
             let elapsed = capture.as_ref().map_or(0, |capture| capture.elapsed_millis);
-            ui.label(
-                RichText::new(format!("{} paused", format_elapsed(elapsed)))
-                    .size(10.5)
-                    .color(theme::PALETTE_YELLOW()),
+            let paused = chrome_text(
+                ui,
+                &format!("{} paused", format_elapsed(elapsed)),
+                10.5,
+                theme::PALETTE_YELLOW(),
+                None,
             );
+            ui.add(egui::Label::new(paused));
             clicked |= video_button(
                 ui,
                 "▶",
@@ -448,7 +467,7 @@ fn video_button(
 ) -> bool {
     let response = ui.add_enabled(
         interactive,
-        egui::Button::new(RichText::new(glyph).size(13.0))
+        egui::Button::new(chrome_text(ui, glyph, 13.0, ui.visuals().text_color(), None))
             .min_size(vec2(22.0, 22.0))
             .fill(theme::PANEL_BG_ALT())
             .corner_radius(6)
@@ -486,7 +505,7 @@ fn nav_button(
 ) -> bool {
     let response = ui.add_enabled(
         interactive,
-        egui::Button::new(RichText::new(glyph).size(13.0))
+        egui::Button::new(chrome_text(ui, glyph, 13.0, ui.visuals().text_color(), None))
             .min_size(vec2(22.0, 22.0))
             .fill(theme::PANEL_BG_ALT())
             .corner_radius(6)
@@ -625,27 +644,34 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
                 .x
                 + (ui.spacing().button_padding.x * 2.0);
             let label_width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(0.0);
-            ui.add_sized(
-                [label_width, 0.0],
-                egui::Label::new(RichText::new(format!("🖐 Agent paused: {reason}")).size(12.0))
-                    .wrap_mode(TextWrapMode::Truncate),
-            )
-            .on_hover_text(reason);
+            let paused_line = chrome_text(
+                ui,
+                &format!("🖐 Agent paused: {reason}"),
+                12.0,
+                ui.visuals().text_color(),
+                Some(label_width),
+            );
+            ui.add_sized([label_width, 0.0], egui::Label::new(paused_line))
+                .on_hover_text(reason);
+            let hand_back = chrome_text(ui, button_label, 11.0, ui.visuals().text_color(), None);
             clicked = ui
                 .add_enabled(
                     interactive && !browser.handoff_resolution_pending,
-                    egui::Button::new(RichText::new(button_label).size(11.0))
+                    egui::Button::new(hand_back)
                         .fill(theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_YELLOW(), 0.2))
                         .corner_radius(6),
                 )
                 .clicked();
         });
         if let Some(error) = &browser.handoff_error {
-            ui.label(
-                RichText::new(format!("Could not hand back: {error}"))
-                    .size(10.5)
-                    .color(theme::PALETTE_RED()),
+            let text = chrome_text(
+                ui,
+                &format!("Could not hand back: {error}"),
+                10.5,
+                theme::PALETTE_RED(),
+                Some(ui.available_width()),
             );
+            ui.add(egui::Label::new(text));
         }
     });
     if clicked {
@@ -1011,6 +1037,42 @@ mod tests {
             assert!(!super::video_stop_button(ui, &mut browser, false));
         });
         assert!(disabled_label(&disabled_stop, "Stop recording"));
+    }
+
+    /// The chrome beside the address field is made for the screen size of the
+    /// canvas zoom: the engine name, the pill and a notice line stay sharp at a
+    /// zoom of 67 and 150 percent, where a stock label would be a scaled picture
+    /// of zoom 1.
+    #[test]
+    fn the_text_of_the_chrome_is_made_for_the_screen_size_of_the_zoom() {
+        for display_scale in [1.0_f32, 2.0] {
+            for zoom in [0.67_f32, 1.0, 1.5] {
+                let (quads, worst_phase, worst_stretch) =
+                    crate::zoom_text::measure_canvas_quads(display_scale, zoom, |ui, _| {
+                        let notice = super::chrome_text(
+                            ui,
+                            "The link to the browser was lost and this is the same page again.",
+                            10.5,
+                            crate::theme::PALETTE_YELLOW(),
+                            Some(460.0),
+                        );
+                        ui.add(egui::Label::new(notice));
+                        let pill = super::chrome_text(ui, "Shared: work", 12.0, crate::theme::FG_SOFT(), None);
+                        ui.add(egui::Label::new(pill));
+                        let engine = super::chrome_text(ui, "firefox", 12.0, ui.visuals().text_color(), None);
+                        ui.add(egui::Button::new(engine).min_size(egui::vec2(22.0, 22.0)));
+                    });
+                assert!(quads > 40, "the chrome draws its text: {quads}");
+                assert!(
+                    worst_phase <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph corner sits {worst_phase} device pixels from a whole pixel"
+                );
+                assert!(
+                    worst_stretch <= 0.01,
+                    "at zoom {zoom} and display scale {display_scale} a glyph picture is stretched by {worst_stretch} device pixels"
+                );
+            }
+        }
     }
 
     #[test]

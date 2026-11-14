@@ -451,6 +451,14 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   atlas when it passes 80 % fill, so the pictures of a long zoom session cannot
   fill it.
 - Zoom 1 takes the plain path. The look of a display of scale 1 does not change.
+- A stock widget takes its text from `zoom_text::widget_text`, not from
+  `RichText`. A label or a button that a stock widget lays out itself takes the
+  font size of zoom 1 and the layer transform then scales a finished picture of
+  every letter. `widget_text` hands the widget a galley that is laid out at the
+  screen size and keeps the size and the line of zoom 1, so the part stays where
+  it is and its letters stay sharp. The test of a part that takes it tessellates
+  the part in a canvas pass at a zoom and asserts that every glyph corner is
+  within 0.01 of a whole device pixel and that no picture is stretched.
 
 ### The floor of a Fit of a workspace
 
@@ -481,10 +489,13 @@ screen size. These parts still draw that text:
 | Part | What a fix would take |
 |---|---|
 | The address field of a browser panel | Done: the panel gives `TextEdit` a layouter, as the editor does |
+| The notice strip of a terminal, and the banners of a browser panel | Done: the sentence and its buttons take `zoom_text::widget_text` |
+| The chrome of a browser panel beside the address field: the engine name, the profile pill, the chip, the elapsed time of a recording, the notice lines and the hand-off banner | Done: they take `zoom_text::widget_text` |
+| The mode bar of the editor | Done: its two modes, its file name and its error line take `zoom_text::widget_text` |
 | The placeholder of a browser panel: its state line and the note under it | Paint both lines with `zoom_text` inside the centred area, and keep the response for the tooltip |
-| The notice strip of a terminal, and the banners of a browser panel | Paint the sentence with `zoom_text`; the buttons beside it need a painted button of their own |
-| The mode bar and the preview of the editor | Paint the bar with `zoom_text`; the preview is markdown through the toolkit |
-| The overlays of a device panel, and every popup of a panel | A popup is its own layer; the canvas transform would have to reach it first |
+| The preview of the editor | The preview is markdown through the toolkit. A fix needs the renderer to build a `LayoutJob` per block and to keep its own line breaks, so it is a rewrite of that renderer and not a call site |
+| The rows and the controls of a device panel | About twenty call sites. Most are one line each through `zoom_text::widget_text`; two lines wrap as a paragraph, which needs a wrapped job as well as the elided one |
+| Every popup of a panel | A popup is its own layer; the canvas transform would have to reach it first |
 
 An overlay or a popup that is not under the canvas transform is already sharp,
 so the fix is not to add the transform to it. The list above is the set of parts
