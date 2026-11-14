@@ -58,8 +58,12 @@ machine and no way out of the card.
 - **Nothing is fetched and nothing is opened.** Horizon sends no request and
   starts no program for a board, a callout or a log. The three parts carry no
   address, so they cannot reach a page either.
-- **An item and a log line take no press.** They are reports, as a step is. A
-  press on them reaches no agent and no Horizon command.
+- **An item, a step and a log line take no press.** They are reports. A press on
+  them reaches no agent and no Horizon command. A step carries a label, a time
+  and one state of `done`, `now`, `waiting` and `failed`. The state selects one
+  mark that Horizon draws: a check, a ring, an empty ring or the cross of a
+  failed board item. It selects no colour, no size and no position from the
+  document, and it changes no other field of the card.
 - **An answer of a callout is a button.** Its id is unique in the document with
   those of `buttons`, its press reaches `next_click` on the same path, and the
   first primary answer of the card is drawn as the primary action like the first

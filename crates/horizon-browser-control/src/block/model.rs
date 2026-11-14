@@ -272,6 +272,9 @@ pub enum StepState {
     /// The step waits for the ones before it.
     #[default]
     Waiting,
+    /// The step did not finish. Its mark is the cross of a failed board item,
+    /// so a card says the same thing with the same mark in both places.
+    Failed,
 }
 
 /// One wave of a board, drawn as the head of a column.

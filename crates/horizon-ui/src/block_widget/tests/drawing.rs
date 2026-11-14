@@ -443,6 +443,30 @@ fn a_step_reports_its_own_state_to_a_reader_as_its_line() {
 }
 
 #[test]
+fn a_failed_step_draws_the_cross_of_a_failed_item_in_the_danger_colour() {
+    let document = BlockDocument {
+        width: None,
+        components: vec![Component::Steps {
+            steps: vec![horizon_browser_control::block::Step {
+                label: "Wait for SSH with the machine key".to_string(),
+                state: horizon_browser_control::block::StepState::Failed,
+                at: Some("3 m".to_string()),
+            }],
+        }],
+    };
+    let output = CardFrames::new().paint(&document, &mut CardRuntime::default(), Owner::Listening);
+    assert!(
+        painted_dot(&output, theme::PALETTE_RED()),
+        "the mark of a failed step is the red disc of a failed board item"
+    );
+    assert_eq!(
+        painted_weights(&output, "Wait for SSH with the machine key"),
+        vec![Some(400.0)],
+        "the label of a failed step keeps the weight of a line"
+    );
+}
+
+#[test]
 fn a_card_that_horizon_owns_says_so_and_shows_no_frame_of_a_gone_agent() {
     use crate::block_widget::footer::HOST_DRAWN;
 

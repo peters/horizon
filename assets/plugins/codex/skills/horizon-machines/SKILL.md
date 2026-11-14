@@ -293,9 +293,29 @@ the `%` twice in `<known_hosts_path>` too.
 5. Prove it: `command -v tmux` answers a path after the install.
 
 When no try answers within 3 minutes, the card must not stay on `Starting`. Show
-the heading with a `warn` badge `No SSH yet`, one `text` component with the last
-error line that ssh printed, and the buttons `Try again` with tone `primary` and
-`Delete` with tone `danger`. Do not rent a second machine for the same card.
+the step list with the step of the first login `failed`, the heading with a
+`warn` badge `No SSH yet`, one `text` component with the last error line that
+ssh printed, and the buttons `Try again` with tone `primary` and `Delete` with
+tone `danger`. Do not rent a second machine for the same card.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Renting the machine", "subtitle": "Small, Helsinki, Hetzner.",
+   "badge": {"text": "No SSH yet", "tone": "warn"}},
+  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 5"},
+  {"type": "steps", "steps": [
+    {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
+    {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
+    {"label": "Wait for SSH with the machine key", "state": "failed", "at": "3 m"},
+    {"label": "Check tmux on the machine"},
+    {"label": "Add the machine to Machines"}]},
+  {"type": "text", "text": "Connection timed out during banner exchange"},
+  {"type": "buttons", "items": [
+    {"id": "try_again", "label": "Try again", "tone": "primary"},
+    {"id": "delete", "label": "Delete the machine", "tone": "danger"}]}]}
+```
+
+`Try again` runs the wait of step 1 again, on the same machine.
 
 ### 5b. Register the machine
 

@@ -958,6 +958,7 @@ fn a_step_holds_a_label_a_state_and_a_short_time() {
     let steps = json!({"type": "steps", "steps": [
         {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
         {"label": "Check tmux on the machine", "state": "now", "at": "now"},
+        {"label": "Turn off password login", "state": "failed", "at": "now"},
         {"label": "Add the machine to Machines"}
     ]})
     .to_string();
@@ -970,10 +971,15 @@ fn a_step_holds_a_label_a_state_and_a_short_time() {
     assert_eq!(steps[1].state, StepState::Now);
     assert_eq!(
         steps[2].state,
+        StepState::Failed,
+        "a step that did not finish says so, and is drawn as a failure, not as the step that runs"
+    );
+    assert_eq!(
+        steps[3].state,
         StepState::Waiting,
         "a step waits unless it says otherwise"
     );
-    assert_eq!(steps[2].at, None);
+    assert_eq!(steps[3].at, None);
 
     for (step, path) in [
         (
@@ -1173,8 +1179,8 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     );
     assert_eq!(
         machines.len(),
-        7,
-        "the machine cards and the step list of a rent keep their documents"
+        8,
+        "the machine cards, the step list of a rent and the card of a rent that found no SSH keep their documents"
     );
     assert!(
         server.is_empty(),

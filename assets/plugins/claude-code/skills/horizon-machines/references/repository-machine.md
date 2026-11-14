@@ -223,12 +223,12 @@ another card to put the server or a browser there.
 ### 4. A step that fails keeps its card
 
 A machine that failed a step keeps its card: the heading keeps the name of the
-machine, the step that failed is `now` in the list, the badge is `Stopped` with
-tone `warn`, one `text` component holds the last lines of the output of that
-step, and the card holds the buttons `Try again` and `Delete the machine`. A step
-holds one of three states, `done`, `now` and `waiting`, and no state names a
-failure: the badge and the `text` line say what failed. Never rent a second
-machine for the same card, and never hide a failed step under a `Working` badge.
+machine, the step that failed is `failed` in the list, the badge is `Stopped`
+with tone `warn`, one `text` component holds the last lines of the output of that
+step, and the card holds the buttons `Try again` and `Delete the machine`. The
+state `failed` draws the red cross of a failed board item, so the person reads
+the step that stopped. Never rent a second machine for the same card, and never
+hide a failed step under a `Working` badge.
 
 ```json
 {"components": [
@@ -238,7 +238,7 @@ machine for the same card, and never hide a failed step under a `Working` badge.
     {"label": "Prepare the system", "state": "done", "at": "18 s"},
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
     {"label": "Bring the repository", "state": "done", "at": "8 s"},
-    {"label": "Warm up", "state": "now", "at": "40 s"},
+    {"label": "Warm up", "state": "failed", "at": "40 s"},
     {"label": "Run the check"}]},
   {"type": "text", "text": "cargo fetch: error: failed to load source for dependency `ring`"},
   {"type": "buttons", "items": [

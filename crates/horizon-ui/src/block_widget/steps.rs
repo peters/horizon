@@ -37,6 +37,8 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
         .as_deref()
         .map(|at| text::line(ui.painter(), at, &time_font, theme::FG_DIM(), (width * 0.5).max(0.0)));
     let time_width = time.as_ref().map_or(0.0, |galley| galley.size().x + STEP_TIME_GAP);
+    // The label of a failed step keeps the colour of a line: the cross and the
+    // time carry the danger.
     let colour = line_colour(step.state);
     let label = text::line_weight(
         ui.painter(),
@@ -73,8 +75,17 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
         painter.galley(
             Pos2::new(rect.max.x - time_width, rect.center().y - time_height * 0.5),
             galley,
-            theme::FG_DIM(),
+            time_colour(step.state),
         );
+    }
+}
+
+/// The colour of the time at the right edge of a step: the time of a step that
+/// did not finish carries the danger.
+fn time_colour(state: StepState) -> egui::Color32 {
+    match state {
+        StepState::Failed => theme::PALETTE_RED(),
+        StepState::Done | StepState::Now | StepState::Waiting => theme::FG_DIM(),
     }
 }
 
@@ -85,31 +96,39 @@ fn show_step(ui: &mut Ui, index: usize, step_index: usize, step: &Step) {
 fn step_weight(state: StepState) -> Weight {
     match state {
         StepState::Now => Weight::Semibold,
-        StepState::Done | StepState::Waiting => Weight::Regular,
+        StepState::Done | StepState::Waiting | StepState::Failed => Weight::Regular,
     }
 }
 
 fn line_colour(state: StepState) -> egui::Color32 {
     match state {
-        StepState::Done | StepState::Now => theme::FG(),
+        StepState::Done | StepState::Now | StepState::Failed => theme::FG(),
         StepState::Waiting => theme::FG_SOFT(),
     }
 }
 
 /// Paints the mark of a step: a green disc with a check when it finished, an
-/// accent ring with a halo while it runs, and an empty ring while it waits.
+/// accent ring with a halo while it runs, an empty ring while it waits, and the
+/// red disc with a cross of a failed board item when it did not finish.
 fn paint_mark(painter: &egui::Painter, mark: Rect, state: StepState) {
     let center = mark.center();
     let radius = STEP_MARK * 0.5;
+    let ink = Stroke::new(STEP_MARK_RING, theme::PANEL_BG());
     match state {
         StepState::Done => {
             painter.circle_filled(center, radius, theme::PALETTE_GREEN());
-            let ink = Stroke::new(STEP_MARK_RING, theme::PANEL_BG());
             let left = Pos2::new(center.x - radius * 0.45, center.y);
             let bottom = Pos2::new(center.x - radius * 0.1, center.y + radius * 0.35);
             let right = Pos2::new(center.x + radius * 0.5, center.y - radius * 0.35);
             painter.line_segment([left, bottom], ink);
             painter.line_segment([bottom, right], ink);
+        }
+        StepState::Failed => {
+            painter.circle_filled(center, radius, theme::PALETTE_RED());
+            let left = Pos2::new(center.x - radius * 0.4, center.y - radius * 0.4);
+            let right = Pos2::new(center.x + radius * 0.4, center.y + radius * 0.4);
+            painter.line_segment([left, right], ink);
+            painter.line_segment([Pos2::new(right.x, left.y), Pos2::new(left.x, right.y)], ink);
         }
         StepState::Now => {
             painter.circle_filled(center, radius, theme::alpha(theme::ACCENT(), 48));

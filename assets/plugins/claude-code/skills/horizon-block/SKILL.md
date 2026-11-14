@@ -611,9 +611,13 @@ A document holds components in draw order, and only these components:
   words need, and a long subtitle takes the lines it needs instead of a cut.
 - `caption`: `text`. One short line above a group of rows, such as `Size` or
   `Place`. Horizon draws it in upper case, small and dim.
-- `steps`: `steps` with `label`, optional `state` (`done`, `now` or `waiting`,
-  the default) and optional `at`, a short time at the right edge such as `38 s`
-  or `now`. A step list reports progress and takes no click.
+- `steps`: `steps` with `label`, optional `state` (`done`, `now`, `waiting` or
+  `failed`) and optional `at`, a short time at the right edge such as `38 s` or
+  `now`. `waiting` is the default. A step that did not finish is `failed`: its
+  mark is the red disc with the cross of a failed board item, its label keeps the
+  normal colour and its time is red. Draw the step that runs `now`, and the step
+  that answered an error `failed`, and never leave both in one card for the same
+  step. A step list reports progress and takes no click.
 - `buttons`: `items` with `id`, `label` and optional `tone`.
 - `board`: `columns`, `rows` and `items`. A column is one wave: `label`,
   optional `tag` of at most 12 characters, optional `note`, optional `value`

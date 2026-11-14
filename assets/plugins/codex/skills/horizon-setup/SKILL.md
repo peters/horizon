@@ -814,14 +814,20 @@ while Horizon draws its own card, and read its answer.
 
 ## When a step fails
 
-Change the card to the failure card. Put the reason of the step in the first line
-of the `kv` row `What failed`: one sentence, in the words of the tool or the
-system where those words help, and never a stack of terminal text.
+Change the card to the failure card. Keep the step list of the card and draw the
+step that did not finish `failed`, so the person reads where the flow stopped.
+Put the reason of the step in the first line of the `kv` row `What failed`: one
+sentence, in the words of the tool or the system where those words help, and
+never a stack of terminal text.
 
 ```json
 {"components": [
   {"type": "heading", "text": "The step did not finish",
    "subtitle": "Nothing else was changed.", "badge": {"text": "Needs you", "tone": "warn"}},
+  {"type": "steps", "steps": [
+    {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
+    {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
+    {"label": "Wait for SSH with the machine key", "state": "failed", "at": "3 m"}]},
   {"type": "kv", "rows": [
     {"label": "What failed", "value": "The machine answered no SSH after 3 minutes."},
     {"label": "Undone", "value": "The machine key of helsinki-1."},
