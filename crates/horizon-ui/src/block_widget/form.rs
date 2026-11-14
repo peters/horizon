@@ -32,6 +32,17 @@ impl Form {
     }
 }
 
+/// How the buttons of a component sit in the room that the component gives
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Answers {
+    /// One row: the ordinary buttons from the left, a destructive one at the
+    /// right edge of the room.
+    Row,
+    /// One button per line, and every line starts at the left edge of the room.
+    Stack,
+}
+
 #[cfg(test)]
 mod tests {
     use super::Form;

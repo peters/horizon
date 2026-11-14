@@ -26,6 +26,81 @@ fn button(id: &str, label: &str, tone: Tone) -> Button {
     }
 }
 
+/// The question of the callout under test.
+const QUESTION: &str = "Rent the machine in Helsinki?";
+
+/// A callout that asks [`QUESTION`] with the answers in `items`.
+fn callout(items: Vec<Button>) -> BlockDocument {
+    BlockDocument {
+        width: None,
+        components: vec![Component::Callout {
+            tone: Tone::Info,
+            caption: None,
+            text: QUESTION.to_string(),
+            buttons: items,
+        }],
+    }
+}
+
+/// The left edge of the first painted text whose words are `text`.
+fn painted_left(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<f32> {
+    fn walk(shape: &egui::epaint::Shape, text: &str, found: &mut Option<f32>) {
+        match shape {
+            egui::epaint::Shape::Text(shape) if shape.galley.text() == text => {
+                found.get_or_insert(shape.pos.x);
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, text, found);
+                }
+            }
+            _ => {}
+        };
+    }
+
+    let mut found = None;
+    for clipped in shapes {
+        walk(&clipped.shape, text, &mut found);
+    }
+    found
+}
+
+/// The answers of a narrow callout stack the way a card stacks them: every line
+/// of them starts at the left edge of the question, also when the last answer is
+/// the destructive one.
+#[test]
+fn every_line_of_answers_of_a_narrow_callout_starts_at_the_left_edge() {
+    for items in [
+        vec![button("go", "Go", Tone::Primary), button("stop", "Stop", Tone::Danger)],
+        vec![
+            button("go", "Go", Tone::Primary),
+            button("later", "Later", Tone::Neutral),
+            button("stop", "Stop", Tone::Danger),
+        ],
+    ] {
+        let document = callout(items.clone());
+        let (shapes, nodes) =
+            CardFrames::new().pass_in(420.0, &document, &mut CardRuntime::default(), Owner::Listening);
+        let question = painted_left(&shapes, QUESTION).expect("the question is painted");
+        let mut tops = Vec::new();
+        for item in &items {
+            let answer = bounds_of(&nodes, &item.label).expect("every answer is drawn");
+            #[allow(clippy::cast_possible_truncation)]
+            let left = answer.x0 as f32;
+            assert!(
+                (left - question).abs() < 0.5,
+                "{} starts at the left edge of the question: {left} against {question}",
+                item.label
+            );
+            tops.push(answer.y0);
+        }
+        assert!(
+            tops.windows(2).all(|pair| pair[0] < pair[1]),
+            "every answer has a line of its own: {tops:?}"
+        );
+    }
+}
+
 #[test]
 fn only_the_first_primary_button_of_a_card_is_the_primary_one() {
     let document = BlockDocument {

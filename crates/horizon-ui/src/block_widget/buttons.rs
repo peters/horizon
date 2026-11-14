@@ -1,6 +1,7 @@
 //! The buttons of a card, from the left in document order, with every
-//! destructive button pushed to the right edge. The wide form pushes every
-//! button to the right edge, so a row of answers closes a wide strip.
+//! destructive button pushed to the right edge of a row. The wide form pushes
+//! every button to the right edge, so a row of answers closes a wide strip. A
+//! stack draws every answer from the left edge of its room instead.
 //!
 //! Only the first `primary` button of a card is drawn as the primary action.
 //! That one decision is made for the whole document by [`super::primary_button`]
@@ -12,7 +13,7 @@ use horizon_browser_control::block::{Button, Tone};
 use crate::theme;
 use crate::typeface::Weight;
 
-use super::form::Form;
+use super::form::{Answers, Form};
 use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, RADIUS_CONTROL, count};
 use super::{CardView, text, tones};
 
@@ -20,7 +21,8 @@ use super::{CardView, text, tones};
 ///
 /// `primary` is the position of the card's first primary button as
 /// `(component, item)`, so this component draws its own primary only when it
-/// holds that one.
+/// holds that one. `answers` says whether the buttons keep one row or stack one
+/// per line.
 pub(super) fn show(
     ui: &mut Ui,
     component: usize,
@@ -29,6 +31,7 @@ pub(super) fn show(
     view: &mut CardView<'_>,
     enabled: bool,
     form: Form,
+    answers: Answers,
 ) {
     if items.is_empty() {
         return;
@@ -46,7 +49,7 @@ pub(super) fn show(
         })
         .collect();
 
-    let lines = lines_of(items, &tones_and_widths, available, form);
+    let lines = lines_of(items, &tones_and_widths, available, form, answers);
     let height = count(lines.len()) * BUTTON_HEIGHT + count(lines.len().saturating_sub(1)) * BUTTON_GAP;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(available, height), Sense::hover());
 
@@ -84,13 +87,17 @@ struct ButtonLine {
 }
 
 /// Split `items` into lines that fit `available`, keeping document order. The
-/// ordinary buttons fill the lines from the left; the destructive ones keep the
-/// right edge, and move to a right-aligned line of their own when the last line
-/// has no room for them.
-fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32, form: Form) -> Vec<ButtonLine> {
+/// ordinary buttons fill the lines from the left; in a row the destructive ones
+/// keep the right edge, and move to a right-aligned line of their own when the
+/// last line has no room for them. A stack draws every button from the left edge
+/// of the room, so every line of it starts at the same edge.
+fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32, form: Form, answers: Answers) -> Vec<ButtonLine> {
     // The wide form closes its row at the right edge, so every button of it is
     // one that keeps the right edge.
-    let keeps_right_edge = |button: &Button| form.is_wide() || button.tone == Tone::Danger;
+    let keeps_right_edge = |button: &Button| match answers {
+        Answers::Stack => false,
+        Answers::Row => form.is_wide() || button.tone == Tone::Danger,
+    };
     let mut lines = vec![ButtonLine {
         left: Vec::new(),
         right: Vec::new(),

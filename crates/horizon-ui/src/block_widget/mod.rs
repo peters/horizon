@@ -50,7 +50,7 @@ use horizon_core::{CardFrames, CardRuntime, PanelId};
 
 use crate::theme;
 
-use form::Form;
+use form::{Answers, Form};
 
 use metrics::{
     BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
@@ -316,7 +316,7 @@ fn show_component(
             form,
         ),
         Component::Log { entries } => log::show(ui, index, entries, form),
-        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled, form),
+        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled, form, Answers::Row),
         // A link opens a browser panel of Horizon itself, so it needs no agent:
         // only a host dialog over the card keeps it from taking a press.
         Component::Link { label, url } => {

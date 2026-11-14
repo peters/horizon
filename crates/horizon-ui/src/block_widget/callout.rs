@@ -11,7 +11,7 @@ use horizon_browser_control::block::{Button, Tone};
 use crate::theme;
 use crate::typeface::Weight;
 
-use super::form::Form;
+use super::form::{Answers, Form};
 use super::metrics::{
     BUTTON_GAP, BUTTON_HEIGHT, CALLOUT_CAPTION_GAP, CALLOUT_PAD_SIDE, CALLOUT_PAD_Y, CALLOUT_ROW_GAP,
     CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT, CAPTION_TRACKING, RADIUS_FRAME, count,
@@ -128,5 +128,8 @@ pub(super) fn show(
     };
     let button_rect = Rect::from_min_size(Pos2::new(left, top), Vec2::new(buttons_width, buttons_height));
     let mut child = ui.new_child(UiBuilder::new().max_rect(button_rect));
-    buttons::show(&mut child, component, items, primary, view, enabled, form);
+    // The wide form keeps one row of answers; the narrow form gives every answer
+    // a line of its own, and every line starts at the left edge of the question.
+    let answers = if form.is_wide() { Answers::Row } else { Answers::Stack };
+    buttons::show(&mut child, component, items, primary, view, enabled, form, answers);
 }
