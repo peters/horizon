@@ -151,6 +151,37 @@ fn a_page_that_comes_back_keeps_the_notice_away_and_a_new_page_says_so() {
     assert!(!panel.page_resumed);
 }
 
+/// The line that says a lost link came back to the same page is about an event
+/// that already happened, so it goes after its time even when the page never
+/// navigates again.
+#[test]
+fn the_notice_of_a_page_that_came_back_goes_after_its_time() {
+    let mut panel = BrowserPanelState::lost_host_driver_for_tests(
+        &host(BrowserHostEngine::Firefox),
+        "https://example.test/page",
+        "the link dropped",
+    );
+    panel.apply_host_driver_event_for_tests(HostDriverEvent::Ready {
+        resumed: true,
+        page: HostDriverPage {
+            url: "https://example.test/page".to_string(),
+            title: "Example".to_string(),
+            resumed: true,
+            loading: false,
+        },
+    });
+    assert!(panel.page_resumed, "the notice is on");
+    let within = std::time::Instant::now() + BrowserPanelState::RESUMED_NOTICE_TTL / 2;
+    assert!(!panel.expire_resumed_notice_at(within), "the notice stays for its time");
+    assert!(panel.page_resumed);
+    let after = std::time::Instant::now() + BrowserPanelState::RESUMED_NOTICE_TTL * 2;
+    assert!(
+        panel.expire_resumed_notice_at(after),
+        "the panel has output of its own to show"
+    );
+    assert!(!panel.page_resumed, "the notice goes after its time");
+}
+
 #[test]
 fn the_link_of_the_panel_carries_the_input_of_the_person_and_the_operations_of_an_agent() {
     let panel = BrowserPanelState::start_host_driver(

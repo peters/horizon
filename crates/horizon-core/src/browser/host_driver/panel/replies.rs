@@ -8,7 +8,7 @@
 //! is a lost link with words, which the panel shows.
 
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use horizon_browser::BrowserCoordination as _;
 use horizon_browser::host_driver::{HostDriverReply, HostDriverRequest};
@@ -19,6 +19,33 @@ use super::super::client::DriverLink;
 use super::super::latency::LinkProbe;
 use super::{HostDriverEvent, LostLink, wake};
 use crate::browser::AttachedHostFailure;
+
+/// How long a write of the manifest of this computer is tried again while
+/// another program holds the lock of that manifest.
+///
+/// An agent that lists panels and takes a screenshot holds the lock of the
+/// manifest for short turns, and a loaded disk holds it longer than the one
+/// budget of a single turn. One refused turn must not cost the link of the
+/// driver, because the person would see a recovered page instead of their own.
+const MANIFEST_WRITE_BUDGET: Duration = Duration::from_secs(6);
+const MANIFEST_WRITE_STEP: Duration = Duration::from_millis(50);
+
+/// Write the manifest of this computer, and try again while another writer holds
+/// its lock, for a bounded time.
+///
+/// Only a lock that timed out is tried again: a manifest that this computer
+/// cannot read or write for another reason is a reason to stop the link.
+fn write_manifest(mut write: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    let deadline = Instant::now() + MANIFEST_WRITE_BUDGET;
+    loop {
+        match write() {
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut && Instant::now() < deadline => {
+                std::thread::sleep(MANIFEST_WRITE_STEP);
+            }
+            outcome => return outcome,
+        }
+    }
+}
 
 /// The name of the wait that one command of the panel writes, for a stall line.
 pub(super) fn request_method(command: &BrowserCommand) -> &'static str {
@@ -112,22 +139,23 @@ pub(super) fn apply_reply(
                 passkey_pending: state.passkey_pending,
             };
             // A manifest that this computer cannot write is a reason to stop a
-            // link: an agent would drive a page whose owner nobody records.
-            if let Err(error) = update_manifest(manifest, panel_local_id, &state) {
+            // link: an agent would drive a page whose owner nobody records. A
+            // turn that another writer held is tried again first.
+            if let Err(error) = write_manifest(|| update_manifest(manifest, panel_local_id, &state)) {
                 return ReplyOutcome::Lost(LostLink::Ended(format!(
                     "the manifest of this computer did not take the state of the page: {error}"
                 )));
             }
         }
         HostDriverReply::Action(result) => {
-            if let Err(error) = manifest.complete_action(panel_local_id, &result.result) {
+            if let Err(error) = write_manifest(|| manifest.complete_action(panel_local_id, &result.result)) {
                 return ReplyOutcome::Lost(LostLink::Ended(format!(
                     "the manifest of this computer did not take the result of an agent: {error}"
                 )));
             }
         }
         HostDriverReply::Audit(entry) => {
-            if let Err(error) = manifest.record_action(panel_local_id, &entry) {
+            if let Err(error) = write_manifest(|| manifest.record_action(panel_local_id, &entry)) {
                 return ReplyOutcome::Lost(LostLink::Ended(format!(
                     "the manifest of this computer did not take the record of an agent: {error}"
                 )));
@@ -205,5 +233,51 @@ pub(super) fn request_of(command: BrowserCommand) -> Option<HostDriverRequest> {
         | BrowserCommand::NativeSelectDismiss
         | BrowserCommand::HandoffDone
         | BrowserCommand::Stop => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::{MANIFEST_WRITE_BUDGET, MANIFEST_WRITE_STEP, write_manifest};
+
+    /// A lock that another writer held is tried again, so one busy turn of an
+    /// agent does not cost the link of the driver.
+    #[test]
+    fn a_manifest_write_that_waited_for_its_lock_is_tried_again() {
+        let mut attempts = 0;
+        let written = write_manifest(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(Error::new(ErrorKind::TimedOut, "timed out waiting for manifest lock"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(written.is_ok(), "the third turn of the write takes the lock");
+        assert_eq!(attempts, 3);
+    }
+
+    /// A manifest that this computer cannot write for another reason is not a
+    /// lock turn: the link stops at once, with the reason of the disk.
+    #[test]
+    fn a_manifest_write_that_cannot_succeed_stops_at_once() {
+        let mut attempts = 0;
+        let written = write_manifest(|| {
+            attempts += 1;
+            Err(Error::new(ErrorKind::PermissionDenied, "no room in the state folder"))
+        });
+        let error = written.expect_err("the write cannot succeed");
+        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(attempts, 1, "no turn waits for a reason that a wait cannot fix");
+    }
+
+    /// The wait is bounded: the panel stops the link after the budget and says so.
+    #[test]
+    fn the_wait_for_the_manifest_lock_is_bounded() {
+        assert!(MANIFEST_WRITE_BUDGET <= std::time::Duration::from_secs(10));
+        assert!(MANIFEST_WRITE_STEP >= std::time::Duration::from_millis(10));
+        assert!(MANIFEST_WRITE_STEP * 2 <= MANIFEST_WRITE_BUDGET);
     }
 }

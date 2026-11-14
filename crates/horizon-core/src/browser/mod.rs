@@ -119,6 +119,8 @@ pub struct BrowserPanelState {
     /// The link came back to the same page: the body says so and no page state
     /// was lost.
     pub page_resumed: bool,
+    /// When the panel started to say that a lost link came back to the same page.
+    resumed_notice_at: Option<std::time::Instant>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -194,6 +196,7 @@ impl BrowserPanelState {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -270,6 +273,7 @@ impl BrowserPanelState {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -673,6 +677,7 @@ impl BrowserPanelState {
     /// URL changes that must dirty the persisted runtime state.
     pub fn drain_events(&mut self) -> BrowserDrainOutput {
         let orientation_expired = self.expire_orientation_pending();
+        let notice_expired = self.expire_resumed_notice_at(std::time::Instant::now());
         if self.poll_host_driver() {
             return BrowserDrainOutput {
                 had_output: true,
@@ -693,7 +698,7 @@ impl BrowserPanelState {
             .map(|session| session.event_rx.try_iter().collect::<Vec<_>>())
             .unwrap_or_default();
         let mut output = BrowserDrainOutput {
-            had_output: relaunched || config_changed || orientation_expired,
+            had_output: relaunched || config_changed || orientation_expired || notice_expired,
             config_changed,
             ..BrowserDrainOutput::default()
         };
@@ -916,6 +921,33 @@ impl BrowserPanelState {
         output.had_output = true;
     }
 
+    /// How long the panel says that a lost link came back to the same page. The
+    /// notice is about an event that already happened, and a page that never
+    /// navigates would keep it in the chrome for the rest of the panel's life.
+    pub const RESUMED_NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(12);
+
+    /// Record that the link of this panel came back to the same page.
+    pub(super) fn set_page_resumed(&mut self, resumed: bool) {
+        self.page_resumed = resumed;
+        self.resumed_notice_at = resumed.then(std::time::Instant::now);
+    }
+
+    /// Clear the notice of a page that came back, after its time. Says whether
+    /// the notice went, so the frame shows the chrome without it.
+    pub(crate) fn expire_resumed_notice_at(&mut self, now: std::time::Instant) -> bool {
+        if !self.page_resumed {
+            return false;
+        }
+        let Some(since) = self.resumed_notice_at else {
+            return false;
+        };
+        if now.saturating_duration_since(since) < Self::RESUMED_NOTICE_TTL {
+            return false;
+        }
+        self.set_page_resumed(false);
+        true
+    }
+
     fn sync_committed_url(&mut self, output: &mut BrowserDrainOutput) {
         let Some(url) = self.committed_url.snapshot() else {
             return;
@@ -931,7 +963,7 @@ impl BrowserPanelState {
         }
         // A page that navigated no longer reports the page that came back after
         // a lost link; the person is looking at a new document.
-        self.page_resumed = false;
+        self.set_page_resumed(false);
         self.url = Some(url);
         self.navigation_error = None;
         output.url_changed = true;
@@ -1094,6 +1126,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1147,6 +1180,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1194,6 +1228,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1249,6 +1284,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1321,6 +1357,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1420,6 +1457,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1469,6 +1507,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1517,6 +1556,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1568,6 +1608,7 @@ mod tests {
             attach_endpoint: None,
             attached_page_target: None,
             page_resumed: false,
+            resumed_notice_at: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,

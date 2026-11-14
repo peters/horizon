@@ -636,7 +636,7 @@ impl BrowserPanelState {
         drop(slot);
         self.frame_slot.clear();
         self.navigation_error = None;
-        self.page_resumed = false;
+        self.set_page_resumed(false);
         self.attach_endpoint = None;
         self.loading = true;
         self.status = BrowserStatus::Starting;
@@ -820,7 +820,7 @@ impl BrowserPanelState {
         if !automatic {
             return;
         }
-        self.page_resumed = resumed;
+        self.set_page_resumed(resumed);
         self.navigation_error = (!resumed).then(|| PAGE_STATE_LOST.to_string());
     }
 

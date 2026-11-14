@@ -665,7 +665,7 @@ impl BrowserPanelState {
         drop(old);
         self.frame_slot.clear();
         self.navigation_error = None;
-        self.page_resumed = false;
+        self.set_page_resumed(false);
         self.loading = true;
         self.status = BrowserStatus::Starting;
         let target = self.relaunch_target();
@@ -711,7 +711,7 @@ impl BrowserPanelState {
                     // nothing of the old. The page of the host driver is the
                     // page of the session of that machine, and the welcome of
                     // the link says which page this link came back to.
-                    self.page_resumed = resumed;
+                    self.set_page_resumed(resumed);
                     self.note_page_state_lost();
                 }
                 if resumed {
@@ -755,7 +755,7 @@ impl BrowserPanelState {
             self.navigation_error = None;
         }
         self.title = page.title;
-        self.page_resumed = page.resumed;
+        self.set_page_resumed(page.resumed);
         self.loading = page.loading;
     }
 
