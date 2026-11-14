@@ -133,6 +133,6 @@ pub use transcript::warm_script_support;
 pub use util::{spawn_stand_in, stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
 pub use view::{
     CanvasConfig, CanvasViewState, DEFAULT_CANVAS_ZOOM, DEFAULT_FIT_FLOOR_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM,
-    clamp_canvas_zoom, fit_floor_zoom,
+    clamp_canvas_zoom, fit_floor_zoom, reveal_zoom,
 };
 pub use workspace::{WORKSPACE_COLORS, Workspace, WorkspaceId};

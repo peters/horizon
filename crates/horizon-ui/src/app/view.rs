@@ -223,7 +223,13 @@ impl HorizonApp {
             return;
         };
 
-        let (zoom, pan_offset) = reveal_view_state(canvas_rect, panel_frame, workspace_pos, self.canvas_view.zoom);
+        let (zoom, pan_offset) = reveal_view_state(
+            canvas_rect,
+            panel_frame,
+            workspace_pos,
+            self.canvas_view.zoom,
+            self.template_config.canvas.fit_floor(),
+        );
         self.board.focus(panel_id);
         self.pan_target = None;
         self.canvas_view.set_zoom(zoom);
@@ -415,20 +421,34 @@ const PAN_MARGIN: f32 = 40.0;
 /// left-aligned next to the canvas edge (close to the sidebar), the current
 /// zoom is kept while the panel already fits from there, otherwise the view
 /// zooms out just enough for the panel to fit (never zooming in).
-fn reveal_view_state(canvas_rect: Rect, panel: (Pos2, Vec2), workspace_pos: Pos2, current_zoom: f32) -> (f32, Vec2) {
+fn reveal_view_state(
+    canvas_rect: Rect,
+    panel: (Pos2, Vec2),
+    workspace_pos: Pos2,
+    current_zoom: f32,
+    floor: f32,
+) -> (f32, Vec2) {
     let (panel_pos, panel_size) = panel;
     // The horizontal fit spans the workspace's left edge to the panel's right
     // edge because the view left-aligns the workspace, not the panel.
     let fit_width = (panel_pos.x + panel_size.x) - workspace_pos.x;
-    let zoom = current_zoom.min(fit_zoom_for_frame(
-        canvas_rect.size(),
-        Vec2::new(fit_width, panel_size.y),
-        Vec2::splat(REVEAL_MARGIN),
-    ));
-    (
-        zoom,
-        reveal_pan_offset(canvas_rect, panel_pos, panel_size, workspace_pos, zoom),
-    )
+    let frame = Vec2::new(fit_width, panel_size.y);
+    let margin = Vec2::splat(REVEAL_MARGIN);
+    let fit = fit_zoom_for_frame(canvas_rect.size(), frame, margin);
+    let zoom = horizon_core::reveal_zoom(current_zoom, fit, floor);
+    // The workspace is left-aligned while its left edge and the panel fit
+    // together. A workspace that is too wide at this zoom still shows its panel
+    // whole, at the panel's own left edge. A panel that is larger than the view
+    // even at the floor of a Fit is shown from its top left, so the person reads
+    // the start of it.
+    let pan = if fits_in_canvas(canvas_rect.size(), frame, margin, zoom) {
+        reveal_pan_offset(canvas_rect, panel_pos, panel_size, workspace_pos, zoom)
+    } else if fits_in_canvas(canvas_rect.size(), panel_size, margin, zoom) {
+        reveal_pan_offset(canvas_rect, panel_pos, panel_size, panel_pos, zoom)
+    } else {
+        top_left_pan_offset(panel_pos, zoom)
+    };
+    (zoom, pan)
 }
 
 fn reveal_pan_offset(canvas_rect: Rect, panel_pos: Pos2, panel_size: Vec2, workspace_pos: Pos2, zoom: f32) -> Vec2 {
@@ -510,6 +530,7 @@ mod tests {
         FIT_MARGIN, PAN_MARGIN, aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame,
         fits_in_canvas, panel_focus_frame, reveal_view_state, top_left_pan_offset,
     };
+    use horizon_core::DEFAULT_FIT_FLOOR_ZOOM;
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -646,7 +667,7 @@ mod tests {
         let panel = (Pos2::new(500.0, 300.0), Vec2::new(400.0, 300.0));
         let workspace_pos = Pos2::new(484.0, 254.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
 
         assert!((zoom - 1.0).abs() <= f32::EPSILON);
         // x: workspace left edge at the margin: 40 - 484 ; y centered on the panel.
@@ -654,62 +675,76 @@ mod tests {
         assert!((pan.y - (-50.0)).abs() < 0.001);
     }
 
+    /// A panel that would fit at a zoom under the floor keeps the floor, so its
+    /// text stays readable, and the view shows its top left.
     #[test]
-    fn reveal_view_state_zooms_out_just_enough_for_oversized_panel() {
+    fn reveal_view_state_holds_the_floor_for_a_panel_that_asks_for_less() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
         // Span workspace-left -> panel-right is 1300 - 84 = 1216 wide; available
-        // (1200-80) x (800-80) -> min(1120/1216, 720/900) = 0.8.
+        // (1200-80) x (800-80) -> min(1120/1216, 720/900) = 0.8, under the floor.
         let panel = (Pos2::new(100.0, 50.0), Vec2::new(1200.0, 900.0));
         let workspace_pos = Pos2::new(84.0, -4.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
 
-        assert!((zoom - 0.8).abs() < 0.001);
-        assert!((pan.x - (-27.2)).abs() < 0.001);
-        // 900 * 0.8 = 720 fits exactly -> centered: 400 - (50 + 450) * 0.8.
-        assert!(pan.y.abs() < 0.001);
+        assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() < 0.001);
+        assert!(
+            (pan.x - (PAN_MARGIN - panel.0.x * zoom)).abs() < 0.001,
+            "the panel starts at the top-left margin"
+        );
+        assert!((pan.y - (PAN_MARGIN - panel.0.y * zoom)).abs() < 0.001);
     }
 
     #[test]
-    fn reveal_view_state_never_zooms_in() {
+    fn reveal_view_state_never_zooms_in_past_the_default_zoom() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
         let panel = (Pos2::new(0.0, 0.0), Vec2::new(100.0, 80.0));
         let workspace_pos = Pos2::new(-16.0, -44.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.5);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.5, DEFAULT_FIT_FLOOR_ZOOM);
 
-        assert!((zoom - 1.5).abs() <= f32::EPSILON);
-        assert!((pan.x - 64.0).abs() < 0.001);
+        assert!((zoom - horizon_core::DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
+        // x: the left edge of the workspace at the margin, at the default zoom.
+        assert!((pan.x - (40.0 - workspace_pos.x * zoom)).abs() < 0.001);
     }
 
+    /// A panel taller than the view is shown from its top left at the floor: the
+    /// jump reads the start of the panel instead of shrinking it to nothing.
     #[test]
-    fn reveal_view_state_bottom_aligns_panel_taller_than_viewport() {
+    fn reveal_view_state_shows_a_panel_taller_than_the_view_from_its_top_left() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
-        // The panel remains 1000px tall at the shared minimum zoom.
         let extent = 1000.0 / MIN_CANVAS_ZOOM;
         let panel = (Pos2::new(100.0, 0.0), Vec2::splat(extent));
         let workspace_pos = Pos2::new(84.0, -44.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
 
-        assert!((zoom - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
-        assert!((pan.x + workspace_pos.x * zoom - 40.0).abs() < 0.001);
-        assert!((pan.y + extent * zoom - 760.0).abs() < 0.001);
+        assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() <= f32::EPSILON);
+        assert!((pan.x - (PAN_MARGIN - panel.0.x * zoom)).abs() < 0.001);
+        assert!((pan.y - (PAN_MARGIN - panel.0.y * zoom)).abs() < 0.001);
     }
 
+    /// A panel far to the right of its workspace shows the whole workspace width
+    /// at the floor, so the left edge of that workspace stays next to the sidebar.
     #[test]
     fn reveal_view_state_keeps_off_left_panel_visible() {
         let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
         // Panel sits far right inside its workspace: the fit span runs from the
-        // workspace's left edge (0) to the panel's right edge (1400) -> 1120/1400 = 0.8.
+        // workspace's left edge (0) to the panel's right edge (1400) -> 1120/1400 = 0.8,
+        // under the floor, so the view holds the floor and starts at the top left.
         let panel = (Pos2::new(1000.0, 0.0), Vec2::new(400.0, 300.0));
         let workspace_pos = Pos2::new(0.0, -54.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0);
+        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
 
-        assert!((zoom - 0.8).abs() < 0.001);
-        assert!((pan.x - 40.0).abs() < 0.001);
-        // Panel screen span: 40 + 1000 * 0.8 .. 40 + 1400 * 0.8 = 840 .. 1160 (right margin).
-        assert!((pan.y - 280.0).abs() < 0.001);
+        assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() < 0.001);
+        // The workspace is too wide for the view at this zoom, so the panel is
+        // shown whole at its own left edge and its right edge keeps the margin.
+        assert!((pan.x - (40.0 - panel.0.x * zoom)).abs() < 0.001);
+        let right_edge = panel.0.x * zoom + pan.x + panel.1.x * zoom;
+        assert!(
+            right_edge <= 1200.0 - 40.0 + 0.001,
+            "the panel stays whole: {right_edge}"
+        );
     }
 }

@@ -24,6 +24,28 @@ pub fn fit_floor_zoom(configured: f32) -> f32 {
     configured.clamp(MIN_CANVAS_ZOOM, DEFAULT_CANVAS_ZOOM)
 }
 
+/// The zoom that shows one panel to a person who jumps to it.
+///
+/// `fit` is the zoom that shows that panel whole and `current` is the zoom of the
+/// view. The current zoom is kept while the panel fits from it, so a person who
+/// zoomed in keeps their zoom. A jump from a zoom below the floor is the reason
+/// for this rule: a Fit that showed a whole workspace under the floor leaves
+/// text that nobody reads, so a jump shows the panel whole at a zoom of the
+/// floor at least and of the default zoom at most. A panel that is larger than
+/// the view even at the floor is shown from its top left at the floor.
+#[must_use]
+pub fn reveal_zoom(current: f32, fit: f32, floor: f32) -> f32 {
+    let floor = fit_floor_zoom(floor);
+    let fit = clamp_canvas_zoom(fit);
+    let current = clamp_canvas_zoom(current);
+    let wanted = if current <= fit && current >= floor {
+        current
+    } else {
+        fit
+    };
+    wanted.clamp(floor, DEFAULT_CANVAS_ZOOM)
+}
+
 /// The canvas of the window: what a Fit of a workspace may do.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
@@ -151,7 +173,7 @@ pub fn clamp_canvas_zoom(zoom: f32) -> f32 {
 mod tests {
     use super::{
         CanvasViewState, DEFAULT_CANVAS_ZOOM, DEFAULT_FIT_FLOOR_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM,
-        clamp_canvas_zoom, fit_floor_zoom,
+        clamp_canvas_zoom, fit_floor_zoom, reveal_zoom,
     };
 
     #[test]
@@ -174,6 +196,31 @@ mod tests {
             "a Fit never zooms in past one, so a floor above one is one"
         );
         assert!((fit_floor_zoom(f32::NAN) - DEFAULT_FIT_FLOOR_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    /// A jump to a panel never shows it under the floor of a Fit, and never zooms
+    /// in past the default zoom.
+    #[test]
+    fn a_jump_to_a_panel_keeps_its_whole_frame_readable() {
+        let floor = DEFAULT_FIT_FLOOR_ZOOM;
+        // The whole workspace did not fit, so the view is far under the floor.
+        assert!(
+            (reveal_zoom(0.05, 0.6, floor) - floor).abs() <= f32::EPSILON,
+            "a jump from a view under the floor shows the panel at the floor"
+        );
+        // The panel fits at a zoom above the floor: the view takes that zoom.
+        assert!((reveal_zoom(0.05, 0.95, floor) - 0.95).abs() <= f32::EPSILON);
+        // A person who zoomed in keeps their zoom while the panel fits from it.
+        assert!((reveal_zoom(2.0, 2.5, floor) - DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
+        assert!((reveal_zoom(0.9, 1.4, floor) - 0.9).abs() <= f32::EPSILON);
+        // A panel that is larger than the view at the floor is shown at the floor,
+        // from its top left, and never smaller.
+        assert!((reveal_zoom(0.4, 0.2, floor) - floor).abs() <= f32::EPSILON);
+        // A floor of one makes every jump the default zoom and no more.
+        assert!((reveal_zoom(0.5, 0.3, 1.0) - DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
+        // A current zoom that is not a number is no zoom to keep, so the panel
+        // takes the zoom that shows it whole.
+        assert!((reveal_zoom(f32::NAN, 0.95, 0.7) - 0.95).abs() <= f32::EPSILON);
     }
 
     #[test]
