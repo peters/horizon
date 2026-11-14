@@ -12,6 +12,15 @@ use horizon_browser_control::block::{BlockDocument, Component, Selection, link_h
 use super::clicks::{ClickQueue, PendingClick};
 use super::clock::updated_label;
 
+/// The callout of `document` that holds the button or the answer `component_id`,
+/// so a press on an answer of a callout is the person's answer to that question.
+fn answered_callout<'a>(document: &'a BlockDocument, component_id: &str) -> Option<&'a Component> {
+    document.components.iter().find(|component| match component {
+        Component::Callout { buttons, .. } => buttons.iter().any(|button| button.id == component_id),
+        _ => false,
+    })
+}
+
 /// The frames that Horizon adds above the body of a card, outside the document
 /// its agent wrote.
 ///
@@ -61,6 +70,10 @@ pub struct CardRuntime {
     fitted: Option<(u64, CardFrames)>,
     /// The person resized this card by hand, so its size outranks its content.
     hand_resized: bool,
+    /// The callout whose answer the person pressed, as the document held it, so
+    /// the row of this card stops saying that it needs the person until another
+    /// callout asks something else.
+    answered_callout: Option<Component>,
 }
 
 impl CardRuntime {
@@ -68,8 +81,19 @@ impl CardRuntime {
     /// Returns whether the card queued it; a full queue keeps the older
     /// clicks.
     pub fn press(&mut self, component_id: &str, revision: u64, document: &BlockDocument, now_millis: i64) -> bool {
+        if let Some(callout) = answered_callout(document, component_id) {
+            self.answered_callout = Some(callout.clone());
+        }
         let selected = self.selected_ids(document);
         self.clicks.push(component_id, revision, selected, now_millis)
+    }
+
+    /// Whether the person pressed an answer of `callout`, as the document holds
+    /// it now. A callout with another question or another answer is a new
+    /// question, so the card asks the person again.
+    #[must_use]
+    pub fn pressed_answer_of(&self, callout: &Component) -> bool {
+        self.answered_callout.as_ref() == Some(callout)
     }
 
     /// Selects `row_id` in the list of component `component`. Returns whether

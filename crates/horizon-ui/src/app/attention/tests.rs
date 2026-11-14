@@ -523,3 +523,117 @@ fn a_shortcut_that_moves_the_focus_types_nothing_into_the_panel_that_it_focuses(
         remaining_keys(&ctx)
     );
 }
+
+/// A card that asks the person `text` with `answers`, as the plan card does
+/// before the go.
+fn asking_card(text: &str, answers: &[(&str, &str)]) -> horizon_browser_control::block::BlockDocument {
+    use horizon_browser_control::block::{BlockDocument, Button, Component, Tone};
+    BlockDocument {
+        width: None,
+        components: vec![
+            Component::Text {
+                text: "3 todos in 2 waves".to_owned(),
+            },
+            Component::Callout {
+                tone: Tone::Neutral,
+                caption: Some("Nothing starts before Go".to_owned()),
+                text: text.to_owned(),
+                buttons: answers
+                    .iter()
+                    .map(|(id, label)| Button {
+                        id: (*id).to_owned(),
+                        label: (*label).to_owned(),
+                        tone: Tone::Neutral,
+                    })
+                    .collect(),
+            },
+        ],
+    }
+}
+
+/// A card panel of `workspace` that draws `document`.
+fn card_panel(
+    app: &mut crate::app::HorizonApp,
+    workspace: horizon_core::WorkspaceId,
+    document: horizon_browser_control::block::BlockDocument,
+) -> PanelId {
+    app.board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Block,
+                block: Some(horizon_core::BlockPanelState {
+                    title: "The plan".to_owned(),
+                    document,
+                    revision: 1,
+                    owner_actor: None,
+                    updated_at_millis: 0,
+                }),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("card")
+}
+
+/// The attention of the sidebar row of `panel`, as the sidebar reads it.
+fn row_attention(app: &crate::app::HorizonApp, panel: PanelId) -> Attention {
+    app.panel_attention_of(app.board.panel(panel).expect("panel"))
+}
+
+#[test]
+fn a_card_that_asks_the_person_in_a_callout_marks_its_sidebar_row_and_a_press_ends_it() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("a");
+    let answers = [("go", "Go"), ("stop", "Stop")];
+    let asking = card_panel(&mut app, workspace, asking_card("Run the plan?", &answers));
+    assert_eq!(
+        row_attention(&app, asking),
+        Attention::NeedsYou,
+        "a card that waits for a go marks its row"
+    );
+
+    let document = app
+        .board
+        .panel(asking)
+        .and_then(|panel| panel.block())
+        .map(|card| card.document.clone())
+        .expect("the document of the card");
+    let runtime = app.panel_render_caches.card_runtime.entry(asking).or_default();
+    assert!(
+        runtime.press("go", 1, &document, horizon_browser_control::manifest::now_millis()),
+        "the press of the person is queued on the card"
+    );
+    assert_eq!(
+        row_attention(&app, asking),
+        Attention::Idle,
+        "the answer of the person ends the mark of that callout"
+    );
+
+    // Another question is a new question, so the row asks again.
+    let later = card_panel(
+        &mut app,
+        workspace,
+        asking_card("Push the branch?", &[("push", "Push the branch")]),
+    );
+    assert_eq!(row_attention(&app, later), Attention::NeedsYou);
+}
+
+#[test]
+fn a_card_without_a_callout_or_with_a_callout_of_no_answer_keeps_its_row_quiet() {
+    use horizon_browser_control::block::{BlockDocument, Component};
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("a");
+    let plain = card_panel(
+        &mut app,
+        workspace,
+        BlockDocument {
+            width: None,
+            components: vec![Component::Text {
+                text: "the plan runs".to_owned(),
+            }],
+        },
+    );
+    assert_eq!(row_attention(&app, plain), Attention::Idle);
+    let note = card_panel(&mut app, workspace, asking_card("Nothing to answer here", &[]));
+    assert_eq!(row_attention(&app, note), Attention::Idle);
+}

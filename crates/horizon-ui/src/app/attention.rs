@@ -369,7 +369,30 @@ impl HorizonApp {
         if panel.program_end().is_some() {
             return Attention::Idle;
         }
+        if let Some(card) = panel.block() {
+            return self.card_attention(panel.id, card);
+        }
         self.panel_attention(&panel.local_id)
+    }
+
+    /// The state of one card. A card asks the person while its document holds a
+    /// callout with at least one button that the person has not pressed, so the
+    /// row of the card says `Needs you` in the sidebar even when the card itself
+    /// is outside the view. A press on an answer of that callout ends it, and so
+    /// does a document without such a callout.
+    fn card_attention(&self, panel_id: PanelId, card: &horizon_core::BlockPanelState) -> Attention {
+        let Some(callout) = card.document.components.iter().find(|component| match component {
+            horizon_browser_control::block::Component::Callout { buttons, .. } => !buttons.is_empty(),
+            _ => false,
+        }) else {
+            return Attention::Idle;
+        };
+        let answered = self
+            .panel_render_caches
+            .card_runtime
+            .get(&panel_id)
+            .is_some_and(|runtime| runtime.pressed_answer_of(callout));
+        if answered { Attention::Idle } else { Attention::NeedsYou }
     }
 
     /// The agent panels that a jump goes to: the panels that need the person,
