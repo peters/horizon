@@ -5,6 +5,7 @@
 //! person can hear. The three owner states and both themes are covered, because
 //! the card looks different in each and none of them may panic.
 
+mod board;
 mod clicks;
 mod drawing;
 mod fit;
@@ -166,6 +167,15 @@ impl CardFrames {
             .accesskit_update
             .expect("the card body builds an accessibility tree");
         (output.shapes, update.nodes)
+    }
+
+    /// One pass in a card `width` wide, as the height that the body recorded
+    /// for its content.
+    pub(super) fn measured(&self, width: f32, document: &BlockDocument, card: &mut CardRuntime) -> f32 {
+        let mut input = card_input();
+        input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 900.0)));
+        let _ = self.run(document, card, Owner::Listening, input);
+        card.measured_content_height().expect("the pass measures the body")
     }
 
     fn run(&self, document: &BlockDocument, card: &mut CardRuntime, owner: Owner, input: egui::RawInput) -> Pass {
@@ -518,7 +528,10 @@ pub(super) fn every_component() -> BlockDocument {
         },
     ];
     components.extend(pills_and_steps());
-    BlockDocument { components }
+    BlockDocument {
+        width: None,
+        components,
+    }
 }
 
 /// The second half of a card: a caption, a choice drawn as pills and the steps
@@ -579,6 +592,7 @@ fn pills_and_steps() -> Vec<Component> {
 /// A document with the steps of a longer piece of work and nothing else.
 pub(super) fn steps_document() -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![Component::Steps {
             steps: vec![
                 Step {
@@ -599,6 +613,7 @@ pub(super) fn steps_document() -> BlockDocument {
 /// A document with one list of pills and nothing else.
 pub(super) fn pills_document() -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![Component::List {
             selection: Selection::Single,
             rows: vec![
@@ -631,6 +646,7 @@ pub(super) fn pills_document() -> BlockDocument {
 /// A document with one button, for tests about clicks and the queue.
 pub(super) fn one_button() -> BlockDocument {
     BlockDocument {
+        width: None,
         components: vec![Component::Buttons {
             items: vec![Button {
                 id: "connect".to_string(),

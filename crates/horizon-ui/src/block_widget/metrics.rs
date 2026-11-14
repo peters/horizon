@@ -12,6 +12,8 @@ pub(super) const BODY_PAD_SIDE: i8 = 16;
 pub(super) const BODY_PAD_BOTTOM: i8 = 14;
 /// Space between two components.
 pub(super) const COMPONENT_GAP: f32 = 16.0;
+/// Height of one line of the proportional face, as a multiple of its size.
+pub(super) const LINE_FACTOR: f32 = 1.35;
 
 /// Height of the footer strip.
 pub(super) const FOOTER_HEIGHT: f32 = 30.0;
@@ -211,6 +213,19 @@ pub(super) fn count(value: usize) -> f32 {
 
 /// Width of a new card.
 pub(super) const CARD_WIDTH: f32 = 420.0;
+/// The least width a wide card opens at.
+pub(super) const WIDE_CARD_MIN_WIDTH: f32 = 1100.0;
+/// The largest width a wide card opens at.
+pub(super) const WIDE_CARD_MAX_WIDTH: f32 = 2400.0;
+/// The least body width that draws the wide form of every component.
+pub(super) const WIDE_FORM_MIN_WIDTH: f32 = 1000.0;
+/// The width of the box that a progress bar takes beside the heading of a wide
+/// card.
+pub(super) const WIDE_PROGRESS_WIDTH: f32 = 320.0;
+/// Space between the heading text and the progress bar beside it.
+pub(super) const WIDE_PROGRESS_GAP: f32 = 28.0;
+/// Font of the heading of a wide card that stands beside a progress bar.
+pub(super) const WIDE_HEADING_FONT: f32 = 26.0;
 /// Smallest height of a card that fits its content.
 ///
 /// It keeps the titlebar, one line of the body and the footer on screen, so a
@@ -219,3 +234,132 @@ pub(super) const CARD_WIDTH: f32 = 420.0;
 pub(super) const CARD_MIN_HEIGHT: f32 = 140.0;
 /// Largest height of a card that fits its content.
 pub(super) const CARD_MAX_HEIGHT: f32 = 900.0;
+/// Largest height of a wide card that fits its content.
+pub(super) const WIDE_CARD_MAX_HEIGHT: f32 = 1200.0;
+
+// The board of a card: the grid of a wide card and the grouped list of a narrow
+// one, from the approved board mockup.
+
+/// Height of the head row of the grid, which carries the name of every wave.
+pub(super) const BOARD_HEAD_HEIGHT: f32 = 44.0;
+/// Least height of one body row of the grid; a row grows with its fullest cell.
+pub(super) const BOARD_ROW_MIN_HEIGHT: f32 = 104.0;
+/// Width of the first column of the grid, which carries the workers.
+pub(super) const BOARD_HEAD_COLUMN: f32 = 230.0;
+/// Corner radius of the grid.
+pub(super) const BOARD_RADIUS: u8 = 12;
+/// Space on both sides inside a head cell.
+pub(super) const BOARD_HEAD_PAD_SIDE: f32 = 14.0;
+/// Space between two parts of a head cell.
+pub(super) const BOARD_HEAD_GAP: f32 = 9.0;
+/// Space between the parts of a worker cell.
+pub(super) const BOARD_ROW_GAP: f32 = 2.0;
+/// Space inside a cell, on every side.
+pub(super) const BOARD_CELL_PAD: f32 = 10.0;
+/// Space between two items of one cell.
+pub(super) const BOARD_CELL_GAP: f32 = 8.0;
+/// Side of the square that carries the tag of a wave.
+pub(super) const BOARD_TAG_SIZE: f32 = 20.0;
+/// Corner radius of that square.
+pub(super) const BOARD_TAG_RADIUS: u8 = 6;
+/// Font of the tag of a wave.
+pub(super) const BOARD_TAG_FONT: f32 = 11.0;
+/// Font of the name of a wave.
+pub(super) const BOARD_COLUMN_FONT: f32 = 12.5;
+/// Font of the note of a wave, in the monospace family.
+pub(super) const BOARD_NOTE_FONT: f32 = 10.5;
+/// Font of the value of a wave, in the monospace family.
+pub(super) const BOARD_VALUE_FONT: f32 = 11.5;
+/// Font of the line of a worker.
+pub(super) const BOARD_ROW_LABEL_FONT: f32 = 14.0;
+/// Font of the second line of a worker.
+pub(super) const BOARD_ROW_SUBTITLE_FONT: f32 = 11.5;
+/// How much of the accent the cell of the wave that runs now blends into its
+/// fill.
+pub(super) const BOARD_CURRENT_TINT: f32 = 0.045;
+/// How much of the border colour the hair lines between two cells carry.
+pub(super) const BOARD_HAIR_TINT: f32 = 0.45;
+/// Width of the accent line under the head of the wave that runs now.
+pub(super) const BOARD_CURRENT_LINE: f32 = 2.0;
+/// Space between two groups of the narrow form.
+pub(super) const BOARD_GROUP_GAP: f32 = 14.0;
+/// Space between a group caption and its first item.
+pub(super) const BOARD_GROUP_HEAD_GAP: f32 = 8.0;
+/// Font of the value of a group caption of the narrow form, in the monospace
+/// family.
+pub(super) const BOARD_GROUP_VALUE_FONT: f32 = 11.5;
+
+/// Height of one item, from its two lines and its padding.
+pub(super) const ITEM_BORDER: f32 = 1.0;
+/// Corner radius of an item.
+pub(super) const ITEM_RADIUS: u8 = 10;
+/// Space above and below the lines of an item.
+pub(super) const ITEM_PAD_Y: f32 = 10.0;
+/// Space on both sides inside an item.
+pub(super) const ITEM_PAD_SIDE: f32 = 12.0;
+/// Diameter of the mark of an item.
+pub(super) const ITEM_MARK: f32 = 18.0;
+/// Ring width of the mark of an item.
+pub(super) const ITEM_MARK_RING: f32 = 1.5;
+/// Width of the halo around the mark of the item that runs now.
+pub(super) const ITEM_HALO: f32 = 4.0;
+/// How much of the accent or the warn colour the halo carries.
+pub(super) const ITEM_HALO_ALPHA: u8 = 46;
+/// Space between the mark and the title of an item.
+pub(super) const ITEM_MARK_GAP: f32 = 10.0;
+/// Space between the two lines of an item.
+pub(super) const ITEM_LINE_GAP: f32 = 3.0;
+/// Font of the title of an item.
+pub(super) const ITEM_TITLE_FONT: f32 = 13.5;
+/// Font of the value of an item, in the monospace family.
+pub(super) const ITEM_VALUE_FONT: f32 = 12.0;
+/// Font of the evidence of an item, in the monospace family.
+pub(super) const ITEM_NOTE_FONT: f32 = 11.5;
+/// Line height of the evidence of an item, in points.
+pub(super) const ITEM_NOTE_LINE_HEIGHT: f32 = 15.5;
+/// Font of the tag of an item.
+pub(super) const ITEM_TAG_FONT: f32 = 10.0;
+/// Space between the title and the tag of an item.
+pub(super) const ITEM_TAG_GAP: f32 = 7.0;
+/// Space on both sides inside the outline of the tag of an item.
+pub(super) const ITEM_TAG_PAD: f32 = 5.0;
+/// Corner radius of the outline of the tag of an item.
+pub(super) const ITEM_TAG_RADIUS: u8 = 5;
+/// Least space between the title of an item and its value.
+pub(super) const ITEM_VALUE_GAP: f32 = 10.0;
+/// How much of the ok colour the evidence of a finished item carries.
+pub(super) const ITEM_DONE_NOTE_TINT: f32 = 0.75;
+
+// The callout: one strip that asks the person something.
+
+/// Corner radius of a callout.
+pub(super) const CALLOUT_RADIUS: u8 = 12;
+/// Space on both sides inside a callout.
+pub(super) const CALLOUT_PAD_SIDE: f32 = 18.0;
+/// Space above and below the content of a callout.
+pub(super) const CALLOUT_PAD_Y: f32 = 14.0;
+/// Space between the two parts of the wide callout row.
+pub(super) const CALLOUT_ROW_GAP: f32 = 20.0;
+/// Space between the caption, the text and the buttons of a callout.
+pub(super) const CALLOUT_STACK_GAP: f32 = 12.0;
+/// Space between the caption and the text of a callout.
+pub(super) const CALLOUT_CAPTION_GAP: f32 = 2.0;
+/// Font of the text of a wide callout.
+pub(super) const CALLOUT_TEXT_FONT: f32 = 16.0;
+/// Font of the text of a narrow callout.
+pub(super) const CALLOUT_STACK_TEXT_FONT: f32 = 14.5;
+
+// The log: the events of the work.
+
+/// Font of the time of a log entry, in the monospace family.
+pub(super) const LOG_TIME_FONT: f32 = 11.5;
+/// Font of the text of a log entry.
+pub(super) const LOG_TEXT_FONT: f32 = 12.5;
+/// Space between the time and the text of an entry.
+pub(super) const LOG_TIME_GAP: f32 = 10.0;
+/// Least width of one column of a wide log.
+pub(super) const LOG_COLUMN_MIN_WIDTH: f32 = 330.0;
+/// Space between two columns of a wide log.
+pub(super) const LOG_COLUMN_GAP: f32 = 28.0;
+/// Space between two lines of a log.
+pub(super) const LOG_ROW_GAP: f32 = 4.0;

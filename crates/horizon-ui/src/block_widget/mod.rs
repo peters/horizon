@@ -12,14 +12,18 @@
 //! status frames that explain a dead card or a full click queue.
 
 mod badge;
+mod board;
 mod buttons;
+mod callout;
 mod caption;
 pub(crate) mod chip;
 mod footer;
+mod form;
 mod heading;
 mod kv;
 mod link;
 mod list;
+mod log;
 mod metrics;
 mod progress;
 mod size;
@@ -29,10 +33,16 @@ mod text;
 mod tones;
 
 pub(crate) use chip::CardChip;
+/// The two forms of a card body, which only the tests judge on their own.
+#[cfg(test)]
+pub(crate) use form::Form as CardForm;
 /// The frame around the body, which only the tests judge on its own.
 #[cfg(test)]
 pub(crate) use size::CARD_CHROME_HEIGHT;
-pub(crate) use size::{CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS, default_card_size, fitted_card_height};
+pub(crate) use size::{
+    CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS, asks_wide, card_height_limits, default_card_size, fitted_card_height,
+    wide_card_width,
+};
 
 use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
 use horizon_browser_control::block::{BlockDocument, Component, Tone};
@@ -40,7 +50,11 @@ use horizon_core::{CardFrames, CardRuntime, PanelId};
 
 use crate::theme;
 
-use metrics::{BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, TEXT_FONT, TEXT_LINE_HEIGHT};
+use form::Form;
+
+use metrics::{
+    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
+};
 
 /// What a card with no components says.
 pub(crate) const EMPTY_CARD: &str = "This card is empty.";
@@ -151,6 +165,7 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
         link_refused,
     });
     let primary = primary_button(view.document);
+    let form = Form::of(ui.available_width());
     let mut first = true;
     if !view.agent_present && !view.host_owned {
         status::show(ui, "agent_gone", Tone::Warn, AGENT_GONE_TITLE, AGENT_GONE_LINE);
@@ -177,12 +192,43 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
         ui.label(RichText::new(EMPTY_CARD).size(TEXT_FONT).color(theme::FG_SOFT()));
         return;
     }
-    for (index, component) in document.components.iter().enumerate() {
+    let mut index = 0;
+    while index < document.components.len() {
+        let component = &document.components[index];
         if !first {
             ui.add_space(COMPONENT_GAP);
         }
         first = false;
-        show_component(ui, index, component, view, enabled, primary);
+        // A progress bar that follows a heading directly shares its row in the
+        // wide form: the title at the left, the bar at the right. The narrow
+        // form keeps both as they are.
+        match (form, component, document.components.get(index + 1)) {
+            (
+                Form::Wide,
+                Component::Heading { text, subtitle, badge },
+                Some(Component::Progress { label, percent, detail }),
+            ) => {
+                let parts = heading::Parts {
+                    text,
+                    subtitle: subtitle.as_deref(),
+                    badge: badge.as_ref(),
+                };
+                let rect = heading::show_wide(ui, index, parts, view.agent_present);
+                let centre = Pos2::new(rect.max.x - WIDE_PROGRESS_WIDTH * 0.5, rect.center().y);
+                progress::paint(
+                    ui,
+                    index + 1,
+                    Rect::from_center_size(centre, Vec2::new(WIDE_PROGRESS_WIDTH, progress::height())),
+                    label,
+                    *percent,
+                    detail.as_deref(),
+                );
+                index += 2;
+                continue;
+            }
+            _ => show_component(ui, index, component, view, enabled, primary, form),
+        }
+        index += 1;
     }
 }
 
@@ -193,10 +239,16 @@ fn show_component(
     view: &mut CardView<'_>,
     enabled: bool,
     primary: Option<(usize, usize)>,
+    form: Form,
 ) {
     match component {
         Component::Heading { text, subtitle, badge } => {
-            heading::show(ui, index, text, subtitle.as_deref(), badge.as_ref(), view.agent_present);
+            let parts = heading::Parts {
+                text,
+                subtitle: subtitle.as_deref(),
+                badge: badge.as_ref(),
+            };
+            heading::show(ui, index, parts, view.agent_present);
         }
         Component::Text { text } => {
             ui.add(
@@ -222,7 +274,28 @@ fn show_component(
             rows,
             layout,
         } => list::show(ui, index, *selection, rows, *layout, view, enabled),
-        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled),
+        Component::Board { columns, rows, items } => board::show(ui, index, columns, rows, items, form),
+        Component::Callout {
+            tone,
+            caption,
+            text,
+            buttons,
+        } => callout::show(
+            ui,
+            index,
+            callout::Parts {
+                tone: *tone,
+                caption: caption.as_deref(),
+                text,
+                buttons,
+            },
+            primary,
+            view,
+            enabled,
+            form,
+        ),
+        Component::Log { entries } => log::show(ui, index, entries, form),
+        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled, form),
         // A link opens a browser panel of Horizon itself, so it needs no agent:
         // only a host dialog over the card keeps it from taking a press.
         Component::Link { label, url } => {
@@ -251,7 +324,7 @@ pub(super) fn primary_button(document: &BlockDocument) -> Option<(usize, usize)>
         .iter()
         .enumerate()
         .find_map(|(index, component)| match component {
-            Component::Buttons { items } => items
+            Component::Buttons { items } | Component::Callout { buttons: items, .. } => items
                 .iter()
                 .position(|item| item.tone == Tone::Primary)
                 .map(|item| (index, item)),
