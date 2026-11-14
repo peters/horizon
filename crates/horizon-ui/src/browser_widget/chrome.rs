@@ -134,7 +134,7 @@ pub fn show(
             page_asked: browser.frame_slot.file_chooser().status().pending(),
         })
     {
-        let text = chrome_text(ui, &message, 10.5, theme::PALETTE_YELLOW(), Some(ui.available_width()));
+        let text = chrome_text(ui, message, 10.5, theme::PALETTE_YELLOW(), Some(ui.available_width()));
         ui.add(egui::Label::new(text));
     }
     let reason = browser.handoff_reason.clone();

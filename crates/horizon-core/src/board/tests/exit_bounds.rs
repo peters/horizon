@@ -35,7 +35,7 @@ fn board_that_runs(script: &str) -> (Board, u32) {
             PanelOptions {
                 kind: PanelKind::Command,
                 command: Some("/bin/sh".to_owned()),
-                args: vec!["-c".to_owned(), script.to_owned()],
+                args: vec!["-c".to_owned(), script.clone()],
                 ..PanelOptions::default()
             },
             workspace,

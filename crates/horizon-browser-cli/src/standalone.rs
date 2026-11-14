@@ -64,7 +64,7 @@ pub(crate) struct OwnedSession {
 }
 
 impl OwnedSession {
-    pub(crate) fn start(options: StandaloneOptions, home: &BrowserRuntimePaths) -> Result<Self, StandaloneError> {
+    pub(crate) fn start(options: &StandaloneOptions, home: &BrowserRuntimePaths) -> Result<Self, StandaloneError> {
         let (session, profile_root, panel_id) = start(options, home)?;
         Ok(Self {
             session: Some(session),
@@ -125,7 +125,7 @@ impl OwnedHostProcess {
     /// Returns when the subprocess cannot start, initialize, or publish its
     /// first browser manifest before the startup deadline.
     pub fn start(
-        options: StandaloneOptions,
+        options: &StandaloneOptions,
         home: &Path,
         stderr: File,
     ) -> Result<(Self, BackendKind), StandaloneError> {
@@ -141,6 +141,9 @@ impl OwnedHostProcess {
         }
         if options.visible {
             command.arg("--visible");
+        }
+        if let Some(profile) = &options.profile {
+            command.args(["--profile", profile.as_str()]);
         }
         let mut child = command
             .env("HOME", home)
@@ -265,7 +268,7 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     let root = BrowserRuntimePaths::resolve().root().to_path_buf();
     lease::prune_dead_at(&root);
     let keep_alive = options.keep_alive;
-    let session = OwnedSession::start(options, &BrowserRuntimePaths::resolve())?;
+    let session = OwnedSession::start(&options, &BrowserRuntimePaths::resolve())?;
     let mcp_result = serve_until_host_exit(&root, &session.panel_id, keep_alive).await;
     let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
@@ -401,7 +404,7 @@ fn claim_profile(home: &BrowserRuntimePaths, name: &str) -> Result<std::path::Pa
 }
 
 fn start(
-    options: StandaloneOptions,
+    options: &StandaloneOptions,
     home: &BrowserRuntimePaths,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     if options.backend == Some(BackendKind::SafariWebDriver) && !options.visible {
