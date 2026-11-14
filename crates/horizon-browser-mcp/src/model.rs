@@ -408,6 +408,12 @@ pub(crate) struct CreateOutput {
     /// ready and, when a `url` was given, its page committed or the bounded
     /// startup wait elapsed.
     pub(crate) startup_millis: u64,
+    /// Where the page runs, in words, when it does not run on the browser host of
+    /// the settings: a create that names another engine, a private page of this
+    /// computer, or a shared profile of this computer. Absent when the page runs
+    /// where the settings name it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

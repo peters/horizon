@@ -320,6 +320,10 @@ impl PanelState {
             // A saved panel comes back on the backend that it saved, not on the
             // browser host that the settings of today name.
             follows_browser_host: false,
+            // The rule of the host read the create of a new panel; a saved panel
+            // carries the machine that served it instead.
+            browser_request: None,
+            browser_place: None,
             // Only the host of this app fills the entry of a panel that follows it.
             browser_host_entry: None,
             remote_session: None,

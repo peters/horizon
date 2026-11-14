@@ -194,6 +194,7 @@ impl HorizonBrowserMcp {
             navigation: crate::model::CreateNavigationState::resolve(receipt.navigation, url_requested),
             navigation_error: receipt.navigation_error,
             startup_millis: receipt.startup_millis,
+            note: receipt.note,
         }))
     }
 
@@ -216,6 +217,7 @@ impl HorizonBrowserMcp {
             navigation: crate::model::CreateNavigationState::resolve(receipt.navigation, true),
             navigation_error: receipt.navigation_error,
             startup_millis: receipt.startup_millis,
+            note: receipt.note,
         }))
     }
 

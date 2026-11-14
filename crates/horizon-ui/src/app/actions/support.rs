@@ -11,10 +11,11 @@ use super::PresetPickerAction;
 use crate::app::DetachedWorkspaceViewportState;
 
 /// The options of a panel that a person creates from a preset. A browser panel
-/// of this path follows the browser host that the settings name, and opens in
-/// the shared profile `default`, so it is signed in where the person signed in;
-/// every other caller of `PresetConfig::to_panel_options` keeps the backend that
-/// it chose. A private panel is the one item of the panel menu that names no
+/// of this path follows the browser host that the settings name, and it writes no
+/// `profile` field and names no engine, so the rule of
+/// `horizon_core::browser::new_browser_panel` opens a page of the profile of that
+/// host; every other caller of `PresetConfig::to_panel_options` keeps the backend
+/// that it chose. A private panel is the one item of the panel menu that names a
 /// profile.
 pub(in crate::app) fn preset_panel_options(
     preset: &PresetConfig,
@@ -23,7 +24,7 @@ pub(in crate::app) fn preset_panel_options(
     let mut options = preset.to_panel_options(browser_config);
     options.follows_browser_host = matches!(preset.kind, PanelKind::Browser);
     if options.follows_browser_host {
-        options.browser_session_id = Some(horizon_browser::DEFAULT_PROFILE.to_string());
+        options.browser_request = Some(horizon_core::browser::BrowserPanelRequest::default());
     }
     options
 }
@@ -365,9 +366,14 @@ mod tests {
             "the panel that a person picks opens on the browser host of the settings"
         );
         assert_eq!(
-            options.browser_session_id.as_deref(),
-            Some(horizon_browser::DEFAULT_PROFILE),
-            "the panel that a person picks is signed in where the person signed in"
+            options.browser_request,
+            Some(horizon_core::browser::BrowserPanelRequest::default()),
+            "the panel that a person picks writes no profile field and names no engine, so the rule opens a page of \
+             the profile of the host"
+        );
+        assert!(
+            options.browser_session_id.is_none(),
+            "the rule decides the profile of the page, so the preset writes none"
         );
 
         let shell = preset_panel_options(

@@ -89,6 +89,8 @@ pub use panel::{
     RestartRequest, SshConnectionEnd, StartRequest, browser_actor, current_unix_millis, finish_restart,
     prepare_panel_start, prepare_restart,
 };
+#[doc(hidden)]
+pub use panel::{BrowserMachine, browser_machine};
 pub use place::{
     AfterConnectionLoss, ConnectionLoss, PlaceError, PlaceWorkspace, RECONNECT_RESET_AFTER, SESSION_KILL_TIMEOUT,
     SSH_CONNECTION_FAILURE, SessionKill, WorkspacePlace, after_connection_loss, attaches_a_tmux_session, kill_command,

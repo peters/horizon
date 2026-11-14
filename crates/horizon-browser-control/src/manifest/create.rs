@@ -130,6 +130,11 @@ pub enum BrowserCreateOutcome {
         /// was reported ready.
         #[serde(default)]
         startup_millis: u64,
+        /// The one line that says where the page runs when it does not run on the
+        /// browser host of the settings, such as a page of another engine of this
+        /// computer. Absent when the page runs where the settings name it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     Failed {
         code: String,
@@ -145,6 +150,7 @@ impl BrowserCreateResult {
         navigation: CreateNavigation,
         navigation_error: Option<String>,
         startup_millis: u64,
+        note: Option<String>,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
@@ -154,6 +160,7 @@ impl BrowserCreateResult {
                 navigation: Some(navigation),
                 navigation_error,
                 startup_millis,
+                note,
             },
         }
     }
@@ -862,6 +869,7 @@ mod tests {
                 navigation: None,
                 navigation_error: None,
                 startup_millis: 0,
+                note: None,
             },
             "a legacy result leaves the navigation state unknown rather than claiming no URL was requested"
         );
@@ -870,16 +878,19 @@ mod tests {
             navigation: Some(CreateNavigation::Pending),
             navigation_error: None,
             startup_millis: 1234,
+            note: Some("This page runs in the Firefox of this computer.".to_string()),
         })
         .expect("encode");
         assert_eq!(encoded["navigation"], "pending");
         assert_eq!(encoded["startup_millis"], 1234);
+        assert_eq!(encoded["note"], "This page runs in the Firefox of this computer.");
         assert!(encoded.get("navigation_error").is_none());
         let failed = serde_json::to_value(BrowserCreateOutcome::Ready {
             panel_local_id: "panel".to_string(),
             navigation: Some(CreateNavigation::Failed),
             navigation_error: Some("could not navigate to https://down.test/".to_string()),
             startup_millis: 900,
+            note: None,
         })
         .expect("encode");
         assert_eq!(failed["navigation"], "failed");
@@ -969,6 +980,7 @@ mod tests {
             CreateNavigation::Committed,
             None,
             1_500,
+            None,
         );
         complete_at(root.path(), &result).expect("complete create");
         assert_eq!(

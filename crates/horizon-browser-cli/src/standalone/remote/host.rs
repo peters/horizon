@@ -389,6 +389,7 @@ impl RemoteHost {
                             manifest::now_millis()
                                 .saturating_sub(request.requested_at_millis)
                                 .unsigned_abs(),
+                            None,
                         ),
                         Err(error) => {
                             BrowserCreateResult::failed(&request, "browser_publish_failed", &error.to_string())

@@ -24,20 +24,51 @@ shared profile and the folder of a private page never share a name.
 
 ## What a create names
 
-`browser_create` takes one optional field, `profile`:
+A create takes one optional field, `profile`, and one optional field, `backend`.
+One rule decides the machine, the engine and the profile of the panel:
+`horizon_core::browser::new_browser_panel`
+(`crates/horizon-core/src/browser/host_route.rs`). Every path reads that rule:
+the agent tool `browser_create`, the picker, the shortcut and a link of a card,
+and the item `Private panel` of a panel menu. The panel that opens, the profile
+that it saves and the answer of the create therefore cannot disagree.
 
-- omitted: the shared profile `default`;
-- a name of the profile rule: that shared profile;
-- the reserved word `private`: a folder of this panel alone.
+The rule reads the entry `browser_host` of the settings, the `profile` field and
+the `backend` field. A panel that a person makes from the picker writes no
+`profile` field and names no engine, so the engine of its preset is the configured
+engine of this computer and not a create field.
 
-A panel that a person creates from the picker, from a shortcut or from a link
-uses `default`. The context menu of a browser panel has one item,
-`Private panel`, that uses `private` and keeps the URL of the panel.
+### With a browser host in the settings
+
+| The create | The panel | The answer |
+|------------|-----------|------------|
+| no `profile` | a page of the profile of the host, in the engine of the host | no note |
+| no `profile`, and a `backend` other than the engine of the host | a page of this computer in that engine, in the shared profile `default` of this computer | a note that says that it runs on this computer |
+| `profile: "private"` | a private page of the host, in the engine of the host | no note |
+| `profile: "private"`, and a `backend` other than the engine of the host | a private panel of this computer in that engine | a note that says that it runs on this computer |
+| a name of the profile rule | a panel of this computer in that shared profile | a note that says that it runs on this computer |
+
+A page of this computer in another engine is how a person checks a page in
+Chromium while the host runs Firefox. A named profile stays on this computer,
+because the host serves the one profile of its entry.
+
+### Without a browser host
+
+| The create | The panel |
+|------------|-----------|
+| no `profile` | a page of this computer in the shared profile `default` |
+| `profile: "private"` | a private page of this computer |
+| a name of the profile rule | a page of this computer in that shared profile |
+
+The engine of the panel is the `backend` field when the create names one, and
+the configured engine of this computer otherwise.
+
+A saved panel takes no part in the rule: it comes back on the machine and in the
+profile that served it, and the entry of today's settings does not move it.
 
 The field reaches the same place for the MCP tools, the host wire, the CLI and
 the UI: the profile name becomes the session id of the panel
 (`PanelOptions::browser_session_id`), which the board already persists and
-restores.
+restores, and the machine of the page becomes `PanelOptions::browser_place`.
 
 ## One browser process, one page more
 

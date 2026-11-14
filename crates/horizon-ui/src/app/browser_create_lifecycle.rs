@@ -68,6 +68,10 @@ pub(super) struct CreatedPanel {
     pub(super) manifest_read_at: Option<Instant>,
     /// A read of that manifest runs on the coordination worker.
     pub(super) manifest_reading: bool,
+    /// The one line that the answer of this create carries when its page does not
+    /// run on the browser host of the settings, so an agent and a person read
+    /// where it runs.
+    pub(super) note: Option<String>,
 }
 
 impl PendingBrowserCreate {
@@ -456,6 +460,7 @@ fn finish_ready_browser_create(
         navigation,
         navigation_error,
         startup_millis,
+        panel.note.clone(),
     );
     let (panel_local_id, live) = (panel.local_id.clone(), io.live_fence());
     let (backend, orientation) = (panel.backend, panel.startup_orientation);
@@ -555,6 +560,7 @@ mod tests {
                     manifest: None,
                     manifest_read_at: None,
                     manifest_reading: false,
+                    note: None,
                 }),
                 remote_credentials: None,
             });

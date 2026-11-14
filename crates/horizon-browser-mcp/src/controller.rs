@@ -102,6 +102,9 @@ pub(crate) struct CreateReceipt {
     pub(crate) navigation: Option<horizon_browser_control::manifest::CreateNavigation>,
     pub(crate) navigation_error: Option<String>,
     pub(crate) startup_millis: u64,
+    /// The one line that says where the page runs when it does not run on the
+    /// browser host of the settings.
+    pub(crate) note: Option<String>,
 }
 
 #[derive(Debug)]
@@ -383,6 +386,7 @@ impl BrowserController {
                         navigation,
                         navigation_error,
                         startup_millis,
+                        note,
                     } => {
                         self.ensure_claim(&panel_local_id)?;
                         let manifest = manifest::read(&panel_local_id).ok_or_else(|| {
@@ -397,6 +401,7 @@ impl BrowserController {
                             navigation,
                             navigation_error,
                             startup_millis,
+                            note,
                         })
                     }
                     BrowserCreateOutcome::Failed { code, message } => Err(ControlError::Browser {

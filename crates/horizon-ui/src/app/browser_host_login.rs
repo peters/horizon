@@ -53,6 +53,12 @@ impl HorizonApp {
 
     /// [`Self::resolve_browser_host_login`] for one entry, which is a parameter so
     /// that a test names the entry that it judges.
+    ///
+    /// The rule `horizon_core::browser::new_browser_panel` reads the entry, the
+    /// `profile` field of the create and the engine that it named, and answers the
+    /// machine, the engine and the profile of the page. Every new browser panel of
+    /// this app passes here, so the panel that opens, the profile that it saves
+    /// and the answer of `browser_create` read one answer.
     fn apply_browser_host_login(
         &self,
         browser_host: &BrowserHostConfig,
@@ -61,6 +67,20 @@ impl HorizonApp {
         if options.kind != PanelKind::Browser || !options.follows_browser_host || options.browser_host.is_some() {
             return Ok(());
         }
+        let request = options.browser_request.clone().unwrap_or_default();
+        let configured = options
+            .browser_config
+            .as_ref()
+            .map_or(self.template_config.browser.backend, |config| config.backend);
+        let panel = horizon_core::browser::new_browser_panel(
+            request.profile.as_deref(),
+            request.backend,
+            configured,
+            browser_host,
+        )?;
+        options.browser_place = Some(panel.place);
+        options.browser_session_id.clone_from(&panel.profile);
+        options.browser_private = panel.private;
         options.browser_host_entry = Some(browser_host.clone());
         let Some(machine) = browser_host.machine() else {
             return Ok(());

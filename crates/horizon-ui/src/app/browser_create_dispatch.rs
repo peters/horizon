@@ -5,7 +5,7 @@ use std::time::Instant;
 use horizon_core::browser::manifest::{
     self, BrowserCreateAuditStatus, BrowserCreateRequest, BrowserCreateResult, ManifestWorkspace,
 };
-use horizon_core::browser::{BackendAvailability, BackendKind};
+use horizon_core::browser::{BackendAvailability, BackendKind, NewBrowserPanel, new_browser_panel};
 use horizon_core::{PanelKind, PanelOptions};
 
 use super::HorizonApp;
@@ -95,27 +95,17 @@ impl HorizonApp {
             return;
         }
         let backend = request.backend.unwrap_or(self.template_config.browser.backend);
-        // A panel that follows the browser host runs in the browser of that machine.
-        // A create that names an engine the host does not run is refused here
-        // instead of opening a panel that never attaches; a create that names no
-        // engine takes the engine of the host.
-        if let Some(named) = request.backend
-            && let Some(reason) = self.browser_host_backend_refusal(named)
-        {
-            fail_create(
-                &mut self.browser_create_host.io,
-                &request,
-                "unsupported_backend",
-                reason,
-            );
-            return;
-        }
-        // The profile of a panel: the shared default, a shared profile by name,
-        // or a private panel that keeps nothing. A private panel of a browser host
-        // is a page of an isolated context of that browser, so its sign-ins are
-        // apart from the profile of that machine.
-        let profile = match create_profile(&request) {
-            Ok(profile) => profile,
+        // One rule decides the machine, the engine and the profile of every new
+        // browser panel, and it reads the entry that the settings hold now. A
+        // create that names an engine that the host does not run is a panel of
+        // this computer in that engine, and its answer says so.
+        let panel = match new_browser_panel(
+            request.profile.as_deref(),
+            request.backend,
+            backend,
+            &self.template_config.browser_host,
+        ) {
+            Ok(panel) => panel,
             Err(message) => {
                 fail_create(&mut self.browser_create_host.io, &request, "invalid_profile", &message);
                 return;
@@ -142,20 +132,23 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
-        let options =
-            duplicate.unwrap_or_else(|| browser_create_options(&request, browser_config, profile.shared_name()));
-        self.open_requested_browser_panel(request, actor_panel, options, started_at);
+        let note = duplicate.is_none().then(|| panel.note.clone()).flatten();
+        let options = duplicate.unwrap_or_else(|| browser_create_options(&request, browser_config, &panel));
+        self.open_requested_browser_panel(request, actor_panel, options, note, started_at);
     }
 
     /// Opens the panel of a create whose request is resolved, and audits its
     /// dispatch. The backend, the startup orientation and the remote allocation
     /// cancelled by a failed creation come from `options`, so a local create and
     /// a remote create that was planned off this thread take one path here.
+    /// `note` is the one line that the answer of the create carries when the page
+    /// does not run on the browser host of the settings.
     pub(super) fn open_requested_browser_panel(
         &mut self,
         request: BrowserCreateRequest,
         actor_panel: ActorPanel,
         options: PanelOptions,
+        note: Option<String>,
         started_at: Instant,
     ) {
         let backend = options.browser_config.as_ref().map_or_else(
@@ -207,6 +200,7 @@ impl HorizonApp {
                 manifest: None,
                 manifest_read_at: None,
                 manifest_reading: false,
+                note,
             }),
             remote_credentials: None,
         });
@@ -346,16 +340,18 @@ pub(super) fn publish_requested_create(
 ///
 /// It follows the browser host of the settings, as a panel that a person creates
 /// does, because its Chromium then runs on that machine through a tunnel and the
-/// widget, the input and the frames stay the ones of a local panel. A duplicate
+/// widget, the input and the frames stay the ones of a local panel. The rule
+/// `new_browser_panel` named the profile and the machine of the page. A duplicate
 /// instead keeps the backend and the profile of its source.
-fn browser_create_options(
+pub(in crate::app) fn browser_create_options(
     request: &BrowserCreateRequest,
     mut browser_config: horizon_core::browser::BrowserConfig,
-    shared_profile: Option<&str>,
+    panel: &NewBrowserPanel,
 ) -> PanelOptions {
     // The driver stamps the profile of its panel into the manifest, so an agent
-    // reads the profile of the panel that it controls.
-    browser_config.profile = Some(shared_profile.unwrap_or(horizon_browser::PRIVATE_PROFILE).to_string());
+    // reads the profile of the panel that it controls. The spawn names it again
+    // for a page of the browser host, which keeps the profile of that machine.
+    browser_config.profile.clone_from(&panel.profile);
     PanelOptions {
         command: request.url.clone(),
         kind: PanelKind::Browser,
@@ -363,31 +359,20 @@ fn browser_create_options(
         browser_config: Some(browser_config),
         // The name of a shared profile is the session identity of the panel, so
         // a later page joins the browser that already holds its sign-ins. A
-        // private panel names no profile and gets a folder of its own.
-        browser_session_id: shared_profile.map(str::to_string),
-        browser_private: shared_profile.is_none(),
+        // private panel names no profile and gets a folder of its own. A page of
+        // the browser host keeps the profile of that machine, so it names none.
+        browser_session_id: panel.profile.clone(),
+        browser_private: panel.private,
+        // The app runs the rule again where the entry of the settings is at hand,
+        // and it reads these two fields to do it.
+        browser_request: Some(horizon_core::browser::BrowserPanelRequest {
+            profile: request.profile.clone(),
+            backend: request.backend,
+        }),
         remote_session: None,
         follows_browser_host: true,
         ..PanelOptions::default()
     }
-}
-
-/// The reason that this Horizon refuses a create of `backend`, when its settings
-/// name a browser host that serves the engine of its own profile and no other.
-///
-/// The entry is the one that the settings hold now, so a host that the person
-/// confirmed a moment ago decides this create too.
-impl HorizonApp {
-    fn browser_host_backend_refusal(&self, backend: BackendKind) -> Option<&'static str> {
-        self.template_config.browser_host.backend_refusal(backend)
-    }
-}
-
-/// The profile that a create names, or the words of the refusal: the host wire
-/// answers with the field, the rule and the reserved word, exactly as the MCP
-/// layer does, so an agent learns what to change.
-fn create_profile(request: &BrowserCreateRequest) -> Result<horizon_browser::ProfileChoice, String> {
-    horizon_browser::ProfileChoice::parse(request.profile.as_deref())
 }
 
 #[cfg(test)]
@@ -431,15 +416,14 @@ mod tests {
         local_id
     }
 
+    /// The rule of the host reads the `profile` field of a create, and its words
+    /// are the words of the profile-name rule, so an agent learns what to change.
     #[test]
     fn a_create_on_the_wire_with_a_refused_profile_names_the_field_and_the_rule() {
-        let mut request = BrowserCreateRequest::for_tests("agent");
+        let host = horizon_core::BrowserHostConfig::default();
         for refused in ["Private", "my profile", "my_profile"] {
-            request.profile = Some(refused.to_string());
-            let message = match create_profile(&request) {
-                Ok(profile) => panic!("the profile rule refuses {refused:?}: {profile:?}"),
-                Err(message) => message,
-            };
+            let message = new_browser_panel(Some(refused), None, BackendKind::ChromiumCdp, &host)
+                .expect_err("the profile rule refuses this name");
             assert!(message.contains("profile"), "the answer names the field: {message}");
             assert!(message.contains("a-z, 0-9"), "the answer names the rule: {message}");
             assert!(
@@ -447,18 +431,18 @@ mod tests {
                 "the answer names the reserved word: {message}"
             );
         }
-        request.profile = Some("work".to_string());
-        assert!(create_profile(&request).is_ok(), "a name that the rule accepts passes");
+        assert!(
+            new_browser_panel(Some("work"), None, BackendKind::ChromiumCdp, &host).is_ok(),
+            "a name that the rule accepts passes"
+        );
     }
 
     #[test]
     fn a_create_without_a_device_target_follows_the_browser_host() {
         let request = BrowserCreateRequest::for_tests("agent");
-        let options = browser_create_options(
-            &request,
-            horizon_core::browser::BrowserConfig::default(),
-            Some(horizon_browser::DEFAULT_PROFILE),
-        );
+        let host = horizon_core::BrowserHostConfig::default();
+        let panel = new_browser_panel(None, None, BackendKind::ChromiumCdp, &host).expect("a create");
+        let options = browser_create_options(&request, horizon_core::browser::BrowserConfig::default(), &panel);
         assert_eq!(options.kind, PanelKind::Browser);
         assert!(
             options.follows_browser_host,
@@ -471,36 +455,38 @@ mod tests {
         assert_eq!(
             options.browser_session_id.as_deref(),
             Some(horizon_browser::DEFAULT_PROFILE),
-            "a create that names no profile joins the shared default"
+            "a create that names no profile joins the shared default without a host"
+        );
+        assert_eq!(
+            options.browser_request,
+            Some(horizon_core::browser::BrowserPanelRequest::default()),
+            "the app runs the rule again where the entry of the settings is at hand"
         );
         assert_eq!(options.command, request.url);
     }
 
-    /// A private create names no profile, so its panel gets the throwaway folder
-    /// of its own id, and a named profile reaches the panel as its session id.
+    /// A private create names the reserved word, so its panel gets a throwaway
+    /// folder, and a named profile reaches the panel as its session id.
     #[test]
     fn a_create_reads_the_profile_that_it_names() {
         let mut request = BrowserCreateRequest::for_tests("agent");
+        let host = horizon_core::BrowserHostConfig::default();
         request.profile = Some(horizon_browser::PRIVATE_PROFILE.to_string());
-        let private = horizon_browser::ProfileChoice::parse(request.profile.as_deref()).expect("private");
-        let options = browser_create_options(
-            &request,
-            horizon_core::browser::BrowserConfig::default(),
-            private.shared_name(),
-        );
+        let private = new_browser_panel(request.profile.as_deref(), None, BackendKind::ChromiumCdp, &host)
+            .expect("a private create");
+        let options = browser_create_options(&request, horizon_core::browser::BrowserConfig::default(), &private);
         assert!(
             options.browser_session_id.is_none(),
             "a private panel joins no shared profile"
         );
+        assert!(options.browser_private, "a private panel keeps nothing");
 
         request.profile = Some("work".to_string());
-        let work = horizon_browser::ProfileChoice::parse(request.profile.as_deref()).expect("work");
-        let options = browser_create_options(
-            &request,
-            horizon_core::browser::BrowserConfig::default(),
-            work.shared_name(),
-        );
+        let work = new_browser_panel(request.profile.as_deref(), None, BackendKind::ChromiumCdp, &host)
+            .expect("a create of one profile");
+        let options = browser_create_options(&request, horizon_core::browser::BrowserConfig::default(), &work);
         assert_eq!(options.browser_session_id.as_deref(), Some("work"));
+        assert!(!options.browser_private, "a shared profile keeps its sign-ins");
     }
 
     #[test]

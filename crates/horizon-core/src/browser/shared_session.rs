@@ -374,6 +374,12 @@ impl BrowserPanelState {
                 // the person's private panel follows the entry of the settings as
                 // every other browser panel of that person does.
                 follows_browser_host: true,
+                // The reserved word is the `profile` field of this create, so the
+                // rule of the host reads the same field that an agent writes.
+                browser_request: Some(crate::browser::BrowserPanelRequest {
+                    profile: Some(horizon_browser::PRIVATE_PROFILE.to_string()),
+                    backend: None,
+                }),
                 ..PanelOptions::default()
             }
         })
