@@ -26,6 +26,16 @@
 //! because the watch is made at the moment that Horizon starts the browser.
 
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Mutex, PoisonError};
+
+/// The watches whose driver outlived the call that owned them.
+///
+/// A watch ends its driver when the pipe to this process ends, so it must stay
+/// alive while its driver does. A caller that gave up on ending a driver drops its
+/// [`BrowserWatch`], and that drop stops the watch — which would leave the driver
+/// with no one to end it. Such a watch waits here instead, with its pipe open,
+/// until this process ends or the program quits.
+static ABANDONED: Mutex<Vec<BrowserWatch>> = Mutex::new(Vec::new());
 
 #[cfg(all(test, unix))]
 use std::time::Duration;
@@ -113,6 +123,15 @@ impl BrowserWatch {
         }
     }
 
+    /// Keeps this watch for a driver that the caller could not end.
+    ///
+    /// The watch stays bound to this process: when the process ends, the kernel
+    /// closes the pipe and the watch ends the driver and its group. Dropping the
+    /// value here would stop the watch and leave the driver behind for good.
+    pub(crate) fn abandon(watch: Self) {
+        ABANDONED.lock().unwrap_or_else(PoisonError::into_inner).push(watch);
+    }
+
     /// The process id of the watch, for a test that reads its process group.
     #[cfg(all(test, unix))]
     pub(crate) fn child_pid(&self) -> Option<u32> {
@@ -124,6 +143,12 @@ impl BrowserWatch {
     pub(crate) fn has_no_child(&self) -> bool {
         self.child.is_none()
     }
+    /// Takes the abandoned watches back, so a test ends them by itself.
+    #[cfg(all(test, unix))]
+    pub(crate) fn take_abandoned() -> Vec<Self> {
+        std::mem::take(&mut *ABANDONED.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
     /// The longest time that a test waits for a process that a watch ends.
     #[cfg(all(test, unix))]
     pub(crate) fn reap_bound() -> Duration {
@@ -301,6 +326,33 @@ wait
             "the watch is not a member of the group of this process"
         );
         watch.stop();
+    }
+
+    /// A driver that outlived the call that owned it keeps its watch. The watch
+    /// stays bound to this process, so the end of the process still ends the
+    /// driver; a watch that was dropped would stop and leave the driver behind.
+    #[test]
+    fn an_abandoned_watch_still_ends_its_browser_when_the_process_dies() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let script = stand_in(directory.path());
+        let (mut browser, helper) = start_stand_in(&script, directory.path());
+        let watch = BrowserWatch::start(browser.id()).expect("the watch of the browser");
+        BrowserWatch::abandon(watch);
+
+        let abandoned = BrowserWatch::take_abandoned();
+        assert_eq!(
+            abandoned.len(),
+            1,
+            "the watch of a driver that outlived its call waits for the end of this process"
+        );
+        for watch in abandoned {
+            watch.release();
+        }
+        assert!(
+            gone(&helper),
+            "the helper of the browser ended with the group of its browser"
+        );
+        assert!(wait_for_exit(&mut browser), "the browser ended with the watch");
     }
 
     /// A watch that the process ends itself leaves the browser that it owns, so a

@@ -313,6 +313,11 @@ impl ServiceProcess {
                     service = self.label,
                     "automation service did not exit before its deadline"
                 );
+                drop(child);
+                // The driver may still run. Its watch is the only thing that ends
+                // it when this process dies, so the watch outlives this value
+                // instead of being stopped with it.
+                self.abandon_watch();
                 false
             }
             Err(error) => {
@@ -332,6 +337,15 @@ impl ServiceProcess {
         #[cfg(unix)]
         if let Some(mut watch) = self.watch.take() {
             watch.stop();
+        }
+    }
+
+    /// Keeps the watch of a driver that the caller could not end, so the watch
+    /// still ends that driver when this process dies.
+    fn abandon_watch(&mut self) {
+        #[cfg(unix)]
+        if let Some(watch) = self.watch.take() {
+            super::watch::BrowserWatch::abandon(watch);
         }
     }
 
@@ -511,6 +525,105 @@ mod tests {
             stderr.contains(message),
             "stderr after exit did not include the final line: {stderr}"
         );
+    }
+
+    /// The stand-in Horizon of [`a_horizon_that_a_signal_ends_leaves_no_driver_behind`]:
+    /// it starts the real driver service with a stand-in driver program, and it
+    /// waits to be ended by a signal. It runs as a child of the test, so the test
+    /// can end it with `SIGTERM` and with `SIGKILL` the way a person ends Horizon.
+    #[cfg(unix)]
+    #[test]
+    fn the_stand_in_horizon_of_the_signal_test() {
+        let Some(root) = std::env::var_os("HORIZON_DRIVER_SIGNAL_STAND_IN") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let pid_file = root.join("driver.pid");
+        let script = format!(
+            "trap '' TERM\nprintf '%s' \"$$\" > {}\nwhile :; do sleep 1; done\n",
+            pid_file.display()
+        );
+        let args = vec!["-c".to_string(), script, "stand-in-driver".to_string()];
+        let _process = ServiceProcess::spawn(
+            Path::new("/bin/sh"),
+            &args,
+            ChromeProcessControl::default(),
+            "stand-in-driver",
+        )
+        .unwrap_or_else(|error| panic!("spawn the stand-in driver: {error}"));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// A Horizon that the system ends with a signal runs no exit cleanup, so the
+    /// watch of a driver is the only thing that ends it. The stand-in Horizon is a
+    /// real child of this test, it starts the real driver service, and its driver
+    /// ignores `SIGTERM`, so only the watch of the driver can end it.
+    #[cfg(unix)]
+    #[test]
+    fn a_horizon_that_a_signal_ends_leaves_no_driver_behind() {
+        for signal in ["TERM", "KILL"] {
+            let root = tempfile::tempdir().unwrap_or_else(|error| panic!("create temp dir: {error}"));
+            let executable = std::env::current_exe().expect("the test binary");
+            let mut horizon = Command::new(executable)
+                .args([
+                    "--exact",
+                    "process::control::tests::the_stand_in_horizon_of_the_signal_test",
+                    "--test-threads",
+                    "1",
+                ])
+                .env("HORIZON_DRIVER_SIGNAL_STAND_IN", root.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap_or_else(|error| panic!("start the stand-in Horizon: {error}"));
+            let driver = wait_for_pid(&root.path().join("driver.pid"));
+            assert!(process_exists(&driver), "the stand-in driver runs");
+
+            let status = Command::new("/bin/kill")
+                .args(["-".to_string() + signal, horizon.id().to_string()])
+                .status()
+                .unwrap_or_else(|error| panic!("end the stand-in Horizon: {error}"));
+            assert!(status.success(), "the signal reaches the stand-in Horizon");
+            let _ = horizon.wait();
+
+            assert!(
+                gone_within(&driver, Duration::from_secs(8)),
+                "the driver of a Horizon that ended with SIG{signal} stays: {driver}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn wait_for_pid(path: &Path) -> String {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && !text.trim().is_empty()
+            {
+                return text.trim().to_owned();
+            }
+            assert!(Instant::now() < deadline, "the stand-in driver wrote its process id");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Whether `pid` is gone inside `bound`. The bound is a guard for a watch that
+    /// does not act at all, not a speed of the machine: the watch sends `SIGTERM`
+    /// and the surviving group gets `SIGKILL` a second later.
+    #[cfg(unix)]
+    fn gone_within(pid: &str, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
     }
 
     #[cfg(unix)]
