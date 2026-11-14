@@ -211,7 +211,9 @@ calls.
    usable only when its three names are there: `TS_<NET>_CLIENT_ID`,
    `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. With more than one network and no
    word from the person, show them in a `list` with `selection: single` and wait
-   for a click.
+   for a click. A panel keeps the environment of its start, so a network that the
+   person stores while this panel runs is in no pill. Ask the person to open a new
+   agent panel, or to start Set Up again, after the three names are stored.
 
 2. Read the state of this computer, and change nothing there:
 
@@ -220,9 +222,9 @@ calls.
    ```
 
    Result: `Running`, then the suffix of the network of this computer, for
-example `tail1234.ts.net`, or an empty line when MagicDNS is off. `Stopped`,
-`NeedsLogin` or `NoState` means that this computer is in no network, and its
-second line is empty.
+   example `tail1234.ts.net`, or an empty line when MagicDNS is off. `Stopped`,
+   `NeedsLogin` or `NoState` means that this computer is in no network, and its
+   second line is empty.
 
    **Never run a command that changes the Tailscale state of this computer:**
    `up`, `down`, `login`, `logout`, `switch` or `set`. This computer can be in a
@@ -386,7 +388,7 @@ OAuth client, and it asks for no value.
     {"label": "TS_<NET>_CLIENT_ID", "value": "The client id of the OAuth client", "mono": true},
     {"label": "TS_<NET>_CLIENT_SECRET", "value": "The client secret of the same client", "mono": true},
     {"label": "TS_<NET>_TAG", "value": "The tag of the machine, for example tag:horizon", "mono": true}]},
-  {"type": "text", "text": "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add, then press Join a network again."},
+  {"type": "text", "text": "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add. Then open a new agent panel, or start Set Up again, and press Join a network."},
   {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}
 ```
 

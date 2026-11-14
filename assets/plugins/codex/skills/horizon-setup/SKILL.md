@@ -280,8 +280,11 @@ name order.
 on the card of a machine draws the card that says what the person stores.
 
 A pill is a choice of the person, and it changes no setting. One machine joins
-one network. Never ask the person for a client id, a client secret or a tag in
-this panel, and never take one from the conversation.
+one network. A panel keeps the environment of its start, so a network that the
+person stores while this panel runs is in no pill. Ask the person to open a new
+agent panel, or to start Set Up again, after the person adds the three names.
+Never ask the person for a client id, a client secret or a tag in this panel, and
+never take one from the conversation.
 
 ### 3. Renting the machine
 

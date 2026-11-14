@@ -298,7 +298,7 @@ fn the_cards_of_a_network_offer_the_stored_networks_and_name_the_network_of_a_ma
     // the place of the OAuth client, with no field for a value.
     let (name, store) = card_with_text(
         &cards,
-        "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add, then press Join a network again.",
+        "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add. Then open a new agent panel, or start Set Up again, and press Join a network.",
     );
     let rows = kv_of(store);
     for secret in ["TS_<NET>_CLIENT_ID", "TS_<NET>_CLIENT_SECRET", "TS_<NET>_TAG"] {
