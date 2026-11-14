@@ -8,8 +8,16 @@ login.
 `(doc)` marks a command, a flag, a body or a name that the current public
 Tailscale documentation or the source of `tailscale up` states, read on
 2026-11-12. `UNVERIFIED` marks one that those documents do not state, and the
-reason follows it. No command of this reference ran in this slice, so the
-reviewer proves every one live.
+reason follows it. The other statements of this page ran in no live run, so a
+reviewer proves every one.
+
+## What a live run has proven so far
+
+- The token answer of an OAuth client that has the scope `auth_keys` only and one
+tag holds `"scope": "auth_keys"` and `"tags": "tag:<name>"`. That client makes
+keys. It reads, changes and deletes no device.
+
+A statement that this list does not hold is `(doc)` or `UNVERIFIED`.
 
 ```sh
 NET=HOME                  # [A-Z0-9]{1,16}: the <NET> of the three named secrets
@@ -37,9 +45,20 @@ prefix that Horizon owns. `TS_` is free, so every name of this recipe passes the
 rule. A name that starts with `OPENAI`, for example, is refused.
 
 One OAuth client of the network, in the admin console at **Trust credentials** â†’
-**OAuth** (doc):
+**OAuth** (doc). It has one of two shapes, and the person chooses it:
 
-- The scopes `auth_keys` (write) and `devices:core` (read and write).
+| Shape | Scopes | What the agent can do | The key of the machine |
+|---|---|---|---|
+| Narrow: enough for a machine that this set-up rents | `auth_keys` (write) | Make one key. Read, change and delete no device | `ephemeral: true`, so the node leaves the network with the machine |
+| Wide | `auth_keys` (write) and `devices:core` (read and write) | Make one key and remove the device of a deleted machine | The key, and a delete through the API |
+
+A client with a devices scope can touch every machine of the network, and a
+narrow client makes the node clean itself up. So the narrow client is the
+default of this page, and the wide client is a choice of the person. The agent
+never asks the person for the wide client.
+
+The rest of the client:
+
 - The tag `<TAG>` as the tag of the client. The tag must exist in
   `tagOwners` of the access controls, and the client is limited to it.
 - A key that the client makes must carry a tag that the client owns. The API
@@ -49,7 +68,51 @@ One OAuth client of the network, in the admin console at **Trust credentials** â
 The access controls of the network must also let the devices of the person reach
 TCP 22 of `<TAG>`. A tagged device is not a member of the network, so a rule
 whose `dst` is `autogroup:member` does not include it. Name `tag:horizon` or `*`
-in `dst` (doc).
+in `dst` (doc). That rule is needed only while this computer is in the same
+network, as section 9 says.
+
+### 1.1 A machine that must reach devices of the network
+
+The machine reaches the devices of the network only through a grant, and the
+grant is in the policy file. Only the person writes that file: the agent never
+writes it, and the agent never asks for a client that can.
+
+Propose a tag for the purpose, for example `tag:work`, and give the person this
+block. The person adds it in the admin console, at **Access controls**, after
+the preview of the change answers without an error (doc for the names of the
+fields):
+
+```json
+{
+  "tagOwners": {"tag:work": ["autogroup:admin"]},
+  "grants": [
+    {"src": ["tag:horizon"], "dst": ["tag:work"], "ip": ["tcp:443", "tcp:22"]}
+  ]
+}
+```
+
+- `src` is the tag or the name of the machine, or a name of a user.
+- `dst` is the tag of the devices, a name, or a `100.x` address.
+- `ip` is the list of ports and protocols, or omit the field to allow every port
+  of that destination (doc).
+
+UNVERIFIED: this page read no policy file of a network live, so the person
+checks the preview of the console before the person saves the file.
+
+### 1.2 A machine that two networks must reach
+
+One machine joins one network (see section 6). When a second network must reach
+the same machine, the person shares the device of the machine with a user of
+that network: in the admin console, on the page of the device, with the sharing
+function (doc). The device then appears in the network of that user, and a rule
+of that network reaches it.
+
+UNVERIFIED: the exact place of the sharing function in the console. This page
+read no console for it.
+
+The agent shares no device and removes no share. Two networks mean one client on
+the machine and no second client, because a second client would fight the first
+for the routes of the machine.
 
 ## 2. The two rules of a secret here
 
@@ -61,6 +124,9 @@ in `dst` (doc).
 - **The auth key arrives on standard input.** It travels in the standard input of
   `ssh` to a file under `/run` that only root reads, and the same command removes
   the file. No argument and no environment variable of the machine holds it.
+- **The agent asks the person for no value.** A card names the three names and the
+  place that stores them. Never ask the person to type a client id, a secret or a
+  tag in the panel, and never take one from the conversation.
 
 ## 3. The safe API calls on the computer of the person
 
@@ -70,39 +136,56 @@ in `dst` (doc).
 builtin of `bash`, `zsh`, `dash` and of `busybox sh`, so the value is in no
 argument list of its own: `command -V printf` answers `printf is a shell builtin`.
 
-One token, which lives one hour (doc):
+One token, which lives one hour (doc). The answer gives the token and the
+scopes of the client, so keep it once in a variable of this shell:
 
 ```sh
-TS_TOKEN=$(printf '%s' "$TS_HOME_CLIENT_SECRET" | curl --silent --show-error --fail \
+TS_ANSWER=$(printf '%s' "$TS_HOME_CLIENT_SECRET" | curl --silent --show-error --fail \
   --data-urlencode "client_id=$TS_HOME_CLIENT_ID" \
   --data-urlencode client_secret@- \
-  https://api.tailscale.com/api/v2/oauth/token | jq -r '.access_token')
+  https://api.tailscale.com/api/v2/oauth/token)
+TS_TOKEN=$(printf '%s' "$TS_ANSWER" | jq -r '.access_token')
+TS_SCOPE=$(printf '%s' "$TS_ANSWER" | jq -r '.scope')
+unset TS_ANSWER
 ```
 
 The endpoint takes the client credentials grant and answers `access_token` and
 `expires_in` 3600 (doc). `--data-urlencode name@-` reads the value from standard
 input, and `curl` encodes it (doc).
 
+`TS_SCOPE` is the scope of the client, and the key follows it. A client of
+`auth_keys` only answers `auth_keys`; a client with a devices scope names that
+scope in the answer (doc). The answer of the narrow client is proven live. Choose
+the body of the key by that value, and never widen the scope of the client.
+
 One auth key for this machine (doc):
 
 ```sh
 TS_KEY=$(printf 'Authorization: Bearer %s\n' "$TS_TOKEN" | curl --silent --show-error --fail \
   --header @- --request POST \
-  --data '{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":false,"preauthorized":true,"tags":["tag:horizon"]}}},"expirySeconds":600,"description":"horizon build-1"}' \
+  --data '{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":true,"preauthorized":true,"tags":["tag:horizon"]}}},"expirySeconds":600,"description":"horizon build-1"}' \
   https://api.tailscale.com/api/v2/tailnet/-/keys | jq -r '.key')
 ```
+
+That body is the one of a narrow client: `ephemeral` is `true`, so the node
+leaves the network by itself after the machine stops (doc), and the person
+removes nothing in the console.
+
+The wide client takes the same call with `"ephemeral":false` in place of
+`"ephemeral":true`. Section 10 then removes the device with the two calls below.
 
 `-H @-` reads the header lines from standard input (doc). The body holds the tag,
 the expiry and the machine name, and no secret. `-` is the tailnet of the token
 (doc). The answer holds the key in `.key` only at creation (doc), so no other
-program may print that answer. `jq` is required for these three calls: prove `command -v jq` before the first.
+program may print that answer. `jq` is required for these calls: prove `command -v jq` before the first.
 
 The one body `UNVERIFIED`: the fields `capabilities.devices.create.reusable`,
 `ephemeral`, `preauthorized` and `tags` are the documented ones, and the shortest
 accepted `expirySeconds` is not stated. 600 is ten minutes, and the key is spent
 by one login.
 
-The device of one hostname, and its removal (doc):
+The device of one hostname, and its removal (doc). Only a client with a devices
+scope reaches these two calls; a narrow client answers 403:
 
 ```sh
 TS_ID=$(printf 'Authorization: Bearer %s\n' "$TS_TOKEN" | curl --silent --show-error --fail --header @- \
@@ -130,16 +213,25 @@ calls.
    word from the person, show them in a `list` with `selection: single` and wait
    for a click.
 
-2. Read whether this computer is a member of a network:
+2. Read the state of this computer, and change nothing there:
 
    ```sh
-   tailscale status --json | jq -r '.BackendState'
+   tailscale status --json | jq -r '.BackendState, .CurrentTailnet.MagicDNSSuffix'
    ```
 
-   Result: `Running`. `Stopped`, `NeedsLogin` or `NoState` means that this
-   computer has no network, and then the machine would be unreachable after the
-   port closes: stop at [Refusals](#refusals). A client of macOS that the app
-   owns answers only with `TAILSCALE_BE_CLI=1` in its environment (doc).
+   Result: `Running`, then the suffix of the network of this computer, for
+example `tail1234.ts.net`, or an empty line when MagicDNS is off. `Stopped`,
+`NeedsLogin` or `NoState` means that this computer is in no network, and its
+second line is empty.
+
+   **Never run a command that changes the Tailscale state of this computer:**
+   `up`, `down`, `login`, `logout`, `switch` or `set`. This computer can be in a
+   network of the person's work, and such a command moves it out of that
+   network. The comparison of the suffix with the suffix of the machine in
+   section 7 says whether this computer is in the same network.
+
+   A client of macOS that the app owns answers only with `TAILSCALE_BE_CLI=1` in
+   its environment (doc).
 
 ## 5. Install the client on the machine
 
@@ -215,6 +307,26 @@ ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
 
 Result: one line, a `100.x.y.z` address, and nothing else.
 
+Then read the suffix of the network of the machine, and its own name:
+
+```sh
+ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+    -o BatchMode=yes -o ConnectTimeout=10 root@<address> \
+    'tailscale status --json | jq -r ".MagicDNSSuffix, .Self.DNSName"'
+```
+
+Result: `<suffix>`, for example `tail1234.ts.net`, then
+`build-1.<suffix>.ts.net.` (doc for the two fields).
+
+The suffix of this computer is the second line of section 4.2:
+
+- Two equal suffixes, and `Running` here: this computer is in the network of the
+  machine. Prove the login of section 9, and then close port 22.
+- A different suffix, an empty line, or `Stopped`: this computer is in no network
+  or in a network of the person's work. Keep the public SSH rule with the machine
+  key, write the line of section 8.4 on the card, and close nothing.
+
 On the computer of the person, which is the place that must reach the machine:
 
 ```sh
@@ -246,20 +358,118 @@ provider:   "Hetzner, hel1"
 ```
 
 The route is `100.x.y.z` when MagicDNS is off. Then draw the card with three rows
-more than step 6 of the skill draws:
-
-```json
-{"type": "kv", "rows": [
-  {"label": "Network", "value": "home", "mono": true},
-  {"label": "Network name", "value": "build-1.tail1234.ts.net", "mono": true},
-  {"label": "Internet SSH", "value": "open"}]}
-```
+more than step 6 of the skill draws, as section 8.4 shows.
 
 `Internet SSH` reads `open` while the provider lets the internet reach port 22,
 and `closed` after the next step. The `Address` row keeps the public address of
 the rent, so the person sees both routes. A click on the row in the Machines
 section of the sidebar then opens the tmux session over the network, as step 8 of
 the skill says.
+
+The card of a machine that joined a network holds the four documents below: the
+card that says what the person stores, the join card, the steps card of the
+join, and the machine card of a computer that is not in the network.
+
+### 8.1 The card that says what the person stores
+
+Draw this card when the panel holds no stored network, or when one of the three
+names of a network is missing. It names the three names and the place of the
+OAuth client, and it asks for no value.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Store a network in Settings",
+   "subtitle": "A machine joins a network that this computer stores.",
+   "badge": {"text": "Needs you", "tone": "warn"}},
+  {"type": "kv", "rows": [
+    {"label": "Where", "value": "Settings, Secrets"},
+    {"label": "TS_<NET>_CLIENT_ID", "value": "The client id of the OAuth client", "mono": true},
+    {"label": "TS_<NET>_CLIENT_SECRET", "value": "The client secret of the same client", "mono": true},
+    {"label": "TS_<NET>_TAG", "value": "The tag of the machine, for example tag:horizon", "mono": true}]},
+  {"type": "text", "text": "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add, then press Join a network again."},
+  {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}
+```
+
+`<NET>` is the name of the person: `[A-Z0-9]{1,16}`. Say in one `text` line
+which of the three names is missing. Never ask for a client id, a secret or a
+tag in the panel, and never take one from the conversation.
+
+### 8.2 The join card
+
+The button `Join a network` of a machine card draws this card. The pills are the
+stored networks of section 4.1, and the row `network.none` is first.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Join build-1 to a network",
+   "subtitle": "One machine joins one network.", "badge": {"text": "Network"}},
+  {"type": "caption", "text": "Network"},
+  {"type": "list", "selection": "single", "layout": "pills", "rows": [
+    {"id": "network.none", "title": "None", "selected": true},
+    {"id": "network.home", "title": "home"},
+    {"id": "network.factory", "title": "factory"}]},
+  {"type": "text", "text": "The machine takes the tag of the network and its own name. The node leaves the network by itself when this machine is deleted."},
+  {"type": "buttons", "items": [
+    {"id": "join", "label": "Join home", "tone": "primary"},
+    {"id": "cancel", "label": "Cancel"}]}]}
+```
+
+- The label of the button names the selected network: `Join home`.
+- The row `network.none` and `Cancel` join nothing.
+- A machine that is already in a network gets the card of its state and no
+second join: the heading names the network, the card says that one machine joins
+one network, and it holds `Close` only.
+
+### 8.3 The steps card of the join
+
+```json
+{"components": [
+  {"type": "heading", "text": "Joining the network home",
+   "subtitle": "build-1, a machine of Hetzner.",
+   "badge": {"text": "Working", "tone": "info"}},
+  {"type": "progress", "label": "Join the network", "percent": 40, "detail": "2 of 5"},
+  {"type": "steps", "steps": [
+    {"label": "Read the state of this computer", "state": "done", "at": "1 s"},
+    {"label": "Make one auth key", "state": "done", "at": "2 s"},
+    {"label": "Install the client on the machine", "state": "now", "at": "now"},
+    {"label": "Join the network home"},
+    {"label": "Prove the login over the network"}]},
+  {"type": "text", "text": "The key arrives on standard input and leaves no file on the machine. Port 22 stays open until the proof answers."},
+  {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}]}
+```
+
+The steps card of a machine that a recipe prepares holds the step
+`Join the network <NET>` in its own list, as `references/repository-machine.md`
+says.
+
+### 8.4 The machine card, and a computer that is not in the network
+
+The machine card of step 6 keeps its rows and adds the three rows of this page.
+The line below the rows is the one of a computer that is not in the network of
+the machine.
+
+```json
+{"components": [
+  {"type": "heading", "text": "build-1", "subtitle": "Hetzner, hel1",
+   "badge": {"text": "Running", "tone": "ok"}},
+  {"type": "kv", "rows": [
+    {"label": "Network", "value": "home", "mono": true},
+    {"label": "Network name", "value": "build-1.tail1234.ts.net", "mono": true},
+    {"label": "Internet SSH", "value": "open"},
+    {"label": "Address", "value": "203.0.113.10", "mono": true}]},
+  {"type": "text", "text": "This computer is not in the network home; the machine is reached over its public address."},
+  {"type": "buttons", "items": [
+    {"id": "connect", "label": "Connect", "tone": "primary"},
+    {"id": "join_network", "label": "Join a network"},
+    {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
+```
+
+When the two suffixes of section 7 are equal, draw the rows `Network` and
+`Network name` with `Internet SSH: open` until section 9 closes the port, and draw
+no line about this computer. A client of `auth_keys` only leaves the node of an
+ephemeral key out of the console after the machine goes, and the card says so.
+A card of a machine with a non-ephemeral key says that the person removes the
+node in the console.
 
 ## 9. Prove the login over the network, then close port 22
 
@@ -316,18 +526,23 @@ The provider delete of step 10 of the skill runs last. Before it:
    The command expires the login of the machine (doc). A machine that does not
    answer takes no logout; go on.
 
-2. Remove the device through the API, always, with the two calls of section 3.
-   A device that the API removes is gone from the network at once, so the network
-   keeps no dead device, no address and no row in the machines list. The delete
-   answers 200 with an empty body.
+2. Remove the device through the API with a wide client: the two calls of
+   section 3. A device that the API removes is gone from the network at once, so
+   the network keeps no dead device, no address and no row in the machines list.
+   The delete answers 200 with an empty body. A narrow client answers 403 here,
+   and that is not a fault: the node of an ephemeral key leaves the network by
+   itself after the machine stops (doc).
 
 3. Then delete the machine, its record and its key as step 10 of the skill says.
+   The card says which node stays in the console, if any.
 
 ## 11. Find it again
 
-A new session does not remember the network of a machine. Read the names of the
-networks as section 4 says, and ask each of them for the device of that hostname
-and its own tag:
+A new session does not remember the network of a machine. A wide client finds it
+through the device list; a narrow client asks the machine itself.
+
+With a wide client, read the names of the networks as section 4 says, and ask
+each of them for the device of that hostname and its own tag:
 
 ```sh
 GET https://api.tailscale.com/api/v2/tailnet/-/devices?hostname=<machine name>&tags=<that network tag>
@@ -338,9 +553,16 @@ holds `nodeId`, `hostname`, `tags` and `name`, the MagicDNS name. The descriptio
 `horizon <machine name>` is on the key of the join, and a device filter does not
 match on it.
 
+With a narrow client, the machine answers for its own device. Prove the login of
+section 7 with the machine key and read `tailscale status --json` on the machine:
+`.Self.DNSName` is the MagicDNS name and `.Self.Tags` holds the tag. Ask the
+person which network that name belongs to, because the panel holds no device
+list.
+
 A device that is left in the network costs nothing and holds the machine name, so
 a new machine of that name is the second device of that name. Remove the device
-of a deleted machine before a new join of the same name.
+of a deleted machine before a new join of the same name. With a narrow client the
+node of a machine that is gone leaves by itself (doc).
 
 ## 12. Use a machine of the network as a relay
 
@@ -549,11 +771,14 @@ says what the link does now.
 
 Write each of these as a `text` line on the card, and do nothing else.
 
-- **This computer of the person is not a member of the network.** Section 4 shows
-  `Stopped` or `NeedsLogin`, or the machine is not in `tailscale status` after the
-  join. Then the machine is unreachable when port 22 closes, so the port stays
-  open. Say why, and offer to join this computer to the network or to keep the
-  public address.
+- **This computer of the person is not in the network of the machine.** The two
+  suffixes of section 7 differ, or this computer answers `Stopped` or `NeedsLogin`.
+  Then the machine is unreachable through the network, so port 22 stays open and the
+  machine is reached over its public address. Write the line of section 8.4, and
+  offer no close. Do not join this computer to a network: section 4 forbids it.
+- **The machine is already in a network.** One machine joins one network. Say which
+  network it joined, and offer no second join. A second network reaches the machine
+  through the sharing function of section 1.2, and the person does that.
 - **The tag is not owned by the client.** The key call answers 400 or 403
   (`UNVERIFIED`: this slice made no such call). Quote the code and the tag only,
   never the body in full, and never a header. Then the person adds the tag to
@@ -564,6 +789,9 @@ Write each of these as a `text` line on the card, and do nothing else.
   offer to create it with a value that the agent does not hold.
 - **A machine of the same name is already a device.** Remove that device first,
   as section 11 says, or the new machine is the second device of the name.
+- **The client of `auth_keys` only answers 403 on a device call.** That is the
+  scope of the client and no fault. Read the device on the machine, as section 11
+  says, and remove nothing.
 
 ## 15. What can go wrong
 
@@ -575,7 +803,9 @@ Write each of these as a `text` line on the card, and do nothing else.
 | `tailscale ip -4` answers nothing | The join did not finish. Read `tailscale status` on the machine, and do not close port 22. |
 | The name of MagicDNS does not resolve here | MagicDNS is off, or this computer has `--accept-dns=false`. Use the `100.x` address in the record. |
 | The device list holds two rows of one name | A machine of that name joined twice, or an old device stayed. Remove the row that does not answer. |
-| `403 Forbidden` on the devices call | The client lacks `devices:core`, or its token is older than one hour. Make a token again. |
+| `403 Forbidden` on the devices call | A narrow client, or its token is older than one hour. With a narrow client the scope is the reason and no fault: read the device on the machine, as section 11 says. |
+| The card says that this computer is not in the network | The two suffixes of section 7 differ. Port 22 stays open and the public address is the route. That is the normal state when the computer is in a network of the person's work. |
+| The node is still in the console after the delete | The key was not ephemeral, or the machine did not answer the logout. The card says which. The person removes the node in the console. |
 | The exit node stays `false` | The home computer did not advertise itself, or the network did not approve it. Both steps are the person's. |
 | The machine answers `100.x` but no internet | The exit node went away, or its forwarding is off. Tell the person, and offer `Stop using exit`. |
 | A second `DELETE` answers no 200 | The device is already gone. Go on with the delete of the machine. |

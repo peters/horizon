@@ -10,7 +10,7 @@ use horizon_browser_control::block::{BlockDocument, Component, parse_document};
 /// The card documents of the bundled skills, from the copy that the build
 /// embeds. The two bundled copies of each skill hold the same bytes, and the
 /// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 7] = [
+const SKILLS: [(&str, &str); 9] = [
     (
         "horizon-setup",
         include_str!(concat!(
@@ -37,6 +37,20 @@ const SKILLS: [(&str, &str); 7] = [
         include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-machines/SKILL.md"
+        )),
+    ),
+    (
+        "horizon-machines/repository-machine",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/repository-machine.md"
+        )),
+    ),
+    (
+        "horizon-machines/tailscale",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/tailscale.md"
         )),
     ),
     (
@@ -159,5 +173,187 @@ fn the_first_card_of_set_up_offers_the_whole_workshop_as_a_row() {
     assert!(
         offers,
         "the first card of Set up lists the goal workshop as a row, because the start page has no tile for it"
+    );
+}
+
+/// The heading of one card, when it has one.
+fn heading_of(document: &BlockDocument) -> Option<&str> {
+    document.components.iter().find_map(|component| match component {
+        Component::Heading { text, .. } => Some(text.as_str()),
+        _ => None,
+    })
+}
+
+/// The ids of the rows of every list of one card, with the selected row first.
+fn rows_of(document: &BlockDocument) -> Vec<(String, bool)> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::List { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .flatten()
+        .map(|row| (row.id.clone(), row.selected))
+        .collect()
+}
+
+/// The label and the value of each key and value row of one card.
+fn kv_of(document: &BlockDocument) -> Vec<(&str, &str)> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Kv { rows } => Some(rows),
+            _ => None,
+        })
+        .flatten()
+        .map(|row| (row.label.as_str(), row.value.as_str()))
+        .collect()
+}
+
+/// The labels of the steps of one card.
+fn steps_of(document: &BlockDocument) -> Vec<&str> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Steps { steps } => Some(steps),
+            _ => None,
+        })
+        .flatten()
+        .map(|step| step.label.as_str())
+        .collect()
+}
+
+/// The body text of every `text` component of one card.
+fn texts_of(document: &BlockDocument) -> Vec<&str> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The id of every button of one card.
+fn buttons_of(document: &BlockDocument) -> Vec<&str> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Buttons { items } => Some(items),
+            _ => None,
+        })
+        .flatten()
+        .map(|button| button.id.as_str())
+        .collect()
+}
+
+/// The card of the skills that holds this text, named for a message.
+fn card_with_text<'a>(cards: &'a [(String, BlockDocument)], wanted: &str) -> (&'a str, &'a BlockDocument) {
+    let (name, document) = cards
+        .iter()
+        .find(|(_, document)| texts_of(document).contains(&wanted))
+        .unwrap_or_else(|| panic!("no card of the skills says {wanted:?}"));
+    (name.as_str(), document)
+}
+
+/// A machine joins one stored network, and the person can store more than one.
+/// The card of the join offers `None` first and then the names of the panel, the
+/// card that the person needs first names the three secrets and asks for no value,
+/// the steps of the join name the network, and the card of a machine that joined
+/// keeps the rows of its network and the line of a computer that is not in it.
+#[test]
+fn the_cards_of_a_network_offer_the_stored_networks_and_name_the_network_of_a_machine() {
+    let cards = skill_cards();
+
+    // The join card: `None` first and selected, then the stored networks by name.
+    let (name, join) = card_with_text(
+        &cards,
+        "The machine takes the tag of the network and its own name. The node leaves the network by itself when this machine is deleted.",
+    );
+    assert_eq!(
+        heading_of(join),
+        Some("Join build-1 to a network"),
+        "{name}: the join card"
+    );
+    assert_eq!(
+        rows_of(join),
+        vec![
+            ("network.none".to_string(), true),
+            ("network.home".to_string(), false),
+            ("network.factory".to_string(), false),
+        ],
+        "{name}: the join card offers None first and then the stored networks"
+    );
+    assert!(
+        buttons_of(join).contains(&"join"),
+        "{name}: the join card holds the press"
+    );
+
+    // The card that the person needs when no network is stored: the three names and
+    // the place of the OAuth client, with no field for a value.
+    let (name, store) = card_with_text(
+        &cards,
+        "Make one OAuth client in the Tailscale admin console, at Trust credentials, OAuth. Add the three names in Settings, Secrets, with Add, then press Join a network again.",
+    );
+    let rows = kv_of(store);
+    for secret in ["TS_<NET>_CLIENT_ID", "TS_<NET>_CLIENT_SECRET", "TS_<NET>_TAG"] {
+        assert!(
+            rows.iter().any(|(label, _)| *label == secret),
+            "{name}: the store card names {secret}"
+        );
+    }
+    assert!(
+        rows.iter().any(|(_, value)| *value == "Settings, Secrets"),
+        "{name}: the store card says where the names go"
+    );
+    assert_eq!(
+        buttons_of(store),
+        vec!["close"],
+        "{name}: the store card asks for no value"
+    );
+
+    // The steps of a join name the network, after the key and before the proof.
+    let (name, steps) = card_with_text(
+        &cards,
+        "The key arrives on standard input and leaves no file on the machine. Port 22 stays open until the proof answers.",
+    );
+    let labels = steps_of(steps);
+    assert!(
+        labels.contains(&"Join the network home"),
+        "{name}: the steps card of a join names the network: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"Install the client on the machine") && labels.contains(&"Prove the login over the network"),
+        "{name}: the join comes after the client and before the proof: {labels:?}"
+    );
+
+    // The machine of a computer that is not in the network: the rows of the
+    // network, and the line that says which route reaches the machine.
+    let (name, machine) = card_with_text(
+        &cards,
+        "This computer is not in the network home; the machine is reached over its public address.",
+    );
+    let rows = kv_of(machine);
+    for row in ["Network", "Network name", "Internet SSH"] {
+        assert!(
+            rows.iter().any(|(label, _)| *label == row),
+            "{name}: the card of a machine of a network holds the row {row}"
+        );
+    }
+
+    // The ready card of a machine that a recipe prepared names the network too.
+    let (name, ready) = card_with_text(&cards, "cargo test --workspace: 412 tests pass, 0 failed");
+    assert!(
+        kv_of(ready).iter().any(|(label, _)| *label == "Network"),
+        "{name}: the ready card holds the row Network"
+    );
+    assert!(
+        steps_of(ready).iter().any(|step| step.starts_with("Join the network")),
+        "{name}: the steps card of a recipe holds the join as its own step"
     );
 }
