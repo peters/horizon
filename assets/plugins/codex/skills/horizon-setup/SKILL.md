@@ -185,6 +185,16 @@ type of this place that holds what it needs:
   cores: a dedicated core, an ARM type or a type with a GPU costs more for the
   same work. Name an ARM type only when the machine is for a person who asks for
   one.
+- Read the types, their cores, their memory and their prices from the provider
+  in this run, at the place that the person chose. The three rows are the
+  cheapest types that hold their pair at that place and at that moment, so a
+  second run of the same card at the same moment gives the same three rows. Do
+  not keep a size from an earlier card, from a document or from the name of a
+  type.
+- When two types cost the same, take the one with more vCPU. When they also
+  have the same vCPU, take the one with more memory. When they also have the
+  same memory, take the type whose name sorts first, so the answer of two runs
+  is the same.
 - The `subtitle` of a row names the type and its true cores and memory, as the
   provider answered them, for example `cpx21, 3 vCPU, 4 GB. Agents and light
   builds.`. The row says what the place offers, never what the name Small

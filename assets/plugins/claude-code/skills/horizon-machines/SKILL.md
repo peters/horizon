@@ -167,6 +167,14 @@ at least 4 vCPU and 8 GB, and Large at least 8 vCPU and 16 GB. A size that the
 place does not offer is a row with `disabled: true` that names the reason, and it
 is never the selected row.
 
+Read the types, their cores, their memory and their prices from the provider in
+this run, at the place that the person chose. The three sizes are the cheapest
+types of that provider that hold their pair at that place and at that moment, so
+two runs of the same card at the same moment give the same three rows: never
+keep a size from an earlier card, a document or the name of a type. When two
+types cost the same, take the one with more vCPU, then the one with more memory,
+and then the type whose name sorts first.
+
 ### 4. Make the key and rent
 
 Call `machine_key` with the name before you rent. The answer is `{name,
