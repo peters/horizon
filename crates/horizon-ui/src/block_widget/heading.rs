@@ -60,25 +60,36 @@ pub(super) struct Parts<'a> {
 
 /// Draw the heading of component `index` and return the row it took.
 pub(super) fn show(ui: &mut Ui, index: usize, parts: Parts<'_>, agent_present: bool) -> Rect {
-    show_row(ui, index, parts, HEADING_FONT, 0.0, agent_present)
+    show_row(ui, index, parts, HEADING_FONT, 0.0, 0.0, agent_present)
 }
 
 /// Draw the heading of a wide card that a progress bar stands beside, at the
-/// larger size of that row and with the room of the bar kept free at the right.
-pub(super) fn show_wide(ui: &mut Ui, index: usize, parts: Parts<'_>, agent_present: bool) -> Rect {
+/// larger size of that row, with the room of the bar kept free at the right, and
+/// in a row at least `least_height` tall.
+pub(super) fn show_wide(ui: &mut Ui, index: usize, parts: Parts<'_>, agent_present: bool, least_height: f32) -> Rect {
     show_row(
         ui,
         index,
         parts,
         WIDE_HEADING_FONT,
         WIDE_PROGRESS_WIDTH + WIDE_PROGRESS_GAP,
+        least_height,
         agent_present,
     )
 }
 
 /// Draw a heading at `font_size`, keeping `reserve` points free at the right of
-/// the row for the part that stands beside it.
-fn show_row(ui: &mut Ui, index: usize, parts: Parts<'_>, font_size: f32, reserve: f32, agent_present: bool) -> Rect {
+/// the row for the part that stands beside it, in a row at least `least_height`
+/// tall.
+fn show_row(
+    ui: &mut Ui,
+    index: usize,
+    parts: Parts<'_>,
+    font_size: f32,
+    reserve: f32,
+    least_height: f32,
+    agent_present: bool,
+) -> Rect {
     let Parts { text, subtitle, badge } = parts;
     let width = ui.available_width();
     let room = (width - reserve).max(0.0);
@@ -125,6 +136,9 @@ fn show_row(ui: &mut Ui, index: usize, parts: Parts<'_>, font_size: f32, reserve
             BadgeRow::OwnRow => height + HEADING_BADGE_ROW_GAP + BADGE_HEIGHT,
         };
     }
+    // The part that stands beside the heading may be taller than the heading,
+    // and the row takes the height of the taller of the two.
+    let height = height.max(least_height);
 
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));

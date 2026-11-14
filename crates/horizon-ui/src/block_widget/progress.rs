@@ -69,24 +69,14 @@ pub(super) fn paint(ui: &Ui, index: usize, rect: Rect, label: &str, percent: u8,
     let response = ui.interact(rect, ui.make_persistent_id(("block_progress", index)), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, label));
 
-    let (bar_top, detail_top) = match layout {
-        Layout::Inline => {
-            paint_inline(ui, index, rect, label, detail, &font);
-            let top = rect.min.y + progress_text_height();
-            (top, top)
-        }
+    let bar_top = rect.min.y + progress_text_height();
+    match layout {
+        Layout::Inline => paint_inline(ui, index, rect, label, detail, &font),
         Layout::Stacked => {
             let painter = ui.painter();
             let label_galley = text::line(painter, label, &font, theme::FG_SOFT(), width);
             painter.galley(rect.min, label_galley, theme::FG_SOFT());
-            let top = rect.min.y + progress_text_height();
-            (top, top + PROGRESS_BAR_HEIGHT + PROGRESS_DETAIL_GAP)
         }
-    };
-    if layout == Layout::Stacked
-        && let Some(detail) = detail
-    {
-        paint_detail(ui, index, rect, detail, &font, detail_top);
     }
 
     let painter = ui.painter();
@@ -100,6 +90,13 @@ pub(super) fn paint(ui: &Ui, index: usize, rect: Rect, label: &str, percent: u8,
     if filled > 0.0 {
         let fill = Rect::from_min_size(track.min, Vec2::new(track.width() * filled, PROGRESS_BAR_HEIGHT));
         painter.rect_filled(fill, radius, theme::ACCENT());
+    }
+    // The line of the detail stands under the bar by the gap of the metrics, and
+    // it is painted after the bar, so that no part of its words is covered.
+    if layout == Layout::Stacked
+        && let Some(detail) = detail
+    {
+        paint_detail(ui, index, rect, detail, &font, track.max.y + PROGRESS_DETAIL_GAP);
     }
 }
 

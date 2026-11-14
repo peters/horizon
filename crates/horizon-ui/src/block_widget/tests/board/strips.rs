@@ -1,10 +1,55 @@
 //! The parts beside the board: the callout, the list of a document, the log, the
 //! progress bar of a heading row and the buttons of a wide card.
 
+use egui::accesskit;
 use horizon_browser_control::block::{ListLayout, Selection};
 
+use super::super::bounds_of;
 use super::*;
-use crate::block_widget::metrics::{BUTTON_PAD, CALLOUT_PAD_Y, LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT};
+use crate::block_widget::metrics::{
+    BUTTON_PAD, CALLOUT_PAD_Y, LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_DETAIL_GAP, PROGRESS_LABEL_FONT,
+    PROGRESS_LABEL_GAP,
+};
+
+/// The row of the heading, the bar beside it and the line of the detail, as one
+/// pass of a wide card drew them.
+fn heading_row_of(subtitle: Option<&str>) -> (Rect, Rect, Rect) {
+    let document = BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![
+            Component::Heading {
+                text: "Fix the login redirect".to_owned(),
+                subtitle: subtitle.map(str::to_owned),
+                badge: Some(Badge {
+                    text: "Running".to_owned(),
+                    tone: Tone::Ok,
+                }),
+            },
+            Component::Progress {
+                label: "3 of 8 done · 1 needs you".to_owned(),
+                percent: 38,
+                detail: Some("27 min so far · about 30 left".to_owned()),
+            },
+        ],
+    };
+    let frames = CardFrames::new();
+    let (shapes, nodes) = frames.pass_in(1400.0, &document, &mut CardRuntime::default(), Owner::Listening);
+    let row = node_rect(&nodes, "Fix the login redirect").expect("the row of the heading is a node");
+    let bar = node_rect(&nodes, "3 of 8 done · 1 needs you").expect("the bar is a node");
+    let detail = painted(&shapes, "27 min so far · about 30 left").expect("the detail of the bar is drawn");
+    (row, bar, detail)
+}
+
+/// The screen rectangle of the node that the accessibility tree holds as
+/// `label`.
+#[allow(clippy::cast_possible_truncation)] // A coordinate of this window fits an f32 exactly.
+fn node_rect(nodes: &[(accesskit::NodeId, accesskit::Node)], label: &str) -> Option<Rect> {
+    let bounds = bounds_of(nodes, label)?;
+    Some(Rect::from_min_max(
+        Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+        Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+    ))
+}
 
 #[test]
 fn the_callout_is_one_row_in_the_wide_form_and_a_stack_in_the_narrow_one() {
@@ -278,6 +323,28 @@ fn the_detail_of_a_wide_bar_takes_its_own_line_under_the_bar() {
         (detail.min.y - label.min.y).abs() < 1.5 && detail.min.x > label.min.x,
         "the narrow card keeps the label and the detail on one line: {label:?} {detail:?}"
     );
+}
+
+#[test]
+fn the_row_of_a_wide_heading_takes_the_height_of_the_bar_beside_it() {
+    for subtitle in [None, Some("Issue #1987 · example-org/shop · branch fix-login-redirect")] {
+        let (row, bar, detail) = heading_row_of(subtitle);
+        // The bar of the metrics: its label line, the gap above the track and the
+        // track itself.
+        let bar_bottom = bar.min.y + PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT;
+        assert!(
+            (detail.min.y - (bar_bottom + PROGRESS_DETAIL_GAP)).abs() < 0.6,
+            "the detail stands under the bar by the gap of the metrics: {detail:?} against a bar that ends at {bar_bottom}, subtitle {subtitle:?}"
+        );
+        assert!(
+            row.height() >= bar.height() - 0.6,
+            "the row takes the height of the taller of its two parts: {row:?} against {bar:?}, subtitle {subtitle:?}"
+        );
+        assert!(
+            row.contains_rect(detail),
+            "the row of the heading holds the whole line of the detail: {row:?} against {detail:?}, subtitle {subtitle:?}"
+        );
+    }
 }
 
 #[test]

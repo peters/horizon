@@ -213,18 +213,7 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
                     subtitle: subtitle.as_deref(),
                     badge: badge.as_ref(),
                 };
-                let rect = heading::show_wide(ui, index, parts, view.agent_present);
-                let centre = Pos2::new(rect.max.x - WIDE_PROGRESS_WIDTH * 0.5, rect.center().y);
-                let layout = progress::wide_layout(detail.as_deref());
-                progress::paint(
-                    ui,
-                    index + 1,
-                    Rect::from_center_size(centre, Vec2::new(WIDE_PROGRESS_WIDTH, progress::height(layout))),
-                    label,
-                    *percent,
-                    detail.as_deref(),
-                    layout,
-                );
+                show_heading_row(ui, index, parts, view.agent_present, label, *percent, detail.as_deref());
                 index += 2;
                 continue;
             }
@@ -232,6 +221,36 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
         }
         index += 1;
     }
+}
+
+/// Draw the row of a wide card that holds the heading of component `index` and
+/// the progress bar that follows it.
+///
+/// The bar takes the right end of the row, and the row takes the height of the
+/// taller of its two parts, so a bar that has a line of detail under it is not
+/// cut by the row of the heading.
+fn show_heading_row(
+    ui: &mut Ui,
+    index: usize,
+    parts: heading::Parts<'_>,
+    agent_present: bool,
+    label: &str,
+    percent: u8,
+    detail: Option<&str>,
+) {
+    let layout = progress::wide_layout(detail);
+    let height = progress::height(layout);
+    let rect = heading::show_wide(ui, index, parts, agent_present, height);
+    let centre = Pos2::new(rect.max.x - WIDE_PROGRESS_WIDTH * 0.5, rect.center().y);
+    progress::paint(
+        ui,
+        index + 1,
+        Rect::from_center_size(centre, Vec2::new(WIDE_PROGRESS_WIDTH, height)),
+        label,
+        percent,
+        detail,
+        layout,
+    );
 }
 
 fn show_component(
