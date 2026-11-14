@@ -13,6 +13,7 @@ use horizon_core::browser::manifest::device::{Outcome, VideoAction, VideoRecordi
 use horizon_vnc::Frame;
 
 use super::DeviceUiState;
+use super::panel_text;
 
 /// A VNC desktop is re-encoded as a whole frame, so the target is the rate a
 /// release build sustains at a 1600 × 900 desktop with the default compression
@@ -313,11 +314,17 @@ impl DeviceUiState {
             {
                 self.recording.stop();
             }
-            ui.label(if status.finalizing {
-                "Finishing recording…"
-            } else {
-                "Recording VNC desktop"
-            });
+            let state = panel_text::word(
+                ui,
+                if status.finalizing {
+                    "Finishing recording…"
+                } else {
+                    "Recording VNC desktop"
+                },
+                panel_text::SMALL,
+                panel_text::fg(),
+            );
+            ui.add(egui::Label::new(state));
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         } else {
             let can_record = interactive && self.has_current_desktop_frame();
@@ -331,11 +338,16 @@ impl DeviceUiState {
             }
             if let Some(status) = &status {
                 if status.capture.encoder_failed {
-                    ui.colored_label(egui::Color32::RED, "Recording failed");
+                    let failed = panel_text::word(ui, "Recording failed", panel_text::SMALL, egui::Color32::RED);
+                    ui.add(egui::Label::new(failed));
                 } else if let Some((text, color)) = capture_quality_label(status) {
-                    ui.colored_label(color, text).on_hover_text(recording_detail(status));
+                    let quality = panel_text::word(ui, text, panel_text::SMALL, color);
+                    ui.add(egui::Label::new(quality))
+                        .on_hover_text(recording_detail(status));
                 } else {
-                    ui.label(format!("{} frames recorded", status.capture.frames_encoded));
+                    let frames = format!("{} frames recorded", status.capture.frames_encoded);
+                    let frames = panel_text::word(ui, &frames, panel_text::SMALL, panel_text::fg());
+                    ui.add(egui::Label::new(frames));
                 }
                 if crate::icon_button::icon_button(ui, true, "Copy video path", crate::icon_button::paint_clipboard)
                     .on_hover_text(
@@ -348,7 +360,8 @@ impl DeviceUiState {
             }
         }
         if let Some(error) = &self.recording.error {
-            ui.colored_label(egui::Color32::RED, error);
+            let error = panel_text::wrapped(ui, error, panel_text::SMALL, egui::Color32::RED, ui.available_width());
+            ui.add(egui::Label::new(error));
         }
     }
 }

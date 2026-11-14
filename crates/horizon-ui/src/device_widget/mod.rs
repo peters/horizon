@@ -6,6 +6,7 @@ mod details;
 mod host;
 mod keys;
 mod observation;
+mod panel_text;
 mod picture;
 pub(super) mod recording;
 mod session;
@@ -309,7 +310,14 @@ impl DeviceUiState {
                 self.release_input();
             }
         } else {
-            ui.label("The device desktop appears here after connection.");
+            let waiting = panel_text::wrapped(
+                ui,
+                "The device desktop appears here after connection.",
+                panel_text::SMALL,
+                panel_text::fg(),
+                ui.available_width(),
+            );
+            ui.add(egui::Label::new(waiting));
         }
     }
 

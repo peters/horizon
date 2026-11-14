@@ -1,5 +1,7 @@
-use egui::Ui;
+use egui::{Label, Ui};
 use horizon_vnc::{Region, ViewOptions};
+
+use super::panel_text;
 
 #[derive(Default)]
 pub(super) struct Controls {
@@ -23,87 +25,148 @@ impl Controls {
                 self.error = None;
             }
         }
-        ui.collapsing("View controls", |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Maximum fps");
-                ui.add(egui::DragValue::new(&mut self.options.max_fps).range(1..=30));
-                ui.label("Image limits");
-                ui.add(
-                    egui::DragValue::new(&mut self.options.max_width)
-                        .range(1..=8192)
-                        .suffix(" px wide"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut self.options.max_height)
-                        .range(1..=8192)
-                        .suffix(" px high"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.one_to_one, false, "Fit");
-                ui.selectable_value(&mut self.one_to_one, true, "1:1")
-                    .on_hover_text("One rendered image pixel per UI point; image limits still apply.");
-                if (desktop.is_some() || self.options.viewport.is_some()) && ui.button("Whole desktop").clicked() {
-                    self.options.viewport = None;
-                    self.draft = None;
-                    self.error = None;
-                }
-                if let (Some([source_width, source_height]), Some([image_width, image_height])) = (desktop, rendered) {
-                    ui.label(format!(
-                        "Desktop {source_width}×{source_height} · Image {image_width}×{image_height}"
-                    ));
-                }
-            });
+        let heading = panel_text::heading(ui, "View controls");
+        ui.collapsing(heading, |ui| {
+            self.limits(ui);
+            let whole_desktop = self.presentation(ui, desktop, rendered);
+            if whole_desktop {
+                self.options.viewport = None;
+                self.draft = None;
+                self.error = None;
+            }
             if let Some(desktop) = desktop {
-                let draft = self.draft.get_or_insert(Region {
-                    x: 0,
-                    y: 0,
-                    width: desktop[0],
-                    height: desktop[1],
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Viewport");
-                    ui.add(
-                        egui::DragValue::new(&mut draft.x)
-                            .range(0..=desktop[0].saturating_sub(1))
-                            .prefix("x "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut draft.y)
-                            .range(0..=desktop[1].saturating_sub(1))
-                            .prefix("y "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut draft.width)
-                            .range(1..=desktop[0])
-                            .prefix("w "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut draft.height)
-                            .range(1..=desktop[1])
-                            .prefix("h "),
-                    );
-                    if ui.button("Apply viewport").clicked() {
-                        let options = ViewOptions {
-                            viewport: Some(*draft),
-                            ..self.options
-                        };
-                        match options.layout(desktop) {
-                            Ok(_) => {
-                                self.options = options;
-                                self.error = None;
-                            }
-                            Err(error) => self.error = Some(error.to_string()),
-                        }
-                    }
-                });
+                self.viewport(ui, desktop);
             }
-            if let Some(error) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            ui.weak("Image limits affect rendering; they do not change desktop resolution or VNC compression.");
+            self.notes(ui);
         });
         before != self.options
+    }
+
+    /// The rate and the size limits of the images that the host renders.
+    fn limits(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.add(Label::new(panel_text::word(
+                ui,
+                "Maximum fps",
+                panel_text::SMALL,
+                panel_text::fg(),
+            )));
+            ui.add(egui::DragValue::new(&mut self.options.max_fps).range(1..=30));
+            ui.add(Label::new(panel_text::word(
+                ui,
+                "Image limits",
+                panel_text::SMALL,
+                panel_text::fg(),
+            )));
+            ui.add(
+                egui::DragValue::new(&mut self.options.max_width)
+                    .range(1..=8192)
+                    .suffix(" px wide"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut self.options.max_height)
+                    .range(1..=8192)
+                    .suffix(" px high"),
+            );
+        });
+    }
+
+    /// The fit choice and the sizes of the desktop and of the image, as the
+    /// answer to whether the person asked for the whole desktop.
+    fn presentation(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
+        let mut whole_desktop = false;
+        ui.horizontal(|ui| {
+            let fit = panel_text::word(ui, "Fit", panel_text::SMALL, panel_text::fg());
+            ui.selectable_value(&mut self.one_to_one, false, fit);
+            let one_to_one = panel_text::word(ui, "1:1", panel_text::SMALL, panel_text::fg());
+            ui.selectable_value(&mut self.one_to_one, true, one_to_one)
+                .on_hover_text("One rendered image pixel per UI point; image limits still apply.");
+            let whole = panel_text::word(ui, "Whole desktop", panel_text::SMALL, panel_text::fg());
+            if (desktop.is_some() || self.options.viewport.is_some()) && ui.button(whole).clicked() {
+                whole_desktop = true;
+            }
+            if let (Some([source_width, source_height]), Some([image_width, image_height])) = (desktop, rendered) {
+                let limits = format!("Desktop {source_width}×{source_height} · Image {image_width}×{image_height}");
+                let limits = panel_text::word(ui, &limits, panel_text::SMALL, panel_text::fg());
+                ui.add(Label::new(limits));
+            }
+        });
+        whole_desktop
+    }
+
+    /// The crop of the desktop that the host renders, with the word that applies
+    /// it once the person is content with the four numbers.
+    fn viewport(&mut self, ui: &mut Ui, desktop: [usize; 2]) {
+        let draft = self.draft.get_or_insert(Region {
+            x: 0,
+            y: 0,
+            width: desktop[0],
+            height: desktop[1],
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.add(Label::new(panel_text::word(
+                ui,
+                "Viewport",
+                panel_text::SMALL,
+                panel_text::fg(),
+            )));
+            ui.add(
+                egui::DragValue::new(&mut draft.x)
+                    .range(0..=desktop[0].saturating_sub(1))
+                    .prefix("x "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut draft.y)
+                    .range(0..=desktop[1].saturating_sub(1))
+                    .prefix("y "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut draft.width)
+                    .range(1..=desktop[0])
+                    .prefix("w "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut draft.height)
+                    .range(1..=desktop[1])
+                    .prefix("h "),
+            );
+            let apply = panel_text::word(ui, "Apply viewport", panel_text::SMALL, panel_text::fg());
+            if ui.button(apply).clicked() {
+                let options = ViewOptions {
+                    viewport: Some(*draft),
+                    ..self.options
+                };
+                match options.layout(desktop) {
+                    Ok(_) => {
+                        self.options = options;
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error.to_string()),
+                }
+            }
+        });
+    }
+
+    /// What the controls cannot do, and the last reason they refused a crop.
+    fn notes(&self, ui: &mut Ui) {
+        if let Some(error) = &self.error {
+            let error = panel_text::wrapped(
+                ui,
+                error,
+                panel_text::SMALL,
+                ui.visuals().error_fg_color,
+                ui.available_width(),
+            );
+            ui.add(Label::new(error));
+        }
+        let note = panel_text::wrapped(
+            ui,
+            "Image limits affect rendering; they do not change desktop resolution or VNC compression.",
+            panel_text::SMALL,
+            panel_text::weak(ui),
+            ui.available_width(),
+        );
+        ui.add(Label::new(note));
     }
 }
 

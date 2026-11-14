@@ -6,22 +6,31 @@ use horizon_vnc::{ImageLayout, InputEvent, InputState, SCROLL_NOTCH_POINTS};
 
 use super::DeviceUiState;
 use super::keys::{self, button_bit, desktop_point};
+use super::panel_text;
 
 pub(super) const VIEW_ONLY_REASON: &str = "View only: the VNC server of this desktop ignores mouse and keyboard input";
 
 impl DeviceUiState {
     pub(super) fn interact_toggle(&mut self, ui: &mut Ui, input: DeviceInput) {
         ui.horizontal(|ui| {
+            let toggle = panel_text::word(ui, "Interact", panel_text::SMALL, panel_text::fg());
             if input == DeviceInput::ViewOnly {
-                ui.add_enabled_ui(false, |ui| ui.toggle_value(&mut false, "Interact"))
+                ui.add_enabled_ui(false, |ui| ui.toggle_value(&mut false, toggle))
                     .inner
                     .on_disabled_hover_text(VIEW_ONLY_REASON);
                 // Wrapped, so a narrow viewer does not grow to fit the reason.
-                ui.add(egui::Label::new(egui::RichText::new(VIEW_ONLY_REASON).weak()).wrap());
+                let reason = panel_text::wrapped(
+                    ui,
+                    VIEW_ONLY_REASON,
+                    panel_text::SMALL,
+                    panel_text::weak(ui),
+                    ui.available_width(),
+                );
+                ui.add(egui::Label::new(reason));
                 return;
             }
             let was = self.interact;
-            ui.toggle_value(&mut self.interact, "Interact").on_hover_text(
+            ui.toggle_value(&mut self.interact, toggle).on_hover_text(
                 "Send your mouse and keyboard to the desktop while the image has focus. \
                  Click the image to start; click outside it or turn this off to stop. \
                  Off by default, and never turned on by agents.",
@@ -30,11 +39,19 @@ impl DeviceUiState {
                 self.release_input();
             }
             if self.interact {
-                ui.weak(if self.captured {
+                let capture = if self.captured {
                     "Keyboard captured, Escape included; click outside the image to release it"
                 } else {
                     "Click the image to type into it"
-                });
+                };
+                let capture = panel_text::wrapped(
+                    ui,
+                    capture,
+                    panel_text::SMALL,
+                    panel_text::weak(ui),
+                    ui.available_width(),
+                );
+                ui.add(egui::Label::new(capture));
             }
         });
     }

@@ -36,8 +36,11 @@ impl Form {
 /// them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Answers {
-    /// One row: the ordinary buttons from the left, a destructive one at the
-    /// right edge of the room.
+    /// A wide card closes its row at the right edge, so every button of it keeps
+    /// the right edge.
+    RowClosedAtTheRight,
+    /// One row of a narrow card: the ordinary buttons from the left, a
+    /// destructive one at the right edge of the room.
     Row,
     /// One button per line, and every line starts at the left edge of the room.
     Stack,

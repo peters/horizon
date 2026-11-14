@@ -84,7 +84,8 @@ fn painted_colours(output: &egui::FullOutput, text: &str) -> Vec<Color32> {
 
 /// The weights of the approved card mockups reach the glyphs that the card
 /// paints: the heading is heavy, a caption is the heaviest, and the row title
-/// and the primary button label stand above the body text.#[test]
+/// and the primary button label stand above the body text.
+#[test]
 fn the_weights_of_the_mockups_reach_the_painted_card() {
     let frames = CardFrames::new();
     let mut card = CardRuntime::default();

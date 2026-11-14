@@ -1,10 +1,11 @@
 //! Machine identity and selectable connection facts, separate from image controls.
-use egui::{Align, Label, Layout, RichText, Stroke, Ui, vec2};
+use egui::{Align, Label, Layout, Stroke, Ui, vec2};
 use horizon_core::{
     DevicePanelState,
     browser::manifest::device::{DeviceServerDetails, NativeSessionMetadata},
 };
 
+use super::panel_text;
 use super::session::Status;
 use crate::theme;
 
@@ -44,7 +45,8 @@ impl NativeLabels {
 }
 
 pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServerDetails, connected: bool) {
-    ui.collapsing("Connection details", |ui| {
+    let heading = panel_text::heading(ui, "Connection details");
+    ui.collapsing(heading, |ui| {
         let height = (ui.available_height() * 0.6).clamp(96.0, 300.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, true])
@@ -78,12 +80,14 @@ pub(super) fn show(ui: &mut Ui, device: &DevicePanelState, server: &DeviceServer
 }
 
 fn section(ui: &mut Ui, title: &str) {
-    ui.label(RichText::new(title).size(13.0).strong().color(theme::FG()));
+    let title = panel_text::word(ui, title, panel_text::VALUE, theme::FG());
+    ui.add(Label::new(title));
     ui.add_space(5.0);
 }
 
-fn caption(ui: &mut Ui, text: &str) {
-    ui.add(Label::new(RichText::new(text).size(12.0).color(theme::FG_SOFT())).wrap());
+pub(super) fn caption(ui: &mut Ui, text: &str) {
+    let text = panel_text::wrapped(ui, text, panel_text::SMALL, theme::FG_SOFT(), ui.available_width());
+    ui.add(Label::new(text));
     ui.add_space(6.0);
 }
 
@@ -159,13 +163,11 @@ fn row(ui: &mut Ui, label: &str, value: &str) {
         ui.spacing_mut().item_spacing.x = 12.0;
         ui.allocate_ui_with_layout(vec2(86.0, 0.0), Layout::top_down(Align::Min), |ui| {
             ui.set_min_width(86.0);
-            ui.label(RichText::new(label).size(12.0).color(theme::FG_SOFT()));
+            let label = panel_text::word(ui, label, panel_text::SMALL, theme::FG_SOFT());
+            ui.add(Label::new(label));
         });
-        ui.add(
-            Label::new(RichText::new(value).size(13.0).monospace())
-                .wrap()
-                .selectable(true),
-        );
+        let value = panel_text::mono_wrapped(ui, value, panel_text::VALUE, panel_text::fg(), ui.available_width());
+        ui.add(Label::new(value).selectable(true));
     });
     ui.add_space(3.0);
 }
@@ -196,12 +198,6 @@ pub(super) fn header(
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         ui.add_space(8.0);
-        let endpoint = device.endpoint_label();
-        let transport = if device.ssh_tunnel.is_some() {
-            "VNC desktop over SSH"
-        } else {
-            "VNC desktop"
-        };
         let name = if server.native_session.is_some() {
             Some(native_labels.device.as_str())
         } else {
@@ -210,83 +206,10 @@ pub(super) fn header(
         // Stopping only means something while something runs or waits, and a
         // stopped viewer keeps the two words that bring it back.
         let can_stop = !matches!(status, Status::Stopped);
-        let buttons = if can_stop { 176.0 } else { 88.0 };
-        let requested = ui
-            .horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                if ui.available_width() >= 300.0 {
-                    desktop_icon(ui);
-                }
-                let width = (ui.available_width() - buttons - 12.0).max(24.0);
-                ui.allocate_ui_with_layout(vec2(width, 40.0), Layout::top_down(Align::Min), |ui| {
-                    ui.set_min_width(width);
-                    ui.add(Label::new(RichText::new(name.unwrap_or(&endpoint)).size(20.0).strong()).truncate())
-                        .on_hover_text(name.unwrap_or(&endpoint));
-                    ui.add(
-                        Label::new(
-                            RichText::new(if server.native_session.is_some() {
-                                &native_labels.lane
-                            } else if name.is_some() {
-                                &endpoint
-                            } else {
-                                transport
-                            })
-                            .size(12.0)
-                            .color(theme::FG_SOFT()),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(&endpoint);
-                });
-                ui.allocate_ui_with_layout(vec2(buttons, 40.0), Layout::right_to_left(Align::Center), |ui| {
-                    let mut action = HeaderAction::None;
-                    if can_stop
-                        && ui
-                            .add_enabled(interactive, egui::Button::new("Stop").min_size(vec2(72.0, 28.0)))
-                            .on_hover_text("End the connection and its automatic attempts")
-                            .clicked()
-                    {
-                        action = HeaderAction::Stop;
-                    }
-                    if ui
-                        .add_enabled(interactive, egui::Button::new("Reconnect").min_size(vec2(84.0, 28.0)))
-                        .clicked()
-                    {
-                        action = HeaderAction::Reconnect;
-                    }
-                    action
-                })
-                .inner
-            })
-            .inner;
-        if let Some(native) = &server.native_session {
-            ui.add(Label::new(&native_labels.app).wrap())
-                .on_hover_text(&native.build_sha256);
-            if !native_labels.progress.is_empty() {
-                ui.add(Label::new(&native_labels.progress).wrap());
-            }
-        }
+        let requested = header_row(ui, device, server, native_labels, name, can_stop, interactive);
+        native_captions(ui, server, native_labels);
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            connection_status(ui, status);
-            let mode = if interact {
-                "Interactive: your mouse and keyboard go to the desktop"
-            } else {
-                "Read-only"
-            };
-            ui.label(RichText::new(mode).size(12.0).color(theme::FG_SOFT()));
-            if name.is_some() {
-                let source = if server.native_session.is_some() {
-                    "Native host"
-                } else if device.display_name(None).is_some() {
-                    "Supplied name"
-                } else {
-                    "VNC name"
-                };
-                ui.label(RichText::new(source).size(12.0).color(theme::FG_SOFT()));
-            }
-        });
+        header_facts(ui, device, server, name, status, interact);
         status_message(ui, status);
         ui.add_space(8.0);
         requested
@@ -294,17 +217,143 @@ pub(super) fn header(
     .inner
 }
 
+/// The icon, the name of the desktop and its two buttons.
+fn header_row(
+    ui: &mut Ui,
+    device: &DevicePanelState,
+    server: &DeviceServerDetails,
+    native_labels: &NativeLabels,
+    name: Option<&str>,
+    can_stop: bool,
+    interactive: bool,
+) -> HeaderAction {
+    let endpoint = device.endpoint_label();
+    let transport = if device.ssh_tunnel.is_some() {
+        "VNC desktop over SSH"
+    } else {
+        "VNC desktop"
+    };
+    let buttons = if can_stop { 176.0 } else { 88.0 };
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        if ui.available_width() >= 300.0 {
+            desktop_icon(ui);
+        }
+        let width = (ui.available_width() - buttons - 12.0).max(24.0);
+        ui.allocate_ui_with_layout(vec2(width, 40.0), Layout::top_down(Align::Min), |ui| {
+            ui.set_min_width(width);
+            let title = panel_text::line(ui, name.unwrap_or(&endpoint), panel_text::NAME, panel_text::fg(), width);
+            ui.add(Label::new(title).truncate())
+                .on_hover_text(name.unwrap_or(&endpoint));
+            let subtitle = if server.native_session.is_some() {
+                &native_labels.lane
+            } else if name.is_some() {
+                &endpoint
+            } else {
+                transport
+            };
+            let subtitle = panel_text::line(ui, subtitle, panel_text::SMALL, theme::FG_SOFT(), width);
+            ui.add(Label::new(subtitle).truncate()).on_hover_text(&endpoint);
+        });
+        header_actions(ui, buttons, can_stop, interactive)
+    })
+    .inner
+}
+
+/// The two words that change the connection, at the right of the header row.
+fn header_actions(ui: &mut Ui, buttons: f32, can_stop: bool, interactive: bool) -> HeaderAction {
+    ui.allocate_ui_with_layout(vec2(buttons, 40.0), Layout::right_to_left(Align::Center), |ui| {
+        let mut action = HeaderAction::None;
+        let stop = panel_text::word(ui, "Stop", panel_text::SMALL, theme::FG());
+        if can_stop
+            && ui
+                .add_enabled(interactive, egui::Button::new(stop).min_size(vec2(72.0, 28.0)))
+                .on_hover_text("End the connection and its automatic attempts")
+                .clicked()
+        {
+            action = HeaderAction::Stop;
+        }
+        let reconnect = panel_text::word(ui, "Reconnect", panel_text::SMALL, theme::FG());
+        if ui
+            .add_enabled(interactive, egui::Button::new(reconnect).min_size(vec2(84.0, 28.0)))
+            .clicked()
+        {
+            action = HeaderAction::Reconnect;
+        }
+        action
+    })
+    .inner
+}
+
+/// The two lines that a native host reports, under the header row.
+fn native_captions(ui: &mut Ui, server: &DeviceServerDetails, native_labels: &NativeLabels) {
+    let Some(native) = &server.native_session else {
+        return;
+    };
+    let width = ui.available_width();
+    let font = panel_text::body_font(ui);
+    let app =
+        crate::zoom_text::wrapped_widget_text(ui.painter(), &native_labels.app, font.clone(), panel_text::fg(), width);
+    ui.add(Label::new(app)).on_hover_text(&native.build_sha256);
+    if !native_labels.progress.is_empty() {
+        let progress =
+            crate::zoom_text::wrapped_widget_text(ui.painter(), &native_labels.progress, font, panel_text::fg(), width);
+        ui.add(Label::new(progress));
+    }
+}
+
+/// The state of the connection, the input mode and the source of the name.
+fn header_facts(
+    ui: &mut Ui,
+    device: &DevicePanelState,
+    server: &DeviceServerDetails,
+    name: Option<&str>,
+    status: &super::session::Status,
+    interact: bool,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        connection_status(ui, status);
+        let mode = if interact {
+            "Interactive: your mouse and keyboard go to the desktop"
+        } else {
+            "Read-only"
+        };
+        let mode = panel_text::word(ui, mode, panel_text::SMALL, theme::FG_SOFT());
+        ui.add(Label::new(mode));
+        if name.is_some() {
+            let source = if server.native_session.is_some() {
+                "Native host"
+            } else if device.display_name(None).is_some() {
+                "Supplied name"
+            } else {
+                "VNC name"
+            };
+            let source = panel_text::word(ui, source, panel_text::SMALL, theme::FG_SOFT());
+            ui.add(Label::new(source));
+        }
+    });
+}
+
 /// What the state of the connection adds below its badge.
 fn status_message(ui: &mut Ui, status: &super::session::Status) {
     match status {
         Status::Disconnected { message, .. } => {
             ui.add_space(3.0);
-            ui.add(Label::new(RichText::new(message).size(12.0).color(theme::PALETTE_RED())).wrap());
+            let message = panel_text::wrapped(
+                ui,
+                message,
+                panel_text::SMALL,
+                theme::PALETTE_RED(),
+                ui.available_width(),
+            );
+            ui.add(Label::new(message));
         }
         Status::Reconnecting { message, .. } => {
             ui.add_space(3.0);
             caption(ui, "The link to the desktop is lost. Horizon tries again by itself.");
-            ui.add(Label::new(RichText::new(message).size(12.0).color(theme::FG_SOFT())).wrap());
+            let message = panel_text::wrapped(ui, message, panel_text::SMALL, theme::FG_SOFT(), ui.available_width());
+            ui.add(Label::new(message));
         }
         Status::Stopped => {
             ui.add_space(3.0);
@@ -334,7 +383,8 @@ fn connection_status(ui: &mut Ui, status: &super::session::Status) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let (rect, _) = ui.allocate_exact_size(vec2(8.0, 12.0), egui::Sense::hover());
         ui.painter().circle_filled(rect.center(), 3.0, color);
-        ui.label(RichText::new(label).size(12.0).color(color));
+        let label = panel_text::word(ui, &label, panel_text::SMALL, color);
+        ui.add(Label::new(label));
     });
 }
 

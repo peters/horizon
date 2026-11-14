@@ -13,7 +13,7 @@ use horizon_browser_control::block::{Button, Tone};
 use crate::theme;
 use crate::typeface::Weight;
 
-use super::form::{Answers, Form};
+use super::form::Answers;
 use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, RADIUS_CONTROL, count};
 use super::{CardView, text, tones};
 
@@ -30,7 +30,6 @@ pub(super) fn show(
     primary: Option<(usize, usize)>,
     view: &mut CardView<'_>,
     enabled: bool,
-    form: Form,
     answers: Answers,
 ) {
     if items.is_empty() {
@@ -49,7 +48,7 @@ pub(super) fn show(
         })
         .collect();
 
-    let lines = lines_of(items, &tones_and_widths, available, form, answers);
+    let lines = lines_of(items, &tones_and_widths, available, answers);
     let height = count(lines.len()) * BUTTON_HEIGHT + count(lines.len().saturating_sub(1)) * BUTTON_GAP;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(available, height), Sense::hover());
 
@@ -91,12 +90,11 @@ struct ButtonLine {
 /// keep the right edge, and move to a right-aligned line of their own when the
 /// last line has no room for them. A stack draws every button from the left edge
 /// of the room, so every line of it starts at the same edge.
-fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32, form: Form, answers: Answers) -> Vec<ButtonLine> {
-    // The wide form closes its row at the right edge, so every button of it is
-    // one that keeps the right edge.
+fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32, answers: Answers) -> Vec<ButtonLine> {
     let keeps_right_edge = |button: &Button| match answers {
+        Answers::RowClosedAtTheRight => true,
+        Answers::Row => button.tone == Tone::Danger,
         Answers::Stack => false,
-        Answers::Row => form.is_wide() || button.tone == Tone::Danger,
     };
     let mut lines = vec![ButtonLine {
         left: Vec::new(),

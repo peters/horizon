@@ -316,7 +316,18 @@ fn show_component(
             form,
         ),
         Component::Log { entries } => log::show(ui, index, entries, form),
-        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled, form, Answers::Row),
+        Component::Buttons { items } => buttons::show(
+            ui,
+            index,
+            items,
+            primary,
+            view,
+            enabled,
+            match form {
+                Form::Wide => Answers::RowClosedAtTheRight,
+                Form::Narrow => Answers::Row,
+            },
+        ),
         // A link opens a browser panel of Horizon itself, so it needs no agent:
         // only a host dialog over the card keeps it from taking a press.
         Component::Link { label, url } => {

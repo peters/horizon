@@ -55,7 +55,7 @@ fn painted_left(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<f32
                 }
             }
             _ => {}
-        };
+        }
     }
 
     let mut found = None;

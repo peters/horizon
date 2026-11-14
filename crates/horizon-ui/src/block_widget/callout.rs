@@ -131,5 +131,5 @@ pub(super) fn show(
     // The wide form keeps one row of answers; the narrow form gives every answer
     // a line of its own, and every line starts at the left edge of the question.
     let answers = if form.is_wide() { Answers::Row } else { Answers::Stack };
-    buttons::show(&mut child, component, items, primary, view, enabled, form, answers);
+    buttons::show(&mut child, component, items, primary, view, enabled, answers);
 }

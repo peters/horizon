@@ -431,6 +431,35 @@ pub(crate) fn widget_text(
     WidgetText::Galley(layout_job(painter, job))
 }
 
+/// `text` as the widget text of a label that wraps inside `width`.
+///
+/// The layout is the layout of zoom 1: the text breaks at the words that it
+/// breaks at on a canvas that is not zoomed, and only the glyphs are made at the
+/// size they have on the screen.
+pub(crate) fn wrapped_widget_text(
+    painter: &Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> WidgetText {
+    let job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: width.max(0.0),
+            ..TextWrapping::default()
+        },
+        ..LayoutJob::single_section(
+            text.to_owned(),
+            TextFormat {
+                font_id: font,
+                color,
+                ..TextFormat::default()
+            },
+        )
+    };
+    WidgetText::Galley(layout_job(painter, job))
+}
+
 /// One text run of the terminal: `text` at the screen size, drawn from `pos`.
 ///
 /// `font` is already the size of the screen, from [`ZoomText::font`]: the
@@ -464,6 +493,72 @@ fn sharpen(galley: Arc<Galley>, inverse: f32) -> Arc<Galley> {
     let mut shape = TextShape::new(Pos2::ZERO, galley, Color32::PLACEHOLDER);
     shape.transform(TSTransform::from_scaling(inverse));
     shape.galley
+}
+
+/// What one canvas pass measured about its glyph quads.
+#[cfg(test)]
+#[derive(Default)]
+struct Measured {
+    /// The glyph quads of the pass.
+    quads: usize,
+    /// The worst distance of a quad corner from a whole device pixel.
+    worst_phase: f32,
+    /// The worst stretch between a quad and the texels of its glyph picture.
+    worst_stretch: f32,
+}
+
+/// Measure every glyph quad of `shape`, which the layer transform already moved
+/// into the coordinates of the screen.
+///
+/// The quads of a text are the vertices of the rows of its galley, and the
+/// tessellator puts the galley on a whole device pixel before it draws it. Only
+/// a text is measured: a prerasterised disc of a drawing lives in the same
+/// atlas, and it says nothing about the size that a glyph picture was made for.
+#[cfg(test)]
+fn measure_shapes(shape: &Shape, pixels_per_point: f32, measured: &mut Measured) {
+    use egui::emath::GuiRounding as _;
+
+    match shape {
+        Shape::Text(text) => {
+            let origin = text.pos.round_to_pixels(pixels_per_point);
+            for placed in &text.galley.rows {
+                let base = origin + placed.pos.to_vec2();
+                for &[a, b, c, d] in placed.visuals.mesh.vertices.as_chunks::<4>().0 {
+                    // The mesh of a row names the texels of the atlas, so the
+                    // distance between two of its uv points is the number of
+                    // texels that the picture of the glyph covers.
+                    let texels = (b.uv.x - a.uv.x).abs();
+                    let rows = (c.uv.y - b.uv.y).abs();
+                    if texels <= 0.0 || rows <= 0.0 {
+                        continue;
+                    }
+                    measured.quads += 1;
+                    let mut worst_phase: f32 = 0.0;
+                    for vertex in [a, b, c, d] {
+                        for value in [base.x + vertex.pos.x, base.y + vertex.pos.y] {
+                            let device = value * pixels_per_point;
+                            worst_phase = worst_phase.max((device - device.round()).abs());
+                        }
+                    }
+                    measured.worst_phase = measured.worst_phase.max(worst_phase);
+                    // The quad covers the texels of its glyph picture, so the
+                    // picture is drawn at the size that it was made for.
+                    let width = (b.pos.x - a.pos.x).abs() * pixels_per_point;
+                    let height = (c.pos.y - b.pos.y).abs() * pixels_per_point;
+                    measured.worst_stretch = measured
+                        .worst_stretch
+                        .max((width - texels).abs())
+                        .max((height - rows).abs());
+                }
+            }
+        }
+        Shape::Vec(shapes) => {
+            for shape in shapes {
+                measure_shapes(shape, pixels_per_point, measured);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The glyph quads of one canvas pass: how many there are, the worst distance of a
@@ -517,52 +612,16 @@ pub(crate) fn measure_canvas_quads(
     });
     let shapes = output.shapes.clone();
     let _ = crate::test_egui::DiscardTextures::discard_textures(output);
-    let primitives = ctx.tessellate(shapes, pixels_per_point);
-    let [atlas_width, atlas_height] = atlas_size(&ctx);
-    assert!(atlas_width > 0.0 && atlas_height > 0.0);
-    let mut quads = 0_usize;
-    let mut worst_phase: f32 = 0.0;
-    let mut worst_stretch: f32 = 0.0;
-    for primitive in &primitives {
-        let egui::epaint::Primitive::Mesh(mesh) = &primitive.primitive else {
-            continue;
-        };
-        for quad in mesh.vertices.chunks(4) {
-            let [a, b, c, d] = [quad[0], quad[1], quad[2], quad[3]];
-            // A filled rectangle has one colour and no glyph picture, so it says
-            // nothing about the size that a picture was made for.
-            let texels = (b.uv.x - a.uv.x).abs() * atlas_width;
-            let rows = (c.uv.y - b.uv.y).abs() * atlas_height;
-            if texels <= 0.0 || rows <= 0.0 {
-                continue;
-            }
-            quads += 1;
-            for vertex in [a, b, c, d] {
-                for value in [vertex.pos.x, vertex.pos.y] {
-                    let device = value * pixels_per_point;
-                    worst_phase = worst_phase.max((device - device.round()).abs());
-                }
-            }
-            // The quad covers the texels of its glyph picture, so the picture is
-            // drawn at the size that it was made for.
-            let width = (b.pos.x - a.pos.x).abs() * pixels_per_point;
-            let height = (c.pos.y - b.pos.y).abs() * pixels_per_point;
-            worst_stretch = worst_stretch.max((width - texels).abs()).max((height - rows).abs());
-        }
+    let mut measured = Measured::default();
+    for clipped in &shapes {
+        measure_shapes(&clipped.shape, pixels_per_point, &mut measured);
     }
+    let Measured {
+        quads,
+        worst_phase,
+        worst_stretch,
+    } = measured;
     (quads, worst_phase, worst_stretch)
-}
-
-/// The size of the glyph atlas of its context, in texels.
-#[cfg(test)]
-#[allow(
-    clippy::redundant_closure_for_method_calls,
-    reason = "Context::fonts wants a higher-ranked closure, so the method path does not compile"
-)]
-pub(crate) fn atlas_size(ctx: &Context) -> [f32; 2] {
-    let [width, height] = ctx.fonts(|fonts| fonts.font_image_size());
-    #[allow(clippy::cast_precision_loss)]
-    [width as f32, height as f32]
 }
 
 #[cfg(test)]
