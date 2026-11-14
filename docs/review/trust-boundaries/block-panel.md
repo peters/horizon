@@ -180,6 +180,31 @@ writes no file, starts no link and changes no setting.
   secret, so that is no new disclosure; an agent must still not write the address
   of a machine or a command into a card that a person did not agree to publish.
 
+### An agent reads the presets, and the answer is a name and a kind
+
+`presets` answers the presets that `open_panel` accepts, so an agent learns which
+name to pass without asking the person. It is a read: it writes no file, changes
+no setting and starts no program.
+
+- **The answer is the settings' own value.** Horizon reads the list from the
+  settings in memory, in the order of the store, and filters it with the rule of
+  `open_panel` itself: a preset that runs no program of this computer, such as a
+  browser page, a Device viewer, a card or an SSH terminal, is left out. The
+  filter is the same predicate that refuses such a request, so the list and the
+  operation cannot disagree.
+- **A name and a kind alone.** One entry holds `name` and `kind`. The command,
+  the arguments, the alias, the resume rule and the SSH route of a preset are in
+  no answer, so a read of the list reaches no program of the person and no
+  credential that a preset names. The kind is the token of the store, such as
+  `claude` or `shell`, and not a display name.
+- **Every agent panel of the workspace reads it.** The list belongs to the
+  person's settings, and the answer names the same entries to every agent of this
+  Horizon. It carries no secret and no command, so that is no new disclosure.
+- **Does not guarantee:** that a preset works. The list states what the settings
+  hold, not that the program of a preset is installed, that its folder exists or
+  that its command answers. A name in the list is still the person's text, and an
+  agent compares it exactly.
+
 ## Trusted: the caller identity
 
 The caller is the agent panel that Horizon launched, and its identity is the two

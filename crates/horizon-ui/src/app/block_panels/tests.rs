@@ -559,3 +559,42 @@ fn the_mark_and_the_directory_are_saved_with_the_panel() {
         "a restored panel keeps its folder"
     );
 }
+
+#[test]
+fn the_presets_of_the_settings_answer_their_names_and_kinds_and_no_command() {
+    let (_temp, ctx, mut app) = app();
+    let root = queue(&_temp);
+    let answer = answer(&mut app, &ctx, &root, block::Operation::Presets);
+    let outcome = answer.clone();
+    let Outcome::Presets { presets } = answer else {
+        panic!("expected the presets: {outcome:?}");
+    };
+    let listed = presets
+        .iter()
+        .map(|preset| (preset.name.as_str(), preset.kind.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        listed,
+        [("Task shell", "shell"), ("Claude Code", "claude")],
+        "a preset that open_panel accepts answers its name and the kind that the settings store"
+    );
+    let encoded = serde_json::to_value(&outcome).expect("the answer serializes");
+    for entry in encoded["presets"].as_array().expect("a list of presets") {
+        let mut keys = entry.as_object().expect("an object").keys().collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, ["kind", "name"], "an entry is a name and a kind alone");
+    }
+    let text = encoded.to_string();
+    for absent in [
+        "/bin/sh", "\"-l\"", "\"ts\"", "\"cc\"", "browser", "device", "block", "\"Page\"",
+    ] {
+        assert!(
+            !text.contains(absent),
+            "the answer holds no command, argument, alias or preset that open_panel refuses: {absent} in {text}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&outcome).expect("the answer serializes")["status"],
+        serde_json::json!("presets")
+    );
+}

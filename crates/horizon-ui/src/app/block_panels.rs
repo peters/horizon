@@ -20,7 +20,7 @@ use egui::Context;
 use horizon_browser_control::manifest::block;
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_preset;
-use horizon_core::{AgentStatus, BlockPanelState, Panel, PanelId, PresetConfig, preset_named};
+use horizon_core::{AgentStatus, BlockPanelState, Panel, PanelId, PanelKind, PresetConfig, preset_named};
 
 use super::HorizonApp;
 use super::actions::support::preset_panel_options;
@@ -188,6 +188,26 @@ impl HorizonApp {
         None
     }
 
+    /// Answers `presets`: the presets that a panel of `open_panel` can be opened
+    /// from, each with its name and its kind. It reads the settings in memory, so
+    /// no frame waits for a file, and the answer holds no command, no argument, no
+    /// alias and no folder: an agent learns which name to pass and which kind
+    /// starts a program like its own.
+    pub(super) fn answer_presets(&self) -> block::Outcome {
+        block::Outcome::Presets {
+            presets: self
+                .template_config
+                .presets
+                .iter()
+                .filter(|preset| preset.requires_workspace_cwd())
+                .map(|preset| block::PresetSummary {
+                    name: preset.name.clone(),
+                    kind: preset_kind_name(preset.kind),
+                })
+                .collect(),
+        }
+    }
+
     /// The names of the presets of the settings, each alias as `alias (name)`, for
     /// the answer of an unknown preset. It lists names only: a command of a preset
     /// is never in an answer.
@@ -295,6 +315,16 @@ impl HorizonApp {
         }
         self.agent_opens.panels.prompts = kept;
         typed
+    }
+}
+
+/// The kind of a preset as the settings store it, such as `claude` or `shell`, for
+/// the answer of `presets`. It is the stored token and not a display name, so an
+/// agent compares it with the kind that its own panel reports.
+fn preset_kind_name(kind: PanelKind) -> String {
+    match serde_json::to_value(kind) {
+        Ok(serde_json::Value::String(name)) => name,
+        _ => kind.display_name().to_ascii_lowercase(),
     }
 }
 

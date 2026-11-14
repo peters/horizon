@@ -7,8 +7,9 @@
 //! wait ends. `open_terminal` asks for an SSH terminal instead of a card, which
 //! the host opens for the person beside the calling agent panel, `open_panel`
 //! asks for a panel of one preset of the person's settings in a folder that the
-//! caller names, and `machine_key`, `machine_keys` and `delete_machine_key` keep
-//! the SSH key pairs that such a terminal connects with. `server_link_request`
+//! caller names, and `presets` reads the presets that such a panel can come from,
+//! by name and kind alone. `machine_key`, `machine_keys` and `delete_machine_key`
+//! keep the SSH key pairs that such a terminal connects with. `server_link_request`
 //! and `browser_host_request` ask the person to change a setting of this
 //! computer on a card that Horizon draws itself: the agent states the change and
 //! reads the person's answer, and only the person's press writes it. A request
@@ -163,6 +164,10 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prompt: Option<String>,
     },
+    /// The presets that a panel of `open_panel` can be opened from, each with its
+    /// name and its kind. It is a read: the answer holds no command, no argument,
+    /// no alias and no folder of a preset, and the settings are not changed.
+    Presets,
     /// Add or replace one machine of this Horizon: its name, SSH route, key, tmux
     /// session and the provider line that the caller read. The record belongs
     /// to the person, so every agent panel of this Horizon sees it and a click on
@@ -429,6 +434,26 @@ pub struct MachineSummary {
     pub key_missing: bool,
 }
 
+/// One preset that a panel of `open_panel` can be opened from: the name of the
+/// settings and its kind, such as `claude`, `codex` or `shell`.
+///
+/// The name is what `open_panel` takes, and the kind tells an agent which preset
+/// starts a program of the kind that runs the calling agent. The entry is the
+/// preset name and the kind alone: the command, the arguments, the alias, the
+/// resume rule and the SSH route of a preset stay in the settings.
+///
+/// The list names the presets that `open_panel` accepts. A preset of a browser
+/// page, a Device viewer, a card or an SSH terminal runs no program of this
+/// computer, so it has no folder and is left out.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("type" = "object"))]
+pub struct PresetSummary {
+    /// The name of the preset, exactly as `open_panel` takes it.
+    pub name: String,
+    /// The kind of the preset, as the settings store it, such as `claude`.
+    pub kind: String,
+}
+
 /// One card as `list` reports it.
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[schemars(extend("type" = "object"))]
@@ -498,6 +523,12 @@ pub enum Outcome {
     /// One panel of a preset that the caller now has in its workspace.
     Opened {
         panel_id: String,
+    },
+    /// The presets that a panel of `open_panel` can be opened from, in the order
+    /// of the settings. An entry is a name and a kind, and no command, argument,
+    /// alias or folder of a preset is part of an answer.
+    Presets {
+        presets: Vec<PresetSummary>,
     },
     /// One machine key pair of the caller's workspace, and whether Horizon
     /// made it for this request.
@@ -1027,6 +1058,7 @@ mod tests {
                 "open_panel",
             ),
             (serde_json::json!({"operation": "server_status"}), "server_status"),
+            (serde_json::json!({"operation": "presets"}), "presets"),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -1039,6 +1071,7 @@ mod tests {
                 Operation::Close { .. } => "close",
                 Operation::OpenTerminal { .. } => "open_terminal",
                 Operation::OpenPanel { .. } => "open_panel",
+                Operation::Presets => "presets",
                 Operation::MachineSet { .. } => "machine_set",
                 Operation::MachineDelete { .. } => "machine_delete",
                 Operation::ServerStatus => "server_status",

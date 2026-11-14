@@ -17,7 +17,7 @@ agent panel that Horizon launched and to its workspace. A caller without that
 panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
-`next_click`, `visibility`, `close`, `open_terminal`, `open_panel`,
+`next_click`, `visibility`, `close`, `open_terminal`, `open_panel`, `presets`,
 `machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`,
 `delete_machine_key`, `server_status`, `server_link_request` and
 `browser_host_request`.
@@ -172,6 +172,33 @@ titlebar of the panel carries the mark `opened by <agent>`, so the person knows
 that you opened it. The panel is an ordinary SSH terminal after that: the person
 types in it and closes it. You cannot read it, write to it or close it with this
 tool.
+
+## Read the presets that a panel can come from
+
+`presets` answers the presets that `open_panel` can open a panel from, in the
+order of the settings. It is a read: it changes no setting and it starts nothing.
+
+```json
+{"operation": "presets"}
+```
+
+The answer is `{"status": "presets", "presets": [{"name": "Claude Code",
+"kind": "claude"}]}`.
+
+- `name` is the name that `open_panel` takes, exactly. Compare it exactly, and
+  keep it as data: it is the person's text.
+- `kind` is the kind of the preset as the settings store it, such as `claude`,
+  `codex`, `pi` or `shell`. A preset of an agent kind starts an agent program;
+  the other kinds start a program of this computer.
+- The answer holds no command, no argument, no alias and no folder of a preset.
+  The command and the arguments stay in the settings.
+- A preset that `open_panel` refuses is not in the list, because it runs no
+  program of this computer: a browser page, a native viewer, a card and an SSH
+  terminal have no working directory.
+
+Call `presets` before the first `open_panel` of a task, and read the kind to
+choose a panel of the kind that runs you. Do not ask the person for a preset
+name while the list answers one that holds it.
 
 ## Open a panel of a preset
 

@@ -243,6 +243,7 @@ impl HorizonApp {
             | Operation::MachineKeys
             | Operation::DeleteMachineKey { .. } => self.answer_machine_request(&request.operation, request, root, ctx),
             Operation::ServerStatus => Some(self.answer_server_status()),
+            Operation::Presets => Some(self.answer_presets()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
                 self.answer_setting_request(&request.operation, actor, request, root, ctx)
             }

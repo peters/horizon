@@ -571,6 +571,15 @@ leaves undone.
 
 ## Disturb the person only when it is theirs
 
+Every question to the person goes on the plan card, as the `callout` of the
+`Needs you` state, and the answer arrives as a press of one of its buttons. Never
+ask in the question box of your agent program: the card is the one place where
+the person reads the task, and the terminal of the coordinator can be off the
+view, in another workspace or under other panels. A question in that terminal can
+wait an hour while the card says that the plan runs. A helper follows the same
+rule and writes its question into its progress note, where the coordinator reads
+it and draws it on the card.
+
 After the go, ask nothing between the todos. The coordinator decides every other
 question itself and writes the decision into the history. A row of state
 `needs_you` is allowed for one of these decisions only:
@@ -691,7 +700,12 @@ plan file.
    The coordinator is inside one tool call while the sub-agent runs, so the card
    of the plan cannot change during it.
 2. **A second agent panel on this computer.** Use `open_panel` with a preset of
-   the person and its own worktree:
+   the person and its own worktree. Read the preset first with
+   `{"operation": "presets"}`: it answers the name and the kind of every preset
+   that `open_panel` accepts. Use a preset whose kind is the kind that runs you,
+   because a helper of your own kind reads the same brief and the same rules.
+   Another kind only when the section `## Horizon plan` of the repository names
+   it, for example `helpers: codex`:
 
    ```json
    {"operation": "open_panel", "preset": "<the helper preset of the settings>",
@@ -703,8 +717,8 @@ plan file.
    panel one time, when the program of the panel is ready. It works for a preset
    of an agent kind only. Write the long brief to `.horizon-plan/BRIEF.md` of the
    helper's worktree, and keep the line short: it names the brief and the todo.
-   Ask the person for that preset one time when the settings hold none: the
-   message of `unknown_preset` lists the names of the presets.
+   Ask the person for that preset one time when `presets` answers none of that
+   kind: the message of `unknown_preset` lists the names of the presets.
 
    - An agent cannot read, write or close a panel that it opened. The person
      closes the panel of the helper.
