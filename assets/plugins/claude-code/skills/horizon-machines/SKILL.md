@@ -338,8 +338,13 @@ The row `SSH from` says which rule is in force: `any address, machine key only`
 for the default, or `<address of this computer>/32, machine key only` for a rule
 that the person asked for. Then give
 `Connect` with tone `primary`, `Put the Horizon server here`, `Add a browser`,
-`Stop`, and `Delete` in `danger`. When the machine is stopped, draw `Start`
-instead of `Stop`.
+`Join a network`, `Stop`, and `Delete` in `danger`. When the machine is stopped,
+draw `Start` instead of `Stop`.
+
+`Join a network` draws the network card of
+[tailscale](references/tailscale.md). The card holds the stored networks as pills
+and no field for a secret. A machine that is already in a network shows its rows
+on the machine card and the same button says which network it joined.
 
 The two buttons that name Horizon hand the work to the skill `horizon-setup`,
 with that goal and this machine as its place:
@@ -450,13 +455,20 @@ from this computer before the address changes.
 ## A machine on a Tailscale network
 
 The person can ask to put a machine on one of their Tailscale networks: "put
-`build-1` on my home network". The networks of this computer are the three named
-secrets of each one, in the environment of your panel:
-`TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read
+`build-1` on my home network". A machine joins one network. The person can store
+several networks, and each one is a choice on the rent card. The stored
+networks are the three named secrets of each one, in the environment of your
+panel: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read
 [tailscale](references/tailscale.md) for the one-time setup of the person, the
-commands, the proof, the delete and the relay recipes.
+commands, the cards, the proof, the delete and the relay recipes.
 
-Three rules have no exception:
+When two networks must reach one machine, the person shares the device with the
+other network in the Tailscale admin console, on the page of that device. You
+share no device. A machine carries the client of one network only: never install
+a second client and never join a machine that is already in a network to another
+one.
+
+Four rules have no exception:
 
 - **The client secret stays on this computer.** You make one API token here and
   one auth key for one machine. Never send the secret to a machine and never run
@@ -469,10 +481,14 @@ Three rules have no exception:
 - **Prove the login before port 22 closes.** A login over the network with the
   machine key answers first, and only then does the provider close inbound port
   22. When the proof fails, the port stays open and the card says why.
+- **The agent reads the state of this computer and changes nothing there.** The
+  computer of the person can be in a network of the person's work, so you never
+  run `tailscale up`, `down`, `login`, `logout`, `switch` or `set` on that
+  computer. Read the state with `tailscale status --json` only.
 
 Step 5b writes the record with the network name as its `ssh.host`, so a click in
 the Machines section connects over the network. The machine card of step 6 then
-holds three more rows:
+holds three more rows, and the button `Join a network`:
 
 ```json
 {"type": "kv", "rows": [
@@ -573,6 +589,7 @@ The machine runs. The person may connect, stop or delete it:
     {"id": "connect", "label": "Connect", "tone": "primary"},
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
+    {"id": "join_network", "label": "Join a network"},
     {"id": "stop", "label": "Stop"}, {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 

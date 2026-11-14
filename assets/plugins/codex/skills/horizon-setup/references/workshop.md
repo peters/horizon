@@ -43,6 +43,7 @@ cannot go on without the person, for example a link that is `away`.
      "subtitle": "One machine that is ready for the repository that you name.",
      "badge": {"text": "Not set up", "tone": "neutral"}}]},
   {"type": "caption", "text": "Nothing is rented and no setting changes before your press."},
+  {"type": "text", "text": "A machine of the workshop can join one of your Tailscale networks. You choose the network on the card that rents the machine, and this computer then reaches that machine over the network."},
   {"type": "buttons", "items": [
     {"id": "all_ready", "label": "Set up the parts that are not ready", "tone": "primary"},
     {"id": "part_server", "label": "The server only"},

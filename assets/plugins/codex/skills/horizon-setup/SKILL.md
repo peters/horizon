@@ -246,6 +246,10 @@ type of this place that holds what it needs:
     {"id": "place.fsn1", "title": "Falkenstein"},
     {"id": "place.ash", "title": "Ashburn"},
     {"id": "place.sin", "title": "Singapore"}]},
+  {"type": "caption", "text": "Network"},
+  {"type": "list", "selection": "single", "layout": "pills", "rows": [
+    {"id": "network.none", "title": "None", "selected": true},
+    {"id": "network.home", "title": "home"}]},
   {"type": "buttons", "items": [
     {"id": "rent", "label": "Rent this machine", "tone": "primary"},
     {"id": "back", "label": "Back"}]}
@@ -257,7 +261,27 @@ type name, the cores and the memory that the place answers. A size row whose
 price the CLI does not answer holds `price not read` in `value`.
 `Back` returns to the provider card with the provider of the person still
 selected. The press on `Rent this machine` is the only press that may spend
-money.
+money. The caption `Network` and its pills are an example too: draw them only
+when the panel holds a stored network.
+
+#### The network of the machine
+
+Read the names of the stored networks from the environment of your own panel, as
+the page `references/tailscale.md` of the skill `horizon-machines` says: the
+names only, never a value. A network is stored only when the panel holds all
+three of its names: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and
+`TS_<NET>_TAG`.
+
+- At least one network is stored: draw the caption `Network` and its pills below
+the place list. The row `network.none` is the first row and it is
+`selected: true`. Then draw one row `network.<net>` for each stored network, in
+name order.
+- No network is stored: draw no caption and no row. A press on `Join a network`
+on the card of a machine draws the card that says what the person stores.
+
+A pill is a choice of the person, and it changes no setting. One machine joins
+one network. Never ask the person for a client id, a client secret or a tag in
+this panel, and never take one from the conversation.
 
 ### 3. Renting the machine
 
@@ -286,7 +310,10 @@ card between the steps, so the `now` step is the step that runs.
 
 Write the `subtitle` as the size, the place and the provider of the person, and
 the times as you measured them. `percent` is the share of the steps that are
-done. A press on `Stop and delete the machine` deletes what this flow made, with
+done. When the person chose a network, the list holds one step more,
+`Join the network <NET>`, after `Check tmux on the machine` and before
+`Add the machine to Machines`. The page `references/tailscale.md` of the skill
+`horizon-machines` gives that card. A press on `Stop and delete the machine` deletes what this flow made, with
 the delete of `horizon-machines`, and the card then says what was deleted and
 what is left. It deletes nothing that this flow did not make.
 
@@ -315,6 +342,7 @@ session.
     {"id": "connect", "label": "Connect", "tone": "primary"},
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
+    {"id": "join_network", "label": "Join a network"},
     {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}
 ]}
@@ -322,8 +350,8 @@ session.
 
 The card of a machine holds the buttons of every machine card of the skill
 `horizon-machines`, and this card is no exception: `Connect`, `Put the Horizon
-server here`, `Add a browser`, `Stop`, and `Delete`. Draw `Start` instead of
-`Stop` while the machine is stopped. A machine that a run prepared for a
+server here`, `Add a browser`, `Join a network`, `Stop`, and `Delete`. Draw
+`Start` instead of `Stop` while the machine is stopped. A machine that a run prepared for a
 repository keeps these buttons too, so a set-up continues from the card that the
 run left.
 
@@ -331,6 +359,9 @@ run left.
 - `Put the Horizon server here` continues with the goal `server` and this machine
   as its place.
 - `Add a browser` continues with the goal `browser` and this machine as its place.
+- `Join a network` draws the card of the network of this machine, which the page
+  `references/tailscale.md` of the skill `horizon-machines` gives. The card
+  offers the stored networks as pills and no field for a secret.
 - `Stop` stops the machine, and `Start` starts it again, as `horizon-machines`
   says. `Delete` asks before it deletes, as that skill says, and the record and
   the key go with the machine.
@@ -579,6 +610,7 @@ no guess of your own.
      "subtitle": "A machine in your list. Hetzner, running.", "selected": true},
     {"id": "place.new_machine", "title": "A new rented machine",
      "subtitle": "Rent a small machine first."}]},
+  {"type": "text", "text": "A machine that is in a Tailscale network is reached over that network. The card of a machine shows its network, and Join a network puts the machine in one."},
   {"type": "buttons", "items": [
     {"id": "set_up_browser", "label": "Put the browser on helsinki-1", "tone": "primary"},
     {"id": "back", "label": "Back"}]}

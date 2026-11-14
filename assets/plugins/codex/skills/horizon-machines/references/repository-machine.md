@@ -26,6 +26,7 @@ It sits beside `## Horizon plan` and it is read before any machine is rented.
 | `check` | The one command that proves the machine | `cargo test --workspace` |
 | `repository` | How the repository arrives: `bundle`, or `clone` with the name of a credential | `bundle` |
 | `branch` | The branch that the machine holds, when `AGENTS.md` names the branch of the work. Absent when the work uses the branch that the clone has | `work/login-redirect` |
+| `network` | The stored name of the Tailscale network that the machine joins. Absent when the machine joins no network | `home` |
 
 A section of this shape is a recipe:
 
@@ -43,6 +44,10 @@ A section of this shape is a recipe:
 ```
 
 Give this block to the person to paste when the repository holds no section.
+
+The entry `network` holds the stored name of a network and never an address or a
+secret. A recipe names it only when the work of the repository reaches that
+network. A recipe without the entry prepares a machine in no network.
 
 ## A repository without a section
 
@@ -80,6 +85,10 @@ One card states the whole rent, and one press rents every machine of the run:
 - The price for each hour of every machine of the run together, for example
   `2 machines, 0.0214 EUR / hour together`. Read both prices in this run and add
   them. When the provider answers no price, write `price not read`.
+- The network of the machine, when the panel of the agent holds one or more
+  stored networks: the caption `Network` and the pills of the cards of Set up,
+  with `network.none` first. The pill of the `network` entry of the recipe is
+  `selected: true`.
 
 ```json
 {"components": [
@@ -90,37 +99,51 @@ One card states the whole rent, and one press rents every machine of the run:
     {"label": "Type", "value": "the cheapest type of this place that holds them"},
     {"label": "Machines", "value": "2"},
     {"label": "Price", "value": "2 x 0.0107 EUR / hour, 0.0214 EUR / hour together", "mono": true}]},
+  {"type": "caption", "text": "Network"},
+  {"type": "list", "selection": "single", "layout": "pills", "rows": [
+    {"id": "network.none", "title": "None"},
+    {"id": "network.home", "title": "home", "selected": true}]},
   {"type": "text", "text": "One press rents both machines. The setup of each machine follows on its own card."},
   {"type": "buttons", "items": [
     {"id": "rent", "label": "Rent 2 machines", "tone": "primary"},
     {"id": "cancel", "label": "Cancel", "tone": "danger"}]}]}
 ```
 
+Draw the caption and the pills only when the panel holds a stored network. A
+recipe that names a network that the panel does not hold gets no pill for it:
+say in one `text` line which three names are missing, and join nothing from a
+guess. A press on a pill changes the network of this run, and `None` keeps the
+machine out of every network.
+
 ### 2. One steps card for each machine
 
 After the press, rent each machine and give each one a card of its own, titled
-with its name. The card shows the five steps of the machine, one after the
-other:
+with its name. The card shows the five steps of the machine, and one step more
+when the machine joins a network:
 
 1. `Prepare the system`: the packages of the recipe, with the package manager of
    the image, and the update of the package list first.
 2. `Install the tools`: each tool with the version of the recipe, installed in
    the way that the recipe names.
-3. `Bring the repository`: the bundle or the clone of the section below.
-4. `Warm up`: the `warmup` commands of the recipe, in the folder of the
+3. `Join the network <NET>`: the network of the run, when it is not `None`. The
+   page [tailscale](tailscale.md) gives the commands and the proof. The machine
+   joins after `Prepare the system` and before the repository arrives.
+4. `Bring the repository`: the bundle or the clone of the section below.
+5. `Warm up`: the `warmup` commands of the recipe, in the folder of the
    repository.
-5. `Run the check`: the `check` command of the recipe, in the folder of the
+6. `Run the check`: the `check` command of the recipe, in the folder of the
    repository.
 
 ```json
 {"components": [
   {"type": "heading", "text": "build-1", "subtitle": "Ready for example-repo",
    "badge": {"text": "Working", "tone": "info"}},
-  {"type": "progress", "label": "Prepare the machine", "percent": 40, "detail": "2 of 5"},
+  {"type": "progress", "label": "Prepare the machine", "percent": 50, "detail": "3 of 6"},
   {"type": "steps", "steps": [
     {"label": "Prepare the system", "state": "done", "at": "18 s"},
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
-    {"label": "Bring the repository", "state": "now", "at": "now"},
+    {"label": "Join the network home", "state": "now", "at": "now"},
+    {"label": "Bring the repository"},
     {"label": "Warm up"},
     {"label": "Run the check"}]},
   {"type": "buttons", "items": [
@@ -168,21 +191,31 @@ older Horizon refuses the record of a newer one.
   {"type": "steps", "steps": [
     {"label": "Prepare the system", "state": "done", "at": "18 s"},
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
+    {"label": "Join the network home", "state": "done", "at": "31 s"},
     {"label": "Bring the repository", "state": "done", "at": "8 s"},
     {"label": "Warm up", "state": "done", "at": "1 m 40 s"},
     {"label": "Run the check", "state": "done", "at": "6 m 02 s"}]},
+  {"type": "kv", "rows": [
+    {"label": "Network", "value": "home", "mono": true}]},
   {"type": "text", "text": "cargo test --workspace: 412 tests pass, 0 failed"},
   {"type": "buttons", "items": [
     {"id": "connect", "label": "Connect", "tone": "primary"},
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
+    {"id": "join_network", "label": "Join a network"},
     {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 
+The ready card of a machine that joined a network holds the row `Network` with
+the stored name of that network, and a machine in no network has no such row.
+The page [tailscale](tailscale.md) gives the rows and the proof that the machine
+is in the network.
+
 The ready card of a machine that was prepared for a repository keeps the buttons
 of every machine card of the skill `horizon-machines`: `Connect`, `Put the
-Horizon server here`, `Add a browser`, `Stop`, and `Delete`. Draw `Start` instead
+Horizon server here`, `Add a browser`, `Join a network`, `Stop`, and `Delete`.
+Draw `Start` instead
 of `Stop` while the machine is stopped. A card that holds only `Connect` and
 `Delete` is a card that cannot continue the set-up, and the person must open
 another card to put the server or a browser there.
