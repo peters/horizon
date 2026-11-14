@@ -11,16 +11,21 @@ use crate::theme;
 use crate::typeface::Weight;
 
 use super::super::metrics::{
-    BOARD_CELL_GAP, BOARD_CELL_PAD, BOARD_COLUMN_FONT, BOARD_CURRENT_LINE, BOARD_CURRENT_TINT, BOARD_HAIR_TINT,
-    BOARD_HEAD_COLUMN, BOARD_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_HEAD_PAD_SIDE, BOARD_NOTE_FONT, BOARD_RADIUS,
-    BOARD_ROW_GAP, BOARD_ROW_LABEL_FONT, BOARD_ROW_MIN_HEIGHT, BOARD_ROW_SUBTITLE_FONT, BOARD_TAG_FONT,
+    BOARD_CELL_GAP, BOARD_CELL_PAD, BOARD_COLUMN_FONT, BOARD_COLUMN_MAX_WIDTH, BOARD_CURRENT_LINE, BOARD_CURRENT_TINT,
+    BOARD_HAIR_TINT, BOARD_HEAD_COLUMN, BOARD_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_HEAD_PAD_SIDE, BOARD_NOTE_FONT,
+    BOARD_RADIUS, BOARD_ROW_GAP, BOARD_ROW_LABEL_FONT, BOARD_ROW_MIN_HEIGHT, BOARD_ROW_SUBTITLE_FONT, BOARD_TAG_FONT,
     BOARD_TAG_RADIUS, BOARD_TAG_SIZE, BOARD_VALUE_FONT, ITEM_NOTE_FONT, ITEM_NOTE_LINE_HEIGHT, count,
 };
 use super::super::text;
 
 pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRow], items: &[BoardItem]) {
-    let width = ui.available_width();
-    let column_width = ((width - BOARD_HEAD_COLUMN) / count(columns.len())).max(1.0);
+    // A column of the grid is at most BOARD_COLUMN_MAX_WIDTH wide, so the grid
+    // of a few waves keeps the left edge of the body instead of stretching its
+    // cells across a card that the person made wide.
+    let column_width = ((ui.available_width() - BOARD_HEAD_COLUMN) / count(columns.len()))
+        .min(BOARD_COLUMN_MAX_WIDTH)
+        .max(1.0);
+    let width = BOARD_HEAD_COLUMN + count(columns.len()) * column_width;
     let row_height = (0..rows.len())
         .map(|row| cell_height(tallest_cell(items, columns.len(), row)))
         .fold(BOARD_ROW_MIN_HEIGHT, f32::max);

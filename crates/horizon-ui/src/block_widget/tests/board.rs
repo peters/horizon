@@ -17,7 +17,7 @@ use horizon_core::CardRuntime;
 use super::{CardFrames, Owner};
 use crate::block_widget::metrics::{
     BOARD_HEAD_COLUMN, BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT, BODY_PAD_SIDE, BODY_PAD_TOP, CALLOUT_PAD_Y,
-    ITEM_RADIUS, WIDE_FORM_MIN_WIDTH,
+    CALLOUT_RADIUS, ITEM_RADIUS, WIDE_FORM_MIN_WIDTH,
 };
 use crate::block_widget::{CARD_HEIGHT_LIMITS, CardForm, card_height_limits, default_card_size, fitted_card_height};
 
@@ -694,6 +694,103 @@ fn a_wide_card_opens_as_wide_as_its_board_needs_and_the_view_allows() {
     assert_eq!(default_card_size(&no_board, 5120.0)[0], 2400.0);
     assert_eq!(default_card_size(&no_board, 2000.0)[0], 1100.0);
     assert_eq!(default_card_size(&no_board, 20_000.0)[0], 2400.0);
+}
+
+/// A board of two waves with a callout, a log and a button under it.
+fn board_with_a_callout_a_log_and_a_button() -> BlockDocument {
+    let mut document = board_of(2);
+    let Component::Board { columns, rows, items } = document.components.remove(0) else {
+        panic!("the fixture holds a board");
+    };
+    document.components = vec![
+        Component::Board { columns, rows, items },
+        Component::Callout {
+            tone: Tone::Warn,
+            caption: Some("Needs you".to_owned()),
+            text: "Which address must the redirect use?".to_owned(),
+            buttons: vec![Button {
+                id: "answer.account".to_owned(),
+                label: "The account address".to_owned(),
+                tone: Tone::Primary,
+            }],
+        },
+        Component::Log {
+            entries: (0..6)
+                .map(|index| LogEntry {
+                    at: format!("07:3{index}"),
+                    text: format!("t{index} done on build-2, 9 rows"),
+                })
+                .collect(),
+        },
+        Component::Buttons {
+            items: vec![Button {
+                id: "stop".to_owned(),
+                label: "Stop".to_owned(),
+                tone: Tone::Neutral,
+            }],
+        },
+    ];
+    document
+}
+
+#[test]
+fn a_column_of_the_grid_is_at_most_480_points_and_the_rest_of_the_card_keeps_its_width() {
+    // A card of 2400 points: the person made it wide, and two waves keep the
+    // left edge in columns of 480 points instead of stretching over the card.
+    let document = board_with_a_callout_a_log_and_a_button();
+    let shapes = pass(2400.0, &document);
+    let body_left = f32::from(BODY_PAD_SIDE);
+
+    // The callout keeps the full width of the body, not the width of the grid.
+    let question =
+        painted(&shapes, "Which address must the redirect use?").expect("the question of the callout is drawn");
+    let callout = shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect)
+                if rect.corner_radius == CornerRadius::same(CALLOUT_RADIUS) && rect.rect.contains_rect(question) =>
+            {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .expect("the callout draws its frame");
+    let chips: Vec<Rect> = chips(&shapes)
+        .into_iter()
+        .filter(|chip| chip.max.y <= callout.min.y)
+        .collect();
+    assert_eq!(chips.len(), 2, "the grid draws the item of every wave");
+    assert!(
+        chips.iter().all(|chip| (chip.width() - 460.0).abs() < 0.01),
+        "a column of the grid is 480 points wide, so its item is 460: {chips:?}"
+    );
+    assert!(
+        (chips[0].min.x - (body_left + BOARD_HEAD_COLUMN + 10.0)).abs() < 0.01
+            && (chips[0].max.x - (body_left + BOARD_HEAD_COLUMN + 480.0 - 10.0)).abs() < 0.01,
+        "the grid starts at the left edge of the body: {:?}",
+        chips[0]
+    );
+    assert!(
+        (callout.min.x - body_left).abs() < 0.01 && (callout.max.x - (2400.0 - body_left)).abs() < 1.5,
+        "the callout keeps the width of the body: {callout:?}"
+    );
+
+    // The log flows into the six columns that the body holds, so the six
+    // entries of one row stand at one height.
+    let first = painted(&shapes, "t0 done on build-2, 9 rows").expect("the first entry is drawn");
+    for (index, at) in [(1, "t1 done on build-2, 9 rows"), (5, "t5 done on build-2, 9 rows")] {
+        let entry = painted(&shapes, at).expect("the entry is drawn");
+        assert!(
+            (entry.min.y - first.min.y).abs() < 0.01 && entry.min.x > first.min.x,
+            "entry {index} shares the row of the log and the width of the body: {entry:?} against {first:?}"
+        );
+    }
+
+    let stop = painted(&shapes, "Stop").expect("the button is drawn");
+    assert!(
+        (stop.max.x - (2400.0 - body_left - 14.0)).abs() < 1.0,
+        "the button keeps the right edge of the body: {stop:?}"
+    );
 }
 
 #[test]
