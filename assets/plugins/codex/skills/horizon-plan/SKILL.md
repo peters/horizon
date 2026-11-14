@@ -622,6 +622,34 @@ on the screen of the person with a button that does nothing.
 
 The coordinator ends its turn only when no callout of its own waits for an answer.
 
+### The person writes in the panel while your callout stands
+
+`next_click` waits for a press, and a person may type instead. A line of text in
+the panel of the coordinator is a message about the question that stands, and it
+is never a reason to end the turn:
+
+- **The words name an answer of the callout.** Read them as that answer, such as
+  `go`, `yes`, `stop`, `the account address` or `the last address`, and do what
+  that press does. Update the card in the same step: the callout goes, or its
+  `caption` and `text` say what the person decided. Write the answer into
+  `history.jsonl` as you write a press.
+- **The words name another instruction**, such as a change of the plan, another
+  todo first or a machine. Do that work, and update the card so that the old
+  callout no longer stands: its question and its state change with the decision,
+  or the card holds no callout. A callout that asked about a plan that the person
+  just changed asks about nothing.
+- **The words name neither.** Ask the one question again in one sentence, keep the
+  callout, and say in its `caption` what you read and what you did not
+  understand, such as `Needs you · t5 · I read: use the last address`.
+- **Never leave a callout with buttons while nobody waits for it.** A button that
+  no `next_click` reads is a press that reaches nobody, and the card then shows a
+  question that the plan does not wait for. When your update keeps the question,
+  call `next_click` again with the same fields.
+
+A plan that is `done` or `stopped` closes no card and ends its turn: the card says
+what the plan holds, its `Close` and `Stop` stay the person's press, and the
+coordinator closes nothing by itself.
+
 After the go, ask nothing between the todos. The coordinator decides every other
 question itself and writes the decision into the history. A row of state
 `needs_you` is allowed for one of these decisions only:
