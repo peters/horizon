@@ -15,6 +15,7 @@ use super::super::metrics::{
     ITEM_RADIUS, LOG_TEXT_FONT, LOG_TIME_FONT,
 };
 use super::super::text;
+use super::NOTE_LINES;
 
 /// The narrow form: the same items as one list, grouped by wave.
 pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRow], items: &[BoardItem]) {
@@ -135,13 +136,15 @@ fn show_list_item(ui: &mut Ui, index: usize, at: usize, item: &BoardItem, rows: 
         place,
     };
     let room = (width - 2.0 * ITEM_BORDER - 2.0 * ITEM_PAD_SIDE - ITEM_MARK - ITEM_MARK_GAP).max(0.0);
-    let note = text::wrapped_weight(
+    // The list gives the evidence two lines of the card, and no more.
+    let note = text::wrapped_rows(
         ui.painter(),
         &note_text,
         &FontId::monospace(ITEM_NOTE_FONT),
         colours(item.state).note,
         room,
         Some(ITEM_NOTE_LINE_HEIGHT),
+        NOTE_LINES,
         Weight::Regular,
     );
     let height = chip_height(1) + note.size().y - ITEM_NOTE_LINE_HEIGHT;

@@ -138,6 +138,118 @@ fn painted_any(shapes: &[ClippedShape], text: &str) -> bool {
     shapes.iter().any(|clipped| inner(&clipped.shape, text))
 }
 
+/// The text that holds `holding`: where the pass painted it, the lines that it
+/// took, and the last line as the person reads it.
+fn painted_text(shapes: &[ClippedShape], holding: &str) -> (Rect, usize, String) {
+    shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text().contains(holding) => Some((
+                Rect::from_min_size(shape.pos, shape.galley.size()),
+                shape.galley.rows.len(),
+                shape
+                    .galley
+                    .rows
+                    .last()
+                    .map(|placed| placed.row.text())
+                    .unwrap_or_default(),
+            )),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the pass painted the text that holds {holding}"))
+}
+
+/// A board of three waves on one worker, with `note` as the evidence of the one
+/// item of the second wave.
+fn one_long_note(note: &str) -> BlockDocument {
+    BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![Component::Board {
+            columns: vec![
+                column("Understand", "1", "4 m", false),
+                column("Change", "2", "10 m", true),
+                column("Verify", "3", "20 m", false),
+            ],
+            rows: vec![worker(1)],
+            items: vec![item(0, 0, "Push the branch", BoardState::Now, "8 m", note)],
+        }],
+    }
+}
+
+/// The narrow form of [`one_long_note`]: one wave and one item.
+fn one_long_note_narrow(note: &str) -> BlockDocument {
+    BlockDocument {
+        width: None,
+        components: vec![Component::Board {
+            columns: vec![column("Change", "2", "10 m", true)],
+            rows: vec![worker(1)],
+            items: vec![item(0, 0, "Push the branch", BoardState::Now, "8 m", note)],
+        }],
+    }
+}
+
+#[test]
+fn the_grid_keeps_one_line_of_evidence_inside_the_item() {
+    // A card of 1100 points with three waves: the note of the item is wider
+    // than its cell, so the grid has to cut it.
+    let short = chips(&pass(1100.0, &one_long_note("edits routes")));
+    let shapes = pass(
+        1100.0,
+        &one_long_note("your push is your own choice, and nobody else reads it"),
+    );
+    let chips = chips(&shapes);
+    assert_eq!(chips.len(), 1, "the board draws one item");
+    assert!(
+        (chips[0].height() - short[0].height()).abs() < 0.01,
+        "a long note keeps the height of the item: {:?} against {:?}",
+        chips[0],
+        short[0]
+    );
+
+    let (note, lines, last) = painted_text(&shapes, "your push is your own choice");
+    assert_eq!(lines, 1, "the grid keeps one line of evidence");
+    assert!(
+        last.ends_with('\u{2026}'),
+        "the line of the evidence ends with an ellipsis: {last:?}"
+    );
+    assert!(
+        chips[0].contains_rect(note),
+        "the evidence stays inside its item: {note:?} against {:?}",
+        chips[0]
+    );
+}
+
+#[test]
+fn the_list_of_the_narrow_form_gives_a_note_two_lines_and_then_an_ellipsis() {
+    let note = "your push is your own choice, and nobody else reads it, so the branch stays yours";
+    let shapes = pass(420.0, &one_long_note_narrow(note));
+    let item_rects = chips(&shapes);
+    assert_eq!(item_rects.len(), 1, "the board draws one item");
+
+    let (evidence, lines, last) = painted_text(&shapes, "helper-1 \u{b7} build-1 \u{b7} your push");
+    assert_eq!(lines, 2, "a note of the narrow form takes two lines of the card");
+    assert!(
+        last.ends_with('\u{2026}'),
+        "the second line ends with an ellipsis: {last:?}"
+    );
+    assert!(
+        item_rects[0].contains_rect(evidence),
+        "the evidence stays inside its item: {evidence:?} against {:?}",
+        item_rects[0]
+    );
+
+    // No note takes a third line, whatever its length.
+    let longer = one_long_note_narrow(&format!("{note}, and the notes of the run stay on this card"));
+    let taller = pass(420.0, &longer);
+    let (_, lines, _) = painted_text(&taller, "helper-1 \u{b7} build-1 \u{b7} your push");
+    assert_eq!(lines, 2, "the longest note keeps the two lines of the list");
+    assert_eq!(
+        chips(&taller)[0].height(),
+        item_rects[0].height(),
+        "and the height of the item"
+    );
+}
+
 #[test]
 fn the_grid_gives_every_wave_the_same_width_after_the_230_points_of_the_workers() {
     let shapes = pass(1400.0, &board_document());

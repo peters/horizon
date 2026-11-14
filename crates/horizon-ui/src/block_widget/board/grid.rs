@@ -163,13 +163,16 @@ fn show_cell(ui: &Ui, painter: &egui::Painter, index: usize, cell: Cell, items: 
             state: item.state,
             place: rows.get(item.row).map(|worker| worker.label.as_str()),
         };
-        let note = text::wrapped_weight(
+        // The cell of the grid keeps one line of evidence: a longer note ends
+        // with an ellipsis and the whole note shows while the pointer rests on
+        // the item.
+        let note = text::line_at_height(
             painter,
             item.note.as_deref().unwrap_or_default(),
             &FontId::monospace(ITEM_NOTE_FONT),
             colours(item.state).note,
             note_room(rect),
-            Some(ITEM_NOTE_LINE_HEIGHT),
+            ITEM_NOTE_LINE_HEIGHT,
             Weight::Regular,
         );
         paint_chip(painter, rect, &chip, &note);

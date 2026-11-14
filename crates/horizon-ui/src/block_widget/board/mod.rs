@@ -14,6 +14,9 @@ mod chip;
 mod grid;
 mod list;
 
+/// The lines of the card that the evidence of one item of the list may take.
+pub(super) const NOTE_LINES: usize = 2;
+
 use egui::Ui;
 use horizon_browser_control::block::{BoardColumn, BoardItem, BoardRow};
 

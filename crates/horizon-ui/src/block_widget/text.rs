@@ -36,6 +36,25 @@ pub(super) fn line_weight(
     zoom_text::layout_job(painter, job)
 }
 
+/// One line of `text` at `line_height`, elided with an ellipsis when it is
+/// wider than `max_width`.
+pub(super) fn line_at_height(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    line_height: f32,
+    weight: Weight,
+) -> Arc<Galley> {
+    let mut job = single_line_label_job(text, font, color, max_width);
+    for section in &mut job.sections {
+        section.format.coords = weight.coords();
+        section.format.line_height = Some(line_height);
+    }
+    zoom_text::layout_job(painter, job)
+}
+
 /// `text` wrapped to `max_width` at `line_height`, which is `None` for the
 /// font's own line height.
 pub(super) fn wrapped(
@@ -62,6 +81,35 @@ pub(super) fn wrapped_weight(
     let mut job = LayoutJob {
         wrap: TextWrapping {
             max_width: max_width.max(0.0),
+            ..TextWrapping::default()
+        },
+        ..LayoutJob::default()
+    };
+    job.append(text, 0.0, {
+        let mut format = typeface::format(font, color, weight);
+        format.line_height = line_height;
+        format
+    });
+    zoom_text::layout_job(painter, job)
+}
+
+/// `text` wrapped to `max_width` at `line_height` and at most `max_rows` rows,
+/// elided with an ellipsis at the end of the last row when it needs more.
+pub(super) fn wrapped_rows(
+    painter: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    line_height: Option<f32>,
+    max_rows: usize,
+    weight: Weight,
+) -> Arc<Galley> {
+    let mut job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: max_width.max(0.0),
+            max_rows,
+            overflow_character: Some('\u{2026}'),
             ..TextWrapping::default()
         },
         ..LayoutJob::default()

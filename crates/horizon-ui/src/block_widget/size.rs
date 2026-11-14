@@ -9,7 +9,7 @@
 
 use horizon_browser_control::block::{BlockDocument, BoardItem, BoardRow, Component, ListLayout, Width};
 
-use super::board::{cell_height, chip_height};
+use super::board::{NOTE_LINES, cell_height, chip_height};
 use super::form::Form;
 use super::metrics::{
     BADGE_HEIGHT, BOARD_CELL_GAP, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT,
@@ -306,7 +306,7 @@ fn board_list_height(columns: usize, rows: &[BoardRow], items: &[BoardItem]) -> 
         for item in &group {
             let place = rows.get(item.row).map_or(0, |row| row.label.chars().count());
             let note = item.note.as_ref().map_or(0, |note| note.chars().count() + 3);
-            height += chip_height((place + note).div_ceil(NOTE_CHARS_PER_LINE).max(1));
+            height += chip_height((place + note).div_ceil(NOTE_CHARS_PER_LINE).clamp(1, NOTE_LINES));
         }
         height += count(group.len().saturating_sub(1)) * BOARD_CELL_GAP;
     }
