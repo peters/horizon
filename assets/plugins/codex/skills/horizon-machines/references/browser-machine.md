@@ -161,6 +161,14 @@ panel without a start of Horizon.
 Tell the person to open a browser panel. The panel starts the container when it is
 stopped, and it writes the endpoint file. A fresh container can take 20 seconds.
 
+The browser of the container serves several panels of its profile, for both
+engines: each panel is its own page of the one browser, so a later panel is
+signed in where the first one signed in. A panel with `profile: "private"` is a
+page of an isolated browser context of that browser: it reads none of the
+sign-ins of the profile, and the browser removes the context when the page
+closes. Its traffic still leaves from the container, and its downloads go to the
+download folder of the container.
+
 ## The C library of the image, and the driver of this computer
 
 The driver of a Firefox host is the horizon binary of the person's computer, and

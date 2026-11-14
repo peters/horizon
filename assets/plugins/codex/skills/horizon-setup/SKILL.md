@@ -640,8 +640,11 @@ The engine of the press decides the steps:
 The last step needs the press of the person: call `browser_host_request` with the
 machine of the list or the SSH target, the profile, the engine and, for a Firefox
 host whose driver starts another way, the `command` that the setup printed. A
-Firefox host serves one page of its profile, so a second panel of that profile is
-refused until the first one closes. Show
+browser host serves several panels of one profile, for Chromium and for Firefox:
+each panel is its own page of the one browser of that profile, so a later panel
+of the same profile is signed in where the first one signed in. A panel with
+`profile: "private"` is a page of an isolated browser context of that host.
+Show
 that command in the row `Driver command` of the card, as Horizon holds it, and
 wait while Horizon draws its own card. The press serves the next browser panel at once, so no
 panel needs a start of Horizon: when the answer says `confirmed`, open the panel

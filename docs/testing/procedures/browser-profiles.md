@@ -15,16 +15,18 @@ owner: peters
 This procedure tests that one shared browser profile keeps the sign-in of a
 person, so a second panel is signed in and a restart keeps the sign-in. It also
 tests that a private panel is signed in nowhere, that its folder is gone when it
-closes, and that the chrome names the profile of a panel.
+closes, and that the chrome names the profile of a panel. A browser host gives
+the same properties: several panels of one profile, and a private panel.
 
 ## 2. Applicability
 
 - Candidate: the exact build of the pull request.
-- Platforms: Linux and macOS. Tasks P01 to P05 run on local panels. Task P07
-  needs a browser host and is not part of this procedure.
-- Engines: Chromium and Firefox. Do the tasks one time for each engine.
-- This procedure does not test a browser host, a remote device, or the profile
-  of another computer.
+- Platforms: Linux and macOS. Tasks P01 to P05 run on local panels. Tasks P06 to
+  P08 need a browser host of the setting **Browser host**.
+- Engines: Chromium and Firefox. Do the tasks one time for each engine. Tasks
+  P06 to P08 run one time for each engine of a browser host.
+- This procedure does not test a remote device, or the profile of another
+  computer beyond the page of a browser host.
 
 ## 3. Safety
 
@@ -107,15 +109,24 @@ closes, and that the chrome names the profile of a panel.
 ### 6.4 P04 — A closed private panel leaves no folder
 
 1. Note the folder of the shared profile and the folder of the private panel
-   under the browser profile root of this computer. Read the root in the
-   settings of the browser, or under the state folder of the test fixture.
+   under the browser profile root of this computer. The folder of a shared
+   profile is `<root>/<safe id of the profile>`. The folder of a private panel is
+   `<root>/private/<safe id of the panel>`, and it holds the file
+   `.horizon-private-panel`.
 
 2. Close the private panel with the normal close of the panel.
 
    Result: the folder of the private panel is gone. The folder of the shared
    profile is there.
 
-3. Delete the saved session of this run from the session manager.
+3. Open a private panel again, and stop Horizon with the normal close of the
+   window while the panel is open. Start Horizon again, and open a session that
+   does not hold that panel.
+
+   Result: the folder of that private panel is gone after the start, because no
+   saved session names it. The folder of the shared profile is there.
+
+4. Delete the saved session of this run from the session manager.
 
    Result: the folder of the shared profile is still there.
 
@@ -136,19 +147,66 @@ closes, and that the chrome names the profile of a panel.
    Result: the create is refused, and the words name the profile rule and the
    reserved word `private`.
 
-### 6.6 P06 — A browser host refuses a private panel
+### 6.6 P06 — Two panels of one profile on a browser host
 
-Run this task only with a configured Chromium browser host.
+Run this task with a configured browser host of the engine under test.
 
-1. Ask an agent to call `browser_create` with `profile: "private"`.
+1. Ask an agent to call `browser_create` with
+   `url: "http://127.0.0.1:8765/profile.html"` and no `profile`. Sign in on that
+   page.
 
-   Result: the create is refused with `unsupported_on_browser_host`, and the
-   words say that the profile of that machine holds its sign-ins.
+   Result: the panel shows the page of the host, and it reports the profile of
+   the host.
 
-2. Read `browser_create` in the tool description of the same server.
+2. Ask an agent to call `browser_create` again with the same `url` and no
+   `profile`.
 
-   Result: the description states the shared profile, the private panel, and the
-   refusal on a browser host.
+   Result: the second panel opens, and it reads the cookie of the sign-in of the
+   first panel. Both panels report the same profile.
+
+3. Do this task one time for Chromium and one time for Firefox. A Firefox host
+   answers `page_limit_reached` after eight pages of one profile.
+
+### 6.7 P07 — A private panel of a browser host
+
+1. Right-click a panel of the browser host and select `Private panel`.
+
+   Result: a new panel opens at the same address, on the same host, and its
+   chrome shows `Private`.
+
+2. Read the title and the body of the private page.
+
+   Result: the cookie of the shared profile is absent. The private page sets its
+   own cookie, and the panels of the shared profile do not read it.
+
+3. Close the private panel. Read the log of the host, which is
+   `~/.horizon/browser-profiles/<profile>/host-firefox.log` for a Firefox host
+   and the log of the Chromium of that host for a Chromium host.
+
+   Result: the log holds the line that the user context or the browser context
+   is removed.
+
+4. Open a private panel of the same host again, and read its page.
+
+   Result: the new private page reads no cookie of the private page of step 3.
+
+### 6.8 P08 — A lost link with two panels comes back to its own page
+
+Run this task with a Firefox host.
+
+1. Open two panels of one profile on the host, and go to a different page in each
+   panel. Type text into a field of the first panel.
+
+2. End the `ssh` child of the first panel, as task F3 of the
+   [browser host procedure](browser-host-firefox.md) says.
+
+   Result: the first panel says that the link is lost.
+
+3. Wait for the countdown of the panel.
+
+   Result: the first panel shows its own page, and the text that you typed is
+   still in the field. The second panel shows its own page, and it is not
+   reloaded.
 
 ## 7. Pass criteria
 
@@ -157,7 +215,11 @@ Run this task only with a configured Chromium browser host.
 - A private panel reads no cookie of the shared profile.
 - A restart puts a shared panel back in the same profile, in `Shared: default`.
 - The close of a private panel removes its folder, and no close and no session
-  delete removes the folder of a shared profile.
+  delete removes the folder of a shared profile. A folder of a private panel
+  that a run left behind is removed at the next start when no saved session
+  names it.
+- A browser host gives two panels of one profile that read the same sign-in, and
+  a private panel that reads none of it.
 - The chrome names the profile of each panel in one line.
 - Each refusal names the profile, or the rule that it breaks, and the action
   that the person can take.
