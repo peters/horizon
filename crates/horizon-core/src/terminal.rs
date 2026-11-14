@@ -274,6 +274,12 @@ mod tests {
     use std::sync::Arc;
     use std::sync::mpsc;
 
+    /// A wait that the machine's speed must not decide. A program that is ready
+    /// and a shutdown that ends it take milliseconds; this guard only separates
+    /// that from a shutdown that never returns, so a loaded machine cannot turn
+    /// the verdict into a failure.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     #[test]
     fn terminal_dimensions_clamp_to_supported_minimums() {
         let dimensions = TerminalDimensions::new(0, 1);
@@ -295,7 +301,9 @@ mod tests {
         let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         let mut terminal = Terminal::spawn(TerminalSpawnOptions {
             program,
-            args: Vec::new(),
+            // The program prints its line and then reads input that never comes,
+            // so only the hangup of its terminal can end it.
+            args: vec!["-c".to_string(), "printf 'ready\\n'; exec cat".to_string()],
             cwd: None,
             rows: 24,
             cols: 80,
@@ -309,7 +317,28 @@ mod tests {
         })
         .expect("terminal should spawn");
 
-        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+        // The program says when it runs. A hangup that reaches a program which
+        // has not started yet proves nothing about a wait for its end.
+        let deadline = std::time::Instant::now() + HANG_GUARD;
+        while !terminal
+            .try_last_lines_text(1)
+            .is_some_and(|text| text.contains("ready"))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the program of the panel started and printed its line"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // The program waits on the grid of this terminal, so the hangup of its
+        // PTY is the one thing that ends it: a true here is the join of that end,
+        // and a wait that never returns is far past the guard.
+        assert!(
+            terminal.shutdown_with_timeout(HANG_GUARD),
+            "the shutdown of a program that ended returned false"
+        );
+        assert!(terminal.pty_released(), "the PTY of the terminal is gone");
     }
 
     #[test]
