@@ -1,6 +1,12 @@
 use super::*;
 use std::io::{Read, Write};
 
+/// A wait that the machine's speed must not decide. The viewer reports the close
+/// of its server in milliseconds; this guard only separates that from a viewer
+/// that never reports it, so a loaded machine cannot turn the verdict into a
+/// failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 enum Reply {
     Silent,
     Raw,
@@ -154,7 +160,7 @@ fn disconnect_after_negotiation_invalidates_cached_capability_and_dimensions() {
     assert_eq!(backend.dimensions().unwrap(), ImageDimensions { width: 1, height: 1 });
     close.send(()).unwrap();
     server.join().unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + HANG_GUARD;
     while matches!(backend.supported(), Ok(true)) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }

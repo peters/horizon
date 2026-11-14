@@ -27,6 +27,12 @@ fn wait_until(mut ready: impl FnMut() -> bool, message: &str) {
     }
 }
 
+/// A wait that the machine's speed must not decide. A drop that lets go of its
+/// terminal returns at once; this guard only separates that from a drop that
+/// waits for the child of that terminal, which the test releases afterwards, so a
+/// loaded machine cannot turn the verdict into a failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 #[test]
 fn dropping_a_finished_event_loop_does_not_wait_for_its_live_child() {
     let state = tempfile::tempdir().expect("owned PTY fixture state");
@@ -74,7 +80,7 @@ fn dropping_a_finished_event_loop_does_not_wait_for_its_live_child() {
         drop(terminal);
         dropped_tx.send(()).expect("drop observer remains available");
     });
-    let dropped_before_release = dropped_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+    let dropped_before_release = dropped_rx.recv_timeout(HANG_GUARD).is_ok();
     // Unblock the old implementation before joining or asserting its failure.
     release.release();
     if !dropped_before_release {

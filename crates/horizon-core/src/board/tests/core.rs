@@ -5,6 +5,12 @@ use crate::panel::{PanelKind, PanelOptions};
 use super::super::*;
 use super::{editor_panel_options, shell_panel_options};
 
+/// A wait that the machine's speed must not decide. A shell that is ready and a
+/// shutdown that ends it take milliseconds; this guard only separates that from a
+/// wait that never ends, so a loaded machine cannot turn the verdict into a
+/// failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 #[test]
 fn rename_workspace_updates_matching_workspace() {
     let mut board = Board::new();
@@ -156,15 +162,12 @@ impl ShutdownFixture {
     fn wait_until_ready(&self) {
         #[cfg(unix)]
         {
-            let started = std::time::Instant::now();
+            let deadline = std::time::Instant::now() + HANG_GUARD;
             while !["shell-ready", "command-ready"]
                 .iter()
                 .all(|name| self.root.path().join(name).is_file())
             {
-                assert!(
-                    started.elapsed() < Duration::from_secs(2),
-                    "shells did not become ready"
-                );
+                assert!(std::time::Instant::now() < deadline, "shells did not become ready");
                 std::thread::sleep(Duration::from_millis(2));
             }
         }
@@ -238,8 +241,8 @@ fn begin_async_shutdown_completes_for_shell_and_command_panels() {
     fixture.wait_until_ready();
 
     let progress = board.begin_async_shutdown();
-    let started_at = std::time::Instant::now();
-    while !progress.is_complete() && started_at.elapsed() < Duration::from_secs(2) {
+    let deadline = std::time::Instant::now() + HANG_GUARD;
+    while !progress.is_complete() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
 

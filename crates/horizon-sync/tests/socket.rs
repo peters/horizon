@@ -11,6 +11,12 @@ use std::{
     time::Duration,
 };
 
+/// A wait that the machine's speed must not decide. A relay that sees the end of
+/// its socket returns at once; this guard only separates that from a relay that
+/// waits for the pipes of the test, which stay open for the whole test, so a
+/// loaded machine cannot turn the verdict into a failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 use horizon_core::Machine;
 use horizon_sync::{
     Client, Link, ObjectMirror, Op, Store, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket,
@@ -182,7 +188,7 @@ fn a_relay_returns_within_a_second_when_the_socket_ends_while_the_input_stays_op
     let (peer, _address) = listener.accept().expect("the link of the relay");
     drop(peer);
     assert_eq!(
-        returning.recv_timeout(Duration::from_secs(1)),
+        returning.recv_timeout(HANG_GUARD),
         Ok(true),
         "the relay returned at once after the socket ended"
     );

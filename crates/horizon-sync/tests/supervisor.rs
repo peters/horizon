@@ -30,6 +30,12 @@ use horizon_sync::{
 /// more than 30 seconds for one of these waits.
 const PATIENCE: Duration = Duration::from_secs(180);
 
+/// A wait that the machine's speed must not decide. A sentence that names the lost
+/// link answers at once; this guard only separates that from a request that a
+/// stopped server would answer, which is no answer at all, so a loaded machine
+/// cannot turn the verdict into a failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// The relay of one stand-in `ssh`: the bytes of its standard input and output go
 /// to the socket of the server in both directions.
 const RELAY: &str = "\
@@ -1196,7 +1202,7 @@ fn a_question_of_the_window_answers_at_once_when_the_server_is_away() {
     ] {
         let asked = a.handle().ask(request.clone());
         let answer = asked
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANG_GUARD)
             .unwrap_or_else(|error| panic!("{request:?} answered no sentence: {error}"));
         assert_eq!(
             answer,

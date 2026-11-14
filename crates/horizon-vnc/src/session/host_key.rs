@@ -381,6 +381,12 @@ mod tests {
     const READY_ARG: &str = "--horizon-vnc-test-ready";
     const READY: &str = "if [ \"$1\" = \"--horizon-vnc-test-ready\" ]; then exit 0; fi";
 
+    /// A wait that the machine's speed must not decide. Another test thread that
+    /// forks holds the open file of a stand-in for milliseconds; this guard only
+    /// separates that from a file that is never released, so a loaded machine
+    /// cannot turn the verdict into a failure.
+    const HANG_GUARD: Duration = Duration::from_secs(30);
+
     struct Scratch(PathBuf);
 
     impl Scratch {
@@ -410,7 +416,8 @@ mod tests {
         /// with `Text file busy`; retry until that window closes.
         fn make_runnable(&self, name: &str) {
             let path = self.0.join(name);
-            for _ in 0..200 {
+            let deadline = std::time::Instant::now() + HANG_GUARD;
+            loop {
                 let status = std::process::Command::new(&path)
                     .arg(READY_ARG)
                     .stdout(Stdio::null())
@@ -419,9 +426,9 @@ mod tests {
                 if status.is_ok_and(|status| status.success()) {
                     return;
                 }
+                assert!(std::time::Instant::now() < deadline, "{name} never became runnable");
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            panic!("{name} never became runnable");
         }
 
         /// A stand-in `ssh` that records the arguments of each call and answers

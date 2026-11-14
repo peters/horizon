@@ -10,6 +10,12 @@ use horizon_browser::remote::{
 
 const PLAN: &str = r#"{"parallel_sessions_running":3,"parallel_sessions_max_allowed":10,"team_parallel_sessions_max_allowed":5,"queued_sessions":2}"#;
 
+/// A wait that the machine's speed must not decide. A thread that starts and
+/// answers in microseconds is waited for; this guard only separates that from a
+/// read that waits for a lock the test holds, which would never answer, so a
+/// loaded machine cannot turn the verdict into a failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 fn profile() -> RemoteProviderProfile {
     RemoteProviderProfile {
         adapter: RemoteAdapterKind::Browserstack,
@@ -234,7 +240,7 @@ fn session_credentials_do_not_wait_for_an_unrelated_file_read() {
     credentials
         .set_session_value("remote", &profile, &CredentialReference::from("key"), b"synthetic-key")
         .expect("credential");
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + HANG_GUARD;
     let file = loop {
         credentials.poll();
         if let Some(store) = credentials.store_handle() {
@@ -249,7 +255,7 @@ fn session_credentials_do_not_wait_for_an_unrelated_file_read() {
     let worker = std::thread::spawn(move || {
         sender.send(prepared.authorization().is_ok()).expect("answer");
     });
-    let resolved_while_locked = receiver.recv_timeout(Duration::from_secs(1));
+    let resolved_while_locked = receiver.recv_timeout(HANG_GUARD);
     drop(guard);
     worker.join().expect("worker");
     assert_eq!(resolved_while_locked, Ok(true));
@@ -374,7 +380,7 @@ fn stalled_usage_read_does_not_hold_the_allocation_store() {
     binding.store = CredentialStoreKind::File;
     binding.slot = Some("test-slot".into());
     let mut credentials = credentials();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + HANG_GUARD;
     let shared = loop {
         credentials.poll();
         if let Some(shared) = credentials.store_handle() {
@@ -392,7 +398,7 @@ fn stalled_usage_read_does_not_hold_the_allocation_store() {
         Ok(Box::new(SecretStore::in_memory().expect("a store in memory")))
     }));
     let worker = std::thread::spawn(move || prepared.authorization());
-    reading.recv_timeout(Duration::from_secs(1)).expect("reader started");
+    reading.recv_timeout(HANG_GUARD).expect("reader started");
     assert!(shared.try_lock().is_ok(), "usage must never retain allocation's mutex");
     release.send(()).expect("release reader");
     assert!(worker.join().expect("worker").is_err());

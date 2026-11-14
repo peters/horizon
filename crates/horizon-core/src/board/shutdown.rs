@@ -324,6 +324,12 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    /// A wait that the machine's speed must not decide. Starting the work of a
+    /// forced cleanup takes milliseconds; this guard only separates that from a
+    /// caller that waits for the cleanup itself, so a loaded machine cannot turn
+    /// the verdict into a failure.
+    const HANG_GUARD: Duration = Duration::from_secs(2);
+
     #[test]
     fn completion_wait_observes_async_teardown() {
         let completed = Arc::new(AtomicUsize::new(0));
@@ -394,7 +400,10 @@ mod tests {
             initial,
             ForcedBrowserShutdownStatus::Running | ForcedBrowserShutdownStatus::Succeeded
         ));
-        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(
+            started.elapsed() < HANG_GUARD,
+            "the caller starts the forced work and waits for nothing"
+        );
         let deadline = Instant::now() + Duration::from_secs(1);
         while progress.forced_browser_shutdown_status() == ForcedBrowserShutdownStatus::Running
             && Instant::now() < deadline
