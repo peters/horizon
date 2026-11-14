@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use super::*;
-use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use horizon_core::{RuntimeState, StartupDecision};
 
 fn app() -> (tempfile::TempDir, Context, HorizonApp) {
@@ -160,6 +160,8 @@ fn an_update_that_asks_for_the_wide_card_widens_the_same_card() {
     ) else {
         panic!("the update applies");
     };
+    // The frame draws the new document, measures it and fits the card to it.
+    run_app_frame_with_input(&ctx, &mut app, raw_input([5120.0, 1200.0], None));
 
     assert_eq!(revision, 2);
     let wide = card_width(&app, &panel_id);
@@ -204,6 +206,7 @@ fn a_card_that_the_person_resized_keeps_its_size_when_the_document_asks_for_the_
         ),
         &ctx,
     );
+    run_app_frame_with_input(&ctx, &mut app, raw_input([5120.0, 1200.0], None));
 
     assert_eq!(
         card_width(&app, &panel_id),

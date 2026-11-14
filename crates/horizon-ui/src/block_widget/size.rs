@@ -54,11 +54,13 @@ const CALLOUT_CHARS_PER_LINE: usize = 34;
 /// titlebar, the panel padding above and below the body, and the footer.
 pub(crate) const CARD_CHROME_HEIGHT: f32 = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING + FOOTER_HEIGHT;
 
-/// The bounds of a card height that fits its content.
+/// The bounds of a card height that fits its content, which only the tests
+/// judge on their own: the height of a card follows its document.
+#[cfg(test)]
 pub(crate) const CARD_HEIGHT_LIMITS: [f32; 2] = [CARD_MIN_HEIGHT, CARD_MAX_HEIGHT];
 
 /// Whether the document asks for the wide card.
-pub(crate) fn asks_wide(document: &BlockDocument) -> bool {
+fn asks_wide(document: &BlockDocument) -> bool {
     document.width == Some(Width::Wide)
 }
 
@@ -82,7 +84,7 @@ pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
 /// width opens the card as a narrow card. A document without a board keeps the
 /// width of the wide card of round 40: the half of the view, between the bounds
 /// of the wide card.
-pub(crate) fn wide_card_width(document: &BlockDocument, canvas_width: f32) -> f32 {
+fn wide_card_width(document: &BlockDocument, canvas_width: f32) -> f32 {
     let Some(columns) = board_columns(document) else {
         return (canvas_width * 0.5).clamp(WIDE_CARD_MIN_WIDTH, WIDE_CARD_MAX_WIDTH);
     };
@@ -134,6 +136,17 @@ pub(crate) fn fitted_card_height(
         .clamp(limits[0], limits[1])
 }
 
+/// The width that a card of `document` takes at a canvas view of `canvas_width`:
+/// the narrow card while the document is narrow, and the width that the board of
+/// a wide document asks for while the document is wide.
+pub(crate) fn card_width(document: &BlockDocument, canvas_width: f32) -> f32 {
+    if asks_wide(document) {
+        wide_card_width(document, canvas_width)
+    } else {
+        CARD_WIDTH
+    }
+}
+
 /// The size a new card of `document` opens at: the width that the document asks
 /// for and the height its content is estimated to need, between the card
 /// limits. A wide card opens at half of the canvas view of `canvas_width`.
@@ -141,11 +154,7 @@ pub(crate) fn fitted_card_height(
 /// The estimate is provisional: the first pass measures the real content and
 /// [`fitted_card_height`] takes over from it.
 pub(crate) fn default_card_size(document: &BlockDocument, canvas_width: f32) -> [f32; 2] {
-    let width = if asks_wide(document) {
-        wide_card_width(document, canvas_width)
-    } else {
-        CARD_WIDTH
-    };
+    let width = card_width(document, canvas_width);
     let body_width = width - 2.0 * f32::from(BODY_PAD_SIDE);
     let form = Form::of(body_width);
     let body = components_height(document, form, body_width);

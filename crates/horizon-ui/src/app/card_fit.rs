@@ -1,12 +1,17 @@
-//! Fits a card panel to the height its content needs.
+//! Fits a card panel to the size its content needs.
 //!
 //! The body measures its content in the pass that draws it, because only that
-//! pass has the font atlas. After the pass, the host gives the card the height
-//! the measurement asks for, once per document revision and set of
-//! Horizon-owned frames: the card opens and changes at the size of its content,
-//! a card that the person resized by hand keeps the person's size, and a card
-//! shorter than its content scrolls its body above a footer that stays put. One
-//! repaint settles a new height, so no frame loop starts.
+//! pass has the font atlas. After the pass, the host gives the card the size the
+//! measurement asks for, once per document revision and set of Horizon-owned
+//! frames: the card opens, widens and changes at the size of its content, a card
+//! that the person resized by hand keeps the person's size, and a card shorter
+//! than its content scrolls its body above a footer that stays put. One repaint
+//! settles a new size, so no frame loop starts.
+//!
+//! The width follows the document too: a wide document takes the width that its
+//! board asks for at every update, and a document that is narrow again takes the
+//! narrow card. The left edge of the panel stays where it is, so the card grows
+//! and shrinks to the right.
 //!
 //! The frames that Horizon adds above the body, the one that explains a card
 //! whose agent left and the one that reports a refused click, take room like a
@@ -18,14 +23,14 @@
 
 use egui::Context;
 
-use horizon_core::{Panel, PanelId, PanelKind};
+use horizon_core::{PanelId, PanelKind};
 
 use super::HorizonApp;
-use crate::block_widget::{CARD_HEIGHT_LIMITS, card_height_limits, fitted_card_height};
+use crate::block_widget::{card_height_limits, card_width, fitted_card_height};
 
 impl HorizonApp {
-    /// Gives every card panel the height that its content of the current
-    /// revision and frames needs, and marks that pair as fitted.
+    /// Gives every card panel the size that its content of the current revision
+    /// and frames needs, and marks that pair as fitted.
     ///
     /// Runs after the pass that measured the content. A card whose document and
     /// frames did not change since its last fit is left alone, so a person's
@@ -38,6 +43,8 @@ impl HorizonApp {
             .filter(|panel| panel.kind == PanelKind::Block)
             .map(|panel| panel.id)
             .collect();
+        // The room of the canvas decides how wide a wide card may be.
+        let canvas_width = self.canvas_rect(ctx).width();
         let mut resized = false;
         for id in cards {
             let Some(revision) = self
@@ -58,18 +65,17 @@ impl HorizonApp {
                 continue;
             };
             let hand_resized = card.hand_resized();
-            // The bounds of the height come from the document: a wide card may
-            // grow taller than the narrow card of today.
-            let limits = self
-                .board
-                .panel(id)
-                .and_then(Panel::block)
-                .map_or(CARD_HEIGHT_LIMITS, |state| card_height_limits(&state.document));
-            let Some((size, workspace_id)) = self
-                .board
-                .panel(id)
-                .map(|panel| (panel.layout.size, panel.workspace_id))
-            else {
+            // The bounds of the height and the width come from the document: a
+            // wide card may grow taller and wider than the narrow card of today.
+            let Some((limits, width, current, workspace_id)) = self.board.panel(id).and_then(|panel| {
+                let document = &panel.block()?.document;
+                Some((
+                    card_height_limits(document),
+                    card_width(document, canvas_width),
+                    panel.layout.size,
+                    panel.workspace_id,
+                ))
+            }) else {
                 continue;
             };
             // An arranged workspace gives every panel its preset size.
@@ -80,11 +86,17 @@ impl HorizonApp {
             {
                 continue;
             }
-            let fitted = fitted_card_height(measured, hand_resized, size[1], limits);
-            if (fitted - size[1]).abs() > f32::EPSILON {
-                resized |= self.board.resize_panel(id, [size[0], fitted]);
+            let fitted = fitted_card_height(measured, hand_resized, current[1], limits);
+            let fitted_width = if hand_resized { current[0] } else { width };
+            let wider = (fitted_width - current[0]).abs() > f32::EPSILON;
+            if wider || (fitted - current[1]).abs() > f32::EPSILON {
+                resized |= self.board.resize_panel(id, [fitted_width, fitted]);
             }
-            if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id) {
+            // A card that took another width measures its content again: the
+            // height of a document depends on the room that its body has.
+            if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id)
+                && !wider
+            {
                 card.mark_content_fit(revision);
             }
         }

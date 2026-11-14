@@ -1,11 +1,11 @@
-//! A card takes the height its content needs, once per document and per set of
+//! A card takes the size its content needs, once per document and per set of
 //! Horizon-owned frames.
 
-use horizon_browser_control::block::BlockDocument;
+use horizon_browser_control::block::{BlockDocument, BoardColumn, BoardItem, BoardRow, BoardState, Component, Width};
 use horizon_core::{BlockPanelState, CardFrames, Panel, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 
 use super::*;
-use crate::app::test_support::{editor_workspace_state, test_app_with_startup};
+use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
 use crate::block_widget::CARD_CHROME_HEIGHT;
 
 /// A board with one card panel that measured `measured_content_height`.
@@ -223,4 +223,111 @@ fn a_workspace_preset_keeps_the_size_of_its_cards() {
         "the preset owns the size of its panels"
     );
     assert!((height(&app, sibling) - sibling_height).abs() < f32::EPSILON);
+}
+
+/// The width of the card panel `id`.
+fn width(app: &HorizonApp, id: PanelId) -> f32 {
+    app.board.panel(id).expect("the card").layout.size[0]
+}
+
+/// A document of `columns` waves, as the board of a plan card draws them.
+fn board_document(columns: usize) -> BlockDocument {
+    BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![Component::Board {
+            columns: (0..columns)
+                .map(|index| BoardColumn {
+                    label: format!("wave {index}"),
+                    tag: Some(format!("{}", index + 1)),
+                    note: None,
+                    value: Some("5 m".to_owned()),
+                    current: index == 0,
+                })
+                .collect(),
+            rows: vec![BoardRow {
+                label: "helper-1 · build-1".to_owned(),
+                subtitle: None,
+            }],
+            items: vec![BoardItem {
+                column: 0,
+                row: 0,
+                title: "Read the issue".to_owned(),
+                state: BoardState::Done,
+                value: None,
+                note: None,
+                tag: None,
+            }],
+        }],
+    }
+}
+
+/// A document of `columns` waves that asks for the narrow card.
+fn narrow_document(columns: usize) -> BlockDocument {
+    BlockDocument {
+        width: None,
+        ..board_document(columns)
+    }
+}
+
+/// Replaces the document of the card panel `id`.
+fn replace(app: &mut HorizonApp, id: PanelId, document: BlockDocument) {
+    let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
+    let _ = state.replace_document(document);
+}
+
+/// The view of the window of this test: the whole screen, so that the canvas
+/// keeps its width and no sidebar takes room from it.
+const VIEW: [f32; 2] = [5120.0, 1200.0];
+
+#[test]
+fn a_card_takes_the_width_that_its_document_asks_for_at_every_update() {
+    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    app.sidebar_visible = false;
+
+    // The card of a person who did not resize it: the width follows the document
+    // at every update, wider and narrower again, and the card grows to the right.
+    let left = app.board.panel(id).expect("the card").layout.position[0];
+    for (document, expected) in [
+        (narrow_document(1), 420.0),
+        (board_document(2), 1222.0),
+        (board_document(5), 2400.0),
+        (board_document(2), 1222.0),
+        (narrow_document(1), 420.0),
+    ] {
+        replace(&mut app, id, document);
+        run_app_frame_with_input(&ctx, &mut app, raw_input(VIEW, None));
+        assert!(
+            (width(&app, id) - expected).abs() < 0.5,
+            "the card takes the {expected} points that its document asks for, not {}",
+            width(&app, id)
+        );
+        assert!(
+            (app.board.panel(id).expect("the card").layout.position[0] - left).abs() < f32::EPSILON,
+            "the left edge stays where the person put it"
+        );
+    }
+}
+
+#[test]
+fn a_card_that_the_person_resized_by_hand_keeps_its_size_at_every_update() {
+    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    app.sidebar_visible = false;
+    replace(&mut app, id, board_document(2));
+    run_app_frame_with_input(&ctx, &mut app, raw_input(VIEW, None));
+    let card = app.panel_render_caches.card_runtime.entry(id).or_default();
+    card.mark_hand_resized();
+    assert!(
+        app.board.resize_panel(id, [700.0, 500.0]),
+        "the person resizes the card"
+    );
+
+    for document in [board_document(5), board_document(2), narrow_document(1)] {
+        replace(&mut app, id, document);
+        run_app_frame_with_input(&ctx, &mut app, raw_input(VIEW, None));
+        let size = app.board.panel(id).expect("the card").layout.size;
+        assert!(
+            (size[0] - 700.0).abs() < f32::EPSILON && (size[1] - 500.0).abs() < f32::EPSILON,
+            "the person's own size stays: {size:?}"
+        );
+    }
 }

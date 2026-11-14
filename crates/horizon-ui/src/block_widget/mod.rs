@@ -39,10 +39,10 @@ pub(crate) use form::Form as CardForm;
 /// The frame around the body, which only the tests judge on its own.
 #[cfg(test)]
 pub(crate) use size::CARD_CHROME_HEIGHT;
-pub(crate) use size::{
-    CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS, asks_wide, card_height_limits, default_card_size, fitted_card_height,
-    wide_card_width,
-};
+/// The bounds of a card height, which only the tests judge on their own.
+#[cfg(test)]
+pub(crate) use size::CARD_HEIGHT_LIMITS;
+pub(crate) use size::{CARD_FOOT_SPAN, card_height_limits, card_width, default_card_size, fitted_card_height};
 
 use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
 use horizon_browser_control::block::{BlockDocument, Component, Tone};
