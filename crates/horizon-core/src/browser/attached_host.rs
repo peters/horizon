@@ -807,6 +807,33 @@ impl BrowserPanelState {
             .is_some_and(|slot| slot.failure.is_some() && slot.reached_ready)
     }
 
+    /// How long the panel says that a lost link came back to the same page. The
+    /// notice is about an event that already happened, and a page that never
+    /// navigates would keep it in the chrome for the rest of the panel's life.
+    pub const RESUMED_NOTICE_TTL: std::time::Duration = std::time::Duration::from_secs(12);
+
+    /// Record that the link of this panel came back to the same page.
+    pub(super) fn set_page_resumed(&mut self, resumed: bool) {
+        self.page_resumed = resumed;
+        self.resumed_notice_at = resumed.then(std::time::Instant::now);
+    }
+
+    /// Clear the notice of a page that came back, after its time. Says whether
+    /// the notice went, so the frame shows the chrome without it.
+    pub(crate) fn expire_resumed_notice_at(&mut self, now: std::time::Instant) -> bool {
+        if !self.page_resumed {
+            return false;
+        }
+        let Some(since) = self.resumed_notice_at else {
+            return false;
+        };
+        if now.saturating_duration_since(since) < Self::RESUMED_NOTICE_TTL {
+            return false;
+        }
+        self.set_page_resumed(false);
+        true
+    }
+
     /// The driver bound a page target. On an automatic attempt the page is
     /// either the one the person already had — the browser of that machine kept
     /// running behind the lost link, so its text, its scroll place and its
