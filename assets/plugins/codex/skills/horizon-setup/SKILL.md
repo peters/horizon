@@ -28,6 +28,9 @@ itself belongs to other skills:
   SSH and the delete.
 - `horizon-server` holds the Horizon server on a machine: the copy, the service,
   the check and the removal.
+- `horizon-server-move` holds the move of the server to another computer: the
+  order, the check of the store id, the note for each other computer and the undo
+  of each step.
 
 This skill repeats none of them. It gives the order, the words of each card and
 what the person presses.
@@ -492,6 +495,15 @@ The three ways are the three rows, in their order:
   other computer pastes the link in Join with a link.
 
 `Done` closes the Set up card, and `Close` does the same.
+
+### 5. When the server must move
+
+The person wants the server on another computer, or replaces the computer that
+runs it. The goal is not a card of this flow: it is the skill
+`horizon-server-move`, which gives the order, the cards, the check of the store
+id and the undo of each step. Tell the person that one sentence, and read that
+skill. It moves the same server home, so the machines, the keys, the values and
+the computers that joined stay the same.
 
 ## Goal `browser`
 

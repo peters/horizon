@@ -1089,10 +1089,11 @@ fn the_card_documents_of_the_set_up_procedure_are_valid() {
     );
 }
 
-/// The card documents that the skills of Set up ship. The two bundled copies of
-/// each skill hold the same bytes, and the coverage check keeps them in step, so
-/// one copy is read here.
-const SKILL_DOCUMENTS: [(&str, &str); 3] = [
+/// The card documents that the bundled skills ship: Set up and the recipes that
+/// its steps name, the plan of one task and the move of the server. The two
+/// bundled copies of each skill hold the same bytes, and the coverage check keeps
+/// them in step, so one copy is read here.
+const SKILL_DOCUMENTS: [(&str, &str); 5] = [
     (
         "horizon-setup",
         include_str!("../../../../assets/plugins/claude-code/skills/horizon-setup/SKILL.md"),
@@ -1104,6 +1105,14 @@ const SKILL_DOCUMENTS: [(&str, &str); 3] = [
     (
         "horizon-machines",
         include_str!("../../../../assets/plugins/claude-code/skills/horizon-machines/SKILL.md"),
+    ),
+    (
+        "horizon-plan",
+        include_str!("../../../../assets/plugins/claude-code/skills/horizon-plan/SKILL.md"),
+    ),
+    (
+        "horizon-server-move",
+        include_str!("../../../../assets/plugins/claude-code/skills/horizon-server-move/SKILL.md"),
     ),
 ];
 
@@ -1131,6 +1140,8 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     let setup = skill_documents(SKILL_DOCUMENTS[0].0, SKILL_DOCUMENTS[0].1);
     let server = skill_documents(SKILL_DOCUMENTS[1].0, SKILL_DOCUMENTS[1].1);
     let machines = skill_documents(SKILL_DOCUMENTS[2].0, SKILL_DOCUMENTS[2].1);
+    let plan = skill_documents(SKILL_DOCUMENTS[3].0, SKILL_DOCUMENTS[3].1);
+    let server_move = skill_documents(SKILL_DOCUMENTS[4].0, SKILL_DOCUMENTS[4].1);
 
     assert_eq!(
         setup.len(),
@@ -1145,6 +1156,35 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     assert!(
         server.is_empty(),
         "the server skill gives commands and no card, so a card cannot drift from its recipe"
+    );
+    assert_eq!(
+        plan.len(),
+        5,
+        "the plan skill ships the plan of 3, 8 and 12 todos, the card of an older run and the card of a stopped plan"
+    );
+    assert_eq!(
+        server_move.len(),
+        4,
+        "the move skill ships the plan of the move, the card of the link, the card of the done step and the failure card"
+    );
+    let todo_rows: Vec<usize> = plan
+        .iter()
+        .take(3)
+        .map(|document| {
+            document
+                .components
+                .iter()
+                .find_map(|component| match component {
+                    Component::List { rows, .. } => Some(rows.len()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        todo_rows,
+        vec![3, 8, 12],
+        "the plan card holds one row per todo, and its three layouts hold 3, 8 and 12 of them"
     );
 
     let headings: Vec<String> = setup
@@ -1178,7 +1218,7 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     );
     // Every card of a flow takes a press, so the person can move on: a card
     // holds a button or a row that takes one.
-    for document in setup.iter().chain(&machines) {
+    for document in setup.iter().chain(&machines).chain(&plan).chain(&server_move) {
         let takes_a_press = document.components.iter().any(|component| match component {
             Component::Buttons { items } => !items.is_empty(),
             Component::List { rows, selection, .. } => {

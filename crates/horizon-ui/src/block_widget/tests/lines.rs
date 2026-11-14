@@ -13,10 +13,10 @@ use horizon_core::CardRuntime;
 use super::{CardFrames, Owner};
 use crate::app::setup::notice::{self, ProgramRow};
 
-/// The card documents of the skills of Set up, from the copy that the build
+/// The card documents of the bundled skills, from the copy that the build
 /// embeds. The two bundled copies of each skill hold the same bytes, and the
 /// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 3] = [
+const SKILLS: [(&str, &str); 5] = [
     (
         "horizon-setup",
         include_str!(concat!(
@@ -36,6 +36,20 @@ const SKILLS: [(&str, &str); 3] = [
         include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-machines/SKILL.md"
+        )),
+    ),
+    (
+        "horizon-plan",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-plan/SKILL.md"
+        )),
+    ),
+    (
+        "horizon-server-move",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-server-move/SKILL.md"
         )),
     ),
 ];
@@ -147,7 +161,7 @@ fn lines_at_zoom(zoom: f32, documents: &[(String, BlockDocument)]) -> Vec<Vec<(S
         .collect()
 }
 
-/// Every component of the card documents of the three skills and of the notice
+/// Every component of the card documents of the bundled skills and of the notice
 /// card keeps the line count and the words of every line of zoom 1, at forty
 /// zoom values between 0.5 and 2.0.
 #[test]
