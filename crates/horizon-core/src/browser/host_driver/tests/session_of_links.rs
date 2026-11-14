@@ -586,7 +586,7 @@ fn the_bound_of_a_private_page_with_no_link_is_one_constant() {
     let released_at = Instant::now();
 
     assert!(
-        !pages.close_unlinked_private_pages(released_at + PRIVATE_PAGE_UNLINKED - Duration::from_secs(1)),
+        !pages.close_unlinked_private_pages(released_at + Duration::from_secs(599)),
         "the session closes no page before the bound"
     );
     assert!(pages.keeps_page("private-panel"), "the private page waits for a link");

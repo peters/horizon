@@ -39,7 +39,7 @@ pub const MAX_PAGES: usize = 8;
 /// Horizon stopped with keeps nothing of the host for ever. A shared page keeps
 /// the page of its panel instead: a person signs in there, and that page is the
 /// reason for the host.
-pub const PRIVATE_PAGE_UNLINKED: Duration = Duration::from_secs(10 * 60);
+pub const PRIVATE_PAGE_UNLINKED: Duration = Duration::from_mins(10);
 
 /// Why a link cannot drive the page that it asked for, in the words that the
 /// person reads.
