@@ -66,6 +66,7 @@ pub fn show(
                 });
         clicked |= super::orientation::controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
+        profile_label(ui, browser);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
         // what the row can spare while keeping the URL bar a usable minimum
@@ -205,6 +206,34 @@ fn remote_host_label(ui: &mut Ui, target: &str) {
         RichText::new(target).size(10.0).color(theme::FG_SOFT()),
     ))
     .on_hover_text("This page belongs to a browser host on this SSH target");
+}
+
+/// The profile of a local browser panel, beside its engine: `Shared: <name>` is
+/// one browser of the sign-ins of that profile, and `Private` is a browser of this
+/// panel alone that is signed in nowhere.
+///
+/// A panel of a browser host names the profile of that machine in the picker's
+/// place instead, and a remote device runs no profile of this computer.
+fn profile_label(ui: &mut Ui, browser: &horizon_core::browser::BrowserPanelState) {
+    const SHARED_HINT: &str = "Every panel of this profile is one page of one browser: they read the same sign-ins, and a sign-out in one \
+         signs out all of them. Use Private panel for a browser that is not signed in.";
+    const PRIVATE_HINT: &str = "This panel has a browser of its own: it is signed in nowhere, it reads none of the shared sign-ins, and its \
+         profile is gone when the panel closes.";
+    if let Some(name) = browser.shared_profile_id() {
+        let label = |ui: &mut Ui, text: &str, strong: bool| {
+            let mut text = RichText::new(text).size(10.0).color(theme::FG_SOFT());
+            text = if strong { text.strong() } else { text };
+            ui.add(egui::Label::new(text).wrap_mode(TextWrapMode::Truncate))
+                .on_hover_text(SHARED_HINT);
+        };
+        label(ui, "Shared:", false);
+        label(ui, name, true);
+    } else if browser.is_private_profile() {
+        ui.add(egui::Label::new(
+            RichText::new("Private").size(10.0).color(theme::FG_SOFT()),
+        ))
+        .on_hover_text(PRIVATE_HINT);
+    }
 }
 
 fn backend_picker(

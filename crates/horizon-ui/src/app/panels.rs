@@ -83,6 +83,8 @@ struct PanelUiOutcome {
     commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
     duplicate_browser: bool,
+    /// Open a private browser panel with the page of this one.
+    private_browser: bool,
     session_rebind_and_restart: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,

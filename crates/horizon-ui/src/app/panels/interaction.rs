@@ -136,6 +136,36 @@ impl HorizonApp {
         }
     }
 
+    /// The browser items of the panel menu: another page of the profile of this
+    /// panel, and a private panel that keeps nothing.
+    fn show_browser_items(&mut self, ui: &mut egui::Ui, panel_id: PanelId, outcome: &mut PanelUiOutcome) {
+        let browser = self.board.panel(panel_id).and_then(|panel| panel.browser());
+        let supported = browser.is_some_and(horizon_core::browser::BrowserPanelState::can_duplicate);
+        let private = browser.is_some_and(horizon_core::browser::BrowserPanelState::can_open_private);
+        if ui
+            .add_enabled(supported, egui::Button::new("Duplicate panel"))
+            .on_hover_text(
+                "Open the same URL in a new panel, sharing login and website storage. Requires local Chromium or Firefox.",
+            )
+            .clicked()
+        {
+            outcome.duplicate_browser = true;
+            ui.close();
+        }
+        if ui
+            .add_enabled(private, egui::Button::new("Private panel"))
+            .on_hover_text(
+                "Open the same URL in a panel of its own: it is signed in nowhere, it reads none of the shared \
+                 sign-ins, and its profile is gone when the panel closes.",
+            )
+            .clicked()
+        {
+            outcome.private_browser = true;
+            ui.close();
+        }
+        ui.separator();
+    }
+
     pub(super) fn show_panel_context_menu(
         &mut self,
         drag_response: &egui::Response,
@@ -149,22 +179,7 @@ impl HorizonApp {
         popup.show(|ui| {
             ui.set_min_width(180.0);
             if kind == PanelKind::Browser {
-                let supported = self
-                    .board
-                    .panel(panel_id)
-                    .and_then(|panel| panel.browser())
-                    .is_some_and(horizon_core::browser::BrowserPanelState::can_duplicate);
-                if ui
-                    .add_enabled(supported, egui::Button::new("Duplicate panel"))
-                    .on_hover_text(
-                        "Open the same URL in a new panel, sharing login and website storage. Requires local Chromium or Firefox.",
-                    )
-                    .clicked()
-                {
-                    outcome.duplicate_browser = true;
-                    ui.close();
-                }
-                ui.separator();
+                self.show_browser_items(ui, panel_id, outcome);
             }
             if let Some(workspace) = self.show_workspace_destination(ui, drag_response, current_workspace_id) {
                 outcome.workspace_assignment = Some(workspace);
@@ -338,15 +353,8 @@ impl HorizonApp {
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);
         }
-        if outcome.duplicate_browser {
-            match self.board.duplicate_browser_panel(panel_id) {
-                Ok(duplicate) => {
-                    self.reveal_selected_panel(ctx, duplicate);
-                    self.mark_runtime_dirty();
-                    ctx.request_repaint();
-                }
-                Err(error) => tracing::warn!(%error, "could not duplicate browser panel"),
-            }
+        if outcome.duplicate_browser || outcome.private_browser {
+            self.open_panel_beside(ctx, panel_id, snapshot.current_workspace_id, outcome.private_browser);
         }
         if let Some(workspace_id) = outcome.workspace_assignment {
             self.workspace_assignments.push((panel_id, workspace_id));
@@ -359,6 +367,32 @@ impl HorizonApp {
         }
 
         matches!(outcome.command, Some(PanelCommand::Close))
+    }
+
+    /// Open a browser panel beside the source with its page: another page of the
+    /// profile of that panel, or a private panel that is signed in nowhere.
+    fn open_panel_beside(&mut self, ctx: &Context, panel_id: PanelId, workspace_id: WorkspaceId, private: bool) {
+        let options = if private {
+            self.board
+                .panel(panel_id)
+                .and_then(|panel| panel.browser())
+                .and_then(horizon_core::browser::BrowserPanelState::private_panel_options)
+        } else {
+            None
+        };
+        let opened = match (private, options) {
+            (true, Some(options)) => self.board.create_panel(options, workspace_id),
+            (true, None) => return,
+            (false, _) => self.board.duplicate_browser_panel(panel_id),
+        };
+        match opened {
+            Ok(opened) => {
+                self.reveal_selected_panel(ctx, opened);
+                self.mark_runtime_dirty();
+                ctx.request_repaint();
+            }
+            Err(error) => tracing::warn!(%error, "could not open a panel beside the browser panel"),
+        }
     }
 
     fn apply_panel_drag(

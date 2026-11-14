@@ -227,6 +227,13 @@ impl BrowserPanelState {
         directory.join("captures")
     }
 
+    /// Whether this panel is a private one: a browser of its own that is signed
+    /// in nowhere and whose folder goes away at its close.
+    #[must_use]
+    pub fn is_private_profile(&self) -> bool {
+        self.shared_session.is_some() && self.shared_profile_id().is_none()
+    }
+
     /// The name of the shared profile of this panel.
     ///
     /// `None` is a private panel: its folder belongs to this panel alone, keeps
@@ -288,6 +295,29 @@ impl BrowserPanelState {
             && matches!(self.backend(), BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
             && matches!(self.status, BrowserStatus::Ready)
             && self.shared_session.is_some()
+    }
+
+    /// Whether this panel can open a private panel beside it: only a panel of a
+    /// browser of this computer can, because a browser host keeps the profile of
+    /// that machine and a remote device keeps its own.
+    #[must_use]
+    pub fn can_open_private(&self) -> bool {
+        !self.is_remote() && !self.is_attached() && !self.is_host_driver()
+    }
+
+    /// Construct the options of a private panel with the page of this one.
+    ///
+    /// The panel gets a profile folder of its own, so it is signed in nowhere
+    /// and keeps nothing after its close.
+    #[must_use]
+    pub fn private_panel_options(&self) -> Option<PanelOptions> {
+        self.can_open_private().then(|| PanelOptions {
+            kind: PanelKind::Browser,
+            command: self.url.clone().or_else(|| self.requested_url.clone()),
+            browser_config: Some(self.config.clone()),
+            browser_session_id: None,
+            ..PanelOptions::default()
+        })
     }
 
     /// Construct a new page's launch options without copying profile files.
@@ -651,6 +681,31 @@ mod tests {
             left.shared_session.as_ref().expect("left"),
             other.shared_session.as_ref().expect("other")
         ));
+    }
+
+    /// The private panel of the menu takes the page of its source and no profile.
+    #[test]
+    fn a_private_panel_takes_the_page_of_its_source_and_no_profile() {
+        let root = tempfile::tempdir().expect("profiles");
+        let source = panel(root.path(), "page-1", "work");
+        let options = source
+            .private_panel_options()
+            .expect("a local panel opens a private one");
+        assert!(
+            options.browser_session_id.is_none(),
+            "a private panel joins no shared profile"
+        );
+        assert_eq!(options.command.as_deref(), Some("https://example.test/current"));
+        assert!(
+            options.browser_config.is_some(),
+            "the private panel keeps the engine of its source"
+        );
+
+        let remote = BrowserPanelState::restored_remote("page-2", &BrowserConfig::default(), "phone".into(), None);
+        assert!(
+            !remote.can_open_private(),
+            "a remote device keeps its own browser, so it opens no private panel of this computer"
+        );
     }
 
     #[test]
