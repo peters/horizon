@@ -243,6 +243,7 @@ impl HorizonApp {
             | Operation::MachineKeys
             | Operation::DeleteMachineKey { .. } => self.answer_machine_request(&request.operation, request, root, ctx),
             Operation::ServerStatus => Some(self.answer_server_status()),
+            Operation::BrowserHostStatus => Some(self.answer_browser_host_status()),
             Operation::Presets => Some(self.answer_presets()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
                 self.answer_setting_request(&request.operation, actor, request, root, ctx)
@@ -270,6 +271,33 @@ impl HorizonApp {
                 store,
             }),
         }
+    }
+
+    /// Answers `browser_host_status`: the browser host that the browser panels
+    /// of this computer follow. It reads the entry that the settings hold in
+    /// memory and writes nothing, so no frame waits for a file, and the answer
+    /// holds no key, no password and no token.
+    fn answer_browser_host_status(&self) -> Outcome {
+        let entry = &self.template_config.browser_host;
+        let host = if entry.names_host() {
+            block::BrowserHost {
+                state: "host".to_owned(),
+                ssh_target: entry.ssh_target().map(str::to_owned),
+                machine: entry.machine().map(str::to_owned),
+                profile: entry.profile().map(str::to_owned),
+                engine: entry.engine().as_str().to_owned(),
+                command: entry.driver_command().map(str::to_owned),
+            }
+        } else {
+            // An entry that names no host serves the browser of this computer, so
+            // no field of an entry that a person dropped reaches the answer.
+            block::BrowserHost {
+                state: "local".to_owned(),
+                engine: horizon_core::BrowserHostEngine::default().as_str().to_owned(),
+                ..block::BrowserHost::default()
+            }
+        };
+        Outcome::BrowserHostStatus { host: Box::new(host) }
     }
 
     /// Answers `open_terminal`: a route of its own, or the record of a machine of

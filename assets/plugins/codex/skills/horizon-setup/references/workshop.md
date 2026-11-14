@@ -11,10 +11,12 @@ Read the state of each part with the commands that exist, and draw one card:
 
 - The server: `{"operation": "server_status"}` answers the entry of this computer
   and the state of its link, `off` when this computer reaches no server.
-- The browser: the browser host entry of the settings and the profile that it
-  names. The entry serves the browser panels that a create makes after the
-  person's press, and `horizon-browser` holds its contract. When the settings
-  hold no entry, the part is `Not set up`.
+- The browser: `{"operation": "browser_host_status"}` answers the browser host
+  entry of this computer, its machine or SSH target, its profile, its engine and
+  the command of its driver, with `state` `host`. A `state` `local` says that
+  the browser panels of this computer use its own browser, so the part is
+  `Not set up`. The entry serves the browser panels that a create makes after the
+  person's press, and `horizon-browser` holds its contract.
 - The machines: `{"operation": "machines"}` answers the machine list of this
   Horizon, and `key_missing` on a record says that this computer holds no key of
   that machine. A repository of the person counts as ready for machines when its

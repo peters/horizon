@@ -542,6 +542,13 @@ the computers that joined stay the same.
 
 Three cards: the engine and the place, the steps, and the ready card.
 
+Read the browser host of this computer before the first card, with
+`{"operation": "browser_host_status"}`. It answers the entry that the settings
+hold: `state` is `host` with the machine or the SSH target, the profile, the
+engine and the command of the driver, or `local` when the browser panels of
+this computer use its own browser. The cards of this goal state those values and
+no guess of your own.
+
 ### 1. The engine and the place
 
 ```json
@@ -669,7 +676,9 @@ of the same profile is signed in where the first one signed in. A panel with
 `profile: "private"` is a page of an isolated browser context of that host.
 Show
 that command in the row `Driver command` of the card, as Horizon holds it, and
-wait while Horizon draws its own card. The press serves the next browser panel at once, so no
+wait while Horizon draws its own card. Read the entry again with
+`browser_host_status` after a `confirmed` answer, and draw the ready card from
+that answer. The press serves the next browser panel at once, so no
 panel needs a start of Horizon: when the answer says `confirmed`, open the panel
 of that browser with `browser_create` beside this card and name no `backend`,
 because the host serves the engine of its profile. A panel that was open before
@@ -698,10 +707,17 @@ card says what was removed and what is left.
 ]}
 ```
 
-The row `Browser` names the engine of the press in its own words: `Chromium`, or
+The row `Browser` names the engine that the settings now hold: `Chromium`, or
 `Firefox, with Horizon on that machine`. A Firefox host adds the row
-`Driver program` with the command of `browser_host.command` when the card flow
-wrote one.
+`Driver program` with the command of `browser_host.command`, when the person set
+one.
+
+Read `{"operation": "browser_host_status"}` after the press of the person, and
+draw the ready card from that answer: `state` `host`, `machine` or `ssh_target`
+in the row `Runs on`, `engine` in the row `Browser`, `profile` in the row
+`Profile`, and `command` in the row `Driver program` while it is present. A
+value that the answer does not hold stays off the card, because no panel follows
+it.
 
 `Use this computer again` is a change of a setting, and only the person changes
 it: `browser_host_request` writes a host and never clears one. Say on the card

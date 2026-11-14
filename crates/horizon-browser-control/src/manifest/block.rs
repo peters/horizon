@@ -199,6 +199,13 @@ pub enum Operation {
     /// it never answers a token, a key or a secret: an agent reads the entry that
     /// the person saved, as the settings hold it.
     ServerStatus,
+    /// The browser host that the browser panels of this computer follow: the SSH
+    /// target or the machine that runs the browser, its profile, its engine and
+    /// the command that starts its driver, or the word `local` when the person
+    /// set no host. It reads and writes nothing, and it never answers a key, a
+    /// password or a token: an agent reads the entry that the person saved, as
+    /// the settings hold it.
+    BrowserHostStatus,
     /// The machines of this Horizon, in name order, each with whether a terminal
     /// of it is open.
     Machines,
@@ -400,6 +407,41 @@ pub struct ServerLink {
     pub store: Option<String>,
 }
 
+/// The browser host that the browser panels of this computer follow, as
+/// `browser_host_status` reports it.
+///
+/// Every field is the entry that the person saved in the settings, with the
+/// surrounding spaces trimmed. A key, a password and a token are not part of such
+/// an entry, and this answer adds none.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("type" = "object"))]
+pub struct BrowserHost {
+    /// `host` when the settings name a browser host, or `local` when they name
+    /// none and the browser panels of this computer use its own browser. A
+    /// `local` answer names no target, no profile, no driver command and no
+    /// engine of an entry that no panel follows.
+    pub state: String,
+    /// The SSH target of the entry, when the person named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_target: Option<String>,
+    /// The name of a machine of the machine list that runs the browser, when the
+    /// entry names one. The tunnel of a panel then uses the address, the user,
+    /// the port, the key file and the known-hosts file of a terminal of that
+    /// machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// The profile of that machine whose pages the new browser panels use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The engine of that machine: `chromium` through its `DevTools` port, or
+    /// `firefox` through the driver of Horizon that runs beside it.
+    pub engine: String,
+    /// The program that starts the driver of that machine, when the person set
+    /// one instead of the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
 /// One machine of this Horizon as `machines` reports it.
 ///
 /// `provider` is the agent's claim, not verified Horizon state. `terminal_open`
@@ -560,6 +602,12 @@ pub enum Outcome {
     /// the outcome that every card operation answers stays small.
     ServerStatus {
         server: Box<ServerLink>,
+    },
+    /// The browser host that the browser panels of this computer follow. The
+    /// value is boxed, so the outcome that every card operation answers stays
+    /// small.
+    BrowserHostStatus {
+        host: Box<BrowserHost>,
     },
     /// The machines of this Horizon, in name order.
     Machines {
@@ -1058,6 +1106,10 @@ mod tests {
                 "open_panel",
             ),
             (serde_json::json!({"operation": "server_status"}), "server_status"),
+            (
+                serde_json::json!({"operation": "browser_host_status"}),
+                "browser_host_status",
+            ),
             (serde_json::json!({"operation": "presets"}), "presets"),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
@@ -1075,6 +1127,7 @@ mod tests {
                 Operation::MachineSet { .. } => "machine_set",
                 Operation::MachineDelete { .. } => "machine_delete",
                 Operation::ServerStatus => "server_status",
+                Operation::BrowserHostStatus => "browser_host_status",
                 Operation::Machines => "machines",
                 Operation::MachineKey { .. } => "machine_key",
                 Operation::MachineKeys => "machine_keys",

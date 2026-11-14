@@ -741,9 +741,9 @@ price card and stops.
 2. Read the three rows of the parts.
 
    Result: The row of the server names the entry that `server_status` answers,
-   the row of the browser names the browser host entry and the profile of the
-   settings, and the row of the machines names the records of `machines` and the
-   repositories that hold the section `## Horizon machine`.
+   the row of the browser names the entry that `browser_host_status` answers, and
+   the row of the machines names the records of `machines` and the repositories
+   that hold the section `## Horizon machine`.
 
 3. Press `The server only`.
 

@@ -19,8 +19,8 @@ panel gets `caller_unavailable`.
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`, `presets`,
 `machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`,
-`delete_machine_key`, `server_status`, `server_link_request` and
-`browser_host_request`.
+`delete_machine_key`, `server_status`, `browser_host_status`,
+`server_link_request` and `browser_host_request`.
 
 ## Create a card
 
@@ -332,6 +332,35 @@ The answer is `server_status` with one `server` object:
 The answer holds no token, no key and no secret, and it changes nothing. A field
 that the entry does not name is absent.
 
+## Read the browser host of this computer
+
+`browser_host_status` answers the browser host that the new browser panels of
+this computer follow. It reads and writes nothing, so use it before you ask the
+person about a browser and before you state a browser on a card.
+
+```json
+{"operation": "browser_host_status"}
+```
+
+The answer is `browser_host_status` with one `host` object:
+
+- `state` is `host` when the settings name a browser host, and `local` when they
+  name none, so the browser panels of this computer use its own browser.
+- `ssh_target` is the SSH target of the entry, when the person named one, and
+  `machine` is the name of a machine of the list that runs the browser. One of
+  them is present while `state` is `host`.
+- `profile` is the profile of that machine whose pages the new browser panels
+  use, and `engine` is `chromium` or `firefox`: its Chromium through its
+  `DevTools` port, or its Firefox through the driver of Horizon beside it.
+- `command` is the program that starts the driver of that machine, when the
+  person set one instead of the default. It is absent otherwise.
+
+The answer holds no key, no password and no token, and it changes nothing. A
+field that the entry does not name is absent, and a `local` answer names no
+field of an entry that no panel follows. The answer states the entry, not the
+machine: it does not prove that the machine answers or that its browser is
+signed in.
+
 ```json
 {"operation": "machine_delete", "name": "build-1"}
 ```
@@ -538,9 +567,10 @@ and you can press nothing.
 - A `confirmed` browser host entry serves every browser panel that a create
   makes after the answer, and no start of Horizon is needed. A panel that was
   open before the answer keeps its browser. Say that on your own card.
-- Never read a settings file and never write one: this operation is the only
-  path from an agent to these two settings, and only a press of the person moves
-  it.
+- Never read a settings file and never write one. `server_status` and
+  `browser_host_status` read the two entries, this operation and
+  `server_link_request` ask the person to change one, and only a press of the
+  person moves it.
 
 ## The document
 

@@ -713,6 +713,52 @@ fn server_status_names_the_target_and_the_command_but_no_secret() {
 }
 
 #[test]
+fn browser_host_status_answers_local_when_this_computer_uses_its_own_browser() {
+    let (_temp, ctx, mut app) = app();
+    let answer = app.apply_block_request(&request(&app, Operation::BrowserHostStatus), &ctx);
+    let Outcome::BrowserHostStatus { host } = answer else {
+        panic!("expected the status of the browser host: {answer:?}");
+    };
+    assert_eq!(
+        host.state, "local",
+        "a computer without a browser host uses its own browser"
+    );
+    assert_eq!(host.ssh_target, None);
+    assert_eq!(host.machine, None);
+    assert_eq!(host.profile, None, "no profile of an entry that no panel follows");
+    assert_eq!(host.command, None);
+    let encoded = serde_json::to_string(&Outcome::BrowserHostStatus { host }).expect("the answer serializes");
+    for secret in ["token", "key", "secret", "password"] {
+        assert!(!encoded.contains(secret), "the answer names no {secret}: {encoded}");
+    }
+}
+
+#[test]
+fn browser_host_status_names_the_host_the_profile_the_engine_and_the_command() {
+    let (_temp, ctx, mut app) = app();
+    app.template_config.browser_host = horizon_core::BrowserHostConfig {
+        machine: Some(" helsinki-1 ".to_owned()),
+        profile: Some("work".to_owned()),
+        engine: horizon_core::BrowserHostEngine::Firefox,
+        command: Some("/opt/horizon/horizon --browser-host-driver".to_owned()),
+        ..horizon_core::BrowserHostConfig::default()
+    };
+    let answer = app.apply_block_request(&request(&app, Operation::BrowserHostStatus), &ctx);
+    let Outcome::BrowserHostStatus { host } = answer else {
+        panic!("expected the status of the browser host: {answer:?}");
+    };
+    assert_eq!(host.state, "host");
+    assert_eq!(host.machine.as_deref(), Some("helsinki-1"), "the name is trimmed");
+    assert_eq!(host.ssh_target, None, "the entry names a machine and no target");
+    assert_eq!(host.profile.as_deref(), Some("work"));
+    assert_eq!(host.engine, "firefox");
+    assert_eq!(
+        host.command.as_deref(),
+        Some("/opt/horizon/horizon --browser-host-driver")
+    );
+}
+
+#[test]
 fn a_card_whose_owner_panel_left_can_be_closed_by_another_agent_of_the_workspace() {
     let (_temp, ctx, mut app) = app();
     share_workspace(&mut app);

@@ -180,6 +180,34 @@ writes no file, starts no link and changes no setting.
   secret, so that is no new disclosure; an agent must still not write the address
   of a machine or a command into a card that a person did not agree to publish.
 
+### An agent reads the browser host, and the answer holds no secret
+
+`browser_host_status` answers the browser host entry that the settings of this
+computer hold, or the word `local` when they name no host. It is a read: it
+writes no file, opens no tunnel, starts no driver and changes no setting.
+
+- **The answer is the store's own value.** Horizon reads the entry from the
+  settings in memory and answers its trimmed values, so no field is a claim of
+  the caller: the SSH target or the machine name, the profile, the engine and
+  the driver command while the person set one. The agent therefore reads which
+  browser serves a new browser panel, and needs no guess.
+- **An entry that names no host answers `local` alone.** The browser panels of
+  this computer then use its own browser, so no profile, engine or command of an
+  older entry reaches the answer. A tunnel of a stopped entry is no part of the
+  answer either, because the entry is the whole state that a person saved.
+- **No secret is part of the entry.** The key of a machine, the password of a
+  site and the token of a join are separate rows of the secrets file and
+  separate files, so an answer that names only the entry of the settings cannot
+  reach them. The tunnel reads the machine key itself, and no card operation
+  answers it.
+- **Every agent panel of the workspace reads it.** The entry is the person's,
+  and the answer names the same values to every agent of this Horizon. It
+  carries no secret, so that is no new disclosure; an agent must still not write
+  the address of a machine into a card that a person did not agree to publish.
+- **Does not guarantee:** that the machine answers, that the profile exists on
+  it or that its browser is signed in. The answer states the entry that the
+  person saved, not the state of a tunnel or of a page.
+
 ### An agent reads the presets, and the answer is a name and a kind
 
 `presets` answers the presets that `open_panel` accepts, so an agent learns which
@@ -329,8 +357,10 @@ are written by Horizon and no document field can set them:
   as tall as the host measured its content needs, between 140 and 900 points,
   and a title that the host trims to one line. A document that asks for the wide
   card opens at half of the canvas view of that moment, between 1100 and 2400
-  points, and as tall as its content needs, up to 1200 points; an update to such
-  a document widens the same card. A card that the person resized by hand keeps
+  points, and as tall as its content needs, up to 1200 points. Every update of a
+  document takes the width that it asks for, so a card of a board widens when the
+  board gains a wave and narrows again when the document is narrow, and its left
+  edge stays where the person put it. A card that the person resized by hand keeps
   that size, and a card that is shorter than its content scrolls its body above
   a footer that stays at the bottom. The form of every component follows the real
   width of the card body, so the same document draws the wide form at 1000 points
