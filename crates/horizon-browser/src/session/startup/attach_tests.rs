@@ -31,6 +31,7 @@ fn borrowed_browser() -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>)
         while let Ok(Message::Text(text)) = socket.read() {
             let command: Value = serde_json::from_str(&text).expect("command JSON");
             let result = match command["method"].as_str() {
+                Some("Target.createBrowserContext") => json!({ "browserContextId": "ctx-private" }),
                 Some("Target.createTarget") => json!({ "targetId": "ours" }),
                 Some("Target.attachToTarget") => json!({ "sessionId": "ours-session" }),
                 Some("Target.closeTarget") => json!({ "success": true }),
@@ -81,6 +82,50 @@ fn event_sender() -> (BrowserEventSender, mpsc::Receiver<BrowserEvent>) {
         },
         rx,
     )
+}
+
+/// A private page of a browser that another process owns is a page of an
+/// isolated browser context of that browser: it is made in a context of its own,
+/// so it reads none of the cookies of the profile of that machine.
+#[test]
+fn a_private_page_of_a_borrowed_browser_is_made_in_an_isolated_context() {
+    let (endpoint, server) = borrowed_browser();
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(endpoint, &frame_slot);
+    config.browser.isolated_page = true;
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a private page of the borrowed browser");
+    assert_eq!(connection.target_id, "ours");
+    assert_eq!(
+        connection.chrome.context().as_deref(),
+        Some("ctx-private"),
+        "the page carries the context that its close disposes"
+    );
+    drop(connection);
+    let commands = server.join().expect("the mock browser");
+
+    let position = |method: &str| {
+        commands
+            .iter()
+            .position(|command| command["method"] == method)
+            .unwrap_or_else(|| panic!("the session sends {method}"))
+    };
+    let context = position("Target.createBrowserContext");
+    let created = position("Target.createTarget");
+    assert!(context < created, "the context comes before the page that it carries");
+    assert_eq!(
+        commands[created]["params"]["browserContextId"], "ctx-private",
+        "the page of a private panel is a page of that context: {}",
+        commands[created]
+    );
+    assert!(
+        !commands.iter().any(|command| command["method"] == "Target.getTargets"),
+        "a private page adopts no page of the profile of that machine"
+    );
 }
 
 #[test]

@@ -248,6 +248,7 @@ impl SharedFirefoxSession {
             cleanup: Arc::new(Mutex::new(PageCleanup {
                 endpoint: state.endpoint.clone(),
                 context: String::new(),
+                user_context: None,
                 registrations: Vec::new(),
                 retry_after: Instant::now(),
             })),
@@ -258,14 +259,15 @@ impl SharedFirefoxSession {
         if panel_control.delegate(lifecycle.clone()) {
             let _ = panel_control.terminate(Duration::ZERO);
         }
-        let context = state.create_context(&mut link, first)?;
-        context.clone_into(
-            &mut lifecycle
+        let (context, user_context) = state.create_context(&mut link, first, config.isolated_page)?;
+        {
+            let mut cleanup = lifecycle
                 .cleanup
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .context,
-        );
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            context.clone_into(&mut cleanup.context);
+            cleanup.user_context.clone_from(&user_context);
+        }
         state.retiring.store(false, Ordering::Release);
         let service = state
             .service
@@ -290,7 +292,21 @@ impl SharedFirefoxSession {
 }
 
 impl GroupState {
-    fn create_context(&mut self, link: &mut JsonWsLink, first: bool) -> Result<String, String> {
+    /// Make the page of one panel: the page of the shared window, or a page of a
+    /// user context of its own that keeps nothing of the profile.
+    ///
+    /// A private page is made in a user context that the driver protocol calls
+    /// `browser.createUserContext`: the context has its own cookies and its own
+    /// site storage, and `browser.removeUserContext` removes them with it.
+    fn create_context(
+        &mut self,
+        link: &mut JsonWsLink,
+        first: bool,
+        isolated: bool,
+    ) -> Result<(String, Option<String>), String> {
+        if isolated {
+            return self.create_isolated_context(link);
+        }
         // The command may execute without a reply. Retain this generation's
         // cleanup ownership and refuse more creates until it has been reaped.
         self.creation_uncertain = true;
@@ -320,7 +336,42 @@ impl GroupState {
         .filter(|context| !context.is_empty())
         .ok_or_else(|| "Firefox did not return the exact page context".to_string())?;
         self.creation_uncertain = false;
-        Ok(context)
+        Ok((context, None))
+    }
+
+    /// Make a page in a user context of its own, and answer that context with
+    /// the page.
+    fn create_isolated_context(&mut self, link: &mut JsonWsLink) -> Result<(String, Option<String>), String> {
+        self.creation_uncertain = true;
+        let user_context = link
+            .call(Duration::from_secs(5), "browser.createUserContext", &json!({}))
+            .result
+            .map_err(|error| {
+                format!("this Firefox cannot keep a private panel: it refused a user context of its own ({error})")
+            })?
+            .get("userContext")
+            .and_then(Value::as_str)
+            .filter(|context| !context.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| "Firefox returned no user context for a private panel".to_string())?;
+        let page = link
+            .call(
+                Duration::from_secs(5),
+                "browsingContext.create",
+                &json!({"type": "window", "userContext": user_context}),
+            )
+            .result
+            .map_err(|error| format!("Firefox made no page in a user context of its own: {error}"))
+            .and_then(|result| {
+                result
+                    .get("context")
+                    .and_then(Value::as_str)
+                    .filter(|context| !context.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| "Firefox did not return the exact page context".to_string())
+            })?;
+        self.creation_uncertain = false;
+        Ok((page, Some(user_context)))
     }
 
     fn close(&mut self) {
@@ -370,6 +421,8 @@ impl ProcessLifecycle for StartupControl {
 struct PageCleanup {
     endpoint: String,
     context: String,
+    /// The user context of a private page, removed with the page's storage.
+    user_context: Option<String>,
     registrations: Vec<(&'static str, String)>,
     retry_after: Instant,
 }
@@ -412,7 +465,31 @@ impl PageCleanup {
                 released.store(true, Ordering::Release);
             }
         }
-        released.load(Ordering::Acquire) && self.registrations.is_empty()
+        if let Some(user_context) = self.user_context.clone()
+            && released.load(Ordering::Acquire)
+        {
+            let removed = link
+                .call(
+                    Duration::from_secs(2),
+                    "browser.removeUserContext",
+                    &json!({"userContext": user_context}),
+                )
+                .result
+                .is_ok();
+            if removed {
+                tracing::info!(
+                    user_context = %user_context,
+                    "the user context of a private panel is removed with its cookies and its storage"
+                );
+                self.user_context = None;
+            } else {
+                tracing::warn!(
+                    user_context = %user_context,
+                    "the user context of a private panel did not go with its page"
+                );
+            }
+        }
+        released.load(Ordering::Acquire) && self.registrations.is_empty() && self.user_context.is_none()
     }
 }
 
@@ -784,6 +861,7 @@ mod tests {
             cleanup: Arc::new(Mutex::new(PageCleanup {
                 endpoint: String::new(),
                 context: context.into(),
+                user_context: None,
                 registrations: Vec::new(),
                 retry_after: Instant::now(),
             })),
@@ -1241,7 +1319,7 @@ mod tests {
         {
             let mut state = group.state.lock().expect("state");
             state.control = control.control.clone();
-            assert!(state.create_context(&mut link, false).is_err());
+            assert!(state.create_context(&mut link, false, false).is_err());
         }
         drop(page);
         for _ in 0..3 {

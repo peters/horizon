@@ -208,31 +208,64 @@ fn remote_host_label(ui: &mut Ui, target: &str) {
     .on_hover_text("This page belongs to a browser host on this SSH target");
 }
 
-/// The profile of a local browser panel, beside its engine: `Shared: <name>` is
-/// one browser of the sign-ins of that profile, and `Private` is a browser of this
-/// panel alone that is signed in nowhere.
+/// The profile of a browser panel, beside its engine: `Shared: <name>` is one
+/// browser of the sign-ins of that profile, and `Private` is a panel that is
+/// signed in nowhere.
 ///
-/// A panel of a browser host names the profile of that machine in the picker's
-/// place instead, and a remote device runs no profile of this computer.
+/// The label is a pill of the size of the engine name beside it. The shared name
+/// is neutral, because it is the ordinary case; `Private` carries the accent,
+/// because a person must notice that this panel reads none of the sign-ins.
 fn profile_label(ui: &mut Ui, browser: &horizon_core::browser::BrowserPanelState) {
     const SHARED_HINT: &str = "Every panel of this profile is one page of one browser: they read the same sign-ins, and a sign-out in one \
          signs out all of them. Use Private panel for a browser that is not signed in.";
-    const PRIVATE_HINT: &str = "This panel has a browser of its own: it is signed in nowhere, it reads none of the shared sign-ins, and its \
-         profile is gone when the panel closes.";
-    if let Some(name) = browser.shared_profile_id() {
-        let label = |ui: &mut Ui, text: &str, strong: bool| {
-            let mut text = RichText::new(text).size(10.0).color(theme::FG_SOFT());
-            text = if strong { text.strong() } else { text };
-            ui.add(egui::Label::new(text).wrap_mode(TextWrapMode::Truncate))
-                .on_hover_text(SHARED_HINT);
+    const PRIVATE_HINT: &str = "This panel is signed in nowhere: it reads none of the shared sign-ins, and what it keeps is gone when \
+         the panel closes.";
+    let profile = match (browser.visible_profile_name(), browser.is_private_page()) {
+        (Some(name), _) => ProfilePill {
+            text: format!("Shared: {name}"),
+            hint: SHARED_HINT,
+            private: false,
+        },
+        (None, true) => ProfilePill {
+            text: "Private".to_string(),
+            hint: PRIVATE_HINT,
+            private: true,
+        },
+        (None, false) => return,
+    };
+    profile.show(ui);
+}
+
+/// One pill of the profile of a browser panel.
+struct ProfilePill {
+    text: String,
+    hint: &'static str,
+    private: bool,
+}
+
+impl ProfilePill {
+    fn show(self, ui: &mut Ui) {
+        // The picker of the engine draws its name in the button style of this
+        // window, so the pill takes that size and the two read as one row.
+        let size = ui
+            .style()
+            .text_styles
+            .get(&egui::TextStyle::Button)
+            .map_or(12.0, |font| font.size);
+        let text = RichText::new(&self.text).size(size);
+        let text = if self.private {
+            text.color(theme::ACCENT()).strong()
+        } else {
+            text.color(theme::FG_SOFT())
         };
-        label(ui, "Shared:", false);
-        label(ui, name, true);
-    } else if browser.is_private_profile() {
-        ui.add(egui::Label::new(
-            RichText::new("Private").size(10.0).color(theme::FG_SOFT()),
-        ))
-        .on_hover_text(PRIVATE_HINT);
+        egui::Frame::new()
+            .fill(theme::PANEL_BG_ALT())
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(6, 2))
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(text).wrap_mode(TextWrapMode::Truncate))
+                    .on_hover_text(self.hint);
+            });
     }
 }
 

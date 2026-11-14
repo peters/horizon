@@ -81,6 +81,7 @@ pub(in crate::panel) fn placeholder_panel(
         hidden: !visible,
         remote_target: opts.remote_target.clone(),
         host: opts.browser_host.clone(),
+        private: opts.browser_private,
     });
     let PanelOptions {
         name,

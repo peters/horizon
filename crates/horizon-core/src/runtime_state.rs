@@ -50,6 +50,7 @@ pub(crate) fn browser_profile_state(browser: &crate::browser::BrowserPanelState,
     let host = browser_host_state(browser);
     BrowserProfileState {
         session_id: browser.shared_profile_id().map(str::to_string),
+        private: browser.is_private_page(),
         root: browser.profile_root_for_persistence().map(Path::to_path_buf),
         backend: Some(browser.backend()),
         hidden,

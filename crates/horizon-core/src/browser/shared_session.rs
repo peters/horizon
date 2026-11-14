@@ -259,6 +259,10 @@ impl BrowserPanelState {
     /// leaves the folder on disk.
     #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
     pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
+        // A page of a browser host ends with its panel: no link of that panel
+        // comes back, so the page must not wait on the machine of the host for
+        // ever.
+        self.close_host_driver_page();
         self.request_shutdown();
         if self.is_attached() {
             // The Chromium of another machine keeps its profile there, and this
@@ -301,26 +305,77 @@ impl BrowserPanelState {
             && self.shared_session.is_some()
     }
 
-    /// Whether this panel can open a private panel beside it: only a panel of a
-    /// browser of this computer can, because a browser host keeps the profile of
-    /// that machine and a remote device keeps its own.
+    /// Whether this panel keeps nothing of a browser profile.
+    ///
+    /// A panel of a browser of this computer keeps nothing when it has no shared
+    /// profile: its own folder, gone at its close. A panel of a browser host
+    /// keeps nothing when it asked for a private page: a page of an isolated
+    /// context of the browser of that machine, which takes no cookie of the
+    /// profile and leaves none in it.
+    #[must_use]
+    pub fn is_private_page(&self) -> bool {
+        if self.is_attached() || self.is_host_driver() {
+            return self.config.profile.as_deref() == Some(horizon_browser::PRIVATE_PROFILE);
+        }
+        self.is_private_profile()
+    }
+
+    /// The name of the shared profile that this panel shows, when it has one:
+    /// the profile of this computer, or the profile of the browser of its host.
+    ///
+    /// `None` is a private panel, whose profile name is the reserved word alone.
+    #[must_use]
+    pub fn visible_profile_name(&self) -> Option<&str> {
+        if let Some(name) = self.shared_profile_id() {
+            return Some(name);
+        }
+        if self.is_private_page() {
+            return None;
+        }
+        self.config
+            .profile
+            .as_deref()
+            .filter(|name| *name != horizon_browser::PRIVATE_PROFILE)
+    }
+
+    /// Whether this panel can open a private panel beside it.
+    ///
+    /// Every browser panel can: a panel of this computer opens a throwaway folder
+    /// of its own, and a panel of a browser host opens a page of an isolated
+    /// context of that browser, which keeps none of the sign-ins of the profile.
     #[must_use]
     pub fn can_open_private(&self) -> bool {
-        !self.is_remote() && !self.is_attached() && !self.is_host_driver()
+        !self.is_remote()
+    }
+
+    /// The browser host of this panel, when it runs on one.
+    #[must_use]
+    pub fn browser_host_of_panel(&self) -> Option<crate::runtime_state::BrowserHostState> {
+        self.attached_host_state()
     }
 
     /// Construct the options of a private panel with the page of this one.
     ///
-    /// The panel gets a profile folder of its own, so it is signed in nowhere
-    /// and keeps nothing after its close.
+    /// The panel gets a profile folder of its own, or a page of an isolated
+    /// context of the browser of its host, so it is signed in nowhere and keeps
+    /// nothing after its close.
     #[must_use]
     pub fn private_panel_options(&self) -> Option<PanelOptions> {
-        self.can_open_private().then(|| PanelOptions {
-            kind: PanelKind::Browser,
-            command: self.url.clone().or_else(|| self.requested_url.clone()),
-            browser_config: Some(self.config.clone()),
-            browser_session_id: None,
-            ..PanelOptions::default()
+        self.can_open_private().then(|| {
+            let mut config = self.config.clone();
+            config.profile = Some(horizon_browser::PRIVATE_PROFILE.to_string());
+            PanelOptions {
+                kind: PanelKind::Browser,
+                command: self.url.clone().or_else(|| self.requested_url.clone()),
+                browser_config: Some(config),
+                browser_session_id: None,
+                browser_private: true,
+                // A private panel of a browser host is a page of that host, so
+                // the person's private panel follows the entry of the settings as
+                // every other browser panel of that person does.
+                follows_browser_host: true,
+                ..PanelOptions::default()
+            }
         })
     }
 
@@ -339,6 +394,7 @@ impl BrowserPanelState {
             command: self.url.clone().or_else(|| self.requested_url.clone()),
             browser_config: Some(self.config.clone()),
             browser_session_id: self.shared_profile_id().map(str::to_string),
+            browser_private: self.is_private_page(),
             ..PanelOptions::default()
         })
     }

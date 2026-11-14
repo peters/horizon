@@ -52,6 +52,10 @@ pub(super) fn browser_spawn_mode(
     let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
         return Ok(mode);
     };
+    // A create that names no profile follows the entry of the settings, so a page
+    // of the one profile of that host opens on the host. A create that names a
+    // profile keeps a profile of this computer, and a saved panel keeps the host
+    // and the profile that served it, which the caller decides before this point.
     if !matches!(mode, BrowserSpawnMode::Local(None)) {
         return Ok(mode);
     }

@@ -11,6 +11,7 @@ mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
 mod attached_host;
 pub mod host_driver;
+mod private_profiles;
 pub use attached_host::{
     AttachedHost, AttachedHostFailure, AttachedHostFailureKind, DEFAULT_HOST_PROFILE, attached_host_backend_refusal,
 };
@@ -237,12 +238,27 @@ impl BrowserPanelState {
         let mut config = config.resolved_for_launch()?;
         let home = crate::horizon_home::HorizonHome::resolve();
         let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
+        // The profile of this page decides where its folder is: a shared profile
+        // under the profile root, and a page that keeps nothing under the folder
+        // of the private pages. The saved board names the shared profile, and a
+        // panel without one is a private panel.
+        config.profile = Some(session_id.unwrap_or(horizon_browser::PRIVATE_PROFILE).to_string());
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
         if let Some(profile_id) = session_id {
             shared_session::refuse_unjoinable(&config, profile_id)?;
         }
         let shared_session = matches!(config.backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
             .then(|| shared_session::acquire(&config, session_id.unwrap_or(&panel_local_id)));
+        if session_id.is_none() {
+            // A private panel of this computer keeps its own throwaway folder.
+            // The mark says that this program made it for such a panel and that
+            // the folder goes away when no saved session names it, so a run that
+            // ends without a close leaves nothing on the disk for ever.
+            let folder = profile_dir_for_home(&config, &home, &panel_local_id);
+            if let Err(error) = private_profiles::mark_private_profile(&folder) {
+                tracing::warn!(%error, folder = %folder.display(), "the folder of a private browser panel carries no mark");
+            }
+        }
         let mut state = Self {
             status: BrowserStatus::Starting,
             url: None,
@@ -972,6 +988,8 @@ fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path
     config.profile_root = Some(config.effective_profile_root(default_root));
     true
 }
+
+pub use private_profiles::{PrivateProfileSweep, is_private_profile, mark_private_profile, sweep_private_profiles};
 
 pub use horizon_browser::provider_catalog;
 

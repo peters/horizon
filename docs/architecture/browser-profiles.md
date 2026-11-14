@@ -16,10 +16,11 @@ The repeatable check is
 |------|----------------|------------------|-----------|
 | Shared `default` | `browser-profiles/%<default>` | Never | With every panel of `default` |
 | Shared `<name>` | `browser-profiles/%<name>` | Never | With every panel of `<name>` |
-| Private | `browser-profiles/%<panel id>` | Yes, with its last panel | Never |
+| Private | `browser-profiles/private/%<panel id>` | Yes, with its last panel | Never |
 
 The folder name uses the existing `safe_local_id` form, which starts with `%`.
-A named profile and a panel therefore never get one folder.
+A private page lives under the folder of the private pages, so the folder of a
+shared profile and the folder of a private page never share a name.
 
 ## What a create names
 
@@ -60,17 +61,53 @@ Two paths remove a profile folder: the close of a panel
 (`session_store`). Each removes the folder of a private panel and neither
 removes the folder of a shared profile.
 
+A third path removes a folder that a run left behind: the sweep of the folders
+of private pages at the next start
+(`horizon_core::browser::sweep_private_profiles`). It runs on a worker thread,
+so the window never waits on the disk. It removes only a folder under
+`browser-profiles/private/` that carries the mark `.horizon-private-panel`, that
+no saved session of this Horizon home names, and that no browser of this
+computer holds. The folder of a shared profile sits at the root of the profiles,
+so the sweep reads it to count it and never removes it.
+
 A panel keeps its kind and its profile across a restart, because the saved board
 names the profile.
+
+## A browser host
+
+A browser host serves the browser of one profile of that machine. Every panel of
+that profile on the host is its own page of the one browser, for Chromium and
+for Firefox:
+
+- a Chromium host opens the page beside the pages of the profile in that
+  browser;
+- a Firefox host runs the driver of
+  [`crates/horizon-core/src/browser/host_driver/`](../../crates/horizon-core/src/browser/host_driver/mod.rs),
+  and one session of that driver serves every panel of its profile.
+
+One link drives one page. A link names the page of its panel, so a link that
+comes back after a loss attaches to the page that it had, with its typed text and
+its scroll place, and never to the page of another panel. A panel that closes
+ends its page, and the session and its browser end with the last page. One
+session serves at most eight pages (`pages::MAX_PAGES`): eight pages keep the
+memory of the host under about 1.5 GB, and the next create reads the number and
+the way out.
+
+A private panel of a browser host is a page of an isolated context of the browser
+that already runs there, so it needs no second browser process and no folder of
+this computer: `Target.createBrowserContext` and
+`Target.disposeBrowserContext` of the DevTools protocol for Chromium, and
+`browser.createUserContext` and `browser.removeUserContext` of the driver
+protocol for Firefox. The context reads no cookie and no site storage of the
+profile, and the driver removes it when its page ends.
 
 ## The limits that a person meets
 
 - Two panels of one shared profile are two pages of one browser: there is no
   isolation between them, and a sign-out in one signs out both.
 - Every panel of a profile writes its downloads into one folder of the profile.
-- The profile of a Chromium browser host is shared by its nature. A private
-  panel on a browser host is refused.
-- The Firefox driver of a browser host serves one page for one profile. A second
-  panel of that profile is refused with words.
-- A folder of a per-panel profile of an earlier version stays on disk. No sweep
-  exists.
+- A private panel of a browser host runs on that machine, in the browser of the
+  shared profile: the machine and its owner see its traffic, and a download of
+  the page goes to the download folder of that host.
+- A folder of a per-panel profile of an earlier version stays on disk: it is not
+  under the folder of the private pages, so no sweep reads it.

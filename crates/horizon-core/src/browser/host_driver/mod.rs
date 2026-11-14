@@ -24,9 +24,14 @@
 //! same binary on the host (`HORIZON_BROWSER_HOST_SESSION=1`, started with
 //! `nohup` so that it outlives the link), and every link relays its standard
 //! input and output to the socket of that session. A link that ends leaves the
-//! browser and its page running, and the next link attaches to the same page.
-//! That is the promise that a Chromium host gives with its running browser, and
-//! this is how Firefox keeps it.
+//! browser and its page running, and the next link of that panel attaches to the
+//! page that it had. That is the promise that a Chromium host gives with its
+//! running browser, and this is how Firefox keeps it.
+//!
+//! One session serves every panel of its profile: each panel is its own page of
+//! the one Firefox, so two panels of a profile are signed in together, and the
+//! pages are apart from each other's text and scroll place. [`pages`] keeps them
+//! and the bound of them.
 //!
 //! A session lives until the person closes the panel, until the person removes
 //! the browser of that profile, or until the machine of the host restarts. An
@@ -43,11 +48,12 @@
 //! socket. This computer never reads or prepares one of them.
 
 pub(crate) mod client;
-pub use client::HostDriverHost;
+pub use client::{HostDriverHost, LinkPage};
 #[cfg(test)]
 mod client_tests;
 mod coordination;
 mod latency;
+mod pages;
 pub(crate) mod panel;
 #[cfg(test)]
 mod panel_tests;
@@ -59,7 +65,8 @@ mod tests;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use horizon_browser::BackendKind;
@@ -100,6 +107,15 @@ pub(super) const LINK_SILENT: Duration = Duration::from_secs(60);
 /// the link that it left behind answered nothing since, so the page comes back
 /// instead of waiting for that link for a minute.
 pub(super) const LINK_TAKE_OVER: Duration = Duration::from_secs(1);
+
+/// The most links that one session of a browser host serves at one time.
+///
+/// A link is a thread of the session, and a session serves one page for each
+/// panel of its profile, so the links that a session carries are the pages of
+/// [`pages::MAX_PAGES`] plus the links of a panel that attaches again while its
+/// own link is still there. A connection beyond this bound reads why it waits
+/// instead of growing the session without end.
+const MAX_LINK_THREADS: usize = pages::MAX_PAGES + 4;
 
 /// The engine that a driver of a browser host serves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,12 +192,12 @@ pub fn serve_test_session(
             silent: LINK_SILENT,
             idle_stop: None,
         };
-        let start = move |_options: &HostDriverOptions| {
+        let start = pages::StartPage::new(move |_options, _group, _private| {
             Ok(session::HostSession::over_page(
                 Box::new(session::IdlePage),
                 std::sync::Arc::clone(&slot),
             ))
-        };
+        });
         serve_links(&listener, &options, &socket, rules, start)
     })
 }
@@ -464,13 +480,12 @@ fn serve_session(options: &HostDriverOptions) -> i32 {
     if let Err(error) = write_state(options) {
         eprintln!("error: {error}");
     }
-    let start = |options: &HostDriverOptions| session::HostSession::start(options);
     let rules = LinkRules {
         take_over: LINK_TAKE_OVER,
         silent: LINK_SILENT,
         idle_stop: options.idle_stop(),
     };
-    serve_links(&listener, options, &socket, rules, start)
+    serve_links(&listener, options, &socket, rules, pages::StartPage::of_host())
 }
 
 /// The bounds of one session of a browser host: when a new link takes the page
@@ -490,53 +505,140 @@ pub(super) struct LinkRules {
 /// Serve the links of one session, in the order that this computer asks for
 /// them.
 ///
-/// The session outlives every link: a link that ends leaves the browser and the
-/// page running, and the next link attaches to the same page. A new link takes
-/// the page over from a link that went silent, which is what a dropped link
-/// looks like from here, and a link whose other end vanished is closed after
+/// The session outlives every link: a link that ends leaves the browser and its
+/// page running, and the next link of that panel attaches to the page that it
+/// had. Each link has a thread of its own, because one link drives one page and
+/// two panels of one profile are two pages of one browser. A link takes its page
+/// over from a link that went silent, which is what a dropped link looks like
+/// from here, and a link whose other end vanished is closed after
 /// [`LINK_SILENT`], so its process ends instead of waiting on the socket.
-fn serve_links<F>(
+fn serve_links(
     listener: &std::os::unix::net::UnixListener,
     options: &HostDriverOptions,
     socket: &Path,
     rules: LinkRules,
-    start: F,
-) -> i32
-where
-    F: Fn(&HostDriverOptions) -> std::result::Result<session::HostSession, String>,
-{
-    let mut session: Option<session::HostSession> = None;
-    let mut next_link: Option<std::os::unix::net::UnixStream> = None;
+    start: pages::StartPage,
+) -> i32 {
+    let served = Arc::new(pages::SessionPages::new(options.clone(), rules, start));
+    let links = Arc::new(AtomicUsize::new(0));
+    let (ended, events) = mpsc::channel();
+    // The bound of the idle stop counts from the moment that this session has no
+    // link, which is the moment that the last page of it let go.
     let mut idle_since: Option<Instant> = None;
     loop {
-        let Some(stream) = next_link.take().or_else(|| waiting_link(listener)) else {
-            if let Some(idle_stop) = rules.idle_stop
-                && idle_since.is_some_and(|since| since.elapsed() >= idle_stop)
-            {
+        if let Some(stream) = waiting_link(listener) {
+            if links.load(Ordering::Acquire) >= MAX_LINK_THREADS {
+                refuse_extra_link(stream);
+                continue;
+            }
+            links.fetch_add(1, Ordering::AcqRel);
+            spawn_link(stream, Arc::clone(&served), Arc::clone(&links), ended.clone());
+        }
+        let last_page_closed = match events.recv_timeout(ACCEPT_POLL) {
+            Ok(SessionEvent::PageClosed { last_page }) => last_page,
+            // A link ended, no link said anything, or every thread is gone, so
+            // nothing of this session can be reached.
+            Ok(SessionEvent::LinkEnded)
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => false,
+        };
+        if last_page_closed {
+            tracing::info!(
+                profile = options.profile(),
+                "the last page of a browser host session ended, so the session stops its browser"
+            );
+            served.stop_all();
+            cleanup(socket, options);
+            return 0;
+        }
+        if let Some(idle_stop) = rules.idle_stop {
+            if links.load(Ordering::Acquire) > 0 {
+                idle_since = None;
+            } else if idle_since.get_or_insert_with(Instant::now).elapsed() >= idle_stop {
                 tracing::info!(
                     profile = options.profile(),
                     "the session of a browser host kept its browser with no link for the idle bound, so it stops"
                 );
-                stop_and_cleanup(&mut session, socket, options);
+                served.stop_all();
+                cleanup(socket, options);
                 return 0;
             }
-            std::thread::sleep(ACCEPT_POLL);
-            continue;
-        };
-        idle_since = None;
-        let mut link = Link::over_socket(&stream);
-        let end = serve_one(&mut session, options, &mut link, listener, rules, &start);
-        drop(link);
-        if let Some(next) = end.next {
-            next_link = Some(next);
-            continue;
         }
-        if end.outcome == LinkOutcome::Close {
-            stop_and_cleanup(&mut session, socket, options);
-            return 0;
-        }
-        idle_since = Some(Instant::now());
     }
+}
+
+/// What a link of a session reports to the loop that serves the session.
+enum SessionEvent {
+    /// A link ended, and its page waits for the next link.
+    LinkEnded,
+    /// A link closed its page, and `last_page` says whether that was the last
+    /// page of the session.
+    PageClosed { last_page: bool },
+}
+
+/// Serve one connection of the socket of a session, on a thread of its own.
+fn spawn_link(
+    stream: std::os::unix::net::UnixStream,
+    served: Arc<pages::SessionPages>,
+    links: Arc<AtomicUsize>,
+    events: mpsc::Sender<SessionEvent>,
+) {
+    let counted = Arc::clone(&links);
+    let spawned = std::thread::Builder::new()
+        .name("browser-host-link".to_string())
+        .spawn(move || {
+            let mut link = Link::over_socket(&stream);
+            let served_page = served.serve_link(&mut link);
+            drop(link);
+            let event = if served_page.last_page {
+                SessionEvent::PageClosed { last_page: true }
+            } else {
+                SessionEvent::LinkEnded
+            };
+            let _ = events.send(event);
+            links.fetch_sub(1, Ordering::AcqRel);
+        });
+    if spawned.is_err() {
+        counted.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Tell a connection that this session has no link left for it, and close it.
+///
+/// The greeting of the connection is read first, in a thread of its own: a link
+/// that this session closes with its greeting still unread answers the write of
+/// the greeting with a reset, and this computer would then read no words at all.
+fn refuse_extra_link(stream: std::os::unix::net::UnixStream) {
+    refuse_link(
+        stream,
+        "link_limit",
+        &format!(
+            "the session of this browser host serves {MAX_LINK_THREADS} links, and all of them are in use: close a panel of this profile, then use Retry"
+        ),
+    );
+}
+
+fn refuse_link(stream: std::os::unix::net::UnixStream, code: &'static str, message: &str) {
+    let reply = HostDriverReply::Refusal {
+        code: code.to_string(),
+        message: message.to_string(),
+        fatal: true,
+    };
+    std::thread::Builder::new()
+        .name("browser-host-refusal".to_string())
+        .spawn(move || {
+            let _ = stream.set_read_timeout(Some(session::GREET_WAIT));
+            if let Ok(reader) = stream.try_clone() {
+                let mut reader = BufReader::new(reader);
+                let _ = read_wire_line(&mut reader, MAX_HOST_DRIVER_LINE_BYTES);
+            }
+            if let Ok(line) = horizon_browser::host_driver::encode_line(&reply) {
+                let mut writer = &stream;
+                let _ = writer.write_all(&line);
+                let _ = writer.flush();
+            }
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        })
+        .ok();
 }
 
 /// The connection that waits on the socket of the session, when one arrived, and
@@ -556,56 +658,6 @@ fn waiting_link(listener: &std::os::unix::net::UnixListener) -> Option<std::os::
             None
         }
     }
-}
-
-/// Stop the browser of this host and remove the files of its session.
-fn stop_and_cleanup(session: &mut Option<session::HostSession>, socket: &Path, options: &HostDriverOptions) {
-    if let Some(session) = session.as_mut() {
-        session.stop();
-    }
-    cleanup(socket, options);
-}
-
-fn serve_one<F>(
-    session: &mut Option<session::HostSession>,
-    options: &HostDriverOptions,
-    link: &mut Link,
-    listener: &std::os::unix::net::UnixListener,
-    rules: LinkRules,
-    start: &F,
-) -> LinkEnd
-where
-    F: Fn(&HostDriverOptions) -> std::result::Result<session::HostSession, String>,
-{
-    if session.is_none() {
-        match start(options) {
-            Ok(started) => *session = Some(started),
-            Err(words) => {
-                let _ = link.send(&HostDriverReply::Refusal {
-                    code: "browser_start".to_string(),
-                    message: words,
-                    fatal: true,
-                });
-                let _ = link.flush();
-                return LinkEnd::of(LinkOutcome::Closed);
-            }
-        }
-    }
-    let Some(started) = session.as_mut() else {
-        return LinkEnd::of(LinkOutcome::Closed);
-    };
-    session::serve_link(
-        started,
-        link,
-        options.profile(),
-        options.engine(),
-        Some(&session::NewLinks {
-            listener,
-            take_over: rules.take_over,
-            silent: rules.silent,
-            profile: options.profile(),
-        }),
-    )
 }
 
 fn remove_stale_socket(socket: &Path) -> Result<()> {
@@ -696,21 +748,11 @@ pub(super) enum Next {
 /// How one link of a browser host ended.
 pub(super) struct LinkEnd {
     pub(super) outcome: LinkOutcome,
-    /// The connection that takes the page over, when one arrived while this link
-    /// served it.
-    pub(super) next: Option<std::os::unix::net::UnixStream>,
 }
 
 impl LinkEnd {
-    pub(super) fn of(outcome: LinkOutcome) -> Self {
-        Self { outcome, next: None }
-    }
-
-    pub(super) fn taken_over(stream: std::os::unix::net::UnixStream) -> Self {
-        Self {
-            outcome: LinkOutcome::TakeOver,
-            next: Some(stream),
-        }
+    pub(super) const fn of(outcome: LinkOutcome) -> Self {
+        Self { outcome }
     }
 }
 

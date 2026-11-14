@@ -39,7 +39,11 @@ sign-ins, and keeps no folder at close. Use `private` when the user asks for a
 site without their sign-in, for example to test a sign-up. The panels of one
 shared profile are pages of one browser: they read the same sign-ins, and a
 sign-out in one signs out all of them. Never sign out of a shared profile
-unless the user asks for it. `profile: "private"` is refused on a browser host. Every panel of
+unless the user asks for it. A browser host serves several panels of one
+profile, for Chromium and for Firefox: each panel is its own page of the one
+browser of that profile. On a browser host `private` opens a page of an
+isolated browser context of that machine, which reads none of the profile's
+sign-ins and which the browser removes when the page closes. Every panel of
 `browser_create`, `browser_list` and `browser_panel` reports `profile`: the
 name of the shared profile that it uses, or `private`. A remote session
 reports none. Use that field to tell which profile a panel's sign-ins belong
@@ -406,13 +410,19 @@ computer.
   after Horizon stops. A later panel and the next Horizon attach to the same
   browser, so a signed-in page is still signed in. Horizon closes only its own
   page (`Target.closeTarget`) and never the browser.
-- The profile of a browser host belongs to that machine, so `profile` names no
-  profile there and `profile: "private"` answers `unsupported_on_browser_host`:
-  the panels use the profile of the settings entry.
-- A Firefox browser host serves one page of its profile. A `browser_create`
-  while that page is attached is refused with `link_busy`, which names the
-  profile and asks for the close of the other panel. `allow_additional` and a
-  second profile do not help there.
+- The profile of a browser host belongs to that machine. A create without
+  `profile` uses the profile of the settings entry, and a create with a profile
+  name opens a panel of this computer.
+- A browser host serves several panels of one profile, for Chromium and for
+  Firefox: each panel is its own page of the one browser of that profile, so a
+  second panel is signed in where the first one signed in. Each link of a
+  Firefox host drives one page, and a link that comes back after a loss returns
+  to its own page with its typed text. One session of that host serves at most
+  eight pages, and the ninth create answers `page_limit_reached`.
+- `profile: "private"` on a browser host opens a page of an isolated browser
+  context of that machine: no cookie and no site storage of the profile, and the
+  browser removes the context when the page closes. The page runs in the browser
+  process of the shared profile, and the machine and its owner see its traffic.
 - The panels of one profile share its cookies and its storage: that is one
   Chromium. There is no isolation between two panels of one profile.
   `browser_duplicate` of such a panel answers `browser_unavailable`, because the

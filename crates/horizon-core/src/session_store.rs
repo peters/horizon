@@ -334,11 +334,46 @@ impl SessionStore {
                     continue;
                 }
                 let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
+                // A private panel keeps the folder of the private pages, whose
+                // name this page decides by the profile that it saves.
+                let mut browser_config = browser_config;
+                browser_config.profile = Some(horizon_browser::PRIVATE_PROFILE.to_string());
                 let profile_dir = crate::browser::profile_dir_for_home(&browser_config, &self.home, &panel.local_id);
                 remove_dir_if_exists(&profile_dir)?;
             }
         }
         Ok(())
+    }
+
+    /// The folder name of every browser panel that a saved session of this
+    /// Horizon home names.
+    ///
+    /// The sweep of the throwaway folders of private panels reads this set, so a
+    /// folder that a saved session still names for a panel that comes back is
+    /// never removed.
+    #[must_use]
+    pub fn saved_browser_profile_folders(&self) -> std::collections::HashSet<String> {
+        let mut names = std::collections::HashSet::new();
+        let Ok(entries) = std::fs::read_dir(self.home.sessions_dir()) else {
+            return names;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let session_id = entry.file_name().to_string_lossy().to_string();
+            let Ok(Some(runtime_state)) = self.load_runtime(&session_id) else {
+                continue;
+            };
+            for workspace in &runtime_state.workspaces {
+                for panel in &workspace.panels {
+                    if panel.kind == crate::panel::PanelKind::Browser {
+                        names.insert(horizon_browser_control::paths::safe_local_id(&panel.local_id));
+                    }
+                }
+            }
+        }
+        names
     }
 
     /// Persist the runtime state and refreshed metadata for a session, and queue its touch of

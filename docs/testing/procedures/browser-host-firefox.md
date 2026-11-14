@@ -203,7 +203,35 @@ its private settings, so no hand edit of a settings store is necessary.
    Result: one `latency frame` line and one `latency action` line of that press,
    with `received_us` larger than `written_us`.
 
-### 6.4 F3b — a browser host on a machine of the machine list
+### 6.4 F3c — a lost link with two panels comes back to its own page
+
+1. Open a second Browser panel of this computer beside the first one.
+
+   Result: the second panel paints the Firefox of the host, and both panels show
+   the same profile of that host.
+
+2. Go to `example.com` in the first panel and to `example.org` in the second
+   panel. Type `seven` into a field of the first panel.
+
+   Result: each panel shows its own page, and the field of the first panel holds
+   `seven`.
+
+3. End the `ssh` child of the first panel, as step 2 of task F3 says.
+
+   Result: only the first panel says that the link is lost. The second panel
+   keeps its page and its picture.
+
+4. Wait for the countdown of the first panel.
+
+   Result: the first panel shows `example.com` again, and the field still holds
+   `seven`. The second panel still shows `example.org` and is not reloaded.
+
+5. Close the second panel, and then the first panel.
+
+   Result: the page of each panel ends, and the browser of the host stops with
+   the last page.
+
+### 6.5 F3b — a browser host on a machine of the machine list
 
 A machine of the list answers to the machine key of this computer and to no key
 of the person, so this lane proves that a browser panel of such a machine opens
@@ -236,7 +264,7 @@ with that key.
    `ssh`, which say that the identity file is not accessible and that the login
    was refused. The panel starts no shell and asks no password.
 
-### 6.5 F4 — each refusal gives its words
+### 6.6 F4 — each refusal gives its words
 
 1. Write a target of a host that has no `horizon`, such as
    `fftest@127.0.0.1` with **Driver program** set to `/home/fftest/missing`, and
@@ -256,7 +284,7 @@ with that key.
    Result: the panel gives the words of the engine: the browser did not start,
    and `geckodriver` is named.
 
-### 6.6 F5 — the agent tools reach the page of the host
+### 6.7 F5 — the agent tools reach the page of the host
 
 1. Start an agent panel of this computer, and ask it to take a snapshot of the
    browser panel and to click a link of the page.
@@ -264,7 +292,21 @@ with that key.
    Result: the snapshot names the page of the host, the click changes the page,
    and the picture shows the new page.
 
-### 6.7 C1 — the container lane on a Linux machine with Docker
+2. Open a panel of the host, and ask the agent to call `browser_create` with
+   `profile: "private"` and the address of a test page that sets a cookie. Read
+   the page title and compare it with a page of the shared profile.
+
+   Result: the private panel shows `Private`, and it reads no cookie of the
+   shared profile of the host.
+
+3. Close the private panel, and read the log of the host at
+   `~/.horizon/browser-profiles/fftest/host-firefox.log`.
+
+   Result: the log holds the line that the user context of the private panel is
+   removed. Open a private panel again, and its page reads no cookie of the
+   private page that you closed.
+
+### 6.8 C1 — the container lane on a Linux machine with Docker
 
 These tasks prove the lane that the reference
 `horizon-machines/references/browser-machine.md` describes: Firefox and
@@ -346,7 +388,7 @@ browser of its own, and about 5 GB of free disk.
    driver again, and a new page opens at the same address. The sign-ins of the
    profile stay, because the profile folder is the mount of the machine.
 
-### 6.8 C2 — the refusal of a binary that the image cannot run
+### 6.9 C2 — the refusal of a binary that the image cannot run
 
 1. Change the base image of the Dockerfile to one with an older C library, and
    read the two libraries again.

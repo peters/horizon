@@ -29,7 +29,7 @@ mod replies;
 use replies::{ReplyOutcome, apply_reply, request_method, request_of, unsupported_words};
 
 use super::HostDriverEngine;
-use super::client::{DriverLink, HostDriverHost};
+use super::client::{DriverLink, HostDriverHost, LinkPage};
 use crate::RECONNECT_RESET_AFTER;
 use crate::browser::attached_host::{AttachedHostFailure, PAGE_STATE_LOST};
 use crate::browser::{BrowserPanelState, BrowserStatus};
@@ -83,6 +83,9 @@ pub(crate) struct HostDriverSlot {
     ready_at: Option<Instant>,
     /// The worker of this link, so a stop waits for it to end.
     worker: Option<std::thread::JoinHandle<()>>,
+    /// Whether the person closed this panel for good, so its page ends with the
+    /// link instead of waiting for the next link of the same panel.
+    close_page: Arc<AtomicBool>,
 }
 
 impl HostDriverSlot {
@@ -94,12 +97,15 @@ impl HostDriverSlot {
         panel_local_id: String,
         frame_slot: Arc<FrameSlot>,
         quality: u32,
+        private: bool,
     ) -> Self {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let waker: Arc<Mutex<Option<BrowserEventWaker>>> = Arc::default();
         let stop = Arc::new(AtomicBool::new(false));
+        let close_page = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let worker_close_page = Arc::clone(&close_page);
         let worker_waker = Arc::clone(&waker);
         let worker_host = host.clone();
         let worker_ssh = ssh.clone();
@@ -112,9 +118,11 @@ impl HostDriverSlot {
                     &panel_local_id,
                     frame_slot,
                     quality,
+                    private,
                     command_rx,
                     event_tx,
                     worker_stop,
+                    worker_close_page,
                     worker_waker,
                 );
             })
@@ -131,6 +139,7 @@ impl HostDriverSlot {
             attempts: 0,
             ready_at: None,
             worker,
+            close_page,
         };
         if slot.worker.is_none() {
             slot.failure = Some(AttachedHostFailure::closed(&slot.host));
@@ -171,6 +180,13 @@ impl HostDriverSlot {
         self.worker.is_some()
     }
 
+    /// Close the page of this panel as well as its link: the person closed the
+    /// panel, so the page must not wait on the host for a link that never comes.
+    pub(super) fn close_page(&mut self) {
+        self.close_page.store(true, Ordering::Release);
+        self.stop();
+    }
+
     /// Stop the worker of this link. The browser and the page of the host keep
     /// running, so a panel that comes back attaches to the same page.
     pub(super) fn stop(&mut self) {
@@ -209,6 +225,19 @@ fn lock<T>(slot: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The driver of the host of this panel, or the failure that the panel reads.
+fn driver_of(host: &crate::browser::AttachedHost) -> Result<HostDriverHost, AttachedHostFailure> {
+    let Some(driver) = host.driver() else {
+        return Err(AttachedHostFailure::refused(
+            host,
+            "host_driver_engine",
+            "a Chromium browser host is reached through its DevTools port and needs no driver",
+        ));
+    };
+    HostDriverHost::new(driver.ssh_target(), driver.profile(), driver.engine(), driver.command())
+        .map_err(|error| AttachedHostFailure::refused(host, "host_driver_name", &error.to_string()))
+}
+
 /// The worker of one panel's link: open, serve, attach again.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run(
@@ -217,31 +246,20 @@ fn run(
     panel_local_id: &str,
     frame_slot: Arc<FrameSlot>,
     quality: u32,
+    private: bool,
     commands: mpsc::Receiver<(BrowserCommand, Instant)>,
     events: mpsc::Sender<HostDriverEvent>,
     stop: Arc<AtomicBool>,
+    close_page: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<BrowserEventWaker>>>,
 ) {
-    let Some(driver) = host.driver() else {
-        let _ = events.send(HostDriverEvent::Failed(AttachedHostFailure::refused(
-            &host,
-            "host_driver_engine",
-            "a Chromium browser host is reached through its DevTools port and needs no driver",
-        )));
-        return;
+    let driver_host = match driver_of(&host) {
+        Ok(driver_host) => driver_host,
+        Err(failure) => {
+            let _ = events.send(HostDriverEvent::Failed(failure));
+            return;
+        }
     };
-    let driver_host =
-        match HostDriverHost::new(driver.ssh_target(), driver.profile(), driver.engine(), driver.command()) {
-            Ok(driver_host) => driver_host,
-            Err(error) => {
-                let _ = events.send(HostDriverEvent::Failed(AttachedHostFailure::refused(
-                    &host,
-                    "host_driver_name",
-                    &error.to_string(),
-                )));
-                return;
-            }
-        };
     let manifest = ManifestCoordination::default();
     let mut probe = super::latency::LinkProbe::new();
     let mut attempt = 0u32;
@@ -251,7 +269,11 @@ fn run(
             let _ = events.send(HostDriverEvent::Stopped);
             return;
         }
-        match DriverLink::open(&ssh, &driver_host, quality) {
+        let page = LinkPage {
+            id: panel_local_id,
+            private,
+        };
+        match DriverLink::open(&ssh, &driver_host, quality, &page) {
             Ok(mut link) => {
                 ready_at = Some(Instant::now());
                 match follow(
@@ -261,6 +283,7 @@ fn run(
                     &commands,
                     &events,
                     &stop,
+                    &close_page,
                     &waker,
                     &manifest,
                     &mut probe,
@@ -337,6 +360,7 @@ fn follow(
     commands: &mpsc::Receiver<(BrowserCommand, Instant)>,
     events: &mpsc::Sender<HostDriverEvent>,
     stop: &AtomicBool,
+    close_page: &AtomicBool,
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
     probe: &mut super::latency::LinkProbe,
@@ -356,6 +380,7 @@ fn follow(
         commands,
         events,
         stop,
+        close_page,
         waker,
         manifest,
         probe,
@@ -421,6 +446,7 @@ pub(super) fn serve(
     commands: &mpsc::Receiver<(BrowserCommand, Instant)>,
     events: &mpsc::Sender<HostDriverEvent>,
     stop: &AtomicBool,
+    close_page: &AtomicBool,
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
     probe: &mut super::latency::LinkProbe,
@@ -429,6 +455,12 @@ pub(super) fn serve(
     loop {
         let pass_started = Instant::now();
         if stop.load(Ordering::Acquire) {
+            if close_page.load(Ordering::Acquire) {
+                // The person closed this panel: its page ends with the link, so
+                // the browser of the host does not keep a page that nobody can
+                // reach again.
+                let _ = link.request(&HostDriverRequest::Close);
+            }
             return PumpOutcome::Stopped;
         }
         // The input of the person, and the operations that the tools of an agent
@@ -557,12 +589,14 @@ impl BrowserPanelState {
         // The link of a Firefox host runs over the SSH of its machine: a machine
         // of the machine list answers with its own key.
         let ssh = ssh.with_options(host.login_options());
+        let private = state.config.profile.as_deref() == Some(horizon_browser::PRIVATE_PROFILE);
         let slot = HostDriverSlot::connecting(
             ssh,
             host.clone(),
             panel_local_id,
             Arc::clone(&state.frame_slot),
             DEFAULT_QUALITY,
+            private,
         );
         if let Some(failure) = slot.failure().cloned() {
             state.status = BrowserStatus::Error {
@@ -672,12 +706,14 @@ impl BrowserPanelState {
         // The link of a Firefox host runs over the SSH of its machine: a machine
         // of the machine list answers with its own key.
         let ssh = ssh.with_options(host.login_options());
+        let private = self.config.profile.as_deref() == Some(horizon_browser::PRIVATE_PROFILE);
         let slot = HostDriverSlot::connecting(
             ssh,
             host.clone(),
             self.panel_local_id.clone(),
             Arc::clone(&self.frame_slot),
             DEFAULT_QUALITY,
+            private,
         );
         if let Some(failure) = slot.failure().cloned() {
             self.status = BrowserStatus::Error {
@@ -821,6 +857,14 @@ impl BrowserPanelState {
     pub(crate) fn shutdown_host_driver(&mut self) {
         if let Some(slot) = self.host_driver.as_mut() {
             slot.stop();
+        }
+    }
+
+    /// Stop the link of this panel and end its page on the host, because the
+    /// person closed the panel for good.
+    pub(crate) fn close_host_driver_page(&mut self) {
+        if let Some(slot) = self.host_driver.as_mut() {
+            slot.close_page();
         }
     }
 

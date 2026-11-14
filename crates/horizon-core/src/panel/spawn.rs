@@ -112,6 +112,8 @@ struct StaticPanelSeed {
     position: Option<[f32; 2]>,
     size: Option<[f32; 2]>,
     template: Option<PanelTemplateRef>,
+    /// A panel that keeps nothing of a browser profile.
+    browser_private: bool,
 }
 
 struct TerminalLaunchTrace<'a> {
@@ -152,6 +154,7 @@ impl StaticPanelSeed {
             position: opts.position,
             size: opts.size,
             template: opts.template.take(),
+            browser_private: opts.browser_private,
         }
     }
 
@@ -493,12 +496,14 @@ fn spawn_browser(
         // mismatch there is a page that this computer cannot open.
         BrowserSpawnMode::AttachedHost(host) => {
             browser_config.backend = host.engine().backend();
+            browser_config.profile = Some(profile_of_host(&host, seed.browser_private).to_string());
             browser_of_host(seed.local_id.clone(), &browser_config, initial_url.clone(), &host)
         }
         BrowserSpawnMode::RestoredHost(host) => {
             if let Some(reason) = crate::browser::attached_host_backend_refusal(host.engine(), browser_config.backend) {
                 return Err(crate::error::Error::Config(reason.to_string()));
             }
+            browser_config.profile = Some(profile_of_host(&host, seed.browser_private).to_string());
             browser_of_host(seed.local_id.clone(), &browser_config, initial_url.clone(), &host)
         }
     };
@@ -512,6 +517,16 @@ fn spawn_browser(
         None,
         has_custom_name,
     ))
+}
+
+/// The profile that a page of `host` keeps: the profile of that host, or the
+/// reserved word of a private page, whose context keeps none of it.
+fn profile_of_host(host: &crate::browser::AttachedHost, private: bool) -> &str {
+    if private {
+        horizon_browser::PRIVATE_PROFILE
+    } else {
+        host.profile()
+    }
 }
 
 /// The browser of a panel whose pages the browser of `host` carries.

@@ -402,13 +402,21 @@ pub(super) enum DriverProcess {
 /// of what this session may close, and the browser stays up for the next one.
 pub(super) struct AttachedBrowser {
     target: Mutex<Option<String>>,
+    /// The isolated browser context of a private page, disposed with the page so
+    /// that its cookies and its storage go with it.
+    context: Mutex<Option<String>>,
 }
 
 impl AttachedBrowser {
     pub(super) fn new() -> Self {
         Self {
             target: Mutex::new(None),
+            context: Mutex::new(None),
         }
+    }
+
+    pub(super) fn set_context(&self, context: String) {
+        *self.context.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(context);
     }
 
     fn target(&self) -> Option<String> {
@@ -428,6 +436,21 @@ impl DriverProcess {
     /// session never adopts a page of a sibling, and never stops the browser.
     pub(super) fn is_attached(&self) -> bool {
         matches!(self, Self::Attached(_))
+    }
+
+    /// The isolated browser context of a private page, when this session drives
+    /// the browser of another process. The test of a private page reads it to
+    /// show that the page carries the context that its close disposes.
+    #[cfg(test)]
+    pub(super) fn context(&self) -> Option<String> {
+        match self {
+            Self::Attached(browser) => browser
+                .context
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            Self::Exclusive(_) | Self::Shared(_) => None,
+        }
     }
 
     pub(super) fn child_status(&mut self) -> Option<std::process::ExitStatus> {
@@ -508,6 +531,21 @@ impl DriverProcess {
                     None,
                 );
                 *ours = None;
+                // A private page also takes its isolated browser context with
+                // it, so nothing of the page stays in the browser of the host.
+                let context = browser
+                    .context
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(context) = context {
+                    let _ = link.call_and_drain(
+                        Duration::from_secs(1),
+                        "Target.disposeBrowserContext",
+                        &serde_json::json!({ "browserContextId": context }),
+                        None,
+                    );
+                }
             }
             Self::Shared(page) => {
                 page.release(Some((link, target)));

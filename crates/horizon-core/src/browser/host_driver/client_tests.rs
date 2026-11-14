@@ -16,7 +16,7 @@ use horizon_browser::host_driver::{HostDriverReply, HostDriverRequest, HostSyste
 use horizon_browser_control::ssh_forward::Ssh;
 
 use super::HostDriverEngine;
-use super::client::{DriverLink, HostDriverHost};
+use super::client::{DriverLink, HostDriverHost, LinkPage};
 use super::session::{HostSession, serve_link};
 use super::tests::FakePage;
 use crate::browser::AttachedHostFailureKind;
@@ -25,6 +25,14 @@ const WAIT: Duration = Duration::from_secs(5);
 
 fn host() -> HostDriverHost {
     HostDriverHost::new("browser-host", "mail", HostDriverEngine::Firefox, None).expect("a host of a test")
+}
+
+/// The page of the panel of a test.
+fn page() -> LinkPage<'static> {
+    LinkPage {
+        id: "page-1",
+        private: false,
+    }
 }
 
 /// Start the driver of the host in this process over one socket of this
@@ -38,7 +46,7 @@ fn pair(quality: u32) -> (DriverLink, std::thread::JoinHandle<()>) {
         let mut link = super::Link::over_socket(&theirs);
         serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
-    let link = DriverLink::over_stream(&ours, &host(), quality).expect("the driver greets this computer");
+    let link = DriverLink::over_stream(&ours, &host(), quality, &page()).expect("the driver greets this computer");
     (link, handle)
 }
 
@@ -109,7 +117,7 @@ fn a_pushed_picture_reaches_the_frame_slot_and_is_acknowledged_once() {
         let mut link = super::Link::over_socket(&theirs);
         serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
-    let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
+    let mut link = DriverLink::over_stream(&ours, &host(), 60, &page()).expect("a greeted link");
 
     // The page of the host drew something.
     let first = store(&slot, 4, 2, 10);
@@ -152,14 +160,14 @@ fn a_link_that_comes_back_says_that_the_page_is_the_same_one() {
         }
     });
 
-    let mut first = DriverLink::over_stream(&first_of_ours, &host(), 60).expect("the first link");
+    let mut first = DriverLink::over_stream(&first_of_ours, &host(), 60, &page()).expect("the first link");
     assert!(!first.welcome().page.resumed(), "the first link opens the page");
     first
         .request(&HostDriverRequest::Close)
         .expect("a close of the session");
     drop(first);
 
-    let mut second = DriverLink::over_stream(&second_of_ours, &host(), 60).expect("the second link");
+    let mut second = DriverLink::over_stream(&second_of_ours, &host(), 60, &page()).expect("the second link");
     assert!(
         second.welcome().page.resumed(),
         "the page of the link before is the page of this link, so typed text is still there"
@@ -176,7 +184,7 @@ fn a_host_that_ssh_cannot_reach_keeps_the_words_of_ssh() {
     let directory = tempfile::tempdir().expect("a folder of a test");
     let program = stand_in(directory.path(), "echo 'Host key verification failed.' >&2\nexit 255");
     let ssh = Ssh::default().with_program(program);
-    let failure = DriverLink::open(&ssh, &host(), 60).expect_err("a refused host");
+    let failure = DriverLink::open(&ssh, &host(), 60, &page()).expect_err("a refused host");
     assert_eq!(failure.kind(), AttachedHostFailureKind::Unreachable);
     assert!(
         failure.message().contains("Host key verification failed"),
@@ -190,7 +198,7 @@ fn a_host_without_a_horizon_names_the_program_that_is_missing() {
     let directory = tempfile::tempdir().expect("a folder of a test");
     let program = stand_in(directory.path(), "echo 'sh: 1: horizon: not found' >&2\nexit 127");
     let ssh = Ssh::default().with_program(program);
-    let failure = DriverLink::open(&ssh, &host(), 60).expect_err("no horizon on the host");
+    let failure = DriverLink::open(&ssh, &host(), 60, &page()).expect_err("no horizon on the host");
     assert_eq!(failure.kind(), AttachedHostFailureKind::NoDriver);
     assert!(
         failure.message().contains("runs no horizon"),
@@ -239,7 +247,7 @@ fn the_words_of_a_driver_that_refused_the_link_reach_the_panel() {
                 .to_vec(),
         ],
     );
-    let failure = DriverLink::over_stream(&ours, &host(), 60).expect_err("a refusal of the driver");
+    let failure = DriverLink::over_stream(&ours, &host(), 60, &page()).expect_err("a refusal of the driver");
     assert_eq!(
         failure.kind(),
         AttachedHostFailureKind::Refused,
@@ -310,7 +318,7 @@ fn a_driver_of_another_version_or_system_is_refused_with_its_words() {
         let (ours, theirs) = UnixStream::pair().expect("a socket pair");
         let line = horizon_browser::host_driver::encode_line(&HostDriverReply::Welcome(welcome)).expect("one line");
         let handle = answering_driver(theirs, vec![line]);
-        let failure = DriverLink::over_stream(&ours, &host(), 60).expect_err("a refused welcome");
+        let failure = DriverLink::over_stream(&ours, &host(), 60, &page()).expect_err("a refused welcome");
         assert_eq!(failure.kind(), kind, "{}", failure.message());
         assert!(
             failure.message().contains(needle),
@@ -329,7 +337,7 @@ fn a_driver_that_ends_the_link_is_a_lost_link_with_no_words_of_its_own() {
     let program = stand_in(directory.path(), "exit 0");
     let ssh = Ssh::default().with_program(program);
     let _ = handle;
-    let failure = DriverLink::open(&ssh, &host(), 60).expect_err("a link that ended");
+    let failure = DriverLink::open(&ssh, &host(), 60, &page()).expect_err("a link that ended");
     assert_eq!(failure.kind(), AttachedHostFailureKind::Unreachable);
     assert!(
         failure.message().contains("could not be reached"),
@@ -351,7 +359,7 @@ fn a_request_of_this_computer_reaches_the_page_of_the_host() {
         let mut link = super::Link::over_socket(&theirs);
         serve_link(&mut session, &mut link, "mail", HostDriverEngine::Firefox, None);
     });
-    let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
+    let mut link = DriverLink::over_stream(&ours, &host(), 60, &page()).expect("a greeted link");
     link.request(&HostDriverRequest::Navigate {
         url: "https://example.test/".to_string(),
     })
@@ -431,7 +439,7 @@ fn a_fatal_refusal_after_the_greeting_ends_the_link_with_the_words_of_the_driver
             refusal,
         ],
     );
-    let mut link = DriverLink::over_stream(&ours, &host(), 60).expect("a greeted link");
+    let mut link = DriverLink::over_stream(&ours, &host(), 60, &page()).expect("a greeted link");
     let (_commands, commands) = std::sync::mpsc::channel();
     let (events, _event_rx) = std::sync::mpsc::channel();
     let stop = std::sync::atomic::AtomicBool::new(false);
@@ -445,6 +453,7 @@ fn a_fatal_refusal_after_the_greeting_ends_the_link_with_the_words_of_the_driver
         &commands,
         &events,
         &stop,
+        &std::sync::atomic::AtomicBool::new(false),
         &waker,
         &manifest,
         &mut probe,

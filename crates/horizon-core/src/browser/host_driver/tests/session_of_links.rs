@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use horizon_browser::BrowserCommand;
 use horizon_browser::host_driver::{HostDriverPageState, HostDriverReply, HostDriverRequest};
 
+use super::super::pages::MAX_PAGES;
 use super::super::{HostDriverOptions, relay_streams};
-use super::fixtures::{Collected, SessionOfTest, WAIT, hello, lock, never_ends, signals, store};
+use super::fixtures::{Collected, SessionOfTest, WAIT, hello, hello_page, lock, never_ends, signals, store};
 
 #[test]
 fn a_new_link_takes_the_page_over_from_a_link_that_vanished_without_a_goodbye() {
@@ -78,25 +79,62 @@ fn a_link_that_says_nothing_for_the_bound_of_the_session_is_closed() {
 }
 
 #[test]
-fn a_second_link_of_a_live_panel_reads_why_the_page_is_not_free() {
-    let session = SessionOfTest::start("busy", Duration::from_millis(100), Duration::from_secs(60));
+fn a_link_that_keeps_answering_keeps_its_page() {
+    // The rule of a taken-over link is the rule of each page: the page of a panel
+    // goes to a new link of that panel when the link that holds it went silent,
+    // and never while it still answers. A link of a panel says something four
+    // times a second (the signals of its manifest), so it is not taken over.
+    let session = SessionOfTest::start("answering", Duration::from_secs(2), Duration::from_secs(60));
+    let mut first = session.connect();
+    first.send(&hello_page("panel-1", false, 60));
+    assert_eq!(first.welcome(WAIT).page, HostDriverPageState::New);
+    first.send(&signals());
+
+    let mut second = session.connect();
+    second.send(&hello_page("panel-1", false, 60));
+    let HostDriverReply::Refusal { code, .. } = second.wait_for("refusal", WAIT) else {
+        panic!("a link that still answers is not taken over");
+    };
+    assert_eq!(code, "link_busy");
+
+    // The page is still the page of the link that answers.
+    first.send(&HostDriverRequest::Navigate {
+        url: "https://kept.test/".to_string(),
+    });
+    let deadline = Instant::now() + WAIT;
+    while !session
+        .commands_of(0)
+        .iter()
+        .any(|command| matches!(command, BrowserCommand::Navigate(url) if url == "https://kept.test/"))
+    {
+        assert!(Instant::now() < deadline, "the link that answers keeps its page");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let code = session.close(&mut first);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn a_second_link_of_the_same_page_reads_why_the_page_is_not_free() {
+    // The take-over bound is longer than this test, so the link that holds the
+    // page is a link of a panel that still answers: a second link of the same
+    // panel waits instead of taking the page of the person.
+    let session = SessionOfTest::start("busy", Duration::from_secs(60), Duration::from_secs(60));
     let mut first = session.connect();
     first.send(&hello(60));
     assert_eq!(first.welcome(WAIT).page, HostDriverPageState::New);
 
-    // The first link is the link of a panel: it says something four times a
-    // second, so it is never silent long enough to be taken over.
-    first.send(&signals());
     let mut second = session.connect();
     second.send(&hello(60));
     let HostDriverReply::Refusal { code, message, fatal } = second.wait_for("refusal", WAIT) else {
-        panic!("a second link of a profile that is in use reads why it waits");
+        panic!("a second link of a page that a link drives reads why it waits");
     };
     assert_eq!(code, "link_busy");
-    assert!(fatal, "a second panel of one profile needs a person");
+    assert!(fatal, "a second link of one page needs a person");
     assert!(
         message.contains("another link") && message.contains("Retry"),
-        "the words say what to close and what to do: {message}"
+        "the words say what to do: {message}"
     );
 
     // The link of the panel keeps the page.
@@ -261,4 +299,166 @@ fn the_idle_bound_of_a_host_entry_is_minutes_and_off_without_it() {
             "{arguments:?} must be refused"
         );
     }
+}
+
+/// The panels of one profile are pages of one browser: a second panel is a new
+/// page of the same profile, not a refusal and not the page of the first panel.
+#[test]
+fn two_panels_of_one_profile_are_two_pages_of_one_browser() {
+    let session = SessionOfTest::start("two-pages", Duration::from_millis(100), Duration::from_secs(60));
+    let mut first = session.connect();
+    first.send(&hello_page("panel-1", false, 60));
+    assert_eq!(
+        first.welcome(WAIT).page,
+        HostDriverPageState::New,
+        "the first panel of a profile opens its page"
+    );
+    let mut second = session.connect();
+    second.send(&hello_page("panel-2", false, 60));
+    assert_eq!(
+        second.welcome(WAIT).page,
+        HostDriverPageState::New,
+        "a second panel of the same profile opens another page of the same browser"
+    );
+    assert_eq!(session.pages(), 2, "one page for each panel of the profile");
+
+    // The page of each panel is driven by its own link alone.
+    first.send(&HostDriverRequest::Navigate {
+        url: "https://one.test/".to_string(),
+    });
+    second.send(&HostDriverRequest::Navigate {
+        url: "https://two.test/".to_string(),
+    });
+    let navigated = |commands: &[BrowserCommand], url: &str| {
+        commands
+            .iter()
+            .any(|command| matches!(command, BrowserCommand::Navigate(page) if page == url))
+    };
+    let deadline = Instant::now() + WAIT;
+    while !(navigated(&session.commands_of(0), "https://one.test/")
+        && navigated(&session.commands_of(1), "https://two.test/"))
+    {
+        assert!(
+            Instant::now() < deadline,
+            "each page takes the request of its own link: {:?} and {:?}",
+            session.commands_of(0),
+            session.commands_of(1)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !navigated(&session.commands_of(0), "https://two.test/"),
+        "the page of the first panel takes no request of the second panel"
+    );
+
+    // A panel whose link was lost gets its own page back, and the page of the
+    // other panel is not touched. The link of the lost panel said nothing for the
+    // take-over bound, which is what a link of a dropped connection looks like.
+    drop(first);
+    std::thread::sleep(Duration::from_millis(250));
+    let mut back = session.connect();
+    back.send(&hello_page("panel-1", false, 60));
+    assert_eq!(
+        back.welcome(WAIT).page,
+        HostDriverPageState::Same,
+        "the page of the panel that came back is the page that it had"
+    );
+    assert_eq!(
+        session.pages(),
+        2,
+        "the page of the lost link came back instead of a new page"
+    );
+    assert!(
+        navigated(&session.commands_of(1), "https://two.test/"),
+        "the page of the other panel kept its own history"
+    );
+
+    // The close of one panel ends its page, and the browser stays for the page of
+    // the other panel.
+    second.send(&HostDriverRequest::Close);
+    let _ = second.wait_for("end of the session", WAIT);
+    let mut again = session.connect();
+    again.send(&hello_page("panel-2", false, 60));
+    assert_eq!(
+        again.welcome(WAIT).page,
+        HostDriverPageState::New,
+        "the page of a panel that closed is gone, so its next panel opens a new one"
+    );
+    assert_eq!(session.pages(), 3, "one page for each open panel");
+
+    // The last page ends the session, and its browser with it.
+    back.send(&HostDriverRequest::Close);
+    let _ = back.wait_for("end of the session", WAIT);
+    let code = session.close(&mut again);
+    assert_eq!(code, 0, "the last page of a session ends the session");
+}
+
+/// A private panel of a browser host is a page of the same browser that keeps
+/// nothing of the profile.
+#[test]
+fn a_private_page_of_a_profile_is_a_page_that_keeps_nothing() {
+    let session = SessionOfTest::start("private-page", Duration::from_millis(100), Duration::from_secs(60));
+    let mut shared = session.connect();
+    shared.send(&hello_page("panel-1", false, 60));
+    let _ = shared.welcome(WAIT);
+    let mut private = session.connect();
+    private.send(&hello_page("panel-2", true, 60));
+    assert_eq!(private.welcome(WAIT).page, HostDriverPageState::New);
+    assert_eq!(
+        session.private_of(0),
+        Some(false),
+        "a panel of the profile is a page of the profile"
+    );
+    assert_eq!(
+        session.private_of(1),
+        Some(true),
+        "the page of a private panel is made in a context that keeps nothing"
+    );
+    assert_eq!(session.pages(), 2, "both pages are pages of one session of the profile");
+    // A private page keeps nothing, so its panel never resumes a page.
+    private.send(&HostDriverRequest::Close);
+    let _ = private.wait_for("end of the session", WAIT);
+    let mut again = session.connect();
+    again.send(&hello_page("panel-2", true, 60));
+    assert_eq!(
+        again.welcome(WAIT).page,
+        HostDriverPageState::New,
+        "a private panel that comes back opens a page that keeps nothing again"
+    );
+    assert_eq!(session.pages(), 3, "a fresh page for each private panel");
+    shared.send(&HostDriverRequest::Close);
+    let _ = shared.wait_for("end of the session", WAIT);
+    let code = session.close(&mut again);
+    assert_eq!(code, 0);
+}
+
+/// The pages of one session are bounded, and the next panel reads the number and
+/// the way out.
+#[test]
+fn a_session_refuses_a_page_beyond_the_bound_of_its_pages() {
+    let session = SessionOfTest::start("many-pages", Duration::from_millis(100), Duration::from_secs(600));
+    for index in 0..MAX_PAGES {
+        let mut link = session.connect();
+        link.send(&hello_page(&format!("panel-{index}"), false, 60));
+        assert_eq!(
+            link.welcome(WAIT).page,
+            HostDriverPageState::New,
+            "the page {index} of the profile"
+        );
+        // The link of that page goes on serving it, so the next link names
+        // another panel.
+        std::mem::forget(link);
+    }
+    let mut refused = session.connect();
+    refused.send(&hello_page("panel-too-many", false, 60));
+    let HostDriverReply::Refusal { code, message, fatal } = refused.wait_for("refusal", WAIT) else {
+        panic!("a page beyond the bound of a session reads why");
+    };
+    assert_eq!(code, "page_limit_reached");
+    assert!(fatal, "a person must close a panel of that profile");
+    assert!(
+        message.contains(&MAX_PAGES.to_string()) && message.contains("another profile"),
+        "the words name the bound and the way out: {message}"
+    );
+    assert_eq!(session.pages(), MAX_PAGES, "no page beyond the bound was started");
 }
