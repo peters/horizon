@@ -486,8 +486,14 @@ pub enum Outcome {
         panel_id: String,
         visible: bool,
     },
+    /// One card that is gone. `by_owner` says whether the agent that created the
+    /// card closed it; a card whose owner panel left the workspace can be closed
+    /// by another agent panel of that workspace, and `closed_by` names the panel
+    /// that closed it.
     Closed {
         panel_id: String,
+        by_owner: bool,
+        closed_by: String,
     },
     /// One panel of a preset that the caller now has in its workspace.
     Opened {
@@ -874,6 +880,32 @@ mod tests {
                 "the key operation {operation} is described: {schema}"
             );
         }
+    }
+
+    #[test]
+    fn a_closed_card_names_whether_its_owner_closed_it_and_which_panel_did() {
+        let owned = serde_json::to_value(Outcome::Closed {
+            panel_id: "card".into(),
+            by_owner: true,
+            closed_by: "agent".into(),
+        })
+        .expect("serialize");
+        assert_eq!(owned["status"], serde_json::json!("closed"));
+        assert_eq!(owned["panel_id"], serde_json::json!("card"));
+        assert_eq!(owned["by_owner"], serde_json::json!(true));
+        assert_eq!(owned["closed_by"], serde_json::json!("agent"));
+
+        let other = serde_json::to_value(Outcome::Closed {
+            panel_id: "card".into(),
+            by_owner: false,
+            closed_by: "other-agent".into(),
+        })
+        .expect("serialize");
+        assert_eq!(
+            other["by_owner"],
+            serde_json::json!(false),
+            "a card of an owner that left the workspace says that another agent closed it"
+        );
     }
 
     #[test]

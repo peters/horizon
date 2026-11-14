@@ -63,7 +63,7 @@ the returned `revision`; it increases with every new document.
  "document": {"components": [{"type": "text", "text": "Hour 4 of 24."}]}}
 ```
 
-Only the agent that created a card may update it, hide it, show it or close it.
+Only the agent that created a card may update it or change its visibility.
 Another agent of the same workspace gets `not_owner`.
 
 ## List and inspect cards
@@ -106,6 +106,19 @@ need from `inspect` before you close it.
 ```json
 {"operation": "close", "panel_id": "<panel_id>"}
 ```
+
+A card whose owner panel left the workspace can be closed by any agent panel of
+that workspace, so a coordinator can clean up after a plan of an earlier run. The
+answer says who closed the card:
+
+```json
+{"status": "closed", "panel_id": "<panel_id>", "by_owner": false,
+ "closed_by": "<the panel id of the agent that closed it>"}
+```
+
+`by_owner: true` means that the owner of the card closed it. A card whose owner
+panel is still in the workspace stays closed to every other agent: `close` is
+`not_owner` there, and so are `update` and `visibility`.
 
 ## Connect an SSH terminal
 
@@ -668,8 +681,10 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - `panel_unavailable`: the panel id is not in the calling workspace. Call
   `list` to see the cards that the caller can reach.
 - `not_block_panel`: the panel id is a panel that is not a card.
-- `not_owner`: another agent created this card. Read it with `inspect`; only its
-  owner changes it.
+- `not_owner`: another agent created this card and its agent panel is still in
+  the workspace. Read it with `inspect`; only its owner changes it, hides it or
+  shows it. `close` is the one exception: a card whose owner panel is gone can be
+  closed by an agent panel of the same workspace.
 - `invalid_document`: the document breaks a rule. The message names the
   offending place, such as `components[2].items[0].id` or
   `components[1].rows`. Correct that place and send the document again.
@@ -735,7 +750,9 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
   card is not saved.
 - A card is not saved as a file; its document lives in the panel and comes back
   after a restart of Horizon.
-- Only the agent that created a card can change it.
+- Only the agent that created a card can change it or hide it. The one exception
+  is `close` of a card whose owner panel left the workspace, which another agent
+  panel of that workspace may do.
 - A terminal that you open with `open_terminal` is not a card. It has no
   document, no click and no `next_click`, and this tool cannot change it after
   it is open.

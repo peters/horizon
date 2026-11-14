@@ -150,6 +150,28 @@ variables that Horizon injects into that panel.
   `caller_unavailable`, and a request that reached the host after its deadline is
   `request_expired`.
 
+## A card whose owner panel is gone can be closed by another agent
+
+A card stays on the board after the agent panel that owns it leaves the
+workspace, and for a person it was the only one who could close it. A later
+coordinator can now clean up after a plan of an earlier run.
+
+- **Only when no owner panel is there.** The host resolves the owner actor of the
+  card to an agent panel of the card's workspace, with the rule that `inspect`
+  reports as `agent_present`. While such a panel exists, `close` by another agent
+  is `not_owner`, so a living owner keeps its card closed to others.
+- **The answer names the closer.** The outcome is `closed` with `by_owner: false`
+  and the `closed_by` panel id of the caller, so a person reads who closed the
+  card. A card that its owner closes answers `by_owner: true`.
+- **No other operation opens.** `update`, `visibility` and `next_click` still
+  require the exact owner, so a card of a gone owner can be closed and not
+  changed. Its document is dropped with the card, as every closed card loses it.
+- **The same claim every card has.** The card belongs to the caller's workspace,
+  and an agent of another workspace gets `panel_unavailable` as before.
+- **Does not guarantee:** that the plan of the card is finished, or that its work
+  stopped. The closing agent decides from the plan file, and the person reads that
+  file and not the card.
+
 ## Horizon types one line into a panel that an agent opened
 
 `open_panel` can carry `prompt`: one line that Horizon writes into the terminal of

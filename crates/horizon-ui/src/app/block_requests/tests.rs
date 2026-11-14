@@ -604,3 +604,117 @@ fn server_status_names_the_target_and_the_command_but_no_secret() {
         "a host without a link of its own reports no link, whatever the entry says"
     );
 }
+
+#[test]
+fn a_card_whose_owner_panel_left_can_be_closed_by_another_agent_of_the_workspace() {
+    let (_temp, ctx, mut app) = app();
+    share_workspace(&mut app);
+    let (panel_id, _) = created(app.apply_block_request(
+        &request(
+            &app,
+            Operation::Create {
+                title: None,
+                document: document("a card of an earlier run"),
+            },
+        ),
+        &ctx,
+    ));
+    // The owner panel leaves the workspace, as the panel of a coordinator that a
+    // person closed does.
+    let owner = app.board.panels[0].id;
+    app.board.panels.retain(|panel| panel.id != owner);
+    let closing = app.board.panels[0].local_id.clone();
+
+    // Every other operation still needs the exact owner.
+    for operation in [
+        Operation::Update {
+            panel_id: panel_id.clone(),
+            document: document("intruder"),
+        },
+        Operation::Visibility {
+            panel_id: panel_id.clone(),
+            visible: false,
+        },
+    ] {
+        assert_eq!(
+            code(&app.apply_block_request(&request_from(&app, 0, operation), &ctx)),
+            "not_owner"
+        );
+    }
+
+    let answer = app.apply_block_request(
+        &request_from(
+            &app,
+            0,
+            Operation::Close {
+                panel_id: panel_id.clone(),
+            },
+        ),
+        &ctx,
+    );
+    let Outcome::Closed {
+        by_owner,
+        closed_by,
+        panel_id: closed,
+    } = answer
+    else {
+        panic!("expected the closed card: {answer:?}");
+    };
+    assert_eq!(closed, panel_id);
+    assert!(!by_owner, "another agent closed the card of the gone owner");
+    assert_eq!(closed_by, closing, "the answer names the panel that closed it");
+    assert!(app.board.panel_id_by_local_id(&panel_id).is_none(), "the card is gone");
+}
+
+#[test]
+fn a_card_of_a_living_owner_is_closed_by_that_owner_alone() {
+    let (_temp, ctx, mut app) = app();
+    share_workspace(&mut app);
+    let (panel_id, _) = created(app.apply_block_request(
+        &request(
+            &app,
+            Operation::Create {
+                title: None,
+                document: document("owner's card"),
+            },
+        ),
+        &ctx,
+    ));
+    let refusal = app.apply_block_request(
+        &request_from(
+            &app,
+            1,
+            Operation::Close {
+                panel_id: panel_id.clone(),
+            },
+        ),
+        &ctx,
+    );
+    assert_eq!(code(&refusal), "not_owner");
+    assert!(
+        app.board.panel_id_by_local_id(&panel_id).is_some(),
+        "the card of the living owner stays"
+    );
+
+    let closing = app.board.panels[0].local_id.clone();
+    let answer = app.apply_block_request(
+        &request(
+            &app,
+            Operation::Close {
+                panel_id: panel_id.clone(),
+            },
+        ),
+        &ctx,
+    );
+    let Outcome::Closed {
+        by_owner,
+        closed_by,
+        panel_id: closed,
+    } = answer
+    else {
+        panic!("expected the closed card: {answer:?}");
+    };
+    assert_eq!(closed, panel_id);
+    assert!(by_owner, "the owner closed its own card");
+    assert_eq!(closed_by, closing);
+}

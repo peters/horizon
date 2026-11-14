@@ -537,11 +537,22 @@ impl HorizonApp {
         }
     }
 
+    /// Answers `close`: the caller's own card, or the card of an owner panel that
+    /// left the workspace, so a later coordinator can clean up after a plan of an
+    /// earlier run. A card with a living owner stays closed to every other agent.
     fn close_card(&mut self, panel_id: &str, actor: ActorPanel, owner: &str, ctx: &Context) -> Outcome {
-        let id = match self.owned_card(panel_id, actor, owner) {
-            Ok(id) => id,
+        let panel = match self.card_panel(panel_id, actor.workspace_id) {
+            Ok(panel) => panel,
             Err(refusal) => return refusal,
         };
+        let by_owner = card_owner(panel) == Some(owner);
+        if !by_owner && self.card_owner_panel(panel).is_some() {
+            return Outcome::failed(
+                "not_owner",
+                "Only the agent that created this card may close it: its owner is still in this workspace",
+            );
+        }
+        let id = panel.id;
         if self.fullscreen_panel == Some(id) {
             self.fullscreen_panel = None;
         }
@@ -554,6 +565,11 @@ impl HorizonApp {
         ctx.request_repaint();
         Outcome::Closed {
             panel_id: panel_id.to_owned(),
+            by_owner,
+            closed_by: self
+                .board
+                .panel(actor.panel_id)
+                .map_or_else(String::new, |panel| panel.local_id.clone()),
         }
     }
 

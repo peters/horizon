@@ -665,8 +665,8 @@ leaves the old file as it is.
 
 Never delete the plan file, the history or a progress note of an older run. Name
 the folder of the old file on the card when you start a new plan. The old card
-belongs to the coordinator of that run: when that panel is gone, close the old
-card, and the answer of `close` says who closed it.
+belongs to the coordinator of that run: when that panel is gone, `close` it, and
+the answer names the panel that closed it with `by_owner: false`.
 
 ## A task that is a GitHub issue
 
