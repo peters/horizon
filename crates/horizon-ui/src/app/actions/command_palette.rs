@@ -94,16 +94,15 @@ impl HorizonApp {
                 };
             }
             CommandId::ZoomReset => {
-                let canvas_rect = self.canvas_rect(ctx);
-                let _ = self.zoom_reset(canvas_rect, canvas_rect.center());
+                let _ = self.zoom_by_shortcut(ctx, horizon_core::DEFAULT_CANVAS_ZOOM);
             }
             CommandId::ZoomIn => {
-                let canvas_rect = self.canvas_rect(ctx);
-                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom * 1.1);
+                let zoom = self.canvas_view.zoom * 1.1;
+                let _ = self.zoom_by_shortcut(ctx, zoom);
             }
             CommandId::ZoomOut => {
-                let canvas_rect = self.canvas_rect(ctx);
-                let _ = self.zoom_canvas_at(canvas_rect, canvas_rect.center(), self.canvas_view.zoom / 1.1);
+                let zoom = self.canvas_view.zoom / 1.1;
+                let _ = self.zoom_by_shortcut(ctx, zoom);
             }
             CommandId::AlignWorkspacesHorizontally => {
                 // The shared action settles the view on the row head; the

@@ -63,6 +63,49 @@ impl HorizonApp {
         self.zoom_canvas_at(canvas_rect, screen_anchor, horizon_core::DEFAULT_CANVAS_ZOOM)
     }
 
+    /// A zoom that a shortcut asks for, at the middle of the canvas.
+    ///
+    /// A zoom at a pointer keeps the place of that pointer. A zoom of a shortcut
+    /// has no pointer to keep, and a panel that the person has the keyboard focus
+    /// in must stay readable: the view keeps that panel whole in the canvas when
+    /// it fits at the zoom that the shortcut asked for, by the rule of a jump to
+    /// that panel.
+    pub(super) fn zoom_by_shortcut(&mut self, ctx: &Context, zoom: f32) -> bool {
+        let rect = self.canvas_rect(ctx);
+        let changed = self.zoom_canvas_at(rect, rect.center(), zoom);
+        if changed {
+            self.keep_focused_panel_whole(ctx, rect);
+        }
+        changed
+    }
+
+    /// Moves the view so that the panel with the keyboard focus is whole in
+    /// `rect` at the zoom of the view. A view that already holds the panel whole
+    /// stays as it is, and a panel that is larger than the view at that zoom
+    /// keeps the place that the zoom gave it.
+    fn keep_focused_panel_whole(&mut self, ctx: &Context, rect: Rect) {
+        let Some(panel_id) = self.board.focused else {
+            return;
+        };
+        let Some(panel) = self.board.panel(panel_id) else {
+            return;
+        };
+        let placed = Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into());
+        let placed = canvas_scene_transform(self.canvas_rect(ctx), self.canvas_view) * placed;
+        if rect.contains_rect(placed) {
+            return;
+        }
+        let Some((panel_frame, workspace_pos)) = self.reveal_frames(panel_id) else {
+            return;
+        };
+        let Some(pan) = reveal_pan_at_zoom(rect, panel_frame, workspace_pos, self.canvas_view.zoom) else {
+            return;
+        };
+        self.pan_target = None;
+        self.canvas_view.set_pan_offset([pan.x, pan.y]);
+        self.mark_runtime_dirty();
+    }
+
     #[profiling::function]
     pub(super) fn animate_pan(&mut self, ctx: &Context) {
         if let Some(target) = self.pan_target {
@@ -215,7 +258,40 @@ impl HorizonApp {
     /// bottom-aligns the panel when it stays larger than the viewport even at
     /// the minimum zoom.
     pub(super) fn reveal_panel_visible(&mut self, ctx: &Context, panel_id: PanelId) {
-        self.reveal_panel_in_rect(panel_id, self.canvas_rect(ctx));
+        self.reveal_panel_in_rect(panel_id, self.reveal_rect(ctx));
+    }
+
+    /// The rectangle that a jump reveals a panel into.
+    ///
+    /// The canvas leaves the sidebar, the settings panel and the settings bar
+    /// out, so a revealed panel never stands under them. The minimap sits over
+    /// a corner of the canvas, and a revealed panel keeps clear of that corner
+    /// while the rest of the canvas still holds the panel with the margin of a
+    /// jump.
+    pub(in crate::app) fn reveal_rect(&self, ctx: &Context) -> Rect {
+        let canvas = self.canvas_rect(ctx);
+        let Some(minimap) = self.minimap_overlay_rect(ctx) else {
+            return canvas;
+        };
+        // The minimap is held in the corner that it stands in, so the reveal
+        // takes the corner that holds the overlay rather than the whole canvas.
+        let right = if minimap.max.x > canvas.center().x {
+            minimap.min.x
+        } else {
+            canvas.max.x
+        };
+        let bottom = if minimap.max.y > canvas.center().y {
+            minimap.min.y
+        } else {
+            canvas.max.y
+        };
+        let clear = Rect::from_min_max(canvas.min, Pos2::new(right.max(canvas.min.x), bottom.max(canvas.min.y)));
+        // A canvas that the minimap leaves no room in keeps the whole of it.
+        if fits_in_canvas(clear.size(), Vec2::ZERO, Vec2::splat(REVEAL_MARGIN), 1.0) {
+            clear
+        } else {
+            canvas
+        }
     }
 
     pub(super) fn reveal_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
@@ -441,14 +517,34 @@ fn reveal_view_state(
     // whole, at the panel's own left edge. A panel that is larger than the view
     // even at the floor of a Fit is shown from its top left, so the person reads
     // the start of it.
-    let pan = if fits_in_canvas(canvas_rect.size(), frame, margin, zoom) {
-        reveal_pan_offset(canvas_rect, panel_pos, panel_size, workspace_pos, zoom)
-    } else if fits_in_canvas(canvas_rect.size(), panel_size, margin, zoom) {
-        reveal_pan_offset(canvas_rect, panel_pos, panel_size, panel_pos, zoom)
-    } else {
-        top_left_pan_offset(panel_pos, zoom)
-    };
+    let pan = reveal_pan_at_zoom(canvas_rect, panel, workspace_pos, zoom)
+        .unwrap_or_else(|| top_left_pan_offset(panel_pos, zoom));
     (zoom, pan)
+}
+
+/// The pan of a jump to a panel at `zoom`, or `None` when the panel is larger
+/// than the view at that zoom.
+///
+/// The workspace's left edge comes first, next to the canvas edge, while it and
+/// the panel fit together. A workspace that is too wide at this zoom still shows
+/// its panel whole at the panel's own left edge.
+fn reveal_pan_at_zoom(canvas_rect: Rect, panel: (Pos2, Vec2), workspace_pos: Pos2, zoom: f32) -> Option<Vec2> {
+    let (panel_pos, panel_size) = panel;
+    let margin = Vec2::splat(REVEAL_MARGIN);
+    let fit_width = (panel_pos.x + panel_size.x) - workspace_pos.x;
+    if fits_in_canvas(canvas_rect.size(), Vec2::new(fit_width, panel_size.y), margin, zoom) {
+        Some(reveal_pan_offset(
+            canvas_rect,
+            panel_pos,
+            panel_size,
+            workspace_pos,
+            zoom,
+        ))
+    } else if fits_in_canvas(canvas_rect.size(), panel_size, margin, zoom) {
+        Some(reveal_pan_offset(canvas_rect, panel_pos, panel_size, panel_pos, zoom))
+    } else {
+        None
+    }
 }
 
 fn reveal_pan_offset(canvas_rect: Rect, panel_pos: Pos2, panel_size: Vec2, workspace_pos: Pos2, zoom: f32) -> Vec2 {
@@ -523,14 +619,23 @@ fn canvas_origin(canvas_rect: Rect) -> [f32; 2] {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, Rect, Vec2};
-    use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
+    use egui::{Context, Pos2, Rect, Vec2};
+    use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, RuntimeState, StartupDecision};
 
     use super::{
-        FIT_MARGIN, PAN_MARGIN, aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame,
-        fits_in_canvas, panel_focus_frame, reveal_view_state, top_left_pan_offset,
+        FIT_MARGIN, PAN_MARGIN, aligned_pan_offset, canvas_origin, canvas_scene_transform, fit_workspace_zoom,
+        fit_zoom_for_frame, fits_in_canvas, panel_focus_frame, reveal_view_state, top_left_pan_offset,
     };
     use horizon_core::DEFAULT_FIT_FLOOR_ZOOM;
+
+    use tempfile::TempDir;
+
+    use crate::app::HorizonApp;
+    use crate::app::test_support::{
+        editor_panel_state, editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
+
+    use super::REVEAL_MARGIN;
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -746,5 +851,210 @@ mod tests {
             right_edge <= 1200.0 - 40.0 + 0.001,
             "the panel stays whole: {right_edge}"
         );
+    }
+
+    const VIEWPORT: [f32; 2] = [1400.0, 900.0];
+
+    /// An app with one workspace that holds a panel at `position`.
+    fn app_with_panel_at(position: [f32; 2]) -> (TempDir, Context, HorizonApp) {
+        let mut workspace = editor_workspace_state("fixture", [40.0, 40.0]);
+        workspace.panels = vec![editor_panel_state("notes", position)];
+        let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState {
+                workspaces: vec![workspace],
+                ..RuntimeState::default()
+            }),
+        });
+        for _ in 0..3 {
+            run_app_frame_with_input(&ctx, &mut app, raw_input(VIEWPORT, None));
+        }
+        (temp, ctx, app)
+    }
+
+    /// The screen rectangle of the panel `local_id`, through the view of the app.
+    fn panel_screen_rect(app: &HorizonApp, ctx: &Context, local_id: &str) -> Rect {
+        let panel_id = app
+            .board
+            .panel_id_by_local_id(local_id)
+            .expect("the panel of the fixture");
+        let panel = app.board.panel(panel_id).expect("the panel of the fixture");
+        let rect = Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into());
+        canvas_scene_transform(app.canvas_rect(ctx), app.canvas_view) * rect
+    }
+
+    /// A zoom of a shortcut keeps the zoom that it asked for and the panel of the
+    /// keyboard focus whole in the canvas, also when the panel stood past the right
+    /// edge before it.
+    #[test]
+    fn a_zoom_of_a_shortcut_keeps_the_focused_panel_whole() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
+        app.board.focus(panel);
+        app.canvas_view.set_zoom(2.0);
+        app.canvas_view.set_pan_offset([-1500.0, -200.0]);
+        let before = panel_screen_rect(&app, &ctx, "notes");
+        let canvas = app.canvas_rect(&ctx);
+        assert!(
+            !canvas.contains_rect(before),
+            "the panel starts outside the canvas: {before:?} in {canvas:?}"
+        );
+
+        assert!(app.zoom_by_shortcut(&ctx, 2.2), "the shortcut changes the zoom");
+        assert!(
+            (app.canvas_view.zoom - 2.2).abs() < 1.0e-4,
+            "the view keeps the zoom that the shortcut asked for: {}",
+            app.canvas_view.zoom
+        );
+        let after = panel_screen_rect(&app, &ctx, "notes");
+        let canvas = app.canvas_rect(&ctx);
+        assert!(
+            canvas.contains_rect(after),
+            "the panel of the keyboard focus stays whole in the canvas: {after:?} in {canvas:?}"
+        );
+        assert!(
+            after.min.x >= canvas.min.x + REVEAL_MARGIN - 0.5 && after.min.x <= canvas.min.x + REVEAL_MARGIN + 40.0,
+            "the panel starts at the left edge that a jump gives it: {} against {}",
+            after.min.x,
+            canvas.min.x + REVEAL_MARGIN
+        );
+    }
+
+    /// A zoom of a shortcut that already holds the panel whole leaves the view where
+    /// the zoom about the middle of the canvas put it: the panel decides only when it
+    /// would leave the canvas.
+    #[test]
+    fn a_zoom_of_a_shortcut_that_keeps_the_panel_whole_leaves_the_view_alone() {
+        let (_temp, ctx, mut app) = app_with_panel_at([480.0, 240.0]);
+        let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
+        app.board.focus(panel);
+        app.canvas_view.set_zoom(1.0);
+        app.canvas_view.set_pan_offset([0.0, 0.0]);
+        let canvas = app.canvas_rect(&ctx);
+        assert!(
+            canvas.contains_rect(panel_screen_rect(&app, &ctx, "notes")),
+            "the fixture panel starts whole in the canvas"
+        );
+        let mut expected = app.canvas_view;
+        expected.zoom_about_screen_anchor(canvas_origin(canvas), [canvas.center().x, canvas.center().y], 0.9);
+
+        assert!(app.zoom_by_shortcut(&ctx, 0.9), "the shortcut changes the zoom");
+        assert!(
+            (app.canvas_view.pan_offset[0] - expected.pan_offset[0]).abs() < 0.01
+                && (app.canvas_view.pan_offset[1] - expected.pan_offset[1]).abs() < 0.01,
+            "the panel keeps the view where the zoom put it: {:?} against {:?}",
+            app.canvas_view.pan_offset,
+            expected.pan_offset
+        );
+    }
+
+    /// A zoom at a pointer keeps the canvas point under the pointer, and it does not
+    /// move the panel of the keyboard focus: the pointer decides, not the panel.
+    #[test]
+    fn a_zoom_at_the_pointer_keeps_the_place_of_the_pointer() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
+        app.board.focus(panel);
+        app.canvas_view.set_zoom(1.0);
+        app.canvas_view.set_pan_offset([-20.0, -20.0]);
+        let canvas = app.canvas_rect(&ctx);
+        let anchor = canvas.center();
+        let under_pointer = app.screen_to_canvas(canvas, anchor);
+        let before = panel_screen_rect(&app, &ctx, "notes");
+
+        assert!(app.zoom_canvas_at(canvas, anchor, 1.4), "the zoom changes");
+        let after = panel_screen_rect(&app, &ctx, "notes");
+        let moved = app.canvas_to_screen(canvas, under_pointer);
+        assert!(
+            moved.distance(anchor) < 0.01,
+            "the canvas point under the pointer keeps its place: {moved:?} against {anchor:?}"
+        );
+        assert!(
+            (after.center().distance(before.center()) - 0.0).abs() > 1.0,
+            "a zoom at the pointer moves the panel with the canvas: {before:?} then {after:?}"
+        );
+        assert!(
+            (app.canvas_view.pan_offset[0] + 300.0).abs() > 1.0,
+            "the pan of the zoom at the pointer is the pan of that pointer"
+        );
+    }
+
+    /// A jump puts a panel clear of the sidebar, and the canvas of the reveal leaves
+    /// the sidebar out of its rectangle whether it is open or closed.
+    #[test]
+    fn a_jump_keeps_the_panel_clear_of_an_open_sidebar() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        app.minimap_visible = false;
+
+        let mut left_edges = Vec::new();
+        for visible in [true, false] {
+            app.sidebar_visible = visible;
+            let canvas = app.canvas_rect(&ctx);
+            if visible {
+                assert!(
+                    canvas.min.x > 0.0,
+                    "an open sidebar leaves the canvas to its right: {canvas:?}"
+                );
+            } else {
+                assert!(
+                    canvas.min.x.abs() < f32::EPSILON,
+                    "a closed sidebar leaves the canvas at the edge: {canvas:?}"
+                );
+            }
+            app.reveal_panel_visible(
+                &ctx,
+                app.board.panel_id_by_local_id("notes").expect("the fixture panel"),
+            );
+            let revealed = panel_screen_rect(&app, &ctx, "notes");
+            let reveal = app.reveal_rect(&ctx);
+            assert!(
+                reveal.contains_rect(revealed),
+                "the revealed panel is whole in the rectangle of the reveal: {revealed:?} in {reveal:?}"
+            );
+            assert!(
+                revealed.min.x >= reveal.min.x + REVEAL_MARGIN - 0.5,
+                "the revealed panel starts clear of the sidebar: {} against {}",
+                revealed.min.x,
+                reveal.min.x + REVEAL_MARGIN
+            );
+            left_edges.push(revealed.min.x);
+        }
+        assert!(
+            left_edges[1] < left_edges[0],
+            "the same jump stands further left without the sidebar: {left_edges:?}"
+        );
+    }
+
+    /// The minimap covers a corner of the canvas, and the reveal keeps a panel out of
+    /// that corner.
+    #[test]
+    fn a_jump_keeps_the_panel_clear_of_the_minimap() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        app.sidebar_visible = false;
+        app.minimap_visible = true;
+        let canvas = app.canvas_rect(&ctx);
+        let minimap = app.minimap_overlay_rect(&ctx).expect("the minimap is on the canvas");
+        assert!(canvas.contains_rect(minimap), "the minimap stands over the canvas");
+        let reveal = app.reveal_rect(&ctx);
+        assert!(
+            reveal.max.y <= minimap.min.y + 0.5 || reveal.max.x <= minimap.min.x + 0.5,
+            "the rectangle of a jump leaves the corner of the minimap out: {reveal:?} against {minimap:?}"
+        );
+
+        app.board
+            .focus(app.board.panel_id_by_local_id("notes").expect("the fixture panel"));
+        app.reveal_panel_visible(
+            &ctx,
+            app.board.panel_id_by_local_id("notes").expect("the fixture panel"),
+        );
+        let revealed = panel_screen_rect(&app, &ctx, "notes");
+        assert!(
+            !revealed.intersects(minimap),
+            "the revealed panel stays out of the minimap: {revealed:?} against {minimap:?}"
+        );
+        assert!(
+            reveal.contains_rect(revealed),
+            "the revealed panel is whole in the rectangle of the reveal: {revealed:?} in {reveal:?}"
+        );
+        let _ = canvas_scene_transform(canvas, app.canvas_view);
     }
 }
