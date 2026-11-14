@@ -122,6 +122,7 @@ fn full_example_round_trips() {
 #[test]
 fn a_hand_built_document_with_every_component_validates() {
     let document = BlockDocument {
+        width: None,
         components: vec![
             Component::Heading {
                 text: "cloud-1".to_owned(),
@@ -727,6 +728,7 @@ fn a_duplicate_id_across_a_button_and_a_list_row_is_rejected() {
 #[test]
 fn validate_document_rejects_a_repeated_button_id() {
     let document = BlockDocument {
+        width: None,
         components: vec![Component::Buttons {
             items: vec![
                 Button {
@@ -1299,4 +1301,292 @@ fn every_card_of_a_skill_stays_inside_the_bounds_of_the_host() {
         10,
         "the card of twelve todos, one question and five history lines holds 10 components of 64"
     );
+}
+
+/// One wave of a board, named `Wave <index>` with the tag of its index.
+fn board_column(index: usize, current: bool) -> serde_json::Value {
+    json!({"label": format!("Wave {index}"), "tag": index.to_string(), "value": "~4 m", "current": current})
+}
+
+/// One worker of a board.
+fn board_row(index: usize) -> serde_json::Value {
+    json!({"label": format!("helper-{index} · build-{index}"), "subtitle": "16 vCPU"})
+}
+
+fn board_component(columns: usize, rows: usize, items: &[serde_json::Value]) -> String {
+    json!({
+        "type": "board",
+        "columns": (0..columns).map(|index| board_column(index, false)).collect::<Vec<_>>(),
+        "rows": (0..rows).map(board_row).collect::<Vec<_>>(),
+        "items": items,
+    })
+    .to_string()
+}
+
+fn board_item(column: usize, row: usize) -> serde_json::Value {
+    json!({"column": column, "row": row, "title": "Read the issue", "state": "done", "value": "4 m",
+           "note": "12 tests pass", "tag": "added"})
+}
+
+fn callout_component(buttons: usize) -> String {
+    let buttons: Vec<serde_json::Value> = (0..buttons)
+        .map(|index| json!({"id": format!("answer.{index}"), "label": "Answer"}))
+        .collect();
+    json!({"type": "callout", "tone": "warn", "caption": "Needs you · t5", "text": "Which address?",
+           "buttons": buttons})
+    .to_string()
+}
+
+fn log_component(entries: usize) -> String {
+    let entries: Vec<serde_json::Value> = (0..entries)
+        .map(|index| json!({"at": format!("07:3{index}"), "text": "t3 done on build-2, 9 rows"}))
+        .collect();
+    json!({"type": "log", "entries": entries}).to_string()
+}
+
+#[test]
+fn a_board_holds_its_waves_its_workers_and_the_items_of_its_cells() {
+    let document = board_component(2, 2, &[board_item(0, 0), board_item(1, 1)]);
+    let parsed = parse_document(&document_of(&[document])).expect("a board parses");
+    assert_eq!(parsed.width, None, "a document of no width asks for the narrow card");
+    let Component::Board { columns, rows, items } = &parsed.components[0] else {
+        panic!("the component is a board");
+    };
+    assert_eq!(columns.len(), 2);
+    assert_eq!(rows[1].label, "helper-1 · build-1");
+    assert_eq!(items[0].state, super::BoardState::Done);
+    assert_eq!(items[1].note.as_deref(), Some("12 tests pass"));
+}
+
+#[test]
+fn a_board_at_the_limits_parses_and_one_more_wave_row_or_item_is_rejected() {
+    let items = |count: usize| {
+        (0..count)
+            .map(|index| board_item(index % 8, index / 8))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        parse_document(&document_of(&[board_component(
+            BlockDocument::MAX_BOARD_COLUMNS,
+            BlockDocument::MAX_BOARD_ROWS,
+            &items(BlockDocument::MAX_BOARD_ITEMS)
+        )]))
+        .is_ok()
+    );
+
+    for (component, path, actual, limit) in [
+        (
+            board_component(BlockDocument::MAX_BOARD_COLUMNS + 1, 1, &[]),
+            "components[0].columns",
+            BlockDocument::MAX_BOARD_COLUMNS + 1,
+            BlockDocument::MAX_BOARD_COLUMNS,
+        ),
+        (
+            board_component(1, BlockDocument::MAX_BOARD_ROWS + 1, &[]),
+            "components[0].rows",
+            BlockDocument::MAX_BOARD_ROWS + 1,
+            BlockDocument::MAX_BOARD_ROWS,
+        ),
+        (
+            board_component(8, 8, &items(BlockDocument::MAX_BOARD_ITEMS + 1)),
+            "components[0].items",
+            BlockDocument::MAX_BOARD_ITEMS + 1,
+            BlockDocument::MAX_BOARD_ITEMS,
+        ),
+    ] {
+        let error = parse_document(&document_of(&[component])).expect_err("above the bound");
+        assert_eq!(
+            error,
+            BlockDocumentError::TooManyItems {
+                path: path.to_owned(),
+                actual,
+                limit
+            }
+        );
+    }
+}
+
+#[test]
+fn a_board_item_names_a_cell_that_its_board_holds() {
+    for (item, field, value, limit) in [(board_item(2, 0), "column", 2, 2), (board_item(0, 2), "row", 2, 2)] {
+        let error = parse_document(&document_of(&[board_component(2, 2, &[item])])).expect_err("outside");
+        assert_eq!(
+            error,
+            BlockDocumentError::BoardIndexOutOfRange {
+                path: format!("components[0].items[0].{field}"),
+                value,
+                limit,
+                name: if field == "column" { "columns" } else { "rows" }
+            }
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains(field) && message.contains(&limit.to_string()),
+            "the refusal names the field and the bound: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_fifth_item_of_one_cell_is_rejected_and_four_parse() {
+    let four: Vec<serde_json::Value> = (0..BlockDocument::MAX_BOARD_CELL_ITEMS)
+        .map(|_| board_item(0, 0))
+        .collect();
+    assert!(parse_document(&document_of(&[board_component(1, 1, &four)])).is_ok());
+
+    let mut five = four;
+    five.push(board_item(0, 0));
+    let error = parse_document(&document_of(&[board_component(1, 1, &five)])).expect_err("one over");
+    assert_eq!(
+        error,
+        BlockDocumentError::TooManyCellItems {
+            path: "components[0].items[4] (column 0, row 0)".to_owned(),
+            actual: BlockDocument::MAX_BOARD_CELL_ITEMS + 1,
+            limit: BlockDocument::MAX_BOARD_CELL_ITEMS
+        }
+    );
+}
+
+#[test]
+fn a_board_holds_one_current_wave_at_most() {
+    let component = json!({
+        "type": "board",
+        "columns": [board_column(0, false), board_column(1, true), board_column(2, true)],
+        "rows": [board_row(1)],
+        "items": [],
+    })
+    .to_string();
+    let error = parse_document(&document_of(&[component])).expect_err("two current waves");
+    assert_eq!(
+        error,
+        BlockDocumentError::DuplicateCurrentColumn {
+            path: "components[0].columns[2].current".to_owned(),
+            first: "components[0].columns[1].current".to_owned()
+        }
+    );
+}
+
+#[test]
+fn the_tag_of_a_wave_or_an_item_holds_twelve_characters() {
+    let longest = "a".repeat(BlockDocument::MAX_TAG_CHARS);
+    let column = json!({"label": "Understand", "tag": longest});
+    let item = json!({"column": 0, "row": 0, "title": "Read the issue", "tag": longest});
+    let component = json!({"type": "board", "columns": [column], "rows": [board_row(1)], "items": [item]});
+    assert!(
+        parse_document(&document_of(&[component.to_string()])).is_ok(),
+        "twelve characters are accepted"
+    );
+
+    let long = "a".repeat(BlockDocument::MAX_TAG_CHARS + 1);
+    for (column, item, path) in [
+        (
+            json!({"label": "Understand", "tag": long}),
+            json!({"column": 0, "row": 0, "title": "Read the issue"}),
+            "components[0].columns[0].tag",
+        ),
+        (
+            json!({"label": "Understand"}),
+            json!({"column": 0, "row": 0, "title": "Read the issue", "tag": long}),
+            "components[0].items[0].tag",
+        ),
+    ] {
+        let component = json!({"type": "board", "columns": [column], "rows": [board_row(1)], "items": [item]});
+        let error = parse_document(&document_of(&[component.to_string()])).expect_err("one over");
+        assert_eq!(
+            error,
+            BlockDocumentError::TextTooLong {
+                path: path.to_owned(),
+                actual: BlockDocument::MAX_TAG_CHARS + 1,
+                limit: BlockDocument::MAX_TAG_CHARS
+            }
+        );
+    }
+}
+
+#[test]
+fn a_callout_holds_a_tone_a_caption_and_four_answers() {
+    let parsed = parse_document(&document_of(&[callout_component(BlockDocument::MAX_CALLOUT_BUTTONS)]))
+        .expect("a callout parses");
+    let Component::Callout {
+        tone, buttons: items, ..
+    } = &parsed.components[0]
+    else {
+        panic!("the component is a callout");
+    };
+    assert_eq!(*tone, Tone::Warn);
+    assert_eq!(items.len(), BlockDocument::MAX_CALLOUT_BUTTONS);
+    assert!(
+        parse_document(&document_of(&[callout_component(0)])).is_ok(),
+        "no answer is fine"
+    );
+
+    let error = parse_document(&document_of(&[callout_component(
+        BlockDocument::MAX_CALLOUT_BUTTONS + 1,
+    )]))
+    .expect_err("one over");
+    assert_eq!(
+        error,
+        BlockDocumentError::TooManyItems {
+            path: "components[0].buttons".to_owned(),
+            actual: BlockDocument::MAX_CALLOUT_BUTTONS + 1,
+            limit: BlockDocument::MAX_CALLOUT_BUTTONS
+        }
+    );
+}
+
+#[test]
+fn the_answers_of_a_callout_share_the_ids_of_the_buttons_of_the_document() {
+    let document = json!({
+        "components": [
+            serde_json::from_str::<serde_json::Value>(&callout_component(1)).expect("a callout"),
+            {"type": "buttons", "items": [{"id": "answer.0", "label": "Go"}]},
+        ]
+    })
+    .to_string();
+    let error = parse_document(&document).expect_err("the id is taken");
+    assert_eq!(
+        error,
+        BlockDocumentError::DuplicateId {
+            path: "components[1].items[0].id".to_owned(),
+            id: "answer.0".to_owned()
+        }
+    );
+}
+
+#[test]
+fn a_log_holds_sixteen_events_and_no_more() {
+    assert!(parse_document(&document_of(&[log_component(BlockDocument::MAX_LOG_ENTRIES)])).is_ok());
+
+    let error =
+        parse_document(&document_of(&[log_component(BlockDocument::MAX_LOG_ENTRIES + 1)])).expect_err("one over");
+    assert_eq!(
+        error,
+        BlockDocumentError::TooManyItems {
+            path: "components[0].entries".to_owned(),
+            actual: BlockDocument::MAX_LOG_ENTRIES + 1,
+            limit: BlockDocument::MAX_LOG_ENTRIES
+        }
+    );
+}
+
+#[test]
+fn a_document_asks_for_the_narrow_card_the_wide_one_or_neither() {
+    let components = log_component(1);
+    for (width, expected) in [
+        (json!(null), None),
+        (json!("narrow"), Some(super::Width::Narrow)),
+        (json!("wide"), Some(super::Width::Wide)),
+    ] {
+        let mut document: serde_json::Value = json!({"components": []});
+        let parsed_components: serde_json::Value = serde_json::from_str(&format!("[{components}]")).expect("valid");
+        document["components"] = parsed_components;
+        if !width.is_null() {
+            document["width"] = width.clone();
+        }
+        let parsed = parse_document(&document.to_string()).expect("the width parses");
+        assert_eq!(parsed.width, expected, "{width}");
+    }
+
+    let error = parse_document(&format!(r#"{{"width":"huge","components":[{components}]}}"#)).expect_err("refused");
+    assert!(matches!(error, BlockDocumentError::InvalidJson { .. }));
 }

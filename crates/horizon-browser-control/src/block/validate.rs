@@ -11,7 +11,9 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
-use super::model::{BlockDocument, Button, Component, KvRow, ListRow, Selection};
+use super::model::{
+    BlockDocument, BoardColumn, BoardItem, BoardRow, Button, Component, KvRow, ListRow, LogEntry, Selection,
+};
 
 impl BlockDocument {
     /// Largest serialized document accepted, in bytes.
@@ -38,6 +40,20 @@ impl BlockDocument {
     pub const MAX_ID_CHARS: usize = 64;
     /// Largest percentage a progress component may show.
     pub const MAX_PERCENT: u8 = 100;
+    /// Most columns one `board` component may hold.
+    pub const MAX_BOARD_COLUMNS: usize = 8;
+    /// Most rows one `board` component may hold.
+    pub const MAX_BOARD_ROWS: usize = 8;
+    /// Most items one `board` component may hold.
+    pub const MAX_BOARD_ITEMS: usize = 32;
+    /// Most items one cell of a board may hold.
+    pub const MAX_BOARD_CELL_ITEMS: usize = 4;
+    /// Most characters the tag of a board column or item may hold.
+    pub const MAX_TAG_CHARS: usize = 12;
+    /// Most buttons one `callout` component may hold.
+    pub const MAX_CALLOUT_BUTTONS: usize = 4;
+    /// Most entries one `log` component may hold.
+    pub const MAX_LOG_ENTRIES: usize = 16;
 }
 
 /// Why a block document was rejected.
@@ -155,6 +171,36 @@ pub enum BlockDocumentError {
         /// Offending place.
         path: String,
         /// The row that is selected first.
+        first: String,
+    },
+    /// A column or row index of a board item names no column or row of it.
+    #[error("{path} is {value}, above the {limit} {name} of the board")]
+    BoardIndexOutOfRange {
+        /// Offending place.
+        path: String,
+        /// The rejected index.
+        value: usize,
+        /// Accepted count.
+        limit: usize,
+        /// What the index counts: `columns` or `rows`.
+        name: &'static str,
+    },
+    /// A cell of a board holds more items than it may show.
+    #[error("{path} holds {actual} items, above the {limit} item limit of one cell")]
+    TooManyCellItems {
+        /// Offending place.
+        path: String,
+        /// Measured count.
+        actual: usize,
+        /// Accepted count.
+        limit: usize,
+    },
+    /// Two columns of one board are marked as the one that runs now.
+    #[error("{path} is the second current column; {first} is already current")]
+    DuplicateCurrentColumn {
+        /// Offending place.
+        path: String,
+        /// The column that is current first.
         first: String,
     },
 }
@@ -309,7 +355,148 @@ fn validate_component<'a>(
             Ok(())
         }
         Component::Link { label, url } => validate_link(&at, label, url),
+        Component::Board { columns, rows, items } => validate_board(&at, columns, rows, items),
+        Component::Callout {
+            caption, text, buttons, ..
+        } => validate_callout(&at, caption.as_deref(), text, buttons, ids),
+        Component::Log { entries } => validate_log(&at, entries),
     }
+}
+
+/// A callout: a question, an optional caption and the answers to it. Each answer
+/// is a button, so its id shares one namespace with every other button.
+fn validate_callout<'a>(
+    at: &str,
+    caption: Option<&str>,
+    text: &str,
+    buttons: &'a [Button],
+    ids: &mut HashSet<&'a str>,
+) -> Result<(), BlockDocumentError> {
+    if let Some(caption) = caption {
+        line(&field(at, "caption"), caption)?;
+    }
+    filled_line(&field(at, "text"), text)?;
+    check_count(&field(at, "buttons"), buttons.len(), BlockDocument::MAX_CALLOUT_BUTTONS)?;
+    for (button_index, button) in buttons.iter().enumerate() {
+        validate_button(&element(at, "buttons", button_index), button, ids)?;
+    }
+    Ok(())
+}
+
+/// A board: its waves, its workers and the items of its cells.
+fn validate_board(
+    at: &str,
+    columns: &[BoardColumn],
+    rows: &[BoardRow],
+    items: &[BoardItem],
+) -> Result<(), BlockDocumentError> {
+    check_count(&field(at, "columns"), columns.len(), BlockDocument::MAX_BOARD_COLUMNS)?;
+    check_count(&field(at, "rows"), rows.len(), BlockDocument::MAX_BOARD_ROWS)?;
+    check_count(&field(at, "items"), items.len(), BlockDocument::MAX_BOARD_ITEMS)?;
+    let mut current: Option<String> = None;
+    for (column_index, column) in columns.iter().enumerate() {
+        let column_at = element(at, "columns", column_index);
+        validate_board_column(&column_at, column)?;
+        if !column.current {
+            continue;
+        }
+        let path = field(&column_at, "current");
+        if let Some(first) = &current {
+            return Err(BlockDocumentError::DuplicateCurrentColumn {
+                path,
+                first: first.clone(),
+            });
+        }
+        current = Some(path);
+    }
+    for (row_index, row) in rows.iter().enumerate() {
+        validate_board_row(&element(at, "rows", row_index), row)?;
+    }
+    validate_board_cells(at, columns.len(), rows.len(), items)
+}
+
+/// A log: the time and the words of each event, one line each.
+fn validate_log(at: &str, entries: &[LogEntry]) -> Result<(), BlockDocumentError> {
+    check_count(&field(at, "entries"), entries.len(), BlockDocument::MAX_LOG_ENTRIES)?;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        let entry_at = element(at, "entries", entry_index);
+        filled_line(&field(&entry_at, "at"), &entry.at)?;
+        filled_line(&field(&entry_at, "text"), &entry.text)?;
+    }
+    Ok(())
+}
+
+fn validate_board_column(at: &str, column: &BoardColumn) -> Result<(), BlockDocumentError> {
+    filled_line(&field(at, "label"), &column.label)?;
+    if let Some(tag) = &column.tag {
+        tag_text(&field(at, "tag"), tag)?;
+    }
+    if let Some(note) = &column.note {
+        line(&field(at, "note"), note)?;
+    }
+    if let Some(value) = &column.value {
+        line(&field(at, "value"), value)?;
+    }
+    Ok(())
+}
+
+fn validate_board_row(at: &str, row: &BoardRow) -> Result<(), BlockDocumentError> {
+    filled_line(&field(at, "label"), &row.label)?;
+    if let Some(subtitle) = &row.subtitle {
+        line(&field(at, "subtitle"), subtitle)?;
+    }
+    Ok(())
+}
+
+/// The items of a board: each one names a cell of the declared columns and rows,
+/// and no cell holds more items than the narrow card can show.
+fn validate_board_cells(at: &str, columns: usize, rows: usize, items: &[BoardItem]) -> Result<(), BlockDocumentError> {
+    let mut cells = vec![0_usize; columns.saturating_mul(rows)];
+    for (item_index, item) in items.iter().enumerate() {
+        let item_at = element(at, "items", item_index);
+        if item.column >= columns {
+            return Err(BlockDocumentError::BoardIndexOutOfRange {
+                path: field(&item_at, "column"),
+                value: item.column,
+                limit: columns,
+                name: "columns",
+            });
+        }
+        if item.row >= rows {
+            return Err(BlockDocumentError::BoardIndexOutOfRange {
+                path: field(&item_at, "row"),
+                value: item.row,
+                limit: rows,
+                name: "rows",
+            });
+        }
+        filled_line(&field(&item_at, "title"), &item.title)?;
+        if let Some(tag) = &item.tag {
+            tag_text(&field(&item_at, "tag"), tag)?;
+        }
+        for name in ["value", "note"] {
+            let text = if name == "value" { &item.value } else { &item.note };
+            if let Some(text) = text {
+                line(&field(&item_at, name), text)?;
+            }
+        }
+        let cell = &mut cells[item.row * columns + item.column];
+        *cell += 1;
+        if *cell > BlockDocument::MAX_BOARD_CELL_ITEMS {
+            return Err(BlockDocumentError::TooManyCellItems {
+                path: format!("{item_at} (column {}, row {})", item.column, item.row),
+                actual: *cell,
+                limit: BlockDocument::MAX_BOARD_CELL_ITEMS,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A tag is a small word beside a title or in a square of a column head.
+fn tag_text(path: &str, value: &str) -> Result<(), BlockDocumentError> {
+    check_length(path, value, BlockDocument::MAX_TAG_CHARS)?;
+    line(path, value)
 }
 
 fn validate_kv_row(at: &str, row: &KvRow) -> Result<(), BlockDocumentError> {

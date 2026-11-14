@@ -20,12 +20,18 @@ person's terminals.
   path or a command, and no field selects a size, a colour or a position.
 - The host checks the document before any UI sees it, in the MCP server and again
   in the UI: at most 32 KiB, at most 64 components, at most 24 `kv` rows, 32
-  `list` rows and 8 buttons, and at most 512 characters in one text. A text keeps
-  no control character except the line break of a body text. An id is
-  `[a-z0-9_.-]{1,64}` and is unique in the document. A row can be selected only
-  in a list with `selection: single`, at most one row of a list. An unknown
-  field, component or value is refused with `invalid_document`, and the message
-  names the place, such as `components[2].items[0].id`.
+  `list` rows and 8 buttons, at most 16 steps, at most 8 columns and 8 rows of a
+  board with 32 items and 4 items in one cell, at most 4 answers of a callout and
+  16 entries of a log, and at most 512 characters in one text. A text keeps no
+  control character except the line break of a body text. An id is
+  `[a-z0-9_.-]{1,64}` and is unique in the document, and the answers of a callout
+  share that one namespace with the buttons of a `buttons` component. A row can be
+  selected only in a list with `selection: single`, at most one row of a list. One
+  board holds at most one current wave, and every item names a cell that the
+  declared columns and rows hold. An unknown field, component or value is refused
+  with `invalid_document`, and the message names the place, such as
+  `components[2].items[0].id`, and the bound it broke, such as
+  `components[1].items[3].column is 4, above the 3 columns of the board`.
 - No field is a path, a file or a command. Horizon fetches nothing, opens
   nothing and runs nothing for a card, and a `link` reaches a page only when the
   person presses it. A card has no input, no image and no table.
@@ -36,6 +42,36 @@ person's terminals.
   `panel_unavailable`.
 - The host assigns the revision. An agent cannot write the revision, the owner
   or the visibility of a card that it does not own.
+
+## A board, a callout and a log carry plain text
+
+Three parts describe a longer piece of work: a board of waves and workers, a
+callout that asks a question, and a log of events. They add no way into the
+machine and no way out of the card.
+
+- **Plain text only.** Every field of them is drawn as text, a mark or a fill:
+  the labels of the waves and of the workers, the titles, values, notes and tags
+  of the items, the caption and the question of a callout, and the time and words
+  of a log entry. No field is a path, a command, a size or a colour, and no field
+  selects a position: the grid, the tints, the marks and the fold are Horizon's
+  own layout of them.
+- **Nothing is fetched and nothing is opened.** Horizon sends no request and
+  starts no program for a board, a callout or a log. The three parts carry no
+  address, so they cannot reach a page either.
+- **An item and a log line take no press.** They are reports, as a step is. A
+  press on them reaches no agent and no Horizon command.
+- **An answer of a callout is a button.** Its id is unique in the document with
+  those of `buttons`, its press reaches `next_click` on the same path, and the
+  first primary answer of the card is drawn as the primary action like the first
+  primary button.
+- **The fold of the narrow form is the person's own view.** The leading waves
+  whose items all finished fold into one line, and a press on that line hides or
+  shows them. That state is kept for the card, it is not part of the document and
+  it is not a click of `next_click`, so an agent neither sets it nor reads it.
+- **Does not guarantee:** that a wave really runs at the same time as its
+  neighbours, that an item really finished, or that the marks of the states are
+  true. A board is the agent's account of its own work, as every other part of a
+  card is.
 
 ## A link names one page, and a person opens it
 
@@ -266,9 +302,14 @@ are written by Horizon and no document field can set them:
   disabled.
 - **The panel size and title** of a new card come from the host: 420 wide and
   as tall as the host measured its content needs, between 140 and 900 points,
-  and a title that the host trims to one line. A card that the person resized by
-  hand keeps that size, and a card that is shorter than its content scrolls its
-  body above a footer that stays at the bottom.
+  and a title that the host trims to one line. A document that asks for the wide
+  card opens at half of the canvas view of that moment, between 1100 and 2400
+  points, and as tall as its content needs, up to 1200 points; an update to such
+  a document widens the same card. A card that the person resized by hand keeps
+  that size, and a card that is shorter than its content scrolls its body above
+  a footer that stays at the bottom. The form of every component follows the real
+  width of the card body, so the same document draws the wide form at 1000 points
+  or more and the narrow form under it.
 
 A document may still choose its own words, its own ids, its tones, its order of
 components and which row of a list starts selected. None of those carry host

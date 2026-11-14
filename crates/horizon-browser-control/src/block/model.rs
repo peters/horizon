@@ -13,8 +13,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BlockDocument {
+    /// How wide the card is; the narrow card of today when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<Width>,
     /// Components in draw order.
     pub components: Vec<Component>,
+}
+
+/// How wide the card that draws a document is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Width {
+    /// The narrow card: one column of components.
+    Narrow,
+    /// The wide card: a board, a callout beside its buttons and columns of a
+    /// log.
+    Wide,
 }
 
 /// One element of a document. The `type` field selects the variant.
@@ -97,6 +111,37 @@ pub enum Component {
         /// The absolute `http` or `https` URL that Horizon opens when the
         /// person presses the link.
         url: String,
+    },
+    /// Who and where the work runs, against the waves that run it: the grid of
+    /// the wide card and the grouped list of the narrow one. An item takes no
+    /// press.
+    Board {
+        /// The waves, in the order they run.
+        columns: Vec<BoardColumn>,
+        /// The workers, in draw order.
+        rows: Vec<BoardRow>,
+        /// The items of the cells, in draw order.
+        items: Vec<BoardItem>,
+    },
+    /// A strip that asks the person something, with the buttons to answer it.
+    /// A button is a button in every sense.
+    Callout {
+        /// Visual weight; neutral when omitted.
+        #[serde(default)]
+        tone: Tone,
+        /// Optional line above the text, drawn as a caption.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        /// The question or the statement, one line.
+        text: String,
+        /// The answers, in draw order.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        buttons: Vec<Button>,
+    },
+    /// The events of the work, each with its time. An entry takes no press.
+    Log {
+        /// The entries, in the order they happened.
+        entries: Vec<LogEntry>,
     },
 }
 
@@ -227,6 +272,89 @@ pub enum StepState {
     /// The step waits for the ones before it.
     #[default]
     Waiting,
+}
+
+/// One wave of a board, drawn as the head of a column.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardColumn {
+    /// The name of the wave, such as `Understand`.
+    pub label: String,
+    /// A short tag of the column, drawn in a square: `1` or `now`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// A short note beside the label, in the monospace family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// A short time or count at the right edge, in the monospace family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The wave that runs now. At most one column of a board is current.
+    #[serde(default)]
+    pub current: bool,
+}
+
+/// One worker of a board: who the work runs as and where it runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardRow {
+    /// The line of the row, such as `helper-1 · build-1`.
+    pub label: String,
+    /// A short second line, such as `16 vCPU`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+}
+
+/// One item of a cell of a board.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardItem {
+    /// Index of the column of the item.
+    pub column: usize,
+    /// Index of the row of the item.
+    pub row: usize,
+    /// What the item does, one line.
+    pub title: String,
+    /// What the item does now; waiting when omitted.
+    #[serde(default)]
+    pub state: BoardState,
+    /// A short value at the right edge, in the monospace family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The evidence of the item, in the monospace family: one line in the wide
+    /// card, the end of the second line in the narrow one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// A short word after the title, such as `added`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// What one item of a board does now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardState {
+    /// The item waits for the item before it.
+    #[default]
+    Waiting,
+    /// The item runs now.
+    Now,
+    /// The item finished.
+    Done,
+    /// The item waits for the person.
+    NeedsYou,
+    /// The item failed.
+    Failed,
+}
+
+/// One line of a log.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LogEntry {
+    /// The time of the event, such as `07:31`.
+    pub at: String,
+    /// What happened, one line.
+    pub text: String,
 }
 
 /// One button.
