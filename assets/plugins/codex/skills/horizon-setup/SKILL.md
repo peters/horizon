@@ -77,6 +77,15 @@ These rules have no exception:
   click with `next_click`.
 - **Say what you do.** While a step runs, the card shows the step list with the
   time of each finished step, and the panel says one line.
+- **Every card that ends the flow holds `Close` last.** An end card is a card
+  that finishes a goal: the ready card of a machine, of the server or of the
+  browser, the card that adds another computer, and the end card of the
+  workshop. Its last button is `{"id": "close", "label": "Close"}`, so the person
+  always has the same way out, and no run ends on a card that offers no press. A
+  card that continues the flow names its next press in its last button instead.
+  Every card document below whose line `<!-- end card -->` stands before it is an
+  end card, and the test of the card documents of this build checks that each one
+  ends with that button.
 
 ## How to wait
 
@@ -385,6 +394,7 @@ run left.
 Then change the Set up card to the summary, so the person knows where the card
 of the machine is:
 
+<!-- end card -->
 ```json
 {"components": [
   {"type": "heading", "text": "The machine is ready",
@@ -477,6 +487,7 @@ Read the answer of the request:
 
 ### 3. The server is ready
 
+<!-- end card -->
 ```json
 {"components": [
   {"type": "heading", "text": "The server is ready",
@@ -531,6 +542,7 @@ A second computer joins with one of three ways, and the place of this server
 decides which one works. Choose the row of that way, and draw the other rows
 `disabled: true` with the reason.
 
+<!-- end card -->
 ```json
 {"components": [
   {"type": "heading", "text": "Add another computer",
@@ -745,6 +757,7 @@ card says what was removed and what is left.
 
 ### 3. The browser is ready
 
+<!-- end card -->
 ```json
 {"components": [
   {"type": "heading", "text": "The browser is ready",
@@ -760,9 +773,14 @@ card says what was removed and what is left.
   {"type": "buttons", "items": [
     {"id": "open_panel", "label": "Open a browser panel", "tone": "primary"},
     {"id": "use_this_computer", "label": "Use this computer again"},
-    {"id": "remove", "label": "Remove the browser", "tone": "danger"}]}
+    {"id": "remove", "label": "Remove the browser", "tone": "danger"},
+    {"id": "close", "label": "Close"}]}
 ]}
 ```
+
+`Close` is the last button of this end card, as it is of every end card: this goal
+ended in one run on a card that held no `Close` and in another on one that did,
+and the person had no way out in the first.
 
 The row `Browser` names the engine that the settings now hold: `Chromium`, or
 `Firefox, with Horizon on that machine`. A Firefox host adds the row

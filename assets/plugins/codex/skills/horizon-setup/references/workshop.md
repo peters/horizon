@@ -96,6 +96,7 @@ When the chosen parts are done, or when the person stops, the card says what the
 workshop holds, what it costs for each hour while it is on, and the three things
 that a person does next:
 
+<!-- end card -->
 ```json
 {"components": [
   {"type": "heading", "text": "Your workshop is ready",

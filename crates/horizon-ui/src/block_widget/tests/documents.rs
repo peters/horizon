@@ -357,3 +357,55 @@ fn the_cards_of_a_network_offer_the_stored_networks_and_name_the_network_of_a_ma
         "{name}: the steps card of a recipe holds the join as its own step"
     );
 }
+
+/// The card documents of one skill that the skill marks as end cards: a line
+/// `<!-- end card -->` of its own, directly before the fence of the document.
+fn end_cards(skill: &str, body: &str) -> Vec<BlockDocument> {
+    let mut documents = Vec::new();
+    let lines: Vec<&str> = body.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim() != "<!-- end card -->" {
+            continue;
+        }
+        let fence = lines[index + 1..]
+            .iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim())
+            .unwrap_or_default();
+        assert_eq!(
+            fence, "```json",
+            "{skill}: the line {index} marks an end card and no card document follows it"
+        );
+        let rest = lines[index + 1..].join("\n");
+        let start = rest.find("```json\n").expect("the fence of the card") + "```json\n".len();
+        let after = &rest[start..];
+        let end = after.find("```").expect("the fence of the card closes");
+        documents.push(
+            parse_document(after[..end].trim())
+                .unwrap_or_else(|error| panic!("{skill}: the end card {index} does not parse: {error}")),
+        );
+    }
+    documents
+}
+
+/// A card that ends a flow holds the same last button, so a run never ends on a
+/// card that offers the person no press. The ready card of the browser goal held
+/// `Close` in one run and no `Close` in another, so the rule is checked on every
+/// end card that a skill marks.
+#[test]
+fn every_end_card_of_the_skills_ends_with_clos() {
+    let mut cards = 0;
+    for (skill, body) in SKILLS {
+        for (index, document) in end_cards(skill, body).into_iter().enumerate() {
+            let ids = buttons_of(&document);
+            assert_eq!(
+                ids.last().copied(),
+                Some("close"),
+                "{skill} end card {index} {} does not end with the button close: {ids:?}",
+                heading_of(&document).unwrap_or("<no heading>")
+            );
+            cards += 1;
+        }
+    }
+    assert!(cards >= 5, "the skills mark their end cards, and {cards} were found");
+}
