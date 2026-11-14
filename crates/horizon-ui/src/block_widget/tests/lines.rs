@@ -7,77 +7,12 @@
 //! compares every painted line with the line that zoom 1 drew.
 
 use egui::epaint::{ClippedShape, Shape, TextShape};
-use horizon_browser_control::block::{BlockDocument, parse_document};
+use horizon_browser_control::block::BlockDocument;
 use horizon_core::CardRuntime;
 
+use super::documents::skill_cards;
 use super::{CardFrames, Owner};
 use crate::app::setup::notice::{self, ProgramRow};
-
-/// The card documents of the bundled skills, from the copy that the build
-/// embeds. The two bundled copies of each skill hold the same bytes, and the
-/// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 5] = [
-    (
-        "horizon-setup",
-        include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-setup/SKILL.md"
-        )),
-    ),
-    (
-        "horizon-server",
-        include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-server/SKILL.md"
-        )),
-    ),
-    (
-        "horizon-machines",
-        include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-machines/SKILL.md"
-        )),
-    ),
-    (
-        "horizon-plan",
-        include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-plan/SKILL.md"
-        )),
-    ),
-    (
-        "horizon-server-move",
-        include_str!(concat!(
-            env!("OUT_DIR"),
-            "/assets/plugins/claude-code/skills/horizon-server-move/SKILL.md"
-        )),
-    ),
-];
-
-/// Whether one fenced block of a skill is a card document: a document of
-/// components, with or without the width that it asks for.
-fn is_card_document(block: &str) -> bool {
-    block.contains("\"components\"") && (block.starts_with(r#"{"components""#) || block.starts_with(r#"{"width""#))
-}
-
-/// Every fenced JSON block of one skill that is a card document.
-fn skill_documents(skill: &str, body: &str) -> Vec<BlockDocument> {
-    let mut documents = Vec::new();
-    let mut rest = body;
-    while let Some(start) = rest.find("```json\n") {
-        let after = &rest[start + "```json\n".len()..];
-        let Some(end) = after.find("```") else {
-            panic!("{skill}: a fenced JSON block does not close");
-        };
-        let block = after[..end].trim();
-        rest = &after[end + 3..];
-        if !is_card_document(block) {
-            continue;
-        }
-        documents.push(parse_document(block).unwrap_or_else(|error| panic!("{skill}: {error}\n{block}")));
-    }
-    documents
-}
 
 /// The card of the notice that Set up draws when it finds no agent, with the
 /// programs that it looked for.
@@ -95,12 +30,7 @@ fn notice_document() -> BlockDocument {
 
 /// Every document under test, named for a message.
 fn documents() -> Vec<(String, BlockDocument)> {
-    let mut documents = Vec::new();
-    for (skill, body) in SKILLS {
-        for (index, document) in skill_documents(skill, body).into_iter().enumerate() {
-            documents.push((format!("{skill} card {index}"), document));
-        }
-    }
+    let mut documents = skill_cards();
     documents.push(("the notice".to_owned(), notice_document()));
     documents
 }

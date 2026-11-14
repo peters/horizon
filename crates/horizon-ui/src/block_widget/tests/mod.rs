@@ -7,6 +7,7 @@
 
 mod board;
 mod clicks;
+mod documents;
 mod drawing;
 mod fit;
 mod lines;

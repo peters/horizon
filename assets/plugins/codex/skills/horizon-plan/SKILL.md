@@ -50,7 +50,7 @@ evidence:
   {"type": "progress", "label": "0 of 1 done · 0 needs you", "percent": 0,
    "detail": "t1 now"},
   {"type": "board",
-   "columns": [{"label": "Change", "tag": "1", "current": true}],
+   "columns": [{"label": "Change", "tag": "1", "value": "~20 m", "current": true}],
    "rows": [{"label": "coordinator · this computer"}],
    "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
               "state": "now", "value": "~20 m",
@@ -67,7 +67,7 @@ evidence:
   {"type": "progress", "label": "1 of 1 done · 0 needs you", "percent": 100,
    "detail": "done"},
   {"type": "board",
-   "columns": [{"label": "Change", "tag": "1"}],
+   "columns": [{"label": "Change", "tag": "1", "value": "18 m"}],
    "rows": [{"label": "coordinator · this computer"}],
    "items": [{"column": 0, "row": 0, "title": "Fix the login redirect",
               "state": "done", "value": "18 m", "note": "12 tests pass"}]},
@@ -263,7 +263,11 @@ The parts of the card, in this order:
 4. `board`: the waves as columns and the workers as rows, as `The board of a
    plan` says.
 5. `log`: the last five events of `history.jsonl`, each with its time, the newest
-   first.
+   first. The `log` of every update holds the last five events, and the update at
+   the end of the plan holds them too: a done card whose `log` holds one line
+   while the history holds six tells the person that five events never happened.
+   When the plan has six events, the card shows five of them, and the rest stays
+   in `history.jsonl`.
 6. `caption`: the policy of the repository in one line, such as
    `AGENTS.md · 2 at once · this computer, build-1 · rent: ask`.
 7. One `buttons` row: `Change the plan`, `Stop` with tone `danger`, and `Show
@@ -292,6 +296,15 @@ Write the columns from `waves` of the plan file:
   is done, such as `9 m`.
 - `current` is `true` for the wave of the todo that runs now, and for no other
   column.
+
+Every update sends every column with its `tag` and its `value`, and every item
+with its `value`. Never draw a board of the running plan whose columns hold no
+tag or no value, and never send an item without one: a column that loses its tag
+loses the number of its wave, and a column or an item that loses its value loses
+the one fact that the person reads a board for, which is how long the work takes.
+A wave keeps its `tag` for the whole plan. Its `value` starts as the estimate
+with `~` in front while the wave waits, and it becomes the real time, without the
+`~`, as soon as the wave finished.
 
 Write the rows from the todos, one row for each `who` and `where` that a todo
 names, in this order: the coordinator, each helper in the order of `helpers`, and
@@ -666,6 +679,23 @@ Append one line at each change of a todo, at each question and at each answer.
 Never rewrite a line. The card shows the last five lines as one `log`, newest
 first, with the clock time of the event and its words in one line: `07:31` and
 `t3 done on build-2, 9 rows`.
+
+### The time of the card is this computer's time
+
+`at` of a log entry, and every other time that the card draws, is the local time
+of this computer, such as `07:31` or `27 min so far`. Read the clock with one
+command before you write a time:
+
+```sh
+date +%H:%M
+```
+
+Never write a time in UTC on the card because the plan file holds it in UTC: a
+person reads the card beside their own clock, and a card that shows `11:49` while
+the person reads `12:49` says that the plan is an hour behind. A plan file and the
+history keep the time with its zone, as `2026-11-14T07:20:11Z`, because those
+files travel to another computer; the card converts that time to the local time
+of this computer when it draws it.
 
 ## Give a todo to a helper
 
