@@ -412,7 +412,9 @@ computer.
   page (`Target.closeTarget`) and never the browser.
 - The profile of a browser host belongs to that machine. A create without
   `profile` uses the profile of the settings entry, and a create with a profile
-  name opens a panel of this computer.
+  name opens a panel of this computer. `default` is a profile name: a create
+  that writes `profile: "default"` asks for the shared profile of this computer,
+  and its `note` says that the page runs here and not on the host.
 - A browser host serves several panels of one profile, for Chromium and for
   Firefox: each panel is its own page of the one browser of that profile, so a
   second panel is signed in where the first one signed in. Each link of a
@@ -436,6 +438,7 @@ The rule of a new panel, with a browser host in the settings:
 | `profile: "private"` | a private page of the host, in the engine of the host |
 | `profile: "private"`, and a `backend` of another engine | a private panel of this computer, and `note` says so |
 | a profile name | a panel of this computer in that shared profile, and `note` says so |
+| `profile: "default"` | the shared profile `default` of this computer, and `note` says so: a name is not the absent field |
 
 Without a browser host, every create is a panel of this computer in the profile
 and the engine that it names. `note` is absent when the page runs where the

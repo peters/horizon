@@ -73,6 +73,9 @@ these properties:
   answer of the create says in words that the page runs on this computer.
 - A create that names a profile of the profile rule keeps a profile of this
   computer, and the answer says so. The host serves the one profile of its entry.
+  The name `default` is such a name: the queue writes no default name into a
+  create that named none, so the rule reads a create with no field and a create
+  with the field `default` apart.
 - A saved panel takes no part in the rule: it comes back on the host and in the
   profile that served it, and the entry of today's settings does not move it.
 - The field `profile` reaches the rule once. The MCP tool, the host wire, the CLI,

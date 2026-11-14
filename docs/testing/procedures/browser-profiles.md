@@ -222,6 +222,7 @@ settings, the field `profile` and the field `backend` of the create:
 | `profile: "private"` | a private page of the host, in the engine of the host | P07, P09 step 3 |
 | `profile: "private"`, and a `backend` of another engine | a private panel of this computer, and `note` says that it runs on this computer | P09 step 4 |
 | a profile name | a panel of this computer in that profile, and `note` says that it runs on this computer | P09 step 5 |
+| `profile: "default"` | a panel of this computer in the shared profile `default`, and `note` says that it runs on this computer | P09 step 6 |
 
 Without a browser host, every create is a panel of this computer in the profile
 and the engine that it names. The field `note` is absent when the page runs
@@ -257,12 +258,24 @@ where the settings name it.
    Result: the panel runs on this computer in the shared profile `work`, and
    `note` says so.
 
+6. Ask an agent to call `browser_create` with `profile: "default"` and no
+   `backend`. Then ask an agent to call `browser_create` with no `profile` and no
+   `backend`.
+
+   Result: the first panel runs on this computer in the shared profile `default`,
+   and `note` says so. The second panel runs on the host in the profile of the
+   entry, and it has no `note`. The two creates differ: a create that names no
+   profile is not a create that names `default`.
+
 The checks of the repository prove the same lines without a host:
 `app::browser_host_route_tests::a_create_with_no_profile_is_a_page_of_the_host_for_an_agent_and_for_a_person`,
 `app::browser_host_route_tests::a_create_with_no_profile_that_names_another_engine_is_a_panel_of_this_computer`,
 `app::browser_host_route_tests::a_private_create_is_a_private_page_of_the_host`,
-`app::browser_host_route_tests::a_private_create_of_another_engine_is_a_private_panel_of_this_computer`, and
-`app::browser_host_route_tests::a_create_that_names_a_profile_keeps_a_profile_of_this_computer`.
+`app::browser_host_route_tests::a_private_create_of_another_engine_is_a_private_panel_of_this_computer`,
+`app::browser_host_route_tests::a_create_that_names_a_profile_keeps_a_profile_of_this_computer`, and
+`app::browser_host_route_tests::a_create_that_names_the_shared_default_keeps_it_on_this_computer`.
+Each check starts at the fields of the tool, takes the request that the host
+claims from the queue of the agent, and ends at the machine of the panel.
 
 ## 7. Pass criteria
 

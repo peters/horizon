@@ -37,6 +37,12 @@ the `backend` field. A panel that a person makes from the picker writes no
 `profile` field and names no engine, so the engine of its preset is the configured
 engine of this computer and not a create field.
 
+The rule reads the two fields as the caller wrote them. The queue of the host
+keeps a create that names no `profile` as a create with no field, so a create that
+names no profile and a create that writes the name `default` are two requests:
+the first asks for the profile of the browser host, and the second asks for the
+shared profile `default` of this computer.
+
 ### With a browser host in the settings
 
 | The create | The panel | The answer |
@@ -46,6 +52,7 @@ engine of this computer and not a create field.
 | `profile: "private"` | a private page of the host, in the engine of the host | no note |
 | `profile: "private"`, and a `backend` other than the engine of the host | a private panel of this computer in that engine | a note that says that it runs on this computer |
 | a name of the profile rule | a panel of this computer in that shared profile | a note that says that it runs on this computer |
+| `profile: "default"` | a panel of this computer in the shared profile `default` | a note that says that it runs on this computer |
 
 A page of this computer in another engine is how a person checks a page in
 Chromium while the host runs Firefox. A named profile stays on this computer,
