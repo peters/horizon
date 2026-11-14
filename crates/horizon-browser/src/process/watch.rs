@@ -16,6 +16,11 @@
 //! 3. It sends `SIGTERM` to the process group of the browser, and `SIGKILL` one
 //!    second later to a group that still holds a process.
 //!
+//! The watch keeps a process group of its own. A signal that a terminal or a
+//! supervisor sends to the whole group of Horizon would otherwise end the watch
+//! before it ends the browser and its driver, and the driver would stay for
+//! minutes with no browser under it.
+//!
 //! The watch of a browser that this process ends itself stops with it, so a normal
 //! quit leaves no child behind. A browser that Horizon did not start has no watch,
 //! because the watch is made at the moment that Horizon starts the browser.
@@ -54,15 +59,23 @@ impl BrowserWatch {
     /// keeps the browser: a browser without a watch is the behavior of every
     /// Horizon before this one.
     pub(crate) fn start(browser: u32) -> std::io::Result<Self> {
-        let mut child = Command::new("/bin/sh")
+        let mut command = Command::new("/bin/sh");
+        command
             .arg("-c")
             .arg(watch_script())
             .arg("horizon-browser-watch")
             .arg(browser.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+            .stderr(Stdio::null());
+        // A signal that reaches the whole group of Horizon must not end the
+        // watch before the watch ends what Horizon started.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            command.process_group(0);
+        }
+        let mut child = command.spawn()?;
         let beacon = child.stdin.take();
         Ok(Self {
             child: Some(child),
@@ -98,6 +111,12 @@ impl BrowserWatch {
                     let _ = child.wait();
                 });
         }
+    }
+
+    /// The process id of the watch, for a test that reads its process group.
+    #[cfg(all(test, unix))]
+    pub(crate) fn child_pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
     }
 
     /// Whether the watch left no child of its own.
@@ -259,6 +278,29 @@ wait
             "the helper of the browser ended with the group of its browser"
         );
         assert!(wait_for_exit(&mut browser), "the browser ended with the watch");
+    }
+
+    /// The watch holds a process group of its own, so a signal that a terminal or
+    /// a supervisor sends to the group of Horizon cannot end it before it ends the
+    /// driver and the browser of the panel.
+    #[test]
+    fn the_watch_lives_outside_the_process_group_of_horizon() {
+        let mut watch = BrowserWatch::start(std::process::id()).expect("the watch of this process");
+        let pid = watch.child_pid().expect("the watch has a child");
+        let group = |pid: u32| {
+            let output = Command::new("ps")
+                .args(["-o", "pgid=", "-p", &pid.to_string()])
+                .output()
+                .expect("read a process group");
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        assert_eq!(group(pid), pid.to_string(), "the watch leads its own group");
+        assert_ne!(
+            group(pid),
+            group(std::process::id()),
+            "the watch is not a member of the group of this process"
+        );
+        watch.stop();
     }
 
     /// A watch that the process ends itself leaves the browser that it owns, so a
