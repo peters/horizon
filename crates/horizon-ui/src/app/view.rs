@@ -66,35 +66,47 @@ impl HorizonApp {
     /// A zoom that a shortcut asks for, at the middle of the canvas.
     ///
     /// A zoom at a pointer keeps the place of that pointer. A zoom of a shortcut
-    /// has no pointer to keep, and a panel that the person has the keyboard focus
-    /// in must stay readable: the view keeps that panel whole in the canvas when
-    /// it fits at the zoom that the shortcut asked for, by the rule of a jump to
-    /// that panel.
+    /// has no pointer to keep, so it keeps the middle of the canvas: a panel that
+    /// stood out of the view, or partly out of it, before the zoom is not a panel
+    /// that the person reads, and it does not pull the view to itself.
+    ///
+    /// The one exception is a panel that the view held whole before the zoom: the
+    /// person reads that panel, and a zoom that would push it out of the canvas
+    /// keeps it whole by the rule of a jump to that panel.
     pub(super) fn zoom_by_shortcut(&mut self, ctx: &Context, zoom: f32) -> bool {
         let rect = self.canvas_rect(ctx);
+        let held = self.focused_panel_whole(ctx, rect);
         let changed = self.zoom_canvas_at(rect, rect.center(), zoom);
-        if changed {
+        if changed && held {
             self.keep_focused_panel_whole(ctx, rect);
         }
         changed
     }
 
-    /// Moves the view so that the panel with the keyboard focus is whole in
-    /// `rect` at the zoom of the view. A view that already holds the panel whole
-    /// stays as it is, and a panel that is larger than the view at that zoom
-    /// keeps the place that the zoom gave it.
-    fn keep_focused_panel_whole(&mut self, ctx: &Context, rect: Rect) {
-        let Some(panel_id) = self.board.focused else {
-            return;
-        };
-        let Some(panel) = self.board.panel(panel_id) else {
-            return;
+    /// Whether the panel with the keyboard focus is whole in `rect` at the view
+    /// that the app holds now. No focus, or a panel that the board does not hold,
+    /// is not a panel for the view to keep.
+    fn focused_panel_whole(&self, ctx: &Context, rect: Rect) -> bool {
+        let Some(panel) = self.board.focused.and_then(|panel_id| self.board.panel(panel_id)) else {
+            return false;
         };
         let placed = Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into());
         let placed = canvas_scene_transform(self.canvas_rect(ctx), self.canvas_view) * placed;
-        if rect.contains_rect(placed) {
+        rect.contains_rect(placed)
+    }
+
+    /// Moves the view so that the panel with the keyboard focus is whole in
+    /// `rect` at the zoom of the view. The caller calls this only for a panel that
+    /// the view held whole before the zoom, so a panel that is whole again stays
+    /// as it is, and a panel that is larger than the view at this zoom keeps the
+    /// place that the zoom gave it.
+    fn keep_focused_panel_whole(&mut self, ctx: &Context, rect: Rect) {
+        if self.focused_panel_whole(ctx, rect) {
             return;
         }
+        let Some(panel_id) = self.board.focused else {
+            return;
+        };
         let Some((panel_frame, workspace_pos)) = self.reveal_frames(panel_id) else {
             return;
         };
@@ -883,25 +895,36 @@ mod tests {
     }
 
     /// A zoom of a shortcut keeps the zoom that it asked for and the panel of the
-    /// keyboard focus whole in the canvas, also when the panel stood past the right
-    /// edge before it.
+    /// keyboard focus whole in the canvas, while that panel was whole before the
+    /// zoom and the zoom would push it past the left edge.
     #[test]
-    fn a_zoom_of_a_shortcut_keeps_the_focused_panel_whole() {
+    fn a_zoom_of_a_shortcut_keeps_a_whole_focused_panel_whole() {
         let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
         let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
         app.board.focus(panel);
-        app.canvas_view.set_zoom(2.0);
-        app.canvas_view.set_pan_offset([-1500.0, -200.0]);
-        let before = panel_screen_rect(&app, &ctx, "notes");
+        app.canvas_view.set_zoom(1.0);
+        app.canvas_view.set_pan_offset([-38.0, -38.0]);
         let canvas = app.canvas_rect(&ctx);
         assert!(
-            !canvas.contains_rect(before),
-            "the panel starts outside the canvas: {before:?} in {canvas:?}"
+            canvas.contains_rect(panel_screen_rect(&app, &ctx, "notes")),
+            "the panel starts whole at the left edge of the canvas: {:?} in {canvas:?}",
+            panel_screen_rect(&app, &ctx, "notes")
+        );
+        let mut plain = app.canvas_view;
+        plain.zoom_about_screen_anchor(canvas_origin(canvas), [canvas.center().x, canvas.center().y], 1.2);
+        let placed = {
+            let panel = app.board.panel(panel).expect("the fixture panel");
+            Rect::from_min_size(panel.layout.position.into(), panel.layout.size.into())
+        };
+        let pushed = canvas_scene_transform(canvas, plain) * placed;
+        assert!(
+            !canvas.contains_rect(pushed),
+            "a plain zoom pushes the panel past the left edge: {pushed:?} in {canvas:?}"
         );
 
-        assert!(app.zoom_by_shortcut(&ctx, 2.2), "the shortcut changes the zoom");
+        assert!(app.zoom_by_shortcut(&ctx, 1.2), "the shortcut changes the zoom");
         assert!(
-            (app.canvas_view.zoom - 2.2).abs() < 1.0e-4,
+            (app.canvas_view.zoom - 1.2).abs() < 1.0e-4,
             "the view keeps the zoom that the shortcut asked for: {}",
             app.canvas_view.zoom
         );
@@ -916,6 +939,94 @@ mod tests {
             "the panel starts at the left edge that a jump gives it: {} against {}",
             after.min.x,
             canvas.min.x + REVEAL_MARGIN
+        );
+    }
+
+    /// A zoom of a shortcut leaves the view at the middle of the canvas when the
+    /// panel of the keyboard focus stood out of the view before it: a panel that
+    /// nobody reads does not pull the view to itself.
+    #[test]
+    fn a_zoom_of_a_shortcut_leaves_a_panel_out_of_the_view_alone() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
+        app.board.focus(panel);
+        app.canvas_view.set_zoom(2.0);
+        app.canvas_view.set_pan_offset([-1500.0, -200.0]);
+        let before = panel_screen_rect(&app, &ctx, "notes");
+        let canvas = app.canvas_rect(&ctx);
+        assert!(
+            !canvas.intersects(before),
+            "the panel starts fully out of the canvas: {before:?} in {canvas:?}"
+        );
+        let mut expected = app.canvas_view;
+        expected.zoom_about_screen_anchor(canvas_origin(canvas), [canvas.center().x, canvas.center().y], 2.2);
+
+        assert!(app.zoom_by_shortcut(&ctx, 2.2), "the shortcut changes the zoom");
+        assert!(
+            (app.canvas_view.pan_offset[0] - expected.pan_offset[0]).abs() < 0.01
+                && (app.canvas_view.pan_offset[1] - expected.pan_offset[1]).abs() < 0.01,
+            "the zoom keeps the pan of a plain zoom at the middle: {:?} against {:?}",
+            app.canvas_view.pan_offset,
+            expected.pan_offset
+        );
+        assert!(
+            !app.canvas_rect(&ctx).intersects(panel_screen_rect(&app, &ctx, "notes")),
+            "the panel that nobody read stays out of the view: the view did not move to it"
+        );
+    }
+
+    /// A zoom of a shortcut leaves the view at the middle of the canvas when the
+    /// panel of the keyboard focus stood partly out of the view before it.
+    #[test]
+    fn a_zoom_of_a_shortcut_leaves_a_partly_visible_panel_alone() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        let panel = app.board.panel_id_by_local_id("notes").expect("the fixture panel");
+        app.board.focus(panel);
+        app.canvas_view.set_zoom(1.0);
+        app.canvas_view.set_pan_offset([-80.0, -10.0]);
+        let before = panel_screen_rect(&app, &ctx, "notes");
+        let canvas = app.canvas_rect(&ctx);
+        assert!(
+            !canvas.contains_rect(before) && canvas.intersects(before),
+            "the panel starts partly out of the canvas: {before:?} in {canvas:?}"
+        );
+        let mut expected = app.canvas_view;
+        expected.zoom_about_screen_anchor(canvas_origin(canvas), [canvas.center().x, canvas.center().y], 1.3);
+
+        assert!(app.zoom_by_shortcut(&ctx, 1.3), "the shortcut changes the zoom");
+        assert!(
+            (app.canvas_view.pan_offset[0] - expected.pan_offset[0]).abs() < 0.01
+                && (app.canvas_view.pan_offset[1] - expected.pan_offset[1]).abs() < 0.01,
+            "the zoom keeps the pan of a plain zoom at the middle: {:?} against {:?}",
+            app.canvas_view.pan_offset,
+            expected.pan_offset
+        );
+        let after = panel_screen_rect(&app, &ctx, "notes");
+        assert!(
+            after.min.x < canvas.min.x && !canvas.contains_rect(after),
+            "the panel keeps the edge that the zoom gave it instead of a jump: {after:?}"
+        );
+    }
+
+    /// A zoom of a shortcut without a panel of the keyboard focus keeps the middle
+    /// of the canvas.
+    #[test]
+    fn a_zoom_of_a_shortcut_without_focus_keeps_the_middle_of_the_canvas() {
+        let (_temp, ctx, mut app) = app_with_panel_at([40.0, 40.0]);
+        app.board.focused = None;
+        app.canvas_view.set_zoom(1.4);
+        app.canvas_view.set_pan_offset([-600.0, -300.0]);
+        let canvas = app.canvas_rect(&ctx);
+        let mut expected = app.canvas_view;
+        expected.zoom_about_screen_anchor(canvas_origin(canvas), [canvas.center().x, canvas.center().y], 0.8);
+
+        assert!(app.zoom_by_shortcut(&ctx, 0.8), "the shortcut changes the zoom");
+        assert!(
+            (app.canvas_view.pan_offset[0] - expected.pan_offset[0]).abs() < 0.01
+                && (app.canvas_view.pan_offset[1] - expected.pan_offset[1]).abs() < 0.01,
+            "the zoom keeps the pan of a plain zoom at the middle: {:?} against {:?}",
+            app.canvas_view.pan_offset,
+            expected.pan_offset
         );
     }
 
