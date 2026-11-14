@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use horizon_browser::{BackendKind, BrowserButton, BrowserCommand, BrowserEvent, BrowserInput, BrowserModifiers};
@@ -16,6 +16,9 @@ use super::{AttachedHost, AttachedHostFailureKind, attached_host_backend_refusal
 use crate::config::BrowserHostEngine;
 
 const DEADLINE: Duration = Duration::from_secs(10);
+/// The longest wait of a test before it reports a stall, so a wait of the product
+/// that a test holds fails the test instead of hanging it.
+const HANG_GUARD: Duration = Duration::from_secs(10);
 /// A lost link waits three seconds before its first automatic attempt, so a
 /// test that waits for that attempt needs a wider bound than a plain connect.
 const RETRY_DEADLINE: Duration = Duration::from_secs(60);
@@ -68,6 +71,11 @@ fn calls(log: &Path) -> Vec<String> {
 
 fn count_start_snippets(log: &Path) -> usize {
     calls(log).iter().filter(|call| call.contains("nohup")).count()
+}
+
+/// How often the stand-in answered the endpoint that a connect reads.
+fn count_answers(answers: &Path) -> usize {
+    std::fs::read_to_string(answers).unwrap_or_default().lines().count()
 }
 
 fn count_port_reads(log: &Path) -> usize {
@@ -164,6 +172,16 @@ fn wait_until(panel: &mut BrowserPanelState, done: impl Fn(&BrowserPanelState) -
         assert!(Instant::now() < deadline, "the panel did not reach the expected state");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// A thread that releases the gate of a stand-in program if the test stalls, so a
+/// wait of the product fails the test instead of hanging it.
+fn release_on_hang(gate: std::path::PathBuf, done: mpsc::Receiver<()>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        if done.recv_timeout(HANG_GUARD).is_err() {
+            let _ = std::fs::write(&gate, b"");
+        }
+    })
 }
 
 #[test]
@@ -386,12 +404,22 @@ fn retry_after_a_lost_link_reconnects_with_a_fresh_forward() {
     let _serial = serial();
     let directory = scratch();
     let log = directory.path().join("commands.log");
+    let close = directory.path().join("hold-the-retry");
+    let release = directory.path().join("release-the-retry");
+    let answers = directory.path().join("answers.log");
     let served: Served = Arc::default();
+    // The stand-in answers at once while the gate is open, so the first connect
+    // runs as every other connect of these tests. The test closes the gate after
+    // that connect, so the endpoint that the retry reads cannot answer until the
+    // test answers for it: the retry returns while that read waits here.
     let program = stand_in(
         directory.path(),
         &log,
         &format!(
-            "printf '%s\\n' {running}",
+            "case \"$*\" in\n  *DevToolsActivePort*)\n    if [ -e {close} ]; then while [ ! -e {release} ]; do sleep 1; done; fi\n    printf 'read answered\\n' >> {answers}\n    ;;\nesac\nprintf '%s\\n' {running}",
+            close = quoted(&close),
+            release = quoted(&release),
+            answers = quoted(&answers),
             running = script_text(&endpoint_text(RUNNING_BROWSER))
         ),
     );
@@ -417,12 +445,19 @@ fn retry_after_a_lost_link_reconnects_with_a_fresh_forward() {
     );
     let first = lock(&served).first().copied().expect("the first forward");
 
-    let started = Instant::now();
+    assert_eq!(count_answers(&answers), 1, "the first connect read the endpoint once");
+    std::fs::write(&close, b"").expect("the test closes the gate of the retry");
+    let (done, waiting) = mpsc::channel();
+    let watchdog = release_on_hang(release.clone(), waiting);
     panel.relaunch();
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "Retry never waits for ssh"
+    assert_eq!(
+        count_answers(&answers),
+        1,
+        "the retry returns while the endpoint that it reads still waits at the gate"
     );
+    std::fs::write(&release, b"").expect("the test releases the gate of the retry");
+    let _ = done.send(());
+    watchdog.join().expect("the watchdog of the gate ends");
     assert_eq!(panel.status, BrowserStatus::Starting);
     assert_eq!(panel.attached_host_target(), Some("browser-vm"));
     assert_eq!(
@@ -437,6 +472,7 @@ fn retry_after_a_lost_link_reconnects_with_a_fresh_forward() {
     assert_eq!(ports.len(), 2, "the retry opened one fresh forward: {ports:?}");
     assert_eq!(ports[0], first, "the first forward of this panel answered");
     assert_eq!(count_port_reads(&log), 2, "the retry reads the endpoint again");
+    assert_eq!(count_answers(&answers), 2, "the read of the retry answered once");
     assert_eq!(count_start_snippets(&log), 0, "the browser of the host is reused");
     assert!(panel.session.is_some(), "the retry starts the ordinary session again");
     panel.stop();

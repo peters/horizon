@@ -152,7 +152,12 @@ fn url_opener_invocation(url: &str) -> (&'static str, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::{open_url, url_opener_invocation};
+
+    /// The bound of the wait of a test, so a stall fails instead of hanging.
+    const HANG_GUARD: Duration = Duration::from_secs(10);
 
     #[test]
     fn url_opener_uses_the_platform_default_handler() {
@@ -168,16 +173,20 @@ mod tests {
 
     #[test]
     fn a_url_opens_on_a_thread_of_its_own() {
-        // The frame asks for the open and returns; the handler starts on a
-        // thread, so no frame waits for `fork` and `exec`.
-        let started = std::time::Instant::now();
+        // The start of the handler is a call that can wait of the guide, so the
+        // guard of the UI thread is the separator: a frame that ran the program
+        // reports that call here and the test fails. A worker is never inside a
+        // frame, so the thread that Horizon starts makes the same call without a
+        // report, however long the program takes to start.
+        crate::ui_thread::use_strict_mode();
+        let started = Instant::now();
         let frame = crate::ui_thread::FrameScope::enter();
         let opened = open_url("https://example.invalid/");
         drop(frame);
         assert!(opened.is_ok(), "a URL of the desktop starts its handler: {opened:?}");
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "the frame that opens a URL waits for no program"
+            started.elapsed() < HANG_GUARD,
+            "the thread that opens a URL starts without a stall"
         );
     }
 }
