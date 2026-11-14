@@ -13,8 +13,8 @@ use crate::typeface::Weight;
 use super::super::metrics::{
     BOARD_CELL_GAP, BOARD_CELL_PAD, BOARD_COLUMN_FONT, BOARD_COLUMN_MAX_WIDTH, BOARD_CURRENT_LINE, BOARD_CURRENT_TINT,
     BOARD_HAIR_TINT, BOARD_HEAD_COLUMN, BOARD_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_HEAD_PAD_SIDE, BOARD_NOTE_FONT,
-    BOARD_RADIUS, BOARD_ROW_GAP, BOARD_ROW_LABEL_FONT, BOARD_ROW_MIN_HEIGHT, BOARD_ROW_SUBTITLE_FONT, BOARD_TAG_FONT,
-    BOARD_TAG_RADIUS, BOARD_TAG_SIZE, BOARD_VALUE_FONT, ITEM_NOTE_FONT, ITEM_NOTE_LINE_HEIGHT, count,
+    BOARD_ROW_GAP, BOARD_ROW_LABEL_FONT, BOARD_ROW_MIN_HEIGHT, BOARD_ROW_SUBTITLE_FONT, BOARD_TAG_FONT, BOARD_TAG_SIZE,
+    BOARD_VALUE_FONT, ITEM_NOTE_FONT, ITEM_NOTE_LINE_HEIGHT, RADIUS_FRAME, RADIUS_TAG, count,
 };
 use super::super::text;
 
@@ -33,13 +33,13 @@ pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[B
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let painter = ui.painter().clone();
     let term = theme::BG_ELEVATED();
-    let radius = CornerRadius::same(BOARD_RADIUS);
+    let radius = CornerRadius::same(RADIUS_FRAME);
     painter.rect_filled(rect, radius, term);
     painter.rect_filled(
         Rect::from_min_size(rect.min, Vec2::new(width, BOARD_HEAD_HEIGHT)),
         CornerRadius {
-            nw: BOARD_RADIUS,
-            ne: BOARD_RADIUS,
+            nw: RADIUS_FRAME,
+            ne: RADIUS_FRAME,
             sw: 0,
             se: 0,
         },
@@ -48,9 +48,9 @@ pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[B
     painter.rect_filled(
         Rect::from_min_size(rect.min, Vec2::new(BOARD_HEAD_COLUMN, height)),
         CornerRadius {
-            nw: BOARD_RADIUS,
+            nw: RADIUS_FRAME,
             ne: 0,
-            sw: BOARD_RADIUS,
+            sw: RADIUS_FRAME,
             se: 0,
         },
         theme::PANEL_BG(),
@@ -217,7 +217,7 @@ fn show_column_head(painter: &egui::Painter, cell: Rect, wave: &BoardColumn) {
         } else {
             (theme::PANEL_BG_ALT(), theme::FG_SOFT())
         };
-        painter.rect_filled(square, CornerRadius::same(BOARD_TAG_RADIUS), fill);
+        painter.rect_filled(square, CornerRadius::same(RADIUS_TAG), fill);
         let galley = text::line_weight(
             painter,
             tag,

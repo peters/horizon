@@ -783,20 +783,26 @@ around it: the state chip, the footer and the status frames. The document owns
 the body. Sizes come from `crates/horizon-ui/src/block_widget/metrics.rs` and
 the rules from the modules beside it.
 
-- Body: 18 of space above the first component, 16 on both sides, 14 below the
+- Body: 16 of space above the first component, 16 on both sides, 16 below the
   last one, and 16 between two components. The body scrolls; the footer does
   not.
+- Spacing grid: every gap and padding of `metrics.rs` is a multiple of 4 points,
+  and 2 points only for a hair gap inside a row, such as between the two lines
+  of a list row. One set of radii serves every part: 12 for a frame inside a
+  card (the board, the callout, the box of a `kv`), 8 for a control (a row, a
+  pill, an item of a board, a button, a badge, the state chip, a status frame),
+  4 for a small part (a tag) and 2 for the bar of a progress.
 - Heading: title 18 strong `FG`; optional second line 12.5 `FG_SOFT`, 4 below
   the title; optional badge on the title row, right aligned, 12 to its left.
-  Both truncate with an ellipsis.
-- Badge: 24 high, radius 8, padding 10 on both sides, text 11.5 in the tone
-  colour, 6 px dot at 6 from the text. A state tone (`ok` `PALETTE_GREEN`,
+  The title and the second line take the lines that their words need.
+- Badge: 24 high, radius 8, padding 12 on both sides, text 11.5 in the tone
+  colour, 6 px dot at 4 from the text. A state tone (`ok` `PALETTE_GREEN`,
   `warn` `PALETTE_YELLOW`, `danger` `PALETTE_RED`, `info` `PALETTE_CYAN`,
   `primary` `ACCENT`) fills with `alpha(colour, 28)`, outlines with
   `alpha(colour, 90)` and carries a filled dot. The neutral tone is a raised
   pill: `PANEL_BG_ALT` fill, `BORDER_SUBTLE` outline, `FG_SOFT` text and no dot.
 - Label and value box (`kv`): `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, radius
-  10, 12 of horizontal inset. A pair is at least 34 high: label 12.5 `FG_SOFT`
+  12, 12 of horizontal inset. A pair is at least 34 high: label 12.5 `FG_SOFT`
   at the top left, value 12.5 `FG` or monospace 12 when the agent marks the
   value `mono`, 8 of space above and below the text. A 0.5 px
   `alpha(BORDER_SUBTLE, 179)` line separates two pairs. The box keeps one
@@ -809,11 +815,15 @@ the rules from the modules beside it.
 - One line, cut with an ellipsis when it does not fit, because each names a
   control or a state and not a sentence: a link label and the host under it, a
   badge text, a button label, a caption, the label and the time of a step, the
-  state chip and the footer. The heading, its second line, body text, both
+  state chip and the footer. A text that is cut shows whole while the pointer
+  rests on it: a button label and the title of a pill of a list carry that hover
+  text today. The heading, its second line, body text, both
   halves of a `kv` pair and both lines of a list row take the lines that their
   words need.
-- List: rows radius 8, 6 apart. A row is 10 above and below its text, 12 of
-  horizontal inset, and a 14 px radio mark 12 left of the text. Unselected:
+- List: rows radius 8, 8 apart. A row is 12 above and below its text, 12 of
+  horizontal inset, and a 14 px radio mark 12 left of the text. Every row of one
+  list takes the height of its tallest row, so the marks and the values of the
+  list keep one column. Unselected:
   `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, hollow mark in `BORDER_STRONG`.
   Selected: 2 px `ACCENT` outline, `blend(BG_ELEVATED, ACCENT, 0.18)` fill and a
   filled `ACCENT` mark with a `BG` centre. A selected row of a card without its
@@ -825,13 +835,13 @@ the rules from the modules beside it.
   keep the lines that their words need, and the row grows with them; the value
   or the badge keeps the right edge of the row.
 - Progress: label row 11.5 `FG_SOFT`, label on the left and the detail on the
-  right, then 6, then a bar 4 high, radius 2, track `PANEL_BG_ALT`, fill
+  right, then 8, then a bar 4 high, radius 2, track `PANEL_BG_ALT`, fill
   `ACCENT` at the percentage of the width.
-- Buttons: 36 high, radius 10, 8 apart, in document order from the left. A
+- Buttons: 36 high, radius 8, 8 apart, in document order from the left. A
   `danger` button keeps the right edge of its row; when the row is too narrow
   the destructive buttons move to a right-aligned row of their own, and the
   ordinary ones wrap. Primary: solid `ACCENT` with `BG` text and 16 of
-  horizontal padding (14 for every other button); only the first primary button
+  horizontal padding (12 for every other button); only the first primary button
   of a card is drawn primary and a later one is drawn neutral. Danger: `PALETTE_RED` text,
   `alpha(PALETTE_RED, 23)` fill and `alpha(PALETTE_RED, 90)` outline. Every
   other button: `PANEL_BG_ALT` fill, 1 px `BORDER_SUBTLE`, `FG` text. Disabled:
@@ -851,7 +861,7 @@ the rules from the modules beside it.
   document, and the reason is also the line that the sidebar notice shows.
 - State chip (titlebar, left of the close control): 20 high, radius 8,
   `BG_ELEVATED` fill, 1 px `BORDER_SUBTLE`, 8 of horizontal inset, text 10.5
-  monospace `FG_SOFT`, a 6 px dot 6 left of the text. `<agent> listens` with a
+  monospace `FG_SOFT`, a 6 px dot 4 left of the text. `<agent> listens` with a
   filled `PALETTE_GREEN` dot while a click wait is open; `<agent>` with a hollow
   `FG_SOFT` dot while the agent is in the workspace but not waiting; `No agent`
   with a hollow dot when the owner is gone. The chip hides rather than cover
@@ -860,7 +870,7 @@ the rules from the modules beside it.
   `FG_DIM`, which does not reach 4.5:1 on a panel), 16 of horizontal inset. Left
   `Card drawn by the agent <name>`, or `Card drawn by an agent` when the owner
   is gone; right `updated HH:MM` in local time from the last create or update.
-- Status frame: radius 8, 10 above and below, 12 on both sides,
+- Status frame: radius 8, 12 above and below, 12 on both sides,
   `alpha(colour, 23)` fill, 1 px `alpha(colour, 90)` outline, strong line 12.5
   in the colour and a second line 12 `FG_SOFT` at line height 1.45. A card
   without its agent shows one at the top of the body in `warn`; a card that
@@ -868,6 +878,21 @@ the rules from the modules beside it.
 - A heading keeps at least 60 per cent of its row. A badge that would leave it
   less than that gives up the row and stands on its own row under the second
   line, left aligned, so a narrow card cuts neither the name nor the badge.
+- A document that asks for the wide card with a board opens as wide as its
+  board needs and the canvas view allows: the half of the view, between 230
+  plus 260 for each wave and 230 plus 480 for each wave, plus the 16 of body
+  padding on both sides, and 2400 at most. A view that cannot give the least
+  width opens a narrow card. A wide document without a board opens at the half
+  of the view, between 1100 and 2400.
+- The board draws the grid only when every wave keeps a column of at least 260
+  points: the body needs 230 plus 260 for each wave. Under that, also inside a
+  card that draws the wide form, it draws the list of the narrow form, 560
+  points wide at most, at the left edge of the body.
+- A column of the grid is 480 points wide at most, and a grid that needs less
+  than the body keeps the left edge of the body; the callout, the log and the
+  buttons keep the full width of the body. An item of the grid takes one line of
+  evidence, and the list of the narrow form takes two; a longer evidence ends
+  with an ellipsis and shows whole while the pointer rests on the item.
 - A new card opens 420 wide and, once the body has measured its content, as
   tall as that content needs, between 140 and 900. A card that the person
   resized by hand keeps that size, and a card shorter than its content scrolls

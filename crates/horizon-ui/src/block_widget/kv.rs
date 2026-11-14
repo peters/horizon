@@ -15,8 +15,8 @@ use horizon_browser_control::block::KvRow;
 use crate::theme;
 
 use super::metrics::{
-    KV_COLUMN_GAP, KV_LABEL_FONT, KV_MONO_FONT, KV_PAD_SIDE, KV_RADIUS, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_SEPARATOR,
-    KV_SEPARATOR_ALPHA, KV_VALUE_FONT,
+    KV_COLUMN_GAP, KV_LABEL_FONT, KV_MONO_FONT, KV_PAD_SIDE, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_SEPARATOR,
+    KV_SEPARATOR_ALPHA, KV_VALUE_FONT, RADIUS_FRAME,
 };
 use super::text;
 
@@ -47,7 +47,7 @@ pub(super) fn show(ui: &mut Ui, index: usize, rows: &[KvRow]) {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, "Details"));
 
-    let radius = CornerRadius::same(KV_RADIUS);
+    let radius = CornerRadius::same(RADIUS_FRAME);
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::BG_ELEVATED());
     painter.rect_stroke(

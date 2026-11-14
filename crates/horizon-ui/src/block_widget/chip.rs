@@ -10,7 +10,7 @@ use horizon_core::PanelKind;
 
 use crate::theme;
 
-use super::metrics::{CHIP_DOT, CHIP_DOT_GAP, CHIP_FONT, CHIP_HEIGHT, CHIP_PAD_SIDE, CHIP_RADIUS, CHIP_TITLE_GAP};
+use super::metrics::{CHIP_DOT, CHIP_DOT_GAP, CHIP_FONT, CHIP_HEIGHT, CHIP_PAD_SIDE, CHIP_TITLE_GAP, RADIUS_CONTROL};
 use super::text;
 
 /// What the chip says about the owner of a card.
@@ -166,7 +166,7 @@ impl<'a> CardChip<'a> {
 
     /// Paint the chip inside `rect`.
     pub(crate) fn paint(&self, painter: &Painter, rect: Rect) {
-        let radius = CornerRadius::same(CHIP_RADIUS);
+        let radius = CornerRadius::same(RADIUS_CONTROL);
         painter.rect_filled(rect, radius, theme::BG_ELEVATED());
         painter.rect_stroke(
             rect,

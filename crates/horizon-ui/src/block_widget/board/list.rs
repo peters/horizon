@@ -12,7 +12,7 @@ use crate::typeface::Weight;
 use super::super::metrics::{
     BOARD_CELL_PAD, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_GROUP_VALUE_FONT, BOARD_HEAD_GAP,
     BOARD_LIST_MAX_WIDTH, CAPTION_FONT, CAPTION_TRACKING, ITEM_BORDER, ITEM_MARK, ITEM_MARK_GAP, ITEM_NOTE_FONT,
-    ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_SIDE, ITEM_RADIUS, LOG_TEXT_FONT, LOG_TIME_FONT,
+    ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_SIDE, LOG_TEXT_FONT, LOG_TIME_FONT, RADIUS_CONTROL,
 };
 use super::super::text;
 use super::NOTE_LINES;
@@ -187,7 +187,7 @@ fn show_fold(ui: &mut Ui, index: usize, done: usize, folded: bool) {
     let painter = ui.painter();
     painter.rect_stroke(
         rect,
-        CornerRadius::same(ITEM_RADIUS),
+        CornerRadius::same(RADIUS_CONTROL),
         Stroke::new(1.0, theme::BORDER_SUBTLE()),
         StrokeKind::Inside,
     );

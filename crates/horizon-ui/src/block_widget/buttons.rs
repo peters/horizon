@@ -13,7 +13,7 @@ use crate::theme;
 use crate::typeface::Weight;
 
 use super::form::Form;
-use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, BUTTON_RADIUS, count};
+use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, RADIUS_CONTROL, count};
 use super::{CardView, text, tones};
 
 /// Draw every button of a `buttons` component.
@@ -237,7 +237,7 @@ fn draw_button(ui: &mut Ui, button: &Button, rect: Rect, is_primary: bool, view:
 
     let colours = tones::button(drawn_tone(button.tone, is_primary), enabled);
     let painter = ui.painter();
-    let radius = CornerRadius::same(BUTTON_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
     let label = text::line_weight(
@@ -250,11 +250,15 @@ fn draw_button(ui: &mut Ui, button: &Button, rect: Rect, is_primary: bool, view:
     );
     let height = label.size().y;
     let width = label.size().x;
+    let cut = label.elided;
     painter.galley(
         Pos2::new(rect.center().x - width * 0.5, rect.center().y - height * 0.5),
         label,
         colours.text,
     );
+    if cut {
+        response.clone().on_hover_text(&button.label);
+    }
 
     if enabled && response.clicked() {
         if view.host_owned {

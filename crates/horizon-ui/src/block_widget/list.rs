@@ -16,9 +16,9 @@ use crate::typeface::Weight;
 use super::badge;
 use super::metrics::{
     LIST_LINE_GAP, LIST_MARK_GAP, LIST_MARK_RING, LIST_MARK_RING_SELECTED, LIST_MARK_SIZE, LIST_ROW_GAP,
-    LIST_ROW_OUTLINE, LIST_ROW_OUTLINE_SELECTED, LIST_ROW_PAD_SIDE, LIST_ROW_PAD_Y, LIST_ROW_RADIUS,
-    LIST_SUBTITLE_FONT, LIST_TITLE_FONT, LIST_VALUE_FONT, LIST_VALUE_GAP, PILL_FONT, PILL_GAP, PILL_HEIGHT,
-    PILL_LINE_GAP, PILL_PAD_SIDE, PILL_RADIUS,
+    LIST_ROW_OUTLINE, LIST_ROW_OUTLINE_SELECTED, LIST_ROW_PAD_SIDE, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT,
+    LIST_TITLE_FONT, LIST_VALUE_FONT, LIST_VALUE_GAP, PILL_FONT, PILL_GAP, PILL_HEIGHT, PILL_LINE_GAP, PILL_PAD_SIDE,
+    RADIUS_CONTROL,
 };
 use super::{CardView, text, tones};
 
@@ -226,7 +226,7 @@ fn show_row(
     };
 
     let painter = ui.painter();
-    let radius = CornerRadius::same(LIST_ROW_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     if fill.a() > 0 {
         painter.rect_filled(rect, radius, fill);
     }
@@ -235,7 +235,7 @@ fn show_row(
         // that nothing here takes a press.
         let dashes = dashed_outline(
             rect,
-            f32::from(LIST_ROW_RADIUS),
+            f32::from(RADIUS_CONTROL),
             Stroke::new(LIST_ROW_OUTLINE, theme::BORDER_STRONG()),
         );
         painter.extend(dashes);
@@ -442,7 +442,7 @@ fn show_pill(
     let response = ui.interact(pill, ui.make_persistent_id(("block_pill", index, row_index)), sense);
     row_info(&response, row, selection == Selection::Single, selectable, selected);
     let hovered = selectable && response.hovered();
-    let radius = CornerRadius::same(PILL_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     let painter = ui.painter();
     if selected {
         painter.rect_filled(
@@ -466,6 +466,7 @@ fn show_pill(
         painter.rect_stroke(pill, radius, Stroke::new(1.0, outline), StrokeKind::Inside);
     }
     let colour = if selected { theme::FG() } else { theme::FG_SOFT() };
+    let cut = title.elided;
     painter.galley(
         Pos2::new(
             pill.center().x - title.size().x * 0.5,
@@ -474,6 +475,9 @@ fn show_pill(
         title.clone(),
         colour,
     );
+    if cut {
+        response.clone().on_hover_text(&row.title);
+    }
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }

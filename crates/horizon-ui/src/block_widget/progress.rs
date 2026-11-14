@@ -5,7 +5,7 @@ use horizon_browser_control::block::BlockDocument;
 
 use crate::theme;
 
-use super::metrics::{LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, PROGRESS_RADIUS};
+use super::metrics::{LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, RADIUS_BAR};
 use super::text;
 
 /// The largest share of the label row the right-hand text may take.
@@ -71,7 +71,7 @@ pub(super) fn paint(ui: &Ui, index: usize, rect: Rect, label: &str, percent: u8,
         Pos2::new(rect.min.x, rect.min.y + label_height + PROGRESS_LABEL_GAP),
         Vec2::new(width, PROGRESS_BAR_HEIGHT),
     );
-    let radius = CornerRadius::same(PROGRESS_RADIUS);
+    let radius = CornerRadius::same(RADIUS_BAR);
     painter.rect_filled(track, radius, theme::PANEL_BG_ALT());
     let filled = f32::from(percent.min(BlockDocument::MAX_PERCENT)) / f32::from(BlockDocument::MAX_PERCENT);
     if filled > 0.0 {

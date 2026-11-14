@@ -9,8 +9,8 @@ use crate::typeface::Weight;
 
 use super::super::metrics::{
     ITEM_BORDER, ITEM_DONE_NOTE_TINT, ITEM_HALO, ITEM_HALO_ALPHA, ITEM_LINE_GAP, ITEM_MARK, ITEM_MARK_GAP,
-    ITEM_MARK_RING, ITEM_PAD_SIDE, ITEM_PAD_Y, ITEM_RADIUS, ITEM_TAG_FONT, ITEM_TAG_GAP, ITEM_TAG_PAD, ITEM_TAG_RADIUS,
-    ITEM_TITLE_FONT, ITEM_VALUE_FONT, ITEM_VALUE_GAP,
+    ITEM_MARK_RING, ITEM_PAD_SIDE, ITEM_PAD_Y, ITEM_TAG_FONT, ITEM_TAG_GAP, ITEM_TAG_PAD, ITEM_TITLE_FONT,
+    ITEM_VALUE_FONT, ITEM_VALUE_GAP, RADIUS_CONTROL, RADIUS_TAG,
 };
 use super::super::text;
 
@@ -104,7 +104,7 @@ pub(super) fn colours(state: BoardState) -> ChipColours {
 /// its tag, its value at the right edge and its evidence under them.
 pub(super) fn paint_chip(painter: &egui::Painter, rect: Rect, chip: &Chip<'_>, note: &std::sync::Arc<egui::Galley>) {
     let colours = colours(chip.state);
-    let radius = CornerRadius::same(ITEM_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(
         rect,
@@ -192,7 +192,7 @@ fn paint_tag(painter: &egui::Painter, at: Pos2, tag: &str) {
         Pos2::new(at.x, at.y + (ITEM_MARK - galley.size().y) * 0.5 - ITEM_TAG_GAP * 0.5),
         Vec2::new(galley.size().x + 2.0 * ITEM_TAG_PAD, galley.size().y + ITEM_TAG_GAP),
     );
-    let radius = CornerRadius::same(ITEM_TAG_RADIUS);
+    let radius = CornerRadius::same(RADIUS_TAG);
     painter.rect_stroke(
         rect,
         radius,

@@ -16,8 +16,9 @@ use horizon_core::CardRuntime;
 
 use super::{CardFrames, Owner};
 use crate::block_widget::metrics::{
-    BOARD_HEAD_COLUMN, BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT, BODY_PAD_SIDE, BODY_PAD_TOP, CALLOUT_PAD_Y,
-    CALLOUT_RADIUS, ITEM_RADIUS, WIDE_FORM_MIN_WIDTH,
+    BOARD_CELL_PAD, BOARD_COLUMN_MAX_WIDTH, BOARD_HEAD_COLUMN, BOARD_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_HEAD_PAD_SIDE,
+    BOARD_ROW_MIN_HEIGHT, BOARD_TAG_SIZE, BODY_PAD_SIDE, BODY_PAD_TOP, BUTTON_PAD, CALLOUT_PAD_Y, RADIUS_CONTROL,
+    RADIUS_FRAME, WIDE_FORM_MIN_WIDTH,
 };
 use crate::block_widget::{CARD_HEIGHT_LIMITS, CardForm, card_height_limits, default_card_size, fitted_card_height};
 use crate::theme::ResolvedTheme;
@@ -100,7 +101,9 @@ fn chips(shapes: &[ClippedShape]) -> Vec<Rect> {
     shapes
         .iter()
         .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect) if rect.corner_radius == CornerRadius::same(ITEM_RADIUS) && rect.stroke.width > 0.0 => {
+            Shape::Rect(rect)
+                if rect.corner_radius == CornerRadius::same(RADIUS_CONTROL) && rect.stroke.width > 0.0 =>
+            {
                 Some(rect.rect)
             }
             _ => None,
@@ -258,7 +261,8 @@ fn the_grid_gives_every_wave_the_same_width_after_the_230_points_of_the_workers(
     let change = painted(&shapes, "Change").expect("the second wave is drawn");
     let verify = painted(&shapes, "Verify").expect("the third wave is drawn");
     let column_width = (body(1400.0) - BOARD_HEAD_COLUMN) / 3.0;
-    let first_column = f32::from(BODY_PAD_SIDE) + BOARD_HEAD_COLUMN + 14.0 + 20.0 + 9.0;
+    let first_column =
+        f32::from(BODY_PAD_SIDE) + BOARD_HEAD_COLUMN + BOARD_HEAD_PAD_SIDE + BOARD_TAG_SIZE + BOARD_HEAD_GAP;
 
     assert!(
         (understand.min.x - first_column).abs() < 1.5,
@@ -512,10 +516,16 @@ fn the_callout_is_one_row_in_the_wide_form_and_a_stack_in_the_narrow_one() {
         (account.min.x - last.min.x).abs() < 10.0,
         "the answers of the narrow form keep one left edge: {account:?} against {last:?}"
     );
-    let frame = CALLOUT_PAD_Y;
+    let frame = narrow
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect) if rect.corner_radius == CornerRadius::same(RADIUS_FRAME) => Some(rect.rect),
+            _ => None,
+        })
+        .expect("the callout draws its frame");
     assert!(
-        question.min.y - caption.min.y >= frame,
-        "the caption keeps the padding of the frame: {caption:?}"
+        question.min.y - frame.min.y >= CALLOUT_PAD_Y - 0.5 && last.max.y <= frame.max.y + 0.5,
+        "the text of the callout keeps the padding of its frame: {question:?} in {frame:?}"
     );
 }
 
@@ -749,7 +759,7 @@ fn a_column_of_the_grid_is_at_most_480_points_and_the_rest_of_the_card_keeps_its
         .iter()
         .find_map(|clipped| match &clipped.shape {
             Shape::Rect(rect)
-                if rect.corner_radius == CornerRadius::same(CALLOUT_RADIUS) && rect.rect.contains_rect(question) =>
+                if rect.corner_radius == CornerRadius::same(RADIUS_FRAME) && rect.rect.contains_rect(question) =>
             {
                 Some(rect.rect)
             }
@@ -761,13 +771,15 @@ fn a_column_of_the_grid_is_at_most_480_points_and_the_rest_of_the_card_keeps_its
         .filter(|chip| chip.max.y <= callout.min.y)
         .collect();
     assert_eq!(chips.len(), 2, "the grid draws the item of every wave");
+    let item_width = BOARD_COLUMN_MAX_WIDTH - 2.0 * BOARD_CELL_PAD;
     assert!(
-        chips.iter().all(|chip| (chip.width() - 460.0).abs() < 0.01),
-        "a column of the grid is 480 points wide, so its item is 460: {chips:?}"
+        chips.iter().all(|chip| (chip.width() - item_width).abs() < 0.01),
+        "a column of the grid is 480 points wide, so its item is {item_width}: {chips:?}"
     );
     assert!(
-        (chips[0].min.x - (body_left + BOARD_HEAD_COLUMN + 10.0)).abs() < 0.01
-            && (chips[0].max.x - (body_left + BOARD_HEAD_COLUMN + 480.0 - 10.0)).abs() < 0.01,
+        (chips[0].min.x - (body_left + BOARD_HEAD_COLUMN + BOARD_CELL_PAD)).abs() < 0.01
+            && (chips[0].max.x - (body_left + BOARD_HEAD_COLUMN + BOARD_COLUMN_MAX_WIDTH - BOARD_CELL_PAD)).abs()
+                < 0.01,
         "the grid starts at the left edge of the body: {:?}",
         chips[0]
     );
@@ -789,7 +801,7 @@ fn a_column_of_the_grid_is_at_most_480_points_and_the_rest_of_the_card_keeps_its
 
     let stop = painted(&shapes, "Stop").expect("the button is drawn");
     assert!(
-        (stop.max.x - (2400.0 - body_left - 14.0)).abs() < 1.0,
+        (stop.max.x - (2400.0 - body_left - BUTTON_PAD)).abs() < 1.0,
         "the button keeps the right edge of the body: {stop:?}"
     );
 }
@@ -1092,7 +1104,7 @@ fn the_buttons_of_a_wide_card_close_their_row_at_the_right_edge() {
         "the buttons of a wide card keep the right end of the row: {plan:?}"
     );
     assert!(
-        (stop.max.x - (1400.0 - f32::from(BODY_PAD_SIDE) - 14.0)).abs() < 1.0,
+        (stop.max.x - (1400.0 - f32::from(BODY_PAD_SIDE) - BUTTON_PAD)).abs() < 1.0,
         "the last button ends at the right edge of the body, less its padding: {stop:?}"
     );
     assert!(
@@ -1103,7 +1115,7 @@ fn the_buttons_of_a_wide_card_close_their_row_at_the_right_edge() {
     let narrow = pass(420.0, &document);
     let plan = painted(&narrow, "Change the plan").expect("the first button is drawn");
     assert!(
-        (plan.min.x - (f32::from(BODY_PAD_SIDE) + 14.0)).abs() < 1.0,
+        (plan.min.x - (f32::from(BODY_PAD_SIDE) + BUTTON_PAD)).abs() < 1.0,
         "the narrow card keeps its buttons at the left edge: {plan:?}"
     );
 }

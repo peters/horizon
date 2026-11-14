@@ -99,11 +99,13 @@ Give this line to the stand-in agent:
 
 1. Read the card.
 
-   Result: the same card is now wide. Its width is half of the canvas view,
-   between 1100 and 2400 points. The heading takes the larger title. The callout
-   is one row with the caption above the question at the left and the three
-   answers at the right. The board is a grid: the first column of 230 points
-   names the workers, each wave takes the same width, the head row is 44 points.
+   Result: the same card is now wide. Its width follows its board: the half of
+   the canvas view, between 230 plus 260 for each wave and 230 plus 480 for each
+   wave, plus 32 of body padding, and 2400 at most. The heading takes the larger
+   title. The callout is one row with the caption above the question at the left
+   and the three answers at the right. The board is a grid: the first column of
+   230 points names the workers, each wave takes a column of 480 points at most,
+   the head row is 44 points.
 2. Compare the drawing with the picture of the design.
 
    Result: the numbers of the design hold: one chip height for every item, one

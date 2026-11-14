@@ -9,7 +9,7 @@ use horizon_browser_control::block::{Badge, Tone};
 
 use crate::theme;
 
-use super::metrics::{BADGE_DOT, BADGE_DOT_GAP, BADGE_FONT, BADGE_HEIGHT, BADGE_PAD_SIDE, BADGE_RADIUS};
+use super::metrics::{BADGE_DOT, BADGE_DOT_GAP, BADGE_FONT, BADGE_HEIGHT, BADGE_PAD_SIDE, RADIUS_CONTROL};
 use super::text;
 use super::tones;
 
@@ -37,7 +37,7 @@ pub(super) fn width(ui: &Ui, text: &str, prefix: Option<&str>, tone: Tone) -> f3
 /// Paint one pill inside `rect`, which the caller sizes and places.
 pub(super) fn paint(painter: &Painter, rect: Rect, text: &str, prefix: Option<&str>, tone: Tone) {
     let colours = tones::badge(tone);
-    let radius = CornerRadius::same(BADGE_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
 

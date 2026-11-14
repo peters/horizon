@@ -13,8 +13,8 @@ use crate::typeface::Weight;
 
 use super::form::Form;
 use super::metrics::{
-    BUTTON_GAP, BUTTON_HEIGHT, CALLOUT_CAPTION_GAP, CALLOUT_PAD_SIDE, CALLOUT_PAD_Y, CALLOUT_RADIUS, CALLOUT_ROW_GAP,
-    CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT, CAPTION_TRACKING, count,
+    BUTTON_GAP, BUTTON_HEIGHT, CALLOUT_CAPTION_GAP, CALLOUT_PAD_SIDE, CALLOUT_PAD_Y, CALLOUT_ROW_GAP,
+    CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT, CAPTION_TRACKING, RADIUS_FRAME, count,
 };
 use super::{CardView, buttons, text, tones};
 
@@ -100,7 +100,7 @@ pub(super) fn show(
         Form::Narrow => stack + CALLOUT_STACK_GAP + buttons_height,
     };
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, content + 2.0 * CALLOUT_PAD_Y), egui::Sense::hover());
-    let radius = CornerRadius::same(CALLOUT_RADIUS);
+    let radius = CornerRadius::same(RADIUS_FRAME);
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
 

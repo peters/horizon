@@ -11,7 +11,7 @@ use horizon_browser_control::block::Tone;
 use crate::theme;
 
 use super::metrics::{
-    STATUS_LINE_FONT, STATUS_LINE_GAP, STATUS_PAD_SIDE, STATUS_PAD_Y, STATUS_RADIUS, STATUS_TITLE_FONT,
+    RADIUS_CONTROL, STATUS_LINE_FONT, STATUS_LINE_GAP, STATUS_PAD_SIDE, STATUS_PAD_Y, STATUS_TITLE_FONT,
 };
 use super::text;
 use super::tones;
@@ -47,7 +47,7 @@ pub(super) fn show(ui: &mut Ui, tag: &'static str, tone: Tone, title: &str, line
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, title));
 
-    let radius = CornerRadius::same(STATUS_RADIUS);
+    let radius = CornerRadius::same(RADIUS_CONTROL);
     let painter = ui.painter();
     painter.rect_filled(rect, radius, colours.fill);
     painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
