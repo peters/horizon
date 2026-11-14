@@ -74,30 +74,23 @@ pub(super) fn wrapped_weight(
     zoom_text::layout_job(painter, job)
 }
 
-/// The lines that a wrapped text may take: their height and their count.
-#[derive(Clone, Copy)]
-pub(super) struct Lines {
-    /// Height of one line, or `None` for the line height of the font.
-    pub(super) line_height: Option<f32>,
-    /// How many lines the text may take before its last one ends with an
-    /// ellipsis.
-    pub(super) max_rows: usize,
-}
-
-/// `text` wrapped to `max_width` in the lines of `lines`.
+/// `text` wrapped to `max_width` at `line_height` and at most `max_rows` rows,
+/// elided with an ellipsis at the end of the last row when it needs more.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn wrapped_rows(
     painter: &Painter,
     text: &str,
     font: &FontId,
     color: Color32,
     max_width: f32,
-    lines: Lines,
+    line_height: Option<f32>,
+    max_rows: usize,
     weight: Weight,
 ) -> Arc<Galley> {
     let mut job = LayoutJob {
         wrap: TextWrapping {
             max_width: max_width.max(0.0),
-            max_rows: lines.max_rows,
+            max_rows,
             overflow_character: Some('\u{2026}'),
             ..TextWrapping::default()
         },
@@ -105,7 +98,7 @@ pub(super) fn wrapped_rows(
     };
     job.append(text, 0.0, {
         let mut format = typeface::format(font, color, weight);
-        format.line_height = lines.line_height;
+        format.line_height = line_height;
         format
     });
     zoom_text::layout_job(painter, job)

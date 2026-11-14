@@ -176,10 +176,8 @@ fn show_cell(ui: &Ui, painter: &egui::Painter, index: usize, cell: Cell, items: 
             &FontId::monospace(ITEM_NOTE_FONT),
             colours(item.state).note,
             note_room(rect),
-            text::Lines {
-                line_height: Some(ITEM_NOTE_LINE_HEIGHT),
-                max_rows: 1,
-            },
+            Some(ITEM_NOTE_LINE_HEIGHT),
+            1,
             Weight::Regular,
         );
         paint_chip(painter, rect, &chip, &note);

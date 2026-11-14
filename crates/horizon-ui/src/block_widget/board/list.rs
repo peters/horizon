@@ -158,10 +158,8 @@ fn show_list_item(ui: &mut Ui, index: usize, at: usize, item: &BoardItem, rows: 
         &FontId::monospace(ITEM_NOTE_FONT),
         colours(item.state).note,
         room,
-        text::Lines {
-            line_height: Some(ITEM_NOTE_LINE_HEIGHT),
-            max_rows: NOTE_LINES,
-        },
+        Some(ITEM_NOTE_LINE_HEIGHT),
+        NOTE_LINES,
         Weight::Regular,
     );
     let height = chip_height(1) + note.size().y - ITEM_NOTE_LINE_HEIGHT;
