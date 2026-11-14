@@ -145,6 +145,29 @@ pub fn new_browser_panel(
     })
 }
 
+/// Fill the place of a browser panel of `opts` from the rule of
+/// [`new_browser_panel`], so the panel that opens, the profile that it saves and
+/// the answer of the create read one answer.
+///
+/// The app hands the entry of the settings that this run holds, so a panel that
+/// is created after a confirmed change of the entry uses that host at once.
+///
+/// # Errors
+/// Returns the words of the rule for a profile name that it refuses.
+pub fn place_browser_panel(
+    opts: &mut crate::PanelOptions,
+    host: &BrowserHostConfig,
+    configured: BackendKind,
+) -> Result<(), String> {
+    let request = opts.browser_request.clone().unwrap_or_default();
+    let panel = new_browser_panel(request.profile.as_deref(), request.backend, configured, host)?;
+    opts.browser_place = Some(panel.place);
+    opts.browser_session_id.clone_from(&panel.profile);
+    opts.browser_private = panel.private;
+    opts.browser_host_entry = Some(host.clone());
+    Ok(())
+}
+
 /// The words that the answer of a create carries when a browser host is in the
 /// settings and the page does not run on it.
 ///

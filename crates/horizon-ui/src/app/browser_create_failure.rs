@@ -31,6 +31,14 @@ pub(super) fn terminal_create_failure(
             if let Some(failure) = browser.attached_host_failure() {
                 return Some((failure.code(), failure.report()));
             }
+            // A session that was asked for a private page and could not prove one
+            // names its own code and says that it opened no page of the shared
+            // profile, so the agent reads the refusal and not a start failure.
+            if let BrowserStatus::Error { message } = &browser.status
+                && let Some(detail) = horizon_core::browser::private_page_unavailable_detail(message)
+            {
+                return Some((horizon_browser::PRIVATE_PAGE_UNAVAILABLE, detail.to_string()));
+            }
             Some(browser.remote_failure().map_or_else(
                 || match &browser.status {
                     BrowserStatus::Error { .. } => (

@@ -236,6 +236,9 @@ pub(super) struct HostSession {
     /// Links that served this session, so the first answer can say that the page
     /// is new and every later one that it is the page of the link before.
     links: u32,
+    /// What this session established about its page: whether the page that it
+    /// drives keeps anything of the profile of this machine.
+    isolation: horizon_browser::PageIsolationReport,
     /// The frame sequence that this session last sent, so a pass does not send a
     /// picture that the person already sees.
     last_sent: Option<u64>,
@@ -265,6 +268,7 @@ impl HostSession {
         let (sender, outbox) = mpsc::channel();
         let coordination = WireCoordination::new(sender);
         let slot = Arc::new(FrameSlot::new());
+        let isolation = horizon_browser::PageIsolationReport::default();
         let config = BrowserConfig {
             backend: options.engine().backend(),
             headless: true,
@@ -286,6 +290,8 @@ impl HostSession {
                 remote: None,
                 attach: None,
                 resume_target: None,
+                resume_context: None,
+                page_isolation: isolation.clone(),
             },
             group.clone(),
         )
@@ -314,6 +320,7 @@ impl HostSession {
             loading: true,
             sent_page: HostDriverPage::default(),
             links: 0,
+            isolation,
             last_sent: None,
         })
     }
@@ -332,6 +339,7 @@ impl HostSession {
             loading: true,
             sent_page: HostDriverPage::default(),
             links: 0,
+            isolation: horizon_browser::PageIsolationReport::default(),
             last_sent: None,
         }
     }
@@ -435,6 +443,7 @@ impl HostSession {
             title: self.sent_page.title.clone(),
             resumed: self.page_state.resumed() || self.sent_page.resumed,
             loading: self.loading,
+            keeps_nothing: self.isolation.isolation().keeps_nothing(),
         }
     }
 

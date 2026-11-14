@@ -594,6 +594,8 @@ mod tests {
             let config = BrowserSessionConfig {
                 attach: None,
                 resume_target: None,
+                resume_context: None,
+                page_isolation: Default::default(),
                 browser: BrowserConfig {
                     automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
                     ..BrowserConfig::default()

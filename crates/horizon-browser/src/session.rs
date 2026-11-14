@@ -35,6 +35,7 @@ pub(crate) mod file_drop;
 mod handle;
 mod http_auth;
 mod http_bodies;
+mod isolation;
 mod lifecycle;
 mod manifest_io;
 mod native_select;
@@ -58,6 +59,10 @@ use command_queue::CommandSender;
 pub(crate) use handle::{BrowserEventSender, BrowserEventWake, publish_frame};
 pub use handle::{BrowserEventWaker, CommittedUrl};
 pub use horizon_browser_protocol::BrowserCommand;
+pub use isolation::{
+    PRIVATE_PAGE_UNAVAILABLE, PageIsolation, PageIsolationReport, private_page_unavailable,
+    private_page_unavailable_detail,
+};
 use native_select::NativeSelectState;
 use run_loop::run_loop;
 pub use shutdown::BrowserShutdownSignal;
@@ -126,9 +131,13 @@ pub enum BrowserEvent {
     /// The page this session drives. `resumed` says that it is the page the
     /// panel drove before a lost link came back, so the page keeps what it
     /// had; `false` says that the page is new and the previous state is gone.
+    /// `context` is the isolated browser context of a private page of a browser
+    /// that another process owns, which the next link resumes inside and the
+    /// close of the page disposes.
     PageAttached {
         target_id: String,
         resumed: bool,
+        context: Option<String>,
     },
     /// Allocation, expiry and release facts for a remote session.
     RemoteSession(crate::RemoteSessionEvent),
@@ -168,6 +177,14 @@ pub struct BrowserSessionConfig {
     /// typed into it, its scroll place and its session. A target that is gone
     /// falls back to a new page of `initial_url`.
     pub resume_target: Option<String>,
+    /// The isolated browser context of the private page that this panel drove
+    /// before its link was lost. A private page resumes inside that context or
+    /// not at all: a page of the default context is never adopted for it.
+    pub resume_context: Option<String>,
+    /// Where the driver publishes what it established about the page that it
+    /// made: a page of an isolated context, a page of a folder of this panel
+    /// alone, or a page of the profile that it named.
+    pub page_isolation: PageIsolationReport,
 }
 
 /// The panel-side handle to a running driver.

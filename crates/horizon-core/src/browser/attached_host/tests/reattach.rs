@@ -21,6 +21,7 @@ fn a_page_that_came_back_after_a_lost_link_keeps_its_state_and_says_so() {
         BrowserEvent::PageAttached {
             target_id: "the-old-page".to_string(),
             resumed: true,
+            context: None,
         },
         &mut output,
     );
@@ -44,6 +45,7 @@ fn a_resume_target_that_is_gone_says_that_the_page_is_new() {
         BrowserEvent::PageAttached {
             target_id: "a-new-page".to_string(),
             resumed: false,
+            context: None,
         },
         &mut output,
     );
@@ -71,6 +73,7 @@ fn a_first_page_of_a_browser_host_reports_no_page_state_loss() {
         BrowserEvent::PageAttached {
             target_id: "the-first-page".to_string(),
             resumed: false,
+            context: None,
         },
         &mut output,
     );

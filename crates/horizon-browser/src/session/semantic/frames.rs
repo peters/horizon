@@ -378,6 +378,8 @@ mod tests {
         let config = BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser: crate::BrowserConfig::default(),
             panel_local_id: "frame-protocol".into(),
             initial_url: None,

@@ -367,6 +367,8 @@ pub(in crate::webdriver::session) mod tests {
         let config = BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser: BrowserConfig {
                 backend: BackendKind::FirefoxBidi,
                 ..BrowserConfig::default()

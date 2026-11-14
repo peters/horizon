@@ -126,6 +126,7 @@ fn a_page_that_comes_back_keeps_the_notice_away_and_a_new_page_says_so() {
             title: "Example".to_string(),
             resumed: true,
             loading: false,
+            keeps_nothing: false,
         },
     });
     assert_eq!(panel.status, BrowserStatus::Ready);
@@ -145,6 +146,7 @@ fn a_page_that_comes_back_keeps_the_notice_away_and_a_new_page_says_so() {
             title: "Example".to_string(),
             resumed: false,
             loading: false,
+            keeps_nothing: false,
         },
     });
     assert_eq!(panel.navigation_error.as_deref(), Some(PAGE_STATE_LOST));
@@ -168,6 +170,7 @@ fn the_notice_of_a_page_that_came_back_goes_after_its_time() {
             title: "Example".to_string(),
             resumed: true,
             loading: false,
+            keeps_nothing: false,
         },
     });
     assert!(panel.page_resumed, "the notice is on");
@@ -239,11 +242,11 @@ fn a_chromium_host_does_not_start_the_driver_of_a_firefox() {
     let _ = std::mem::size_of::<HostDriverSlot>();
 }
 
-/// The page of a browser host names the profile that it reads, so an agent reads
-/// where the page of the host keeps its sign-ins. A private page names the
-/// reserved word, and the profile of the host stays the one of the machine.
+/// The label of a private page of a browser host follows the fact that its driver
+/// reports: the reserved word names a page of a user context of that machine, and
+/// a panel whose host reports no such page keeps the profile of the machine.
 #[test]
-fn a_private_page_of_a_firefox_host_reports_the_reserved_word() {
+fn a_private_page_of_a_firefox_host_reports_the_reserved_word_only_when_the_host_proves_it() {
     let directory = tempfile::tempdir().expect("owned fixture state");
     let program = stand_in(directory.path(), "exit 0\n");
     let ssh = Ssh::default().with_program(program);
@@ -251,12 +254,37 @@ fn a_private_page_of_a_firefox_host_reports_the_reserved_word() {
         profile: Some(horizon_browser::PRIVATE_PROFILE.to_string()),
         ..crate::browser::BrowserConfig::default()
     };
-    let panel = BrowserPanelState::start_host_driver_with(
+    let mut panel = BrowserPanelState::start_host_driver_with(
         ssh,
         "panel-private",
         &config,
         None,
         &host(BrowserHostEngine::Firefox),
+    );
+    assert!(
+        !panel.is_private_page(),
+        "a page that the driver of the host has not described yet is not private"
+    );
+    assert_eq!(
+        panel.reported_profile(),
+        "mail",
+        "the panel names the profile of that machine until the host proves otherwise"
+    );
+
+    panel.apply_host_driver_event_for_tests(HostDriverEvent::Ready {
+        resumed: false,
+        page: HostDriverPage {
+            url: "https://example.test/".to_string(),
+            title: "Example".to_string(),
+            resumed: false,
+            loading: false,
+            keeps_nothing: true,
+        },
+    });
+
+    assert!(
+        panel.is_private_page(),
+        "the driver of the host reports a page of a user context of its own"
     );
     assert_eq!(
         panel.reported_profile(),

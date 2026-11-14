@@ -22,6 +22,8 @@ fn reattach_exhaustion_ends_the_driver_but_recoverable_attempts_do_not() {
     let config = BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig::default(),
         panel_local_id: "reattach-cleanup".into(),
         initial_url: None,
@@ -122,6 +124,8 @@ fn run_setup_with_browser(
     let config = BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser,
         panel_local_id: "native-window-test".to_string(),
         initial_url: Some("https://fixture.invalid/".to_string()),
@@ -306,6 +310,8 @@ fn run_read_retry(attach: bool) -> ReadRetry {
                 .expect("a forwarded endpoint")
         }),
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig::default(),
         panel_local_id: "read-retry".into(),
         initial_url: None,
@@ -406,6 +412,8 @@ fn run_attach(outcome_resume: Option<bool>) -> SetupOutcome {
                 .expect("a forwarded endpoint"),
         ),
         resume_target: outcome_resume.map(|_| "page".to_string()),
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig {
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
             ..BrowserConfig::default()
@@ -528,6 +536,8 @@ fn the_title_question_never_holds_the_driver_for_a_round_trip() {
     let config = BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig::default(),
         panel_local_id: "title".to_string(),
         initial_url: None,
@@ -580,6 +590,8 @@ fn a_picture_asks_for_scroll_geometry_only_when_its_size_changed() {
     let config = BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig::default(),
         panel_local_id: "scrollbar-layout".to_string(),
         initial_url: None,

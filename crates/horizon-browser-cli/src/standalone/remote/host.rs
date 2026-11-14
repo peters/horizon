@@ -286,6 +286,8 @@ impl RemoteHost {
         let started = start_session(BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser,
             panel_local_id: id.clone(),
             initial_url: request.url.clone(),

@@ -536,6 +536,8 @@ mod egress_tests {
         crate::session::BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser: crate::BrowserConfig::default(),
             panel_local_id: "panel".into(),
             initial_url: None,

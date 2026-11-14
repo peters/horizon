@@ -12,7 +12,7 @@ pub use remote_identity::RemoteIdentityDisplay;
 mod attached_host;
 pub mod host_driver;
 mod host_route;
-pub use host_route::{BrowserPanelRequest, BrowserPlace, NewBrowserPanel, new_browser_panel};
+pub use host_route::{BrowserPanelRequest, BrowserPlace, NewBrowserPanel, new_browser_panel, place_browser_panel};
 mod private_profiles;
 pub use attached_host::{
     AttachedHost, AttachedHostFailure, AttachedHostFailureKind, DEFAULT_HOST_PROFILE, attached_host_backend_refusal,
@@ -119,6 +119,19 @@ pub struct BrowserPanelState {
     /// driver reported it. A lost link passes it back as the resume target, so
     /// the same page comes back with the text the person typed into it.
     attached_page_target: Option<String>,
+    /// The isolated browser context of a private page of a browser host, as the
+    /// driver reported it. A lost link passes it back with the page target, so
+    /// the page comes back inside its own context and never as a page of the
+    /// shared profile.
+    attached_page_context: Option<String>,
+    /// What the session of this panel established about its page: a page of an
+    /// isolated context, a page of a folder of this panel alone, or a page of
+    /// the profile that it named. The label of the panel follows this fact.
+    page_isolation: horizon_browser::PageIsolationReport,
+    /// What the driver of a browser host established about the page that it
+    /// drives, for the Firefox of that machine, whose page this computer reads
+    /// through the link of its driver rather than through a session of its own.
+    host_page_keeps_nothing: bool,
     /// The link came back to the same page: the body says so and no page state
     /// was lost.
     pub page_resumed: bool,
@@ -198,6 +211,9 @@ impl BrowserPanelState {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -290,6 +306,9 @@ impl BrowserPanelState {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -434,6 +453,10 @@ impl BrowserPanelState {
     }
 
     fn start_session(&mut self, initial_url: Option<String>, remote: Option<RemoteSessionRequest>) {
+        // A fact of the link before never describes the page of the link now: a
+        // new session proves its own isolation, and a page that nothing proves
+        // is never shown as private.
+        self.page_isolation = horizon_browser::PageIsolationReport::default();
         let browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
         let capture_directory = self.capture_directory(&home);
@@ -443,6 +466,10 @@ impl BrowserPanelState {
             // Only a panel that drives a browser of another computer can adopt
             // the page it had: that browser kept running behind the link.
             resume_target: self.attached_page_target.clone().filter(|_| self.is_attached()),
+            // A private page comes back inside the context that it had, or not
+            // at all: the panel never resumes a page of the default context.
+            resume_context: self.attached_page_context.clone().filter(|_| self.is_attached()),
+            page_isolation: self.page_isolation.clone(),
             browser,
             panel_local_id: self.panel_local_id.clone(),
             // A navigation typed while the driver was absent takes precedence
@@ -845,8 +872,13 @@ impl BrowserPanelState {
                 self.status = BrowserStatus::Error { message };
                 output.had_output = true;
             }
-            BrowserEvent::PageAttached { target_id, resumed } => {
+            BrowserEvent::PageAttached {
+                target_id,
+                resumed,
+                context,
+            } => {
                 self.attached_page_target = Some(target_id);
+                self.attached_page_context = context;
                 self.apply_page_attached(resumed);
                 output.had_output = true;
             }
@@ -994,6 +1026,7 @@ fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path
 pub use private_profiles::{PrivateProfileSweep, is_private_profile, mark_private_profile, sweep_private_profiles};
 
 pub use horizon_browser::provider_catalog;
+pub use horizon_browser::{PageIsolation, private_page_unavailable_detail};
 
 #[cfg(test)]
 mod tests {
@@ -1118,6 +1151,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1172,6 +1208,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1220,6 +1259,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1276,6 +1318,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1349,6 +1394,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1449,6 +1497,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1499,6 +1550,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1548,6 +1602,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,
@@ -1600,6 +1657,9 @@ mod tests {
             host_driver: None,
             attach_endpoint: None,
             attached_page_target: None,
+            attached_page_context: None,
+            page_isolation: Default::default(),
+            host_page_keeps_nothing: false,
             page_resumed: false,
             resumed_notice_at: None,
             pending_user_navigation: None,

@@ -30,6 +30,8 @@ fn chromium_press_dispatches_trusted_key_events_to_the_page_session() {
     let config = BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig::default(),
         panel_local_id: "press-test".into(),
         initial_url: None,

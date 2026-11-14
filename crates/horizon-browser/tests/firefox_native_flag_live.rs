@@ -35,6 +35,8 @@ fn firefox_minimization_keeps_a_native_webdriver_getter_false() {
     let session = start_session(BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig {
             backend: BackendKind::FirefoxBidi,
             profile_root: Some(profiles.path().to_path_buf()),

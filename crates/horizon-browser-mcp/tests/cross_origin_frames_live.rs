@@ -593,6 +593,8 @@ fn run(backend: BackendKind, root: &Path, nested: bool) {
     let session = start_session(BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig {
             backend,
             headless: backend != BackendKind::SafariWebDriver,
@@ -905,6 +907,8 @@ fn run_chat(backend: BackendKind, root: &Path) {
     let session = start_session(BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig {
             backend,
             headless: true,

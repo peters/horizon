@@ -67,21 +67,11 @@ impl HorizonApp {
         if options.kind != PanelKind::Browser || !options.follows_browser_host || options.browser_host.is_some() {
             return Ok(());
         }
-        let request = options.browser_request.clone().unwrap_or_default();
         let configured = options
             .browser_config
             .as_ref()
             .map_or(self.template_config.browser.backend, |config| config.backend);
-        let panel = horizon_core::browser::new_browser_panel(
-            request.profile.as_deref(),
-            request.backend,
-            configured,
-            browser_host,
-        )?;
-        options.browser_place = Some(panel.place);
-        options.browser_session_id.clone_from(&panel.profile);
-        options.browser_private = panel.private;
-        options.browser_host_entry = Some(browser_host.clone());
+        horizon_core::browser::place_browser_panel(options, browser_host, configured)?;
         let Some(machine) = browser_host.machine() else {
             return Ok(());
         };

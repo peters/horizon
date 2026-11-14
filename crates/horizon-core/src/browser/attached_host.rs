@@ -500,6 +500,11 @@ impl BrowserPanelState {
         state.config = config.clone();
         // A browser host serves the Chromium of its profile and nothing else.
         state.config.backend = BackendKind::ChromiumCdp;
+        // A private panel of a browser host is a page of a browser context of its
+        // own: the profile of that machine cannot reach it, and its close disposes
+        // it. The session proves that context and never opens a page of the shared
+        // profile in its place.
+        state.config.isolated_page = state.config.profile.as_deref() == Some(horizon_browser::PRIVATE_PROFILE);
         state.status = BrowserStatus::Starting;
         state.loading = true;
         let requested_url = initial_url.map(|url| horizon_browser::normalize_navigation_target(&url));
@@ -560,6 +565,12 @@ impl BrowserPanelState {
         state
     }
 
+    /// Whether the page of the driver of this host keeps nothing of the profile
+    /// of that machine, as the driver of the host established it.
+    pub(super) fn host_driver_page_is_isolated(&self) -> bool {
+        self.host_page_keeps_nothing
+    }
+
     /// Whether the Chromium of this panel runs on another machine.
     #[must_use]
     pub fn is_attached(&self) -> bool {
@@ -598,9 +609,19 @@ impl BrowserPanelState {
     /// keeps nothing. It is the name that the MCP tools answer as `profile`.
     #[must_use]
     pub fn reported_profile(&self) -> String {
-        self.config
-            .profile
-            .clone()
+        let named = self.config.profile.as_deref();
+        if named == Some(horizon_browser::PRIVATE_PROFILE) && !self.is_private_page() {
+            // Nothing proved this page isolated, so it is a page of the profile of
+            // that machine: the manifest names the profile that it reads instead of
+            // claiming the reserved word.
+            return self
+                .attached_host_profile()
+                .or_else(|| self.host_driver_profile())
+                .map(str::to_string)
+                .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string());
+        }
+        named
+            .map(str::to_string)
             .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string())
     }
 

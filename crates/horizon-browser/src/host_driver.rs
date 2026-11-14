@@ -280,6 +280,11 @@ pub struct HostDriverPage {
     pub resumed: bool,
     /// Whether the browser is still fetching the page.
     pub loading: bool,
+    /// Whether the session of that page proved that it keeps nothing of a profile:
+    /// a page of an isolated browser context of that machine. A driver of an older
+    /// host omits it, and then no panel calls that page private.
+    #[serde(default)]
+    pub keeps_nothing: bool,
 }
 
 /// The result of one operation of the agent tools.
@@ -652,6 +657,7 @@ mod tests {
             title: "Example".to_string(),
             resumed: true,
             loading: false,
+            keeps_nothing: false,
         };
         for reply in [
             HostDriverReply::Welcome(welcome),

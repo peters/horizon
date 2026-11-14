@@ -102,7 +102,8 @@ pub use semantic_fingerprint::{
 };
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
-    CommittedUrl, SharedSessionGroup, start_session, start_shared_session,
+    CommittedUrl, PRIVATE_PAGE_UNAVAILABLE, PageIsolation, PageIsolationReport, SharedSessionGroup,
+    private_page_unavailable, private_page_unavailable_detail, start_session, start_shared_session,
 };
 pub use video::VideoCaptureHandle;
 pub use webdriver::{

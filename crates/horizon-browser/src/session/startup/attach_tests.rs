@@ -12,16 +12,38 @@ use tungstenite::Message;
 
 use crate::frames::FrameSlot;
 use crate::process::ChromeProcessControl;
+use crate::session::PageIsolation;
 use crate::{AutomationDisclosurePolicy, BrowserCommand, BrowserConfig, BrowserEvent, DevtoolsEndpoint};
 
 use super::super::{BrowserEventSender, BrowserEventWake, BrowserSessionConfig, CommittedUrl};
 use super::initialize_driver;
 
-const BROWSER_PATH: &str = "/devtools/browser/ours";
-
 /// One loopback CDP browser that holds a sibling page of its person, so a
 /// session that adopts one has something to adopt.
 fn borrowed_browser() -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>) {
+    let browser = mock_browser(|_command| None);
+    (browser.endpoint, browser.server)
+}
+
+/// A mock CDP browser on a loopback port, which answers the startup commands of
+/// a session and keeps every command that it received.
+struct MockBrowser {
+    endpoint: DevtoolsEndpoint,
+    server: std::thread::JoinHandle<Vec<Value>>,
+}
+
+impl MockBrowser {
+    /// The commands that the session sent, after the link closed.
+    fn commands(self) -> Vec<Value> {
+        self.server.join().expect("the mock browser")
+    }
+}
+
+const BROWSER_PATH: &str = "/devtools/browser/ours";
+
+/// A mock CDP browser that answers `override_answer` for a command when it
+/// answers `Some`, and the ordinary answers of a borrowed browser otherwise.
+fn mock_browser(override_answer: impl Fn(&Value) -> Option<Value> + Send + 'static) -> MockBrowser {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind the mock browser");
     let port = listener.local_addr().expect("mock address").port();
     let server = std::thread::spawn(move || {
@@ -30,16 +52,17 @@ fn borrowed_browser() -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>)
         let mut commands = Vec::new();
         while let Ok(Message::Text(text)) = socket.read() {
             let command: Value = serde_json::from_str(&text).expect("command JSON");
-            let result = match command["method"].as_str() {
+            let result = override_answer(&command).unwrap_or_else(|| match command["method"].as_str() {
                 Some("Target.createBrowserContext") => json!({ "browserContextId": "ctx-private" }),
                 Some("Target.createTarget") => json!({ "targetId": "ours" }),
                 Some("Target.attachToTarget") => json!({ "sessionId": "ours-session" }),
                 Some("Target.closeTarget") => json!({ "success": true }),
+                Some("Target.getBrowserContexts") => json!({ "browserContextIds": [] }),
                 Some("Target.getTargets") => json!({ "targetInfos": [
                     { "targetId": "sibling", "type": "page", "attached": false }
                 ] }),
                 _ => json!({}),
-            };
+            });
             commands.push(command.clone());
             let reply = json!({ "id": command["id"], "result": result });
             socket.send(Message::Text(reply.to_string().into())).expect("respond");
@@ -48,13 +71,20 @@ fn borrowed_browser() -> (DevtoolsEndpoint, std::thread::JoinHandle<Vec<Value>>)
     });
     let endpoint = DevtoolsEndpoint::from_active_port_file(&format!("41000\n{BROWSER_PATH}"), port)
         .expect("the endpoint of the mock browser");
-    (endpoint, server)
+    MockBrowser { endpoint, server }
+}
+
+/// One answer that a mock browser sends instead of the ordinary one.
+fn failing_answer(method: &'static str) -> impl Fn(&Value) -> Option<Value> + Send + 'static {
+    move |command| (command["method"].as_str() == Some(method)).then(|| json!({}))
 }
 
 fn attached_config(endpoint: DevtoolsEndpoint, frame_slot: &Arc<FrameSlot>) -> BrowserSessionConfig {
     BrowserSessionConfig {
         attach: Some(endpoint),
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser: BrowserConfig {
             automation_disclosure: AutomationDisclosurePolicy::BrowserDefault,
             profile_root: Some(std::path::PathBuf::from("/nonexistent/horizon-attach-profiles")),
@@ -125,6 +155,243 @@ fn a_private_page_of_a_borrowed_browser_is_made_in_an_isolated_context() {
     assert!(
         !commands.iter().any(|command| command["method"] == "Target.getTargets"),
         "a private page adopts no page of the profile of that machine"
+    );
+}
+
+/// A private page of a browser that another process owns reports the fact that
+/// allows a panel to call it private: a page of a browser context of its own.
+#[test]
+fn a_private_page_of_a_borrowed_browser_reports_its_isolated_context() {
+    let browser = mock_browser(|_command| None);
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(browser.endpoint.clone(), &frame_slot);
+    config.browser.isolated_page = true;
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a private page of the borrowed browser");
+
+    assert_eq!(
+        config.page_isolation.snapshot(),
+        Some(PageIsolation::IsolatedContext),
+        "the session proves the context that makes the page private"
+    );
+    assert!(config.page_isolation.isolation().keeps_nothing());
+    drop(connection);
+    let _ = browser.commands();
+}
+
+/// A shared page of a borrowed browser is a page of its default context, so it
+/// sends no browser-context command at all and claims nothing about privacy.
+#[test]
+fn a_shared_page_of_a_borrowed_browser_makes_no_browser_context() {
+    let browser = mock_browser(|_command| None);
+    let frame_slot = Arc::new(FrameSlot::new());
+    let config = attached_config(browser.endpoint.clone(), &frame_slot);
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection =
+        initialize_driver(&config, &event_tx, &stop_requested, &control, None).expect("a page of the borrowed browser");
+    assert_eq!(
+        config.page_isolation.snapshot(),
+        Some(PageIsolation::Shared),
+        "a page of the default context keeps the profile that it named"
+    );
+    drop(connection);
+    let commands = browser.commands();
+    for forbidden in [
+        "Target.createBrowserContext",
+        "Target.disposeBrowserContext",
+        "Target.getBrowserContexts",
+    ] {
+        assert!(
+            !commands.iter().any(|command| command["method"] == forbidden),
+            "a shared page sends no {forbidden}: {commands:?}"
+        );
+    }
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command["method"] == "Target.createTarget"
+                && command["params"].get("browserContextId").is_some()),
+        "the page of a shared panel carries no context: {commands:?}"
+    );
+}
+
+/// A private page that comes back after a lost link is the page of the link
+/// before inside its own context, and the session sends no new context and
+/// adopts no page of the default context.
+#[test]
+fn a_private_page_of_a_lost_link_comes_back_inside_its_own_context() {
+    let browser = mock_browser(|command| match command["method"].as_str() {
+        Some("Target.getBrowserContexts") => Some(json!({ "browserContextIds": ["ctx-private"] })),
+        Some("Target.getTargets") => Some(json!({ "targetInfos": [
+            { "targetId": "a-page-of-the-profile", "type": "page", "attached": false },
+            { "targetId": "its-page", "type": "page", "browserContextId": "ctx-private" }
+        ] })),
+        _ => None,
+    });
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(browser.endpoint.clone(), &frame_slot);
+    config.browser.isolated_page = true;
+    config.resume_target = Some("its-page".to_string());
+    config.resume_context = Some("ctx-private".to_string());
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("the private page of the lost link");
+    assert_eq!(connection.target_id, "its-page");
+    assert!(connection.resumed_page, "the page of the link before came back");
+    assert_eq!(connection.chrome.context().as_deref(), Some("ctx-private"));
+    assert_eq!(config.page_isolation.snapshot(), Some(PageIsolation::IsolatedContext));
+    drop(connection);
+    let commands = browser.commands();
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command["method"] == "Target.createBrowserContext"),
+        "the context of the page came back, so no context is made: {commands:?}"
+    );
+    let attached = commands
+        .iter()
+        .find(|command| command["method"] == "Target.attachToTarget")
+        .expect("the session attaches to its page");
+    assert_eq!(attached["params"]["targetId"], "its-page");
+}
+
+/// A private page whose context the browser no longer holds gets a new isolated
+/// context, and never a page of the default context.
+#[test]
+fn a_private_page_of_a_browser_that_restarted_gets_a_new_context() {
+    let browser = mock_browser(|command| match command["method"].as_str() {
+        Some("Target.getBrowserContexts") => Some(json!({ "browserContextIds": [] })),
+        Some("Target.getTargets") => Some(json!({ "targetInfos": [
+            { "targetId": "its-page", "type": "page", "attached": false }
+        ] })),
+        Some("Target.createBrowserContext") => Some(json!({ "browserContextId": "ctx-new" })),
+        Some("Target.createTarget") => Some(json!({ "targetId": "its-new-page" })),
+        _ => None,
+    });
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(browser.endpoint.clone(), &frame_slot);
+    config.browser.isolated_page = true;
+    config.resume_target = Some("its-page".to_string());
+    config.resume_context = Some("ctx-gone".to_string());
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a new private page of that browser");
+    assert_eq!(connection.target_id, "its-new-page");
+    assert!(!connection.resumed_page, "the page of the link before is gone");
+    assert_eq!(
+        connection.chrome.context().as_deref(),
+        Some("ctx-new"),
+        "the new private page is a page of a context of its own"
+    );
+    drop(connection);
+    let commands = browser.commands();
+    let created = commands
+        .iter()
+        .position(|command| command["method"] == "Target.createTarget")
+        .expect("the session makes a page");
+    assert_eq!(
+        commands[created]["params"]["browserContextId"], "ctx-new",
+        "the new page is a page of the new context: {}",
+        commands[created]
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command["method"] == "Target.attachToTarget" && command["params"]["targetId"] == "its-page"),
+        "a page of the default context of that browser is never adopted: {commands:?}"
+    );
+}
+
+/// The close of a private page disposes its browser context, so nothing of the
+/// page stays in the browser of that machine.
+#[test]
+fn the_close_of_a_private_page_disposes_its_browser_context() {
+    let browser = mock_browser(|_command| None);
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(browser.endpoint.clone(), &frame_slot);
+    config.browser.isolated_page = true;
+    let (event_tx, _events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let mut connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None)
+        .expect("a private page of the borrowed browser");
+    let target = connection.target_id.clone();
+    connection.chrome.close_page(&mut connection.link, &target);
+    drop(connection);
+    let commands = browser.commands();
+    let closed = commands
+        .iter()
+        .position(|command| command["method"] == "Target.closeTarget")
+        .expect("the page closes");
+    let disposed = commands
+        .iter()
+        .position(|command| command["method"] == "Target.disposeBrowserContext")
+        .expect("the context of the page goes with it");
+    assert!(closed < disposed, "the page goes before its context: {commands:?}");
+    assert_eq!(commands[disposed]["params"]["browserContextId"], "ctx-private");
+    assert!(
+        !commands.iter().any(|command| command["method"] == "Browser.close"),
+        "the browser belongs to another process: {commands:?}"
+    );
+}
+
+/// A browser that cannot give a private panel a context of its own gets a
+/// refusal, and the session opens no page of the shared profile in its place.
+#[test]
+fn a_browser_that_refuses_a_context_opens_no_page_of_the_shared_profile() {
+    let browser = mock_browser(failing_answer("Target.createBrowserContext"));
+    let frame_slot = Arc::new(FrameSlot::new());
+    let mut config = attached_config(browser.endpoint.clone(), &frame_slot);
+    config.browser.isolated_page = true;
+    let (event_tx, events) = event_sender();
+    let stop_requested = AtomicBool::new(false);
+    let control = ChromeProcessControl::default();
+
+    let connection = initialize_driver(&config, &event_tx, &stop_requested, &control, None);
+
+    assert!(
+        connection.is_none(),
+        "a private page that cannot be isolated is no session"
+    );
+    assert_eq!(
+        config.page_isolation.snapshot(),
+        Some(PageIsolation::Shared),
+        "the session proves nothing, so nothing calls the page private"
+    );
+    let seen: Vec<BrowserEvent> = events.try_iter().collect();
+    let refusal = seen
+        .iter()
+        .find_map(|event| match event {
+            BrowserEvent::Warning(message) => Some(message.clone()),
+            _ => None,
+        })
+        .expect("the panel reads why its private page could not be made");
+    assert!(refusal.starts_with(crate::PRIVATE_PAGE_UNAVAILABLE), "{refusal}");
+    assert!(refusal.contains("opened no page in the shared profile"), "{refusal}");
+    assert!(
+        seen.iter().any(|event| matches!(event, BrowserEvent::Stopped { .. })),
+        "the session stops: {seen:?}"
+    );
+    let commands = browser.commands();
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command["method"] == "Target.createTarget"),
+        "no page of the shared profile is opened in its place: {commands:?}"
     );
 }
 

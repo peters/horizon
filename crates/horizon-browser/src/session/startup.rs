@@ -15,10 +15,10 @@ mod disclosure;
 mod page;
 
 use super::{
-    BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
-    run_loop,
+    BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, PageIsolation,
+    WS_URL_TIMEOUT, private_page_unavailable, run_loop,
 };
-pub(crate) use page::{caller_page, create_page_target, create_page_target_in, first_page_target, isolated_context};
+pub(crate) use page::{create_page_target, create_page_target_in, first_page_target, page_start};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -80,6 +80,9 @@ struct DriverConnection {
     /// Whether `target_id` is the page the panel drove before a lost link, so
     /// its state is intact and no startup navigation may run.
     resumed_page: bool,
+    /// The isolated browser context of a private page of a browser that another
+    /// process owns.
+    context: Option<String>,
     native_user_agent_metadata: Option<serde_json::Value>,
     /// Whether this browser accepted the panel download folder and reports
     /// the downloads it saves there.
@@ -289,22 +292,31 @@ fn initialize_target(
     //
     // A private page of a browser that another process owns takes neither: it is
     // a page of a browser context of its own, so it can read none of the cookies
-    // of that browser, and the context goes with the page.
-    let isolated = isolated_context(config, &chrome, &mut link, stop_requested);
+    // of that browser, and the context goes with the page. A browser that cannot
+    // give this page a context of its own gets a refusal instead of a page of the
+    // shared profile, so the label of the panel is the fact of the session.
+    let isolation = page_start(config, &chrome, &mut link, stop_requested);
+    config.page_isolation.publish(isolation.isolation);
+    if config.browser.isolated_page && !isolation.isolation.keeps_nothing() {
+        let detail = isolation
+            .refusal
+            .clone()
+            .unwrap_or_else(|| "this session cannot make a browser context of its own".to_string());
+        let _ = event_tx.send(BrowserEvent::Warning(private_page_unavailable(&detail)));
+        let _ = chrome.kill();
+        let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+        return None;
+    }
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
-    let (resumed_page, existing_target) = if isolated.is_some() {
-        (false, None)
-    } else {
-        caller_page(config, &chrome, &mut link, stop_requested)
-    };
+    let (resumed_page, existing_target) = (isolation.resumed, isolation.target.clone());
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
     let background = config.browser.background_windows && !config.browser.headless && !chrome.is_attached();
-    let Some(target_id) =
-        existing_target.or_else(|| create_page_target_in(&mut link, stop_requested, background, isolated.as_deref()))
+    let Some(target_id) = existing_target
+        .or_else(|| create_page_target_in(&mut link, stop_requested, background, isolation.context.as_deref()))
     else {
         if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
             return None;
@@ -378,6 +390,7 @@ fn initialize_target(
         target_id,
         session_id,
         resumed_page,
+        context: isolation.context.clone(),
         native_user_agent_metadata,
         downloads_reporting,
         downloads_note,
@@ -530,6 +543,7 @@ pub(super) fn run_driver(
     let _ = event_tx.send(BrowserEvent::PageAttached {
         target_id: connection.target_id.clone(),
         resumed: connection.resumed_page,
+        context: connection.context.clone(),
     });
     run_loop(
         &mut state,
@@ -786,6 +800,8 @@ mod tests {
         let session = |command: Option<String>| BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser: BrowserConfig {
                 command,
                 profile_root: Some(profiles.clone()),
@@ -828,6 +844,8 @@ mod tests {
         let session = start_session(BrowserSessionConfig {
             attach: None,
             resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
             browser: BrowserConfig {
                 command: Some(browser.to_string_lossy().into_owned()),
                 profile_root: Some(temp.path().join("profiles")),

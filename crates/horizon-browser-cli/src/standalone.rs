@@ -411,6 +411,8 @@ fn start_backend(
     let session = start_session(BrowserSessionConfig {
         attach: None,
         resume_target: None,
+        resume_context: None,
+        page_isolation: Default::default(),
         browser,
         panel_local_id: panel_id.clone(),
         initial_url: None,

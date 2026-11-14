@@ -305,19 +305,42 @@ impl BrowserPanelState {
             && self.shared_session.is_some()
     }
 
-    /// Whether this panel keeps nothing of a browser profile.
+    /// Whether this panel keeps nothing of a browser profile, as the page that
+    /// it runs proves.
     ///
     /// A panel of a browser of this computer keeps nothing when it has no shared
     /// profile: its own folder, gone at its close. A panel of a browser host
-    /// keeps nothing when it asked for a private page: a page of an isolated
-    /// context of the browser of that machine, which takes no cookie of the
-    /// profile and leaves none in it.
+    /// keeps nothing when the session of its page made an isolated browser
+    /// context: that context takes no cookie of the profile and its close leaves
+    /// none in it.
+    ///
+    /// The answer is a fact of the session and never a copy of the request that
+    /// made the panel, so a page that Horizon could not isolate is not private
+    /// and does not say that it is.
     #[must_use]
     pub fn is_private_page(&self) -> bool {
-        if self.is_attached() || self.is_host_driver() {
-            return self.config.profile.as_deref() == Some(horizon_browser::PRIVATE_PROFILE);
+        if self.is_attached() {
+            return self.page_isolation().keeps_nothing();
+        }
+        if self.is_host_driver() {
+            return self.host_driver_page_is_isolated();
         }
         self.is_private_profile()
+    }
+
+    /// What the page of this panel keeps, as its session established it. A page
+    /// that no session reported is [`horizon_browser::PageIsolation::Shared`].
+    #[must_use]
+    pub fn page_isolation(&self) -> horizon_browser::PageIsolation {
+        self.page_isolation.isolation()
+    }
+
+    /// What the session of this panel reported about its page, and `None` while
+    /// it reports nothing, so a caller can tell a page that it proved shared from
+    /// a page that no session has described yet.
+    #[must_use]
+    pub fn page_isolation_report(&self) -> Option<horizon_browser::PageIsolation> {
+        self.page_isolation.snapshot()
     }
 
     /// The name of the shared profile that this panel shows, when it has one:

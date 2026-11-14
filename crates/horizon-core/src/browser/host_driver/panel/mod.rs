@@ -793,6 +793,9 @@ impl BrowserPanelState {
     }
 
     fn apply_host_page(&mut self, page: HostDriverPage) {
+        // The host's session proves whether its page keeps anything of the
+        // profile of that machine, and the label of this panel follows that fact.
+        self.host_page_keeps_nothing = page.keeps_nothing;
         if page.url.is_empty() && page.title.is_empty() {
             return;
         }

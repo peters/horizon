@@ -206,6 +206,11 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
+    // The session of this lane proves the isolation of its page while it starts:
+    // a private page of a browser of a host is a page of a user context that this
+    // lane creates, and a lane that cannot create one stops before this point. A
+    // page of this computer keeps nothing when it has a folder of its own.
+    config.page_isolation.publish(webdriver_page_isolation(config));
     if !driver.prepare_ready(config, frame_slot, event_tx, stop_requested) {
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
@@ -279,6 +284,19 @@ pub(crate) fn run_webdriver(
     driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
+}
+
+/// What the page of a `WebDriver` session keeps: a page of a user context of a
+/// browser that another process owns, a page of a folder of this panel alone, or
+/// a page of the profile that it named.
+fn webdriver_page_isolation(config: &BrowserSessionConfig) -> crate::PageIsolation {
+    if config.browser.isolated_page {
+        return crate::PageIsolation::IsolatedContext;
+    }
+    if config.browser.profile.as_deref() == Some(crate::PRIVATE_PROFILE) {
+        return crate::PageIsolation::PrivateFolder;
+    }
+    crate::PageIsolation::Shared
 }
 
 /// The local browser session of this panel, or the shared session of the
@@ -762,6 +780,54 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
         return false;
     };
     now <= pending.expires_at && url == Some(pending.url.as_str())
+}
+
+#[cfg(test)]
+mod page_isolation_tests {
+    use super::*;
+
+    fn config(profile: Option<&str>, isolated_page: bool) -> BrowserSessionConfig {
+        BrowserSessionConfig {
+            browser: crate::BrowserConfig {
+                profile: profile.map(str::to_string),
+                isolated_page,
+                ..crate::BrowserConfig::default()
+            },
+            panel_local_id: "panel".to_string(),
+            initial_url: None,
+            width: 1280,
+            height: 800,
+            frame_slot: std::sync::Arc::new(crate::frames::FrameSlot::new()),
+            coordination: None,
+            capture_directory: None,
+            video: std::sync::Arc::new(crate::VideoCaptureHandle::default()),
+            remote: None,
+            attach: None,
+            resume_target: None,
+            resume_context: None,
+            page_isolation: Default::default(),
+        }
+    }
+
+    /// A private page of this computer is a folder of its own, and a private page
+    /// of a browser of a host is a page of a user context of that browser.
+    #[test]
+    fn a_firefox_page_proves_the_folder_of_this_computer_or_the_context_of_a_host() {
+        assert_eq!(
+            webdriver_page_isolation(&config(Some(crate::PRIVATE_PROFILE), false)),
+            crate::PageIsolation::PrivateFolder
+        );
+        assert_eq!(
+            webdriver_page_isolation(&config(Some(crate::DEFAULT_PROFILE), false)),
+            crate::PageIsolation::Shared
+        );
+        assert_eq!(
+            webdriver_page_isolation(&config(Some(crate::PRIVATE_PROFILE), true)),
+            crate::PageIsolation::IsolatedContext,
+            "a private page of a browser of a host is a page of a user context"
+        );
+        assert!(!crate::PageIsolation::Shared.keeps_nothing());
+    }
 }
 
 #[cfg(test)]
