@@ -112,12 +112,12 @@ pub fn show(
     }
 
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
-        && let Some(message) = upload_limit_line(
-            browser.remote_target().is_some(),
-            browser.runs_on_browser_host(),
-            browser.frame_slot.file_chooser().supported(),
-            browser.frame_slot.file_chooser().status().pending(),
-        )
+        && let Some(message) = upload_limit_line(UploadLimit {
+            remote_device: browser.remote_target().is_some(),
+            on_browser_host: browser.runs_on_browser_host(),
+            chooser_supported: browser.frame_slot.file_chooser().supported(),
+            page_asked: browser.frame_slot.file_chooser().status().pending(),
+        })
     {
         ui.label(RichText::new(message).size(10.5).color(theme::PALETTE_YELLOW()));
     }
@@ -129,6 +129,15 @@ pub fn show(
     (url_focused, clicked)
 }
 
+/// What the upload line of a browser panel needs of that panel and its page.
+#[derive(Clone, Copy, Default)]
+struct UploadLimit {
+    remote_device: bool,
+    on_browser_host: bool,
+    chooser_supported: bool,
+    page_asked: bool,
+}
+
 /// The words of the yellow line under the chrome for a panel that cannot take a
 /// file of this computer, or `None` while the panel says nothing.
 ///
@@ -136,12 +145,13 @@ pub fn show(
 /// line of the panel says that once, when the panel connects. The yellow line
 /// waits until a page of that host asks for a file, because that is the moment a
 /// person needs the words.
-fn upload_limit_line(
-    remote_device: bool,
-    on_browser_host: bool,
-    chooser_supported: bool,
-    page_asked: bool,
-) -> Option<&'static str> {
+fn upload_limit_line(limit: UploadLimit) -> Option<&'static str> {
+    let UploadLimit {
+        remote_device,
+        on_browser_host,
+        chooser_supported,
+        page_asked,
+    } = limit;
     if chooser_supported {
         return None;
     }
@@ -586,36 +596,53 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 mod tests {
     use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
-    use super::{backend_picker, nav_widget_info, picker_enabled, sync_url_buffer, upload_limit_line};
+    use super::{UploadLimit, backend_picker, nav_widget_info, picker_enabled, sync_url_buffer, upload_limit_line};
     use crate::test_egui::DiscardTextures;
 
     #[test]
     fn the_upload_line_of_a_browser_host_waits_for_a_page() {
+        let on_host = UploadLimit {
+            on_browser_host: true,
+            ..UploadLimit::default()
+        };
         assert_eq!(
-            upload_limit_line(false, true, false, false),
+            upload_limit_line(on_host),
             None,
             "a panel of a browser host says the limit in its note line and no yellow line"
         );
-        let asked = upload_limit_line(false, true, false, true).expect("a page that asked");
+        let asked = upload_limit_line(UploadLimit {
+            page_asked: true,
+            ..on_host
+        })
+        .expect("a page that asked");
         assert!(
             asked.contains("browser host") && asked.contains("cannot take a file"),
             "{asked}"
         );
         assert_eq!(
-            upload_limit_line(false, true, true, true),
+            upload_limit_line(UploadLimit {
+                chooser_supported: true,
+                ..UploadLimit {
+                    page_asked: true,
+                    ..on_host
+                }
+            }),
             None,
             "a chooser that serves the files shows no line"
         );
         assert!(
-            upload_limit_line(false, false, false, false)
+            upload_limit_line(UploadLimit::default())
                 .expect("local")
                 .contains("local Chromium"),
             "a local Firefox of an old build keeps its own words"
         );
         assert!(
-            upload_limit_line(true, false, false, false)
-                .expect("provider device")
-                .contains("remote device"),
+            upload_limit_line(UploadLimit {
+                remote_device: true,
+                ..UploadLimit::default()
+            })
+            .expect("provider device")
+            .contains("remote device"),
             "a device of a provider keeps its own words"
         );
     }

@@ -159,19 +159,28 @@ as a git worktree of a repository:
 
 ```json
 {"operation": "open_panel", "preset": "<a preset of the settings>",
- "directory": "/abs/path/of/the/worktree", "title": "fix login"}
+ "directory": "/abs/path/of/the/worktree", "title": "fix login",
+ "prompt": "Read .horizon-plan/BRIEF.md and do todo t4 only."}
 ```
 
 - `preset` is the name or the alias of a preset of the settings, exactly. Horizon
   takes the command, the arguments and the kind from that preset, so you send no
-  command, no argument, no environment and no prompt. A name that the settings do
-  not hold is `unknown_preset`, and the message lists the names of the presets
-  and no command.
+  command, no argument and no environment. A name that the settings do not hold
+  is `unknown_preset`, and the message lists the names of the presets and no
+  command.
 - `directory` is an absolute path of at most 1 024 bytes with no control
   character. It must be a directory of this computer, and it becomes the working
   directory of the panel. A folder that is not there is `directory_missing`.
 - `title` is one line of at most 80 characters. It defaults to the name of the
   preset.
+- `prompt` is one line of at most 512 characters with no control character. Leave
+  it out and the panel starts with no text. With it, Horizon types the line into
+  the terminal of the new panel one time, when the program of that panel runs and
+  is at its prompt. It is text and not a command: the preset still holds the
+  program and its arguments. Use it to name a brief file for an agent helper. A
+  prompt on a preset that starts no agent program is `invalid_request`, because a
+  shell or a command reads no sentence. The line waits at most 60 seconds for the
+  program, and the answer of the request is `opened` before the line goes out.
 - A preset of a kind that opens no program of this computer, such as a browser
   page, a native viewer, a card or an SSH terminal, is `invalid_request`. Ask for
   a shell, a command or an agent preset.
@@ -181,7 +190,8 @@ as a git worktree of a repository:
 The answer is `opened` with the `panel_id`. The panel goes in your workspace,
 beside your agent panel, it does not take keyboard focus, and its titlebar
 carries the mark `opened by <agent>`. The panel is the person's afterwards: this
-tool cannot read it, write to it or close it.
+tool cannot read it, write to it or close it, and the one line of `prompt` is the
+only text that reaches it.
 
 For the worktrees of a repository, use the `horizon-worktree` skill: it names
 the branch, the folder, the card and the rules of a merge and of a remove.
@@ -650,7 +660,9 @@ Every refusal is a `failed` outcome with a stable `code` and a message.
 - `terminal_unavailable`: Horizon could not open the terminal panel.
 - `invalid_request`: `open_terminal` named both `ssh` and `machine`, neither, or
   one of `ssh`, `key` and `remote_command` together with `machine`. Pass one
-  target and let the record hold the rest.
+  target and let the record hold the rest. The code also refuses a `prompt` that
+  is empty, longer than 512 characters or holds a control character, and one on a
+  preset that starts no agent program.
 - `request_pending`: this Horizon already asks the person about a setting. Wait
   for that card to be answered or closed, or read its answer first.
 - `engine_unavailable`: the browser host of the settings serves the engine of

@@ -428,6 +428,13 @@ impl Panel {
         self.had_recent_output
     }
 
+    /// Whether the program of this panel wrote to its grid at least once, so it
+    /// has started and can read a line that a person's paste would send.
+    #[must_use]
+    pub const fn drew_output(&self) -> bool {
+        self.last_output_at_millis.is_some()
+    }
+
     #[must_use]
     pub fn had_recent_output_within(&self, window: Duration) -> bool {
         let window_millis = i64::try_from(window.as_millis()).unwrap_or(i64::MAX);

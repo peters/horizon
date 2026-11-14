@@ -1150,20 +1150,19 @@ fn rows_under(document: &BlockDocument, caption_text: &str) -> Option<usize> {
         })
 }
 
+/// The longest string of one value of a document, in characters.
+fn longest_string(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::String(text) => text.chars().count(),
+        serde_json::Value::Array(items) => items.iter().map(longest_string).max().unwrap_or_default(),
+        serde_json::Value::Object(fields) => fields.values().map(longest_string).max().unwrap_or_default(),
+        _ => 0,
+    }
+}
+
 /// The longest string of one document, as the 512-character bound counts it.
 fn longest_text(document: &BlockDocument) -> usize {
-    let value = serde_json::to_value(document).expect("a document of a skill serializes");
-    fn walk(value: &serde_json::Value, longest: &mut usize) {
-        match value {
-            serde_json::Value::String(text) => *longest = (*longest).max(text.chars().count()),
-            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, longest)),
-            serde_json::Value::Object(fields) => fields.values().for_each(|field| walk(field, longest)),
-            _ => {}
-        }
-    }
-    let mut longest = 0;
-    walk(&value, &mut longest);
-    longest
+    longest_string(&serde_json::to_value(document).expect("a document of a skill serializes"))
 }
 
 #[test]
@@ -1198,57 +1197,6 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
         4,
         "the move skill ships the plan of the move, the card of the link, the card of the done step and the failure card"
     );
-    // Every card of every skill stays inside the bounds that the host applies, so
-    // a layout that a person reads cannot be refused at run time. The card of
-    // twelve todos with a question and five history lines proves the largest plan.
-    for (skill, documents) in [
-        (SKILL_DOCUMENTS[0].0, &setup),
-        (SKILL_DOCUMENTS[2].0, &machines),
-        (SKILL_DOCUMENTS[3].0, &plan),
-        (SKILL_DOCUMENTS[4].0, &server_move),
-    ] {
-        for document in documents.iter() {
-            let heading = document
-                .components
-                .iter()
-                .find_map(|component| match component {
-                    Component::Heading { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| format!("{:?}", document.components[0]));
-            assert!(
-                document.components.len() <= 64,
-                "{skill}: the card {heading} holds {} components",
-                document.components.len()
-            );
-            assert!(
-                longest_text(document) <= 512,
-                "{skill}: a text of the card {heading} is longer than 512 characters"
-            );
-            assert!(
-                serde_json::to_vec(document).expect("a document serializes").len() <= 32 * 1024,
-                "{skill}: the card {heading} is larger than 32 KiB"
-            );
-        }
-    }
-    let todos: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "Todos")).collect();
-    assert_eq!(
-        todos,
-        vec![None, None, Some(3), Some(8), Some(12), None, None],
-        "the short path holds no todo list, and the plan cards hold 3, 8 and 12 rows"
-    );
-    let history: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "History")).collect();
-    assert_eq!(
-        history,
-        vec![None, None, None, Some(5), Some(5), None, None],
-        "a plan that runs shows the last five events of its history and nothing more"
-    );
-    assert_eq!(
-        plan[4].components.len(),
-        10,
-        "the card of twelve todos, one question and five history lines holds 10 components of 64"
-    );
-
     let headings: Vec<String> = setup
         .iter()
         .filter_map(|document| match &document.components[0] {
@@ -1294,4 +1242,61 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
         };
         assert!(takes_a_press, "the card {heading} leaves the person no press");
     }
+}
+
+#[test]
+fn every_card_of_a_skill_stays_inside_the_bounds_of_the_host() {
+    // Every card of every skill stays inside the bounds that the host applies, so
+    // a layout that a person reads cannot be refused at run time. The card of
+    // twelve todos with a question and five history lines proves the largest plan.
+    let mut bounds = Vec::new();
+    for (skill, body) in SKILL_DOCUMENTS {
+        for document in skill_documents(skill, body) {
+            let heading = document
+                .components
+                .iter()
+                .find_map(|component| match component {
+                    Component::Heading { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| format!("{:?}", document.components[0]));
+            assert!(
+                document.components.len() <= 64,
+                "{skill}: the card {heading} holds {} components",
+                document.components.len()
+            );
+            assert!(
+                longest_text(&document) <= 512,
+                "{skill}: a text of the card {heading} is longer than 512 characters"
+            );
+            assert!(
+                serde_json::to_vec(&document).expect("a document serializes").len() <= 32 * 1024,
+                "{skill}: the card {heading} is larger than 32 KiB"
+            );
+            bounds.push((skill, document));
+        }
+    }
+
+    let plan: Vec<&BlockDocument> = bounds
+        .iter()
+        .filter(|(skill, _)| *skill == "horizon-plan")
+        .map(|(_, document)| document)
+        .collect();
+    let todos: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "Todos")).collect();
+    assert_eq!(
+        todos,
+        vec![None, None, Some(3), Some(8), Some(12), None, None],
+        "the short path holds no todo list, and the plan cards hold 3, 8 and 12 rows"
+    );
+    let history: Vec<Option<usize>> = plan.iter().map(|document| rows_under(document, "History")).collect();
+    assert_eq!(
+        history,
+        vec![None, None, None, Some(5), Some(5), None, None],
+        "a plan that runs shows the last five events of its history and nothing more"
+    );
+    assert_eq!(
+        plan[4].components.len(),
+        10,
+        "the card of twelve todos, one question and five history lines holds 10 components of 64"
+    );
 }

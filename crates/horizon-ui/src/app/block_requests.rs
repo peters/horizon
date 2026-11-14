@@ -25,6 +25,10 @@ use super::block_machine_keys;
 use super::browser_requests::{ActorPanel, actor_panel};
 use super::device_requests::HOST_REQUEST_POLL;
 
+/// How often a frame comes back while a prompt line waits for the program of its
+/// panel: the line goes out on the frame after that program draws.
+const PROMPT_REPAINT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// A request a claim took. Its file is gone, so this host keeps the request
 /// until it answers it.
 pub(in crate::app) struct ClaimedBlockRequest {
@@ -131,6 +135,12 @@ impl HorizonApp {
         // Click waits settle before a request applies: a click that waits reaches
         // the wait it was made for, and the counts a request reports are fresh.
         let settled = self.settle_block_clicks();
+        // The one line that a request asked Horizon to type into a new panel goes
+        // out when that program has drawn; until then a frame keeps coming.
+        let prompts = self.write_ready_prompts();
+        if self.agent_opens.panels.holds_prompts() {
+            ctx.request_repaint_after(PROMPT_REPAINT);
+        }
         // A card of Horizon that asks about a setting answers at its deadline or
         // when the person closes it without a press.
         let settings = self.settle_setting_requests(ctx);
@@ -142,7 +152,7 @@ impl HorizonApp {
                 self.write_block_answer(BlockAnswer::new(request.root.as_deref(), request.request, outcome));
             }
         }
-        changed | self.retry_block_answers() | settled | settings
+        changed | self.retry_block_answers() | settled | settings | prompts
     }
 
     /// Applies a request against the process runtime root, as a claim's apply
@@ -214,11 +224,13 @@ impl HorizonApp {
                 preset,
                 directory,
                 title,
+                prompt,
             } => self.answer_open_panel(
                 &super::block_panels::OpenPanelFields {
                     preset,
                     directory,
                     title: title.as_deref(),
+                    prompt: prompt.as_deref(),
                 },
                 request,
                 root,
@@ -685,9 +697,10 @@ impl HorizonApp {
 
     /// Whether this host still owes an answer to a card request a claim took.
     /// The request pump keeps waking while it does, so each answer lands also
-    /// when the host runs no frame.
+    /// when the host runs no frame. A prompt line that waits for the program of
+    /// its panel keeps the pump awake for the same reason.
     pub(in crate::app) fn block_claims_outstanding(&self) -> bool {
-        self.block_claim.outstanding()
+        self.block_claim.outstanding() || self.agent_opens.panels.holds_prompts()
     }
 }
 

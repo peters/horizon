@@ -17,6 +17,9 @@ pub const MAX_DIRECTORY_BYTES: usize = 1024;
 /// Most characters a preset name or alias holds.
 pub const MAX_PRESET_CHARS: usize = 80;
 
+/// Most characters the one prompt line of an `open_panel` holds.
+pub const MAX_PROMPT_CHARS: usize = 512;
+
 /// Most panels one agent panel opens from a preset inside [`PANEL_WINDOW`].
 pub const MAX_PANELS_PER_OWNER: usize = 8;
 
@@ -127,6 +130,28 @@ pub fn check_directory_on_disk(directory: &str) -> Result<PathBuf, PresetRefusal
     }
 }
 
+/// Check the one prompt line of a request: one line of at most
+/// [`MAX_PROMPT_CHARS`] characters and no control character. Horizon types the
+/// trimmed line into the new panel and nothing else: it is text, so it reaches no
+/// command line, no environment and no file.
+///
+/// # Errors
+/// Describes the rule with [`super::block_machines::INVALID_REQUEST`].
+pub fn check_prompt(prompt: &str) -> Result<&str, PresetRefusal> {
+    let prompt = prompt.trim();
+    let refused = |message: String| PresetRefusal::new(super::block_machines::INVALID_REQUEST, message);
+    if prompt.is_empty() {
+        return Err(refused("prompt must hold the one line to type, or be left out".into()));
+    }
+    if prompt.chars().count() > MAX_PROMPT_CHARS {
+        return Err(refused(format!("prompt must be at most {MAX_PROMPT_CHARS} characters")));
+    }
+    if let Some(character) = prompt.chars().find(|character| character.is_control()) {
+        return Err(refused(format!("prompt holds the control character {character:?}")));
+    }
+    Ok(prompt)
+}
+
 /// The sentence of an `unknown_preset` refusal: it lists the names and the
 /// aliases of the presets of the settings and never their commands.
 #[must_use]
@@ -208,6 +233,29 @@ mod tests {
         let refusal = check_directory_on_disk(&file).expect_err("a file is not a folder");
         assert_eq!(code(&refusal), DIRECTORY_MISSING);
         assert!(refusal.message.contains("is a file"), "{}", refusal.message);
+    }
+
+    #[test]
+    fn a_prompt_line_is_one_bounded_line_without_a_control_character() {
+        assert_eq!(
+            check_prompt("  Read .horizon-plan/BRIEF.md and do t4  ").expect("a line"),
+            "Read .horizon-plan/BRIEF.md and do t4"
+        );
+        for refused in ["", "   ", "one\ntwo", "one\u{7}", "one\ttwo"] {
+            assert_eq!(
+                code(&check_prompt(refused).expect_err("a refused line")),
+                super::super::block_machines::INVALID_REQUEST,
+                "{refused:?}"
+            );
+        }
+        assert!(
+            check_prompt(&"a".repeat(MAX_PROMPT_CHARS)).is_ok(),
+            "the bound itself passes"
+        );
+        assert_eq!(
+            code(&check_prompt(&"a".repeat(MAX_PROMPT_CHARS + 1)).expect_err("a line above the bound")),
+            super::super::block_machines::INVALID_REQUEST
+        );
     }
 
     #[test]

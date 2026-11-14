@@ -20,7 +20,7 @@ use egui::Context;
 use horizon_browser_control::manifest::block;
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_preset;
-use horizon_core::{BlockPanelState, PresetConfig, preset_named};
+use horizon_core::{AgentStatus, BlockPanelState, Panel, PanelId, PresetConfig, preset_named};
 
 use super::HorizonApp;
 use super::actions::support::preset_panel_options;
@@ -33,7 +33,22 @@ use super::browser_requests::ActorPanel;
 #[derive(Default)]
 pub(in crate::app) struct AgentPanels {
     opened: HashMap<String, Vec<Instant>>,
+    /// The prompt line of each panel that an agent opened and that Horizon has not
+    /// typed yet.
+    prompts: Vec<PendingPrompt>,
 }
+
+/// One line that Horizon types into a new panel once its program has drawn, and
+/// the instant after which Horizon stops waiting for that program.
+pub(in crate::app) struct PendingPrompt {
+    panel: PanelId,
+    line: String,
+    give_up_at: Instant,
+}
+
+/// How long Horizon waits for the program of a new panel to draw before it drops
+/// the prompt line of a request.
+pub(in crate::app) const PROMPT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl AgentPanels {
     /// The instants of the panels that `owner` opened inside the window at `now`.
@@ -71,6 +86,21 @@ impl AgentPanels {
         opened.clear();
         opened.extend(recent);
         opened.push(now);
+    }
+
+    /// Keeps the one line that `owner` asked Horizon to type into the panel at
+    /// `panel`.
+    fn hold_prompt(&mut self, panel: PanelId, line: &str, now: Instant) {
+        self.prompts.push(PendingPrompt {
+            panel,
+            line: line.to_owned(),
+            give_up_at: now + PROMPT_WINDOW,
+        });
+    }
+
+    /// Whether a prompt line still waits for the program of its panel.
+    pub(in crate::app) fn holds_prompts(&self) -> bool {
+        !self.prompts.is_empty()
     }
 }
 
@@ -110,6 +140,22 @@ impl HorizonApp {
             Err(refusal) => return Some(block::Outcome::failed(refusal.code, &refusal.message)),
         };
         let title = asked.title.map(str::to_owned);
+        let prompt = match asked.prompt {
+            Some(line) => match block_preset::check_prompt(line) {
+                Ok(line) => Some(line.to_owned()),
+                Err(refusal) => return Some(block::Outcome::failed(refusal.code, &refusal.message)),
+            },
+            None => None,
+        };
+        if prompt.is_some() && !preset.kind.is_agent() {
+            return Some(block::Outcome::failed(
+                block_machines::INVALID_REQUEST,
+                &format!(
+                    "The preset {} starts no agent program, and a prompt line needs one: a shell or a command reads no sentence",
+                    preset.name
+                ),
+            ));
+        }
         let (root, request, ctx) = (root.map(Path::to_path_buf), request.clone(), ctx.clone());
         let opening = ctx.clone();
         self.block_claim.worker_job_started();
@@ -120,9 +166,17 @@ impl HorizonApp {
                 let outcome = match app.request_caller(&request) {
                     Err(refusal) => refusal,
                     Ok(actor) => match checked {
-                        Some(Ok(path)) => {
-                            app.open_panel(&preset, &path, title.as_deref(), actor, &request.actor, &opening)
-                        }
+                        Some(Ok(path)) => app.open_panel(
+                            &preset,
+                            &path,
+                            PanelText {
+                                title: title.as_deref(),
+                                prompt: prompt.as_deref(),
+                            },
+                            actor,
+                            &request.actor,
+                            &opening,
+                        ),
                         Some(Err(refusal)) => block::Outcome::failed(refusal.code, &refusal.message),
                         None => worker_stopped(),
                     },
@@ -156,7 +210,7 @@ impl HorizonApp {
         &mut self,
         preset: &PresetConfig,
         directory: &Path,
-        title: Option<&str>,
+        text: PanelText<'_>,
         actor: ActorPanel,
         owner: &str,
         ctx: &Context,
@@ -173,7 +227,10 @@ impl HorizonApp {
         }
         let mark = self.opener_mark(actor);
         let mut options = preset_panel_options(preset, &self.template_config.browser);
-        options.name = Some(title.map_or_else(|| preset.name.clone(), BlockPanelState::normalize_title));
+        options.name = Some(
+            text.title
+                .map_or_else(|| preset.name.clone(), BlockPanelState::normalize_title),
+        );
         options.cwd = Some(directory.to_path_buf());
         options.opened_by = Some(mark);
         super::actions::panels::normalize_new_panel_resume(&mut options);
@@ -190,6 +247,10 @@ impl HorizonApp {
             self.board.focus(focused);
         }
         self.agent_opens.panels.record(owner, now);
+        if let Some(line) = text.prompt {
+            self.agent_opens.panels.hold_prompt(id, line, now);
+            ctx.request_repaint();
+        }
         self.mark_runtime_dirty();
         ctx.request_repaint();
         let Some(panel) = self.board.panel(id) else {
@@ -202,6 +263,47 @@ impl HorizonApp {
             panel_id: panel.local_id.clone(),
         }
     }
+
+    /// Types the one line of each request into the panel of its preset, once the
+    /// program of that panel has drawn and is idle. A panel that is gone, or one
+    /// whose program draws nothing inside [`PROMPT_WINDOW`], drops its line.
+    /// Returns whether the answer of a request needs a repaint.
+    pub(super) fn write_ready_prompts(&mut self) -> bool {
+        if !self.agent_opens.panels.holds_prompts() {
+            return false;
+        }
+        let now = Instant::now();
+        let mut kept: Vec<PendingPrompt> = Vec::new();
+        let mut typed = false;
+        for prompt in std::mem::take(&mut self.agent_opens.panels.prompts) {
+            let Some(panel) = self.board.panel_mut(prompt.panel) else {
+                continue;
+            };
+            let ready = prompt_ready(panel);
+            let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+                continue;
+            };
+            if !ready {
+                if now < prompt.give_up_at {
+                    kept.push(prompt);
+                }
+                continue;
+            }
+            let mut bytes = crate::input::paste_bytes(&prompt.line, mode, true);
+            bytes.push(b'\r');
+            typed |= panel.write_input(&bytes);
+        }
+        self.agent_opens.panels.prompts = kept;
+        typed
+    }
+}
+
+/// The text of one `open_panel` request: the title of the panel and the one line
+/// that Horizon types into it when its program is ready.
+#[derive(Clone, Copy, Default)]
+pub(super) struct PanelText<'a> {
+    pub title: Option<&'a str>,
+    pub prompt: Option<&'a str>,
 }
 
 /// One `open_panel` request, as the dispatch reads it.
@@ -209,6 +311,17 @@ pub(super) struct OpenPanelFields<'a> {
     pub preset: &'a str,
     pub directory: &'a str,
     pub title: Option<&'a str>,
+    /// One line that Horizon types into the panel once its program is ready.
+    pub prompt: Option<&'a str>,
+}
+
+/// Whether the program of a new panel is ready for its one line: it runs, its
+/// agent is at its prompt, and it drew at least one output of its own.
+fn prompt_ready(panel: &Panel) -> bool {
+    panel.kind.is_agent()
+        && panel.agent_status() == AgentStatus::Idle
+        && panel.drew_output()
+        && panel.terminal().and_then(horizon_core::Terminal::child_pid).is_some()
 }
 
 /// The answer of a worker job that ended before it answered.

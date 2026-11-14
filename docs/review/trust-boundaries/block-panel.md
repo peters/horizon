@@ -150,6 +150,35 @@ variables that Horizon injects into that panel.
   `caller_unavailable`, and a request that reached the host after its deadline is
   `request_expired`.
 
+## Horizon types one line into a panel that an agent opened
+
+`open_panel` can carry `prompt`: one line that Horizon writes into the terminal of
+the new panel one time. The caller starts the program, so the line is a message to
+that program and no new right.
+
+- **Untrusted: the line.** It is text from an agent like a card's text. Horizon
+  trims it, refuses a control character and refuses more than 512 characters, in
+  the MCP server and again in the UI, with `invalid_request`. It is typed as a
+  person's paste and then Enter, so the program of the panel receives one line:
+  it is no command line, no argument of the preset, no environment and no file.
+  The preset still holds every command and argument that Horizon runs.
+- **An agent preset only.** The line goes out for a preset of an agent kind. A
+  shell, a command or an SSH preset reads no sentence, so a request that names one
+  with a prompt is `invalid_request` and opens no panel.
+- **Once, and only when the program is ready.** Horizon types the line when the
+  program of the panel runs, has drawn at least one output of its own, and its
+  agent is at its prompt. Until then the line waits; a panel whose program never
+  draws inside 60 seconds drops it, and the answer of the request has already
+  said `opened`. The line goes out one time and is never repeated.
+- **The person reads it.** The panel belongs to the person, its titlebar carries
+  the mark `opened by <agent>`, and the line is in the terminal of that panel
+  where the person can read it.
+- **Does not guarantee:** that the program reads the line, acts on it, or is an
+  agent that understands the sentence. Horizon proves that the bytes reached the
+  terminal of a panel whose preset the person saved, not what the program does
+  with them. The line carries no secret: another agent of the workspace can read
+  the request, so an agent must not put a token or a password in it.
+
 ## Horizon writes into an agent terminal
 
 A person's click must reach an agent that is idle and out of its tool loop, so

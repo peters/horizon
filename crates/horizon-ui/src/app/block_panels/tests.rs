@@ -89,10 +89,15 @@ fn request(app: &HorizonApp, operation: block::Operation) -> block::Request {
 }
 
 fn open_panel(preset: &str, directory: &Path, title: Option<&str>) -> block::Operation {
+    with_prompt(preset, directory, title, None)
+}
+
+fn with_prompt(preset: &str, directory: &Path, title: Option<&str>, prompt: Option<&str>) -> block::Operation {
     block::Operation::OpenPanel {
         preset: preset.into(),
         directory: directory.display().to_string(),
         title: title.map(str::to_string),
+        prompt: prompt.map(str::to_string),
     }
 }
 
@@ -337,6 +342,118 @@ fn the_clock_of_the_window_gives_the_allowance_back() {
         None,
         "a record inside the window keeps the allowance of the ones that left it"
     );
+}
+
+/// A preset of an agent kind whose program waits for one line of text and writes
+/// what it read, so a test reads the line that Horizon typed.
+fn helper_preset(temp: &tempfile::TempDir) -> PresetConfig {
+    use std::os::unix::fs::PermissionsExt as _;
+    let program = temp.path().join("helper.py");
+    std::fs::write(
+        &program,
+        "#!/usr/bin/env python3\nimport sys\nprint('helper ready', flush=True)\nfor line in sys.stdin:\n    print('helper read: ' + line.strip(), flush=True)\n",
+    )
+    .expect("the stand-in program of the test");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("an executable program");
+    PresetConfig {
+        command: Some(program.display().to_string()),
+        args: Vec::new(),
+        ..runnable("Helper", None, PanelKind::Claude, None)
+    }
+}
+
+#[test]
+fn a_prompt_line_goes_into_the_panel_once_its_program_has_drawn() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    let work = directory(&temp, "helper");
+    app.template_config.presets.push(helper_preset(&temp));
+    let panel_id = opened(answer(
+        &mut app,
+        &ctx,
+        &root,
+        with_prompt(
+            "Helper",
+            &work,
+            Some("helper t4"),
+            Some("PROMPT-PROBE-1 read the brief of t4"),
+        ),
+    ));
+    let id = app
+        .board
+        .panel_id_by_local_id(&panel_id)
+        .expect("the panel of the request");
+    assert!(
+        app.agent_opens.panels.holds_prompts(),
+        "the line waits for the program of the panel"
+    );
+    assert!(
+        app.block_claims_outstanding(),
+        "the pump keeps waking while a line waits"
+    );
+
+    // The frame that creates a panel asks a worker for its preparation, and the
+    // program of the panel starts when that answer lands.
+    app.settle_panel_starts();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut typed = app.write_ready_prompts();
+    while !typed && Instant::now() < deadline {
+        app.board.process_output();
+        typed = app.write_ready_prompts();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(typed, "the line goes out once the program of the panel drew");
+    assert!(
+        !app.agent_opens.panels.holds_prompts(),
+        "the line goes out one time and no second line follows"
+    );
+    assert!(!app.write_ready_prompts(), "nothing waits, so nothing is typed");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut screen = Vec::new();
+    while Instant::now() < deadline {
+        app.board.process_output();
+        let panel = app.board.panel(id).expect("the panel of the request");
+        screen = panel
+            .terminal()
+            .map(horizon_core::Terminal::viewport_text)
+            .unwrap_or_default();
+        if screen.iter().any(|row| row.contains("helper read: PROMPT-PROBE-1")) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        app.board.panel(id).map(|panel| panel.kind),
+        Some(PanelKind::Claude),
+        "the line goes to a panel of an agent kind"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("helper read: PROMPT-PROBE-1")),
+        "the program of the panel read the line one time: {screen:?}"
+    );
+}
+
+#[test]
+fn a_prompt_line_needs_a_preset_that_starts_an_agent_program() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    let work = directory(&temp, "task");
+    let before = app.board.panels.len();
+
+    let refusal = answer(
+        &mut app,
+        &ctx,
+        &root,
+        with_prompt("Task shell", &work, None, Some("read the brief")),
+    );
+    assert_eq!(code(&refusal), "invalid_request");
+    assert!(
+        message(&refusal).contains("no agent program"),
+        "the refusal says why: {refusal:?}"
+    );
+    assert_eq!(app.board.panels.len(), before, "a refused prompt opens no panel");
+    assert!(!app.agent_opens.panels.holds_prompts(), "no line waits");
 }
 
 #[test]

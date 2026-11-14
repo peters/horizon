@@ -154,6 +154,14 @@ pub enum Operation {
         /// name of the preset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// One line of at most 512 characters, typed into the panel one time when
+        /// its program is ready. It is text, not a command: Horizon writes it into
+        /// the terminal of the new panel as a person's paste and then Enter, once.
+        /// It goes to a preset of an agent kind only, because a shell or a command
+        /// reads no sentence. The caller can already start that agent, so the line
+        /// is a message that the person can read in the panel and no new right.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
     },
     /// Add or replace one machine of this Horizon: its name, SSH route, key, tmux
     /// session and the provider line that the caller read. The record belongs
@@ -862,6 +870,49 @@ mod tests {
     }
 
     #[test]
+    fn open_panel_takes_one_optional_prompt_line_and_no_command() {
+        let sent = serde_json::json!({
+            "operation": "open_panel",
+            "preset": "Claude Code",
+            "directory": "/home/person/work",
+            "prompt": "Read .horizon-plan/BRIEF.md and do todo t4 only."
+        });
+        let Operation::OpenPanel {
+            preset,
+            directory,
+            title,
+            prompt,
+        } = serde_json::from_value::<BlockPanelInput>(sent)
+            .expect("public input")
+            .into_operation()
+        else {
+            panic!("open_panel did not parse as OpenPanel");
+        };
+        assert_eq!(preset, "Claude Code");
+        assert_eq!(directory, "/home/person/work");
+        assert_eq!(title, None, "a panel without a title takes the name of its preset");
+        assert_eq!(
+            prompt.as_deref(),
+            Some("Read .horizon-plan/BRIEF.md and do todo t4 only.")
+        );
+        for refused in [
+            serde_json::json!({
+                "operation": "open_panel", "preset": "Claude Code",
+                "directory": "/home/person/work", "command": "rm -rf /"
+            }),
+            serde_json::json!({
+                "operation": "open_panel", "preset": "Claude Code",
+                "directory": "/home/person/work", "prompt": ["two lines"]
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<BlockPanelInput>(refused.clone()).is_err(),
+                "open_panel still takes no other field: {refused}"
+            );
+        }
+    }
+
+    #[test]
     fn every_operation_parses_and_an_unknown_field_is_rejected() {
         let create = serde_json::json!({"operation": "create", "title": "cloud-1", "document": document()});
         let Operation::Create { title, document: sent } = serde_json::from_value(create).expect("create") else {
@@ -1334,6 +1385,12 @@ mod tests {
             },
             "a machine of the list carries no SSH target, and the link uses its login"
         );
+    }
+
+    /// A browser host request names its host, its profile and its engine, and a
+    /// command only with the engine that runs a driver here.
+    #[test]
+    fn a_browser_host_request_parses_and_its_engine_holds_its_command() {
         let browser = serde_json::from_value::<Operation>(serde_json::json!({
             "operation": "browser_host_request",
             "ssh_target": "browser-vm",

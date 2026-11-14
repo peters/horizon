@@ -184,17 +184,25 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }
 
-/// The preset name and the directory of an `open_panel`, checked before the queue
-/// holds them: a path that cannot be an absolute folder of this computer and a
-/// name that cannot be a name of the settings are refused at once, and no request
-/// file is written. The host resolves the preset itself, because the settings of
-/// the person are the only place that keeps the names.
+/// The preset name, the directory and the one prompt line of an `open_panel`,
+/// checked before the queue holds them: a path that cannot be an absolute folder
+/// of this computer, a name that cannot be a name of the settings and a line that
+/// cannot be one line of text are refused at once, and no request file is written.
+/// The host resolves the preset itself, because the settings of the person are the
+/// only place that keeps the names.
 fn refused_panel(operation: &Operation) -> Option<Outcome> {
-    let Operation::OpenPanel { preset, directory, .. } = operation else {
+    let Operation::OpenPanel {
+        preset,
+        directory,
+        prompt,
+        ..
+    } = operation
+    else {
         return None;
     };
     block_preset::check_name(preset)
         .and_then(|_| block_preset::check_directory(directory))
+        .and_then(|_| prompt.as_deref().map_or(Ok(""), block_preset::check_prompt))
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
 }
