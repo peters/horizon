@@ -588,21 +588,32 @@ impl BrowserPanelState {
     /// Queue a command only when the driver session currently exists.
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
-        // Chrome commands, and the input that can navigate from inside the
-        // page (a click on a link, Enter in a form), count as user activity
-        // that may take a pending startup navigation over, but only once the
-        // driver accepted them; pointer moves and wheel events do not
-        // navigate on their own.
-        let may_navigate = page::command_may_navigate(&command);
-        let accepted = if self.is_host_driver() {
-            self.send_host_driver_command(command)
-        } else {
-            self.session.as_ref().is_some_and(|session| session.send(command))
-        };
-        if accepted && may_navigate {
+        // A command that is a navigation counts as the navigation of the person,
+        // and it may take a pending startup navigation over. A click or a key
+        // does not: it may navigate, and a person who reads a new panel clicks
+        // it before its first page commits, which made a create answer
+        // `superseded` for the page that it had just loaded.
+        let navigation = page::command_is_a_navigation(&command);
+        let accepted = self.deliver(command);
+        if accepted && navigation {
             self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         accepted
+    }
+
+    /// Send the first navigation of a panel, which is the address of its create
+    /// and not a navigation of the person, so it never takes that create over.
+    pub(super) fn send_startup_navigation(&self, url: String) -> bool {
+        self.deliver(BrowserCommand::Navigate(url))
+    }
+
+    /// Hand one command to the driver of this panel, whichever lane it runs on.
+    fn deliver(&self, command: BrowserCommand) -> bool {
+        if self.is_host_driver() {
+            self.send_host_driver_command(command)
+        } else {
+            self.session.as_ref().is_some_and(|session| session.send(command))
+        }
     }
 
     /// Number of user actions that can navigate (typed URL, back, forward,

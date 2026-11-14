@@ -298,6 +298,39 @@ fn a_private_page_of_a_firefox_host_reports_the_reserved_word_only_when_the_host
     );
 }
 
+/// The first navigation of a panel of a browser host is the address of its
+/// create, not a navigation of the person: a create that read the count of the
+/// panel answered `superseded` for the page that this navigation loaded.
+#[test]
+fn the_first_navigation_of_a_panel_of_a_host_is_no_navigation_of_the_person() {
+    let directory = tempfile::tempdir().expect("owned fixture state");
+    let program = stand_in(directory.path(), "exit 0\n");
+    let config = crate::browser::BrowserConfig {
+        profile: Some("mail".to_string()),
+        ..crate::browser::BrowserConfig::default()
+    };
+    let panel = BrowserPanelState::start_host_driver_with(
+        Ssh::default().with_program(program),
+        "panel-first-page",
+        &config,
+        Some("https://example.test/".to_string()),
+        &host(BrowserHostEngine::Firefox),
+    );
+    assert_eq!(
+        panel.user_navigation_count(),
+        0,
+        "the address of the create is not a navigation of the person"
+    );
+
+    let mut panel = panel;
+    assert!(panel.submit_navigation("https://example.test/typed"));
+    assert_eq!(
+        panel.user_navigation_count(),
+        1,
+        "a typed address is a navigation of the person"
+    );
+}
+
 /// A shared page of a browser host names the profile of that machine, and a page
 /// of this computer names the shared profile that it joins.
 #[test]

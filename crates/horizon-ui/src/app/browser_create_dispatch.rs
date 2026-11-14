@@ -186,6 +186,15 @@ impl HorizonApp {
             );
             return;
         };
+        // A navigation that the panel took before this point belongs to the
+        // lane that made the page, not to the person: the first address of a
+        // panel of a browser host is one such navigation. The create reads the
+        // count of the live panel, so only a navigation after it is a takeover.
+        let user_navigations_at_start = self
+            .board
+            .panel(panel_id)
+            .and_then(horizon_core::Panel::browser)
+            .map_or(0, horizon_core::browser::BrowserPanelState::user_navigation_count);
         self.audit_requested_browser(PendingBrowserCreate {
             request,
             started_at,
@@ -196,7 +205,7 @@ impl HorizonApp {
                 backend,
                 startup_orientation,
                 ready_since: None,
-                user_navigations_at_start: 0,
+                user_navigations_at_start,
                 manifest: None,
                 manifest_read_at: None,
                 manifest_reading: false,
@@ -289,6 +298,7 @@ pub(super) fn publish_requested_create(
     workspace: &ManifestWorkspace,
     backend: BackendKind,
     orientation: Option<horizon_core::browser::remote::RemoteOrientation>,
+    title: &str,
     ready: &BrowserCreateResult,
 ) -> bool {
     let fail = |code, message| {
@@ -321,6 +331,7 @@ pub(super) fn publish_requested_create(
             )
         };
     }
+    stamp_create_title(panel_local_id, request, title);
     if let Err(error) = manifest::record_create_status(
         panel_local_id,
         request,
@@ -333,6 +344,26 @@ pub(super) fn publish_requested_create(
     }
     complete_result(ready);
     true
+}
+
+/// Put the title of the live page into the manifest of a finished create, when
+/// the manifest holds none.
+///
+/// A page commits its first document before its title arrives, and the title of a
+/// page of a browser host crosses a tunnel. The answer of the create carries the
+/// title of the page that the person sees, so an agent reads the same line as the
+/// person, and a manifest that already names a title keeps it.
+fn stamp_create_title(panel_local_id: &str, request: &BrowserCreateRequest, title: &str) {
+    if title.is_empty() {
+        return;
+    }
+    if let Err(error) = manifest::update(panel_local_id, |manifest| {
+        if manifest.title.is_empty() {
+            title.clone_into(&mut manifest.title);
+        }
+    }) {
+        tracing::warn!(request_id = %request.request_id, %error, "could not stamp the title of the new browser panel");
+    }
 }
 
 /// The options of a create that names no device target: the ordinary browser
@@ -435,6 +466,41 @@ mod tests {
             new_browser_panel(Some("work"), None, BackendKind::ChromiumCdp, &host).is_ok(),
             "a name that the rule accepts passes"
         );
+    }
+
+    /// The title of the live page reaches the manifest that the answer of a create
+    /// reads, and a manifest that names a title keeps it.
+    #[test]
+    fn a_finished_create_carries_the_title_of_the_page_that_it_loaded() {
+        let request = BrowserCreateRequest::for_tests("agent");
+        let panel_local_id = format!("title-stamp-{}", std::process::id());
+        manifest::write(&manifest::BrowserManifest {
+            panel_local_id: panel_local_id.clone(),
+            ..manifest::BrowserManifest::default()
+        })
+        .expect("a manifest of the create");
+
+        stamp_create_title(&panel_local_id, &request, "Example Domain");
+        assert_eq!(
+            manifest::read(&panel_local_id).map(|manifest| manifest.title),
+            Some("Example Domain".to_string()),
+            "the answer of the create names the page that the person sees"
+        );
+
+        stamp_create_title(&panel_local_id, &request, "Another title");
+        assert_eq!(
+            manifest::read(&panel_local_id).map(|manifest| manifest.title),
+            Some("Example Domain".to_string()),
+            "a manifest that names a title keeps it"
+        );
+
+        stamp_create_title(&panel_local_id, &request, "");
+        assert_eq!(
+            manifest::read(&panel_local_id).map(|manifest| manifest.title),
+            Some("Example Domain".to_string()),
+            "a page without a title writes nothing"
+        );
+        manifest::remove_in(&manifest::default_manifest_dir(), &panel_local_id).expect("the manifest goes");
     }
 
     #[test]

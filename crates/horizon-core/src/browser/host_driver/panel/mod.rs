@@ -616,8 +616,10 @@ impl BrowserPanelState {
         state.remote_status = Some(slot.note());
         state.host_driver = Some(slot);
         // The first request of a panel is the address that it was created with.
+        // It is the create's navigation and not the person's, so it never takes
+        // the create that made this panel over.
         if let Some(url) = requested_url {
-            state.send(BrowserCommand::Navigate(url));
+            state.send_startup_navigation(url);
         }
         state
     }

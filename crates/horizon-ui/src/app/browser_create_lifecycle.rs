@@ -464,6 +464,7 @@ fn finish_ready_browser_create(
     );
     let (panel_local_id, live) = (panel.local_id.clone(), io.live_fence());
     let (backend, orientation) = (panel.backend, panel.startup_orientation);
+    let title = browser.title.clone();
     let published_request = request.clone();
     io.then(
         move || {
@@ -474,6 +475,7 @@ fn finish_ready_browser_create(
                 &workspace,
                 backend,
                 orientation,
+                &title,
                 &result,
             )
         },

@@ -145,6 +145,11 @@ fn a_private_panel_of_a_browser_host_is_a_page_of_a_context_of_its_own() {
     );
     assert_eq!(panel.reported_profile(), horizon_browser::PRIVATE_PROFILE);
 
+    assert_eq!(
+        panel.user_navigation_count(),
+        0,
+        "the create of a host page counts no navigation of the person: S3 probe"
+    );
     let commands = browser.commands();
     let methods = browser.methods();
     let context = methods

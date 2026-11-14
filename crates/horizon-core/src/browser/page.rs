@@ -27,25 +27,60 @@ pub fn panel_title_for_url(url: &str) -> String {
     }
 }
 
-/// Whether `command` can navigate from inside the page (a click on a link, Enter
-/// in a form). A pointer move and a wheel event do not navigate on their own.
+/// Whether `command` is a navigation that the person asked for.
+///
+/// A click or a key may navigate from inside the page, and it counts as no
+/// navigation here: a person who clicks a new panel before its first page
+/// commits sent a create that reported `superseded` for the page that it had
+/// just loaded. A create reads the address that the page commits instead.
 #[must_use]
-pub(super) fn command_may_navigate(command: &BrowserCommand) -> bool {
+pub(super) fn command_is_a_navigation(command: &BrowserCommand) -> bool {
     matches!(
         command,
-        BrowserCommand::Navigate(_)
-            | BrowserCommand::Back
-            | BrowserCommand::Forward
-            | BrowserCommand::Reload
-            | BrowserCommand::Input(
-                horizon_browser::BrowserInput::MousePress { .. } | horizon_browser::BrowserInput::KeyDown { .. }
-            )
+        BrowserCommand::Navigate(_) | BrowserCommand::Back | BrowserCommand::Forward | BrowserCommand::Reload
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::panel_title_for_url;
+    use super::{BrowserCommand, command_is_a_navigation, panel_title_for_url};
+
+    #[test]
+    fn only_a_navigation_command_counts_as_a_navigation_of_the_person() {
+        for command in [
+            BrowserCommand::Navigate("https://example.test/".to_string()),
+            BrowserCommand::Back,
+            BrowserCommand::Forward,
+            BrowserCommand::Reload,
+        ] {
+            assert!(command_is_a_navigation(&command), "{command:?}");
+        }
+        for command in [
+            BrowserCommand::Input(horizon_browser::BrowserInput::MousePress {
+                x: 1.0,
+                y: 2.0,
+                button: horizon_browser::BrowserButton::Left,
+                click_count: 1,
+                buttons: 1,
+                modifiers: horizon_browser::BrowserModifiers::none(),
+            }),
+            BrowserCommand::Input(horizon_browser::BrowserInput::KeyDown {
+                physical_key: None,
+                key: horizon_browser::BrowserKey::Enter,
+                text: None,
+                modifiers: horizon_browser::BrowserModifiers::none(),
+                repeat: false,
+                edit_command: None,
+            }),
+            BrowserCommand::Stop,
+            BrowserCommand::SetViewport {
+                width: 800,
+                height: 600,
+            },
+        ] {
+            assert!(!command_is_a_navigation(&command), "{command:?}");
+        }
+    }
 
     #[test]
     fn panel_titles_extract_dns_and_bracketed_ipv6_hosts() {
