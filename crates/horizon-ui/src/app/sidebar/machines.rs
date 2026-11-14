@@ -111,8 +111,9 @@ impl MachineState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::app) struct MachineRow {
     pub(in crate::app) name: String,
-    /// The provider line as the agent reported it, or nothing.
-    pub(in crate::app) provider: Option<String>,
+    /// The second line of the row: the repository that the record names and the
+    /// provider words of the agent, or nothing when the record names neither.
+    pub(in crate::app) second: Option<String>,
     pub(in crate::app) state: MachineState,
     /// Whether the server has not decided the last change to this machine yet.
     pub(in crate::app) pending: bool,
@@ -182,7 +183,7 @@ impl HorizonApp {
                     .find(|panel| panel.machine() == Some(machine.name.as_str()));
                 MachineRow {
                     name: machine.name.clone(),
-                    provider: machine.provider.clone(),
+                    second: second_line(machine.repository.as_deref(), machine.provider.as_deref()),
                     state: MachineState::of(panel.and_then(horizon_core::Panel::ssh_status)),
                     pending: pending.contains(machine.name.as_str()),
                     panel: panel.map(|panel| panel.id),
@@ -420,10 +421,10 @@ impl HorizonApp {
             ui.painter()
                 .galley(pos2(left, card.min.y + 9.0), mark, text::secondary());
         }
-        if let Some(provider) = row.provider.as_deref() {
+        if let Some(second) = row.second.as_deref() {
             let galley = text::line(
                 ui,
-                provider,
+                second,
                 11.0,
                 text::REGULAR,
                 text::secondary(),
@@ -576,6 +577,14 @@ pub(super) fn paint_machine_dot(painter: &egui::Painter, center: egui::Pos2, sta
     }
 }
 
+/// The second line of a machine row: the repository that the record names, then
+/// the provider words of the agent. The repository comes first, so a row that
+/// runs out of room cuts the claim of the agent and keeps the repository.
+fn second_line(repository: Option<&str>, provider: Option<&str>) -> Option<String> {
+    let parts: Vec<&str> = [repository, provider].into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| parts.join(" \u{00b7} "))
+}
+
 /// The fields of the list and of the terminals that the rows read from, so a
 /// frame knows without building a row whether it must read them again.
 fn machine_fingerprint(app: &HorizonApp) -> u64 {
@@ -591,6 +600,7 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         app.machine_list.key(&machine.name).hash(&mut hasher);
         machine.session.hash(&mut hasher);
         machine.provider.hash(&mut hasher);
+        machine.repository.hash(&mut hasher);
         pending.contains(machine.name.as_str()).hash(&mut hasher);
     }
     if let Some(sync) = app.server_sync.as_ref() {

@@ -138,6 +138,28 @@ the command and its result, for example
 `cargo test --workspace: 412 tests pass, 0 failed`. Then write the record of the
 machine with `machine_set`, as step 5b of the skill says, and add `Connect`.
 
+A machine that is ready for a repository names it in the field `repository` of
+its record:
+
+```
+operation:  machine_set
+name:       "build-1"
+ssh:        {"host": "<address>", "user": "<user from the reference>"}
+key:        "build-1"
+session:    "build-1"
+provider:   "<Provider>, <region>"
+repository: "example-org/example-repo"
+```
+
+The field holds the name of the repository, such as `example-org/example-repo`,
+and not the entry `repository` of the recipe, which says how the repository
+arrives. Horizon draws it on the second line of the row of the machine in the
+sidebar, beside the provider words, and it reads no folder from it. Set the
+field only when the check of the recipe passed on that machine; a machine that
+is ready for no repository has no field. A record that holds the field needs a
+Horizon that knows it on every computer that follows one server, because an
+older Horizon refuses the record of a newer one.
+
 ```json
 {"components": [
   {"type": "heading", "text": "build-1", "subtitle": "Ready for example-repo",

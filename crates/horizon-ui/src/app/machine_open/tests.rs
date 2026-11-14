@@ -51,6 +51,7 @@ fn set_machine(name: &str, session: Option<&str>, key: Option<&str>) -> block::O
         key: key.map(str::to_owned),
         session: session.map(str::to_owned),
         provider: None,
+        repository: None,
     }
 }
 

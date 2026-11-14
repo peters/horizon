@@ -129,8 +129,9 @@ impl HorizonApp {
             key,
             session,
             provider,
+            repository,
         } = *asked;
-        let checked = horizon_core::machines::check(name, ssh, session, provider).and_then(|checked| {
+        let checked = horizon_core::machines::check(name, ssh, session, provider, repository).and_then(|checked| {
             let key = key.map(horizon_core::machines::machine_key_name).transpose()?;
             Ok((checked, key))
         });
@@ -230,6 +231,7 @@ impl HorizonApp {
                 key,
                 session,
                 provider,
+                repository,
             } => {
                 self.answer_machine_set(
                     &MachineSetFields {
@@ -238,6 +240,7 @@ impl HorizonApp {
                         key: key.as_deref(),
                         session: session.as_deref(),
                         provider: provider.as_deref(),
+                        repository: repository.as_deref(),
                     },
                     request,
                     root,
@@ -367,6 +370,7 @@ impl HorizonApp {
                 key: self.machine_list.key(&machine.name).map(str::to_owned),
                 session: machine.session.clone(),
                 provider: machine.provider.clone(),
+                repository: machine.repository.clone(),
                 added_at_millis: machine.added_at_millis,
                 terminal_open: self.machine_panel(&machine.name).is_some(),
                 key_missing: false,
@@ -423,6 +427,7 @@ pub(in crate::app) struct MachineSetFields<'a> {
     pub(in crate::app) key: Option<&'a str>,
     pub(in crate::app) session: Option<&'a str>,
     pub(in crate::app) provider: Option<&'a str>,
+    pub(in crate::app) repository: Option<&'a str>,
 }
 
 /// The refusal of one machine error, with the code that the tool reports.

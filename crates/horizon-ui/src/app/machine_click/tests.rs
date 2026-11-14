@@ -41,6 +41,7 @@ fn record(name: &str, session: Option<&str>) -> Machine {
         port: None,
         session: session.map(str::to_owned),
         provider: Some("Hetzner, hel1".to_owned()),
+        repository: None,
         added_at_millis: 1,
     }
 }

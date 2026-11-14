@@ -16,6 +16,9 @@ pub const MAX_MACHINES: usize = 64;
 /// The longest provider line kept, in characters.
 pub const MAX_PROVIDER_CHARS: usize = 60;
 
+/// The longest repository line kept, in characters.
+pub const MAX_REPOSITORY_CHARS: usize = 60;
+
 /// The longest tmux session name accepted, in characters.
 pub const MAX_SESSION_CHARS: usize = 40;
 
@@ -102,12 +105,11 @@ pub fn check_session_name(session: &str) -> Result<&str, MachineRefusal> {
     Ok(session)
 }
 
-/// The provider line that a record keeps: one line of visible text, at most
-/// [`MAX_PROVIDER_CHARS`] characters. A longer or doubled line is cut instead
-/// of refused, because the text is a claim that Horizon only draws.
-#[must_use]
-pub fn provider_line(provider: &str) -> String {
-    let line: String = provider
+/// The provider line and the repository line are short texts of a record that
+/// Horizon only draws: one line of visible text, at most `max_chars` characters.
+/// A longer or doubled line is cut instead of refused.
+fn short_line(text: &str, max_chars: usize) -> String {
+    let line: String = text
         .chars()
         .map(|character| if character.is_control() { ' ' } else { character })
         .collect();
@@ -115,8 +117,25 @@ pub fn provider_line(provider: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
-        .take(MAX_PROVIDER_CHARS)
+        .take(max_chars)
         .collect()
+}
+
+/// The provider line that a record keeps: one line of visible text, at most
+/// [`MAX_PROVIDER_CHARS`] characters. A longer or doubled line is cut instead
+/// of refused, because the text is a claim that Horizon only draws.
+#[must_use]
+pub fn provider_line(provider: &str) -> String {
+    short_line(provider, MAX_PROVIDER_CHARS)
+}
+
+/// The repository line that a record keeps: one line of visible text, at most
+/// [`MAX_REPOSITORY_CHARS`] characters, such as `example-org/shop`. It is the
+/// rule of the provider line, because it is another short text of a record that
+/// Horizon only draws.
+#[must_use]
+pub fn repository_line(repository: &str) -> String {
+    short_line(repository, MAX_REPOSITORY_CHARS)
 }
 
 /// Check that an `open_terminal` names exactly one target: a route, or a
@@ -220,6 +239,18 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_line_is_folded_and_cut_to_the_bound() {
+        assert_eq!(repository_line("  example-org/shop  "), "example-org/shop");
+        assert_eq!(repository_line("example-org / shop"), "example-org / shop");
+        assert_eq!(repository_line(""), "");
+        assert_eq!(
+            repository_line(&"r".repeat(MAX_REPOSITORY_CHARS + 20)),
+            "r".repeat(MAX_REPOSITORY_CHARS)
+        );
+        assert_eq!(repository_line("example-org\u{7}/shop"), "example-org /shop");
+    }
+
+    #[test]
     fn one_terminal_names_one_target() {
         assert!(check_single_target(true, false).is_ok(), "a route alone is a terminal");
         assert!(
@@ -242,6 +273,7 @@ mod tests {
         assert_eq!(INVALID_REQUEST, "invalid_request");
         assert_eq!(MAX_MACHINES, 64);
         assert_eq!(MAX_PROVIDER_CHARS, 60);
+        assert_eq!(MAX_REPOSITORY_CHARS, 60);
         assert_eq!(MAX_SESSION_CHARS, 40);
     }
 }

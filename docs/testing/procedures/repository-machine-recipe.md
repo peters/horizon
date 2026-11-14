@@ -149,7 +149,17 @@ the provider of the person, and follow the caution of
    Result: the heading of the machine card is `Ready for example-repo`, the badge
    is `Ready` with tone `ok`, one `text` line holds the check command and its
    result, and the card holds `Connect` and `Delete the machine`.
-3. Press `Delete the machine`, and finish the delete as the skill says.
+3. Read the row of the machine in the Machines section of the sidebar.
+
+   Result: the second line of the row reads `<repository> · <provider>`, such as
+   `example-org/example-repo · Hetzner, hel1`. Make the window narrow until the
+   line does not fit, and read it again: the end of the line is cut with an
+   ellipsis, and the repository keeps its place at the start of the line.
+4. Ask the agent to run `machines`.
+
+   Result: the record of the machine holds `repository` with the same text as
+   the row.
+5. Press `Delete the machine`, and finish the delete as the skill says.
 
    Result: the card of the machine goes, and the machine list of the sidebar
    holds no record of it.

@@ -259,7 +259,8 @@ workspaces.
  "ssh": {"host": "203.0.113.10", "user": "root"},
  "key": "build-1",
  "session": "build-1",
- "provider": "Hetzner, hel1"}
+ "provider": "Hetzner, hel1",
+ "repository": "example-org/shop"}
 ```
 
 The answer is `machine_set` with `name` and `created`, which is false when the
@@ -280,6 +281,11 @@ name was already there and the record replaced the old one.
 - `provider` is one line of at most 60 characters, such as `Hetzner, hel1`. It
   is your claim, not verified Horizon state, and Horizon draws it dimmed under
   the machine name.
+- `repository` is one line of at most 60 characters, such as
+  `example-org/shop`: the repository that this machine is ready for. Horizon
+  draws it under the machine name beside the provider words, it reads no folder
+  and it starts nothing from it. Set it when the machine is ready for that
+  repository, and leave it out while the machine is ready for none.
 - The record holds no command line. Horizon builds the `ssh` argv and the tmux
   command from the record when a panel opens, so a record can never run a
   command that you saved in it.
@@ -291,7 +297,7 @@ name was already there and the record replaced the old one.
 ```
 
 `machines` answers every record in name order, each with `name`, `host`,
-`user`, `port`, `key`, `session`, `provider`, `added_at_millis`,
+`user`, `port`, `key`, `session`, `provider`, `repository`, `added_at_millis`,
 `terminal_open` and, when one waits, `pending`. `terminal_open` says whether a
 terminal of that machine is open in this Horizon now. It is not a reachability
 check, and Horizon never polls a machine. `pending: true` says that the server

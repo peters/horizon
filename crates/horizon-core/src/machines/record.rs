@@ -1,5 +1,6 @@
 //! The shareable part of a machine: its name, its route, the tmux session that a
-//! terminal attaches to, and the provider line that the agent reported.
+//! terminal attaches to, the repository that the machine is ready for and the
+//! provider line that the agent reported.
 //!
 //! A record is what another computer may see, so it holds no name of a key: a key
 //! name resolves only in the Horizon home that made it. The key that this
@@ -37,11 +38,16 @@ pub struct Machine {
     /// is the agent's claim, not verified Horizon state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The repository that the machine is ready for, such as
+    /// `example-org/shop`, when the agent set one. Horizon draws it and reads
+    /// nothing else into it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     pub added_at_millis: u64,
 }
 
-/// A machine whose name, route, session and provider line passed their checks:
-/// the only values that a record is made from.
+/// A machine whose name, route, session, repository and provider line passed
+/// their checks: the only values that a record is made from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckedMachine {
     pub name: String,
@@ -50,6 +56,7 @@ pub struct CheckedMachine {
     pub port: Option<u16>,
     pub session: Option<String>,
     pub provider: Option<String>,
+    pub repository: Option<String>,
 }
 
 impl CheckedMachine {
@@ -63,6 +70,7 @@ impl CheckedMachine {
             port: self.port,
             session: self.session.clone(),
             provider: self.provider.clone(),
+            repository: self.repository.clone(),
             added_at_millis,
         }
     }
@@ -80,6 +88,7 @@ impl Machine {
             && self.port == other.port
             && self.session == other.session
             && self.provider == other.provider
+            && self.repository == other.repository
     }
 
     /// The terminal that this machine's connection asks for, re-built from the
@@ -125,8 +134,8 @@ impl Machine {
     }
 }
 
-/// Check one machine record from an agent: its name, route, tmux session and
-/// provider line.
+/// Check one machine record from an agent: its name, route, tmux session,
+/// repository and provider line.
 ///
 /// # Errors
 /// Describes the first refused field with the code of [`MachineError::code`].
@@ -135,11 +144,13 @@ pub fn check(
     route: &TerminalRoute,
     session: Option<&str>,
     provider: Option<&str>,
+    repository: Option<&str>,
 ) -> Result<CheckedMachine, MachineError> {
     let name = machine_name(name)?;
     let terminal = block_terminal::check(route, None)?;
     let session = session.map(session_name).transpose()?;
     let provider = provider.map(block_machines::provider_line);
+    let repository = repository.map(block_machines::repository_line);
     Ok(CheckedMachine {
         name: name.to_owned(),
         host: terminal.host,
@@ -147,6 +158,7 @@ pub fn check(
         port: terminal.port,
         session,
         provider,
+        repository,
     })
 }
 
@@ -167,6 +179,7 @@ pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
         &route,
         record.session.as_deref(),
         record.provider.as_deref(),
+        record.repository.as_deref(),
     )?;
     Ok(checked.record(record.added_at_millis))
 }

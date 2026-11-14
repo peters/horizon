@@ -74,6 +74,30 @@ fn set(name: &str, host: &str, key: Option<&str>, session: Option<&str>) -> bloc
         key: key.map(str::to_string),
         session: session.map(str::to_string),
         provider: Some("Hetzner, hel1".into()),
+        repository: None,
+    }
+}
+
+/// The same record as [`set`], ready for `repository`.
+fn set_ready_for(name: &str, repository: Option<&str>) -> block::Operation {
+    let block::Operation::MachineSet {
+        name: record_name,
+        ssh,
+        key,
+        session,
+        provider,
+        ..
+    } = set(name, "203.0.113.10", Some("build-1"), None)
+    else {
+        unreachable!("an operation of one machine")
+    };
+    block::Operation::MachineSet {
+        name: record_name,
+        ssh,
+        key,
+        session,
+        provider,
+        repository: repository.map(str::to_string),
     }
 }
 
@@ -153,6 +177,39 @@ fn a_machine_set_writes_the_record_of_this_horizon_home() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].host, "203.0.113.11");
     assert_eq!(listed[0].key, None, "a set without a key forgets the old one");
+}
+
+#[test]
+fn a_machine_set_keeps_the_repository_and_machines_answers_it() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+
+    let _ = answered(
+        &mut app,
+        &ctx,
+        &root,
+        set_ready_for("build-1", Some(" example-org/shop ")),
+    );
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        listed[0].repository.as_deref(),
+        Some("example-org/shop"),
+        "the record keeps the repository of the agent, trimmed"
+    );
+    let reloaded = Machines::load(MachineRegistry::from_home(app.session_store.home())).expect("the list");
+    assert_eq!(
+        reloaded.records()[0].repository.as_deref(),
+        Some("example-org/shop"),
+        "a restart of Horizon reads the same repository"
+    );
+
+    let _ = answered(&mut app, &ctx, &root, set_ready_for("build-1", None));
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        listed[0].repository, None,
+        "a set without a repository forgets the one before"
+    );
 }
 
 #[test]

@@ -16,6 +16,13 @@ fn record(name: &str, provider: Option<&str>) -> Machine {
     }
 }
 
+fn with_repository(name: &str, repository: &str) -> Machine {
+    Machine {
+        repository: Some(repository.to_owned()),
+        ..record(name, Some("Hetzner, hel1"))
+    }
+}
+
 fn with_machines(app: &mut crate::app::HorizonApp, records: Vec<Machine>) {
     app.machine_list = Machines::with_records(MachineRegistry::from_home(app.session_store.home()), records);
 }
@@ -41,7 +48,7 @@ fn one_machine_of_the_list_is_one_row_in_name_order() {
         ["build-1", "build-2"],
         "the rows follow the name order of the list"
     );
-    assert_eq!(rows[0].provider.as_deref(), Some("Hetzner, hel1"));
+    assert_eq!(rows[0].second.as_deref(), Some("Hetzner, hel1"));
     assert_eq!(
         rows[0].state,
         MachineState::Closed,
@@ -66,7 +73,7 @@ fn the_rows_are_read_again_only_when_the_list_changes() {
     with_machines(&mut app, vec![record("build-1", Some("Hetzner, hel1"))]);
     app.refresh_machine_rows();
     assert_eq!(
-        app.machine_rows.rows()[0].provider.as_deref(),
+        app.machine_rows.rows()[0].second.as_deref(),
         Some("Hetzner, hel1"),
         "a changed record is read again"
     );
@@ -93,7 +100,7 @@ fn a_row_says_the_state_of_its_own_terminal() {
 fn a_machine_that_waits_for_the_server_says_so() {
     let row = MachineRow {
         name: "build-1".into(),
-        provider: Some("Hetzner, hel1".into()),
+        second: Some("Hetzner, hel1".into()),
         state: MachineState::Closed,
         pending: true,
         panel: None,
@@ -111,7 +118,7 @@ fn a_machine_that_waits_for_the_server_says_so() {
 fn a_press_on_a_closed_machine_opens_one_and_a_press_on_an_open_machine_focuses_it() {
     let mut closed = MachineRow {
         name: "build-1".into(),
-        provider: None,
+        second: None,
         state: MachineState::Closed,
         pending: false,
         panel: None,
@@ -194,4 +201,39 @@ fn the_line_of_the_server_draws_before_the_first_machine() {
         "the section keeps the line of its server without a machine"
     );
     assert!(app.machine_rows.rows().is_empty());
+}
+
+#[test]
+fn the_second_line_of_a_row_names_the_repository_beside_the_provider_words() {
+    let (_temp, mut app) = test_app();
+    with_machines(
+        &mut app,
+        vec![
+            with_repository("build-1", "example-org/shop"),
+            record("build-2", Some("Hetzner, hel1")),
+            record("build-3", None),
+        ],
+    );
+    app.refresh_machine_rows();
+    let rows = app.machine_rows.rows();
+    assert_eq!(
+        rows[0].second.as_deref(),
+        Some("example-org/shop \u{00b7} Hetzner, hel1"),
+        "the repository stands beside the provider words"
+    );
+    assert_eq!(
+        rows[1].second.as_deref(),
+        Some("Hetzner, hel1"),
+        "a record without one keeps its line"
+    );
+    assert_eq!(rows[2].second, None, "a record that names neither draws no second line");
+
+    // A changed repository is read again, because the row is read from the list.
+    with_machines(&mut app, vec![with_repository("build-1", "example-org/docs")]);
+    app.refresh_machine_rows();
+    assert_eq!(
+        app.machine_rows.rows()[0].second.as_deref(),
+        Some("example-org/docs \u{00b7} Hetzner, hel1"),
+        "the row follows the repository of its record"
+    );
 }

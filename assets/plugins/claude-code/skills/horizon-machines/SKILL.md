@@ -309,12 +309,17 @@ ssh:        {"host": "<address>", "user": "<user from the reference>"}
 key:        "build-1"
 session:    "build-1"
 provider:   "<Provider>, <region>"
+repository: "<owner>/<repository>"
 ```
 
 The answer is `machine_set` with `created`, which is false when the name was
 already there. `name` follows the machine key rule, `session` is 1 to 40
-characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, and `provider` is one line of at
-most 60 characters. The record belongs to the person's Horizon and not to your
+characters of `A-Z`, `a-z`, `0-9`, `_` and `-`, and `provider` and `repository`
+are one line of at most 60 characters each. `repository` is the repository that
+the machine is ready for, and Horizon draws it on the second line of the row of
+the machine in the sidebar. Leave it out while the machine is ready for no
+repository, and read `references/repository-machine.md` for a machine of a
+repository. The record belongs to the person's Horizon and not to your
 workspace, so every agent panel of this Horizon sees it and it survives a
 restart. The same name then appears in the Machines section of the sidebar, and
 a click on it opens the tmux session `build-1` with the machine key: the person

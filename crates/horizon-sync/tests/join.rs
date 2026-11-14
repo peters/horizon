@@ -225,6 +225,7 @@ fn machine(name: &str) -> Machine {
         port: Some(2222),
         session: Some("work".to_owned()),
         provider: Some("Hetzner, hel1".to_owned()),
+        repository: Some("example-org/shop".to_owned()),
         added_at_millis: 7,
     }
 }

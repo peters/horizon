@@ -21,7 +21,14 @@ fn route(host: &str) -> TerminalRoute {
 }
 
 fn checked(name: &str, host: &str, session: Option<&str>) -> CheckedMachine {
-    check(name, &route(host), session, Some("Hetzner, hel1")).expect("the machine is accepted")
+    check(
+        name,
+        &route(host),
+        session,
+        Some("Hetzner, hel1"),
+        Some("example-org/shop"),
+    )
+    .expect("the machine is accepted")
 }
 
 fn code(error: &MachineError) -> &'static str {
@@ -186,7 +193,7 @@ fn the_limit_counts_new_names_only_and_is_reported_with_its_own_code() {
 #[test]
 fn every_refusal_names_its_field_and_its_code() {
     let refused = |name: &str, route: TerminalRoute, session: Option<&str>| {
-        let error = check(name, &route, session, None).expect_err("the record is refused");
+        let error = check(name, &route, session, None, None).expect_err("the record is refused");
         (code(&error).to_owned(), error.to_string())
     };
 
@@ -228,9 +235,10 @@ fn every_refusal_names_its_field_and_its_code() {
         assert!(message.contains("session"), "{message}");
     }
     let longest = "a".repeat(MAX_SESSION_CHARS);
-    let accepted = check("build-1", &route("203.0.113.10"), Some(&longest), None).expect("a session at the bound");
+    let accepted =
+        check("build-1", &route("203.0.113.10"), Some(&longest), None, None).expect("a session at the bound");
     assert_eq!(accepted.session.as_deref(), Some(longest.as_str()));
-    let named = check("build-1", &route("203.0.113.10"), Some("Build_1-x"), None).expect("a plain session");
+    let named = check("build-1", &route("203.0.113.10"), Some("Build_1-x"), None, None).expect("a plain session");
     assert_eq!(named.session.as_deref(), Some("Build_1-x"));
 }
 
@@ -241,22 +249,83 @@ fn a_provider_line_is_one_short_line_that_the_record_cuts_to_the_bound() {
         &route("203.0.113.10"),
         None,
         Some("  Hetzner,\n hel1   running  "),
+        None,
     )
     .expect("a record");
     assert_eq!(record.provider.as_deref(), Some("Hetzner, hel1 running"));
     let long = "a".repeat(MAX_PROVIDER_CHARS + 20);
-    let record = check("build-1", &route("203.0.113.10"), None, Some(&long)).expect("a record");
+    let record = check("build-1", &route("203.0.113.10"), None, Some(&long), None).expect("a record");
     assert_eq!(
         record.provider.as_deref().map(str::len),
         Some(MAX_PROVIDER_CHARS),
         "a long provider line is cut"
     );
     assert_eq!(
-        check("build-1", &route("203.0.113.10"), None, None)
+        check("build-1", &route("203.0.113.10"), None, None, None)
             .expect("a record")
             .provider,
         None,
         "no provider line is a record without one"
+    );
+}
+
+#[test]
+fn a_record_of_an_older_version_reads_without_a_repository_and_one_with_it_round_trips() {
+    let temp = tempfile::tempdir().expect("home");
+    // A record of an older Horizon: the file has no `repository` field, and the
+    // struct fills it with nothing.
+    let older = serde_json::json!({
+        "machines": [{
+            "name": "build-1",
+            "host": "203.0.113.10",
+            "user": "root",
+            "provider": "Hetzner, hel1",
+            "added_at_millis": 7
+        }]
+    });
+    std::fs::create_dir_all(temp.path().join("machines")).expect("the machine folder");
+    std::fs::write(
+        temp.path().join("machines/registry.json"),
+        serde_json::to_vec(&older).expect("encode"),
+    )
+    .expect("write");
+    let loaded = Machines::load(registry(&temp)).expect("an older record reads");
+    assert_eq!(
+        loaded.records()[0].repository,
+        None,
+        "a record without the field reads with no repository"
+    );
+
+    let (loaded, _) = loaded
+        .with_record(checked("build-1", "203.0.113.10", None).record(7), None)
+        .expect("the record is kept");
+    loaded.save().expect("the list is written");
+    let text = std::fs::read_to_string(temp.path().join("machines/registry.json")).expect("the file");
+    assert!(
+        text.contains("\"repository\": \"example-org/shop\""),
+        "the record holds the repository: {text}"
+    );
+    let again = Machines::load(registry(&temp)).expect("the written record reads");
+    assert_eq!(
+        again.records()[0].repository.as_deref(),
+        Some("example-org/shop"),
+        "a record with the field reads it again"
+    );
+
+    // An older Horizon refuses a field that it does not know, so every computer
+    // that follows one server must know the field before a machine gets one.
+    let with_unknown = serde_json::json!({
+        "machines": [{
+            "name": "build-1",
+            "host": "203.0.113.10",
+            "added_at_millis": 7,
+            "another_field": "x"
+        }]
+    });
+    let refused = serde_json::from_value::<Machine>(with_unknown["machines"][0].clone());
+    assert!(
+        refused.is_err(),
+        "a record of a newer version is refused by name, not read in part"
     );
 }
 
@@ -396,7 +465,9 @@ fn a_machine_name_is_the_key_name_rule() {
     for name in ["build-1", "a", "0", "rented-machine-17"] {
         assert_eq!(machine_name(name).expect("a plain name"), name);
         assert_eq!(
-            check(name, &route("203.0.113.10"), None, None).expect("a record").name,
+            check(name, &route("203.0.113.10"), None, None, None)
+                .expect("a record")
+                .name,
             name,
             "one name makes the record"
         );

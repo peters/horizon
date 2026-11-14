@@ -189,6 +189,12 @@ pub enum Operation {
         /// caller's claim and Horizon draws it in a low-emphasis style.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
+        /// The repository that this machine is ready for, such as
+        /// `example-org/shop`: one line of at most 60 characters. Horizon draws
+        /// it under the name of the machine in the sidebar, it reads no folder
+        /// and it starts nothing from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
     },
     /// Forget one machine of this Horizon. Does not delete its key: call
     /// `delete_machine_key` for that. A terminal that the machine opened keeps
@@ -462,6 +468,9 @@ pub struct MachineSummary {
     pub session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// The repository that this machine is ready for, when the agent set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     pub added_at_millis: u64,
     /// Whether a terminal panel of this machine is open in this Horizon.
     pub terminal_open: bool,
@@ -1214,7 +1223,8 @@ mod tests {
             "ssh": {"host": "203.0.113.10", "user": "root", "port": 2222},
             "key": "build-1",
             "session": "build-1",
-            "provider": "Hetzner, hel1"
+            "provider": "Hetzner, hel1",
+            "repository": "example-org/shop"
         }))
         .expect("machine_set parses");
         let Operation::MachineSet {
@@ -1223,6 +1233,7 @@ mod tests {
             key,
             session,
             provider,
+            repository,
         } = set
         else {
             panic!("machine_set did not parse as MachineSet");
@@ -1233,6 +1244,7 @@ mod tests {
         assert_eq!(key.as_deref(), Some("build-1"));
         assert_eq!(session.as_deref(), Some("build-1"));
         assert_eq!(provider.as_deref(), Some("Hetzner, hel1"));
+        assert_eq!(repository.as_deref(), Some("example-org/shop"));
         assert!(
             serde_json::from_value::<Operation>(serde_json::json!({
                 "operation": "machine_set",
@@ -1264,6 +1276,7 @@ mod tests {
                 key: Some("build-1".into()),
                 session: Some("build-1".into()),
                 provider: Some("Hetzner, hel1".into()),
+                repository: Some("example-org/shop".into()),
                 added_at_millis: 7,
                 terminal_open: true,
                 pending: true,
