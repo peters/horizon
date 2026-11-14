@@ -778,9 +778,9 @@ card says what was removed and what is left.
 ]}
 ```
 
-`Close` is the last button of this end card, as it is of every end card: this goal
-ended in one run on a card that held no `Close` and in another on one that did,
-and the person had no way out in the first.
+`Close` is the last button of this end card, as it is of every end card. One run
+of this goal ended on a card that held no `Close`, so the person had no way out of
+the goal that the run had finished.
 
 The row `Browser` names the engine that the settings now hold: `Chromium`, or
 `Firefox, with Horizon on that machine`. A Firefox host adds the row
