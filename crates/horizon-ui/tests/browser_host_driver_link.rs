@@ -207,6 +207,8 @@ fn the_panel_of_a_firefox_host_attaches_shows_a_picture_and_comes_back_after_a_l
         horizon_version: env!("CARGO_PKG_VERSION").to_string(),
         system: horizon_browser::host_driver::HostSystem::here(),
         quality: 60,
+        page: "panel-1".to_string(),
+        private: false,
     })
     .expect("one line");
     closing.write_all(&hello).expect("the greeting of the closing link");

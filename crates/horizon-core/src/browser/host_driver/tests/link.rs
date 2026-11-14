@@ -225,6 +225,8 @@ fn a_version_that_this_build_does_not_speak_is_refused_with_words() {
         horizon_version: "9.9.9".to_string(),
         system: HostSystem::here(),
         quality: 60,
+        page: "page-1".to_string(),
+        private: false,
     });
     let HostDriverReply::Refusal { code, message, fatal } = peer.reply(0) else {
         panic!("a refusal");
@@ -233,7 +235,7 @@ fn a_version_that_this_build_does_not_speak_is_refused_with_words() {
     assert!(fatal);
     assert!(message.contains(&HOST_DRIVER_VERSION.to_string()), "{message}");
     assert!(
-        message.contains("speaks 8"),
+        message.contains(&format!("speaks {}", HOST_DRIVER_VERSION + 7)),
         "the words name the other version: {message}"
     );
     assert_eq!(
@@ -256,6 +258,8 @@ fn a_host_of_another_system_is_refused_with_its_words() {
             arch: "other-cpu".to_string(),
         },
         quality: 60,
+        page: "page-1".to_string(),
+        private: false,
     });
     let HostDriverReply::Refusal { code, message, .. } = peer.reply(0) else {
         panic!("a refusal");

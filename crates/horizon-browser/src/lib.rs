@@ -99,7 +99,7 @@ pub use semantic_fingerprint::{
 };
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
-    CommittedUrl, start_session,
+    CommittedUrl, SharedSessionGroup, start_session, start_shared_session,
 };
 pub use video::VideoCaptureHandle;
 pub use webdriver::{
@@ -156,6 +156,14 @@ pub struct BrowserConfig {
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
     pub every_nth_frame: u32,
     pub profile_root: Option<PathBuf>,
+    /// Whether the page of this session keeps nothing of its profile: a page of
+    /// an isolated context of the browser that already runs, whose cookies and
+    /// storage are apart from the profile and which is removed when the page
+    /// ends. A private panel of a browser host sets it; a panel of this computer
+    /// gets the same isolation from its own profile folder, so it stays false
+    /// there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub isolated_page: bool,
     /// The profile that this panel runs in: the name of a shared profile, whose
     /// panels share one sign-in, or the reserved word of a private panel that
     /// keeps nothing. Absent for a remote device session and for a panel whose
@@ -206,6 +214,7 @@ impl Default for BrowserConfig {
             egress: None,
             quality: 60,
             every_nth_frame: 1,
+            isolated_page: false,
             profile: None,
             profile_root: None,
             downloads_root: None,

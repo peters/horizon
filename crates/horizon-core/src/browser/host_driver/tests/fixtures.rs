@@ -16,6 +16,7 @@ use horizon_browser::host_driver::{
 use horizon_browser::{BrowserCommand, BrowserEvent, FrameSlot};
 
 use super::super::session::{HostPage, HostSession, serve_link};
+use super::super::pages::StartPage;
 use super::super::{HostDriverEngine, HostDriverOptions, Incoming, Link, LinkOutcome, LinkRules, serve_links};
 
 pub(crate) const WAIT: Duration = Duration::from_secs(5);
@@ -216,11 +217,18 @@ pub(crate) fn serve(session: HostSession) -> (Arc<Peer>, std::thread::JoinHandle
 }
 
 pub(crate) fn hello(quality: u32) -> HostDriverRequest {
+    hello_page("page-1", false, quality)
+}
+
+/// The greeting of a link that drives `page`.
+pub(crate) fn hello_page(page: &str, private: bool, quality: u32) -> HostDriverRequest {
     HostDriverRequest::Hello {
         version: HOST_DRIVER_VERSION,
         horizon_version: env!("CARGO_PKG_VERSION").to_string(),
         system: HostSystem::here(),
         quality,
+        page: page.to_string(),
+        private,
     }
 }
 
@@ -268,6 +276,9 @@ pub(crate) struct Wire {
     pub(crate) stream: std::os::unix::net::UnixStream,
     incoming: mpsc::Receiver<HostDriverReply>,
     ended: Arc<Mutex<bool>>,
+    /// The kinds of every reply that this link already read, for words of a
+    /// failure.
+    seen: Arc<Mutex<Vec<String>>>,
 }
 
 impl Wire {
@@ -300,6 +311,7 @@ impl Wire {
             stream,
             incoming,
             ended,
+            seen: Arc::default(),
         }
     }
 
@@ -321,19 +333,30 @@ impl Wire {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             let Some(reply) = self.next(left) else {
-                panic!("the session wrote no {want}: {:?}", lock(&self.ended));
+                panic!(
+                    "the session wrote no {want} (ended: {:?}, seen: {:?})",
+                    lock(&self.ended),
+                    lock(&self.seen)
+                );
             };
             let name = match &reply {
+                HostDriverReply::Refusal { code, .. } => {
+                    lock(&self.seen).push(format!("refusal {code}"));
+                    if want == "refusal" {
+                        return reply;
+                    }
+                    "refusal"
+                }
                 HostDriverReply::Welcome(_) => "welcome",
                 HostDriverReply::Frame(_) => "frame",
                 HostDriverReply::Page(_) => "page",
-                HostDriverReply::Refusal { .. } => "refusal",
                 HostDriverReply::Closed => "end of the session",
                 HostDriverReply::Action(_) => "action",
                 HostDriverReply::Coordination(_) => "coordination",
                 HostDriverReply::HandoffAck { .. } => "handoff acknowledgement",
                 HostDriverReply::Audit(_) => "audit record",
             };
+            lock(&self.seen).push(name.to_string());
             if name == want {
                 return reply;
             }
@@ -360,12 +383,22 @@ impl Wire {
     }
 }
 
+/// One page that a session of a test started, and the facts of its start.
+pub(crate) struct StartedPage {
+    pub(crate) private: bool,
+    pub(crate) commands: Arc<Mutex<Vec<BrowserCommand>>>,
+}
+
 /// A session of a test on a socket of this computer, with the accept loop, the
 /// take-over rule and the silence rule of a host.
 pub(crate) struct SessionOfTest {
     pub(crate) path: std::path::PathBuf,
+    /// The slot of the first page that this session started.
     pub(crate) slot: Arc<FrameSlot>,
+    /// The commands of the first page that this session started.
     pub(crate) commands: Arc<Mutex<Vec<BrowserCommand>>>,
+    /// Every page that this session started, in the order of its links.
+    pub(crate) started: Arc<Mutex<Vec<StartedPage>>>,
     pub(crate) handle: Option<std::thread::JoinHandle<i32>>,
     _folder: tempfile::TempDir,
 }
@@ -388,21 +421,40 @@ impl SessionOfTest {
         listener.set_nonblocking(true).expect("a polling socket");
         let slot = Arc::new(FrameSlot::new());
         let commands: Arc<Mutex<Vec<BrowserCommand>>> = Arc::default();
+        let started: Arc<Mutex<Vec<StartedPage>>> = Arc::default();
         let options = HostDriverOptions::new(profile, HostDriverEngine::Firefox).expect("the options of a test");
         let socket = path.clone();
         let session_slot = Arc::clone(&slot);
         let session_commands = Arc::clone(&commands);
+        let session_started = Arc::clone(&started);
         let handle = std::thread::spawn(move || {
-            let start = move |_options: &HostDriverOptions| {
+            let start = StartPage::new(move |_options, _group, private| {
+                // The first page of a session of a test fills the slot and the
+                // commands of the session, so a test of one page reads that page.
+                let first = lock(&session_started).is_empty();
+                let page_slot = if first {
+                    Arc::clone(&session_slot)
+                } else {
+                    Arc::new(FrameSlot::new())
+                };
+                let page_commands = if first {
+                    Arc::clone(&session_commands)
+                } else {
+                    Arc::<Mutex<Vec<BrowserCommand>>>::default()
+                };
+                lock(&session_started).push(StartedPage {
+                    private,
+                    commands: Arc::clone(&page_commands),
+                });
                 Ok(HostSession::over_page(
                     Box::new(FakePage {
-                        commands: Arc::clone(&session_commands),
+                        commands: page_commands,
                         events: Arc::default(),
                         accepts: true,
                     }),
-                    Arc::clone(&session_slot),
+                    page_slot,
                 ))
-            };
+            });
             serve_links(
                 &listener,
                 &options,
@@ -419,9 +471,29 @@ impl SessionOfTest {
             path,
             slot,
             commands,
+            started,
             handle: Some(handle),
             _folder: folder,
         }
+    }
+
+    /// The commands of the page that this session started at `index`.
+    pub(crate) fn commands_of(&self, index: usize) -> Vec<BrowserCommand> {
+        lock(&self.started)
+            .get(index)
+            .map(|page| lock(&page.commands).clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether the page that this session started at `index` keeps nothing of the
+    /// profile.
+    pub(crate) fn private_of(&self, index: usize) -> Option<bool> {
+        lock(&self.started).get(index).map(|page| page.private)
+    }
+
+    /// How many pages this session started.
+    pub(crate) fn pages(&self) -> usize {
+        lock(&self.started).len()
     }
 
     pub(crate) fn connect(&self) -> Wire {

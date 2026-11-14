@@ -259,6 +259,10 @@ impl BrowserPanelState {
     /// leaves the folder on disk.
     #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
     pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
+        // A page of a browser host ends with its panel: no link of that panel
+        // comes back, so the page must not wait on the machine of the host for
+        // ever.
+        self.close_host_driver_page();
         self.request_shutdown();
         if self.is_attached() {
             // The Chromium of another machine keeps its profile there, and this

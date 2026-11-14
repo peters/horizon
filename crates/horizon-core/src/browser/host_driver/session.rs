@@ -1,12 +1,16 @@
-//! The session of a browser host: the browser, the page, and the link of this
-//! computer.
+//! The page of one link, and the session that keeps it for that link.
 //!
-//! The session belongs to the machine of the browser, not to a link. One link
-//! sends what a person and an agent ask for and receives the pushed picture; a
-//! link that ends leaves the browser and the page running, and the next link
-//! attaches to the same page, with the text that a person typed still in it.
-//! That is the promise of a Firefox host, and it is why the session is a process
-//! of its own rather than the life of one `ssh` child.
+//! The session of a browser host belongs to the machine of the browser, not to a
+//! link. One link sends what a person and an agent ask for and receives the
+//! pushed picture; a link that ends leaves the browser and its pages running,
+//! and the next link of that panel attaches to the page that it had, with the
+//! text that a person typed still in it. That is the promise of a Firefox host,
+//! and it is why the session is a process of its own rather than the life of one
+//! `ssh` child.
+//!
+//! One session serves many pages: each panel of the profile is its page of the
+//! one browser, so a person who signs in in one panel is signed in in the next
+//! one. [`super::pages`] keeps the pages and decides which link drives which.
 //!
 //! The page's own driver (geckodriver and Firefox of this machine) produces
 //! screenshots; this module re-encodes one of them as a JPEG of the setting's
@@ -14,19 +18,17 @@
 //! waits for the acknowledgement of the last, so a slow link shows fewer and
 //! newer frames instead of a queue of the past.
 
-use std::io::{BufReader, Write as _};
-use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use horizon_browser::host_driver::{
     FrameGate, HostDriverFrame, HostDriverFrameFormat, HostDriverPage, HostDriverPageState, HostDriverReply,
-    HostDriverRequest, HostDriverWelcome, HostSystem, MAX_HOST_DRIVER_LINE_BYTES, MAX_HOST_FRAME_SIDE,
-    read_line as read_wire_line,
+    HostDriverRequest, HostDriverWelcome, HostSystem, MAX_HOST_FRAME_SIDE,
 };
 use horizon_browser::{
     BrowserCommand, BrowserConfig, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameData, FrameSlot,
-    VideoCaptureHandle, start_session,
+    SharedSessionGroup, VideoCaptureHandle, start_shared_session,
 };
 
 use super::coordination::WireCoordination;
@@ -40,81 +42,107 @@ pub(super) const PASS_WAIT: Duration = Duration::from_millis(20);
 /// channel cannot starve the link.
 const EVENT_BURST: usize = 64;
 
-/// Bound of the stop of one session of a browser host.
+/// Bound of the stop of one page of a browser host.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a link has to greet the session. The greeting is the first line that
 /// this computer writes on a link, so a link that says nothing for this long is
-/// not a panel, and the next connection may take the session over.
-const GREET_WAIT: Duration = Duration::from_secs(5);
+/// not a panel, and the session closes it.
+pub(super) const GREET_WAIT: Duration = Duration::from_secs(5);
 
-/// The connections that arrive on the socket of the session while one link
-/// serves it, and the silences that decide what happens to them.
-pub(super) struct NewLinks<'a> {
-    pub(super) listener: &'a std::os::unix::net::UnixListener,
-    /// The silence of the serving link that a new connection takes the page over
-    /// from.
-    pub(super) take_over: Duration,
-    /// The silence after which the session closes the serving link.
-    pub(super) silent: Duration,
-    /// The profile of this session, for the words of a refusal.
-    pub(super) profile: &'a str,
+/// How long a new link of a page waits for the link that held it to let go, when
+/// that link went silent for longer than the take-over bound. A link that does
+/// not let go inside this wait is a link that still works, so the new one reads
+/// why the page is not free.
+const TAKE_OVER_WAIT: Duration = Duration::from_secs(2);
+
+/// The poll of a link that waits for the page of another link to be let go.
+const TAKE_OVER_POLL: Duration = Duration::from_millis(20);
+
+/// The hold of one page: the link that drives it, and when that link last said
+/// something.
+///
+/// The rules of a link stay the rules of one page: a link that said nothing for
+/// the silence bound belongs to nobody, and a link that said nothing for the
+/// take-over bound gives its page back to the link of the panel, which is what a
+/// dropped link looks like from here.
+pub(super) struct LinkHold {
+    silent: Duration,
+    take_over: Duration,
+    /// The last line of the link that holds this page, and `None` when no link
+    /// holds it.
+    holder: Mutex<Option<Instant>>,
+    /// Set by a new link of this page, so the link that held it ends.
+    taken_over: AtomicBool,
 }
 
-impl NewLinks<'_> {
-    /// The connection that waits on the socket, when one arrived, and otherwise
-    /// nothing.
-    fn waiting(&self) -> Option<std::os::unix::net::UnixStream> {
-        match self.listener.accept() {
-            // A socket that `accept` gives takes the mode of its listener on this
-            // system, and the listener polls, so the link is put back into the
-            // blocking mode that its two ends read and write with.
-            Ok((stream, _)) => {
-                let _ = stream.set_nonblocking(false);
-                Some(stream)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
-            Err(error) => {
-                tracing::warn!(%error, "the socket of a browser host session could not accept a link");
-                None
-            }
+/// Whether a link took a page.
+pub(super) enum Claim {
+    Claimed,
+    /// Another link drives the page and still answers.
+    Busy,
+}
+
+impl LinkHold {
+    pub(super) const fn new(silent: Duration, take_over: Duration) -> Self {
+        Self {
+            silent,
+            take_over,
+            holder: Mutex::new(None),
+            taken_over: AtomicBool::new(false),
         }
     }
-}
 
-/// Tell a new connection why the page of its profile is not free, and close it.
-///
-/// A second panel of one profile is a second page on one browser, and this
-/// session shows one page. The person reads what to close instead of a link that
-/// says nothing.
-///
-/// The greeting of the new link is read first, in a thread of its own: a link
-/// that this session closes with its answer still unread answers the write of
-/// the greeting with a reset, and this computer would then read no words at all.
-fn refuse_busy_link(stream: std::os::unix::net::UnixStream, profile: &str) {
-    let reply = HostDriverReply::Refusal {
-        code: "link_busy".to_string(),
-        message: format!(
-            "the page of the profile {profile} of this browser host is attached to another link: close the other panel of this profile, then use Retry"
-        ),
-        fatal: true,
-    };
-    std::thread::Builder::new()
-        .name("browser-host-refusal".to_string())
-        .spawn(move || {
-            let _ = stream.set_read_timeout(Some(GREET_WAIT));
-            if let Ok(reader) = stream.try_clone() {
-                let mut reader = BufReader::new(reader);
-                let _ = read_wire_line(&mut reader, MAX_HOST_DRIVER_LINE_BYTES);
+    fn holder(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+        self.holder.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Claim the page for a new link: the link that held it must have ended, or
+    /// been silent for longer than the take-over bound.
+    pub(super) fn claim(&self) -> Claim {
+        let deadline = Instant::now() + self.take_over + TAKE_OVER_WAIT;
+        loop {
+            {
+                let mut holder = self.holder();
+                match *holder {
+                    None => {
+                        *holder = Some(Instant::now());
+                        return Claim::Claimed;
+                    }
+                    Some(said_at) if said_at.elapsed() >= self.take_over => {
+                        self.taken_over.store(true, Ordering::Release);
+                    }
+                    Some(_) => return Claim::Busy,
+                }
             }
-            if let Ok(line) = horizon_browser::host_driver::encode_line(&reply) {
-                let mut writer = &stream;
-                let _ = writer.write_all(&line);
-                let _ = writer.flush();
+            if Instant::now() >= deadline {
+                return Claim::Busy;
             }
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-        })
-        .ok();
+            std::thread::sleep(TAKE_OVER_POLL);
+        }
+    }
+
+    /// Let the page go, so the next link of this panel finds it.
+    pub(super) fn release(&self) {
+        *self.holder() = None;
+        self.taken_over.store(false, Ordering::Release);
+    }
+
+    /// Mark that the link that holds this page said something.
+    fn saw_line(&self) {
+        if let Some(said_at) = self.holder().as_mut() {
+            *said_at = Instant::now();
+        }
+    }
+
+    fn belongs_to_nobody(&self) -> bool {
+        self.holder().is_some_and(|said_at| said_at.elapsed() >= self.silent)
+    }
+
+    /// Whether another link of this page asked for it.
+    fn taken_over(&self) -> bool {
+        self.taken_over.load(Ordering::Acquire)
+    }
 }
 
 /// The viewport of a session that no panel has sized yet.
@@ -194,12 +222,21 @@ pub(super) struct HostSession {
 }
 
 impl HostSession {
-    /// Start the browser of this machine in the named profile.
+    /// Start the page of this session in the profile of `options`.
+    ///
+    /// The browser of the profile starts with the first page and stays for
+    /// every later page of it, so two panels of one profile are two pages of one
+    /// Firefox. A private page is a page in an isolated user context of that same
+    /// browser: it sees none of the cookies of the profile and leaves none.
     ///
     /// # Errors
     /// The profile folder cannot be created, or the browser or its driver does
     /// not start. The words name what a person must install.
-    pub(super) fn start(options: &HostDriverOptions) -> Result<Self, String> {
+    pub(super) fn start_page(
+        options: &HostDriverOptions,
+        group: &SharedSessionGroup,
+        private: bool,
+    ) -> Result<Self, String> {
         let profile_root = paths::profile_root(options.profile())
             .map_err(|error| error.to_string())?
             .to_string_lossy()
@@ -211,23 +248,27 @@ impl HostSession {
         let config = BrowserConfig {
             backend: options.engine().backend(),
             headless: true,
+            isolated_page: private,
             profile_root: Some(profile_root.into()),
             ..BrowserConfig::default()
         };
-        let session = start_session(BrowserSessionConfig {
-            browser: config,
-            panel_local_id: options.profile().to_string(),
-            initial_url: None,
-            width: DEFAULT_VIEWPORT.0,
-            height: DEFAULT_VIEWPORT.1,
-            frame_slot: Arc::clone(&slot),
-            coordination: Some(Arc::clone(&coordination) as Arc<dyn horizon_browser::BrowserCoordination>),
-            capture_directory: None,
-            video: Arc::new(VideoCaptureHandle::default()),
-            remote: None,
-            attach: None,
-            resume_target: None,
-        })
+        let session = start_shared_session(
+            BrowserSessionConfig {
+                browser: config,
+                panel_local_id: options.profile().to_string(),
+                initial_url: None,
+                width: DEFAULT_VIEWPORT.0,
+                height: DEFAULT_VIEWPORT.1,
+                frame_slot: Arc::clone(&slot),
+                coordination: Some(Arc::clone(&coordination) as Arc<dyn horizon_browser::BrowserCoordination>),
+                capture_directory: None,
+                video: Arc::new(VideoCaptureHandle::default()),
+                remote: None,
+                attach: None,
+                resume_target: None,
+            },
+            group.clone(),
+        )
         .map_err(|error| {
             format!(
                 "the browser of this machine did not start in {}: {error}",
@@ -237,7 +278,8 @@ impl HostSession {
         tracing::info!(
             profile = options.profile(),
             engine = options.engine().as_str(),
-            "the session of a browser host started"
+            private,
+            "a page of a browser host started"
         );
         Ok(Self {
             page: Box::new(LocalPage {
@@ -442,80 +484,92 @@ fn frame_reply(frame: &FrameData, quality: u32, key: bool) -> Option<HostDriverR
     }))
 }
 
+/// What the greeting of a link asks for: the picture quality, the page that it
+/// drives, and whether that page keeps nothing of the profile.
+pub(super) struct Greeting {
+    pub(super) quality: u32,
+    pub(super) page: String,
+    pub(super) private: bool,
+}
+
 /// Serve one link of this computer until it ends.
 ///
-/// `new_links` is the socket of the session, so a link that arrives while this
-/// one serves the page can take it over; a session of a test serves a link with
-/// no socket and answers nothing to a new connection.
+/// A link of a test names its page before this call, so this function reads the
+/// greeting and serves the page that the caller chose.
+#[cfg(test)]
 pub(super) fn serve_link(
     session: &mut HostSession,
     link: &mut Link,
     profile: &str,
     engine: HostDriverEngine,
-    new_links: Option<&NewLinks<'_>>,
+    hold: Option<&LinkHold>,
 ) -> LinkEnd {
-    let mut gate = FrameGate::new();
-    match greet(session, link, profile, engine, new_links) {
-        LinkEnd {
-            outcome: LinkOutcome::Continue,
-            ..
-        } => {}
-        end => return finish(link, end),
-    }
-    let end = pass(session, link, &mut gate, new_links);
+    let end = match greet(link) {
+        Ok(greeting) => serve_page(session, link, profile, engine, hold, &greeting),
+        Err(end) => end,
+    };
     finish(link, end)
 }
 
-/// Greet this computer: the version of the wire, the system of the host, and the
-/// page that this link came back to.
-fn greet(
-    session: &mut HostSession,
-    link: &mut Link,
-    profile: &str,
-    engine: HostDriverEngine,
-    new_links: Option<&NewLinks<'_>>,
-) -> LinkEnd {
+/// Greet this computer: the version of the wire, the system of the host, the page
+/// that this link drives and the quality of the pictures that it wants.
+///
+/// # Errors
+/// The link ended, said nothing for [`GREET_WAIT`], or wrote a greeting that this
+/// wire cannot use. The end carries the words that the person reads.
+pub(super) fn greet(link: &mut Link) -> Result<Greeting, LinkEnd> {
     let greeted_at = Instant::now();
     let request = loop {
-        // A link that arrives while this one has not greeted yet is the link of
-        // a panel: it takes the session over, and this one ends with no words.
-        if let Some(next) = new_links.and_then(NewLinks::waiting) {
-            tracing::info!(
-                profile,
-                "a new link of a browser host takes the session over from a link that did not greet it"
-            );
-            return LinkEnd::taken_over(next);
-        }
         match request_of(link.next(PASS_WAIT)) {
             Step::Request(request) => break request,
             // A link that says nothing for this long is not a panel of this
             // host.
-            Step::Silent if greeted_at.elapsed() >= GREET_WAIT => return LinkEnd::of(LinkOutcome::Closed),
+            Step::Silent if greeted_at.elapsed() >= GREET_WAIT => return Err(LinkEnd::of(LinkOutcome::Closed)),
             Step::Silent => {}
-            Step::Ended => return LinkEnd::of(LinkOutcome::Closed),
-            Step::Refuse(outcome) => return LinkEnd::of(outcome),
+            Step::Ended => return Err(LinkEnd::of(LinkOutcome::Closed)),
+            Step::Refuse(outcome) => return Err(LinkEnd::of(outcome)),
         }
     };
     let HostDriverRequest::Hello {
         version,
         system,
         quality,
+        page,
+        private,
         ..
     } = request
     else {
-        return LinkEnd::of(greeting_refusal(
+        return Err(LinkEnd::of(greeting_refusal(
             "the first message of a link of a browser host is its greeting",
-        ));
+        )));
     };
     if version != horizon_browser::host_driver::HOST_DRIVER_VERSION {
-        return LinkEnd::of(LinkOutcome::Answer(horizon_browser::host_driver::version_refusal(
-            version,
+        return Err(LinkEnd::of(LinkOutcome::Answer(
+            horizon_browser::host_driver::version_refusal(version),
         )));
     }
     if let Some(words) = system.copy_refusal(&HostSystem::here()) {
-        return LinkEnd::of(greeting_refusal(&words));
+        return Err(LinkEnd::of(greeting_refusal(&words)));
     }
-    session.attach(horizon_browser::host_driver::clamp_quality(quality));
+    Ok(Greeting {
+        quality: horizon_browser::host_driver::clamp_quality(quality),
+        page,
+        private,
+    })
+}
+
+/// Serve the page of this link: the welcome, the state of the page, and one pass
+/// after another until the link ends.
+pub(super) fn serve_page(
+    session: &mut HostSession,
+    link: &mut Link,
+    profile: &str,
+    engine: HostDriverEngine,
+    hold: Option<&LinkHold>,
+    greeting: &Greeting,
+) -> LinkEnd {
+    let mut gate = FrameGate::new();
+    session.attach(greeting.quality);
     if link
         .send(&HostDriverReply::Welcome(session.welcome(profile, engine)))
         .is_err()
@@ -529,7 +583,7 @@ fn greet(
         return LinkEnd::of(LinkOutcome::Closed);
     }
     let _ = link.flush();
-    LinkEnd::of(LinkOutcome::Continue)
+    pass(session, link, &mut gate, hold)
 }
 
 fn greeting_refusal(sentence: &str) -> LinkOutcome {
@@ -573,31 +627,16 @@ fn request_of(next: Next) -> Step {
 
 /// One pass of a link: the requests of this computer, the events of the page,
 /// and one picture when the last one was acknowledged.
-fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, new_links: Option<&NewLinks<'_>>) -> LinkEnd {
+fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, hold: Option<&LinkHold>) -> LinkEnd {
     let mut sent_page = session.page_message();
-    // When this link last said something. Two rules of the session read it: a
-    // link that is silent belongs to nobody, and a new link may take the page
-    // over from it.
-    let mut last_line = Instant::now();
     loop {
-        // A connection that waits on the socket of the session: the page comes
-        // back to a link whose link before it is gone, and a second panel of a
-        // profile that is in use reads why it waits.
-        if let Some(next) = new_links.and_then(NewLinks::waiting) {
-            let silent = last_line.elapsed();
-            if let Some(links) = new_links
-                && silent >= links.take_over
-            {
-                tracing::info!(
-                    profile = links.profile,
-                    silent = ?silent,
-                    "a new link of a browser host takes the page over from a link that went silent"
-                );
-                return LinkEnd::taken_over(next);
-            }
-            if let Some(links) = new_links {
-                refuse_busy_link(next, links.profile);
-            }
+        // A new link of this same page takes it over when the link that drives it
+        // went silent, which is what a dropped link looks like from here.
+        if hold.is_some_and(LinkHold::taken_over) {
+            tracing::info!(
+                "a new link of a browser host takes the page over from a link that went silent"
+            );
+            return LinkEnd::of(LinkOutcome::TakeOver);
         }
         session.apply_events();
         let page = session.page_message();
@@ -627,19 +666,17 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, new_li
         }
         // A link whose other end vanished keeps its socket open, because the
         // other side of `ssh` holds it, so the end of this link is its silence.
-        if let Some(links) = new_links
-            && last_line.elapsed() >= links.silent
-        {
+        if hold.is_some_and(LinkHold::belongs_to_nobody) {
             tracing::info!(
-                profile = links.profile,
-                silent = ?last_line.elapsed(),
                 "a link of a browser host said nothing for the bound of the session, so the session closes it"
             );
             return LinkEnd::of(LinkOutcome::Silent);
         }
         let next = link.next(PASS_WAIT);
-        if matches!(next, Next::Line(_)) {
-            last_line = Instant::now();
+        if matches!(next, Next::Line(_))
+            && let Some(hold) = hold
+        {
+            hold.saw_line();
         }
         match request_of(next) {
             Step::Request(request) => {
@@ -680,7 +717,7 @@ fn pass(session: &mut HostSession, link: &mut Link, gate: &mut FrameGate, new_li
 }
 
 /// Write the answer of a link that ends, and flush it before the link closes.
-fn finish(link: &mut Link, end: LinkEnd) -> LinkEnd {
+pub(super) fn finish(link: &mut Link, end: LinkEnd) -> LinkEnd {
     match &end.outcome {
         LinkOutcome::Answer(reply) => {
             let _ = link.send(reply);

@@ -47,6 +47,18 @@ const COMMAND_NOT_FOUND_EXIT: i32 = 127;
 /// The exit code of `ssh` when the connection itself failed.
 const SSH_CONNECTION_FAILURE: i32 = 255;
 
+/// The page of a panel, as the link of that panel names it to the driver of its
+/// browser host.
+#[derive(Clone, Copy, Debug)]
+pub struct LinkPage<'a> {
+    /// The identity of the panel, which stays the same across a lost link and a
+    /// restart, so the driver gives this panel its own page back.
+    pub id: &'a str,
+    /// Whether this page keeps nothing of the profile: a page of an isolated
+    /// context of the same browser.
+    pub private: bool,
+}
+
 /// The driver of a browser host: where it runs, and the program that this
 /// computer starts there.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,7 +210,19 @@ impl DriverLink {
     /// `ssh` cannot start or refuses the host (its own words are kept), the
     /// driver is not this program or another build of it, the driver runs on
     /// another system, or the driver refused the link in its words.
-    pub(super) fn open(ssh: &Ssh, host: &HostDriverHost, quality: u32) -> Result<Self, AttachedHostFailure> {
+    /// Open the link of one panel: greet the driver, and name the page that this
+    /// link drives.
+    ///
+    /// The page is the identity of the panel, so a link that comes back after a
+    /// loss attaches to the page that the panel had rather than to the page of
+    /// another panel. `private` asks for a page of an isolated context of that
+    /// browser, which keeps nothing of the profile.
+    pub(super) fn open(
+        ssh: &Ssh,
+        host: &HostDriverHost,
+        quality: u32,
+        page: &LinkPage<'_>,
+    ) -> Result<Self, AttachedHostFailure> {
         let attached = host.as_attached();
         // The login options of a machine of the machine list stand in front of the
         // target, so a machine that Horizon rented answers with its own key.
@@ -246,19 +270,26 @@ impl DriverLink {
             pass_wait: None,
             frames: 0,
         };
-        link.handshake(host.engine(), quality)?;
+        link.handshake(host.engine(), quality, page)?;
         link.greeted = true;
         Ok(link)
     }
 
     /// Greet the driver and check what it says about itself.
-    fn handshake(&mut self, engine: HostDriverEngine, quality: u32) -> Result<(), AttachedHostFailure> {
+    fn handshake(
+        &mut self,
+        engine: HostDriverEngine,
+        quality: u32,
+        page: &LinkPage<'_>,
+    ) -> Result<(), AttachedHostFailure> {
         let attached = self.attached();
         self.send(&HostDriverRequest::Hello {
             version: HOST_LINK_VERSION,
             horizon_version: env!("CARGO_PKG_VERSION").to_string(),
             system: HostSystem::here(),
             quality,
+            page: page.id.to_string(),
+            private: page.private,
         })
         .map_err(|error| AttachedHostFailure::unreachable(&attached, &error))?;
         let first = self
@@ -294,6 +325,7 @@ impl DriverLink {
         stream: &std::os::unix::net::UnixStream,
         host: &HostDriverHost,
         quality: u32,
+        page: &LinkPage<'_>,
     ) -> Result<Self, AttachedHostFailure> {
         let attached = host.as_attached();
         let reader = stream
@@ -331,7 +363,7 @@ impl DriverLink {
             pass_wait: None,
             frames: 0,
         };
-        link.handshake(host.engine(), quality)?;
+        link.handshake(host.engine(), quality, page)?;
         link.greeted = true;
         Ok(link)
     }

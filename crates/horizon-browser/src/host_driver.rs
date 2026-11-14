@@ -2,8 +2,13 @@
 //! that runs beside the browser on a browser host.
 //!
 //! One line of JSON is one message in each direction. The driver of the host
-//! holds the browser and the page; this computer sends what the person and the
-//! agent ask for and receives a pushed picture and the state of the page.
+//! holds the browser and the pages of its profile; this computer sends what the
+//! person and the agent ask for and receives a pushed picture and the state of
+//! the page of its link.
+//!
+//! One link drives one page. The greeting of a link names that page, so the
+//! session of the host gives each panel its own page of the one browser, and a
+//! link that comes back after a loss finds the page that it had.
 //!
 //! The version of this file travels in every handshake. A build that speaks
 //! another version refuses the other end in one line of words, because a field
@@ -27,7 +32,7 @@ use crate::{
 
 /// The version of this wire. One number for the whole file: a reader refuses
 /// every other version instead of guessing which fields it shares.
-pub const HOST_DRIVER_VERSION: u32 = 1;
+pub const HOST_DRIVER_VERSION: u32 = 2;
 
 /// Longest one line may be, in bytes, before the newline. A frame of a large
 /// page is the largest message, and a JPEG of a 4096 pixel side fits with room
@@ -67,6 +72,18 @@ pub enum HostDriverRequest {
         system: HostSystem,
         /// Quality of the pushed frames that this link wants.
         quality: u32,
+        /// The page that this link drives: the identity of the panel, which
+        /// stays the same across a lost link and a restart. A session of a
+        /// browser host keeps one page for each identity that a link names, and
+        /// a link that names a page that the session has gives that page back
+        /// with its typed text and its scroll place.
+        #[serde(default)]
+        page: String,
+        /// Whether this page keeps nothing of the profile: an isolated browser
+        /// context of the same browser, whose cookies and storage are apart and
+        /// which is removed when the page ends.
+        #[serde(default)]
+        private: bool,
     },
     /// One input of the person or of an agent. A run of typed text is one
     /// [`BrowserInput::InsertText`], so typing costs one message rather than one
@@ -98,9 +115,10 @@ pub enum HostDriverRequest {
     Signals {
         signals: HostDriverSignals,
     },
-    /// End the session of the host: the browser and the page stop. A lost link
-    /// never sends this, because the point of the driver on the host is that
-    /// the page outlives the link.
+    /// End the page of this link, and with the last page of a session the
+    /// session itself: the browser stops and the files of the session go away.
+    /// A lost link never sends this, because the point of the driver on the host
+    /// is that the page outlives the link.
     Close,
 }
 
@@ -555,6 +573,8 @@ mod tests {
             horizon_version: "1.2.3".to_string(),
             system: HostSystem::here(),
             quality: DEFAULT_HOST_FRAME_QUALITY,
+            page: "panel-1".to_string(),
+            private: false,
         };
         for request in [
             hello,
@@ -685,8 +705,14 @@ mod tests {
         };
         assert_eq!(code, "protocol_version");
         assert!(fatal, "a version mismatch ends the link");
-        assert!(message.contains("version 1"), "{message}");
-        assert!(message.contains("speaks 2"), "{message}");
+        assert!(
+            message.contains(&format!("speaks browser host protocol version {HOST_DRIVER_VERSION}")),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("speaks {}", HOST_DRIVER_VERSION + 1)),
+            "{message}"
+        );
     }
 
     #[test]
