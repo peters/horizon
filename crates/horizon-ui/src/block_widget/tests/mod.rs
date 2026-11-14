@@ -371,25 +371,11 @@ fn card_nodes(document: &BlockDocument, owner: Owner) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// The theme is one value for the whole test process, so a test that switches it
-/// and a test that judges a colour take this lock in turn. Without it, one pass
-/// can draw in the palette that another test just set.
-static THEME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Holds the theme of the process still for the caller.
-pub(crate) fn theme_lock() -> std::sync::MutexGuard<'static, ()> {
-    THEME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 /// The text and disabled state of every widget in `document`, drawn in
 /// `resolved`'s palette.
 fn card_nodes_in(resolved: theme::ResolvedTheme, document: &BlockDocument, owner: Owner) -> Vec<(String, bool)> {
-    let _theme = theme_lock();
-    let previous = theme::current_theme();
-    theme::set_theme(resolved);
-    let nodes = card_nodes(document, owner);
-    theme::set_theme(previous);
-    nodes
+    let _theme = crate::test_egui::with_theme(resolved);
+    card_nodes(document, owner)
 }
 
 /// Every text of a card that draws `document` with a runtime state of its own,
@@ -397,16 +383,13 @@ fn card_nodes_in(resolved: theme::ResolvedTheme, document: &BlockDocument, owner
 fn texts_of_card_with(document: &BlockDocument, card: &mut CardRuntime, owner: Owner) -> Vec<String> {
     let mut texts = Vec::new();
     for resolved in [theme::ResolvedTheme::Dark, theme::ResolvedTheme::Light] {
-        let _theme = theme_lock();
-        let previous = theme::current_theme();
-        theme::set_theme(resolved);
+        let _theme = crate::test_egui::with_theme(resolved);
         let mut card = card.clone();
         texts.extend(
             card_nodes_with(document, &mut card, owner)
                 .into_iter()
                 .map(|(text, _)| text),
         );
-        theme::set_theme(previous);
     }
     texts
 }

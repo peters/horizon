@@ -20,6 +20,7 @@ use crate::block_widget::metrics::{
     CALLOUT_RADIUS, ITEM_RADIUS, WIDE_FORM_MIN_WIDTH,
 };
 use crate::block_widget::{CARD_HEIGHT_LIMITS, CardForm, card_height_limits, default_card_size, fitted_card_height};
+use crate::theme::ResolvedTheme;
 
 /// The body width of a card `width` points wide.
 fn body(width: f32) -> f32 {
@@ -966,17 +967,18 @@ fn the_estimate_of_a_board_a_callout_and_a_log_grows_with_their_parts_in_both_fo
 
 #[test]
 fn a_colour_of_the_board_comes_from_the_theme_and_not_from_a_literal() {
-    // The board paints the accent of the current theme, so the same document
-    // follows the light theme without a branch of its own.
-    let _theme = crate::block_widget::tests::theme_lock();
-    let previous = crate::theme::current_theme();
+    // The board paints the accent of the theme, so the same document follows
+    // the light theme without a branch of its own. Each pass keeps its palette
+    // on this thread: the theme of the process belongs to every test at once,
+    // and the pass of a card is long enough for another test to change it.
     let dark = {
-        crate::theme::set_theme(crate::theme::ResolvedTheme::Dark);
+        let _theme = crate::test_egui::with_theme(ResolvedTheme::Dark);
         pass(1400.0, &board_document())
     };
-    crate::theme::set_theme(crate::theme::ResolvedTheme::Light);
-    let light = pass(1400.0, &board_document());
-    crate::theme::set_theme(previous);
+    let light = {
+        let _theme = crate::test_egui::with_theme(ResolvedTheme::Light);
+        pass(1400.0, &board_document())
+    };
 
     assert_ne!(
         outline_colours(&dark),

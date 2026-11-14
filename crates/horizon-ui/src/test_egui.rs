@@ -46,6 +46,43 @@ fn accesskit_nodes(
         .collect()
 }
 
+/// The theme that the thread of a test draws in, while it holds one.
+///
+/// The theme of the process is one value for every thread, and a test that
+/// paints a card can take tens of milliseconds. A test that writes that value
+/// while another test paints changes the palette under it, so a theme test
+/// keeps its own palette on its own thread instead.
+mod palette {
+    use std::cell::Cell;
+
+    use crate::theme::ResolvedTheme;
+
+    thread_local! {
+        static PALETTE: Cell<Option<ResolvedTheme>> = const { Cell::new(None) };
+    }
+
+    /// Holds the palette of `theme` on this thread until it is dropped.
+    pub(crate) struct ThemeOverride(Option<ResolvedTheme>);
+
+    impl Drop for ThemeOverride {
+        fn drop(&mut self) {
+            PALETTE.with(|palette| palette.set(self.0));
+        }
+    }
+
+    /// Draws as if the process used `theme`, on this thread alone.
+    pub(crate) fn with_theme(theme: ResolvedTheme) -> ThemeOverride {
+        ThemeOverride(PALETTE.with(|palette| palette.replace(Some(theme))))
+    }
+
+    /// The theme that this thread draws in, while it holds one.
+    pub(crate) fn theme_override() -> Option<ResolvedTheme> {
+        PALETTE.with(Cell::get)
+    }
+}
+
+pub(crate) use palette::{theme_override, with_theme};
+
 /// One pass in which a canvas layer at `zoom` is the layer of `add`, so a
 /// painter inside it reads the scale of the layer as the frame does.
 #[cfg(test)]

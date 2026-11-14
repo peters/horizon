@@ -124,12 +124,8 @@ mod tests {
     use super::{badge, badge_has_dot, button, status, text};
 
     fn with_theme<R>(resolved: theme::ResolvedTheme, run: impl FnOnce() -> R) -> R {
-        let _theme = crate::block_widget::tests::theme_lock();
-        let previous = theme::current_theme();
-        theme::set_theme(resolved);
-        let value = run();
-        theme::set_theme(previous);
-        value
+        let _theme = crate::test_egui::with_theme(resolved);
+        run()
     }
 
     #[test]

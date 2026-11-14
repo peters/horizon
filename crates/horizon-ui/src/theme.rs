@@ -422,6 +422,10 @@ pub fn workspace_accent_for(theme: ResolvedTheme, color_idx: usize) -> Color32 {
 }
 
 fn active_palette() -> &'static ThemePalette {
+    #[cfg(test)]
+    if let Some(theme) = crate::test_egui::theme_override() {
+        return palette_for(theme);
+    }
     palette_for(current_theme())
 }
 
