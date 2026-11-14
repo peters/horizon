@@ -46,6 +46,7 @@ impl Controls {
     /// The rate and the size limits of the images that the host renders.
     pub(super) fn limits(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
+            row_of_numbers(ui);
             ui.add(Label::new(panel_text::word(
                 ui,
                 "Maximum fps",
@@ -111,6 +112,7 @@ impl Controls {
             height: desktop[1],
         });
         ui.horizontal_wrapped(|ui| {
+            row_of_numbers(ui);
             ui.add(Label::new(panel_text::word(
                 ui,
                 "Viewport",
@@ -183,6 +185,16 @@ impl Controls {
         );
         ui.add(Label::new(note));
     }
+}
+
+/// A row of a caption and numbers has the height of a number from its first
+/// item. A wrapped row learns its height from the items that it has placed, so a
+/// caption that comes first would otherwise stand at the top of the row and the
+/// captions after it at the middle.
+fn row_of_numbers(ui: &mut Ui) {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let number = ui.fonts_mut(|fonts| fonts.row_height(&font)) + 2.0 * ui.spacing().button_padding.y;
+    ui.set_row_height(number.max(ui.spacing().interact_size.y));
 }
 
 #[cfg(test)]

@@ -365,3 +365,26 @@ fn a_number_of_the_controls_still_takes_a_drag_and_a_click() {
         "a typed number takes the place of the old one"
     );
 }
+
+/// The captions of a row of numbers stand on one line: the first caption of the
+/// row has the height of the row to stand in, as the captions after it have.
+#[test]
+fn the_captions_of_a_row_of_numbers_stand_on_one_line() {
+    for zoom in [0.67_f32, 1.0, 1.5] {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::app::bootstrap::configure_fonts());
+        // The padding of a button of the application: a number is taller than a
+        // caption by twice that padding.
+        ctx.all_styles_mut(|style| style.spacing.button_padding = egui::vec2(12.0, 6.0));
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::unique("captions"));
+        let mut controls = super::controls::Controls::default();
+        let _ = draw_controls(&ctx, layer, zoom, &mut controls, Vec::new());
+        let output = draw_controls(&ctx, layer, zoom, &mut controls, Vec::new());
+        let first = painted_text_center(&output, "Maximum fps");
+        let second = painted_text_center(&output, "Image limits");
+        assert!(
+            (first.y - second.y).abs() < 0.6,
+            "at zoom {zoom} the first caption stands on the line of the second: {first:?} against {second:?}"
+        );
+    }
+}
