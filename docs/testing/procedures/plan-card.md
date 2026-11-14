@@ -15,7 +15,9 @@ owner: peters
 This procedure proves that the plan card of the skill `horizon-plan` draws the
 board, the callout and the log, in the wide form and in the narrow form. It
 proves the fold of the narrow form, a press on an answer of the callout and a
-press on `Show helper terminals`.
+press on `Show helper terminals`. The last three tasks prove the cards of a task
+that came from a GitHub issue: the plan before the go, the branch that waits for
+the person to choose the push, and the end with the link of the pull request.
 
 ## 2. Applicability
 
@@ -65,7 +67,7 @@ the stand-in agent. An `update` names no `panel_id`: the stand-in agent adds the
 Give this line to the stand-in agent:
 
 ```text
-{"operation":"create","title":"Plan","document":{"components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · this computer","badge":{"text":"Running","tone":"info"}},{"type":"progress","label":"0 of 1 done · 0 needs you","percent":0,"detail":"t1 now"},{"type":"board","columns":[{"label":"Change","tag":"1","current":true}],"rows":[{"label":"coordinator · this computer"}],"items":[{"column":0,"row":0,"title":"Fix the login redirect","state":"now","value":"~20 m","note":"check: cargo test -p auth redirect"}]},{"type":"caption","text":"AGENTS.md · 1 at once · this computer · rent: no"},{"type":"buttons","items":[{"id":"stop","label":"Stop","tone":"danger"}]}]}}
+{"operation":"create","title":"Plan","document":{"components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · this computer","badge":{"text":"Running","tone":"info"}},{"type":"progress","label":"0 of 1 done · 0 needs you","percent":0,"detail":"t1 now"},{"type":"board","columns":[{"label":"Change","tag":"1","value":"~20 m","current":true}],"rows":[{"label":"coordinator · this computer"}],"items":[{"column":0,"row":0,"title":"Fix the login redirect","state":"now","value":"~20 m","note":"check: cargo test -p auth redirect"}]},{"type":"caption","text":"AGENTS.md · 1 at once · this computer · rent: no"},{"type":"buttons","items":[{"id":"stop","label":"Stop","tone":"danger"}]}]}}
 ```
 
 1. Read the card.
@@ -80,7 +82,7 @@ Give this line to the stand-in agent:
 Give this line to the stand-in agent:
 
 ```text
-{"operation":"update","document":{"components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · this computer","badge":{"text":"Done","tone":"ok"}},{"type":"progress","label":"1 of 1 done · 0 needs you","percent":100,"detail":"done"},{"type":"board","columns":[{"label":"Change","tag":"1"}],"rows":[{"label":"coordinator · this computer"}],"items":[{"column":0,"row":0,"title":"Fix the login redirect","state":"done","value":"18 m","note":"12 tests pass"}]},{"type":"log","entries":[{"at":"07:28","text":"t1 done: 12 tests pass"}]},{"type":"caption","text":"AGENTS.md · 1 at once · this computer · rent: no"},{"type":"buttons","items":[{"id":"close","label":"Close"}]}]}}
+{"operation":"update","document":{"components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · this computer","badge":{"text":"Done","tone":"ok"}},{"type":"progress","label":"1 of 1 done · 0 needs you","percent":100,"detail":"done"},{"type":"board","columns":[{"label":"Change","tag":"1","value":"18 m"}],"rows":[{"label":"coordinator · this computer"}],"items":[{"column":0,"row":0,"title":"Fix the login redirect","state":"done","value":"18 m","note":"12 tests pass"}]},{"type":"log","entries":[{"at":"07:28","text":"t1 done: 12 tests pass"}]},{"type":"caption","text":"AGENTS.md · 1 at once · this computer · rent: no"},{"type":"buttons","items":[{"id":"close","label":"Close"}]}]}}
 ```
 
 1. Read the card.
@@ -202,9 +204,57 @@ Give this line to the stand-in agent:
    cross, and its chip carries a danger border. The callout asks the question of
    the stopped plan and holds its answers.
 
+### 6.10 A10 — the plan of an issue before the go
+
+Give this line to the stand-in agent:
+
+```text
+{"operation":"update","document":{"width":"wide","components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · example-org/shop · branch fix-login-redirect","badge":{"text":"Plan","tone":"info"}},{"type":"progress","label":"0 of 3 done · 0 needs you","percent":0,"detail":"no todo runs"},{"type":"callout","caption":"Nothing starts before Go","text":"3 todos in 2 waves, on this computer and build-1. Nothing is rented. The pull request waits for your press.","buttons":[{"id":"go","label":"Go","tone":"primary"},{"id":"change","label":"Change the plan"},{"id":"stop","label":"Stop","tone":"danger"}]},{"type":"board","columns":[{"label":"Understand","tag":"1","value":"~12 m"},{"label":"Change","tag":"2","note":"in parallel","value":"~35 m"}],"rows":[{"label":"coordinator · this computer"},{"label":"helper-1 · build-1","subtitle":"16 vCPU"}],"items":[{"column":0,"row":0,"title":"Read the issue and the failing test","value":"~12 m","note":"check: cargo test -p horizon-ui login_redirect"},{"column":1,"row":1,"title":"Change the redirect target","value":"~20 m","note":"check: cargo test -p horizon-ui"},{"column":1,"row":0,"title":"Run the check and open the pull request","value":"~15 m","note":"check: cargo test --workspace"}]},{"type":"caption","text":"AGENTS.md · 2 at once · this computer, build-1 · rent: no"}]}}
+```
+
+1. Read the card.
+
+   Result: the subtitle of the heading names the issue and the branch, the
+   callout says what runs and what it costs, and the card holds no button row
+   beside the three answers of the callout. Press `Go`.
+
+   Result: `next_click` answers with the click of the id `go`.
+
+### 6.11 A11 — the branch is ready and the person chooses the push
+
+Give this line to the stand-in agent:
+
+```text
+{"operation":"update","document":{"width":"wide","components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · example-org/shop · branch fix-login-redirect","badge":{"text":"Running","tone":"info"}},{"type":"progress","label":"11 of 12 done · 1 needs you","percent":92,"detail":"the branch is ready"},{"type":"callout","tone":"warn","caption":"Needs you · the branch is ready","text":"The branch fix-login-redirect holds 4 commits and the checks pass. Nothing is on GitHub yet. Push the branch writes the branch to example-org/shop. Push and open a pull request writes the branch and a pull request there. Keep it local writes nothing.","buttons":[{"id":"answer.t12.push","label":"Push the branch","tone":"primary"},{"id":"answer.t12.pull_request","label":"Push and open a pull request"},{"id":"answer.t12.local","label":"Keep it local"}]},{"type":"board","columns":[{"label":"Understand","tag":"1","value":"4 m"},{"label":"Change","tag":"2","note":"in parallel","value":"13 m"},{"label":"Verify","tag":"3","note":"in parallel","value":"24 m"},{"label":"Push","tag":"4","value":"waits","current":true}],"rows":[{"label":"coordinator · this computer"},{"label":"helper-1 · build-1","subtitle":"16 vCPU"}],"items":[{"column":0,"row":0,"title":"Read the issue and the failing test","state":"done","value":"4 m","note":"1 failing test found"},{"column":1,"row":1,"title":"Change the redirect target","state":"done","value":"13 m","note":"12 tests pass"},{"column":2,"row":0,"title":"Run the full check","state":"done","value":"24 m","note":"412 tests pass"},{"column":3,"row":0,"title":"Name the branch of the push","state":"needs_you","value":"waits 2 m","note":"your push is your own choice"}]},{"type":"log","entries":[{"at":"09:12","text":"t12 waits: a push is the person's"},{"at":"09:08","text":"t11 done, 412 tests pass"},{"at":"09:01","text":"t10 done, the two findings are checked"},{"at":"08:55","text":"t9 done, 2 findings"},{"at":"08:40","text":"t8 added by the person in the agent panel"}]},{"type":"caption","text":"AGENTS.md · 2 at once · this computer, build-1 · rent: no"},{"type":"buttons","items":[{"id":"change","label":"Change the plan"},{"id":"stop","label":"Stop","tone":"danger"}]}]}}
+```
+
+1. Read the card.
+
+   Result: the callout says in words what each of its three answers writes and
+   where. No other button of the card writes anything.
+2. Press `Push the branch`.
+
+   Result: `next_click` answers with the click of the id `answer.t12.push`. The
+   card of the plan writes nothing to GitHub by itself.
+
+### 6.12 A12 — the pull request is open
+
+Give this line to the stand-in agent:
+
+```text
+{"operation":"update","document":{"width":"wide","components":[{"type":"heading","text":"Fix the login redirect","subtitle":"Issue #1987 · example-org/shop · branch fix-login-redirect","badge":{"text":"Done","tone":"ok"}},{"type":"progress","label":"12 of 12 done · 0 needs you","percent":100,"detail":"done in 52 min"},{"type":"board","columns":[{"label":"Understand","tag":"1","value":"4 m"},{"label":"Change","tag":"2","note":"in parallel","value":"13 m"},{"label":"Verify","tag":"3","note":"in parallel","value":"24 m"},{"label":"Push","tag":"4","value":"1 m"}],"rows":[{"label":"coordinator · this computer"},{"label":"helper-1 · build-1","subtitle":"16 vCPU"}],"items":[{"column":0,"row":0,"title":"Read the issue and the failing test","state":"done","value":"4 m","note":"1 failing test found"},{"column":1,"row":1,"title":"Change the redirect target","state":"done","value":"13 m","note":"12 tests pass"},{"column":2,"row":0,"title":"Run the full check","state":"done","value":"24 m","note":"412 tests pass"},{"column":3,"row":0,"title":"Push the branch and open the pull request","state":"done","value":"1 m","note":"412 tests pass"}]},{"type":"link","label":"Pull request 1998 of example-org/shop","url":"https://github.com/example-org/shop/pull/1998"},{"type":"log","entries":[{"at":"09:16","text":"t12 done: the pull request is open"},{"at":"09:14","text":"You pressed Push and open a pull request"},{"at":"09:12","text":"t12 waits: a push is the person's"},{"at":"09:08","text":"t11 done, 412 tests pass"},{"at":"09:01","text":"t10 done, the two findings are checked"}]},{"type":"caption","text":"AGENTS.md · 2 at once · this computer, build-1 · rent: no"},{"type":"buttons","items":[{"id":"terminal.helper-1","label":"Show helper terminals"},{"id":"close","label":"Close"}]}]}}
+```
+
+1. Read the card.
+
+   Result: the card holds one `link` component with the label of the pull
+   request, the host of the address under it, and no callout. A press on the
+   link opens the page in a browser panel of the card's workspace and sends no
+   click to the agent.
+
 ## 7. Pass criteria
 
-- Tasks A1 to A9 pass.
+- Tasks A1 to A12 pass.
 - The wide form and the narrow form draw the same document, and the numbers of
   the design hold: 44 points of the head row, 230 points of the worker column,
   one chip height, one right edge of the values, one hair line between cells.

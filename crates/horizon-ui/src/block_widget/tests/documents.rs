@@ -10,7 +10,7 @@ use horizon_browser_control::block::{BlockDocument, Component, parse_document};
 /// The card documents of the bundled skills, from the copy that the build
 /// embeds. The two bundled copies of each skill hold the same bytes, and the
 /// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 5] = [
+const SKILLS: [(&str, &str); 6] = [
     (
         "horizon-setup",
         include_str!(concat!(
@@ -37,6 +37,13 @@ const SKILLS: [(&str, &str); 5] = [
         include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-plan/SKILL.md"
+        )),
+    ),
+    (
+        "horizon-plan/from-an-issue",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-plan/references/from-an-issue.md"
         )),
     ),
     (
