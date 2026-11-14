@@ -5,12 +5,19 @@
 //! card body: the lines of every document keep the lines of zoom 1, and every
 //! board of a document keeps the tag and the value of each of its columns.
 
-use horizon_browser_control::block::{BlockDocument, Component, parse_document};
+use horizon_browser_control::block::{BlockDocument, Component, Selection, Tone, parse_document};
 
 /// The card documents of the bundled skills, from the copy that the build
 /// embeds. The two bundled copies of each skill hold the same bytes, and the
 /// coverage check keeps them in step.
-const SKILLS: [(&str, &str); 9] = [
+const SKILLS: [(&str, &str); 10] = [
+    (
+        "horizon-block",
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-block/SKILL.md"
+        )),
+    ),
     (
         "horizon-setup",
         include_str!(concat!(
@@ -408,4 +415,111 @@ fn every_end_card_of_the_skills_ends_with_clos() {
         }
     }
     assert!(cards >= 5, "the skills mark their end cards, and {cards} were found");
+}
+
+/// The label of every button of one card, and of every answer of its callouts, in
+/// draw order.
+fn button_labels(document: &BlockDocument) -> Vec<&str> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Buttons { items } => Some(items),
+            Component::Callout { buttons, .. } => Some(buttons),
+            _ => None,
+        })
+        .flatten()
+        .map(|button| button.label.as_str())
+        .collect()
+}
+
+/// The labels of the buttons of one card that are drawn as its primary action.
+fn primary_labels(document: &BlockDocument) -> Vec<&str> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| match component {
+            Component::Buttons { items } => Some(items),
+            Component::Callout { buttons, .. } => Some(buttons),
+            _ => None,
+        })
+        .flatten()
+        .filter(|button| button.tone == Tone::Primary)
+        .map(|button| button.label.as_str())
+        .collect()
+}
+
+/// Whether one card asks the person something: it holds a callout with an answer,
+/// or a list whose rows the person can choose.
+fn asks_a_question(document: &BlockDocument) -> bool {
+    document.components.iter().any(|component| match component {
+        Component::Callout { buttons, .. } => !buttons.is_empty(),
+        Component::List {
+            selection: Selection::Single,
+            rows,
+            ..
+        } => rows.iter().any(|row| !row.disabled),
+        _ => false,
+    })
+}
+
+/// Every string of one card, in document order.
+fn strings_of(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::String(text) => vec![text.clone()],
+        serde_json::Value::Array(items) => items.iter().flat_map(strings_of).collect(),
+        serde_json::Value::Object(fields) => fields.values().flat_map(strings_of).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The money units that a card can name.
+const MONEY_UNITS: [&str; 7] = ["EUR", "USD", "GBP", "CHF", "NOK", "SEK", "DKK"];
+
+/// A card that a person reads keeps four rules, and a skill that draws such a
+/// card keeps them too: one label per button, one primary action on a card that
+/// asks something, a price that says its unit and its hour, and a text inside the
+/// bound of the host.
+#[test]
+fn the_cards_of_the_skills_keep_the_rules_of_a_card() {
+    for (name, document) in skill_cards() {
+        let labels = button_labels(&document);
+        let mut seen: Vec<&str> = Vec::new();
+        for label in &labels {
+            assert!(
+                !seen.contains(label),
+                "{name}: two buttons of the card say {label:?}: {labels:?}"
+            );
+            seen.push(label);
+        }
+
+        if asks_a_question(&document) {
+            let primary = primary_labels(&document);
+            assert!(
+                primary.len() <= 1,
+                "{name}: a card that asks one question holds one primary action, and this one holds {primary:?}"
+            );
+        }
+
+        let strings = strings_of(&serde_json::to_value(&document).expect("a card serializes"));
+        let text = strings.join(" ").to_lowercase();
+        for unit in MONEY_UNITS {
+            if strings.iter().any(|string| string.contains(unit)) {
+                assert!(
+                    text.contains("hour"),
+                    "{name}: the card names a price in {unit} and no hour, so the person cannot tell the period"
+                );
+                assert!(
+                    text.contains(&unit.to_lowercase()),
+                    "{name}: a card that names money names the unit of the amount"
+                );
+            }
+        }
+
+        let longest = strings.iter().map(|string| string.chars().count()).max().unwrap_or(0);
+        assert!(
+            longest <= 512,
+            "{name}: a text of the card holds {longest} characters, above the 512 that the host accepts"
+        );
+    }
 }

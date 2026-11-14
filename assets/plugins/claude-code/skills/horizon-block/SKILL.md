@@ -34,7 +34,7 @@ The card is drawn in the caller's workspace. It does not take keyboard focus.
    {"type": "badge", "text": "running", "tone": "ok"},
    {"type": "kv", "rows": [
      {"label": "Address", "value": "203.0.113.10", "mono": true},
-     {"label": "Price", "value": "0.42 EUR/h"}]},
+     {"label": "Price", "value": "0.42 EUR / hour"}]},
    {"type": "text", "text": "Billed from 14:02 UTC."},
    {"type": "progress", "label": "Hour 3 of 24", "percent": 12, "detail": "Saving"},
    {"type": "list", "selection": "single", "rows": [
@@ -600,6 +600,23 @@ and you can press nothing.
   person moves it.
 
 ## The document
+
+A card that a person reads keeps four rules, and the test of the card documents of
+this build checks every card that a bundled skill ships:
+
+- **One label per button.** Two buttons of one card never say the same words, in
+  the buttons and in the answers of a callout together, so a press is never
+  ambiguous.
+- **One primary action on a card that asks something.** A card that holds a
+  callout with an answer, or a list whose rows the person can choose, marks at
+  most one button with tone `primary`. Only the first primary button of a card is
+  drawn as the primary action, so a second one is a second promise.
+- **A price says its unit and its hour.** A row or a text that names an amount of
+  money names the unit of the amount, such as `EUR`, and the word `hour`: write
+  `0.0107 EUR / hour`, and never `0.0107` or `EUR/h`.
+- **A text stays inside the bound.** 512 characters in one text, including the
+  `subtitle` of a row and the `at` of a step. A sentence that needs more is a
+  second component.
 
 A document holds components in draw order, and only these components:
 
