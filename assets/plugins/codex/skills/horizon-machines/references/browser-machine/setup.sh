@@ -13,12 +13,19 @@
 #
 # Usage:
 #   sh setup.sh [--profile NAME] [--image IMAGE] [--engine ENGINE] [--horizon PATH]
-#               [--rebuild] [--force]
+#               [--check] [--rebuild] [--force]
 #
 # The last line of the output is, for Chromium:
 #   browser-machine ready profile=<name> port=<n>
 # and for Firefox:
 #   browser-machine ready profile=<name> engine=firefox command=<what to write in the settings>
+#
+# `--check` does one thing: it reads the C library that the horizon binary of the
+# destination needs and the C library of the image of the browser machine, writes
+# the two versions, and stops with code 0 when the driver can start in that image
+# and code 3 when it cannot. The firefox engine runs this same check before it
+# builds the image, because a build costs four minutes and a driver that cannot
+# start costs the same four minutes and a failure that reads worse.
 
 set -eu
 
@@ -28,6 +35,7 @@ ENGINE=chromium
 HORIZON=
 REBUILD=0
 FORCE=0
+CHECK=0
 WRAPPER_DIR=/usr/local/bin
 WRAPPER_NAME=google-chrome
 
@@ -51,9 +59,68 @@ usage: sh setup.sh [--profile NAME] [--image IMAGE] [--engine ENGINE] [--horizon
   --image IMAGE   image tag to build and run (default horizon-browser-machine:local)
   --engine ENGINE chromium (default) or firefox; firefox needs --horizon
   --horizon PATH  the horizon binary of this system and CPU, copied into the image
+  --check         read the C library of the driver and of the image, then stop
   --rebuild       build the image again, also when it exists
   --force         continue on a machine that already has a Chromium program
 EOF
+}
+
+# The C library that a program needs: the highest version of GLIBC that its
+# symbols ask for, as binutils reads it or, without binutils, as the version
+# names in the file say. A program that asks for no GLIBC symbol, such as a
+# static program or one of another system, answers nothing.
+glibc_need_of() {
+    if command -v readelf >/dev/null 2>&1; then
+        readelf --version-info "$1" 2>/dev/null
+    elif command -v objdump >/dev/null 2>&1; then
+        objdump --dynamic-syms "$1" 2>/dev/null
+    else
+        cat -- "$1" 2>/dev/null | tr -c 'A-Za-z0-9_.\n' '\n'
+    fi | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -u -V | tail -n 1
+}
+
+# The C library of an image, read by the loader of that image.
+glibc_of_image() {
+    docker run --rm --network none "$1" sh -c 'ldd --version 2>&1 | head -n 1' 2>/dev/null |
+        tr -d '\r' | awk '{print $NF}'
+}
+
+# Whether the first version is the same as the second or older than it.
+version_at_most() {
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
+}
+
+# The image that the Dockerfile builds on.
+base_image_of() {
+    sed -n 's/^FROM[[:space:]][[:space:]]*//p' "$HERE/Dockerfile" | tail -n 1 | cut -d' ' -f1
+}
+
+# Whether the driver of this computer can start in the image of the browser
+# machine: it needs a C library that is not older than the one it was built with,
+# and the image is a Linux of a fixed distribution, whose library is known before
+# the build.
+check_c_library() {
+    binary=$HERE/horizon
+    [ -f "$binary" ] || die "no file at $binary: copy the horizon binary of this computer beside the Dockerfile"
+    base=$(base_image_of)
+    [ -n "$base" ] || die "no FROM line in $HERE/Dockerfile"
+    need=$(glibc_need_of "$binary" || true)
+    have=$(glibc_of_image "$base" || true)
+    if [ -z "$have" ]; then
+        die "the image $base did not answer its C library version: is docker able to pull it?"
+    fi
+    if [ -z "$need" ]; then
+        log "the driver needs no C library of the system, so it can start in any image"
+        return 0
+    fi
+    if version_at_most "$need" "$have"; then
+        log "the driver needs glibc $need and the image $base has glibc $have: the driver can start there"
+        return 0
+    fi
+    log "the driver of this computer needs glibc $need, and the image $base of the browser machine has glibc $have"
+    log "the driver cannot start in that container, and a browser machine of the firefox engine would fail at its first start"
+    log "use the engine chromium, which runs no horizon on the machine, or copy a horizon binary that is built on a system of glibc $have or older, or change the FROM line of the Dockerfile to an image with glibc $need"
+    return 1
 }
 
 while [ "$#" -gt 0 ]; do
@@ -77,6 +144,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die "--horizon needs a path"
             HORIZON=$2
             shift 2
+            ;;
+        --check)
+            CHECK=1
+            shift
             ;;
         --rebuild)
             REBUILD=1
@@ -193,6 +264,21 @@ elif [ ! -f "$HERE/horizon" ]; then
     chmod 0755 "$HERE/horizon"
 fi
 
+# 5. The C library, before anything is built. A driver that needs a newer library
+#    than this image has cannot start, and the person reads that now instead of
+#    after the four minutes of a build.
+if [ "$ENGINE" = firefox ]; then
+    if ! check_c_library; then
+        [ "$CHECK" -eq 1 ] && exit 3
+        die "the driver cannot start in the image of the browser machine"
+    fi
+    if [ "$CHECK" -eq 1 ]; then
+        exit 0
+    fi
+elif [ "$CHECK" -eq 1 ]; then
+    die "--check belongs to the firefox engine: a Chromium host runs no horizon on the machine"
+fi
+
 existing=$(docker inspect --format '{{.State.Running}}' "hz-bvm-$PROFILE" 2>/dev/null || true)
 if docker image inspect "$IMAGE" >/dev/null 2>&1 && [ "$REBUILD" -eq 0 ]; then
     log "the image $IMAGE exists: keep it (use --rebuild to build it again)"
@@ -206,7 +292,7 @@ else
 fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || die "the image $IMAGE is not built"
 
-# 5. The wrapper, under the first browser name that Horizon looks for. The
+# 6. The wrapper, under the first browser name that Horizon looks for. The
 #    firefox engine needs none: its browser runs behind the driver of the
 #    container, and the person names that command in the settings.
 if [ "$ENGINE" = firefox ]; then
@@ -238,7 +324,10 @@ if [ "$ENGINE" = firefox ]; then
     chmod 0700 "$profile_dir" 2>/dev/null || true
     docker rm -f "hz-bvm-$PROFILE" >/dev/null 2>&1 || true
     log "starting the browser machine of the profile $PROFILE (folder $profile_dir)"
+    # --shm-size 1g: a page with many frames crashes a browser of a container
+    # of the default 64 MB of shared memory.
     docker run --detach --name "hz-bvm-$PROFILE" \
+        --shm-size 1g \
         --env "BM_ENGINE=firefox" \
         --env "BM_PROFILE_DIR=/profile" \
         --mount "type=bind,source=$profile_dir,target=/profile" \
@@ -250,7 +339,7 @@ if [ "$ENGINE" = firefox ]; then
     exit 0
 fi
 
-# 6. Start the container through the same wrapper that Horizon runs, so the
+# 7. Start the container through the same wrapper that Horizon runs, so the
 #    setup proves the start path and not a second copy of it.
 profile_dir="$HOME/.horizon/browser-profiles/$PROFILE"
 mkdir -p "$profile_dir"
@@ -266,7 +355,7 @@ if ! "$WRAPPER_DIR/$WRAPPER_NAME" \
     die "the browser machine did not start"
 fi
 
-# 7. Read back what Horizon reads.
+# 8. Read back what Horizon reads.
 active="$profile_dir/DevToolsActivePort"
 [ -s "$active" ] || die "the wrapper wrote no $active"
 port=$(sed -n '1p' "$active")

@@ -17,6 +17,14 @@
 # at /opt/horizon/horizon. It must be built for the system and CPU of the
 # destination, because that is where it runs.
 #
+# The driver needs a C library that is not older than the one it was built with,
+# and a binary of a current distribution is newer than Debian 13. This image is
+# therefore built on Debian 14, whose C library is 2.43: the same one that the
+# newest Ubuntu has, so a horizon of such a computer starts here. A binary of a
+# newer library still cannot start, so setup.sh reads the library that the
+# copied binary needs and compares it with the library of this image before it
+# builds anything. Read `README.md` for the whole rule.
+#
 # Horizon starts its browser headed and passes the arguments itself, so this
 # image holds a display (Xvfb) and starts Chromium headed under it. The start
 # arguments of Horizon include `--remote-debugging-address=127.0.0.1`, which is
@@ -39,13 +47,21 @@
 # reach the DevTools port of this container.
 #
 # Debian's `chromium` is a native Debian package. Do not use the Ubuntu
-# `chromium-browser` of a snap: it needs snapd and a systemd session.
+# `chromium-browser` of a snap: it needs snapd and a systemd session, and Ubuntu
+# has no `firefox-esr` of its own either.
 #
-# Pin a digest for a long-lived machine: this tag follows Debian 13. Read the
+# `geckodriver` has no Debian package, so this image takes the release of
+# Mozilla with the checksum that Mozilla published for it.
+#
+# Pin a digest for a long-lived machine: this tag follows Debian 14. Read the
 # digest after the first build with `docker image inspect --format '{{index
 # .RepoDigests 0}}' horizon-browser-machine:local`.
 
-FROM debian:13-slim
+FROM debian:forky-slim
+
+# The CPU of the image, as BuildKit names it, so geckodriver is the release of
+# that CPU. `docker build` sets it.
+ARG TARGETARCH
 
 LABEL org.opencontainers.image.title="horizon browser machine" \
       org.opencontainers.image.description="A Chromium DevTools endpoint or a Firefox driver for Horizon browser panels" \
@@ -56,9 +72,6 @@ LABEL org.opencontainers.image.title="horizon browser machine" \
 # curl            the readiness check of the entrypoint and of the HEALTHCHECK
 # firefox-esr     the browser of the firefox engine
 # fonts-*         Latin (DejaVu, Liberation), CJK (Noto CJK) and colour emoji
-# geckodriver     the WebDriver of Firefox; when the distribution has no package
-#                 of it, install it on the destination and copy it in with
-#                 `docker cp`, as the horizon binary is copied in
 # openbox         a small window manager, so a headed window has stable geometry
 # socat           the bridge from the container interface to the loopback port
 # tini            PID 1, so the browser's children are reaped and signals reach it
@@ -77,9 +90,25 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
         socat \
         tini \
         xvfb \
-    && (DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends geckodriver \
-        || echo "no geckodriver package: copy a geckodriver binary into the container") \
     && rm -rf /var/lib/apt/lists/*
+
+# The WebDriver of Firefox. Debian has no package of it, so the image takes the
+# release of Mozilla and checks the checksum that Mozilla publishes beside it.
+# The version is pinned, so a build of this Dockerfile is the same binary.
+ARG GECKODRIVER_VERSION=0.37.1
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) architecture=linux64 ; sha256=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e ;; \
+        arm64) architecture=linux-aarch64 ; sha256=8fd90b951422fbad5b56539fb344dff66eb3f986d615d8d6fde9f1f62dad610c ;; \
+        *) echo "no geckodriver release for the CPU $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    release="geckodriver-v${GECKODRIVER_VERSION}-${architecture}.tar.gz"; \
+    curl --fail --location --silent --show-error --output "/tmp/$release" \
+        "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/$release"; \
+    echo "$sha256  /tmp/$release" | sha256sum --check --status; \
+    tar --extract --gzip --file "/tmp/$release" --directory /usr/local/bin; \
+    chmod 0755 /usr/local/bin/geckodriver; \
+    rm -f "/tmp/$release"
 
 COPY entrypoint.sh /usr/local/bin/browser-machine-entrypoint
 RUN chmod 0755 /usr/local/bin/browser-machine-entrypoint
