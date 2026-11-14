@@ -153,23 +153,27 @@ pub(super) fn refuse_unjoinable(config: &BrowserConfig, profile_id: &str) -> cra
         )));
     }
     let folder = config.profile_dir(profile_id);
-    if let Some(held) = held_by_another_browser(&folder) {
-        return Err(crate::error::Error::State(format!(
-            "the folder of the shared profile {profile_id} is held by {held}: close that browser, or open a private panel"
-        )));
-    }
     let difference = {
-        let key = profile_key(config, profile_id);
         let sessions = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = sessions.get(&key).filter(|entry| entry.session.strong_count() > 0) else {
-            return Ok(());
-        };
-        entry.launch.difference(&ProfileLaunch::of(config))
+        let entry = sessions
+            .get(&profile_key(config, profile_id))
+            .filter(|entry| entry.session.strong_count() > 0);
+        entry.map(|entry| entry.launch.difference(&ProfileLaunch::of(config)))
     };
-    match difference {
-        Some(difference) => Err(crate::error::Error::State(format!(
-            "the shared profile {profile_id} cannot take this page: {difference}. Close the panels of that profile, \
-             or create this panel with the setting of that browser"
+    if let Some(difference) = difference {
+        return match difference {
+            Some(difference) => Err(crate::error::Error::State(format!(
+                "the shared profile {profile_id} cannot take this page: {difference}. Close the panels of that \
+                 profile, or create this panel with the setting of that browser"
+            ))),
+            None => Ok(()),
+        };
+    }
+    // No panel of this Horizon runs the profile, so a lock in its folder belongs
+    // to another browser.
+    match held_by_another_browser(&folder) {
+        Some(held) => Err(crate::error::Error::State(format!(
+            "the folder of the shared profile {profile_id} is held by {held}: close that browser, or open a private panel"
         ))),
         None => Ok(()),
     }
@@ -365,7 +369,8 @@ impl crate::board::Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::io::{Read as _, Write as _};
+    use std::time::{Duration, Instant};
 
     fn panel(root: &std::path::Path, id: &str, profile: &str) -> BrowserPanelState {
         let mut state = BrowserPanelState::inert();
@@ -706,6 +711,119 @@ mod tests {
             !remote.can_open_private(),
             "a remote device keeps its own browser, so it opens no private panel of this computer"
         );
+    }
+
+    /// A page of this procedure sets one cookie and shows the cookie that it read
+    /// before it set its own, so a page that joins a signed-in profile reads
+    /// `signin=yes` and a private page reads none.
+    const COOKIE_PAGE: &str = r#"<!doctype html><title>pending</title>
+<script>
+const seen = document.cookie;
+document.cookie = "signin=yes; path=/";
+document.title = "seen: " + (seen || "none");
+</script>"#;
+
+    fn serve_cookie_page() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the test page");
+        let address = listener.local_addr().expect("address of the test page");
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request);
+                let body = COOKIE_PAGE.as_bytes();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(body);
+            }
+        });
+        format!("http://{address}/")
+    }
+
+    /// Wait for the title that the page of `state` reports.
+    fn page_title(state: &mut BrowserPanelState, wanted: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let mut title = String::new();
+        while Instant::now() < deadline {
+            let _ = state.drain_events();
+            title = state.title.clone();
+            if title.contains(wanted) {
+                return title;
+            }
+            if let BrowserStatus::Stopped { code } = state.status {
+                panic!("the browser stopped with {code:?} before its page read {wanted:?}: {title}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the page reported {title:?} and not {wanted:?} within the deadline");
+    }
+
+    /// The judge of the shared profile and the private panel, with a real browser
+    /// and a page of this computer.
+    ///
+    /// Run it with:
+    ///
+    /// ```text
+    /// cargo test -p horizon-core --lib a_shared_profile_keeps_a_sign_in -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "starts the Firefox and geckodriver of this computer"]
+    fn a_shared_profile_keeps_a_sign_in_and_a_private_panel_reads_none() {
+        let url = serve_cookie_page();
+        let profiles = tempfile::tempdir().expect("profile root");
+        let config = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            profile_root: Some(profiles.path().to_path_buf()),
+            ..BrowserConfig::default()
+        };
+        let mut first = BrowserPanelState::start_with_session(
+            "judge-page-1".to_string(),
+            &config,
+            Some(url.clone()),
+            Some(horizon_browser::DEFAULT_PROFILE),
+        )
+        .expect("the first page of the shared profile");
+        let title = page_title(&mut first, "seen:");
+        assert_eq!(title, "seen: none", "the first page signs in");
+
+        let mut second = BrowserPanelState::start_with_session(
+            "judge-page-2".to_string(),
+            &config,
+            Some(url.clone()),
+            Some(horizon_browser::DEFAULT_PROFILE),
+        )
+        .expect("the second page of the shared profile");
+        let title = page_title(&mut second, "seen:");
+        assert_eq!(title, "seen: signin=yes", "a second create reads the sign-in");
+
+        let mut private = BrowserPanelState::start_with_session("judge-private".to_string(), &config, Some(url), None)
+            .expect("a private panel");
+        let title = page_title(&mut private, "seen:");
+        assert_eq!(title, "seen: none", "a private panel reads no sign-in");
+
+        let shared_folder = config.profile_dir(horizon_browser::DEFAULT_PROFILE);
+        let private_folder = config.profile_dir("judge-private");
+        assert!(shared_folder.exists(), "the shared profile is on disk");
+        assert!(
+            private_folder.exists(),
+            "the private profile lives while its panel lives"
+        );
+
+        for panel in [&mut first, &mut second, &mut private] {
+            let signal = panel.close_permanently();
+            assert!(
+                signal.wait(Duration::from_secs(30)) || signal.force_cleanup(Duration::from_secs(10)),
+                "the browser and its profile must stop within the deadline"
+            );
+        }
+        assert!(
+            shared_folder.exists(),
+            "the shared profile keeps the sign-ins after the last close"
+        );
+        assert!(!private_folder.exists(), "the private profile is gone after its close");
     }
 
     #[test]
