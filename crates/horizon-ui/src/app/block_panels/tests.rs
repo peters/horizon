@@ -347,14 +347,12 @@ fn the_clock_of_the_window_gives_the_allowance_back() {
 /// A preset of an agent kind whose program waits for one line of text and writes
 /// what it read, so a test reads the line that Horizon typed.
 fn helper_preset(temp: &tempfile::TempDir) -> PresetConfig {
-    use std::os::unix::fs::PermissionsExt as _;
-    let program = temp.path().join("helper.py");
-    std::fs::write(
-        &program,
-        "#!/usr/bin/env python3\nimport sys\nprint('helper ready', flush=True)\nfor line in sys.stdin:\n    print('helper read: ' + line.strip(), flush=True)\n",
+    let program = horizon_core::stand_in_program_in(
+        temp.path(),
+        "helper",
+        "#!/bin/sh\nprintf 'helper ready\\n'\nwhile IFS= read -r line; do printf 'helper read: %s\\n' \"$line\"; done",
     )
     .expect("the stand-in program of the test");
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("an executable program");
     PresetConfig {
         command: Some(program.display().to_string()),
         args: Vec::new(),
@@ -366,7 +364,7 @@ fn helper_preset(temp: &tempfile::TempDir) -> PresetConfig {
 fn a_prompt_line_goes_into_the_panel_once_its_program_has_drawn() {
     let (temp, ctx, mut app) = app();
     let root = queue(&temp);
-    let work = directory(&temp, "helper");
+    let work = directory(&temp, "helper-t4");
     app.template_config.presets.push(helper_preset(&temp));
     let panel_id = opened(answer(
         &mut app,

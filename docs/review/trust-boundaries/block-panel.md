@@ -124,6 +124,26 @@ and the settings of the person go, so `server_link_request` and
   the sidebar and in the Server tab. A press is not a proof that the person read
   the card.
 
+### An agent reads the entry, and the answer holds no secret
+
+`server_status` answers the entry that the settings of this computer hold, the
+state of the link and the store id that this computer saw last. It is a read: it
+writes no file, starts no link and changes no setting.
+
+- **The answer is the store's own value.** Horizon reads the entry from the
+  settings in memory and the link state from the snapshot of the supervisor, so no
+  field is a claim of the caller and no field is a value that a person did not
+  save. It carries the SSH target or the machine name, the command and the
+  address, the state code of the link and the store id.
+- **No secret is part of the entry.** The token of a join, the machine keys and
+  the credential values are separate rows of the secrets file and separate files,
+  so an answer that names only the entry of the settings cannot reach them. The
+  link reads the token itself, and no card operation answers it.
+- **Every agent panel of the workspace reads it.** The entry is the person's, and
+  the answer names the same values to every agent of this Horizon. It carries no
+  secret, so that is no new disclosure; an agent must still not write the address
+  of a machine or a command into a card that a person did not agree to publish.
+
 ## Trusted: the caller identity
 
 The caller is the agent panel that Horizon launched, and its identity is the two

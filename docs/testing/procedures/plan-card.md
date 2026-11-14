@@ -12,12 +12,13 @@ owner: peters
 
 ## 1. Purpose
 
-This procedure proves that the three card documents of the `horizon-plan` skill
-are valid cards, and that the person reads the plan, the state of each todo, the
-question of a todo that needs the person, and the summary line. It draws the card
-at three moments: the plan before the go, a plan with three done todos and one
-todo that needs the person, and a plan that is done. It then proves that a press
-on an answer button and a press on a button of the card reach the agent that owns
+This procedure proves that the card documents of the `horizon-plan` skill are
+valid cards, and that the person reads the plan, the state of each todo, its
+place, its evidence, the question of a todo that needs the person, and the
+history of the plan. It draws the card at five moments: the short path at its
+start and at its end, the plan before the go, a plan that runs with an added
+todo, and a plan of twelve todos with a question. It then proves that a press on
+an answer button and a press on a button of the card reach the agent that owns
 the card. No AI model, no helper agent and no machine is necessary.
 
 ## 2. Applicability
@@ -98,8 +99,8 @@ the card. No AI model, no helper agent and no machine is necessary.
 ## 6. Tasks
 
 Each task appends one line to the standard input of client A. Every line is one
-JSON-RPC request of the `block_panel` tool. The three moments hold 3, 8 and 12
-todos, so the first two are two cards and the third is the second card changed.
+JSON-RPC request of the `block_panel` tool. The five cards hold 3, 8, 12 and 1
+todos, so the moments P3 and P5 are one card changed in place.
 
 ### 6.1 P1 — The plan before the go
 
@@ -107,7 +108,7 @@ todos, so the first two are two cards and the third is the second card changed.
    person gave the go.
 
    ```
-   {"tool": "block_panel", "arguments": {"operation": "create", "title": "Fix the login redirect", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Plan", "tone": "info"}}, {"type": "progress", "label": "0 of 3 done · 0 needs you", "percent": 0, "detail": "no todo runs"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer", "value": "~12 m", "badge": {"text": "Waiting"}}, {"id": "t2", "title": "Change the redirect target", "subtitle": "helper-1 · this computer", "value": "~20 m", "badge": {"text": "Waiting"}}, {"id": "t3", "title": "Run the test and the full check", "subtitle": "coordinator · this computer", "value": "~15 m", "badge": {"text": "Waiting"}}]}, {"type": "text", "text": "Three todos, one at a time, on this computer. The plan file is in .horizon-plan/ of the worktree, and git ignores it. Nothing outside the worktree changes."}, {"type": "buttons", "items": [{"id": "go", "label": "Go", "tone": "primary"}, {"id": "change", "label": "Change the plan"}, {"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
+   {"tool": "block_panel", "arguments": {"operation": "create", "title": "Fix the login redirect", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Plan", "tone": "info"}}, {"type": "progress", "label": "0 of 3 done · 0 needs you", "percent": 0, "detail": "no todo runs"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer", "value": "~12 m", "badge": {"text": "Waiting"}}, {"id": "t2", "title": "Change the redirect target", "subtitle": "helper-1 · this computer", "value": "~20 m", "badge": {"text": "Waiting"}}, {"id": "t3", "title": "Run the test and the full check", "subtitle": "coordinator · this computer", "value": "~15 m", "badge": {"text": "Waiting"}}]}, {"type": "text", "text": "Three todos, two at once, on this computer, as AGENTS.md says. The plan file is in .horizon-plan/ of the worktree, and git ignores it. Nothing outside the worktree changes."}, {"type": "buttons", "items": [{"id": "go", "label": "Go", "tone": "primary"}, {"id": "change", "label": "Change the plan"}, {"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
    ```
 
    Result: A card appears beside the panel of `Agent A`. The heading is `Fix the
@@ -116,32 +117,44 @@ todos, so the first two are two cards and the third is the second card changed.
    and its detail reads `no todo runs`. Under the caption `TODOS` are three rows,
    each in the form `todo · who · where · time`, for example
    `Change the redirect target`, `helper-1 · this computer`, `~20 m`, with the
-   badge `Waiting`. Below the text are the buttons `Go`, `Change the plan` and
-   `Stop`, and `Stop` is drawn at the right edge in the danger tone.
+   badge `Waiting`. The text names the policy of the repository. Below the text
+   are the buttons `Go`, `Change the plan` and `Stop`, and `Stop` is drawn at the
+   right edge in the danger tone.
 
 2. Read the answer of the request.
 
    Result: The answer is `created` with a `panel_id` and `revision` 1. Record the
    `panel_id`.
 
-### 6.2 P2 — Three done and one that needs the person
+### 6.2 P2 — A plan that runs, with evidence, an added todo and the history
 
-1. Append this line. It draws the card of a plan of eight todos with three done
-   todos and one todo that needs the person.
+1. Append this line. It draws the card of a plan of eight todos: three done, one
+   that runs, one that needs the person, one that the coordinator added, and the
+   last five events of the history.
 
    ```
-   {"tool": "block_panel", "arguments": {"operation": "create", "title": "Fix the login redirect", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}}, {"type": "progress", "label": "3 of 8 done · 1 needs you", "percent": 38, "detail": "t4 now"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t2", "title": "Add the redirect case to the test", "subtitle": "coordinator · this computer", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t3", "title": "Check the route table", "subtitle": "helper-1 · build-1", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t4", "title": "Change the redirect target", "subtitle": "helper-2 · this computer", "value": "8 m", "badge": {"text": "Now", "tone": "info"}}, {"id": "t5", "title": "Choose the address of the redirect", "subtitle": "you · this computer", "value": "waits", "badge": {"text": "Needs you", "tone": "warn"}}, {"id": "t6", "title": "Update the route notes", "subtitle": "coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}}, {"id": "t7", "title": "Run the full check", "subtitle": "coordinator · build-1", "value": "~20 m", "badge": {"text": "Waiting"}}, {"id": "t8", "title": "Write the report of the task", "subtitle": "coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}}]}, {"type": "caption", "text": "Needs you"}, {"type": "text", "text": "t5: Which address must the redirect use?"}, {"type": "buttons", "items": [{"id": "answer.t5.account", "label": "The account address", "tone": "primary"}, {"id": "answer.t5.last", "label": "The last address"}, {"id": "answer.t5.skip", "label": "Skip this todo"}]}, {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
+   {"tool": "block_panel", "arguments": {"operation": "create", "title": "Fix the login redirect", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}}, {"type": "progress", "label": "3 of 8 done · 1 needs you", "percent": 38, "detail": "t4 now"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer · 12 tests pass", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t2", "title": "Add the redirect case to the test", "subtitle": "coordinator · this computer · 12 tests pass", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t3", "title": "Check the route table", "subtitle": "helper-1 · build-1 · 9 rows", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t4", "title": "Change the redirect target", "subtitle": "helper-2 · this computer", "value": "8 m", "badge": {"text": "Now", "tone": "info"}}, {"id": "t5", "title": "Choose the address of the redirect", "subtitle": "you · this computer", "value": "waits", "badge": {"text": "Needs you", "tone": "warn"}}, {"id": "t6", "title": "Update the route notes", "subtitle": "coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}}, {"id": "t7", "title": "Run the full check", "subtitle": "coordinator · build-1", "value": "~20 m", "badge": {"text": "Waiting"}}, {"id": "t8", "title": "Write the report of the task", "subtitle": "added · coordinator · this computer", "value": "~5 m", "badge": {"text": "Waiting"}}]}, {"type": "caption", "text": "Needs you"}, {"type": "text", "text": "t5: Which address must the redirect use?"}, {"type": "buttons", "items": [{"id": "answer.t5.account", "label": "The account address", "tone": "primary"}, {"id": "answer.t5.last", "label": "The last address"}, {"id": "answer.t5.skip", "label": "Skip this todo"}]}, {"type": "caption", "text": "History"}, {"type": "list", "selection": "none", "rows": [{"id": "h1", "title": "t3 done on build-1, 9 rows", "subtitle": "t3", "value": "07:31"}, {"id": "h2", "title": "t2 done, 12 tests pass", "subtitle": "t2", "value": "07:26"}, {"id": "h3", "title": "t5 waits for the person", "subtitle": "t5", "value": "07:22"}, {"id": "h4", "title": "t8 added: the report was missing", "subtitle": "t8", "value": "07:20"}, {"id": "h5", "title": "The person pressed Go", "subtitle": "plan", "value": "07:10"}]}, {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
    ```
 
    Result: A second card appears. Its badge reads `Running`. The summary line
    reads `3 of 8 done · 1 needs you`, its bar fills to 38 percent, and its detail
-   reads `t4 now`. Eight rows are drawn. Three rows carry the badge `Done` in the
-   ok tone with a measured time. One row carries the badge `Now` in the info
-   tone. One row carries the badge `Needs you` in the warn tone and the value
-   `waits`. Three rows carry the badge `Waiting` and an estimate with `~` in
-   front. Under the caption `NEEDS YOU` is the question `t5: Which address must
-   the redirect use?` and three buttons: `The account address`, `The last
-   address` and `Skip this todo`. The last row of the card holds `Stop`.
+   reads `t4 now`. Eight rows are drawn:
+
+   - Three rows carry the badge `Done` in the ok tone, a measured time, and one
+     line of evidence after the place, such as
+     `coordinator · this computer · 12 tests pass`.
+   - One row carries the badge `Now` in the info tone.
+   - One row carries the badge `Needs you` in the warn tone and the value
+     `waits`.
+   - Two rows carry the badge `Waiting` and an estimate with `~` in front.
+   - The row `t8` starts its subtitle with `added`, so the person reads that the
+     coordinator added it after the go.
+
+   Under the caption `NEEDS YOU` is the question `t5: Which address must the
+   redirect use?` and three buttons: `The account address`, `The last address`
+   and `Skip this todo`. Under the caption `HISTORY` are five rows, newest
+   first, each with the event, its todo and a clock time. The last row of the
+   card holds `Stop`.
 
 2. Append this line. It waits for a press on any card of the agent.
 
@@ -158,41 +171,76 @@ todos, so the first two are two cards and the third is the second card changed.
    `click.revision` is the revision that the person saw, `click.selected` is
    empty, and `click.stale` is false.
 
-### 6.3 P3 — All done
+### 6.3 P3 — Twelve todos, a question and five history lines
 
-1. Append this line. It replaces the document of the second card with the card
-   of a plan of twelve todos that are all done.
+1. Append this line. It replaces the document of the second card with the card of
+   a plan of twelve todos: eleven done with their evidence, one that needs the
+   person, and the last five events.
 
    ```
-   {"tool": "block_panel", "arguments": {"operation": "update", "panel_id": "<panel_id of P2>", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Done", "tone": "ok"}}, {"type": "progress", "label": "12 of 12 done · 0 needs you", "percent": 100, "detail": "1 h 12 m"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t2", "title": "Add the redirect case to the test", "subtitle": "coordinator · this computer", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t3", "title": "Check the route table", "subtitle": "helper-1 · build-1", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t4", "title": "Change the redirect target", "subtitle": "helper-2 · this computer", "value": "8 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t5", "title": "Choose the address of the redirect", "subtitle": "you · this computer", "value": "2 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t6", "title": "Update the route notes", "subtitle": "coordinator · this computer", "value": "5 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t7", "title": "Run the full check", "subtitle": "coordinator · build-1", "value": "20 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t8", "title": "Write the report of the task", "subtitle": "coordinator · this computer", "value": "5 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t9", "title": "Read the review of the change", "subtitle": "helper-1 · build-1", "value": "3 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t10", "title": "Fix the two findings of the review", "subtitle": "coordinator · this computer", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t11", "title": "Run the full check again", "subtitle": "coordinator · build-1", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t12", "title": "Write the summary of the task", "subtitle": "coordinator · this computer", "value": "1 m", "badge": {"text": "Done", "tone": "ok"}}]}, {"type": "caption", "text": "What is done"}, {"type": "text", "text": "Done: the redirect target, the new test, the route notes, the review and two rounds of the full check on build-1. Each todo passed the check that the plan names."}, {"type": "caption", "text": "What is left"}, {"type": "text", "text": "Left: the branch is not pushed and no pull request exists. Press Push the branch when you want them."}, {"type": "buttons", "items": [{"id": "push", "label": "Push the branch", "tone": "primary"}, {"id": "close", "label": "Close"}]}]}}, "timeout": 30}
+   {"tool": "block_panel", "arguments": {"operation": "update", "panel_id": "<panel_id of P2>", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}}, {"type": "progress", "label": "11 of 12 done · 1 needs you", "percent": 92, "detail": "stopped at t12"}, {"type": "caption", "text": "Todos"}, {"type": "list", "selection": "none", "rows": [{"id": "t1", "title": "Read the issue and the failing test", "subtitle": "coordinator · this computer · 12 tests pass", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t2", "title": "Add the redirect case to the test", "subtitle": "coordinator · this computer · 12 tests pass", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t3", "title": "Check the route table", "subtitle": "helper-1 · build-1 · 9 rows", "value": "9 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t4", "title": "Change the redirect target", "subtitle": "helper-2 · this computer · 12 tests pass", "value": "8 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t5", "title": "Choose the address of the redirect", "subtitle": "you · this computer · the person chose the account address", "value": "2 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t6", "title": "Update the route notes", "subtitle": "coordinator · this computer · the notes name one address", "value": "5 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t7", "title": "Run the full check", "subtitle": "coordinator · build-1 · 412 tests pass", "value": "20 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t8", "title": "Write the report of the task", "subtitle": "added · coordinator · this computer · 4 lines in the PR", "value": "5 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t9", "title": "Read the review of the change", "subtitle": "helper-1 · build-1 · 2 findings", "value": "3 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t10", "title": "Fix the two findings of the review", "subtitle": "coordinator · this computer · 412 tests pass", "value": "6 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t11", "title": "Run the full check again", "subtitle": "coordinator · build-1 · 412 tests pass", "value": "4 m", "badge": {"text": "Done", "tone": "ok"}}, {"id": "t12", "title": "Name the branch of the push", "subtitle": "you · this computer", "value": "waits", "badge": {"text": "Needs you", "tone": "warn"}}]}, {"type": "caption", "text": "Needs you"}, {"type": "text", "text": "t12: May I push the branch fix-login-redirect and open a pull request?"}, {"type": "buttons", "items": [{"id": "answer.t12.push", "label": "Push and open the PR", "tone": "primary"}, {"id": "answer.t12.wait", "label": "Not now"}]}, {"type": "caption", "text": "History"}, {"type": "list", "selection": "none", "rows": [{"id": "h1", "title": "t12 waits: a push is the person's", "subtitle": "t12", "value": "09:12"}, {"id": "h2", "title": "t11 done on build-1, 412 tests pass", "subtitle": "t11", "value": "09:08"}, {"id": "h3", "title": "t10 done, the two findings are fixed", "subtitle": "t10", "value": "09:01"}, {"id": "h4", "title": "t9 done, 2 findings", "subtitle": "t9", "value": "08:55"}, {"id": "h5", "title": "t8 added by the person in the agent panel", "subtitle": "t8", "value": "08:40"}]}, {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
    ```
 
    Result: The second card changes in place, so its `panel_id` stays the one of
-   step 2 of P2, and the answer is `updated` with a revision above 1. The badge
-   reads `Done` in the ok tone. The summary line reads `12 of 12 done · 0 needs
-   you`, the bar is full, and the detail reads `1 h 12 m`. Twelve rows carry the
-   badge `Done`. Under the caption `WHAT IS DONE` is one line that names the work
-   that finished. Under the caption `WHAT IS LEFT` is one line that says that the
-   branch is not pushed and that no pull request exists. The buttons are `Push
-   the branch` and `Close`, and `Push the branch` is the primary button.
+   step 2 of P2, and the answer is `updated` with a revision above 1. The summary
+   line reads `11 of 12 done · 1 needs you`. Twelve rows are drawn and every done
+   row ends its subtitle with its evidence. The question names the push and the
+   pull request. Five history rows are drawn under the caption `HISTORY`. The
+   card holds ten components and two lists of twelve and five rows, which are
+   inside the bounds of 64 components and 32 rows in one list.
 
-2. Append the `next_click` line of step 2 of P2 again, and press `Push the
-   branch` on the second card.
+2. Append the `next_click` line of step 2 of P2 again, and press `Push and open
+   the PR` on the second card.
 
-   Result: The request answers `clicked` with `click.component_id` `push` and the
-   `panel_id` of the second card.
+   Result: The request answers `clicked` with `click.component_id`
+   `answer.t12.push` and the `panel_id` of the second card.
+
+### 6.4 P4 — The short path
+
+1. Append this line. It draws the card of a task of one todo, with no plan of
+   three todos and no go.
+
+   ```
+   {"tool": "block_panel", "arguments": {"operation": "create", "title": "Fix the login redirect", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Running", "tone": "info"}}, {"type": "progress", "label": "1 todo · starting", "percent": 10, "detail": "this computer"}, {"type": "buttons", "items": [{"id": "stop", "label": "Stop", "tone": "danger"}]}]}}, "timeout": 30}
+   ```
+
+   Result: A third card appears with the badge `Running`, one summary line that
+   reads `1 todo · starting`, the place `this computer` in the detail of the
+   summary line and in the subtitle of the heading, and one button `Stop` in the
+   danger tone. The card holds no `Go` button and no list of todos.
+
+2. Read the answer of the request.
+
+   Result: The answer is `created` with a `panel_id` and `revision` 1. Record the
+   `panel_id`.
+
+3. Append this line. It replaces the document of the third card with the card of
+   the same task when the todo is done.
+
+   ```
+   {"tool": "block_panel", "arguments": {"operation": "update", "panel_id": "<panel_id of P4>", "document": {"components": [{"type": "heading", "text": "Fix the login redirect", "subtitle": "Issue #1987 · this computer", "badge": {"text": "Done", "tone": "ok"}}, {"type": "text", "text": "The redirect of the sign-in page names the account address. Check: cargo test -p auth redirect, 12 tests pass. Evidence: check, the same command, .horizon-plan/progress-t1.md."}, {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}}, "timeout": 30}
+   ```
+
+   Result: The third card changes in place. Its badge reads `Done` in the ok
+   tone, one text holds the result and the evidence with the command and its
+   result line, and the only button is `Close`.
 
 ## 7. Pass criteria
 
-- Two cards are drawn, and each one reads as its task says.
+- Five cards are drawn at five moments, and each one reads as its task says.
 - The summary line reads `0 of 3 done · 0 needs you`, then `3 of 8 done · 1 needs
-  you`, then `12 of 12 done · 0 needs you`.
+  you`, then `11 of 12 done · 1 needs you`, then `1 todo · starting`.
 - Every row holds a todo, an owner, a place and a time, and the badge of the
-  state.
+  state. The place is in the subtitle of every row of every card.
+- Every done row ends its subtitle with one line of evidence, and every done todo
+  of the plan file holds one `evidence` entry of the kind that the line shows.
+- One row starts its subtitle with `added`, and the history holds five rows
+  newest first.
 - A press on an answer button answers `clicked` with the id of that button and no
   selection.
-- A press on `Push the branch` answers `clicked` with the id `push`.
 - `update` keeps the `panel_id` of the card and increases its revision.
+- The short path draws no `Go` button, and its end card holds the result and the
+  evidence.
 
 ## 8. Cleanup
 
