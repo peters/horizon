@@ -214,6 +214,13 @@ no such section, two todos run at once, work runs on this computer only, and you
 rent nothing. Whatever the section says, a rented machine needs a go of the
 person on a card that states its price.
 
+A todo whose place is `rent a machine` uses the recipe of that repository: the
+section `## Horizon machine` of `AGENTS.md`, read with
+`references/repository-machine.md` of `horizon-machines`. The recipe gives the
+resources, the tools, the warm-up and the check of the machine, and a helper on
+that machine works in the clone that the recipe brought. A repository without
+that section gets the one question of that page before any machine is rented.
+
 When the section is absent, give this block to the person to paste:
 
 ```markdown

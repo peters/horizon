@@ -481,6 +481,23 @@ card also holds the row `Internet through` with `this machine` or the name of
 that computer, and the buttons `Use <home name> as exit` and `Stop using exit`.
 The reference gives the steps that belong to the person, the proof and the undo.
 
+## A machine for a repository
+
+A repository says in its own `AGENTS.md`, in the section `## Horizon machine`,
+what a machine for its work needs: the resources, the system packages, the tools
+with their versions, the warm-up commands, the check that proves the machine and
+the way that the repository arrives. Use
+[repository-machine](references/repository-machine.md) when the person asks for a
+machine for a repository, or when a plan needs a place that is `rent a machine`.
+
+That page gives the recipe, the card of the rent with the price of every machine
+of the run together, one steps card for each machine, the card that says
+`Ready for <repository>` with the check as evidence, the card of a step that
+failed, and the rule that the repository arrives as a `git bundle` unless the
+recipe asks for a clone with a credential that the person confirms. When the
+repository holds no such section, ask one question on a card and offer to write
+the section from what the repository says about its own machine.
+
 ## Card documents
 
 These are the values of `document` for `create` and `update`: the overview card,

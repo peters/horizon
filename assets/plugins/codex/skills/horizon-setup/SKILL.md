@@ -25,7 +25,8 @@ itself belongs to other skills:
 - `horizon-block` holds the card contract, `next_click`, the machine records,
   the machine keys and the terminals.
 - `horizon-machines` holds the providers: the commands, the rent, the wait for
-  SSH and the delete.
+  SSH and the delete. Its page `references/repository-machine.md` holds the
+  recipe of a repository for the machine that its work needs.
 - `horizon-server` holds the Horizon server on a machine: the copy, the service,
   the check and the removal.
 - `horizon-server-move` holds the move of the server to another computer: the

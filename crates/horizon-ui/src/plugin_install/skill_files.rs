@@ -116,6 +116,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/repository-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/repository-machine.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-machines/references/runpod.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -370,6 +377,13 @@ pub(super) const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/codex/skills/horizon-machines/references/hetzner.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/repository-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/repository-machine.md"
         )),
     },
     EmbeddedFile {
