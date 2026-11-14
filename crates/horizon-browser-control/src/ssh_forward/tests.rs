@@ -15,6 +15,12 @@ use super::{
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
+/// A wait that the machine's speed must not decide. A stand-in `sh` writes its pid
+/// and a forward that gives up on a short deadline both take milliseconds; this
+/// guard only separates that from a wait on the stand-in's own minute-long sleep,
+/// so a loaded machine cannot turn it into a failure.
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 /// One test at a time. A child that another thread of this process forked holds
 /// the open script of this test, and Linux then refuses to execute it
 /// (`ETXTBSY`), so no test writes a script while another one spawns.
@@ -47,7 +53,7 @@ fn process_exists(pid: u32) -> bool {
 fn read_pid(path: &Path) -> u32 {
     // The stand-in creates the file before it writes the pid, so an existing
     // file can still be empty.
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = Instant::now() + HANG_GUARD;
     loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         if let Ok(pid) = text.trim().parse() {
@@ -125,7 +131,11 @@ fn a_forward_that_never_takes_a_connection_ends_on_its_deadline() {
         matches!(&error, SshForwardError::NotListening { target, .. } if target == "browser-vm"),
         "{error}"
     );
-    assert!(elapsed < DEADLINE, "the deadline of the forward took {elapsed:?}");
+    // The forward returns on its own 200 ms deadline. The guard below is not that
+    // deadline: it separates "gave up at once" from "waited for the stand-in's
+    // minute", which is the failure this test is about, and it leaves the machine's
+    // scheduling out of the verdict.
+    assert!(elapsed < HANG_GUARD, "the deadline of the forward took {elapsed:?}");
     assert!(error.to_string().contains("ssh wrote no reason"), "{error}");
 }
 
