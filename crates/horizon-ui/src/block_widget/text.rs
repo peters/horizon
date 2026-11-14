@@ -36,25 +36,6 @@ pub(super) fn line_weight(
     zoom_text::layout_job(painter, job)
 }
 
-/// One line of `text` at `line_height`, elided with an ellipsis when it is
-/// wider than `max_width`.
-pub(super) fn line_at_height(
-    painter: &Painter,
-    text: &str,
-    font: &FontId,
-    color: Color32,
-    max_width: f32,
-    line_height: f32,
-    weight: Weight,
-) -> Arc<Galley> {
-    let mut job = single_line_label_job(text, font, color, max_width);
-    for section in &mut job.sections {
-        section.format.coords = weight.coords();
-        section.format.line_height = Some(line_height);
-    }
-    zoom_text::layout_job(painter, job)
-}
-
 /// `text` wrapped to `max_width` at `line_height`, which is `None` for the
 /// font's own line height.
 pub(super) fn wrapped(

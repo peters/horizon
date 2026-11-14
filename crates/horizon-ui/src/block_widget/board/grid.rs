@@ -171,13 +171,14 @@ fn show_cell(ui: &Ui, painter: &egui::Painter, index: usize, cell: Cell, items: 
         // The cell of the grid keeps one line of evidence: a longer note ends
         // with an ellipsis and the whole note shows while the pointer rests on
         // the item.
-        let note = text::line_at_height(
+        let note = text::wrapped_rows(
             painter,
             item.note.as_deref().unwrap_or_default(),
             &FontId::monospace(ITEM_NOTE_FONT),
             colours(item.state).note,
             note_room(rect),
-            ITEM_NOTE_LINE_HEIGHT,
+            Some(ITEM_NOTE_LINE_HEIGHT),
+            1,
             Weight::Regular,
         );
         paint_chip(painter, rect, &chip, &note);
