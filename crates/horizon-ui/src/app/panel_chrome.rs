@@ -284,9 +284,14 @@ pub(super) fn paint_panel_chrome(ui: &mut egui::Ui, chrome: PanelChrome<'_>) {
 const CHIP_MIN_TITLE_SPACE: f32 = 24.0;
 
 /// Where the chip of a card sits: against the badge cluster, left of the close
-/// control.
+/// control, and left of the badge of a session when that badge shows. Two chips
+/// keep one place each, so the chip of a card never covers the chip of a session,
+/// and the title is cut before both of them.
 fn card_chip_rect(chrome: &PanelChrome<'_>, width: f32) -> Rect {
-    let right = badges_left_boundary(chrome);
+    let right = match session_badge_rect(chrome) {
+        Some(badge) => badge.min.x - chip::TITLE_GAP,
+        None => badges_left_boundary(chrome),
+    };
     Rect::from_min_size(
         Pos2::new(right - width, chrome.titlebar_rect.center().y - chip::height() * 0.5),
         Vec2::new(width, chip::height()),
@@ -704,9 +709,11 @@ pub(super) fn show_inline_rename_editor(
 mod tests {
     use egui::{Color32, Pos2, Rect};
 
+    use crate::block_widget::CardChip;
+
     use super::{
         AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
-        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill,
+        WORKING_BADGE_GAP, badges_left_boundary, card_chip_rect, focus_ring_stroke, panel_border_stroke, panel_fill,
         panel_history_badge_rect, panel_title_color, panel_title_content_rect, panel_titlebar_fill, session_badge_rect,
         ssh_mark, ssh_status_color, title_focus_indicator_rect, title_right_boundary, working_indicator_reserve,
         working_indicator_width,
@@ -819,6 +826,51 @@ mod tests {
         assert!(approx_eq(title_right_boundary(&idle), expected));
         assert!(approx_eq(title_right_boundary(&working), expected));
         assert!(title_right_boundary(&idle) < title_right_boundary(&plain));
+    }
+
+    #[test]
+    fn the_chip_of_a_card_stays_left_of_the_badge_of_a_session() {
+        let mut chrome = test_chrome_with_session(AgentStatus::Idle, Some("session-42"));
+        chrome.title = Some("Contact page helper \u{2014} add-contact");
+        chrome.card = Some(CardChip::opened_by("claude"));
+        let badge = session_badge_rect(&chrome).expect("the badge of the session is drawn");
+        let chip_width = 96.0;
+        let chip = card_chip_rect(&chrome, chip_width);
+        assert!(
+            chip.max.x <= badge.min.x,
+            "the chip of a card ends left of the badge of the session: {chip:?} against {badge:?}"
+        );
+        assert!(
+            approx_eq(chip.max.x, badge.min.x - super::chip::TITLE_GAP) || chip.max.x < badge.min.x,
+            "the two chips keep one gap between them: {chip:?} against {badge:?}"
+        );
+        assert!(
+            chip.min.x >= title_start_x_for_test(&chrome) + super::CHIP_MIN_TITLE_SPACE,
+            "the chip keeps the room that the title needs at this width: {chip:?}"
+        );
+        // The title stops at the nearer of the badge cluster and the chip, as
+        // the painting of a titlebar cuts it.
+        let title_stop = title_right_boundary(&chrome).min(chip.min.x - super::chip::TITLE_GAP);
+        assert!(
+            title_stop <= chip.min.x,
+            "the title is cut before the chip of the card: {title_stop} against {chip:?}"
+        );
+
+        let mut narrow = chrome_at_width_with_session(AgentStatus::Idle, NARROW_TITLEBAR_WIDTH);
+        narrow.card = Some(CardChip::opened_by("claude"));
+        assert!(
+            session_badge_rect(&narrow).is_none(),
+            "a titlebar that cannot hold both chips keeps the session badge only"
+        );
+        assert!(
+            approx_eq(card_chip_rect(&narrow, 96.0).max.x, badges_left_boundary(&narrow)),
+            "without the badge the chip of the card returns to the badge cluster"
+        );
+    }
+
+    /// The x where the title of a test titlebar begins.
+    fn title_start_x_for_test(chrome: &PanelChrome<'_>) -> f32 {
+        super::title_start_x(chrome)
     }
 
     #[test]
