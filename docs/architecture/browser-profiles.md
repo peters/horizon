@@ -139,6 +139,22 @@ this computer: `Target.createBrowserContext` and
 protocol for Firefox. The context reads no cookie and no site storage of the
 profile, and the driver removes it when its page ends.
 
+The panel asks for the context, and the session of the page proves it
+(`horizon_browser::PageIsolation`, one fact of the session and not a copy of the
+request). A page of this computer proves a folder of its own instead
+(`PageIsolation::PrivateFolder`), and a page that no session proved is
+`PageIsolation::Shared`: the chrome shows `Private` only for a page that keeps
+nothing, and `browser_create` reports `private_page_unavailable` when the browser
+of the host refuses a context, with no page of the shared profile opened in its
+place.
+
+A private page that comes back after a lost link comes back inside its own
+context: the panel carries the page target and the context id, and the session
+adopts that page only when the browser still holds both. A browser that restarted
+holds no such context, so the session makes a new context and a new page, and the
+panel says that the private page was lost. A page of the default context is never
+adopted for a private panel.
+
 ## The limits that a person meets
 
 - Two panels of one shared profile are two pages of one browser: there is no

@@ -190,6 +190,30 @@ Run this task with a configured browser host of the engine under test.
 
    Result: the new private page reads no cookie of the private page of step 3.
 
+5. Do this task one time for a Chromium host and one time for a Firefox host.
+
+   Result: a private page of a Chromium host is a page of a browser context of
+   its own. The chrome shows `Private` only after the session of the page proves
+   that context. A private page of a host never reports `profile` as the shared
+   profile of that machine.
+
+6. Start the browser of the host again while a private panel of that host is
+   open, and read the panel when its link comes back.
+
+   Result: the private panel is a new private page of a new context. Its notice
+   line says that the browser no longer held the context of the private page,
+   the chrome shows `Private`, and the page reads no cookie of the shared
+   profile.
+
+7. On the browser of a Chromium host, refuse a browser context: run the browser
+   of that host with an engine or an argument set that answers
+   `Target.createBrowserContext` with an error, and call `browser_create` with
+   `profile: "private"`.
+
+   Result: the create fails with `code: "private_page_unavailable"`, its message
+   says what failed and that Horizon opened no page in the shared profile, and
+   no panel of the shared profile is left open in its place.
+
 ### 6.8 P08 — A lost link with two panels comes back to its own page
 
 Run this task with a Firefox host.

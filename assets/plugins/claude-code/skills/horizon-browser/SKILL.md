@@ -43,7 +43,13 @@ unless the user asks for it. A browser host serves several panels of one
 profile, for Chromium and for Firefox: each panel is its own page of the one
 browser of that profile. On a browser host `private` opens a page of an
 isolated browser context of that machine, which reads none of the profile's
-sign-ins and which the browser removes when the page closes. Every panel of
+sign-ins and which the browser removes when the page closes. The word is a
+promise that Horizon checks: a private page that the session cannot prove
+isolated is a failed create with the code `private_page_unavailable`, and
+Horizon never opens a page of the shared profile in its place. A private page
+of a host that comes back after a lost link comes back in its own context, or
+in a new context with a notice that the private page was lost; it is never the
+profile. Every panel of
 `browser_create`, `browser_list` and `browser_panel` reports `profile`: the
 name of the shared profile that it uses, or `private`. A remote session
 reports none. Use that field to tell which profile a panel's sign-ins belong
@@ -425,6 +431,13 @@ computer.
   context of that machine: no cookie and no site storage of the profile, and the
   browser removes the context when the page closes. The page runs in the browser
   process of the shared profile, and the machine and its owner see its traffic.
+- The promise of `private` is a fact of the running session and not a copy of
+  the create: `browser_list` and `browser_panel` report `profile: "private"`
+  only for a page that the session proved isolated. A browser of that host that
+  refuses a context fails the create with `private_page_unavailable` and opens
+  no page of the shared profile, so a `private` panel is never a page of the
+  sign-ins of the person. A private page whose context the browser no longer
+  holds is a new private page with a notice, never a page of the profile.
 - A private page of a host whose link went is closed by the session of that
   host after ten minutes, and its context goes with it. A shared page of the
   same host stays, because a person signed in there.

@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-browser/src/profile.rs,crates/horizon-browser/src/lib.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/startup/page.rs,crates/horizon-browser/src/session/shared.rs,crates/horizon-browser/src/webdriver/shared.rs,crates/horizon-core/src/browser/host_route.rs,crates/horizon-core/src/browser/mod.rs,crates/horizon-core/src/browser/private_profiles.rs,crates/horizon-core/src/browser/shared_session.rs,crates/horizon-core/src/browser/host_driver/**,crates/horizon-core/src/session_store.rs,crates/horizon-core/src/panel.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/src/panel/spawn/browser.rs,crates/horizon-core/src/runtime_state.rs,crates/horizon-core/src/runtime_state/models.rs,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/manifest.rs,crates/horizon-browser-control/src/manifest/create.rs,crates/horizon-browser-mcp/src/model.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-cli/src/standalone.rs,crates/horizon-browser-cli/src/main.rs,crates/horizon-ui/src/app/actions/support.rs,crates/horizon-ui/src/app/browser_create_dispatch.rs,crates/horizon-ui/src/app/browser_host_login.rs,crates/horizon-ui/src/app/panels/interaction.rs,crates/horizon-ui/src/app/panels.rs,crates/horizon-ui/src/browser_widget/chrome.rs,crates/horizon-ui/src/main.rs"
+applyTo: "crates/horizon-browser/src/profile.rs,crates/horizon-browser/src/lib.rs,crates/horizon-browser/src/session.rs,crates/horizon-browser/src/session/isolation.rs,crates/horizon-browser/src/session/startup.rs,crates/horizon-browser/src/session/startup/page.rs,crates/horizon-browser/src/session/shared.rs,crates/horizon-browser/src/webdriver/shared.rs,crates/horizon-core/src/browser/host_route.rs,crates/horizon-core/src/browser/mod.rs,crates/horizon-core/src/browser/attached_host.rs,crates/horizon-core/src/browser/attached_host/**,crates/horizon-core/src/browser/private_profiles.rs,crates/horizon-core/src/browser/shared_session.rs,crates/horizon-core/src/browser/host_driver/**,crates/horizon-core/src/session_store.rs,crates/horizon-core/src/panel.rs,crates/horizon-core/src/panel/spawn.rs,crates/horizon-core/src/panel/spawn/browser.rs,crates/horizon-core/src/runtime_state.rs,crates/horizon-core/src/runtime_state/models.rs,crates/horizon-core/src/config/browser_host.rs,crates/horizon-browser-control/src/manifest.rs,crates/horizon-browser-control/src/manifest/create.rs,crates/horizon-browser-mcp/src/model.rs,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-cli/src/standalone.rs,crates/horizon-browser-cli/src/main.rs,crates/horizon-ui/src/app/actions/support.rs,crates/horizon-ui/src/app/browser_create_dispatch.rs,crates/horizon-ui/src/app/browser_host_login.rs,crates/horizon-ui/src/app/panels/interaction.rs,crates/horizon-ui/src/app/panels.rs,crates/horizon-ui/src/browser_widget/chrome.rs,crates/horizon-ui/src/main.rs"
 ---
 
 # Browser profiles
@@ -20,6 +20,10 @@ Read `docs/architecture/browser-profiles.md` before reviewing this boundary.
    cookies of that profile, and can sign the person out of every site.
 4. The greeting of a link of a browser host, which names the page of the
    panel and asks for a private page or a page of the profile.
+5. The DevTools commands of the browser of a host. The browser answers the
+   context question of a private page, and its answer decides whether that page
+   reads the profile. An engine that answers with no context, or with a page of
+   its default context, decides it too.
 
 ## What the code guarantees
 
@@ -98,7 +102,24 @@ for Firefox. The code guarantees these properties:
   `browser.removeUserContext`. A context whose page and link are gone does not
   stay: the driver removes it when its page ends or its session stops.
 - The panel reports `private` as its profile, and the chrome of the panel shows
-  `Private`.
+  `Private`, only when the session of the page proves one of the two facts:
+  `PageIsolation::IsolatedContext` for a page of an isolated context of a
+  browser that another process owns, and `PageIsolation::PrivateFolder` for a
+  page of this computer in a folder of its own
+  (`horizon_browser::PageIsolation`). The fact belongs to the session and never
+  to the request that made the panel, and a page that no session proved is
+  `PageIsolation::Shared`.
+- A private page that the session cannot prove is a refused create, and never a
+  page of the shared profile: the session answers
+  `private_page_unavailable: <what failed>, so this panel opened no page in the
+  shared profile` before it makes any page, and the panel reports the profile of
+  that machine (`private_page_unavailable`, `private_page_unavailable_detail`).
+- A private page that comes back after a lost link comes back inside its own
+  context. The session adopts the page of the link before only when its own
+  `Target.getBrowserContexts` and `Target.getTargets` answers name that context
+  and that page in it. A browser that restarted holds no such context, and the
+  session then makes a new context and a new page: it never adopts a page of the
+  default context, and the panel says that the private page was lost.
 - A private page whose link is gone for ten minutes is closed by the session of
   the host, and its context is removed with it. A shared page of the same session
   keeps its page and its context, and the session ends when it holds no page.
@@ -149,5 +170,10 @@ The code does not guarantee these properties:
   panel is a throwaway folder. A private page of a browser host uses the
   isolated context of that browser, because the profile of the host belongs to
   that machine and has no throwaway folder of this computer.
+- Do not let a label, a manifest or an answer claim `private` from the field of
+  a request. Read the fact of the session, and refuse the create when the fact
+  does not hold. A test of a private page starts at the options of the create,
+  because a test that sets the isolation field by hand judges the helper and not
+  the path of a panel.
 - Do not read or copy the cookies of a profile into a log, a manifest or an
   MCP answer.
