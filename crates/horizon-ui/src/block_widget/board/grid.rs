@@ -22,9 +22,8 @@ pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[B
     // A column of the grid is at most BOARD_COLUMN_MAX_WIDTH wide, so the grid
     // of a few waves keeps the left edge of the body instead of stretching its
     // cells across a card that the person made wide.
-    let column_width = ((ui.available_width() - BOARD_HEAD_COLUMN) / count(columns.len()))
-        .min(BOARD_COLUMN_MAX_WIDTH)
-        .max(1.0);
+    let column_width =
+        ((ui.available_width() - BOARD_HEAD_COLUMN) / count(columns.len())).clamp(1.0, BOARD_COLUMN_MAX_WIDTH);
     let width = BOARD_HEAD_COLUMN + count(columns.len()) * column_width;
     let row_height = (0..rows.len())
         .map(|row| cell_height(tallest_cell(items, columns.len(), row)))
@@ -177,8 +176,10 @@ fn show_cell(ui: &Ui, painter: &egui::Painter, index: usize, cell: Cell, items: 
             &FontId::monospace(ITEM_NOTE_FONT),
             colours(item.state).note,
             note_room(rect),
-            Some(ITEM_NOTE_LINE_HEIGHT),
-            1,
+            text::Lines {
+                line_height: Some(ITEM_NOTE_LINE_HEIGHT),
+                max_rows: 1,
+            },
             Weight::Regular,
         );
         paint_chip(painter, rect, &chip, &note);

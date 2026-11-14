@@ -95,8 +95,8 @@ pub(super) fn colours(state: BoardState) -> ChipColours {
         fill,
         outline,
         title,
-        note,
         value,
+        note,
     }
 }
 
