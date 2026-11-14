@@ -1,0 +1,56 @@
+//! The board: who and where the work runs, against the waves that run it.
+//!
+//! The wide card draws the grid of the approved board mockup: one column for
+//! each wave, one row for each worker and the items of the work in the cells,
+//! each item with the one mark of its state. The narrow card draws the same
+//! items as one list, grouped by wave, with the place of every item on its
+//! second line and the finished leading waves folded into one line.
+//!
+//! An item takes no press and reaches no agent. The fold of the narrow form is
+//! the person's own view of the card: it is kept for that card and it is no
+//! click of a `next_click`.
+
+mod chip;
+mod grid;
+mod list;
+
+use egui::Ui;
+use horizon_browser_control::block::{BoardColumn, BoardItem, BoardRow};
+
+use super::form::Form;
+use super::metrics::{
+    BOARD_CELL_GAP, BOARD_CELL_PAD, ITEM_BORDER, ITEM_LINE_GAP, ITEM_MARK, ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_Y, count,
+};
+
+/// Draw a `board` component in the form that the body is wide enough for.
+pub(super) fn show(
+    ui: &mut Ui,
+    index: usize,
+    columns: &[BoardColumn],
+    rows: &[BoardRow],
+    items: &[BoardItem],
+    form: Form,
+) {
+    if columns.is_empty() || rows.is_empty() {
+        return;
+    }
+    match form {
+        Form::Wide => grid::show(ui, index, columns, rows, items),
+        Form::Narrow => list::show(ui, index, columns, rows, items),
+    }
+}
+
+/// The height of one item whose evidence takes `note_lines` lines.
+pub(super) fn chip_height(note_lines: usize) -> f32 {
+    2.0 * ITEM_BORDER + 2.0 * ITEM_PAD_Y + ITEM_MARK + ITEM_LINE_GAP + count(note_lines) * ITEM_NOTE_LINE_HEIGHT
+}
+
+/// The height of the cell that holds `items` items, and of the body row that
+/// holds that cell.
+pub(super) fn cell_height(items: usize) -> f32 {
+    if items == 0 {
+        0.0
+    } else {
+        2.0 * BOARD_CELL_PAD + count(items) * chip_height(1) + count(items - 1) * BOARD_CELL_GAP
+    }
+}
