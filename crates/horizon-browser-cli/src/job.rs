@@ -78,6 +78,8 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
             backend: options.backend,
             visible: options.visible,
             keep_alive: false,
+            // The browser of a job belongs to that job and goes with it.
+            profile: None,
         },
         browser_home.path(),
         create_private(&browser_diagnostics_path)?,

@@ -41,7 +41,7 @@ USAGE:
     horizon-browser orientation <PANEL-ID> <portrait|landscape> [--timeout-millis <MILLIS>] [-o <REPORT.json|->]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
-    horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
+    horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible] [--profile <NAME>]
     horizon-browser mcp --standalone --config <HOST-FILE>
     horizon-browser mcp --connect --inline-screenshots
     horizon-browser mcp --stop [PANEL-ID]
@@ -66,11 +66,18 @@ COMMANDS:
            sessions when MCP stdin closes. --inline-screenshots (--connect
            only) also returns the PNG of each browser_screenshot as an image
            block, for a client that a person reaches over a stream of its own.
-           The screenshots of a Horizon host stay a path.
+           The screenshots of a Horizon host stay a path. --profile keeps the
+           folder of the local browser, so a later job finds its sign-ins.
 
 OPTIONS:
     --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
     --visible             Show a native browser window; jobs default headless.
+    --profile <NAME>      mcp --standalone: keep the browser folder under the
+                           profile root of this runtime, so the next job that
+                           names it finds the sign-ins of the last one. One job
+                           writes one profile; a second job on that name is
+                           refused. `private`, the default, is a folder that the
+                           job removes when it ends.
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
     --timeout <SECONDS>    Bound durable preparation and MCP work (default 1800, max 86400).
@@ -713,6 +720,7 @@ struct McpFlags {
     backend_seen: bool,
     visible: bool,
     keep_alive: bool,
+    profile: Option<String>,
     config: Option<PathBuf>,
     stop: bool,
     stop_panel: Option<String>,
@@ -735,9 +743,11 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             panel_id: flags.stop_panel,
         });
     }
-    let local_browser_flags = flags.backend_seen || flags.visible || flags.keep_alive;
+    let local_browser_flags = flags.backend_seen || flags.visible || flags.keep_alive || flags.profile.is_some();
     if !flags.standalone && (local_browser_flags || flags.config.is_some()) {
-        return Err("--backend, --visible, --keep-alive, and --config require standalone MCP mode".to_string());
+        return Err(
+            "--backend, --visible, --keep-alive, --profile, and --config require standalone MCP mode".to_string(),
+        );
     }
     if flags.standalone && flags.inline_screenshots {
         return Err("--inline-screenshots requires --connect".to_string());
@@ -760,6 +770,7 @@ fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
             backend: flags.backend,
             visible: flags.visible,
             keep_alive: flags.keep_alive,
+            profile: flags.profile,
         },
         config,
         inline_screenshots: flags.inline_screenshots,
@@ -805,6 +816,21 @@ fn parse_mcp_flags(args: impl Iterator<Item = OsString>) -> Result<McpFlags, Str
             }
             Some("--backend") => return Err("--backend may be specified only once".to_string()),
             Some("--visible") if !flags.visible => flags.visible = true,
+            Some("--profile") if flags.profile.is_none() => {
+                let name = args
+                    .next()
+                    .ok_or_else(|| "--profile requires a profile name".to_string())?;
+                let name = name
+                    .into_string()
+                    .map_err(|_| "--profile name is not valid UTF-8".to_string())?;
+                if name != "private" && !horizon_browser::valid_profile_name(&name) {
+                    return Err(format!(
+                        "\"{name}\" is not a profile name: use lower-case letters, digits and dashes, start and end with a letter or a digit, and keep it short"
+                    ));
+                }
+                flags.profile = Some(name);
+            }
+            Some("--profile") => return Err("--profile may be specified only once".to_string()),
             Some("--inline-screenshots") if !flags.inline_screenshots => flags.inline_screenshots = true,
             Some("--inline-screenshots") => {
                 return Err("--inline-screenshots may be specified only once".to_string());
@@ -1102,6 +1128,40 @@ mod tests {
             &["mcp", "--standalone", "--config", "/h.json", "--config", "/i.json"],
             &["mcp", "--standalone", "--config"],
             &["mcp", "--stop", "--config", "/h.json"],
+        ] {
+            assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
+        }
+    }
+
+    /// A standalone host keeps its browser folder under a profile name, and the
+    /// name rule is the rule of every profile of this crate.
+    #[test]
+    fn a_standalone_host_keeps_its_browser_under_a_profile_name() {
+        let Command::Mcp { options, .. } =
+            parse_args(["mcp", "--standalone", "--profile", "mail"].map(OsString::from)).expect("a named profile")
+        else {
+            panic!("expected MCP command");
+        };
+        assert_eq!(options.profile.as_deref(), Some("mail"));
+        let Command::Mcp { options, .. } =
+            parse_args(["mcp", "--standalone"].map(OsString::from)).expect("the throwaway folder")
+        else {
+            panic!("expected MCP command");
+        };
+        assert_eq!(options.profile, None);
+        let Command::Mcp { options, .. } =
+            parse_args(["mcp", "--standalone", "--profile", "private"].map(OsString::from)).expect("private")
+        else {
+            panic!("expected MCP command");
+        };
+        assert_eq!(options.profile.as_deref(), Some("private"));
+        for refused in [
+            &["mcp", "--standalone", "--profile"][..],
+            &["mcp", "--standalone", "--profile", "Mail"],
+            &["mcp", "--standalone", "--profile", "../mail"],
+            &["mcp", "--standalone", "--profile", "mail", "--profile", "work"],
+            &["mcp", "--standalone", "--config", "/h.json", "--profile", "mail"],
+            &["mcp", "--connect", "--profile", "mail"],
         ] {
             assert!(parse_args(refused.iter().map(OsString::from)).is_err(), "{refused:?}");
         }
