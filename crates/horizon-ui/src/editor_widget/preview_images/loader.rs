@@ -85,6 +85,13 @@ impl NoteImages {
         ctx.data(|data| data.get_temp::<Arc<Self>>(shared_id()).is_some())
     }
 
+    /// The number of pictures that this loader holds. A test proves that the
+    /// cache of a note ends with the panel.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> usize {
+        lock(&self.inner).entries.len()
+    }
+
     /// The one instance of these pictures for `ctx`, with its texture loader
     /// installed.
     pub(crate) fn shared(ctx: &Context) -> Arc<Self> {
