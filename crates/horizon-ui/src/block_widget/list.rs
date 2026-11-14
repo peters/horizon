@@ -65,6 +65,18 @@ fn show_rows(
     enabled: bool,
 ) {
     let selectable = selection == Selection::Single && enabled;
+    // A list that offers no selection draws no ring, so its text takes the room
+    // that the ring keeps.
+    let marked = selection == Selection::Single;
+    let text_x = text_left(marked);
+    let tallest = rows
+        .iter()
+        .map(|row| {
+            let edge = row_edge(ui, row, row.disabled);
+            let room = (ui.available_width() - text_x - LIST_ROW_PAD_SIDE - LIST_ROW_OUTLINE - edge.width).max(0.0);
+            2.0 * LIST_ROW_OUTLINE + 2.0 * LIST_ROW_PAD_Y + row_text_height(ui, row, room)
+        })
+        .fold(0.0, f32::max);
     for (row_index, row) in rows.iter().enumerate() {
         if row_index > 0 {
             ui.add_space(LIST_ROW_GAP);
@@ -78,15 +90,49 @@ fn show_rows(
             index,
             row_index,
             row,
-            selection,
             RowState {
                 selectable: selectable && !row.disabled,
                 selected,
                 enabled,
+                marked,
             },
             view,
+            tallest,
         );
     }
+}
+
+/// The left edge of the text of a row: the outline, the padding and, in a list
+/// that offers a selection, the ring and the gap after it.
+fn text_left(marked: bool) -> f32 {
+    LIST_ROW_OUTLINE + LIST_ROW_PAD_SIDE + if marked { LIST_MARK_SIZE + LIST_MARK_GAP } else { 0.0 }
+}
+
+/// The height that the two lines of one row take in `room` points, so every row
+/// of one list can take the height of its tallest row.
+fn row_text_height(ui: &Ui, row: &ListRow, room: f32) -> f32 {
+    let title = text::wrapped_weight(
+        ui.painter(),
+        &row.title,
+        &FontId::proportional(LIST_TITLE_FONT),
+        theme::FG(),
+        room,
+        None,
+        Weight::Semibold,
+    );
+    let mut height = title.size().y;
+    if let Some(subtitle) = &row.subtitle {
+        let subtitle = text::wrapped(
+            ui.painter(),
+            subtitle,
+            &FontId::proportional(LIST_SUBTITLE_FONT),
+            theme::FG_SOFT(),
+            room,
+            None,
+        );
+        height += LIST_LINE_GAP + subtitle.size().y;
+    }
+    height
 }
 
 /// How one row of a list is drawn: whether it takes a press, whether it carries
@@ -96,6 +142,7 @@ struct RowState {
     selectable: bool,
     selected: bool,
     enabled: bool,
+    marked: bool,
 }
 
 fn show_row(
@@ -103,19 +150,20 @@ fn show_row(
     index: usize,
     row_index: usize,
     row: &ListRow,
-    selection: Selection,
     state: RowState,
     view: &mut CardView<'_>,
+    tallest: f32,
 ) {
     let RowState {
         selectable,
         selected,
         enabled,
+        marked,
     } = state;
     let width = ui.available_width();
     // A selected row keeps its outer size and its text position: the wider
     // outline takes the space of the padding that the row gives up.
-    let text_x = LIST_ROW_OUTLINE + LIST_ROW_PAD_SIDE + LIST_MARK_SIZE + LIST_MARK_GAP;
+    let text_x = text_left(marked);
     let edge = row_edge(ui, row, row.disabled);
     let text_width = (width - text_x - LIST_ROW_PAD_SIDE - LIST_ROW_OUTLINE - edge.width).max(0.0);
 
@@ -150,12 +198,12 @@ fn show_row(
     if subtitle.is_some() {
         height += LIST_LINE_GAP + subtitle_height;
     }
-    height = height.max(edge.height);
+    height = height.max(edge.height).max(tallest);
 
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let sense = if selectable { Sense::click() } else { Sense::hover() };
     let response = ui.interact(rect, ui.make_persistent_id(("block_row", index, row_index)), sense);
-    row_info(&response, row, selection, selectable, selected);
+    row_info(&response, row, marked, selectable, selected);
     let hovered = selectable && response.hovered();
 
     let (fill, outline_stroke) = if row.disabled && !selected {
@@ -195,7 +243,7 @@ fn show_row(
         painter.rect_stroke(rect, radius, outline_stroke, StrokeKind::Inside);
     }
 
-    if !row.disabled {
+    if marked && !row.disabled {
         paint_mark(painter, rect, selected, selected_accent(enabled));
     }
     let text_left = rect.min.x + text_x;
@@ -392,7 +440,7 @@ fn show_pill(
     let selected = selection == Selection::Single && view.card.selected(index) == Some(row.id.as_str());
     let sense = if selectable { Sense::click() } else { Sense::hover() };
     let response = ui.interact(pill, ui.make_persistent_id(("block_pill", index, row_index)), sense);
-    row_info(&response, row, selection, selectable, selected);
+    row_info(&response, row, selection == Selection::Single, selectable, selected);
     let hovered = selectable && response.hovered();
     let radius = CornerRadius::same(PILL_RADIUS);
     let painter = ui.painter();
@@ -503,8 +551,8 @@ fn paint_mark(painter: &egui::Painter, rect: Rect, selected: bool, accent: Color
     }
 }
 
-fn row_info(response: &egui::Response, row: &ListRow, selection: Selection, selectable: bool, selected: bool) {
-    if selection == Selection::Single {
+fn row_info(response: &egui::Response, row: &ListRow, marked: bool, selectable: bool, selected: bool) {
+    if marked {
         response.widget_info(|| WidgetInfo::selected(Role::Button, selectable, selected, &row.title));
     } else {
         response.widget_info(|| WidgetInfo::labeled(Role::Label, selectable, &row.title));

@@ -5,7 +5,7 @@ use horizon_browser_control::block::BlockDocument;
 
 use crate::theme;
 
-use super::metrics::{PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, PROGRESS_RADIUS};
+use super::metrics::{LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, PROGRESS_RADIUS};
 use super::text;
 
 /// The largest share of the label row the right-hand text may take.
@@ -15,6 +15,19 @@ const DETAIL_SHARE: f32 = 0.5;
 /// `detail` on the right.
 pub(super) fn show(ui: &mut Ui, index: usize, label: &str, percent: u8, detail: Option<&str>) {
     let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height()), Sense::hover());
+    paint(ui, index, rect, label, percent, detail);
+}
+
+/// The height of one bar with its label row.
+pub(super) fn height() -> f32 {
+    PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT
+}
+
+/// Paint a bar with its label row into `rect`, which the caller made
+/// [`height`] tall: a wide card puts it beside the heading of its own row.
+pub(super) fn paint(ui: &Ui, index: usize, rect: Rect, label: &str, percent: u8, detail: Option<&str>) {
+    let width = rect.width();
     let font = FontId::proportional(PROGRESS_LABEL_FONT);
     let detail_galley = detail.map(|detail| {
         text::line(
@@ -37,9 +50,8 @@ pub(super) fn show(ui: &mut Ui, index: usize, label: &str, percent: u8, detail: 
         .size()
         .y
         .max(detail_galley.as_ref().map_or(0.0, |galley| galley.size().y));
-    let height = label_height + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT;
 
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let response = ui.interact(rect, ui.make_persistent_id(("block_progress", index)), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Label, true, label));
 
     let painter = ui.painter();

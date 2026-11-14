@@ -1,5 +1,6 @@
 //! The buttons of a card, from the left in document order, with every
-//! destructive button pushed to the right edge.
+//! destructive button pushed to the right edge. The wide form pushes every
+//! button to the right edge, so a row of answers closes a wide strip.
 //!
 //! Only the first `primary` button of a card is drawn as the primary action.
 //! That one decision is made for the whole document by [`super::primary_button`]
@@ -11,6 +12,7 @@ use horizon_browser_control::block::{Button, Tone};
 use crate::theme;
 use crate::typeface::Weight;
 
+use super::form::Form;
 use super::metrics::{BUTTON_FONT, BUTTON_GAP, BUTTON_HEIGHT, BUTTON_PAD, BUTTON_PAD_PRIMARY, BUTTON_RADIUS, count};
 use super::{CardView, text, tones};
 
@@ -26,6 +28,7 @@ pub(super) fn show(
     primary: Option<(usize, usize)>,
     view: &mut CardView<'_>,
     enabled: bool,
+    form: Form,
 ) {
     if items.is_empty() {
         return;
@@ -36,15 +39,14 @@ pub(super) fn show(
         .enumerate()
         .map(|(item, button)| {
             let is_primary = primary == Some((component, item));
-            let pad = if is_primary { BUTTON_PAD_PRIMARY } else { BUTTON_PAD };
             (
                 is_primary,
-                (label_width(ui, &button.label, is_primary) + 2.0 * pad).min(available),
+                button_width(ui.painter(), &button.label, is_primary).min(available),
             )
         })
         .collect();
 
-    let lines = lines_of(items, &tones_and_widths, available);
+    let lines = lines_of(items, &tones_and_widths, available, form);
     let height = count(lines.len()) * BUTTON_HEIGHT + count(lines.len().saturating_sub(1)) * BUTTON_GAP;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(available, height), Sense::hover());
 
@@ -85,14 +87,17 @@ struct ButtonLine {
 /// ordinary buttons fill the lines from the left; the destructive ones keep the
 /// right edge, and move to a right-aligned line of their own when the last line
 /// has no room for them.
-fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32) -> Vec<ButtonLine> {
+fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32, form: Form) -> Vec<ButtonLine> {
+    // The wide form closes its row at the right edge, so every button of it is
+    // one that keeps the right edge.
+    let keeps_right_edge = |button: &Button| form.is_wide() || button.tone == Tone::Danger;
     let mut lines = vec![ButtonLine {
         left: Vec::new(),
         right: Vec::new(),
     }];
     let mut used = 0.0;
     for (item, button) in items.iter().enumerate() {
-        if button.tone == Tone::Danger {
+        if keeps_right_edge(button) {
             continue;
         }
         let width = widths[item].1;
@@ -113,7 +118,7 @@ fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32) -> Vec<But
     let mut danger_lines: Vec<Vec<usize>> = vec![Vec::new()];
     let mut danger_used = 0.0;
     for (item, button) in items.iter().enumerate() {
-        if button.tone != Tone::Danger {
+        if !keeps_right_edge(button) {
             continue;
         }
         let width = widths[item].1;
@@ -135,9 +140,12 @@ fn lines_of(items: &[Button], widths: &[(bool, f32)], available: f32) -> Vec<But
     let mut danger_lines = danger_lines.into_iter();
     if let Some(first) = danger_lines.next() {
         let width = line_width(&first, widths);
-        if lines.last().is_some() && used + BUTTON_GAP + width <= available {
+        // A first line that holds no ordinary button keeps the buttons that keep
+        // the right edge, so a row of answers of the wide form stays one line.
+        let taken = if used > 0.0 { used + BUTTON_GAP } else { 0.0 };
+        if lines.last().is_some() && taken + width <= available {
             if let Some(line) = lines.last_mut() {
-                line.right.extend(first);
+                line.right = first;
             }
         } else {
             lines.push(ButtonLine {
@@ -172,11 +180,32 @@ pub(super) fn drawn_tone(tone: Tone, is_primary: bool) -> Tone {
     }
 }
 
+/// The width that one button needs, from its label and its padding.
+fn button_width(painter: &egui::Painter, label: &str, is_primary: bool) -> f32 {
+    let pad = if is_primary { BUTTON_PAD_PRIMARY } else { BUTTON_PAD };
+    label_width(painter, label, is_primary) + 2.0 * pad
+}
+
+/// The width of each button of a component, in draw order, for a strip that
+/// places the row of answers itself.
+pub(super) fn widths(
+    painter: &egui::Painter,
+    items: &[Button],
+    component: usize,
+    primary: Option<(usize, usize)>,
+) -> Vec<f32> {
+    items
+        .iter()
+        .enumerate()
+        .map(|(item, button)| button_width(painter, &button.label, primary == Some((component, item))))
+        .collect()
+}
+
 /// The width the label of `text` needs at the button font, in the weight that
 /// the button is drawn at.
-fn label_width(ui: &Ui, label: &str, is_primary: bool) -> f32 {
+fn label_width(painter: &egui::Painter, label: &str, is_primary: bool) -> f32 {
     text::line_weight(
-        ui.painter(),
+        painter,
         label,
         &FontId::proportional(BUTTON_FONT),
         theme::FG(),

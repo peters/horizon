@@ -11,7 +11,7 @@ use crate::typeface::Weight;
 use super::badge;
 use super::metrics::{
     BADGE_HEIGHT, HEADING_BADGE_GAP, HEADING_BADGE_ROW_GAP, HEADING_FONT, HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP,
-    HEADING_SUBTITLE_LINE_HEIGHT,
+    HEADING_SUBTITLE_LINE_HEIGHT, WIDE_HEADING_FONT, WIDE_PROGRESS_GAP, WIDE_PROGRESS_WIDTH,
 };
 use super::text;
 
@@ -47,29 +47,54 @@ fn text_room(row_width: f32, badge_width: f32) -> f32 {
     (row_width - badge_width - HEADING_BADGE_GAP).max(0.0)
 }
 
-/// Draw the heading of component `index` and return the height it took.
-pub(super) fn show(
-    ui: &mut Ui,
-    index: usize,
-    text: &str,
-    subtitle: Option<&str>,
-    badge: Option<&Badge>,
-    agent_present: bool,
-) -> f32 {
+/// The parts of a heading, which both forms draw.
+#[derive(Clone, Copy)]
+pub(super) struct Parts<'a> {
+    /// Title text.
+    pub(super) text: &'a str,
+    /// Optional second line under the title.
+    pub(super) subtitle: Option<&'a str>,
+    /// Optional badge on the title row, right aligned.
+    pub(super) badge: Option<&'a Badge>,
+}
+
+/// Draw the heading of component `index` and return the row it took.
+pub(super) fn show(ui: &mut Ui, index: usize, parts: Parts<'_>, agent_present: bool) -> Rect {
+    show_row(ui, index, parts, HEADING_FONT, 0.0, agent_present)
+}
+
+/// Draw the heading of a wide card that a progress bar stands beside, at the
+/// larger size of that row and with the room of the bar kept free at the right.
+pub(super) fn show_wide(ui: &mut Ui, index: usize, parts: Parts<'_>, agent_present: bool) -> Rect {
+    show_row(
+        ui,
+        index,
+        parts,
+        WIDE_HEADING_FONT,
+        WIDE_PROGRESS_WIDTH + WIDE_PROGRESS_GAP,
+        agent_present,
+    )
+}
+
+/// Draw a heading at `font_size`, keeping `reserve` points free at the right of
+/// the row for the part that stands beside it.
+fn show_row(ui: &mut Ui, index: usize, parts: Parts<'_>, font_size: f32, reserve: f32, agent_present: bool) -> Rect {
+    let Parts { text, subtitle, badge } = parts;
     let width = ui.available_width();
+    let room = (width - reserve).max(0.0);
     let pill = badge.map(|badge| badge::heading_pill(ui, badge, agent_present));
-    let pill_width = pill.map_or(0.0, |(width, _, _)| width).min(width).max(0.0);
-    let font = FontId::proportional(HEADING_FONT);
+    let pill_width = pill.map_or(0.0, |(width, _, _)| width).min(room).max(0.0);
+    let font = FontId::proportional(font_size);
     let heading_width = text::line(ui.painter(), text, &font, theme::FG(), f32::INFINITY)
         .size()
         .x;
     let row = match pill {
-        Some(_) => badge_row(width, heading_width, pill_width),
+        Some(_) => badge_row(room, heading_width, pill_width),
         None => BadgeRow::SameRow,
     };
     let text_width = match (row, pill.is_some()) {
-        (BadgeRow::SameRow, true) => text_room(width, pill_width),
-        _ => width,
+        (BadgeRow::SameRow, true) => text_room(room, pill_width),
+        _ => room,
     };
 
     let title = text::wrapped_weight(ui.painter(), text, &font, theme::FG(), text_width, None, Weight::Bold);
@@ -113,7 +138,7 @@ pub(super) fn show(
     }
     if let (Some(badge), Some((pill_width, tone, prefix))) = (badge, pill) {
         let left = match row {
-            BadgeRow::SameRow => rect.max.x - pill_width,
+            BadgeRow::SameRow => rect.min.x + room - pill_width,
             BadgeRow::OwnRow => rect.min.x,
         };
         let top = match row {
@@ -130,7 +155,7 @@ pub(super) fn show(
             prefix,
         );
     }
-    height
+    rect
 }
 
 /// Registers the second line as its own node, so a reader hears both lines and
