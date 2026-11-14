@@ -36,6 +36,7 @@ documents that are not yet STE.
 | [vnc-recording](procedures/vnc-recording.md) | Device panel video | none |
 | [device-panel-ssh-trust](procedures/device-panel-ssh-trust.md) | Device panel ssh route: untrusted host refusal, fingerprint comparison, trust and changed key | none |
 | [machines-skill](procedures/machines-skill.md) | `horizon-machines` skill: rent, card, Connect, confirm delete and proof for each provider | rents compute |
+| [tailscale-network](procedures/tailscale-network.md) | A rented machine joins one stored Tailscale network from its card, with a client of `auth_keys` only, and the delete logs it out | rents compute |
 | [mobile-app-session](procedures/mobile-app-session.md) | `horizon-mobile` skill: one app on one real phone, the card with the watch link, a stop from the card and a session that ends by itself | paid device |
 | [browser-machine](procedures/browser-machine.md) | A browser machine: Chromium in a container on a rented Linux machine as a browser host, its recovery and its deletion | rents compute |
 | [remote-browser-tunnel](procedures/remote-browser-tunnel.md) | Browser panel of a browser on another machine over an SSH forward, a lost browser and the typed refusals | none |
