@@ -160,6 +160,8 @@ pub(super) const PROGRESS_LABEL_FONT: f32 = 11.5;
 pub(super) const PROGRESS_LABEL_GAP: f32 = 8.0;
 /// Height of the bar.
 pub(super) const PROGRESS_BAR_HEIGHT: f32 = 4.0;
+/// Space between the bar and the detail under it, in the wide form.
+pub(super) const PROGRESS_DETAIL_GAP: f32 = 3.0;
 
 /// Height of a button.
 pub(super) const BUTTON_HEIGHT: f32 = 36.0;

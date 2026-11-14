@@ -215,13 +215,15 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
                 };
                 let rect = heading::show_wide(ui, index, parts, view.agent_present);
                 let centre = Pos2::new(rect.max.x - WIDE_PROGRESS_WIDTH * 0.5, rect.center().y);
+                let layout = progress::wide_layout(detail.as_deref());
                 progress::paint(
                     ui,
                     index + 1,
-                    Rect::from_center_size(centre, Vec2::new(WIDE_PROGRESS_WIDTH, progress::height())),
+                    Rect::from_center_size(centre, Vec2::new(WIDE_PROGRESS_WIDTH, progress::height(layout))),
                     label,
                     *percent,
                     detail.as_deref(),
+                    layout,
                 );
                 index += 2;
                 continue;

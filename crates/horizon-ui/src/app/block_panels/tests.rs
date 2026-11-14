@@ -562,8 +562,8 @@ fn the_mark_and_the_directory_are_saved_with_the_panel() {
 
 #[test]
 fn the_presets_of_the_settings_answer_their_names_and_kinds_and_no_command() {
-    let (_temp, ctx, mut app) = app();
-    let root = queue(&_temp);
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
     let answer = answer(&mut app, &ctx, &root, block::Operation::Presets);
     let outcome = answer.clone();
     let Outcome::Presets { presets } = answer else {

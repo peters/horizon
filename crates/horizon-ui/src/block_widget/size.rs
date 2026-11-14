@@ -18,9 +18,8 @@ use super::metrics::{
     CAPTION_TRACKING, CARD_MAX_HEIGHT, CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT,
     HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y,
     KV_VALUE_FONT, LINE_FACTOR, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT,
-    LOG_ROW_GAP, LOG_TEXT_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT,
-    PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT,
-    WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH, WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
+    LOG_ROW_GAP, LOG_TEXT_FONT, PILL_HEIGHT, PILL_LINE_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT,
+    TEXT_LINE_HEIGHT, WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH, WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
@@ -167,11 +166,12 @@ fn components_height(document: &BlockDocument, form: Form, width: f32) -> f32 {
         let component = &document.components[index];
         // The wide form of a heading that a progress bar follows draws both in
         // one row, and that row is as tall as the taller part.
-        if let (Form::Wide, Component::Heading { text, subtitle, badge }, Some(Component::Progress { .. })) =
+        if let (Form::Wide, Component::Heading { text, subtitle, badge }, Some(Component::Progress { detail, .. })) =
             (form, component, document.components.get(index + 1))
         {
             let heading = heading_height(text, subtitle.as_deref(), badge.is_some(), WIDE_HEADING_FONT, width);
-            height += heading.max(progress_height());
+            let bar = super::progress::height(super::progress::wide_layout(detail.as_deref()));
+            height += heading.max(bar);
             index += 2;
             continue;
         }
@@ -198,8 +198,8 @@ fn heading_height(text: &str, subtitle: Option<&str>, badge: bool, font: f32, wi
     height
 }
 
-fn progress_height() -> f32 {
-    PROGRESS_LABEL_FONT * LINE_FACTOR + PROGRESS_LABEL_GAP + PROGRESS_BAR_HEIGHT
+fn progress_height(layout: super::progress::Layout) -> f32 {
+    super::progress::height(layout)
 }
 
 /// The height one component needs.
@@ -229,7 +229,7 @@ fn component_height(component: &Component, form: Form, width: f32) -> f32 {
             })
             .sum::<f32>(),
         Component::Badge { .. } => BADGE_HEIGHT,
-        Component::Progress { .. } => progress_height(),
+        Component::Progress { .. } => progress_height(super::progress::Layout::Inline),
         Component::Divider => 1.0,
         Component::List {
             rows,

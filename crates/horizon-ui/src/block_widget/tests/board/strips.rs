@@ -4,7 +4,7 @@
 use horizon_browser_control::block::{ListLayout, Selection};
 
 use super::*;
-use crate::block_widget::metrics::{BUTTON_PAD, CALLOUT_PAD_Y};
+use crate::block_widget::metrics::{BUTTON_PAD, CALLOUT_PAD_Y, LINE_FACTOR, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT};
 
 #[test]
 fn the_callout_is_one_row_in_the_wide_form_and_a_stack_in_the_narrow_one() {
@@ -202,6 +202,81 @@ fn a_progress_bar_that_follows_a_heading_shares_its_row_in_the_wide_form_only() 
     assert!(
         label.min.y > heading.max.y,
         "the bar takes its own row under the heading: {label:?} against {heading:?}"
+    );
+}
+
+#[test]
+fn the_detail_of_a_wide_bar_takes_its_own_line_under_the_bar() {
+    let document = BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![
+            Component::Heading {
+                text: "Fix the login redirect".to_owned(),
+                subtitle: None,
+                badge: None,
+            },
+            Component::Progress {
+                label: "3 of 8 done · 1 needs you".to_owned(),
+                percent: 38,
+                detail: Some("Checks pass on both computers · 27 min so far · about 30 left".to_owned()),
+            },
+        ],
+    };
+    let wide = pass(1400.0, &document);
+    let label = painted(&wide, "3 of 8 done · 1 needs you").expect("the label of the bar is drawn");
+    let detail = painted(&wide, "Checks pass on both computers · 27 min so far · about 30 left")
+        .expect("the detail of the bar is drawn");
+    let body_right = 1400.0 - f32::from(BODY_PAD_SIDE);
+
+    assert!(
+        (detail.max.x - body_right).abs() < 1.5,
+        "the detail keeps the right edge of the bar: {detail:?}"
+    );
+    assert!(
+        detail.min.y > label.max.y + PROGRESS_BAR_HEIGHT,
+        "the detail takes its own line under the bar: {detail:?} against {label:?}"
+    );
+    assert!(
+        detail.height() < PROGRESS_LABEL_FONT * LINE_FACTOR + 1.0,
+        "the detail is one line: {detail:?}"
+    );
+    assert!(
+        (label.min.x - (body_right - 320.0)).abs() < 1.5,
+        "the label keeps the row above the bar, at the left edge of the bar: {label:?}"
+    );
+    assert!(
+        label.max.x <= detail.max.x + 1.5,
+        "the label is above the bar, not beside the detail: {label:?} {detail:?}"
+    );
+
+    // Two more parts, so that the card is above its least height and the estimate
+    // of the row of the heading and the bar is what decides the difference.
+    let filler = "the person reads the board of the plan and the evidence of each todo";
+    let mut document = document;
+    document.components.push(Component::Text {
+        text: filler.to_owned(),
+    });
+    document.components.push(Component::Text {
+        text: filler.to_owned(),
+    });
+    let mut without_detail = document.clone();
+    if let Some(Component::Progress { detail, .. }) = without_detail.components.get_mut(1) {
+        *detail = None;
+    }
+    let [wide, with_line] = default_card_size(&document, 3000.0);
+    let [_, without_line] = default_card_size(&without_detail, 3000.0);
+    assert!(
+        with_line > without_line,
+        "the height estimate of a card {wide} points wide counts the line of the detail: {with_line} against {without_line}"
+    );
+
+    let narrow = pass(420.0, &document);
+    let label = painted(&narrow, "3 of 8 done · 1 needs you").expect("the label of the narrow bar");
+    let detail = painted(&narrow, "Checks pass on both computers · 27 min so far · about 30 left")
+        .expect("the detail of the narrow bar");
+    assert!(
+        (detail.min.y - label.min.y).abs() < 1.5 && detail.min.x > label.min.x,
+        "the narrow card keeps the label and the detail on one line: {label:?} {detail:?}"
     );
 }
 
