@@ -288,6 +288,15 @@ fn the_private_page_bound_is_ten_minutes_and_an_option_shortens_it() {
     )
     .expect("a driver with a short bound");
     assert_eq!(short.unlinked_private_page(), Duration::from_secs(20));
+    assert!(
+        short.session_arguments().contains("--private-unlinked 20"),
+        "the session process of the profile takes the bound of the link that started it: {}",
+        short.session_arguments()
+    );
+    assert!(
+        !options.session_arguments().contains("--private-unlinked"),
+        "a session with the bound of the rule writes no option"
+    );
     for arguments in [
         &["--private-unlinked", "0"][..],
         &["--private-unlinked", "86401"],

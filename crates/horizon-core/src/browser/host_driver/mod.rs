@@ -374,16 +374,22 @@ impl HostDriverOptions {
 
     /// The arguments that start this session again, so a person reads one
     /// command of a host in a log.
+    ///
+    /// A bound that this link names travels with it, because the session of the
+    /// profile is the process that holds pages: the link of a second panel finds
+    /// the session of the first one, and the bound of that session decides for
+    /// every page of the profile.
     fn session_arguments(&self) -> String {
         let profile = quote(self.profile());
         let engine = quote(self.engine().as_str());
-        match self.idle_stop {
-            Some(idle_stop) => format!(
-                "--browser-host-driver --profile {profile} --engine {engine} --idle-stop {}",
-                idle_stop.as_secs() / 60
-            ),
-            None => format!("--browser-host-driver --profile {profile} --engine {engine}"),
+        let mut arguments = format!("--browser-host-driver --profile {profile} --engine {engine}");
+        if let Some(idle_stop) = self.idle_stop {
+            arguments.push_str(&format!(" --idle-stop {}", idle_stop.as_secs() / 60));
         }
+        if self.unlinked_private_page != pages::PRIVATE_PAGE_UNLINKED {
+            arguments.push_str(&format!(" --private-unlinked {}", self.unlinked_private_page.as_secs()));
+        }
+        arguments
     }
 }
 
