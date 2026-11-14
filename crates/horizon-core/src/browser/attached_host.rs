@@ -60,6 +60,11 @@ pub const DEFAULT_HOST_PROFILE: &str = "default";
 /// new page, so what the person typed into the old one is gone.
 pub const PAGE_STATE_LOST: &str = "The link was lost, so this page is new: text that you had typed into it, its scroll position and its session are gone.";
 
+/// What a private panel says when the browser of its host no longer held the
+/// context of its page: the page is a new page of a new context, it is still
+/// signed in nowhere, and what the page before held is gone.
+pub const PRIVATE_PAGE_LOST: &str = "The browser of the host no longer held the context of this private page, so this is a new private page: it is signed in nowhere, and what the page before held is gone.";
+
 /// How long one wait of an automatic attempt may hold the worker before it looks
 /// at the stop flag again, so a panel that closes during the wait starts no
 /// `ssh` call.
@@ -638,6 +643,20 @@ impl BrowserPanelState {
         self.attached_page_target.as_deref()
     }
 
+    /// The isolated browser context of the private page of this panel, when the
+    /// session of that page proved one.
+    #[must_use]
+    pub fn attached_page_context(&self) -> Option<&str> {
+        self.attached_page_context.as_deref()
+    }
+
+    /// Publish what a session of a browser host established about its page, for a
+    /// test of a panel that runs no session.
+    #[doc(hidden)]
+    pub fn set_page_isolation_for_tests(&mut self, isolation: horizon_browser::PageIsolation) {
+        self.page_isolation.publish(isolation);
+    }
+
     /// Why the last connect of this panel failed. `None` while it is connected
     /// or still connecting.
     #[must_use]
@@ -877,11 +896,21 @@ impl BrowserPanelState {
             return;
         }
         let automatic = self.attached.as_ref().is_some_and(|slot| slot.attempts > 0);
-        if !automatic {
+        let private = self.page_isolation().keeps_nothing();
+        // A private page says that its own context went even when a person asked
+        // for the attempt: the loss of a context is a fact about privacy, and the
+        // page that follows it is a new page.
+        if !automatic && !(private && !resumed) {
             return;
         }
         self.set_page_resumed(resumed);
-        self.navigation_error = (!resumed).then(|| PAGE_STATE_LOST.to_string());
+        self.navigation_error = (!resumed).then(|| {
+            if private {
+                PRIVATE_PAGE_LOST.to_string()
+            } else {
+                PAGE_STATE_LOST.to_string()
+            }
+        });
     }
 
     /// Remember that the session of this connect showed a page, so a later lost
