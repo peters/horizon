@@ -84,6 +84,7 @@ pub(super) fn apply_reply(
     manifest: &ManifestCoordination,
     probe: &mut LinkProbe,
     received_at: Instant,
+    profile: &str,
 ) -> ReplyOutcome {
     match reply {
         HostDriverReply::Frame(frame) => {
@@ -123,24 +124,19 @@ pub(super) fn apply_reply(
             wake(waker);
         }
         HostDriverReply::Coordination(state) => {
-            let state = CoordinationState {
-                backend: horizon_browser::BackendKind::FirefoxBidi,
-                automation_disclosure: state.automation_disclosure,
-                browser_ws: String::new(),
-                target_id: state.target_id,
-                page_resumed: state.page_resumed,
-                url: state.url,
-                title: state.title,
-                remote_target: None,
-                remote_device: None,
-                remote_file_upload: false,
-                remote_orientation: None,
-                file_chooser: state.file_chooser,
-                passkey_pending: state.passkey_pending,
-                // A browser host of another machine keeps the profile of that
-                // machine, which this computer does not read.
-                profile: None,
-            };
+            let state = reported_state(
+                CoordinationState {
+                    automation_disclosure: state.automation_disclosure,
+                    target_id: state.target_id,
+                    page_resumed: state.page_resumed,
+                    url: state.url,
+                    title: state.title,
+                    file_chooser: state.file_chooser,
+                    passkey_pending: state.passkey_pending,
+                    ..CoordinationState::default()
+                },
+                profile,
+            );
             // A manifest that this computer cannot write is a reason to stop a
             // link: an agent would drive a page whose owner nobody records. A
             // turn that another writer held is tried again first.
@@ -175,6 +171,32 @@ pub(super) fn apply_reply(
         }
     }
     ReplyOutcome::Continue
+}
+
+/// The state of the page of the host as the manifest of this computer reports it,
+/// with the profile that the page reads.
+///
+/// The driver of the host cannot name the profile, because the profile belongs to
+/// that machine and its folder never reaches this computer. The panel names it:
+/// the profile of that machine, or the reserved word of a private page that keeps
+/// nothing of it.
+fn reported_state(state: CoordinationState, profile: &str) -> CoordinationState {
+    CoordinationState {
+        backend: horizon_browser::BackendKind::FirefoxBidi,
+        automation_disclosure: state.automation_disclosure,
+        browser_ws: String::new(),
+        target_id: state.target_id,
+        page_resumed: state.page_resumed,
+        url: state.url,
+        title: state.title,
+        remote_target: None,
+        remote_device: None,
+        remote_file_upload: false,
+        remote_orientation: None,
+        file_chooser: state.file_chooser,
+        passkey_pending: state.passkey_pending,
+        profile: Some(profile.to_string()),
+    }
 }
 
 /// Write the state of the page of the host into the manifest of this computer.
@@ -243,7 +265,8 @@ pub(super) fn request_of(command: BrowserCommand) -> Option<HostDriverRequest> {
 mod tests {
     use std::io::{Error, ErrorKind};
 
-    use super::{MANIFEST_WRITE_BUDGET, MANIFEST_WRITE_STEP, write_manifest};
+    use super::{MANIFEST_WRITE_BUDGET, MANIFEST_WRITE_STEP, reported_state, write_manifest};
+    use horizon_browser::CoordinationState;
 
     /// A lock that another writer held is tried again, so one busy turn of an
     /// agent does not cost the link of the driver.
@@ -282,5 +305,26 @@ mod tests {
         assert!(MANIFEST_WRITE_BUDGET <= std::time::Duration::from_secs(10));
         assert!(MANIFEST_WRITE_STEP >= std::time::Duration::from_millis(10));
         assert!(MANIFEST_WRITE_STEP * 2 <= MANIFEST_WRITE_BUDGET);
+    }
+
+    /// The page of a browser host names the profile that it reads, and a private
+    /// page names the reserved word, so an agent reads where its sign-ins are.
+    #[test]
+    fn the_state_of_a_page_of_a_host_names_the_profile_that_the_page_reads() {
+        let from_host = CoordinationState {
+            url: "https://example.test/".to_string(),
+            ..CoordinationState::default()
+        };
+        assert_eq!(
+            reported_state(from_host.clone(), "live42").profile.as_deref(),
+            Some("live42"),
+            "the page names the profile of that machine"
+        );
+        assert_eq!(
+            reported_state(from_host, horizon_browser::PRIVATE_PROFILE)
+                .profile
+                .as_deref(),
+            Some(horizon_browser::PRIVATE_PROFILE)
+        );
     }
 }

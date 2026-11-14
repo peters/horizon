@@ -317,7 +317,7 @@ pub(crate) struct CreateInput {
     pub(crate) orientation: Option<orientation::Orientation>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
-    /// The browser profile of a local panel: omit it for the shared profile `default`, which is where the user signed in and where every later panel is still signed in. Name another shared profile (1 to 40 of a-z, 0-9 and `-`) to keep its sign-ins apart. `private` opens a profile of this panel alone: it starts signed in nowhere, it reads none of the shared sign-ins, and it is gone when the panel closes. Use `private` for a clean browser, for example to test a sign-up. Every panel of one shared profile is one page of one browser, and a sign-out in one signs out all of them. Not available with target or on a Firefox browser host, which serves one page for one profile.
+    /// The browser profile of the panel: omit it for the profile of the browser host when the settings name one, and for the shared profile `default` of this computer otherwise. `default` is a name: a create that writes it asks for the shared profile of this computer, and its answer says in `note` where the page runs. Name another shared profile (1 to 40 of a-z, 0-9 and `-`) to keep its sign-ins apart. `private` opens a profile of this panel alone: it starts signed in nowhere, it reads none of the shared sign-ins, and it is gone when the panel closes. Use `private` for a clean browser, for example to test a sign-up. Every panel of one shared profile is one page of one browser, and a sign-out in one signs out all of them. Not available with target.
     pub(crate) profile: Option<String>,
     /// Explicitly permit another panel of an engine this agent already holds, or any panel when backend is omitted or target is set while it owns one. One panel per named engine needs no opt-in. Use only for a user-requested independent session.
     pub(crate) allow_additional: Option<bool>,
@@ -408,6 +408,12 @@ pub(crate) struct CreateOutput {
     /// ready and, when a `url` was given, its page committed or the bounded
     /// startup wait elapsed.
     pub(crate) startup_millis: u64,
+    /// Where the page runs, in words, when it does not run on the browser host of
+    /// the settings: a create that names another engine, a private page of this
+    /// computer, or a shared profile of this computer. Absent when the page runs
+    /// where the settings name it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1186,6 +1192,11 @@ mod tests {
         };
         assert_eq!(panel(Some("work"), false).as_deref(), Some("work"));
         assert_eq!(panel(Some("private"), false).as_deref(), Some("private"));
+        assert_eq!(
+            panel(Some("live42"), false).as_deref(),
+            Some("live42"),
+            "a page of a browser host names the profile of that machine"
+        );
         assert_eq!(panel(None, true), None, "a remote session names no local profile");
         assert_eq!(panel(None, false), None, "an older host states no profile");
     }

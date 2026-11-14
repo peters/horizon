@@ -98,6 +98,7 @@ impl HostDriverSlot {
         frame_slot: Arc<FrameSlot>,
         quality: u32,
         private: bool,
+        profile: String,
     ) -> Self {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
@@ -119,6 +120,7 @@ impl HostDriverSlot {
                     frame_slot,
                     quality,
                     private,
+                    &profile,
                     command_rx,
                     event_tx,
                     worker_stop,
@@ -247,6 +249,7 @@ fn run(
     frame_slot: Arc<FrameSlot>,
     quality: u32,
     private: bool,
+    profile: &str,
     commands: mpsc::Receiver<(BrowserCommand, Instant)>,
     events: mpsc::Sender<HostDriverEvent>,
     stop: Arc<AtomicBool>,
@@ -287,6 +290,7 @@ fn run(
                     &waker,
                     &manifest,
                     &mut probe,
+                    profile,
                 ) {
                     PumpOutcome::Stopped => {
                         let _ = events.send(HostDriverEvent::Stopped);
@@ -364,6 +368,7 @@ fn follow(
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
     probe: &mut super::latency::LinkProbe,
+    profile: &str,
 ) -> PumpOutcome {
     let resumed = link.welcome().page.resumed();
     let page = link.initial_page().cloned().unwrap_or_else(|| HostDriverPage {
@@ -384,6 +389,7 @@ fn follow(
         waker,
         manifest,
         probe,
+        profile,
     )
 }
 
@@ -450,6 +456,7 @@ pub(super) fn serve(
     waker: &Arc<Mutex<Option<BrowserEventWaker>>>,
     manifest: &ManifestCoordination,
     probe: &mut super::latency::LinkProbe,
+    profile: &str,
 ) -> PumpOutcome {
     let mut last_signals = Instant::now();
     loop {
@@ -525,6 +532,7 @@ pub(super) fn serve(
                     manifest,
                     probe,
                     received_at,
+                    profile,
                 ) {
                     ReplyOutcome::Continue => {}
                     ReplyOutcome::Lost(lost) => return PumpOutcome::Lost(lost),
@@ -597,6 +605,7 @@ impl BrowserPanelState {
             Arc::clone(&state.frame_slot),
             DEFAULT_QUALITY,
             private,
+            state.reported_profile(),
         );
         if let Some(failure) = slot.failure().cloned() {
             state.status = BrowserStatus::Error {
@@ -714,6 +723,7 @@ impl BrowserPanelState {
             Arc::clone(&self.frame_slot),
             DEFAULT_QUALITY,
             private,
+            self.reported_profile(),
         );
         if let Some(failure) = slot.failure().cloned() {
             self.status = BrowserStatus::Error {

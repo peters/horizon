@@ -400,10 +400,10 @@ computer.
   each end; without a profile, Horizon uses `default`. Its folder is
   `~/.horizon/browser-profiles/<profile>` on that machine, and it keeps the
   sign-ins of that browser.
-- The browser host serves the engine of its profile and no other: a
-  `browser_create` of another engine is refused with `unsupported_backend`, and
-  the message names the engine of the host. `chromium` needs a Chromium program
-  on that machine; `firefox` needs Firefox, `geckodriver` and a `horizon` binary
+- A create of an engine that the host does not run opens a panel of this
+  computer in that engine, and its answer says so in `note`. The engine of the
+  host needs its own program on that machine: `chromium` needs a Chromium
+  program there; `firefox` needs Firefox, `geckodriver` and a `horizon` binary
   of the same version there, because a driver of Horizon beside that browser
   carries the page as compressed frames.
 - That browser starts headed with no window of its own, and it keeps running
@@ -412,7 +412,9 @@ computer.
   page (`Target.closeTarget`) and never the browser.
 - The profile of a browser host belongs to that machine. A create without
   `profile` uses the profile of the settings entry, and a create with a profile
-  name opens a panel of this computer.
+  name opens a panel of this computer. `default` is a profile name: a create
+  that writes `profile: "default"` asks for the shared profile of this computer,
+  and its `note` says that the page runs here and not on the host.
 - A browser host serves several panels of one profile, for Chromium and for
   Firefox: each panel is its own page of the one browser of that profile, so a
   second panel is signed in where the first one signed in. Each link of a
@@ -423,6 +425,24 @@ computer.
   context of that machine: no cookie and no site storage of the profile, and the
   browser removes the context when the page closes. The page runs in the browser
   process of the shared profile, and the machine and its owner see its traffic.
+- A private page of a host whose link went is closed by the session of that
+  host after ten minutes, and its context goes with it. A shared page of the
+  same host stays, because a person signed in there.
+
+The rule of a new panel, with a browser host in the settings:
+
+| The create | The panel |
+|------------|-----------|
+| no `profile` | a page of the profile of the host, in the engine of the host |
+| no `profile`, and a `backend` of another engine | a page of this computer in that engine, in the shared profile `default`, and `note` says so |
+| `profile: "private"` | a private page of the host, in the engine of the host |
+| `profile: "private"`, and a `backend` of another engine | a private panel of this computer, and `note` says so |
+| a profile name | a panel of this computer in that shared profile, and `note` says so |
+| `profile: "default"` | the shared profile `default` of this computer, and `note` says so: a name is not the absent field |
+
+Without a browser host, every create is a panel of this computer in the profile
+and the engine that it names. `note` is absent when the page runs where the
+settings name it.
 - The panels of one profile share its cookies and its storage: that is one
   Chromium. There is no isolation between two panels of one profile.
   `browser_duplicate` of such a panel answers `browser_unavailable`, because the

@@ -74,6 +74,9 @@ pub(super) struct LinkHold {
     holder: Mutex<Option<Instant>>,
     /// Set by a new link of this page, so the link that held it ends.
     taken_over: AtomicBool,
+    /// When the page lost the link that drove it, and `None` while a link holds
+    /// it.
+    unlinked_since: Mutex<Option<Instant>>,
 }
 
 /// Whether a link took a page.
@@ -90,6 +93,7 @@ impl LinkHold {
             take_over,
             holder: Mutex::new(None),
             taken_over: AtomicBool::new(false),
+            unlinked_since: Mutex::new(None),
         }
     }
 
@@ -107,6 +111,7 @@ impl LinkHold {
                 match *holder {
                     None => {
                         *holder = Some(Instant::now());
+                        *self.unlinked_since() = None;
                         return Claim::Claimed;
                     }
                     Some(said_at) if said_at.elapsed() >= self.take_over => {
@@ -125,7 +130,22 @@ impl LinkHold {
     /// Let the page go, so the next link of this panel finds it.
     pub(super) fn release(&self) {
         *self.holder() = None;
+        *self.unlinked_since() = Some(Instant::now());
         self.taken_over.store(false, Ordering::Release);
+    }
+
+    fn unlinked_since(&self) -> std::sync::MutexGuard<'_, Option<Instant>> {
+        self.unlinked_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether this page had no link for `bound`, as `now` reads the clock.
+    ///
+    /// `now` is a parameter, so a test drives the bound with a clock of its own.
+    pub(super) fn unlinked_for(&self, bound: Duration, now: Instant) -> bool {
+        self.unlinked_since()
+            .is_some_and(|since| now.saturating_duration_since(since) >= bound)
     }
 
     /// Mark that the link that holds this page said something.

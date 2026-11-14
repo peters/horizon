@@ -20,6 +20,8 @@ mod browser_duplicate;
 mod browser_file_chooser;
 mod browser_host_io;
 mod browser_host_login;
+#[cfg(test)]
+mod browser_host_route_tests;
 mod browser_kept_failures;
 mod browser_manifest_stamp;
 mod browser_provider_catalog;

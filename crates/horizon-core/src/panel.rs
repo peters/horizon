@@ -23,6 +23,8 @@ pub(crate) fn watch_a_program_at_the_end(
 ) {
     termination::watch(child, name, completion);
 }
+#[doc(hidden)]
+pub use spawn::{BrowserMachine, browser_machine};
 pub use spawn::{
     PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
     prepare_restart,
@@ -39,6 +41,7 @@ use serde::Deserialize;
 use crate::agent_definition;
 use crate::agent_work::ResumePolicy;
 use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
+use crate::browser::{BrowserPanelRequest, BrowserPlace};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
@@ -188,6 +191,17 @@ pub struct PanelOptions {
     /// in a browser of this computer, or a page of an isolated context in the
     /// browser of a browser host.
     pub browser_private: bool,
+    /// The fields of the create that asked for this browser panel, before the
+    /// rule of `crate::browser::new_browser_panel` reads them: the `profile`
+    /// field as its caller wrote it, and the engine that it named. The app reads
+    /// the settings entry `browser_host`, so the rule runs there and the spawn
+    /// reads the place below. `None` for a saved panel, whose place travels with
+    /// it.
+    pub browser_request: Option<BrowserPanelRequest>,
+    /// Where the page of this browser panel runs, as the rule answered it: on the
+    /// browser host of the settings, or on this computer in one engine. `None`
+    /// for a saved panel, which comes back where it was.
+    pub browser_place: Option<BrowserPlace>,
     /// Let the browser host that the settings name decide the backend of this
     /// panel. Only a panel that the person creates from the preset picker sets
     /// it: a page that an agent asks for, a page of a local profile that a panel
@@ -257,6 +271,8 @@ impl Default for PanelOptions {
             browser_config: None,
             browser_session_id: None,
             browser_private: false,
+            browser_request: None,
+            browser_place: None,
             follows_browser_host: false,
             browser_host_entry: None,
             remote_session: None,

@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use horizon_browser::SharedSessionGroup;
 
@@ -30,8 +31,19 @@ use super::{HostDriverOptions, Link, LinkEnd, LinkOutcome};
 /// a browser that the host cannot carry.
 pub const MAX_PAGES: usize = 8;
 
+/// How long a private page of a browser host may stay with no link that drives
+/// it, before the session closes it and removes its context.
+///
+/// A private page keeps the memory and the disk cache of its context in the
+/// browser of the host, and no panel of this computer shows it, so a page that
+/// Horizon stopped with keeps nothing of the host for ever. A shared page keeps
+/// the page of its panel instead: a person signs in there, and that page is the
+/// reason for the host.
+pub const PRIVATE_PAGE_UNLINKED: Duration = Duration::from_mins(10);
+
 /// Why a link cannot drive the page that it asked for, in the words that the
 /// person reads.
+#[derive(Debug)]
 pub(super) struct PageRefusal {
     pub(super) code: &'static str,
     pub(super) message: String,
@@ -79,6 +91,9 @@ pub(super) struct PageHandle {
     /// coordination and the frame that is in flight.
     pub(super) session: Mutex<HostSession>,
     pub(super) hold: LinkHold,
+    /// This page keeps nothing of the profile of the host: its context goes when
+    /// the page ends, and no link has to stay for it.
+    pub(super) private: bool,
 }
 
 /// One page of the session, or the start of one.
@@ -170,6 +185,7 @@ impl SessionPages {
                 let handle = Arc::new(PageHandle {
                     session: Mutex::new(session),
                     hold: LinkHold::new(self.rules.silent, self.rules.take_over),
+                    private,
                 });
                 // The link that starts a page holds it, as the link of a page that
                 // the session kept does.
@@ -244,6 +260,44 @@ impl SessionPages {
                 .stop();
         }
         self.pages().is_empty()
+    }
+
+    /// Close every private page that no link drove for the bound of the session,
+    /// and answer whether a page closed and no page is left.
+    ///
+    /// `now` is a parameter, so a test drives the bound with a clock of its own.
+    /// A shared page keeps the rule of today: its page waits for the link of its
+    /// panel, because a person signed in there.
+    pub(super) fn close_unlinked_private_pages(&self, now: Instant) -> bool {
+        let expired: Vec<String> = {
+            let pages = self.pages();
+            pages
+                .iter()
+                .filter(|(_, entry)| match entry {
+                    PageEntry::Live(handle) => {
+                        handle.private && handle.hold.unlinked_for(self.rules.unlinked_private_page, now)
+                    }
+                    PageEntry::Starting => false,
+                })
+                .map(|(page, _)| page.clone())
+                .collect()
+        };
+        if expired.is_empty() {
+            return false;
+        }
+        let mut last_page = false;
+        for page in expired {
+            tracing::info!(page = %page, "the private page of a browser host had no link for the bound, so the session closes it");
+            last_page = self.page_ended(&page);
+        }
+        last_page
+    }
+
+    /// Whether the session keeps a page of that name, for a test that reads the
+    /// rule of a page with no link.
+    #[cfg(test)]
+    pub(super) fn keeps_page(&self, page: &str) -> bool {
+        self.pages().contains_key(page)
     }
 
     /// Stop every page of this session, for the end of the session itself.

@@ -231,6 +231,42 @@ its private settings, so no hand edit of a settings store is necessary.
    Result: the page of each panel ends, and the browser of the host stops with
    the last page.
 
+### 6.4b F6 — a private page of the host leaves after its bound
+
+The session of a browser host closes a private page whose link is gone, ten
+minutes after the link went, and its context goes with it. A shared page of the
+same session stays.
+
+1. Open one private panel of the host (**Private panel** of a panel menu), and
+   note the time.
+
+2. End the `ssh` child of that panel, as task F3 says.
+
+   Result: the panel says that the link is lost.
+
+3. CAUTION: THIS STEP RENTS NO COMPUTE, BUT IT ENDS A PAGE OF THE HOST. Close
+   the panel of this computer.
+
+4. Wait ten minutes. Read the log of the host, which is
+   `~/.horizon/browser-profiles/<profile>/host-firefox.log` on that machine.
+
+   Result: the log holds one line that the private page had no link for the
+   bound, and one line that the user context is removed. A shared panel of the
+   same profile that you opened in step 1 still shows its page, and a shared
+   panel that you open in this step attaches to its page and not to a new one.
+
+5. Open a private panel of the same host again, and read its page.
+
+   Result: the new page is a new page, and it reads no cookie of the private page
+   of step 1.
+
+The bound of a session of a host is ten minutes. The driver takes
+`--private-unlinked <seconds>` for a check that cannot wait for it, and the
+checks of the repository use it:
+`browser::host_driver::tests::session_of_links::a_private_page_with_no_link_goes_after_the_bound_and_a_shared_page_stays`,
+`browser::host_driver::tests::session_of_links::the_bound_of_a_private_page_with_no_link_is_one_constant`, and
+`browser::host_driver::tests::session_of_links::a_private_page_with_a_link_keeps_its_context`.
+
 ### 6.5 F3b — a browser host on a machine of the machine list
 
 A machine of the list answers to the machine key of this computer and to no key
@@ -429,6 +465,9 @@ browser of its own, and about 5 GB of free disk.
 - The latency lines of a press exist and are in order.
 - A browser host on a machine of the machine list opens a panel with the machine
   key of this computer, and no key of the person.
+- A private page of the host that lost its link leaves the browser of the host
+  after ten minutes, with its context, and a shared page of the same session
+  stays.
 - The container lane reads its two C libraries before the build, builds an image
   whose C library, `geckodriver` and Firefox are named, paints a page of that
   container in a panel, comes back to the same page after a cut link, and refuses

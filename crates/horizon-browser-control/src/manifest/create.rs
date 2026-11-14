@@ -49,8 +49,9 @@ pub struct BrowserCreateRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_from: Option<String>,
     /// The profile that the create named: a shared profile by name, or the
-    /// reserved word `private` for a panel that keeps nothing. Absent is the
-    /// shared profile `default`.
+    /// reserved word `private` for a panel that keeps nothing. Absent is a create
+    /// that named no profile, so the rule of the host decides it: the profile of
+    /// the browser host, or the shared profile `default` of this computer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default = "default_visible")]
@@ -130,6 +131,11 @@ pub enum BrowserCreateOutcome {
         /// was reported ready.
         #[serde(default)]
         startup_millis: u64,
+        /// The one line that says where the page runs when it does not run on the
+        /// browser host of the settings, such as a page of another engine of this
+        /// computer. Absent when the page runs where the settings name it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     Failed {
         code: String,
@@ -145,6 +151,7 @@ impl BrowserCreateResult {
         navigation: CreateNavigation,
         navigation_error: Option<String>,
         startup_millis: u64,
+        note: Option<String>,
     ) -> Self {
         Self {
             request_id: request.request_id.clone(),
@@ -154,6 +161,7 @@ impl BrowserCreateResult {
                 navigation: Some(navigation),
                 navigation_error,
                 startup_millis,
+                note,
             },
         }
     }
@@ -257,8 +265,26 @@ pub fn enqueue_create_oriented(
     parameters: RemoteCreateParameters,
     timeout: Duration,
 ) -> std::io::Result<String> {
+    enqueue_create_oriented_at(BrowserRuntimePaths::resolve().root(), identity, parameters, timeout)
+}
+
+/// [`enqueue_create_oriented`] on a root of the caller.
+///
+/// A test queues the create of an agent in a folder of its own and reads the
+/// request that a host would claim from it, so one test goes from the field of
+/// the tool to the panel that the rule of the host decides.
+///
+/// # Errors
+/// Same admission and validation failures as [`enqueue_create`].
+#[doc(hidden)]
+pub fn enqueue_create_oriented_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    parameters: RemoteCreateParameters,
+    timeout: Duration,
+) -> std::io::Result<String> {
     enqueue_operation_at(
-        BrowserRuntimePaths::resolve().root(),
+        root,
         identity,
         CreateParameters {
             url: parameters.url,
@@ -279,8 +305,9 @@ pub struct RemoteCreateParameters {
     pub target: Option<String>,
     pub orientation: Option<horizon_browser::remote::RemoteOrientation>,
     pub visible: bool,
-    /// The profile of a local browser: a shared profile by name, or the
-    /// reserved word `private`. Absent is the shared profile `default`.
+    /// The profile that the create named: a shared profile by name, or the
+    /// reserved word `private`. Absent is a create that named no profile, so the
+    /// rule of the host gives the profile.
     pub profile: Option<String>,
 }
 
@@ -338,12 +365,19 @@ fn enqueue_operation_at(
     let actor = identity.actor;
     super::agent::validate_actor(actor)?;
     validate_target(target.as_deref(), backend)?;
-    // The name is read here as the create reads it, so a queue file holds a
-    // name that the host can use and a refusal reaches the agent now.
-    let profile = match horizon_browser::ProfileChoice::parse(profile.as_deref()) {
-        Ok(horizon_browser::ProfileChoice::Private) => Some(horizon_browser::PRIVATE_PROFILE.to_string()),
-        Ok(horizon_browser::ProfileChoice::Shared(name)) => Some(name),
-        Err(message) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, message)),
+    // The field stays as the create wrote it: a create that names no profile
+    // names none in the queue too, so the host applies its own rule for a create
+    // with no field and decides the profile of the host. A name is read here as
+    // the rule reads it, so a queue file holds a name that the host can use and a
+    // refusal reaches the agent now.
+    let named = profile.as_deref().map(str::trim).filter(|name| !name.is_empty());
+    let profile = match named {
+        Some(named) => match horizon_browser::ProfileChoice::parse(Some(named)) {
+            Ok(horizon_browser::ProfileChoice::Private) => Some(horizon_browser::PRIVATE_PROFILE.to_string()),
+            Ok(horizon_browser::ProfileChoice::Shared(name)) => Some(name),
+            Err(message) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, message)),
+        },
+        None => None,
     };
     if orientation.is_some() && target.is_none() {
         return Err(std::io::Error::new(
@@ -424,10 +458,19 @@ fn enqueue_operation_at(
 /// # Errors
 /// Returns an error when the request directory cannot be read.
 pub fn list_create_requests() -> std::io::Result<Vec<BrowserCreateRequest>> {
-    let paths = BrowserRuntimePaths::resolve();
-    let mut requests = list_at(paths.root())?;
-    requests.extend(list_at(&paths.root().join("shared-pages"))?);
-    requests.extend(list_at(&paths.root().join("oriented-sessions"))?);
+    list_create_requests_at(BrowserRuntimePaths::resolve().root())
+}
+
+/// [`list_create_requests`] on a root of the caller, in the order that a host
+/// claims them.
+///
+/// # Errors
+/// Returns an error when the request directory cannot be read.
+#[doc(hidden)]
+pub fn list_create_requests_at(root: &Path) -> std::io::Result<Vec<BrowserCreateRequest>> {
+    let mut requests = list_at(root)?;
+    requests.extend(list_at(&root.join("shared-pages"))?);
+    requests.extend(list_at(&root.join("oriented-sessions"))?);
     requests.sort_by_key(|request| request.requested_at_millis);
     Ok(requests)
 }
@@ -705,9 +748,10 @@ mod tests {
         }
     }
 
-    /// The profile of a create reaches the host as the name that the host reads:
-    /// a shared profile by name, or the reserved word of a private panel. A name
-    /// that the rule refuses never reaches the queue.
+    /// The profile of a create reaches the host as the create wrote it: no field
+    /// when it named none, a shared profile by name, or the reserved word of a
+    /// private panel. A create that names the shared profile `default` names a
+    /// profile. A name that the rule refuses never reaches the queue.
     #[test]
     fn a_create_queues_the_profile_that_it_names() {
         let root = tempfile::tempdir().expect("queue root");
@@ -736,7 +780,13 @@ mod tests {
                 .expect("a request file");
             request.profile
         };
-        assert_eq!(queue(None).as_deref(), Some(horizon_browser::DEFAULT_PROFILE));
+        assert_eq!(queue(None), None, "a create that names no profile names none");
+        assert_eq!(queue(Some("  ")), None, "a blank field names no profile");
+        assert_eq!(
+            queue(Some(horizon_browser::DEFAULT_PROFILE)).as_deref(),
+            Some(horizon_browser::DEFAULT_PROFILE),
+            "a create that names the shared default names a profile"
+        );
         assert_eq!(queue(Some("work")).as_deref(), Some("work"));
         assert_eq!(
             queue(Some(horizon_browser::PRIVATE_PROFILE)).as_deref(),
@@ -862,6 +912,7 @@ mod tests {
                 navigation: None,
                 navigation_error: None,
                 startup_millis: 0,
+                note: None,
             },
             "a legacy result leaves the navigation state unknown rather than claiming no URL was requested"
         );
@@ -870,16 +921,19 @@ mod tests {
             navigation: Some(CreateNavigation::Pending),
             navigation_error: None,
             startup_millis: 1234,
+            note: Some("This page runs in the Firefox of this computer.".to_string()),
         })
         .expect("encode");
         assert_eq!(encoded["navigation"], "pending");
         assert_eq!(encoded["startup_millis"], 1234);
+        assert_eq!(encoded["note"], "This page runs in the Firefox of this computer.");
         assert!(encoded.get("navigation_error").is_none());
         let failed = serde_json::to_value(BrowserCreateOutcome::Ready {
             panel_local_id: "panel".to_string(),
             navigation: Some(CreateNavigation::Failed),
             navigation_error: Some("could not navigate to https://down.test/".to_string()),
             startup_millis: 900,
+            note: None,
         })
         .expect("encode");
         assert_eq!(failed["navigation"], "failed");
@@ -969,6 +1023,7 @@ mod tests {
             CreateNavigation::Committed,
             None,
             1_500,
+            None,
         );
         complete_at(root.path(), &result).expect("complete create");
         assert_eq!(

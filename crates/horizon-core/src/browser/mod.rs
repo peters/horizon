@@ -11,6 +11,8 @@ mod remote_identity;
 pub use remote_identity::RemoteIdentityDisplay;
 mod attached_host;
 pub mod host_driver;
+mod host_route;
+pub use host_route::{BrowserPanelRequest, BrowserPlace, NewBrowserPanel, new_browser_panel};
 mod private_profiles;
 pub use attached_host::{
     AttachedHost, AttachedHostFailure, AttachedHostFailureKind, DEFAULT_HOST_PROFILE, attached_host_backend_refusal,

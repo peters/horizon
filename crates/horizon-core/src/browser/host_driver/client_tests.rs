@@ -457,6 +457,7 @@ fn a_fatal_refusal_after_the_greeting_ends_the_link_with_the_words_of_the_driver
         &waker,
         &manifest,
         &mut probe,
+        "live42",
     );
     let super::panel::PumpOutcome::Lost(super::panel::LostLink::Refused(failure)) = outcome else {
         panic!("a refusal that ends a link reaches the panel as a failure");

@@ -208,6 +208,75 @@ Run this task with a Firefox host.
    still in the field. The second panel shows its own page, and it is not
    reloaded.
 
+### 6.9 P09 — The rule of a new panel
+
+Run this task with a browser host of the engine under test.
+
+The rule of one new browser panel reads the entry **Browser host** of the
+settings, the field `profile` and the field `backend` of the create:
+
+| The create | The panel | Task that proves it |
+|------------|-----------|---------------------|
+| no `profile` | a page of the profile of the host, in the engine of the host | P06 step 1, P09 step 1 |
+| no `profile`, and a `backend` of another engine | a page of this computer in that engine, in the shared profile `default`, and `note` says that it runs on this computer | P09 step 2 |
+| `profile: "private"` | a private page of the host, in the engine of the host | P07, P09 step 3 |
+| `profile: "private"`, and a `backend` of another engine | a private panel of this computer, and `note` says that it runs on this computer | P09 step 4 |
+| a profile name | a panel of this computer in that profile, and `note` says that it runs on this computer | P09 step 5 |
+| `profile: "default"` | a panel of this computer in the shared profile `default`, and `note` says that it runs on this computer | P09 step 6 |
+
+Without a browser host, every create is a panel of this computer in the profile
+and the engine that it names. The field `note` is absent when the page runs
+where the settings name it.
+
+1. Make a panel from the picker, and then ask an agent to call `browser_create`
+   with no `profile` and no `backend`.
+
+   Result: both panels run on the host, in the profile of the entry. Read
+   `browser_list`: each panel reports the profile of the host, and no panel has
+   `note`.
+
+2. Ask an agent to call `browser_create` with `backend` of an engine that the
+   host does not run, and no `profile`.
+
+   Result: the panel runs on this computer. Its `profile` is `default`, and
+   `note` says that the page runs on this computer and not on the browser host.
+
+3. Right-click a panel of this computer and select `Private panel`. Then
+   right-click a panel of the host and select `Private panel`.
+
+   Result: the first panel is a private panel of this computer with
+   `profile: "private"`, and the second is a private page of the host, in the
+   engine of the host.
+
+4. Ask an agent to call `browser_create` with `profile: "private"` and a
+   `backend` of an engine that the host does not run.
+
+   Result: the panel is a private panel of this computer, and `note` says so.
+
+5. Ask an agent to call `browser_create` with `profile: "work"`.
+
+   Result: the panel runs on this computer in the shared profile `work`, and
+   `note` says so.
+
+6. Ask an agent to call `browser_create` with `profile: "default"` and no
+   `backend`. Then ask an agent to call `browser_create` with no `profile` and no
+   `backend`.
+
+   Result: the first panel runs on this computer in the shared profile `default`,
+   and `note` says so. The second panel runs on the host in the profile of the
+   entry, and it has no `note`. The two creates differ: a create that names no
+   profile is not a create that names `default`.
+
+The checks of the repository prove the same lines without a host:
+`app::browser_host_route_tests::a_create_with_no_profile_is_a_page_of_the_host_for_an_agent_and_for_a_person`,
+`app::browser_host_route_tests::a_create_with_no_profile_that_names_another_engine_is_a_panel_of_this_computer`,
+`app::browser_host_route_tests::a_private_create_is_a_private_page_of_the_host`,
+`app::browser_host_route_tests::a_private_create_of_another_engine_is_a_private_panel_of_this_computer`,
+`app::browser_host_route_tests::a_create_that_names_a_profile_keeps_a_profile_of_this_computer`, and
+`app::browser_host_route_tests::a_create_that_names_the_shared_default_keeps_it_on_this_computer`.
+Each check starts at the fields of the tool, takes the request that the host
+claims from the queue of the agent, and ends at the machine of the panel.
+
 ## 7. Pass criteria
 
 - A second panel of the shared profile reads the cookie of the first panel, for
@@ -221,6 +290,8 @@ Run this task with a Firefox host.
 - A browser host gives two panels of one profile that read the same sign-in, and
   a private panel that reads none of it.
 - The chrome names the profile of each panel in one line.
+- A create with no `profile` runs on the browser host of the settings, and
+  `browser_list` reports the profile of that host for it.
 - Each refusal names the profile, or the rule that it breaks, and the action
   that the person can take.
 

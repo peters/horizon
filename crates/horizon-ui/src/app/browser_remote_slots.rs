@@ -220,7 +220,7 @@ impl HorizonApp {
             remote_session: Some(plan.request),
             ..horizon_core::PanelOptions::default()
         };
-        self.open_requested_browser_panel(pending.request, actor_panel, options, pending.started_at);
+        self.open_requested_browser_panel(pending.request, actor_panel, options, None, pending.started_at);
     }
 }
 

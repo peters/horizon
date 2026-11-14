@@ -1,12 +1,15 @@
 //! Which machine serves the browser panels of a new panel, and where a saved
 //! page comes back.
 //!
-//! A panel that follows the entry `browser_host` is attached to that host, and a
-//! panel of a saved run comes back on the host and profile that served it. Both
-//! modes are decided here, so the panel spawn of `spawn.rs` reads one answer, and
-//! a machine of the machine list takes the login of that machine and never the
-//! SSH configuration of the person.
+//! The rule `crate::browser::new_browser_panel` decides which machine serves a
+//! new browser panel, because it reads the settings entry of this app; this
+//! module turns that answer into the mode of the spawn, and a panel of a saved
+//! run comes back on the host and profile that served it. Both modes are decided
+//! here, so the panel spawn of `spawn.rs` reads one answer, and a machine of the
+//! machine list takes the login of that machine and never the SSH configuration
+//! of the person.
 
+use crate::browser::BrowserPlace;
 use crate::error::Result;
 use crate::ssh::SshConnection;
 
@@ -44,20 +47,98 @@ pub(super) fn restored_browser_mode(
         (_, mode) => Ok(mode),
     }
 }
+/// The mode of the browser panel that `opts` asks for, as the spawn of a panel
+/// reads it. A test names this answer instead of starting a browser.
+pub(super) fn browser_spawn_for(opts: &mut crate::PanelOptions) -> Result<BrowserSpawnMode> {
+    // A panel that follows the browser host of the settings takes the entry that
+    // this app read for it, and no caller sets the entry of a panel of its own.
+    let browser_host = opts.browser_host_entry.take().filter(|_| opts.follows_browser_host);
+    let mode = match (opts.remote_session.take(), opts.remote_target.take()) {
+        (Some(request), _) => BrowserSpawnMode::Remote(Box::new(request)),
+        (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
+        (None, None) => BrowserSpawnMode::Local(opts.browser_session_id.take()),
+    };
+    // A saved panel comes back on the browser host and profile that served it.
+    // The host of today's settings does not decide a saved panel, and a live page
+    // cannot move between machines.
+    let mode = restored_browser_mode(mode, opts.browser_host.take())?;
+    browser_spawn_mode(
+        mode,
+        opts.browser_place.take(),
+        browser_host.as_ref(),
+        opts.ssh_connection.take(),
+    )
+}
+
+/// The machine that serves the page of a browser panel, in the terms that a test
+/// reads: this computer in one engine, or the browser host of the settings in the
+/// profile of that host.
+#[doc(hidden)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BrowserMachine {
+    /// This computer serves the page in `backend`, in the shared profile
+    /// `profile`, or in a private page when `private` is true.
+    ThisComputer {
+        backend: crate::browser::BackendKind,
+        profile: Option<String>,
+        private: bool,
+    },
+    /// The browser host `ssh_target` serves the page in `profile` of that machine.
+    /// `private` says that the page keeps nothing of that profile.
+    Host {
+        ssh_target: String,
+        profile: String,
+        private: bool,
+    },
+}
+
+/// The machine that serves the page of `opts`, as the spawn of a panel decides it.
+///
+/// A test names this answer instead of starting a browser, so the check that a
+/// create reaches the host goes from the request to the machine of the panel and
+/// runs no `ssh` and no engine.
+#[doc(hidden)]
+pub fn browser_machine(opts: &mut crate::PanelOptions) -> Result<BrowserMachine> {
+    let backend = opts
+        .browser_config
+        .as_ref()
+        .map_or_else(crate::browser::BackendKind::default, |config| config.backend);
+    let private = opts.browser_private;
+    let session = opts.browser_session_id.clone();
+    Ok(match browser_spawn_for(opts)? {
+        BrowserSpawnMode::AttachedHost(host) | BrowserSpawnMode::RestoredHost(host) => BrowserMachine::Host {
+            ssh_target: host.ssh_target().to_string(),
+            profile: host.profile().to_string(),
+            private,
+        },
+        BrowserSpawnMode::Local(_) | BrowserSpawnMode::Remote(_) | BrowserSpawnMode::RestoredRemote(_) => {
+            BrowserMachine::ThisComputer {
+                backend,
+                profile: if private { None } else { session },
+                private,
+            }
+        }
+    })
+}
+
 pub(super) fn browser_spawn_mode(
     mode: BrowserSpawnMode,
+    place: Option<BrowserPlace>,
     browser_host: Option<&crate::BrowserHostConfig>,
     login: Option<SshConnection>,
 ) -> Result<BrowserSpawnMode> {
     let Some(browser_host) = browser_host.filter(|browser_host| browser_host.names_host()) else {
         return Ok(mode);
     };
-    // A create that names no profile follows the entry of the settings, so a page
-    // of the one profile of that host opens on the host. A create that names a
-    // profile keeps a profile of this computer, and a saved panel keeps the host
-    // and the profile that served it, which the caller decides before this point.
-    if !matches!(mode, BrowserSpawnMode::Local(None)) {
-        return Ok(mode);
+    // The rule of `crate::browser::new_browser_panel` decided the machine of this
+    // panel when the app read the entry of the settings: a page of the host there,
+    // and a page of this computer otherwise. Only a plain page of this computer can
+    // become a page of the host: a remote session keeps its target, and a saved
+    // panel keeps the host and the profile that served it, which the caller decides
+    // before this point.
+    match (place, &mode) {
+        (Some(BrowserPlace::Host { .. }), BrowserSpawnMode::Local(_)) => {}
+        _ => return Ok(mode),
     }
     let named = browser_host
         .ssh_target()
