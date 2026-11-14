@@ -438,6 +438,21 @@ impl DriverProcess {
         matches!(self, Self::Attached(_))
     }
 
+    /// The isolated browser context of a private page, when this session drives
+    /// the browser of another process. The test of a private page reads it to
+    /// show that the page carries the context that its close disposes.
+    #[cfg(test)]
+    pub(super) fn context(&self) -> Option<String> {
+        match self {
+            Self::Attached(browser) => browser
+                .context
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            Self::Exclusive(_) | Self::Shared(_) => None,
+        }
+    }
+
     pub(super) fn child_status(&mut self) -> Option<std::process::ExitStatus> {
         match self {
             Self::Exclusive(process) => process.child_status(),
