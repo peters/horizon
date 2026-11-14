@@ -22,7 +22,43 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, view: GeneralView<'_>) ->
     changed |= render_features_section(ui, config, view);
     changed |= render_machines_section(ui, config);
     changed |= render_remote_hosts_section(ui, config);
+    changed |= render_canvas_section(ui, config);
     changed |= render_overlays_section(ui, config);
+    changed
+}
+
+/// The floor of a Fit: the least zoom that fitting a workspace chooses, so the
+/// text of its cards and its terminals stays readable. A workspace that does not
+/// fit at this zoom is shown from its top left.
+fn render_canvas_section(ui: &mut Ui, config: &mut Config) -> bool {
+    let mut changed = false;
+    super::section_heading(ui, "Canvas");
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "The least zoom that Fit of a workspace chooses. A workspace that does not fit at this \
+             zoom keeps it and is shown from its top left, and the minimap shows where the rest of it is.",
+        );
+        ui.add_space(8.0);
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Fit floor").color(theme::FG_SOFT()).size(12.0));
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut config.canvas.fit_floor_zoom)
+                        .range(0.2..=1.0)
+                        .speed(0.01)
+                        .max_decimals(2),
+                )
+                .changed();
+            super::dim_label(ui, "of the zoom of this canvas");
+        });
+        super::dim_label(
+            ui,
+            "0.85 keeps the smallest text of a card at about 9 screen points and the text of a \
+             terminal at about 11.",
+        );
+    });
     changed
 }
 

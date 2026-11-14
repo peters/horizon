@@ -4,6 +4,26 @@ pub const DEFAULT_CANVAS_ZOOM: f32 = 1.0;
 pub const MIN_CANVAS_ZOOM: f32 = 0.05;
 pub const MAX_CANVAS_ZOOM: f32 = 4.0;
 
+/// The least zoom that a Fit of a workspace chooses.
+///
+/// A Fit that went under this zoom drew text that a person can no longer read:
+/// the smallest text of a card is 10.5 points and the text of a terminal 13, so
+/// this floor keeps the card at about 9 screen points and the terminal at about
+/// 11. A workspace that does not fit at this zoom is shown from its top left.
+pub const DEFAULT_FIT_FLOOR_ZOOM: f32 = 0.85;
+
+/// The floor of a Fit, held inside the range of the canvas zoom: a value below
+/// the least zoom or above the zoom of one changes no Fit, and a value that is
+/// not a number is the default floor.
+#[must_use]
+pub fn fit_floor_zoom(configured: f32) -> f32 {
+    if !configured.is_finite() {
+        return DEFAULT_FIT_FLOOR_ZOOM;
+    }
+
+    configured.clamp(MIN_CANVAS_ZOOM, DEFAULT_CANVAS_ZOOM)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct CanvasViewState {
@@ -103,7 +123,10 @@ pub fn clamp_canvas_zoom(zoom: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CanvasViewState, DEFAULT_CANVAS_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, clamp_canvas_zoom};
+    use super::{
+        CanvasViewState, DEFAULT_CANVAS_ZOOM, DEFAULT_FIT_FLOOR_ZOOM, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM,
+        clamp_canvas_zoom, fit_floor_zoom,
+    };
 
     #[test]
     fn clamps_zoom_range_and_non_finite_values() {
@@ -111,6 +134,20 @@ mod tests {
         assert!((clamp_canvas_zoom(f32::INFINITY) - DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((clamp_canvas_zoom(0.01) - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((clamp_canvas_zoom(10.0) - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn the_floor_of_a_fit_stays_inside_the_zoom_range() {
+        assert!((fit_floor_zoom(0.7) - 0.7).abs() <= f32::EPSILON);
+        assert!(
+            (fit_floor_zoom(0.01) - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON,
+            "a floor below the least zoom changes no Fit"
+        );
+        assert!(
+            (fit_floor_zoom(2.0) - DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON,
+            "a Fit never zooms in past one, so a floor above one is one"
+        );
+        assert!((fit_floor_zoom(f32::NAN) - DEFAULT_FIT_FLOOR_ZOOM).abs() <= f32::EPSILON);
     }
 
     #[test]

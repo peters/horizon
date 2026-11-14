@@ -49,6 +49,8 @@ pub struct Config {
     #[serde(default)]
     pub overlays: OverlaysConfig,
     #[serde(default)]
+    pub canvas: CanvasConfig,
+    #[serde(default)]
     pub features: FeaturesConfig,
     #[serde(default)]
     pub browser: crate::browser::BrowserConfig,
@@ -83,6 +85,7 @@ impl Default for Config {
             appearance: AppearanceConfig::default(),
             shortcuts: ShortcutsConfig::default(),
             overlays: OverlaysConfig::default(),
+            canvas: CanvasConfig::default(),
             features: FeaturesConfig::default(),
             browser: crate::browser::BrowserConfig::default(),
             remote_hosts: RemoteHostsConfig::default(),
@@ -247,6 +250,32 @@ impl Default for OverlaysConfig {
             minimap_height: 180.0,
             minimap_width: 320.0,
         }
+    }
+}
+
+/// The canvas of the window: what a Fit of a workspace may do.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CanvasConfig {
+    /// The least zoom that a Fit of a workspace chooses, in points of the
+    /// screen for one point of the canvas. A workspace that does not fit at
+    /// this zoom is shown from its top left instead of being made smaller.
+    pub fit_floor_zoom: f32,
+}
+
+impl Default for CanvasConfig {
+    fn default() -> Self {
+        Self {
+            fit_floor_zoom: crate::DEFAULT_FIT_FLOOR_ZOOM,
+        }
+    }
+}
+
+impl CanvasConfig {
+    /// The floor of a Fit, as this entry gives it and as the canvas reads it.
+    #[must_use]
+    pub fn fit_floor(&self) -> f32 {
+        crate::fit_floor_zoom(self.fit_floor_zoom)
     }
 }
 
@@ -1298,6 +1327,25 @@ mod tests {
 
         let document = config.to_json().expect("config should serialize");
         assert!(!document.contains("attention_feed"));
+    }
+
+    #[test]
+    fn the_floor_of_a_fit_round_trips_and_keeps_its_default() {
+        assert!(
+            (Config::default().canvas.fit_floor_zoom - crate::DEFAULT_FIT_FLOOR_ZOOM).abs() <= f32::EPSILON,
+            "a store without the section reads the default floor"
+        );
+        let config = Config::from_json(r#"{"canvas": {"fit_floor_zoom": 0.6}}"#).expect("config should deserialize");
+        assert!((config.canvas.fit_floor() - 0.6).abs() <= f32::EPSILON);
+        let document = config.to_json().expect("config should serialize");
+        assert!(document.contains(r#""fit_floor_zoom": 0.6"#), "{document}");
+        assert_eq!(Config::from_json(&document).expect("parse").canvas.fit_floor_zoom, 0.6);
+
+        let held = Config::from_json(r#"{"canvas": {"fit_floor_zoom": 0.001}}"#).expect("config should deserialize");
+        assert!(
+            held.canvas.fit_floor() >= crate::MIN_CANVAS_ZOOM,
+            "a floor under the least zoom of the canvas reads as that zoom"
+        );
     }
 
     #[test]

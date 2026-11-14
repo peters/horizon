@@ -51,7 +51,7 @@ The store has schema version 1.
 
 | Table | Rows |
 |---|---|
-| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `secrets`, `speech`, `presets`, `workspaces`. |
+| `settings` | One row for each configuration section: `version`, `window`, `appearance`, `shortcuts`, `overlays`, `canvas`, `features`, `browser`, `remote_hosts`, `browser_host`, `server`, `secrets`, `speech`, `presets`, `workspaces`. |
 | `meta` | `schema_version` and `saved_at`. |
 
 Each `settings` row has a `format` column. This build writes `json`. A build that
@@ -203,6 +203,7 @@ store writes, so a new section without a decision fails it.
 | `appearance` | Shared | One theme for every computer of the person. |
 | `shortcuts` | Shared | One set of key bindings, so a key does the same thing on every computer. |
 | `overlays` | Shared | |
+| `canvas` | Shared | The floor of the zoom that a Fit of a workspace chooses. A computer of a smaller screen fits a workspace at the same floor as the others, so the value is shared. |
 | `features` | Shared | |
 | `browser` | Shared | |
 | `remote_hosts` | Shared | One list of remote hosts. |
@@ -259,7 +260,7 @@ typed value of its section:
 
 | Tab | Sections |
 |---|---|
-| General | `window`, `appearance`, `features`, `overlays`, `browser_host`, `remote_hosts` |
+| General | `window`, `appearance`, `features`, `overlays`, `canvas`, `browser_host`, `remote_hosts` |
 | Keys | `shortcuts` |
 | Presets | `presets` |
 | Browser | `browser`: the engine programs, the live view, the recording defaults and the passkey command |

@@ -327,8 +327,21 @@ impl HorizonApp {
             return false;
         };
 
-        let zoom = fit_workspace_zoom(canvas_rect.size(), size, Vec2::splat(64.0));
-        let pan_offset = aligned_pan_offset(canvas_rect, pos, size, zoom, false);
+        let margin = Vec2::splat(FIT_MARGIN);
+        let zoom = fit_workspace_zoom(
+            canvas_rect.size(),
+            size,
+            margin,
+            self.template_config.canvas.fit_floor(),
+        );
+        // A workspace that does not fit at the floor of the zoom is not made any
+        // smaller: it is shown from its top left corner, and the minimap shows
+        // where the rest of it is.
+        let pan_offset = if fits_in_canvas(canvas_rect.size(), size, margin, zoom) {
+            aligned_pan_offset(canvas_rect, pos, size, zoom, false)
+        } else {
+            top_left_pan_offset(pos, zoom)
+        };
 
         self.board.focus_workspace(workspace_id);
         self.pan_target = None;
@@ -392,6 +405,12 @@ fn panel_focus_frame(position: [f32; 2], size: [f32; 2]) -> (Pos2, Vec2) {
 /// Inset (px) kept between the revealed panel and the viewport edge.
 const REVEAL_MARGIN: f32 = 40.0;
 
+/// Inset (px) kept between a fitting workspace and the canvas edge.
+const FIT_MARGIN: f32 = 64.0;
+
+/// Inset (px) kept between a placed workspace and the canvas edge.
+const PAN_MARGIN: f32 = 40.0;
+
 /// View state that keeps a revealed panel visible: the panel's workspace is
 /// left-aligned next to the canvas edge (close to the sidebar), the current
 /// zoom is kept while the panel already fits from there, otherwise the view
@@ -439,12 +458,27 @@ fn fit_zoom_for_frame(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 
     horizon_core::clamp_canvas_zoom((available_size.x / frame_size.x).min(available_size.y / frame_size.y))
 }
 
-fn fit_workspace_zoom(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 {
-    fit_zoom_for_frame(canvas_size, frame_size, margin).min(horizon_core::DEFAULT_CANVAS_ZOOM)
+fn fit_workspace_zoom(canvas_size: Vec2, frame_size: Vec2, margin: Vec2, floor: f32) -> f32 {
+    fit_zoom_for_frame(canvas_size, frame_size, margin)
+        .max(floor)
+        .min(horizon_core::DEFAULT_CANVAS_ZOOM)
+}
+
+/// Whether a frame of `zoom` keeps the margin of a Fit on every side of the
+/// canvas.
+fn fits_in_canvas(canvas_size: Vec2, frame_size: Vec2, margin: Vec2, zoom: f32) -> bool {
+    frame_size.x * zoom <= canvas_size.x - margin.x * 2.0 && frame_size.y * zoom <= canvas_size.y - margin.y * 2.0
+}
+
+/// The pan offset that puts the top left corner of a workspace at the top left
+/// margin of the canvas, for a workspace that is larger than the canvas even at
+/// the floor of the zoom.
+fn top_left_pan_offset(canvas_pos: Pos2, zoom: f32) -> Vec2 {
+    Vec2::new(PAN_MARGIN - canvas_pos.x * zoom, PAN_MARGIN - canvas_pos.y * zoom)
 }
 
 fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
-    let pan_margin = 40.0;
+    let pan_margin = PAN_MARGIN;
     let x = if left_align {
         pan_margin - canvas_pos.x * zoom
     } else {
@@ -473,8 +507,8 @@ mod tests {
     use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
     use super::{
-        aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame, panel_focus_frame,
-        reveal_view_state,
+        FIT_MARGIN, PAN_MARGIN, aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame,
+        fits_in_canvas, panel_focus_frame, reveal_view_state, top_left_pan_offset,
     };
 
     #[test]
@@ -540,11 +574,70 @@ mod tests {
 
     #[test]
     fn workspace_fit_zooms_out_but_never_upscales_content() {
-        let zoomed_out = fit_workspace_zoom(Vec2::new(600.0, 400.0), Vec2::new(900.0, 600.0), Vec2::splat(64.0));
-        let native_scale = fit_workspace_zoom(Vec2::new(1600.0, 1000.0), Vec2::new(100.0, 80.0), Vec2::splat(64.0));
+        let floor = horizon_core::DEFAULT_FIT_FLOOR_ZOOM;
+        let zoomed_out = fit_workspace_zoom(
+            Vec2::new(600.0, 400.0),
+            Vec2::new(900.0, 600.0),
+            Vec2::splat(64.0),
+            floor,
+        );
+        let native_scale = fit_workspace_zoom(
+            Vec2::new(1600.0, 1000.0),
+            Vec2::new(100.0, 80.0),
+            Vec2::splat(64.0),
+            floor,
+        );
 
         assert!(zoomed_out < horizon_core::DEFAULT_CANVAS_ZOOM);
         assert!((native_scale - horizon_core::DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn a_workspace_fit_stops_at_the_floor_of_the_zoom() {
+        let floor = horizon_core::DEFAULT_FIT_FLOOR_ZOOM;
+        // The fit alone would be 0.26, which draws card text that nobody reads.
+        let zoom = fit_workspace_zoom(
+            Vec2::new(600.0, 400.0),
+            Vec2::new(1800.0, 1200.0),
+            Vec2::splat(64.0),
+            floor,
+        );
+
+        assert!(
+            (zoom - floor).abs() <= f32::EPSILON,
+            "{zoom} is the floor of the setting"
+        );
+    }
+
+    #[test]
+    fn a_workspace_that_does_not_fit_at_the_floor_starts_at_its_top_left() {
+        let canvas = Rect::from_min_size(Pos2::new(210.0, 46.0), Vec2::new(1200.0, 800.0));
+        let canvas_size = canvas.size();
+        let margin = Vec2::splat(FIT_MARGIN);
+        let pos = Pos2::new(320.0, 180.0);
+        let size = Vec2::new(1800.0, 1200.0);
+        let zoom = fit_workspace_zoom(canvas_size, size, margin, horizon_core::DEFAULT_FIT_FLOOR_ZOOM);
+
+        assert!(
+            !fits_in_canvas(canvas_size, size, margin, zoom),
+            "the workspace is larger than the canvas at the floor"
+        );
+        let offset = top_left_pan_offset(pos, zoom);
+        assert!((offset.x + pos.x * zoom - PAN_MARGIN).abs() <= f32::EPSILON);
+        assert!((offset.y + pos.y * zoom - PAN_MARGIN).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn a_workspace_that_fits_at_the_floor_is_centred() {
+        let canvas_size = Vec2::new(1200.0, 800.0);
+        let margin = Vec2::splat(FIT_MARGIN);
+        let size = Vec2::new(900.0, 600.0);
+        let zoom = fit_workspace_zoom(canvas_size, size, margin, horizon_core::DEFAULT_FIT_FLOOR_ZOOM);
+
+        assert!(
+            fits_in_canvas(canvas_size, size, margin, zoom),
+            "a workspace of the size of the canvas fits at the fit zoom"
+        );
     }
 
     #[test]

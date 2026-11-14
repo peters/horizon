@@ -116,6 +116,10 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::Shared,
     },
     Section {
+        name: "canvas",
+        scope: Scope::Shared,
+    },
+    Section {
         name: "features",
         scope: Scope::Shared,
     },

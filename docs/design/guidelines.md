@@ -452,6 +452,26 @@ their rectangles. Therefore every text that the canvas zoom draws goes through
   fill it.
 - Zoom 1 takes the plain path. The look of a display of scale 1 does not change.
 
+### The floor of a Fit of a workspace
+
+A Fit of a workspace chooses the zoom at which the workspace fits the canvas,
+never one above 1. It never chooses one under the floor of
+`canvas.fit_floor_zoom`, which is 0.85 by default and is one setting of the
+Settings window, General, Canvas.
+
+| Value | Size at the floor | Source |
+|---|---|---|
+| Smallest text of a card | 10.5 x 0.85 = about 9 screen points | `CAPTION_FONT` in `block_widget/metrics.rs` |
+| Text of a terminal | 13 x 0.85 = about 11 screen points | JetBrains Mono 13 in this document |
+| Panel titlebar title | 13 x 0.85 = about 11 screen points | Inter 13 in this document |
+
+A workspace that does not fit the canvas at the floor keeps the floor: its top
+left corner meets the top left margin of the canvas, and the rest of it is off
+the canvas. The minimap draws the whole workspace with the rectangle of the
+view, so the person reads where the rest of it is and pans there. A Fit never
+shows a workspace at a zoom where its text cannot be read, and it never upscales
+the canvas either.
+
 ### Text of the canvas that a stock widget still draws
 
 A stock widget of the toolkit draws its own text through the fonts of the
