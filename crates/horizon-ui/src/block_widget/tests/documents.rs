@@ -540,3 +540,60 @@ fn the_plan_card_of_a_server_move_names_the_start_at_boot_choice() {
         "{name}: the plan card of a move names the start at boot choice: {rows:?}"
     );
 }
+
+/// A machine can be the host of the browser panels and the place of the server of
+/// this computer. A delete that takes it away must say so before it deletes, and
+/// after the delete the same card offers the way back to this computer, because
+/// every new browser panel fails while the entry names a machine that is gone.
+#[test]
+fn the_delete_cards_of_a_machine_name_the_settings_that_it_takes_away() {
+    let cards = skill_cards();
+
+    let confirm = cards
+        .iter()
+        .find(|(_, document)| {
+            texts_of(document).contains(&"Delete removes the machine and its disk. This cannot be undone.")
+        })
+        .map(|(name, document)| (name.as_str(), document))
+        .expect("the confirm card of a delete");
+    let texts = texts_of(confirm.1).join(" ");
+    assert!(
+        texts.contains("browser panels follow the browser on build-1"),
+        "{}: the confirm card says what the browser host loses: {texts}",
+        confirm.0
+    );
+    assert!(
+        texts.contains("Horizon server on build-1"),
+        "{}: the confirm card says what the server link loses: {texts}",
+        confirm.0
+    );
+    assert_eq!(
+        buttons_of(confirm.1),
+        vec!["delete_now", "keep"],
+        "{}: the confirm card still asks before it deletes",
+        confirm.0
+    );
+
+    let deleted = cards
+        .iter()
+        .find(|(_, document)| heading_of(document) == Some("build-1 is deleted"))
+        .map(|(name, document)| (name.as_str(), document))
+        .expect("the card of a machine that is deleted");
+    assert_eq!(
+        buttons_of(deleted.1),
+        vec!["use_this_computer", "close"],
+        "{}: the card of a deleted machine offers the way back to this computer and the way out",
+        deleted.0
+    );
+    let texts = texts_of(deleted.1).join(" ");
+    assert!(
+        texts.contains("Settings, General, Browser host"),
+        "{}: the card names where the browser host entry goes: {texts}",
+        deleted.0
+    );
+    assert!(
+        texts.contains("Settings, Server"),
+        "{}: the card names what the person does about the server link: {texts}",
+        deleted.0
+    );
+}

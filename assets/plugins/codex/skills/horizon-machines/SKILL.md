@@ -443,7 +443,24 @@ Delete needs a confirm step on the card before anything is deleted. Say on the
 confirm card that a workspace the person put on this machine loses its terminals
 there, and that their tmux sessions end with the machine.
 
-1. A press on `Delete` updates the card to the confirm document.
+Two settings of this computer can name the machine that the person deletes, and
+each one breaks something that no card of this delete shows afterwards:
+
+- `browser_host_status` answers the browser host of the new browser panels. When
+  its `machine` is the name of this machine, every browser panel that a create
+  makes after the delete opens nothing, because its host is gone.
+- `server_status` answers how this computer reaches its Horizon server. When its
+  `machine` is the name of this machine, the server runs on the machine that is
+  deleted, so this computer loses its link: its machine list, its keys and its
+  settings stay on this computer alone, and the other computers of the person
+  follow a server that is gone.
+
+Read both answers before you draw the confirm card, and say on it what the delete
+takes with it. Name the machine in the words of the card, and never guess: a
+field that the answer does not hold names no machine.
+
+1. A press on `Delete` updates the card to the confirm document, with the two
+   sentences of the answers that name this machine.
 2. A press on `Keep` returns to the machine card, and nothing is deleted.
 3. A press on `Delete it` runs the provider delete in the order of the reference.
    A machine of a Tailscale network first loses its login there and then its
@@ -454,9 +471,19 @@ there, and that their tmux sessions end with the machine.
    already gone. Then call `delete_machine_key` with the machine name, which
    removes the key on every computer of the same server; an answer of
    `key_unavailable` means that the key is already gone.
-6. Update the card to a `Deleted` badge with one `Close` button, or close it.
-   Tell the person in the `text` component that the terminal that Connect opened
-   keeps trying to reach the machine that is gone, and that they can close it.
+6. Update the card to a `Deleted` badge, the line of the browser host and the
+   line of the server when they named this machine, and the buttons
+   `Use this computer again` and `Close`. Tell the person in the `text` component
+   that the terminal that Connect opened keeps trying to reach the machine that
+   is gone, and that they can close it.
+7. A press on `Use this computer again` says where the person clears the browser
+   host entry: **Settings**, **General**, **Browser host**, take the entry away.
+   `browser_host_request` writes a host and never clears one, so the person's save
+   in the Settings window is the confirmed operation that moves the new browser
+   panels back to the browser of this computer, as the ready card of the goal
+   `browser` of `horizon-setup` says. Say one line in the panel with the same
+   words. For the server, the person writes the new place in **Settings**,
+   **Server**, or joins another server, as `horizon-server` says.
 
 A leftover resource means the delete did not finish. Show the provider's own
 words on the card and keep `Delete it`, so the person can try again.
@@ -662,7 +689,8 @@ The machine runs. The person may connect, stop or delete it:
     {"id": "stop", "label": "Stop"}, {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 
-The person pressed `Delete`. Ask before you delete:
+The person pressed `Delete`. Ask before you delete, and say on this card what the
+delete takes with it:
 
 ```json
 {"components": [
@@ -672,17 +700,28 @@ The person pressed `Delete`. Ask before you delete:
     {"label": "Type", "value": "cpx02, 1 vCPU, 1 GB"},
     {"label": "Address", "value": "203.0.113.10", "mono": true}]},
   {"type": "text", "text": "Delete removes the machine and its disk. This cannot be undone."},
+  {"type": "text", "text": "New browser panels follow the browser on build-1. After the delete they open nothing until this computer uses its own browser again."},
+  {"type": "text", "text": "This computer follows the Horizon server on build-1. Delete takes the server with the machine, so this computer loses its link."},
   {"type": "buttons", "items": [
     {"id": "delete_now", "label": "Delete it", "tone": "danger"}, {"id": "keep", "label": "Keep"}]}]}
 ```
 
-After the delete and the key removal, update the card to this document:
+Draw the line of the browser host only when `browser_host_status` names this
+machine in `machine`, and the line of the server only when `server_status` does. A
+machine that names neither setting gets neither line.
+
+After the delete and the key removal, update the same card to this document:
 
 ```json
 {"components": [
-  {"type": "badge", "text": "Deleted", "tone": "ok"},
+  {"type": "heading", "text": "build-1 is deleted",
+   "badge": {"text": "Deleted", "tone": "ok"}},
   {"type": "text", "text": "The machine and its key are gone. The terminal that Connect opened keeps trying to reach it; close it."},
-  {"type": "buttons", "items": [{"id": "close", "label": "Close"}]}]}
+  {"type": "text", "text": "New browser panels open nothing until this computer uses its own browser again: Settings, General, Browser host, take the entry away."},
+  {"type": "text", "text": "This computer follows no server now. Settings, Server, takes the place of another server."},
+  {"type": "buttons", "items": [
+    {"id": "use_this_computer", "label": "Use this computer again"},
+    {"id": "close", "label": "Close"}]}]}
 ```
 
 ## Rules
