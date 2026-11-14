@@ -18,9 +18,7 @@ use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
-pub(crate) use page::{
-    caller_page, create_browser_context, create_page_target, create_page_target_in, first_page_target,
-};
+pub(crate) use page::{caller_page, create_page_target, create_page_target_in, first_page_target, isolated_context};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -263,29 +261,6 @@ fn require_reaped_before_port_retry(reaped: bool) -> Result<(), &'static str> {
     } else {
         Err(DEVTOOLS_PORT_REAP_FAILURE)
     }
-}
-
-/// Make the isolated browser context of a private page of a browser that another
-/// process owns, and answer its name.
-///
-/// A browser of this session owns its profile folder, so a private panel of this
-/// computer is a throwaway folder and needs no context. A browser of a browser
-/// host belongs to that machine and holds its sign-ins in its own profile, so its
-/// private page is a page of a context that the profile does not reach.
-fn isolated_context(
-    config: &BrowserSessionConfig,
-    chrome: &DriverProcess,
-    link: &mut CdpLink,
-    stop_requested: &AtomicBool,
-) -> Option<String> {
-    if !config.browser.isolated_page || !chrome.is_attached() {
-        return None;
-    }
-    let context = create_browser_context(link, stop_requested);
-    if let (Some(context), DriverProcess::Attached(browser)) = (context.as_ref(), chrome) {
-        browser.set_context(context.clone());
-    }
-    context
 }
 
 fn initialize_target(

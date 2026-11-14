@@ -129,3 +129,26 @@ pub(crate) fn create_browser_context(link: &mut CdpLink, stop_requested: &Atomic
         .filter(|context| !context.is_empty())
         .map(str::to_string)
 }
+
+/// Make the isolated browser context of a private page of a browser that another
+/// process owns, and answer its name.
+///
+/// A browser of this session owns its profile folder, so a private panel of this
+/// computer is a throwaway folder and needs no context. A browser of a browser
+/// host belongs to that machine and holds its sign-ins in its own profile, so its
+/// private page is a page of a context that the profile does not reach.
+pub(crate) fn isolated_context(
+    config: &BrowserSessionConfig,
+    chrome: &DriverProcess,
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+) -> Option<String> {
+    if !config.browser.isolated_page || !chrome.is_attached() {
+        return None;
+    }
+    let context = create_browser_context(link, stop_requested);
+    if let (Some(context), DriverProcess::Attached(browser)) = (context.as_ref(), chrome) {
+        browser.set_context(context.clone());
+    }
+    context
+}
