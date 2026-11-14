@@ -628,11 +628,14 @@ pub(crate) fn measure_canvas_quads(
 mod tests {
     use std::time::{Duration, Instant};
 
+    use std::sync::Arc;
+
     use egui::text::{LayoutJob, TextFormat, TextWrapping};
-    use egui::{Color32, Context, FontId, Pos2};
+    use egui::{Color32, Context, FontId, Galley, Pos2, Rect, Shape};
 
     use super::{
-        MAX_SCREEN_SIZES, SCREEN_SIZE_QUANTUM, SETTLE, ZoomState, ZoomText, layout_job, live_screen_sizes, quantise,
+        MAX_SCREEN_SIZES, Measured, SCREEN_SIZE_QUANTUM, SETTLE, ZoomState, ZoomText, layout_job, live_screen_sizes,
+        measure_shapes, quantise,
     };
     use crate::test_egui::with_canvas_layer;
     use std::cell::Cell;
@@ -1061,5 +1064,151 @@ mod tests {
         .expect("one frame");
         assert!(logical, "zoom 1 is the logical path");
         assert_eq!(plain_size, sharp_size, "zoom 1 draws the galley it always drew");
+    }
+
+    /// What a pass of a canvas panel said about its hover text.
+    struct HoverText {
+        /// The layer that the hover text was painted on.
+        layer: egui::LayerId,
+        /// The transform that reaches that layer, if any.
+        transform: Option<egui::emath::TSTransform>,
+        /// The transform of the canvas that the panel was drawn in.
+        canvas_transform: Option<egui::emath::TSTransform>,
+        /// The galley of the hover text.
+        galley: Arc<Galley>,
+        /// The size of the body text of the interface.
+        body_size: f32,
+        /// The glyph quads of the hover text: how many, the worst distance of a
+        /// corner from a whole device pixel, and the worst stretch of a picture.
+        measured: (usize, f32, f32),
+    }
+
+    /// The hover text of a label of a canvas panel drawn at `zoom`, and the
+    /// layers and transforms that the pass used.
+    fn popup_text(zoom: f32) -> Option<HoverText> {
+        use egui::emath::TSTransform;
+
+        const HOVER: &str = "One rendered image pixel per UI point";
+        let ctx = Context::default();
+        ctx.set_fonts(crate::app::bootstrap::configure_fonts());
+        ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+        let canvas = egui::LayerId::new(egui::Order::Background, egui::Id::unique("canvas"));
+        let mut pointer = Pos2::ZERO;
+        let mut hovered = egui::Id::NULL;
+        let mut body_size = 0.0;
+        let mut found = None;
+        // The tooltip of a label opens one pass after the pointer reaches it.
+        for pass in 0..4 {
+            let input = egui::RawInput {
+                events: if pass == 0 {
+                    Vec::new()
+                } else {
+                    vec![egui::Event::PointerMoved(pointer)]
+                },
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |_| {
+                ctx.set_transform_layer(
+                    canvas,
+                    TSTransform {
+                        scaling: zoom,
+                        translation: egui::vec2(13.7, 21.3),
+                    },
+                );
+                let layer_ui = egui::UiBuilder::new()
+                    .layer_id(canvas)
+                    .max_rect(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)));
+                let mut child = egui::Ui::new(ctx.clone(), egui::Id::unique("canvas ui"), layer_ui);
+                let response = child.add(egui::Label::new("View controls").sense(egui::Sense::hover()));
+                hovered = response.id;
+                body_size = egui::TextStyle::Body.resolve(child.style()).size;
+                // A pointer event names a place on the screen, so the place of
+                // the label is the place that the zoom puts it at.
+                pointer = ctx.layer_transform_to_global(canvas).map_or_else(
+                    || response.rect.center(),
+                    |transform| transform * response.rect.center(),
+                );
+                let _ = response.on_hover_text(HOVER);
+            });
+            let shapes = output.shapes.clone();
+            let _ = crate::test_egui::DiscardTextures::discard_textures(output);
+            found = None;
+            for clipped in &shapes {
+                let Shape::Text(text) = &clipped.shape else {
+                    continue;
+                };
+                if text.galley.text() != HOVER {
+                    continue;
+                }
+                let mut measured = Measured::default();
+                measure_shapes(&clipped.shape, 1.0, &mut measured);
+                // The tooltip of a widget is an area of the tooltip order.
+                let layer = egui::LayerId::new(egui::Order::Tooltip, hovered.with(0));
+                found = Some(HoverText {
+                    layer,
+                    transform: ctx.layer_transform_to_global(layer),
+                    canvas_transform: ctx.layer_transform_to_global(canvas),
+                    galley: Arc::clone(&text.galley),
+                    body_size,
+                    measured: (measured.quads, measured.worst_phase, measured.worst_stretch),
+                });
+            }
+        }
+        found
+    }
+
+    /// A hover text of a canvas panel is painted on a layer of its own, which
+    /// the zoom of the canvas does not transform: a stock galley is one texel of
+    /// a glyph to one device pixel there, so a person reads a hover text sharp
+    /// at every zoom, at the size of the interface and not at the size of the
+    /// canvas.
+    #[test]
+    fn the_hover_text_of_a_panel_is_drawn_outside_the_zoom_of_the_canvas() {
+        let hover = popup_text(0.67).expect("the panel draws its hover text");
+        let canvas_zoom = hover
+            .canvas_transform
+            .expect("the canvas of the panel carries the transform of its zoom")
+            .scaling;
+        assert!(
+            (canvas_zoom - 0.67).abs() < f32::EPSILON,
+            "the canvas is drawn at a zoom of 0.67"
+        );
+        assert_eq!(
+            hover.layer.order,
+            egui::Order::Tooltip,
+            "a hover text has an order of its own"
+        );
+        assert_ne!(
+            hover.layer.id,
+            egui::Id::unique("canvas"),
+            "the hover text leaves the layer of the canvas"
+        );
+        assert_eq!(
+            hover.transform, None,
+            "no transform reaches the layer of a hover text: {:?}",
+            hover.layer
+        );
+        let (quads, worst_phase, worst_stretch) = hover.measured;
+        assert!(quads > 10, "the hover text paints its words: {quads} quads");
+        assert!(
+            worst_phase <= 0.01,
+            "the words of a hover text sit on whole device pixels: {worst_phase}"
+        );
+        assert!(
+            worst_stretch <= 0.01,
+            "one texel of a glyph of a hover text is one device pixel: {worst_stretch}"
+        );
+        let font_size = hover
+            .galley
+            .job
+            .sections
+            .first()
+            .map_or(0.0, |section| section.format.font_id.size);
+        assert!(
+            (font_size - hover.body_size).abs() < f32::EPSILON,
+            "a hover text keeps the size of the body text of the interface: {font_size} against {}",
+            hover.body_size
+        );
     }
 }
