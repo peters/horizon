@@ -25,8 +25,8 @@ mockups, and that a zoom gesture stays cheap.
   a display of scale 2.
 - This procedure does not test: the Fit zoom rules. It uses the Fit zoom of the
   fixture and does not change it.
-- This procedure does not test an image of a markdown preview: the build
-  installs no image loader, so an image of a note does not load at any zoom.
+- This procedure does not test a picture of a markdown preview:
+  [`markdown-preview.md`](markdown-preview.md) gives that procedure.
 
 ## 3. Safety
 

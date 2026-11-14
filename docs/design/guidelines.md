@@ -506,7 +506,7 @@ screen size. These parts still draw that text:
 | The chrome of a browser panel beside the address field: the engine name, the profile pill, the chip, the elapsed time of a recording, the notice lines and the hand-off banner | Done: they take `zoom_text::widget_text` |
 | The mode bar of the editor | Done: its two modes, its file name and its error line take `zoom_text::widget_text` |
 | The placeholder of a browser panel: its state line and the note under it | Paint both lines with `zoom_text` inside the centred area, and keep the response for the tooltip |
-| The preview of the editor | Done: round 50 draws it in a pane of `screen_pane` at the size of the screen. An image of a note does not load at any zoom, because the build installs no image loader |
+| The preview of the editor | Done: round 50 draws it in a pane of `screen_pane` at the size of the screen. Round 53 shows the pictures of a note: each picture is drawn at its natural size times the zoom, in the same pane, so its proportion to the text is the proportion of zoom 1 |
 | The rows and the controls of a device panel | Done: the labels take `panel_text` and therefore `zoom_text::widget_text`, and the seven drag values of the controls draw through `screen_pane::add_widget` |
 | Every popup of a panel | A popup is its own layer; the canvas transform would have to reach it first |
 
