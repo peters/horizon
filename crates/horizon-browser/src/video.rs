@@ -257,6 +257,24 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// Waits until the running capture has encoded `wanted` pictures. A frame of an
+    /// encode arrives on the encoder thread, so a fixed sleep guesses at it and a
+    /// loaded machine then tests nothing; the bound below only turns a hung encoder
+    /// into a failure.
+    fn wait_for_encoded(handle: &VideoCaptureHandle, wanted: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if handle
+                .snapshot()
+                .is_some_and(|capture| capture.frames_encoded >= wanted)
+            {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "the encoder wrote no picture");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn solid_rgb(red: u8, green: u8, blue: u8) -> Vec<u8> {
         let mut rgb = Vec::with_capacity(64 * 64 * 3);
         for _ in 0..(64 * 64) {
@@ -270,7 +288,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
         let slot = Arc::new(FrameSlot::new());
         slot.store_test_rgb(64, 64, solid_rgb(255, 0, 0));
-        let mut state = VideoCaptureState::default();
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let mut state = VideoCaptureState::new(Arc::clone(&handle));
         let defaults = BrowserVideoCaptureOptions {
             fps: 5,
             compression_level: 0,
@@ -283,7 +302,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("start video: {error:?}"));
         assert!(started.active);
         assert_eq!(started.state, BrowserVideoState::Recording);
-        std::thread::sleep(Duration::from_millis(400));
+        wait_for_encoded(&handle, 1);
         slot.store_test_rgb(64, 64, solid_rgb(0, 255, 0));
         let paused = state.pause().unwrap_or_else(|error| panic!("pause video: {error:?}"));
         assert_eq!(paused.state, BrowserVideoState::Paused);
@@ -291,7 +310,7 @@ mod tests {
         let resumed = state.resume().unwrap_or_else(|error| panic!("resume video: {error:?}"));
         assert_eq!(resumed.state, BrowserVideoState::Recording);
         slot.store_test_rgb(64, 64, solid_rgb(0, 0, 255));
-        std::thread::sleep(Duration::from_millis(400));
+        wait_for_encoded(&handle, 2);
         let stopped = state.stop().unwrap_or_else(|error| panic!("stop video: {error:?}"));
         assert!(!stopped.active);
         assert_eq!(stopped.state, BrowserVideoState::Stopped);

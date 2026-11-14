@@ -813,6 +813,21 @@ mod tests {
         sized_solid_rgb(64, 64, red, green, blue)
     }
 
+    /// Waits until the running capture satisfies `ready`. The samples of an encode
+    /// arrive on the encoder thread, so a fixed sleep guesses at them and a loaded
+    /// machine then tests nothing; the bound below only turns a hung encoder into a
+    /// failure.
+    fn wait_for_capture(handle: &VideoCaptureHandle, what: &str, ready: impl Fn(&BrowserVideoCapture) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if handle.snapshot().is_some_and(|capture| ready(&capture)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the encoder never reached {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn sized_solid_rgb(width: u32, height: u32, red: u8, green: u8, blue: u8) -> Vec<u8> {
         let pixels = usize::try_from(width.saturating_mul(height)).unwrap_or(0);
         let mut rgb = Vec::with_capacity(pixels.saturating_mul(3));
@@ -887,7 +902,7 @@ mod tests {
         };
         let thread = EncoderThread::start(root.path(), "static", Arc::clone(&slot), options, Arc::clone(&handle))
             .unwrap_or_else(|error| panic!("start encoder: {error}"));
-        std::thread::sleep(Duration::from_millis(700));
+        wait_for_capture(&handle, "two held samples", |capture| capture.frames_repeated >= 2);
         let capture = thread
             .finish()
             .unwrap_or_else(|error| panic!("finish encoder: {error}"));
@@ -919,7 +934,9 @@ mod tests {
         };
         let thread = EncoderThread::start(root.path(), "held", Arc::clone(&slot), options, Arc::clone(&handle))
             .unwrap_or_else(|error| panic!("start encoder: {error}"));
-        std::thread::sleep(Duration::from_millis(600));
+        wait_for_capture(&handle, "a graded capture", |capture| {
+            capture.frames_encoded >= 1 && capture.quality == BrowserVideoQuality::Good
+        });
         // A caller reads this before `stop`, while rav1e still holds the packet
         // it will return for the frame after the one it accepted.
         let running = handle.snapshot().unwrap_or_else(|| panic!("no running capture"));
