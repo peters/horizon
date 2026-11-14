@@ -492,12 +492,18 @@ pub struct PendingRequest {
 
 impl PendingRequests {
     pub fn insert(&mut self, id: u64, method: impl Into<String>, session_id: Option<String>) {
+        self.insert_at(id, method, session_id, Instant::now());
+    }
+
+    /// [`Self::insert`] for a caller that keeps its own clock: the request was
+    /// sent at `sent_at`, and [`Self::expired`] measures its age from there.
+    pub fn insert_at(&mut self, id: u64, method: impl Into<String>, session_id: Option<String>, sent_at: Instant) {
         self.by_id.insert(
             id,
             PendingRequest {
                 method: method.into(),
                 session_id,
-                sent_at: Instant::now(),
+                sent_at,
             },
         );
     }
@@ -506,13 +512,15 @@ impl PendingRequests {
         self.by_id.remove(&id)
     }
 
-    /// Ids of requests whose deadline has passed.
-    pub fn expired(&mut self, timeout: Duration) -> Vec<u64> {
-        let now = Instant::now();
+    /// Ids of requests whose deadline has passed at `now`.
+    ///
+    /// The caller names the instant, so a request and the deadline that ends it
+    /// are two values that a test can set instead of two reads of a clock.
+    pub fn expired(&mut self, now: Instant, timeout: Duration) -> Vec<u64> {
         let expired: Vec<u64> = self
             .by_id
             .iter()
-            .filter(|(_, p)| now.duration_since(p.sent_at) > timeout)
+            .filter(|(_, p)| now.saturating_duration_since(p.sent_at) > timeout)
             .map(|(id, _)| *id)
             .collect();
         for id in &expired {
@@ -585,13 +593,30 @@ mod tests {
 
     #[test]
     fn pending_requests_expire() {
+        // The instants of this test are values, not reads of a clock: two inserts
+        // in one tick of a coarse clock are then still two ages.
+        let start = Instant::now();
         let mut pending = PendingRequests::default();
-        pending.insert(1, "Page.enable", None);
+        pending.insert_at(1, "Page.enable", None, start);
         assert_eq!(pending.len(), 1);
-        assert!(pending.expired(Duration::from_mins(1)).is_empty());
-        pending.insert(2, "Page.navigate", Some("S".to_string()));
-        let expired = pending.expired(Duration::from_nanos(1));
-        assert_eq!(expired.len(), 2);
+        assert!(
+            pending
+                .expired(start + Duration::from_mins(1), Duration::from_mins(1))
+                .is_empty()
+        );
+        pending.insert_at(
+            2,
+            "Page.navigate",
+            Some("S".to_string()),
+            start + Duration::from_secs(30),
+        );
+        assert_eq!(
+            pending
+                .expired(start + Duration::from_mins(2), Duration::from_mins(1))
+                .len(),
+            2,
+            "both requests are older than their deadline"
+        );
         assert!(pending.is_empty());
     }
 
