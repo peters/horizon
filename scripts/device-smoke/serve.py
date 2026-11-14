@@ -175,6 +175,29 @@ RESERVED_SECRET_PREFIXES = (
 MAX_NAMED_SECRET_BYTES = 16 * 1024
 
 
+def check_named_secret_name(name):
+    """Raise ValueError unless `name` is the name of one named secret of Horizon.
+
+    The rule of a named secret: an environment variable name of 1 to 64 characters
+    of A-Z, 0-9 and _ that starts with a letter, and no name that Horizon or the
+    system own.
+    """
+    if (not 1 <= len(name) <= 64 or not name[0].isascii() or not name[0].isupper()
+            or not all(character.isascii() and (character.isupper() or character.isdigit() or character == '_')
+                        for character in name)):
+        raise ValueError(f'{name!r} is not 1 to 64 characters of A-Z, 0-9 and _ that starts with A-Z')
+    if name in RESERVED_SECRET_NAMES or name.startswith(RESERVED_SECRET_PREFIXES):
+        raise ValueError(f'{name!r} belongs to Horizon or to the system')
+
+
+def check_named_secret_value(name, value):
+    """Raise ValueError unless `value` is one value of a named secret of Horizon."""
+    if not 1 <= len(value.encode()) <= MAX_NAMED_SECRET_BYTES:
+        raise ValueError(f'the value of {name!r} is empty or larger than {MAX_NAMED_SECRET_BYTES} bytes')
+    if '\n' in value or '\r' in value or '\0' in value:
+        raise ValueError(f'the value of {name!r} holds a line break or a NUL byte')
+
+
 def parse_named_secret(text):
     """The name and the value of one `--named-secret NAME=VALUE`, or ValueError.
 
@@ -185,16 +208,26 @@ def parse_named_secret(text):
     name, separator, value = text.partition('=')
     if not separator:
         raise ValueError(f'{text!r} is not NAME=VALUE')
-    if (not 1 <= len(name) <= 64 or not name[0].isascii() or not name[0].isupper()
-            or not all(character.isascii() and (character.isupper() or character.isdigit() or character == '_')
-                        for character in name)):
-        raise ValueError(f'{name!r} is not 1 to 64 characters of A-Z, 0-9 and _ that starts with A-Z')
-    if name in RESERVED_SECRET_NAMES or name.startswith(RESERVED_SECRET_PREFIXES):
-        raise ValueError(f'{name!r} belongs to Horizon or to the system')
-    if not 1 <= len(value.encode()) <= MAX_NAMED_SECRET_BYTES:
-        raise ValueError(f'the value of {name!r} is empty or larger than {MAX_NAMED_SECRET_BYTES} bytes')
-    if '\n' in value or '\r' in value or '\0' in value:
-        raise ValueError(f'the value of {name!r} holds a line break or a NUL byte')
+    check_named_secret_name(name)
+    check_named_secret_value(name, value)
+    return name, value
+
+
+def named_secret_from_env(name, environ):
+    """The name and the value of one `--named-secret-env NAME`, or ValueError.
+
+    The value is the value of the environment variable NAME of the fixture, so it is
+    in no argument list of the fixture and of no process that the fixture starts. A
+    variable that is not set, or that is empty, is a refusal that names the variable
+    and no value.
+    """
+    check_named_secret_name(name)
+    value = environ.get(name)
+    if value is None:
+        raise ValueError(f'the environment variable {name} is not set')
+    if not value:
+        raise ValueError(f'the environment variable {name} is empty')
+    check_named_secret_value(name, value)
     return name, value
 
 
@@ -861,7 +894,8 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('browser_host_command', '--browser-host-command'),
     ('server_target', '--server-target'), ('server_command', '--server-command'),
     ('device_address', '--device-address'), ('firefox_system_access', '--firefox-system-access'),
-    ('named_secret', '--named-secret'), ('secret_row', '--secret-row'),
+    ('named_secret', '--named-secret'), ('named_secret_env', '--named-secret-env'),
+    ('secret_row', '--secret-row'),
     ('speech_recorder', '--speech-recorder'), ('speech_transcriber_command', '--speech-transcriber-command'),
     ('speech_service', '--speech-service'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
@@ -944,6 +978,12 @@ def arguments():
              'the fixture, <private home>/.horizon/secrets.sqlite, so its agent panels read '
              'NAME as an environment variable. Repeat for more than one. The value is in '
              'clear text in that file, which belongs to one private home.')
+    parser.add_argument(
+        '--named-secret-env', action='append', metavar='NAME',
+        help='Write one named secret into the secrets file of the private Horizon home of '
+             'this run, with the value of the environment variable NAME of this fixture. Use '
+             'it for a secret, because the value is in no argument of a process. Repeat for '
+             'more than one. The fixture refuses a NAME that is not set or empty.')
     parser.add_argument(
         '--secret-row', action='append', metavar='ID=VALUE',
         help='Write one credential value into the secrets file of the private Horizon home '
@@ -1109,6 +1149,11 @@ def main():
     except ValueError as problem:
         parser.error(f'--named-secret {problem}')
     try:
+        secrets_from_env = [named_secret_from_env(name, os.environ)
+                            for name in args.named_secret_env or []]
+    except ValueError as problem:
+        parser.error(f'--named-secret-env {problem}')
+    try:
         secret_rows = [parse_secret_row(text) for text in args.secret_row or []]
     except ValueError as problem:
         parser.error(f'--secret-row {problem}')
@@ -1245,8 +1290,8 @@ def main():
         # home wrote, are both rows of the secrets file that the candidate reads,
         # which is the file of the Horizon home below its masked `HOME`.
         secrets_file = horizon_secrets_file(box.private_home)
-        if named_secrets or secret_rows:
-            seed_secret_rows(secrets_file, named_secrets, secret_rows)
+        if named_secrets or secrets_from_env or secret_rows:
+            seed_secret_rows(secrets_file, named_secrets + secrets_from_env, secret_rows)
         held = read_secret_ids(secrets_file) if secrets_file.is_file() else []
         speech = speech_section(args.speech_recorder, args.speech_transcriber_command, args.speech_service)
         fixture = application_document(

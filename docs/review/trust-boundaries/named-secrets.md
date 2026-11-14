@@ -281,7 +281,11 @@ the device and holds the access controls. Horizon states nothing about those.
 Horizon on an isolated desktop that holds no value of the person. Its
 `--named-secret NAME=VALUE` writes one row `named/<NAME>` into the `secrets.sqlite`
 of the private home of that fixture with Python's `sqlite3`, and `--secret-row
-ID=VALUE` writes one `credential/<reference>` row the same way. Both run the schema
+ID=VALUE` writes one `credential/<reference>` row the same way. `--named-secret-env
+NAME` writes one `named/<NAME>` row with the value of the environment variable
+`NAME` of the fixture, so the value is in no argument of the fixture and in no
+argument of a process that the fixture starts. The fixture refuses a `NAME` that
+is not set or empty, and that refusal names the variable and no value. Both run the schema
 of [`crates/horizon-core/src/secret_store/schema.sql`](../../../crates/horizon-core/src/secret_store/schema.sql),
 which the store of Horizon includes, so the fixture and Horizon write one file and
 cannot drift. A test of the crate runs that Python path and opens its file.

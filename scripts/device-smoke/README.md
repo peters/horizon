@@ -197,6 +197,23 @@ panel needs a string `name`, a `kind` from the panel kinds, string `command`,
 `cwd` and `args` items, two numbers for `position` and `size`, and a `resume`
 value Horizon reads. Any other value stops the fixture with an error.
 
+`--named-secret-env NAME` writes one named secret into `secrets.sqlite` of the
+private home with the value of the environment variable `NAME` of the fixture
+itself. Give the variable in the environment of `serve.py`, and never the value:
+
+```bash
+TS_HOME_CLIENT_SECRET=... scripts/device-smoke/serve.py --horizon target/debug/horizon \
+  --state /var/tmp/network-1 --native-view --named-secret-env TS_HOME_CLIENT_SECRET
+```
+
+The value is in no argument of the fixture and of no process that it starts, so
+it is in no `/proc/<pid>/cmdline` and in no log line. The fixture stops with one
+line when the variable is not set or is empty, and that line names the variable
+and no value. Repeat the option for more than one secret. `--named-secret NAME=VALUE`
+keeps the value in an argument, so give it only a value that may appear there,
+such as the client id or the tag of a test. `--secret-row ID=VALUE` writes a
+`credential/<reference>` row. A plain start refuses both secret options.
+
 ### An agent that shows the attention states
 
 `scripts/device-smoke/agent_attention_standin.py` is the program of an agent
@@ -265,7 +282,8 @@ service.
   `{file}`, such as `speech_standin_recorder.py` of this folder.
 - `--speech-service ENDPOINT` writes `speech.transcriber` of the kind `service`
   with that endpoint, such as `speech_standin_service.py` of this folder. The key
-  of the service is the named secret `SPEECH_API_KEY` of `--named-secret`.
+  of the service is the named secret `SPEECH_API_KEY` of `--named-secret` or of
+  `--named-secret-env`.
 - `--speech-transcriber-command LINE` writes `speech.transcriber` of the kind
   `command` with that line instead, one command with `{file}`.
 
