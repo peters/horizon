@@ -184,6 +184,10 @@ pub struct PanelOptions {
     pub browser_config: Option<crate::browser::BrowserConfig>,
     /// Stable profile identity shared by explicitly duplicated browser pages.
     pub browser_session_id: Option<String>,
+    /// This panel keeps nothing of a browser profile: its own throwaway folder
+    /// in a browser of this computer, or a page of an isolated context in the
+    /// browser of a browser host.
+    pub browser_private: bool,
     /// Let the browser host that the settings name decide the backend of this
     /// panel. Only a panel that the person creates from the preset picker sets
     /// it: a page that an agent asks for, a page of a local profile that a panel
@@ -252,6 +256,7 @@ impl Default for PanelOptions {
             template: None,
             browser_config: None,
             browser_session_id: None,
+            browser_private: false,
             follows_browser_host: false,
             browser_host_entry: None,
             remote_session: None,

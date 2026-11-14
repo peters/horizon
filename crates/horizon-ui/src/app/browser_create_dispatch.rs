@@ -110,9 +110,10 @@ impl HorizonApp {
             );
             return;
         }
-        // The profile of a local panel: the shared default, a shared profile by
-        // name, or a private panel that keeps nothing. A browser host keeps the
-        // profile of that machine, so a private panel is refused there.
+        // The profile of a panel: the shared default, a shared profile by name,
+        // or a private panel that keeps nothing. A private panel of a browser host
+        // is a page of an isolated context of that browser, so its sign-ins are
+        // apart from the profile of that machine.
         let profile = match create_profile(&request) {
             Ok(profile) => profile,
             Err(message) => {
@@ -120,16 +121,6 @@ impl HorizonApp {
                 return;
             }
         };
-        if profile.shared_name().is_none() && self.template_config.browser_host.names_host() {
-            fail_create(
-                &mut self.browser_create_host.io,
-                &request,
-                "unsupported_on_browser_host",
-                "a private panel is not available on a browser host: the profile of that machine holds its sign-ins. \
-                 Omit profile to use that profile, or remove the browser host.",
-            );
-            return;
-        }
         if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
             fail_create(
                 &mut self.browser_create_host.io,
@@ -374,6 +365,7 @@ fn browser_create_options(
         // a later page joins the browser that already holds its sign-ins. A
         // private panel names no profile and gets a folder of its own.
         browser_session_id: shared_profile.map(str::to_string),
+        browser_private: shared_profile.is_none(),
         remote_session: None,
         follows_browser_host: true,
         ..PanelOptions::default()

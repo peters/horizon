@@ -86,11 +86,46 @@ pub(super) fn first_available_page_target_id(targets: &[serde_json::Value]) -> O
 /// Create a fresh page target as a fallback (browser opened without one).
 /// `background` opens it in its own window that does not take the focus.
 pub(crate) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool, background: bool) -> Option<String> {
-    let params = if background {
+    create_page_target_in(link, stop_requested, background, None)
+}
+
+/// Create a page inside `context`, the isolated browser context of a private
+/// page, or in the default context of the browser when it is `None`.
+///
+/// A page of an isolated context sees none of the cookies of the profile, and
+/// keeps none of its own after the context is disposed.
+pub(crate) fn create_page_target_in(
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+    background: bool,
+    context: Option<&str>,
+) -> Option<String> {
+    let mut params = if background {
         serde_json::json!({ "url": "about:blank", "newWindow": true, "background": true })
     } else {
         serde_json::json!({ "url": "about:blank" })
     };
+    if let Some(context) = context {
+        params["browserContextId"] = serde_json::Value::from(context);
+    }
     let result = call_during_startup(link, stop_requested, "Target.createTarget", &params).ok()?;
     result.get("targetId").and_then(|t| t.as_str()).map(str::to_string)
+}
+
+/// Create an isolated browser context of the browser that this session drives,
+/// for a private page: its cookies and its storage are apart from the profile,
+/// and `Target.disposeBrowserContext` removes them with the context.
+pub(crate) fn create_browser_context(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
+    let result = call_during_startup(
+        link,
+        stop_requested,
+        "Target.createBrowserContext",
+        &serde_json::json!({}),
+    )
+    .ok()?;
+    result
+        .get("browserContextId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|context| !context.is_empty())
+        .map(str::to_string)
 }

@@ -315,6 +315,10 @@ impl PanelState {
                 .browser_profile
                 .as_ref()
                 .and_then(|profile| profile.session_id.clone()),
+            browser_private: self
+                .browser_profile
+                .as_ref()
+                .is_some_and(|profile| profile.private),
             browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),
             // A saved panel comes back on the backend that it saved, not on the
             // browser host that the settings of today name.
@@ -391,6 +395,11 @@ pub struct BrowserProfileState {
     pub host: Option<BrowserHostState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Whether the panel kept nothing of a profile: a private panel of this
+    /// computer, or a private page of a browser host. A saved panel comes back
+    /// private, so a restart keeps the kind of a panel.
+    #[serde(default)]
+    pub private: bool,
 }
 
 /// The browser host that served a panel, and the profile of that host.

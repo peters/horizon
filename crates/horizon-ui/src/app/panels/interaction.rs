@@ -381,7 +381,13 @@ impl HorizonApp {
             None
         };
         let opened = match (private, options) {
-            (true, Some(options)) => self.board.create_panel(options, workspace_id),
+            // A private panel of a browser host is a page of that host, so it
+            // takes the login of the machine of the list as every browser panel
+            // of the person does.
+            (true, Some(mut options)) => self
+                .resolve_browser_host_login(&mut options)
+                .map_err(horizon_core::Error::Config)
+                .and_then(|()| self.board.create_panel(options, workspace_id)),
             (true, None) => return,
             (false, _) => self.board.duplicate_browser_panel(panel_id),
         };

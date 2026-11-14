@@ -114,6 +114,7 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
                     remote_target: None,
                     host: None,
                     session_id: None,
+                    private: false,
                 }),
                 ..PanelState::default()
             }],
@@ -167,6 +168,7 @@ fn delete_session_keeps_a_shared_browser_profile() {
                         remote_target: None,
                         host: None,
                         session_id: Some("work".into()),
+                        private: false,
                     }),
                     ..PanelState::default()
                 },
@@ -181,6 +183,7 @@ fn delete_session_keeps_a_shared_browser_profile() {
                         remote_target: None,
                         host: None,
                         session_id: None,
+                        private: false,
                     }),
                     ..PanelState::default()
                 },

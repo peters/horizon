@@ -18,7 +18,7 @@ use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
 };
-pub(crate) use page::{caller_page, create_page_target, first_page_target};
+pub(crate) use page::{caller_page, create_browser_context, create_page_target, create_page_target_in, first_page_target};
 
 const DEVTOOLS_PORT_STARTUP_ATTEMPTS: usize = 3;
 /// Poll interval while the disclosure target loads its bootstrap page.
@@ -263,6 +263,29 @@ fn require_reaped_before_port_retry(reaped: bool) -> Result<(), &'static str> {
     }
 }
 
+/// Make the isolated browser context of a private page of a browser that another
+/// process owns, and answer its name.
+///
+/// A browser of this session owns its profile folder, so a private panel of this
+/// computer is a throwaway folder and needs no context. A browser of a browser
+/// host belongs to that machine and holds its sign-ins in its own profile, so its
+/// private page is a page of a context that the profile does not reach.
+fn isolated_context(
+    config: &BrowserSessionConfig,
+    chrome: &DriverProcess,
+    link: &mut CdpLink,
+    stop_requested: &AtomicBool,
+) -> Option<String> {
+    if !config.browser.isolated_page || !chrome.is_attached() {
+        return None;
+    }
+    let context = create_browser_context(link, stop_requested);
+    if let (Some(context), DriverProcess::Attached(browser)) = (context.as_ref(), chrome) {
+        browser.set_context(context.clone());
+    }
+    context
+}
+
 fn initialize_target(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
@@ -286,12 +309,26 @@ fn initialize_target(
     // A browser of another process already holds the pages of its person: this
     // session takes a page of a sibling only when it created one before, and
     // otherwise creates its own.
-    let (resumed_page, existing_target) = caller_page(config, &chrome, &mut link, stop_requested);
+    //
+    // A private page of a browser that another process owns takes neither: it is
+    // a page of a browser context of its own, so it can read none of the cookies
+    // of that browser, and the context goes with the page.
+    let isolated = isolated_context(config, &chrome, &mut link, stop_requested);
+    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+        return None;
+    }
+    let (resumed_page, existing_target) = if isolated.is_some() {
+        (false, None)
+    } else {
+        caller_page(config, &chrome, &mut link, stop_requested)
+    };
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
     let background = config.browser.background_windows && !config.browser.headless && !chrome.is_attached();
-    let Some(target_id) = existing_target.or_else(|| create_page_target(&mut link, stop_requested, background)) else {
+    let Some(target_id) = existing_target.or_else(|| {
+        create_page_target_in(&mut link, stop_requested, background, isolated.as_deref())
+    }) else {
         if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
             return None;
         }

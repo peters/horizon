@@ -101,6 +101,7 @@ fn persisted_browser_profile_root_survives_other_config_changes() {
             hidden: false,
             remote_target: None,
             host: None,
+            private: false,
         }),
         ..PanelState::default()
     };
@@ -218,6 +219,7 @@ fn a_persisted_remote_target_restores_as_a_stopped_remote_panel() {
             hidden: false,
             remote_target: Some("ios_phone".to_string()),
             host: None,
+            private: false,
         }),
         ..PanelState::default()
     };
@@ -389,6 +391,7 @@ fn a_persisted_browser_host_restores_the_panel_on_that_host_and_profile() {
                 profile: Some("signed-in".to_string()),
                 ..crate::runtime_state::BrowserHostState::default()
             }),
+            private: false,
         }),
         ..PanelState::default()
     };
