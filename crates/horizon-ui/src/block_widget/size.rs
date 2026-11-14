@@ -12,15 +12,15 @@ use horizon_browser_control::block::{BlockDocument, BoardItem, BoardRow, Compone
 use super::board::{NOTE_LINES, cell_height, chip_height};
 use super::form::Form;
 use super::metrics::{
-    BADGE_HEIGHT, BOARD_CELL_GAP, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT,
-    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, BUTTON_GAP, BUTTON_HEIGHT, CALLOUT_CAPTION_GAP, CALLOUT_PAD_Y,
-    CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT, CAPTION_TRACKING, CARD_MAX_HEIGHT,
-    CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT, HEADING_SUBTITLE_FONT,
-    HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y, KV_VALUE_FONT, LINE_FACTOR,
-    LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT, LOG_ROW_GAP, LOG_TEXT_FONT,
-    PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT, PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP,
-    STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH,
-    WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
+    BADGE_HEIGHT, BOARD_CELL_GAP, BOARD_COLUMN_MAX_WIDTH, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_HEAD_COLUMN,
+    BOARD_HEAD_HEIGHT, BOARD_ROW_MIN_HEIGHT, BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, BUTTON_GAP, BUTTON_HEIGHT,
+    CALLOUT_CAPTION_GAP, CALLOUT_PAD_Y, CALLOUT_STACK_GAP, CALLOUT_STACK_TEXT_FONT, CALLOUT_TEXT_FONT, CAPTION_FONT,
+    CAPTION_TRACKING, CARD_MAX_HEIGHT, CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT,
+    HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y,
+    KV_VALUE_FONT, LINE_FACTOR, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT,
+    LOG_ROW_GAP, LOG_TEXT_FONT, PILL_HEIGHT, PILL_LINE_GAP, PROGRESS_BAR_HEIGHT, PROGRESS_LABEL_FONT,
+    PROGRESS_LABEL_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT, TEXT_LINE_HEIGHT,
+    WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH, WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
@@ -74,10 +74,37 @@ pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
     [CARD_MIN_HEIGHT, ceiling]
 }
 
-/// The width that a wide card opens at: half of the canvas view of that moment,
-/// between the bounds of the wide card.
-pub(crate) fn wide_card_width(canvas_width: f32) -> f32 {
-    (canvas_width * 0.5).clamp(WIDE_CARD_MIN_WIDTH, WIDE_CARD_MAX_WIDTH)
+/// The width that a wide card of `document` opens at.
+///
+/// A document with a board opens as wide as its board needs and the canvas view
+/// of that moment allows: the half of the view, between the body that its waves
+/// need at the least and the body that they can fill at the most, never more
+/// than the largest width of a wide card. A view that cannot give the least
+/// width opens the card as a narrow card, because the least wide card that
+/// draws a grid is wider than that view. A document without a board keeps the
+/// width of the wide card of round 40: the half of the view, between the bounds
+/// of the wide card.
+pub(crate) fn wide_card_width(document: &BlockDocument, canvas_width: f32) -> f32 {
+    let Some(columns) = board_columns(document) else {
+        return (canvas_width * 0.5).clamp(WIDE_CARD_MIN_WIDTH, WIDE_CARD_MAX_WIDTH);
+    };
+    let least = super::board::grid_min_width(columns) + 2.0 * f32::from(BODY_PAD_SIDE);
+    if canvas_width < least {
+        return CARD_WIDTH;
+    }
+    let most = BOARD_HEAD_COLUMN + count(columns) * BOARD_COLUMN_MAX_WIDTH + 2.0 * f32::from(BODY_PAD_SIDE);
+    (canvas_width * 0.5)
+        .clamp(least, most)
+        .min(WIDE_CARD_MAX_WIDTH)
+        .min(canvas_width)
+}
+
+/// The number of waves of the board of `document`, while it has one.
+fn board_columns(document: &BlockDocument) -> Option<usize> {
+    document.components.iter().find_map(|component| match component {
+        Component::Board { columns, .. } => Some(columns.len()),
+        _ => None,
+    })
 }
 
 /// The height from the bottom edge of a card to the top of its footer strip:
@@ -117,7 +144,7 @@ pub(crate) fn fitted_card_height(
 /// [`fitted_card_height`] takes over from it.
 pub(crate) fn default_card_size(document: &BlockDocument, canvas_width: f32) -> [f32; 2] {
     let width = if asks_wide(document) {
-        wide_card_width(canvas_width)
+        wide_card_width(document, canvas_width)
     } else {
         CARD_WIDTH
     };

@@ -22,8 +22,15 @@ use horizon_browser_control::block::{BoardColumn, BoardItem, BoardRow};
 
 use super::form::Form;
 use super::metrics::{
-    BOARD_CELL_GAP, BOARD_CELL_PAD, ITEM_BORDER, ITEM_LINE_GAP, ITEM_MARK, ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_Y, count,
+    BOARD_CELL_GAP, BOARD_CELL_PAD, BOARD_COLUMN_MIN_WIDTH, BOARD_HEAD_COLUMN, ITEM_BORDER, ITEM_LINE_GAP, ITEM_MARK,
+    ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_Y, count,
 };
+
+/// The least body width that draws the grid of `columns` waves: the column of
+/// the workers and one column of items for every wave.
+pub(super) fn grid_min_width(columns: usize) -> f32 {
+    BOARD_HEAD_COLUMN + count(columns) * BOARD_COLUMN_MIN_WIDTH
+}
 
 /// Draw a `board` component in the form that the body is wide enough for.
 pub(super) fn show(
@@ -37,6 +44,14 @@ pub(super) fn show(
     if columns.is_empty() || rows.is_empty() {
         return;
     }
+    // The grid needs its room: a wave whose column would be narrower than
+    // BOARD_COLUMN_MIN_WIDTH is drawn as the list of the narrow form instead,
+    // also inside a card that is otherwise in the wide form.
+    let form = if form.is_wide() && ui.available_width() >= grid_min_width(columns.len()) {
+        Form::Wide
+    } else {
+        Form::Narrow
+    };
     match form {
         Form::Wide => grid::show(ui, index, columns, rows, items),
         Form::Narrow => list::show(ui, index, columns, rows, items),

@@ -10,15 +10,30 @@ use crate::theme;
 use crate::typeface::Weight;
 
 use super::super::metrics::{
-    BOARD_CELL_PAD, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_GROUP_VALUE_FONT, BOARD_HEAD_GAP, CAPTION_FONT,
-    CAPTION_TRACKING, ITEM_BORDER, ITEM_MARK, ITEM_MARK_GAP, ITEM_NOTE_FONT, ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_SIDE,
-    ITEM_RADIUS, LOG_TEXT_FONT, LOG_TIME_FONT,
+    BOARD_CELL_PAD, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_GROUP_VALUE_FONT, BOARD_HEAD_GAP,
+    BOARD_LIST_MAX_WIDTH, CAPTION_FONT, CAPTION_TRACKING, ITEM_BORDER, ITEM_MARK, ITEM_MARK_GAP, ITEM_NOTE_FONT,
+    ITEM_NOTE_LINE_HEIGHT, ITEM_PAD_SIDE, ITEM_RADIUS, LOG_TEXT_FONT, LOG_TIME_FONT,
 };
 use super::super::text;
 use super::NOTE_LINES;
+use crate::block_widget::form::Form;
 
 /// The narrow form: the same items as one list, grouped by wave.
 pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRow], items: &[BoardItem]) {
+    // A card that draws the wide form keeps the list of its board at the left
+    // edge, in a column that a reader follows with one look.
+    let width = ui.available_width();
+    if Form::of(width).is_wide() {
+        ui.scope(|ui| {
+            ui.set_max_width(width.min(BOARD_LIST_MAX_WIDTH));
+            show_list(ui, index, columns, rows, items);
+        });
+        return;
+    }
+    show_list(ui, index, columns, rows, items);
+}
+
+fn show_list(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRow], items: &[BoardItem]) {
     let fold = foldable(columns, items);
     let folded = !fold.is_empty() && ui.data(|data| data.get_temp::<bool>(fold_id(ui, index)).unwrap_or(true));
     let mut first = true;

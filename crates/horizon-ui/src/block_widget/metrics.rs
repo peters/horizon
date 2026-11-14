@@ -246,6 +246,14 @@ pub(super) const BOARD_HEAD_HEIGHT: f32 = 44.0;
 pub(super) const BOARD_ROW_MIN_HEIGHT: f32 = 104.0;
 /// Width of the first column of the grid, which carries the workers.
 pub(super) const BOARD_HEAD_COLUMN: f32 = 230.0;
+/// The least width of one column of the grid, with the items of its wave.
+pub(super) const BOARD_COLUMN_MIN_WIDTH: f32 = 260.0;
+/// The largest width of one column of the grid. A grid that needs less than the
+/// body stays at the left edge.
+pub(super) const BOARD_COLUMN_MAX_WIDTH: f32 = 480.0;
+/// The largest width of the list of a board inside a card that draws the wide
+/// form.
+pub(super) const BOARD_LIST_MAX_WIDTH: f32 = 560.0;
 /// Corner radius of the grid.
 pub(super) const BOARD_RADIUS: u8 = 12;
 /// Space on both sides inside a head cell.

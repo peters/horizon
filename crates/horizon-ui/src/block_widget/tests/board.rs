@@ -615,12 +615,65 @@ fn the_log_flows_into_columns_of_at_least_330_points_in_the_wide_form_only() {
     );
 }
 
+/// A board of `columns` waves, one item in each of them, on one worker.
+fn board_of(columns: usize) -> BlockDocument {
+    BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![Component::Board {
+            columns: (0..columns)
+                .map(|index| {
+                    column(
+                        &format!("Wave {}", index + 1),
+                        &(index + 1).to_string(),
+                        "5 m",
+                        index == 0,
+                    )
+                })
+                .collect(),
+            rows: vec![worker(1)],
+            items: (0..columns)
+                .map(|index| {
+                    item(
+                        index,
+                        0,
+                        &format!("Work {}", index + 1),
+                        BoardState::Waiting,
+                        "~5 m",
+                        "cargo test",
+                    )
+                })
+                .collect(),
+        }],
+    }
+}
+
 #[test]
-fn a_wide_card_opens_at_half_of_the_canvas_view_between_its_bounds() {
-    let document = board_document();
-    assert_eq!(default_card_size(&document, 5120.0)[0], 2400.0);
-    assert_eq!(default_card_size(&document, 2000.0)[0], 1100.0);
-    assert_eq!(default_card_size(&document, 20_000.0)[0], 2400.0);
+fn a_wide_card_opens_as_wide_as_its_board_needs_and_the_view_allows() {
+    let padding = 2.0 * f32::from(BODY_PAD_SIDE);
+    let least = |columns: f32| 230.0 + 260.0 * columns + padding;
+    let most = |columns: f32| 230.0 + 480.0 * columns + padding;
+
+    for (columns, view, width) in [
+        // The half of the view keeps the largest width of a wide card.
+        (5, 5120.0, 2400.0),
+        // A view of 2560 gives 1280, under the least width of five waves, so
+        // the card opens at that least width.
+        (5, 2560.0, least(5.0)),
+        // A view of 1500 cannot give the least width of five waves.
+        (5, 1500.0, 420.0),
+        (2, 5120.0, most(2.0)),
+        (8, 5120.0, 2400.0),
+        (3, 5120.0, most(3.0)),
+        (3, 2000.0, least(3.0)),
+    ] {
+        let document = board_of(columns);
+        assert!(
+            (default_card_size(&document, view)[0] - width).abs() < 0.01,
+            "{columns} waves in a view of {view} open at {width}, not {}",
+            default_card_size(&document, view)[0]
+        );
+    }
+
     assert_eq!(
         default_card_size(
             &BlockDocument {
@@ -632,6 +685,44 @@ fn a_wide_card_opens_at_half_of_the_canvas_view_between_its_bounds() {
         420.0,
         "a document that asks for the narrow card keeps the card of today"
     );
+
+    // A wide document that holds no board keeps the rule of round 40.
+    let no_board = BlockDocument {
+        width: Some(Width::Wide),
+        components: vec![Component::Divider],
+    };
+    assert_eq!(default_card_size(&no_board, 5120.0)[0], 2400.0);
+    assert_eq!(default_card_size(&no_board, 2000.0)[0], 1100.0);
+    assert_eq!(default_card_size(&no_board, 20_000.0)[0], 2400.0);
+}
+
+#[test]
+fn the_board_draws_the_list_when_a_column_of_the_grid_would_be_narrower_than_260_points() {
+    // Seven waves need 230 + 7 x 260 = 2050 points of body, and a card of 1600
+    // points gives 1568, so the card draws the list of the narrow form.
+    let narrow = pass(1600.0, &board_of(7));
+    assert!(
+        painted_holding(&narrow, "1 · WAVE 1 · NOW"),
+        "the card draws the list of its board"
+    );
+    assert!(!painted_any(&narrow, "Wave 1"), "the grid keeps no room on the card");
+    let chips = chips(&narrow);
+    assert_eq!(chips.len(), 7, "the list draws every item");
+    assert!(
+        chips.iter().all(|chip| chip.width() <= 560.0),
+        "the list keeps a largest width of 560 points: {chips:?}"
+    );
+    assert!(
+        (chips[0].min.x - f32::from(BODY_PAD_SIDE)).abs() < 0.01,
+        "the list stays at the left edge of the body: {:?}",
+        chips[0]
+    );
+
+    // Three waves need 1010 points of body, so a card of 1702 points draws the
+    // grid: every column keeps at least 260 points.
+    let wide = pass(1702.0, &board_of(3));
+    assert!(painted_any(&wide, "Wave 1"), "the card draws the grid of its board");
+    assert!(!painted_holding(&wide, "1 · WAVE 1 · NOW"));
 }
 
 #[test]

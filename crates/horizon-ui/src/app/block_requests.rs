@@ -472,6 +472,9 @@ impl HorizonApp {
             Ok(document) => document,
             Err(refusal) => return refusal,
         };
+        // The room of the canvas decides how wide a wide card opens, and the
+        // card below holds a borrow of the board for the rest of the update.
+        let canvas_width = self.canvas_rect(ctx).width();
         let Some(state) = self.board.panel_mut(id).and_then(Panel::block_mut) else {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
@@ -483,8 +486,11 @@ impl HorizonApp {
         if let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id) {
             card.retain_selection(&state.document);
         }
+        // The width that the document asks for now, before the borrow of the
+        // card ends: a wide card opens as wide as its board needs.
+        let width = crate::block_widget::wide_card_width(&state.document, canvas_width);
         if !was_wide && now_wide {
-            self.widen_card(id, ctx);
+            self.widen_card(id, width);
         }
         self.mark_runtime_dirty();
         ctx.request_repaint();
@@ -494,10 +500,10 @@ impl HorizonApp {
         }
     }
 
-    /// Widens a card whose document now asks for the wide card, unless the
-    /// person resized the card by hand: the person's size outranks the document,
-    /// and the work keeps one card.
-    fn widen_card(&mut self, id: PanelId, ctx: &Context) {
+    /// Widens a card whose document now asks for the wide card to `width`,
+    /// unless the person resized the card by hand: the person's size outranks
+    /// the document, and the work keeps one card.
+    fn widen_card(&mut self, id: PanelId, width: f32) {
         let hand_resized = self
             .panel_render_caches
             .card_runtime
@@ -506,7 +512,6 @@ impl HorizonApp {
         let Some(size) = self.board.panel(id).map(|panel| panel.layout.size) else {
             return;
         };
-        let width = crate::block_widget::wide_card_width(self.canvas_rect(ctx).width());
         if hand_resized || width <= size[0] {
             return;
         }
