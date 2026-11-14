@@ -80,8 +80,7 @@ pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
 /// of that moment allows: the half of the view, between the body that its waves
 /// need at the least and the body that they can fill at the most, never more
 /// than the largest width of a wide card. A view that cannot give the least
-/// width opens the card as a narrow card, because the least wide card that
-/// draws a grid is wider than that view. A document without a board keeps the
+/// width opens the card as a narrow card. A document without a board keeps the
 /// width of the wide card of round 40: the half of the view, between the bounds
 /// of the wide card.
 pub(crate) fn wide_card_width(document: &BlockDocument, canvas_width: f32) -> f32 {

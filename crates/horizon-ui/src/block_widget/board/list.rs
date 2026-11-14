@@ -4,11 +4,7 @@
 use egui::{Color32, CornerRadius, FontId, Pos2, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
 use horizon_browser_control::block::{BoardColumn, BoardItem, BoardRow, BoardState};
 
-use super::chip::{Chip, chip_node, colours, paint_chip, paint_mark};
-use super::chip_height;
-use crate::theme;
-use crate::typeface::Weight;
-
+use super::super::form::Form;
 use super::super::metrics::{
     BOARD_CELL_PAD, BOARD_GROUP_GAP, BOARD_GROUP_HEAD_GAP, BOARD_GROUP_VALUE_FONT, BOARD_HEAD_GAP,
     BOARD_LIST_MAX_WIDTH, CAPTION_FONT, CAPTION_TRACKING, ITEM_BORDER, ITEM_MARK, ITEM_MARK_GAP, ITEM_NOTE_FONT,
@@ -16,7 +12,10 @@ use super::super::metrics::{
 };
 use super::super::text;
 use super::NOTE_LINES;
-use crate::block_widget::form::Form;
+use super::chip::{Chip, chip_node, colours, paint_chip, paint_mark};
+use super::chip_height;
+use crate::theme;
+use crate::typeface::Weight;
 
 /// The narrow form: the same items as one list, grouped by wave.
 pub(super) fn show(ui: &mut Ui, index: usize, columns: &[BoardColumn], rows: &[BoardRow], items: &[BoardItem]) {
