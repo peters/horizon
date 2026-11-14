@@ -261,7 +261,9 @@ impl BrowserHostConfig {
             && !valid_profile(profile)
         {
             return Err(Error::Config(
-                "browser_host.profile must be 1 to 40 of a-z, 0-9 and '-', with a letter or a digit at each end".into(),
+                "browser_host.profile must be 1 to 40 of a-z, 0-9 and '-', with a letter or a digit at each end, and \
+                 `private` is reserved for a panel that keeps nothing"
+                    .into(),
             ));
         }
         Ok(())

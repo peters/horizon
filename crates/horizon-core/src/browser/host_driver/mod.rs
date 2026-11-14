@@ -205,7 +205,7 @@ impl HostDriverOptions {
         let profile = profile.into();
         if !horizon_browser::valid_profile_name(&profile) {
             return Err(Error::Config(format!(
-                "`{profile}` is not one profile name of a browser host: 1 to 40 of a-z, 0-9 and '-', with a letter or a digit at each end"
+                "`{profile}` is not one profile name of a browser host: 1 to 40 of a-z, 0-9 and '-', with a letter or a digit                  at each end, and `private` is reserved for a panel that keeps nothing"
             )));
         }
         Ok(Self {

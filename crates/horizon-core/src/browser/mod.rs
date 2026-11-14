@@ -219,8 +219,12 @@ impl BrowserPanelState {
 
     /// Restore a profile group or create an isolated browser panel.
     ///
+    /// `session_id` is the name of the shared profile of the panel, or `None`
+    /// for a private panel whose folder goes away at its close.
+    ///
     /// # Errors
-    /// Invalid launch paths cannot be resolved.
+    /// Invalid launch paths cannot be resolved, or the browser of the named
+    /// profile cannot take this page.
     pub fn start_with_session(
         panel_local_id: String,
         config: &BrowserConfig,
@@ -231,6 +235,9 @@ impl BrowserPanelState {
         let home = crate::horizon_home::HorizonHome::resolve();
         let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
+        if let Some(profile_id) = session_id {
+            shared_session::refuse_unjoinable(&config, profile_id)?;
+        }
         let shared_session = matches!(config.backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
             .then(|| shared_session::acquire(&config, session_id.unwrap_or(&panel_local_id)));
         let mut state = Self {
@@ -640,40 +647,6 @@ impl BrowserPanelState {
         self.request_shutdown();
         self.take_shutdown_signal()
             .is_none_or(|signal| signal.wait(timeout) || signal.force_cleanup(FORCED_CHROME_SHUTDOWN_WAIT))
-    }
-
-    /// Permanently close this panel and remove its persistent Chrome profile
-    /// only after the driver has released the profile lock.
-    ///
-    /// The returned signal is what actually starts the profile deletion: it
-    /// must be polled or waited on (see [`BrowserShutdownSignal`]). Dropping
-    /// it leaves the profile on disk permanently.
-    #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
-    pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
-        self.request_shutdown();
-        if self.is_attached() {
-            // The Chromium of another machine keeps its profile there, and this
-            // computer must not delete a local folder that it never made.
-            return self
-                .take_shutdown_signal()
-                .unwrap_or_else(BrowserShutdownSignal::completed);
-        }
-        let profile_id = self.shared_profile_id().unwrap_or(&self.panel_local_id).to_string();
-        let group = self.shared_session.take();
-        let last_panel = group.as_ref().is_none_or(|group| Arc::strong_count(group) == 1);
-        let profile_dir = profile_dir_for_home(&self.config, &crate::horizon_home::HorizonHome::resolve(), &profile_id);
-        let signal = self
-            .take_shutdown_signal()
-            .unwrap_or_else(BrowserShutdownSignal::completed);
-        if !last_panel {
-            return signal;
-        }
-        let signal = signal.with_profile_cleanup(profile_dir);
-        if let Some(group) = group {
-            signal.with_shared_profile_cleanup(group)
-        } else {
-            signal
-        }
     }
 
     /// Whether a failed/stopped session has fully released its Chrome

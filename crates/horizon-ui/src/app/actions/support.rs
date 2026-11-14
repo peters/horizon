@@ -11,14 +11,20 @@ use super::PresetPickerAction;
 use crate::app::DetachedWorkspaceViewportState;
 
 /// The options of a panel that a person creates from a preset. A browser panel
-/// of this path follows the browser host that the settings name; every other
-/// caller of `PresetConfig::to_panel_options` keeps the backend that it chose.
+/// of this path follows the browser host that the settings name, and opens in
+/// the shared profile `default`, so it is signed in where the person signed in;
+/// every other caller of `PresetConfig::to_panel_options` keeps the backend that
+/// it chose. A private panel is the one item of the panel menu that names no
+/// profile.
 pub(in crate::app) fn preset_panel_options(
     preset: &PresetConfig,
     browser_config: &horizon_core::browser::BrowserConfig,
 ) -> horizon_core::PanelOptions {
     let mut options = preset.to_panel_options(browser_config);
     options.follows_browser_host = matches!(preset.kind, PanelKind::Browser);
+    if options.follows_browser_host {
+        options.browser_session_id = Some(horizon_browser::DEFAULT_PROFILE.to_string());
+    }
     options
 }
 
@@ -358,6 +364,11 @@ mod tests {
             options.follows_browser_host,
             "the panel that a person picks opens on the browser host of the settings"
         );
+        assert_eq!(
+            options.browser_session_id.as_deref(),
+            Some(horizon_browser::DEFAULT_PROFILE),
+            "the panel that a person picks is signed in where the person signed in"
+        );
 
         let shell = preset_panel_options(
             &shell_preset_with_stale_ssh_metadata(),
@@ -366,6 +377,10 @@ mod tests {
         assert!(
             !shell.follows_browser_host,
             "a panel that is not a browser asks for no browser host"
+        );
+        assert!(
+            shell.browser_session_id.is_none(),
+            "a terminal joins no browser profile"
         );
     }
 

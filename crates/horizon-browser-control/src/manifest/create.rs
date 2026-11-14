@@ -48,6 +48,11 @@ pub struct BrowserCreateRequest {
     pub orientation: Option<horizon_browser::remote::RemoteOrientation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_from: Option<String>,
+    /// The profile that the create named: a shared profile by name, or the
+    /// reserved word `private` for a panel that keeps nothing. Absent is the
+    /// shared profile `default`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     #[serde(default = "default_visible")]
     pub visible: bool,
     pub requested_at_millis: i64,
@@ -70,6 +75,7 @@ impl BrowserCreateRequest {
             target: None,
             orientation: None,
             duplicate_from: None,
+            profile: None,
             visible: true,
             requested_at_millis: 0,
             deadline_at_millis: i64::MAX,
@@ -237,6 +243,7 @@ fn enqueue_at(
             orientation: None,
             visible,
             duplicate_from: None,
+            profile: None,
         },
         timeout,
     )
@@ -260,6 +267,7 @@ pub fn enqueue_create_oriented(
             orientation: parameters.orientation,
             visible: parameters.visible,
             duplicate_from: None,
+            profile: parameters.profile,
         },
         timeout,
     )
@@ -271,6 +279,9 @@ pub struct RemoteCreateParameters {
     pub target: Option<String>,
     pub orientation: Option<horizon_browser::remote::RemoteOrientation>,
     pub visible: bool,
+    /// The profile of a local browser: a shared profile by name, or the
+    /// reserved word `private`. Absent is the shared profile `default`.
+    pub profile: Option<String>,
 }
 
 struct CreateParameters {
@@ -280,6 +291,7 @@ struct CreateParameters {
     orientation: Option<horizon_browser::remote::RemoteOrientation>,
     visible: bool,
     duplicate_from: Option<String>,
+    profile: Option<String>,
 }
 
 /// Queue a new page sharing a source panel's local Chromium or Firefox session.
@@ -302,6 +314,7 @@ pub fn enqueue_duplicate(
             orientation: None,
             visible,
             duplicate_from: Some(panel_id.to_string()),
+            profile: None,
         },
         timeout,
     )
@@ -320,10 +333,18 @@ fn enqueue_operation_at(
         orientation,
         visible,
         duplicate_from,
+        profile,
     } = parameters;
     let actor = identity.actor;
     super::agent::validate_actor(actor)?;
     validate_target(target.as_deref(), backend)?;
+    // The name is read here as the create reads it, so a queue file holds a
+    // name that the host can use and a refusal reaches the agent now.
+    let profile = match horizon_browser::ProfileChoice::parse(profile.as_deref()) {
+        Ok(horizon_browser::ProfileChoice::Private) => Some(horizon_browser::PRIVATE_PROFILE.to_string()),
+        Ok(horizon_browser::ProfileChoice::Shared(name)) => Some(name),
+        Err(message) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, message)),
+    };
     if orientation.is_some() && target.is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -388,6 +409,7 @@ fn enqueue_operation_at(
         target,
         orientation,
         duplicate_from,
+        profile,
         visible,
         requested_at_millis,
         deadline_at_millis: requested_at_millis.saturating_add(timeout_millis),
@@ -683,6 +705,61 @@ mod tests {
         }
     }
 
+    /// The profile of a create reaches the host as the name that the host reads:
+    /// a shared profile by name, or the reserved word of a private panel. A name
+    /// that the rule refuses never reaches the queue.
+    #[test]
+    fn a_create_queues_the_profile_that_it_names() {
+        let root = tempfile::tempdir().expect("queue root");
+        let actor = AgentIdentity {
+            actor: "horizon:test",
+            host_instance: Some("host"),
+        };
+        let queue = |profile: Option<&str>| {
+            let id = enqueue_operation_at(
+                root.path(),
+                actor,
+                CreateParameters {
+                    url: None,
+                    backend: None,
+                    target: None,
+                    orientation: None,
+                    visible: true,
+                    duplicate_from: None,
+                    profile: profile.map(str::to_string),
+                },
+                Duration::from_secs(5),
+            )
+            .expect("queue create");
+            let request: BrowserCreateRequest = read_json(&super::request_path(root.path(), &id))
+                .expect("queued request")
+                .expect("a request file");
+            request.profile
+        };
+        assert_eq!(queue(None).as_deref(), Some(horizon_browser::DEFAULT_PROFILE));
+        assert_eq!(queue(Some("work")).as_deref(), Some("work"));
+        assert_eq!(
+            queue(Some(horizon_browser::PRIVATE_PROFILE)).as_deref(),
+            Some(horizon_browser::PRIVATE_PROFILE)
+        );
+        let refused = enqueue_operation_at(
+            root.path(),
+            actor,
+            CreateParameters {
+                url: None,
+                backend: None,
+                target: None,
+                orientation: None,
+                visible: true,
+                duplicate_from: None,
+                profile: Some("../private".into()),
+            },
+            Duration::from_secs(5),
+        )
+        .expect_err("a path is no profile name");
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
     #[test]
     fn orientation_is_queued_only_with_a_remote_target() {
         let temp = tempfile::tempdir().unwrap();
@@ -694,6 +771,7 @@ mod tests {
             orientation: Some(horizon_browser::remote::RemoteOrientation::Landscape),
             visible: true,
             duplicate_from: None,
+            profile: None,
         };
         assert!(
             super::enqueue_operation_at(
@@ -741,6 +819,7 @@ mod tests {
                 orientation: None,
                 visible: true,
                 duplicate_from: Some("source".into()),
+                profile: None,
             },
             Duration::from_secs(5),
         )

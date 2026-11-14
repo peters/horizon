@@ -140,6 +140,83 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
     assert!(!home.session_dir(&session.session_id).exists());
 }
 
+/// A shared profile holds the sign-ins of a person and of the agents of this
+/// Horizon, so the delete of a saved session leaves it on disk.
+#[test]
+fn delete_session_keeps_a_shared_browser_profile() {
+    let root_dir = test_root("delete-shared-profile");
+    let root = root_dir.path().to_path_buf();
+    let home = HorizonHome::from_root(root.clone());
+    let store = SessionStore::new(home.clone(), home.config_path());
+    let profile_root = root.join("browser-profiles");
+    let runtime_state = RuntimeState {
+        browser: crate::browser::BrowserConfig {
+            profile_root: Some(profile_root.clone()),
+            ..crate::browser::BrowserConfig::default()
+        },
+        workspaces: vec![WorkspaceState {
+            panels: vec![
+                PanelState {
+                    local_id: "page-1".into(),
+                    name: "Browser".to_string(),
+                    kind: PanelKind::Browser,
+                    browser_profile: Some(BrowserProfileState {
+                        root: Some(profile_root.clone()),
+                        backend: None,
+                        hidden: false,
+                        remote_target: None,
+                        host: None,
+                        session_id: Some("work".into()),
+                    }),
+                    ..PanelState::default()
+                },
+                PanelState {
+                    local_id: "page-2".into(),
+                    name: "Browser".to_string(),
+                    kind: PanelKind::Browser,
+                    browser_profile: Some(BrowserProfileState {
+                        root: Some(profile_root.clone()),
+                        backend: None,
+                        hidden: false,
+                        remote_target: None,
+                        host: None,
+                        session_id: None,
+                    }),
+                    ..PanelState::default()
+                },
+            ],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let session = store
+        .create_session_from_runtime(runtime_state.clone())
+        .expect("create browser session");
+    let config = crate::browser::BrowserConfig {
+        profile_root: Some(profile_root),
+        ..crate::browser::BrowserConfig::default()
+    };
+    let shared = crate::browser::profile_dir_for_home(&config, &home, "work");
+    let private = crate::browser::profile_dir_for_home(&config, &home, "page-2");
+    std::fs::create_dir_all(&shared).expect("create shared profile");
+    std::fs::write(shared.join("Cookies"), b"a sign-in").expect("write shared profile");
+    std::fs::create_dir_all(&private).expect("create private profile");
+
+    store
+        .delete_session(&session.session_id)
+        .expect("delete browser session");
+
+    assert!(
+        shared.join("Cookies").exists(),
+        "the sign-ins of the person outlive the session that saved them"
+    );
+    assert!(
+        !private.exists(),
+        "a private panel of the deleted session leaves no folder behind"
+    );
+    assert!(!home.session_dir(&session.session_id).exists());
+}
+
 #[test]
 #[cfg(unix)]
 fn a_delete_that_fails_keeps_the_newest_board_that_is_not_written() {

@@ -1,10 +1,10 @@
 //! Persistent profile identity and host membership for shared browser panels.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use horizon_browser::session::{SharedBrowserSession, SharedSessionGroup};
+use horizon_browser::session::{BrowserShutdownSignal, SharedBrowserSession, SharedSessionGroup};
 
 use super::{BackendKind, BrowserConfig, BrowserPanelState, BrowserStatus};
 use crate::panel::{PanelKind, PanelOptions};
@@ -14,6 +14,10 @@ pub(super) type ProfileSession = SharedSessionGroup;
 struct RegisteredSession {
     session: Weak<ProfileSession>,
     ever_shared: bool,
+    /// The launch settings of the browser that runs this profile. A second page
+    /// joins that browser or is refused; it never starts a browser of its own
+    /// settings on one profile folder.
+    launch: ProfileLaunch,
 }
 
 type Registry = Mutex<HashMap<PathBuf, RegisteredSession>>;
@@ -23,16 +27,28 @@ fn registry() -> &'static Registry {
     REGISTRY.get_or_init(Mutex::default)
 }
 
+/// The folder that names one profile, without the engine folder inside it.
+///
+/// One profile is one engine: the first panel of a profile fixes it, and the
+/// next create of that name in another engine is refused. The registry therefore
+/// names a profile by the folder above the engine folder.
+fn profile_key(config: &BrowserConfig, profile_id: &str) -> PathBuf {
+    let folder = config.profile_dir(profile_id);
+    // `profile_dir` ends with the engine folder (`chromium`, `firefox`), so the
+    // folder of the profile is the one above it.
+    folder.parent().map_or(folder.clone(), Path::to_path_buf)
+}
+
 pub(super) fn has_shared_members(config: &BrowserConfig, group: &Arc<ProfileSession>) -> bool {
     registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(&config.profile_dir(group.profile_id()))
+        .get(&profile_key(config, group.profile_id()))
         .is_some_and(|entry| entry.ever_shared && Weak::ptr_eq(&entry.session, &Arc::downgrade(group)))
 }
 
 pub(super) fn acquire(config: &BrowserConfig, profile_id: &str) -> Arc<ProfileSession> {
-    let key = config.profile_dir(profile_id);
+    let key = profile_key(config, profile_id);
     let mut sessions = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     sessions.retain(|_, entry| entry.session.strong_count() > 0);
     if let Some(entry) = sessions.get_mut(&key)
@@ -53,9 +69,150 @@ pub(super) fn acquire(config: &BrowserConfig, profile_id: &str) -> Arc<ProfileSe
         RegisteredSession {
             session: Arc::downgrade(&session),
             ever_shared: false,
+            launch: ProfileLaunch::of(config),
         },
     );
     session
+}
+
+/// The launch settings that decide the process of one profile.
+///
+/// Two pages of one profile are two pages of one browser, so they cannot
+/// disagree about the engine, the executable, the extra arguments or the
+/// window. The first panel of a profile pins these, and the next create that
+/// asks for another set is refused before its browser starts.
+#[derive(Clone, PartialEq, Eq)]
+struct ProfileLaunch {
+    backend: BackendKind,
+    headless: bool,
+    command: Option<String>,
+    extra_args: Vec<String>,
+    disclosure: horizon_browser::AutomationDisclosurePolicy,
+    background_windows: bool,
+}
+
+impl ProfileLaunch {
+    fn of(config: &BrowserConfig) -> Self {
+        Self {
+            backend: config.backend,
+            headless: config.headless,
+            command: config.command.clone(),
+            extra_args: config.extra_args.clone(),
+            disclosure: config.automation_disclosure,
+            background_windows: config.background_windows,
+        }
+    }
+
+    /// What this create asks for and the running browser of the profile cannot
+    /// take, in the words that a panel shows.
+    fn difference(&self, asked: &Self) -> Option<String> {
+        if self.backend != asked.backend {
+            return Some(format!(
+                "its panels run {}, and this create asks for {}",
+                backend_name(self.backend),
+                backend_name(asked.backend)
+            ));
+        }
+        if self.headless != asked.headless {
+            return Some(format!(
+                "its panels run {}, and this create asks for {}",
+                window_word(self.headless),
+                window_word(asked.headless)
+            ));
+        }
+        if self.command != asked.command {
+            return Some("its panels use another executable".to_string());
+        }
+        if self.extra_args != asked.extra_args {
+            return Some("its panels pass other extra arguments".to_string());
+        }
+        if self.disclosure != asked.disclosure {
+            return Some("its panels use another automation disclosure".to_string());
+        }
+        if self.background_windows != asked.background_windows {
+            return Some("its panels use another window setting".to_string());
+        }
+        None
+    }
+}
+
+/// Refuse a create that cannot join the browser of its profile, before that
+/// browser starts.
+///
+/// The words name the profile and say what the caller can do, because a create
+/// that reached the driver would show a protocol error of the engine instead.
+///
+/// # Errors
+/// The backend keeps no shared profile, the profile runs with another launch
+/// setting, or another browser holds its folder.
+pub(super) fn refuse_unjoinable(config: &BrowserConfig, profile_id: &str) -> crate::error::Result<()> {
+    if !matches!(config.backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi) {
+        return Err(crate::error::Error::State(format!(
+            "the shared profile {profile_id} needs a local Chromium or Firefox; this panel asks for {}",
+            backend_name(config.backend)
+        )));
+    }
+    let folder = config.profile_dir(profile_id);
+    if let Some(held) = held_by_another_browser(&folder) {
+        return Err(crate::error::Error::State(format!(
+            "the folder of the shared profile {profile_id} is held by {held}: close that browser, or open a private panel"
+        )));
+    }
+    let difference = {
+        let key = profile_key(config, profile_id);
+        let sessions = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(entry) = sessions.get(&key).filter(|entry| entry.session.strong_count() > 0) else {
+            return Ok(());
+        };
+        entry.launch.difference(&ProfileLaunch::of(config))
+    };
+    match difference {
+        Some(difference) => Err(crate::error::Error::State(format!(
+            "the shared profile {profile_id} cannot take this page: {difference}. Close the panels of that profile, \
+             or create this panel with the setting of that browser"
+        ))),
+        None => Ok(()),
+    }
+}
+
+fn window_word(headless: bool) -> &'static str {
+    if headless { "headless" } else { "with a window" }
+}
+
+fn backend_name(backend: BackendKind) -> &'static str {
+    match backend {
+        BackendKind::ChromiumCdp => "Chromium",
+        BackendKind::FirefoxBidi => "Firefox",
+        BackendKind::SafariWebDriver => "Safari",
+    }
+}
+
+/// The lock of a browser process on the folder of one profile.
+///
+/// Chromium and Firefox keep a lock in the profile folder that names the
+/// process that holds it, so a lock that a crash left behind does not stop a
+/// create. On another system than Linux the engine reports the lock itself.
+#[cfg(target_os = "linux")]
+fn held_by_another_browser(folder: &Path) -> Option<&'static str> {
+    for marker in ["SingletonLock", "lock"] {
+        let Some(target) = std::fs::read_link(folder.join(marker)).ok() else {
+            continue;
+        };
+        let pid = target
+            .to_string_lossy()
+            .rsplit(['-', '+'])
+            .next()
+            .and_then(|pid| pid.parse::<u32>().ok());
+        if pid.is_some_and(|pid| Path::new("/proc").join(pid.to_string()).exists()) {
+            return Some("another browser process");
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn held_by_another_browser(_folder: &Path) -> Option<&'static str> {
+    None
 }
 
 impl BrowserPanelState {
@@ -70,9 +227,59 @@ impl BrowserPanelState {
         directory.join("captures")
     }
 
+    /// The name of the shared profile of this panel.
+    ///
+    /// `None` is a private panel: its folder belongs to this panel alone, keeps
+    /// nothing after the close, and is the folder of its own id.
     #[must_use]
     pub fn shared_profile_id(&self) -> Option<&str> {
-        self.shared_session.as_ref().map(|session| session.profile_id())
+        let profile_id = self.shared_session.as_ref()?.profile_id();
+        (profile_id != self.panel_local_id).then_some(profile_id)
+    }
+
+    /// Permanently close this panel. Only a private panel removes its profile
+    /// folder, and only after the driver has released the profile lock.
+    ///
+    /// A shared profile holds the sign-ins of every panel of it, so no close of
+    /// a panel removes its folder.
+    ///
+    /// The returned signal is what actually starts a profile deletion: it must
+    /// be polled or waited on (see [`BrowserShutdownSignal`]). Dropping it
+    /// leaves the folder on disk.
+    #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
+    pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
+        self.request_shutdown();
+        if self.is_attached() {
+            // The Chromium of another machine keeps its profile there, and this
+            // computer must not delete a local folder that it never made.
+            return self
+                .take_shutdown_signal()
+                .unwrap_or_else(BrowserShutdownSignal::completed);
+        }
+        let private_folder = self.shared_profile_id().is_none().then(|| {
+            super::profile_dir_for_home(
+                &self.config,
+                &crate::horizon_home::HorizonHome::resolve(),
+                &self.panel_local_id,
+            )
+        });
+        let group = self.shared_session.take();
+        let last_panel = group.as_ref().is_none_or(|group| Arc::strong_count(group) == 1);
+        let signal = self
+            .take_shutdown_signal()
+            .unwrap_or_else(BrowserShutdownSignal::completed);
+        if !last_panel {
+            return signal;
+        }
+        let signal = match private_folder {
+            Some(folder) => signal.with_profile_cleanup(folder),
+            None => signal,
+        };
+        if let Some(group) = group {
+            signal.with_shared_profile_cleanup(group)
+        } else {
+            signal
+        }
     }
 
     #[must_use]
@@ -140,19 +347,170 @@ mod tests {
         state
     }
 
+    /// The folder of a shared profile holds the sign-ins of every panel of it, so
+    /// the close of one panel leaves it, even when that panel is the last one.
     #[test]
-    fn closing_original_preserves_shared_profile_until_last_panel_closes() {
+    fn a_shared_profile_folder_survives_the_close_of_its_last_panel() {
         let root = tempfile::tempdir().expect("profiles");
-        let mut source = panel(root.path(), "source", "source");
-        let mut duplicate = panel(root.path(), "duplicate", "source");
-        let profile = source.config.profile_dir("source");
+        let mut first = panel(root.path(), "page-1", "work");
+        let mut second = panel(root.path(), "page-2", "work");
+        let profile = first.config.profile_dir("work");
         std::fs::create_dir_all(&profile).expect("profile");
-        std::fs::write(profile.join("fixture"), "session").expect("fixture");
-        assert!(source.close_permanently().wait(Duration::from_secs(2)));
-        assert!(profile.join("fixture").exists());
-        assert_eq!(duplicate.shared_profile_id(), Some("source"));
-        assert!(duplicate.close_permanently().wait(Duration::from_secs(2)));
-        assert!(!profile.exists());
+        std::fs::write(profile.join("Cookies"), "a sign-in").expect("fixture");
+        assert_eq!(second.shared_profile_id(), Some("work"), "a page of a named profile");
+        assert!(first.close_permanently().wait(Duration::from_secs(2)));
+        assert!(profile.join("Cookies").exists(), "a sibling still uses the profile");
+        assert!(second.close_permanently().wait(Duration::from_secs(2)));
+        assert!(
+            profile.join("Cookies").exists(),
+            "the last panel of a shared profile keeps the sign-ins of the person"
+        );
+    }
+
+    /// A saved panel names the profile that its page joined, so a restart opens
+    /// the same page of the same browser, and a private panel comes back private.
+    #[test]
+    fn a_saved_panel_keeps_its_profile_kind() {
+        let root = tempfile::tempdir().expect("profiles");
+        let shared = panel(root.path(), "page-1", "work");
+        assert_eq!(
+            crate::runtime_state::browser_profile_state(&shared, false)
+                .session_id
+                .as_deref(),
+            Some("work")
+        );
+        let private = panel(root.path(), "page-2", "page-2");
+        assert_eq!(
+            crate::runtime_state::browser_profile_state(&private, false).session_id,
+            None,
+            "a private panel saves no shared profile"
+        );
+    }
+
+    /// A private panel keeps its folder while it lives and none after it.
+    #[test]
+    fn a_private_panel_folder_goes_away_at_close() {
+        let root = tempfile::tempdir().expect("profiles");
+        let mut private = panel(root.path(), "page-1", "page-1");
+        let folder = private.config.profile_dir("page-1");
+        std::fs::create_dir_all(&folder).expect("profile");
+        std::fs::write(folder.join("Cookies"), "nothing to keep").expect("fixture");
+        assert_eq!(private.shared_profile_id(), None, "a private panel joins no profile");
+        assert!(private.close_permanently().wait(Duration::from_secs(2)));
+        assert!(!folder.exists(), "the throwaway folder of a private panel goes away");
+    }
+
+    /// Two pages of one profile are two pages of one browser: the second create
+    /// cannot ask for another engine, and the words name the profile.
+    #[test]
+    fn a_create_in_another_engine_of_a_running_profile_is_refused() {
+        let root = tempfile::tempdir().expect("profiles");
+        let config = BrowserConfig {
+            profile_root: Some(root.path().to_path_buf()),
+            ..BrowserConfig::default()
+        };
+        let group = acquire(&config, "work");
+        assert!(refuse_unjoinable(&config, "work").is_ok(), "the same engine joins");
+        let firefox = BrowserConfig {
+            backend: BackendKind::FirefoxBidi,
+            ..config.clone()
+        };
+        let refusal = refuse_unjoinable(&firefox, "work")
+            .expect_err("another engine cannot join")
+            .to_string();
+        assert!(refusal.contains("work"), "the refusal names the profile: {refusal}");
+        assert!(refusal.contains("Chromium"), "the refusal names the engine: {refusal}");
+        drop(group);
+    }
+
+    /// The first panel of a profile pins how its browser starts. A second create
+    /// with another setting is refused before its browser starts.
+    #[test]
+    fn a_create_with_another_launch_setting_of_a_running_profile_is_refused() {
+        for (asked, setting) in [
+            (
+                BrowserConfig {
+                    headless: false,
+                    ..BrowserConfig::default()
+                },
+                "headless",
+            ),
+            (
+                BrowserConfig {
+                    command: Some("/usr/bin/other-browser".into()),
+                    ..BrowserConfig::default()
+                },
+                "executable",
+            ),
+            (
+                BrowserConfig {
+                    extra_args: vec!["--lang=en".into()],
+                    ..BrowserConfig::default()
+                },
+                "extra arguments",
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("profiles");
+            let config = BrowserConfig {
+                profile_root: Some(root.path().to_path_buf()),
+                ..BrowserConfig::default()
+            };
+            let group = acquire(&config, "work");
+            let asked = BrowserConfig {
+                profile_root: Some(root.path().to_path_buf()),
+                ..asked
+            };
+            let refusal = refuse_unjoinable(&asked, "work")
+                .expect_err("another launch setting")
+                .to_string();
+            assert!(refusal.contains("work"), "{refusal}");
+            assert!(
+                refusal.to_lowercase().contains(setting),
+                "the refusal names {setting}: {refusal}"
+            );
+            drop(group);
+        }
+    }
+
+    /// A shared profile needs a local Chromium or Firefox: a Safari panel has no
+    /// process to share, and a folder that another browser holds is refused.
+    #[test]
+    fn a_profile_of_a_backend_without_a_shared_process_is_refused() {
+        let root = tempfile::tempdir().expect("profiles");
+        let safari = BrowserConfig {
+            backend: BackendKind::SafariWebDriver,
+            profile_root: Some(root.path().to_path_buf()),
+            ..BrowserConfig::default()
+        };
+        let refusal = refuse_unjoinable(&safari, "work")
+            .expect_err("Safari keeps no shared profile")
+            .to_string();
+        assert!(refusal.contains("work") && refusal.contains("Safari"), "{refusal}");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_profile_folder_that_another_browser_holds_is_refused() {
+        let root = tempfile::tempdir().expect("profiles");
+        let config = BrowserConfig {
+            profile_root: Some(root.path().to_path_buf()),
+            ..BrowserConfig::default()
+        };
+        let folder = config.profile_dir("work");
+        std::fs::create_dir_all(&folder).expect("profile");
+        let lock = folder.join("SingletonLock");
+        // A lock names the process that holds the profile, and a live process of
+        // this computer holds it now.
+        std::os::unix::fs::symlink(format!("this-computer-{}", std::process::id()), &lock).expect("lock");
+        let refusal = refuse_unjoinable(&config, "work")
+            .expect_err("a held folder cannot be joined")
+            .to_string();
+        assert!(refusal.contains("work"), "{refusal}");
+        // A lock that a crash left behind names a process that is gone, and the
+        // browser of the profile starts as usual.
+        std::fs::remove_file(&lock).expect("remove lock");
+        std::os::unix::fs::symlink("this-computer-4294967290", &lock).expect("stale lock");
+        assert!(refuse_unjoinable(&config, "work").is_ok());
     }
 
     #[test]
@@ -247,17 +605,26 @@ mod tests {
         }
     }
 
+    /// A page of a shared profile keeps the profile when a sibling closes, and a
+    /// duplicate of a private panel is another private panel.
     #[test]
-    fn closing_duplicate_first_preserves_original_profile() {
+    fn closing_duplicate_first_preserves_the_shared_profile() {
         let root = tempfile::tempdir().expect("profiles");
-        let mut source = panel(root.path(), "source", "source");
-        let mut duplicate = panel(root.path(), "duplicate", "source");
-        let profile = source.config.profile_dir("source");
+        let mut source = panel(root.path(), "page-1", "work");
+        let mut duplicate = panel(root.path(), "page-2", "work");
+        let profile = source.config.profile_dir("work");
         std::fs::create_dir_all(&profile).expect("profile");
         assert!(duplicate.close_permanently().wait(Duration::from_secs(2)));
         assert!(profile.exists());
         assert!(source.close_permanently().wait(Duration::from_secs(2)));
-        assert!(!profile.exists());
+        assert!(profile.exists(), "a shared profile outlives its panels");
+
+        let private = panel(root.path(), "page-3", "page-3");
+        let options = private.duplicate_options().expect("options");
+        assert!(
+            options.browser_session_id.is_none(),
+            "a duplicate of a private panel keeps nothing either"
+        );
     }
 
     #[test]

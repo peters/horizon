@@ -87,7 +87,7 @@ pub use network::{
 };
 pub use page_scroll::{NestedScrollbar, VerticalScrollbarOverlay};
 pub use process::attach::{AttachError, DevtoolsEndpoint};
-pub use profile::{MAX_PROFILE_NAME_CHARS, valid_profile_name};
+pub use profile::{DEFAULT_PROFILE, MAX_PROFILE_NAME_CHARS, PRIVATE_PROFILE, ProfileChoice, valid_profile_name};
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserAttachedFile, BrowserBounds, BrowserControlFailure,
     BrowserControlValue, BrowserFileInput, BrowserNode, BrowserSnapshot, BrowserTarget, NavigationOutcome,

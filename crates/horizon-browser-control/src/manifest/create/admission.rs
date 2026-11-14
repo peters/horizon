@@ -128,6 +128,7 @@ mod tests {
                 orientation: None,
                 visible: true,
                 duplicate_from: None,
+                profile: None,
             },
             timeout,
         )

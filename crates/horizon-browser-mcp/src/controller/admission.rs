@@ -57,6 +57,7 @@ mod tests {
             target: target.map(str::to_string),
             orientation: None,
             visible: true,
+            profile: None,
         }
     }
 

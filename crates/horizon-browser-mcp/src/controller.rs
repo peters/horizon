@@ -1085,6 +1085,7 @@ mod tests {
             target: target.map(str::to_string),
             orientation: None,
             visible: true,
+            profile: None,
         };
         let conflict = |owned: Vec<BrowserManifest>, parameters| {
             conflicting_panel(owned.into_iter(), &parameters).map(|panel| panel.panel_local_id)

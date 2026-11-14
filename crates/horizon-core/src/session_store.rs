@@ -323,16 +323,18 @@ impl SessionStore {
                 if panel.kind != crate::panel::PanelKind::Browser {
                     continue;
                 }
+                let saved_profile = panel
+                    .browser_profile
+                    .as_ref()
+                    .and_then(|profile| profile.session_id.as_deref());
+                // A shared profile holds the sign-ins of a person and of the
+                // agents of this Horizon, so the delete of one saved session
+                // leaves it. Only the throwaway folder of a private panel goes.
+                if saved_profile.is_some() {
+                    continue;
+                }
                 let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
-                let profile_dir = crate::browser::profile_dir_for_home(
-                    &browser_config,
-                    &self.home,
-                    panel
-                        .browser_profile
-                        .as_ref()
-                        .and_then(|profile| profile.session_id.as_deref())
-                        .unwrap_or(&panel.local_id),
-                );
+                let profile_dir = crate::browser::profile_dir_for_home(&browser_config, &self.home, &panel.local_id);
                 remove_dir_if_exists(&profile_dir)?;
             }
         }

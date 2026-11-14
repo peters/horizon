@@ -6,6 +6,61 @@ use crate::{BackendKind, BrowserConfig, paths};
 /// host and the remote tunnel allow it.
 pub const MAX_PROFILE_NAME_CHARS: usize = 40;
 
+/// The shared profile that a create opens in when it names none. Every panel of
+/// it is one page of one browser, so a person signs in one time.
+pub const DEFAULT_PROFILE: &str = "default";
+
+/// The word that a create reserves for a panel that keeps nothing: its own
+/// throwaway folder, gone when the panel closes.
+pub const PRIVATE_PROFILE: &str = "private";
+
+/// The profile that a create names: one shared profile by name, or a folder of
+/// the panel alone.
+///
+/// A shared profile is one browser process and one set of cookies. A private
+/// panel is a browser of its own that starts signed in nowhere and leaves no
+/// folder. The two kinds never meet: a private panel never joins a shared
+/// profile, and no name reaches a private folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileChoice {
+    /// A profile that the panels of this Horizon share, by name.
+    Shared(String),
+    /// A folder of this panel alone, removed when it closes.
+    Private,
+}
+
+impl ProfileChoice {
+    /// Read the `profile` field of a create.
+    ///
+    /// # Errors
+    /// Returns the words that a caller shows for a name that the rule refuses,
+    /// or for a reserved word that this build does not know.
+    pub fn parse(field: Option<&str>) -> Result<Self, String> {
+        let Some(name) = field.map(str::trim).filter(|name| !name.is_empty()) else {
+            return Ok(Self::Shared(DEFAULT_PROFILE.to_string()));
+        };
+        if name == PRIVATE_PROFILE {
+            return Ok(Self::Private);
+        }
+        if !valid_profile_name(name) {
+            return Err(format!(
+                "the profile {name:?} is not a browser profile name: use 1 to {MAX_PROFILE_NAME_CHARS} of a-z, 0-9 and -, \
+                 with a letter or a digit at each end, or {PRIVATE_PROFILE:?} for a panel that is not signed in"
+            ));
+        }
+        Ok(Self::Shared(name.to_string()))
+    }
+
+    /// The shared profile that a create opens in, or `None` for a private panel.
+    #[must_use]
+    pub fn shared_name(&self) -> Option<&str> {
+        match self {
+            Self::Shared(name) => Some(name),
+            Self::Private => None,
+        }
+    }
+}
+
 pub(crate) fn resolved_for_launch(config: &BrowserConfig) -> std::io::Result<BrowserConfig> {
     let mut resolved = config.clone();
     resolved.quality = resolved.quality.clamp(1, 100);
@@ -156,8 +211,15 @@ fn snap_firefox_profile_root_with_resolver(
 /// host` accepts: 1 to 40 of `a-z`, `0-9` and `-`, with a letter or a digit at
 /// each end. The name is part of each page ID and of the profile folder, so it
 /// is never a path or a shell word of its own.
+///
+/// The reserved word [`PRIVATE_PROFILE`] names no profile, so this rule refuses
+/// it here for every caller: the settings entry of a browser host, the driver of
+/// that host, and the create that reads the word as the private panel.
 #[must_use]
 pub fn valid_profile_name(name: &str) -> bool {
+    if name == PRIVATE_PROFILE {
+        return false;
+    }
     let edge = |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit());
     (1..=MAX_PROFILE_NAME_CHARS).contains(&name.len())
         && name
@@ -191,6 +253,41 @@ pub(crate) fn schedule_removal(profile_dir: PathBuf) -> std::sync::mpsc::Receive
 mod tests {
     use super::*;
 
+    /// The field of a create reads as the shared profile that it names, and the
+    /// reserved word reads as a private panel of its own.
+    #[test]
+    fn a_create_names_a_shared_profile_or_the_private_panel() {
+        assert_eq!(
+            ProfileChoice::parse(None),
+            Ok(ProfileChoice::Shared(DEFAULT_PROFILE.to_string())),
+            "a create that names no profile opens in the shared default"
+        );
+        assert_eq!(
+            ProfileChoice::parse(Some("  ")),
+            Ok(ProfileChoice::Shared(DEFAULT_PROFILE.to_string())),
+            "a blank field is no name"
+        );
+        assert_eq!(
+            ProfileChoice::parse(Some("work")),
+            Ok(ProfileChoice::Shared("work".to_string()))
+        );
+        assert_eq!(ProfileChoice::parse(Some(PRIVATE_PROFILE)), Ok(ProfileChoice::Private));
+        assert_eq!(
+            ProfileChoice::parse(Some("private")).map(|choice| choice.shared_name().map(str::to_string)),
+            Ok(None),
+            "the private panel joins no shared profile"
+        );
+        let refusal = ProfileChoice::parse(Some("../private")).expect_err("a path is no name");
+        assert!(
+            refusal.contains("private"),
+            "the refusal names the reserved word: {refusal}"
+        );
+        assert!(
+            ProfileChoice::parse(Some("Private")).is_err(),
+            "the reserved word is lower-case only"
+        );
+    }
+
     #[test]
     fn a_profile_name_is_one_folder_under_a_letter_or_a_digit() {
         for accepted in ["mail", "a", "work-1", "1", &"a".repeat(MAX_PROFILE_NAME_CHARS)] {
@@ -198,6 +295,7 @@ mod tests {
         }
         for refused in [
             "",
+            "private",
             "Mail",
             "mail_box",
             "-mail",

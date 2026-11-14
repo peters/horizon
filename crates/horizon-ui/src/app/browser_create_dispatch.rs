@@ -110,6 +110,26 @@ impl HorizonApp {
             );
             return;
         }
+        // The profile of a local panel: the shared default, a shared profile by
+        // name, or a private panel that keeps nothing. A browser host keeps the
+        // profile of that machine, so a private panel is refused there.
+        let profile = match horizon_browser::ProfileChoice::parse(request.profile.as_deref()) {
+            Ok(profile) => profile,
+            Err(message) => {
+                fail_create(&mut self.browser_create_host.io, &request, "invalid_profile", &message);
+                return;
+            }
+        };
+        if profile.shared_name().is_none() && self.template_config.browser_host.names_host() {
+            fail_create(
+                &mut self.browser_create_host.io,
+                &request,
+                "unsupported_on_browser_host",
+                "a private panel is not available on a browser host: the profile of that machine holds its sign-ins. \
+                 Omit profile to use that profile, or remove the browser host.",
+            );
+            return;
+        }
         if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
             fail_create(
                 &mut self.browser_create_host.io,
@@ -131,7 +151,8 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
-        let options = duplicate.unwrap_or_else(|| browser_create_options(&request, browser_config));
+        let options =
+            duplicate.unwrap_or_else(|| browser_create_options(&request, browser_config, profile.shared_name()));
         self.open_requested_browser_panel(request, actor_panel, options, started_at);
     }
 
@@ -339,12 +360,17 @@ pub(super) fn publish_requested_create(
 fn browser_create_options(
     request: &BrowserCreateRequest,
     browser_config: horizon_core::browser::BrowserConfig,
+    shared_profile: Option<&str>,
 ) -> PanelOptions {
     PanelOptions {
         command: request.url.clone(),
         kind: PanelKind::Browser,
         visible: request.visible,
         browser_config: Some(browser_config),
+        // The name of a shared profile is the session identity of the panel, so
+        // a later page joins the browser that already holds its sign-ins. A
+        // private panel names no profile and gets a folder of its own.
+        browser_session_id: shared_profile.map(str::to_string),
         remote_session: None,
         follows_browser_host: true,
         ..PanelOptions::default()
@@ -406,7 +432,11 @@ mod tests {
     #[test]
     fn a_create_without_a_device_target_follows_the_browser_host() {
         let request = BrowserCreateRequest::for_tests("agent");
-        let options = browser_create_options(&request, horizon_core::browser::BrowserConfig::default());
+        let options = browser_create_options(
+            &request,
+            horizon_core::browser::BrowserConfig::default(),
+            Some(horizon_browser::DEFAULT_PROFILE),
+        );
         assert_eq!(options.kind, PanelKind::Browser);
         assert!(
             options.follows_browser_host,
@@ -416,11 +446,39 @@ mod tests {
             options.remote_session.is_none(),
             "a create without a target is no provider session"
         );
-        assert!(
-            options.browser_session_id.is_none(),
-            "no local profile group takes this page"
+        assert_eq!(
+            options.browser_session_id.as_deref(),
+            Some(horizon_browser::DEFAULT_PROFILE),
+            "a create that names no profile joins the shared default"
         );
         assert_eq!(options.command, request.url);
+    }
+
+    /// A private create names no profile, so its panel gets the throwaway folder
+    /// of its own id, and a named profile reaches the panel as its session id.
+    #[test]
+    fn a_create_reads_the_profile_that_it_names() {
+        let mut request = BrowserCreateRequest::for_tests("agent");
+        request.profile = Some(horizon_browser::PRIVATE_PROFILE.to_string());
+        let private = horizon_browser::ProfileChoice::parse(request.profile.as_deref()).expect("private");
+        let options = browser_create_options(
+            &request,
+            horizon_core::browser::BrowserConfig::default(),
+            private.shared_name(),
+        );
+        assert!(
+            options.browser_session_id.is_none(),
+            "a private panel joins no shared profile"
+        );
+
+        request.profile = Some("work".to_string());
+        let work = horizon_browser::ProfileChoice::parse(request.profile.as_deref()).expect("work");
+        let options = browser_create_options(
+            &request,
+            horizon_core::browser::BrowserConfig::default(),
+            work.shared_name(),
+        );
+        assert_eq!(options.browser_session_id.as_deref(), Some("work"));
     }
 
     #[test]
