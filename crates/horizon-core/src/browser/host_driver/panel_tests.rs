@@ -58,7 +58,11 @@ fn a_firefox_panel_names_the_driver_of_its_host() {
     );
     assert_eq!(
         panel.remote_status.as_deref(),
-        Some("Firefox of browser-vm in the profile mail, through the driver of that machine")
+        Some(
+            "Firefox of browser-vm in the profile mail, through the driver of that machine; a page there cannot take \
+             a file of this computer"
+        ),
+        "the note line of the panel says where the browser runs and the one limit of a page there"
     );
     assert!(panel.can_accept_commands(), "the link of the panel is open");
 }

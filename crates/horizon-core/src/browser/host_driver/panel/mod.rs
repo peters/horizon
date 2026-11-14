@@ -859,10 +859,11 @@ impl BrowserPanelState {
 }
 
 impl HostDriverSlot {
-    /// The short line that the panel shows while it connects.
+    /// The short line that the panel shows while it connects. It says the one
+    /// limit of a page of another machine, so no second line has to carry it.
     pub(super) fn note(&self) -> String {
         format!(
-            "Firefox of {} in the profile {}, through the driver of that machine",
+            "Firefox of {} in the profile {}, through the driver of that machine; a page there cannot take a file of this computer",
             self.host.ssh_target(),
             self.host.profile()
         )

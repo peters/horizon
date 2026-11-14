@@ -112,13 +112,13 @@ pub fn show(
     }
 
     if matches!(browser.status, horizon_core::browser::BrowserStatus::Ready)
-        && !browser.frame_slot.file_chooser().supported()
+        && let Some(message) = upload_limit_line(
+            browser.remote_target().is_some(),
+            browser.runs_on_browser_host(),
+            browser.frame_slot.file_chooser().supported(),
+            browser.frame_slot.file_chooser().status().pending(),
+        )
     {
-        let message = if browser.remote_target().is_some() {
-            "A remote device of a provider cannot take files from this computer."
-        } else {
-            "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with file-dialog support."
-        };
         ui.label(RichText::new(message).size(10.5).color(theme::PALETTE_YELLOW()));
     }
     let reason = browser.handoff_reason.clone();
@@ -127,6 +127,37 @@ pub fn show(
     }
     clicked |= crate::browser_widget::teach::show(ui, browser, interactive);
     (url_focused, clicked)
+}
+
+/// The words of the yellow line under the chrome for a panel that cannot take a
+/// file of this computer, or `None` while the panel says nothing.
+///
+/// A page of a browser host never takes a file of this computer, and the note
+/// line of the panel says that once, when the panel connects. The yellow line
+/// waits until a page of that host asks for a file, because that is the moment a
+/// person needs the words.
+fn upload_limit_line(
+    remote_device: bool,
+    on_browser_host: bool,
+    chooser_supported: bool,
+    page_asked: bool,
+) -> Option<&'static str> {
+    if chooser_supported {
+        return None;
+    }
+    if remote_device {
+        return Some("A remote device of a provider cannot take files from this computer.");
+    }
+    if on_browser_host {
+        return page_asked.then_some(
+            "A page of that browser asked for a file. A browser host cannot take a file of this computer: open \
+             the file dialog of the page on that machine.",
+        );
+    }
+    Some(
+        "Manual upload selection is unavailable. Use local Chromium, or update local Firefox to a build with \
+         file-dialog support.",
+    )
 }
 
 fn remote_identity_header(
@@ -555,8 +586,39 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 mod tests {
     use horizon_core::browser::{BackendKind, BrowserPanelState, BrowserStatus};
 
-    use super::{backend_picker, nav_widget_info, picker_enabled, sync_url_buffer};
+    use super::{backend_picker, nav_widget_info, picker_enabled, sync_url_buffer, upload_limit_line};
     use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn the_upload_line_of_a_browser_host_waits_for_a_page() {
+        assert_eq!(
+            upload_limit_line(false, true, false, false),
+            None,
+            "a panel of a browser host says the limit in its note line and no yellow line"
+        );
+        let asked = upload_limit_line(false, true, false, true).expect("a page that asked");
+        assert!(
+            asked.contains("browser host") && asked.contains("cannot take a file"),
+            "{asked}"
+        );
+        assert_eq!(
+            upload_limit_line(false, true, true, true),
+            None,
+            "a chooser that serves the files shows no line"
+        );
+        assert!(
+            upload_limit_line(false, false, false, false)
+                .expect("local")
+                .contains("local Chromium"),
+            "a local Firefox of an old build keeps its own words"
+        );
+        assert!(
+            upload_limit_line(true, false, false, false)
+                .expect("provider device")
+                .contains("remote device"),
+            "a device of a provider keeps its own words"
+        );
+    }
 
     #[test]
     fn a_remote_panel_shows_session_state_without_changing_its_backend() {

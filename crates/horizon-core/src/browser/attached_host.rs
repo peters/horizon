@@ -401,10 +401,11 @@ impl AttachedHostSlot {
     }
 
     /// The short line that the panel shows while it connects and when it waits
-    /// for a retry.
+    /// for a retry. It says the one limit of a page of another machine, so no
+    /// second line has to carry it.
     fn note(&self) -> String {
         format!(
-            "browser of {} in the profile {}, over SSH",
+            "browser of {} in the profile {}, over SSH; a page there cannot take a file of this computer",
             self.host.ssh_target(),
             self.host.profile()
         )
@@ -526,7 +527,7 @@ impl BrowserPanelState {
         state.requested_url = Some(last_url.to_string());
         state.status = BrowserStatus::Starting;
         state.remote_status = Some(format!(
-            "browser of {} in the profile {}, over SSH",
+            "browser of {} in the profile {}, over SSH; a page there cannot take a file of this computer",
             host.ssh_target(),
             host.profile()
         ));
