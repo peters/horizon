@@ -583,7 +583,15 @@ the steps of `browser-machine` and the browser host request:
 ```
 
 The profile is the name of the person or `work` when the person names none: 1 to
-40 characters of `a-z`, `0-9` and `-`.
+40 characters of `a-z`, `0-9` and `-`. The word `private` names no profile: the
+settings entry and the local panel menu use it for a panel that keeps nothing.
+
+The profile of a local panel of this computer is the other place where a sign-in
+stays. A panel of this computer opens in the shared profile `default` unless a
+create names `profile: "private"`, so a person signs in one time on this
+computer too, and every later panel of theirs is signed in. A private panel is
+signed in nowhere, and its folder is gone when the panel closes. The panels of
+one profile read the same sign-ins, and a sign-out in one signs out all of them.
 
 The engine of the press decides the steps:
 
@@ -621,7 +629,9 @@ The engine of the press decides the steps:
 
 The last step needs the press of the person: call `browser_host_request` with the
 machine of the list or the SSH target, the profile, the engine and, for a Firefox
-host whose driver starts another way, the `command` that the setup printed. Show
+host whose driver starts another way, the `command` that the setup printed. A
+Firefox host serves one page of its profile, so a second panel of that profile is
+refused until the first one closes. Show
 that command in the row `Driver command` of the card, as Horizon holds it, and
 wait while Horizon draws its own card. The press serves the next browser panel at once, so no
 panel needs a start of Horizon: when the answer says `confirmed`, open the panel

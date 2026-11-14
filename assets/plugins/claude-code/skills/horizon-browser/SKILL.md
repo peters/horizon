@@ -30,7 +30,16 @@ explicit `backend` (`chromium`, `firefox` or `safari`) beside your open panel.
 Only when the user explicitly requests another independent browser session may
 you call `browser_create` with `allow_additional: true`; a second panel of the
 same engine, a create without `backend` while you own a panel, and a remote
-`target` while you own a panel need it. A create that is still pending counts
+`target` while you own a panel need it. A new local panel opens in the shared
+profile `default` and is signed in where the person signed in, so a site that
+needs a sign-in works in a new panel of yours without a new sign-in. Pass
+`profile` to name another shared profile, or `profile: "private"` for a clean
+browser: a private panel is signed in nowhere, reads none of the shared
+sign-ins, and keeps no folder at close. Use `private` when the user asks for a
+site without their sign-in, for example to test a sign-up. The panels of one
+shared profile are pages of one browser: they read the same sign-ins, and a
+sign-out in one signs out all of them. Never sign out of a shared profile
+unless the user asks for it. `profile: "private"` is refused on a browser host. A create that is still pending counts
 as a panel of its engine. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
 platform supports it. Read `automation_disclosure` on `browser_list` and
@@ -94,7 +103,9 @@ When the user explicitly requests another panel sharing an existing login, call
 Chromium or Firefox panel in your workspace; ownership and handoff guards still
 apply. The panels share cookies and persistent site storage, so logging out in
 one affects the others. Navigation and input are independent; forms, history,
-and live JavaScript state are not copied. This does not authorize helper panels
+and live JavaScript state are not copied. A private source panel opens another
+private panel that shares no sign-in with it, so name a `profile` in
+`browser_create` when the new panel must be signed in. This does not authorize helper panels
 as a workaround for iframe, popup, dialog, or consent interactions.
 
 Snapshots expose iframe boundaries as `iframe` nodes. On local Chromium and
@@ -391,6 +402,13 @@ computer.
   after Horizon stops. A later panel and the next Horizon attach to the same
   browser, so a signed-in page is still signed in. Horizon closes only its own
   page (`Target.closeTarget`) and never the browser.
+- The profile of a browser host belongs to that machine, so `profile` names no
+  profile there and `profile: "private"` answers `unsupported_on_browser_host`:
+  the panels use the profile of the settings entry.
+- A Firefox browser host serves one page of its profile. A `browser_create`
+  while that page is attached is refused with `link_busy`, which names the
+  profile and asks for the close of the other panel. `allow_additional` and a
+  second profile do not help there.
 - The panels of one profile share its cookies and its storage: that is one
   Chromium. There is no isolation between two panels of one profile.
   `browser_duplicate` of such a panel answers `browser_unavailable`, because the
