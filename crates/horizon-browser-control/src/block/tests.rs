@@ -1674,8 +1674,8 @@ fn the_requests_of_the_plan_card_procedure_draw_the_cards_of_the_skill() {
     }
     assert_eq!(
         documents.len(),
-        6,
-        "the procedure replays the two cards of the short path, the plan before the go, the plan with a question, the card of twelve todos and the stopped plan"
+        9,
+        "the procedure replays the two cards of the short path, the plan before the go, the plan with a question, the card of twelve todos, the stopped plan and the three cards of a task that came from an issue"
     );
     let boards: Vec<Option<(usize, usize, usize)>> = documents.iter().map(board_counts).collect();
     assert_eq!(
@@ -1687,6 +1687,9 @@ fn the_requests_of_the_plan_card_procedure_draw_the_cards_of_the_skill() {
             Some((5, 4, 8)),
             Some((8, 5, 12)),
             Some((3, 2, 4)),
+            Some((2, 2, 3)),
+            Some((4, 2, 4)),
+            Some((4, 2, 4)),
         ],
         "each request draws the board of its task, with one wave for the short path"
     );
