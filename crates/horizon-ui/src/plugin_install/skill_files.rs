@@ -185,6 +185,20 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
             "/assets/plugins/claude-code/skills/horizon-setup/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        relative_path: "skills/horizon-plan/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-plan/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-server-move/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-server-move/SKILL.md"
+        )),
+    },
 ];
 
 /// The skill that owns a tool of its own: the body, the three references and the
@@ -373,3 +387,23 @@ pub(super) const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
         )),
     },
 ];
+
+/// The skill that plans one task as three to twelve todos and keeps one live
+/// card of them: the state, the owner, the place and the time of each todo.
+pub(super) const PLAN_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-plan/SKILL.md"
+    )),
+}];
+
+/// The skill that moves the Horizon server to another computer with its store,
+/// its machines, its keys and its values.
+pub(super) const SERVER_MOVE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-server-move/SKILL.md"
+    )),
+}];
