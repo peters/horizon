@@ -213,6 +213,62 @@ impl HorizonApp {
         );
     }
 
+    /// Answers one request about the machines of this Horizon. A frame answers a
+    /// read that writes nothing; a record or a key that the coordination worker
+    /// writes answers later and `None` says that no frame owes it.
+    pub(super) fn answer_machine_request(
+        &mut self,
+        operation: &block::Operation,
+        request: &block::Request,
+        root: Option<&Path>,
+        ctx: &Context,
+    ) -> Option<block::Outcome> {
+        match operation {
+            block::Operation::MachineSet {
+                name,
+                ssh,
+                key,
+                session,
+                provider,
+            } => {
+                self.answer_machine_set(
+                    &MachineSetFields {
+                        name,
+                        ssh,
+                        key: key.as_deref(),
+                        session: session.as_deref(),
+                        provider: provider.as_deref(),
+                    },
+                    request,
+                    root,
+                    ctx,
+                );
+                None
+            }
+            block::Operation::MachineDelete { name } => {
+                self.answer_machine_delete(name, request, root, ctx);
+                None
+            }
+            block::Operation::Machines => {
+                self.answer_machines(request, root, ctx);
+                None
+            }
+            block::Operation::MachineKey { name } => {
+                self.answer_machine_key(name, request, root, ctx);
+                None
+            }
+            block::Operation::MachineKeys => {
+                self.answer_machine_keys(request, root, ctx);
+                None
+            }
+            block::Operation::DeleteMachineKey { name } => {
+                self.answer_deleted_machine_key(name, request, root, ctx);
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Answers `machines`: every record of this Horizon, in name order, with
     /// whether a terminal of it is open now and whether its key is on this
     /// computer.

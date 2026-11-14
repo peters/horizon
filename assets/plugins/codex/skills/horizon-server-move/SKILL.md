@@ -45,16 +45,23 @@ These rules have no exception:
 - **One step at a time, on one card.** Say where the server is now, where it goes
   and what you copy, run the step, and draw the result.
 
-## What you must ask the person
+## Read the server of this computer
 
-You cannot read the server entry of this computer today: no operation answers it,
-and an agent writes no settings file. `machines` answers the state of the link
-(`off`, `connecting`, `in_step`, `behind` or `away`) and not its target. Ask the
-person two things before you draw the card:
+Call `server_status` of `horizon-block` before you ask the person anything. It
+answers the entry that the settings hold now, the state of the link and the store
+id that this computer saw last:
 
-1. Which computer runs the server now.
-2. The name that `ssh` of this computer uses for it, when that computer is no
-   computer of the machine list.
+- `ssh_target` or `machine` names the place of the server of today, `command` is
+  the command of its link, and `address` is its listener when the link is TCP.
+- `link` is `off`, `connecting`, `in_step`, `behind`, `away`, `removed` or
+  `not_logged_in`.
+- `store` is the store id that this computer saw last, and it is absent when the
+  link read none. Record it before the move: step 6 compares it with the store id
+  of the new server.
+
+An agent writes no settings file. Read `server_status` and ask the person only
+about a value that the answer does not hold, such as the name that `ssh` of this
+computer uses for a new computer that is no machine of the list.
 
 Take the new computer from the request of the person. When it is a machine of
 `machines`, its record holds the address, the user and the key, and you reach it

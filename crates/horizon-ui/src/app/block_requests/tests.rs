@@ -563,3 +563,44 @@ fn a_card_starts_level_with_the_top_edge_of_its_agent_panel() {
         agent.layout.position
     );
 }
+
+#[test]
+fn server_status_answers_the_entry_of_this_computer_and_off_without_one() {
+    let (_temp, ctx, mut app) = app();
+    let answer = app.apply_block_request(&request(&app, Operation::ServerStatus), &ctx);
+    let Outcome::ServerStatus { server } = answer else {
+        panic!("expected the status of the server: {answer:?}");
+    };
+    assert_eq!(server.link, "off", "a computer without a server follows none");
+    assert_eq!(server.ssh_target, None);
+    assert_eq!(server.machine, None);
+    assert_eq!(server.store, None, "no link read a store");
+    let encoded = serde_json::to_string(&Outcome::ServerStatus { server }).expect("the answer serializes");
+    for secret in ["token", "key", "secret", "password"] {
+        assert!(!encoded.contains(secret), "the answer names no {secret}: {encoded}");
+    }
+}
+
+#[test]
+fn server_status_names_the_target_and_the_command_but_no_secret() {
+    let (_temp, ctx, mut app) = app();
+    app.template_config.server = horizon_core::ServerConfig {
+        ssh_target: Some("server-vm".to_owned()),
+        command: Some("/opt/horizon --server-link".to_owned()),
+        address: Some("203.0.113.10:7000".to_owned()),
+        ..horizon_core::ServerConfig::default()
+    };
+    let answer = app.apply_block_request(&request(&app, Operation::ServerStatus), &ctx);
+    let Outcome::ServerStatus { server } = answer else {
+        panic!("expected the status of the server: {answer:?}");
+    };
+    assert_eq!(server.ssh_target.as_deref(), Some("server-vm"));
+    assert_eq!(server.command.as_deref(), Some("/opt/horizon --server-link"));
+    assert_eq!(server.address.as_deref(), Some("203.0.113.10:7000"));
+    assert_eq!(server.machine, None, "the entry names a computer and no machine");
+    assert_eq!(server.store, None, "this host started no link");
+    assert_eq!(
+        server.link, "off",
+        "a host without a link of its own reports no link, whatever the entry says"
+    );
+}

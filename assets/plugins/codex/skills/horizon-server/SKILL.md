@@ -233,6 +233,11 @@ journal, and start the service again.
 
 ### 5. Link this computer
 
+Call `server_status` of `horizon-block` first. It answers the entry that this
+computer holds now, the state of its link and the store id that this computer saw
+last, and it names no token and no secret. When its `link` is already `in_step`
+with the place of your card, this computer needs no new entry.
+
 Call `server_link_request` with `machine` and the name of the place, and the
 command:
 

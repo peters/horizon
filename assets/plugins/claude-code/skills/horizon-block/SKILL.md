@@ -19,7 +19,8 @@ panel gets `caller_unavailable`.
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`,
 `machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`,
-`delete_machine_key`, `server_link_request` and `browser_host_request`.
+`delete_machine_key`, `server_status`, `server_link_request` and
+`browser_host_request`.
 
 ## Create a card
 
@@ -255,6 +256,33 @@ A Horizon that follows a server shares its machine list with the other computers
 of the person. A machine that another computer added appears in the Machines
 section here too, and it may have no key on this computer: a click on it opens
 nothing until that computer has the key, and Horizon says so.
+
+## Read the server of this computer
+
+`server_status` answers how this computer reaches the Horizon server, the state
+of that link, and the store id that this computer saw last. It reads and writes
+nothing: use it before you ask the person anything about the server.
+
+```json
+{"operation": "server_status"}
+```
+
+The answer is `server_status` with one `server` object:
+
+- `ssh_target` is the SSH target of the entry, when the person named one, and
+  `machine` is the name of a machine of the list that runs the server. One of
+  them is present when the entry names the server over SSH.
+- `command` is the command that the link runs on that computer, and `address` is
+  the `host:port` of the listener when this computer reaches it over TCP after a
+  join.
+- `link` is `off` when this computer follows no server, or `connecting`,
+  `in_step`, `behind`, `away`, `removed` or `not_logged_in`.
+- `store` is the store id that this computer saw at its last hello, and it is
+  absent when the link read none. Two computers of one server answer the same
+  id; a server that made a new store answers another one.
+
+The answer holds no token, no key and no secret, and it changes nothing. A field
+that the entry does not name is absent.
 
 ```json
 {"operation": "machine_delete", "name": "build-1"}

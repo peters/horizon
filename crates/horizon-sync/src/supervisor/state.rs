@@ -53,6 +53,8 @@ pub struct LinkSnapshot {
     generation: u64,
     settings: SettingsSyncView,
     settings_generation: u64,
+    /// The store id that this computer saw at its last hello, when it saw one.
+    store: Option<String>,
 }
 
 /// What a frame reads about the settings of this computer on the server: whether
@@ -148,6 +150,14 @@ impl LinkSnapshot {
     #[must_use]
     pub fn settings(&self) -> &SettingsSyncView {
         &self.settings
+    }
+
+    /// The store id that this computer saw at its last hello, when it saw one. Two
+    /// computers of one server read the same id, and a server that made a new store
+    /// answers another one.
+    #[must_use]
+    pub fn store(&self) -> Option<&str> {
+        self.store.as_deref()
     }
 
     /// The number of changes of the settings mirror, so a UI reads them again only
@@ -318,6 +328,7 @@ impl SyncState {
                 refused: self.settings_refusal.clone(),
             },
             settings_generation: self.settings_generation,
+            store: self.client.store().map(str::to_owned),
         }
     }
 

@@ -208,13 +208,13 @@ impl HorizonApp {
                 key,
                 machine,
             } => self.answer_open_terminal(
-                &OpenTerminalFields {
-                    ssh: ssh.as_ref(),
-                    remote_command: remote_command.as_deref(),
-                    title: title.as_deref(),
-                    key: key.as_deref(),
-                    machine: machine.as_deref(),
-                },
+                &OpenTerminalFields::of(
+                    ssh.as_ref(),
+                    remote_command.as_deref(),
+                    title.as_deref(),
+                    key.as_deref(),
+                    machine.as_deref(),
+                ),
                 actor,
                 request,
                 root,
@@ -236,50 +236,38 @@ impl HorizonApp {
                 root,
                 ctx,
             ),
-            Operation::MachineSet {
-                name,
-                ssh,
-                key,
-                session,
-                provider,
-            } => {
-                self.answer_machine_set(
-                    &super::block_machines::MachineSetFields {
-                        name,
-                        ssh,
-                        key: key.as_deref(),
-                        session: session.as_deref(),
-                        provider: provider.as_deref(),
-                    },
-                    request,
-                    root,
-                    ctx,
-                );
-                None
-            }
-            Operation::MachineDelete { name } => {
-                self.answer_machine_delete(name, request, root, ctx);
-                None
-            }
-            Operation::Machines => {
-                self.answer_machines(request, root, ctx);
-                None
-            }
-            Operation::MachineKey { name } => {
-                self.answer_machine_key(name, request, root, ctx);
-                None
-            }
-            Operation::MachineKeys => {
-                self.answer_machine_keys(request, root, ctx);
-                None
-            }
-            Operation::DeleteMachineKey { name } => {
-                self.answer_deleted_machine_key(name, request, root, ctx);
-                None
-            }
+            Operation::MachineSet { .. }
+            | Operation::MachineDelete { .. }
+            | Operation::Machines
+            | Operation::MachineKey { .. }
+            | Operation::MachineKeys
+            | Operation::DeleteMachineKey { .. } => self.answer_machine_request(&request.operation, request, root, ctx),
+            Operation::ServerStatus => Some(self.answer_server_status()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
                 self.answer_setting_request(&request.operation, actor, request, root, ctx)
             }
+        }
+    }
+
+    /// Answers `server_status`: how this computer reaches its server, the state of
+    /// that link and the store id that this computer saw last. It reads the entry
+    /// that the settings hold in memory and the snapshot of the link, so no frame
+    /// waits for a file, and it writes nothing.
+    fn answer_server_status(&self) -> Outcome {
+        let entry = &self.template_config.server;
+        let (link, store) = self.server_sync.as_ref().map_or(("off", None), |sync| {
+            let store = sync.store_id();
+            (sync.state_code(), store)
+        });
+        Outcome::ServerStatus {
+            server: Box::new(block::ServerLink {
+                ssh_target: entry.ssh_target.clone(),
+                machine: entry.machine.clone(),
+                command: entry.command.clone(),
+                address: entry.address.clone(),
+                link: link.to_owned(),
+                store,
+            }),
         }
     }
 
@@ -711,6 +699,25 @@ struct OpenTerminalFields<'a> {
     title: Option<&'a str>,
     key: Option<&'a str>,
     machine: Option<&'a str>,
+}
+
+impl<'a> OpenTerminalFields<'a> {
+    /// The fields of the operation, as borrowed values of the request.
+    fn of(
+        ssh: Option<&'a block_terminal::TerminalRoute>,
+        remote_command: Option<&'a str>,
+        title: Option<&'a str>,
+        key: Option<&'a str>,
+        machine: Option<&'a str>,
+    ) -> Self {
+        Self {
+            ssh,
+            remote_command,
+            title,
+            key,
+            machine,
+        }
+    }
 }
 
 pub(in crate::app) fn card_owner(panel: &Panel) -> Option<&str> {

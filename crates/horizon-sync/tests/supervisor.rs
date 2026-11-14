@@ -390,6 +390,15 @@ fn a_machine_of_one_computer_arrives_at_the_other_and_a_removal_comes_back() {
         server.machines()[0].added_at_millis > 1,
         "the server stamps the record with its own clock, not the clock of the computer"
     );
+    // The snapshot of a link names the store of its server, so a tool answer or a
+    // person can prove that two computers read one store.
+    let store = a.handle().snapshot().store().map(str::to_owned);
+    assert!(store.is_some(), "a link that is in step saw the store of its server");
+    assert_eq!(
+        store,
+        b.handle().snapshot().store().map(str::to_owned),
+        "both computers read the same store"
+    );
 
     b.remove("build-1");
     eventually("the removal at both computers", || {

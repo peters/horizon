@@ -145,6 +145,12 @@ impl ServerSync {
         self.snapshot().state().code()
     }
 
+    /// The store id that this computer saw at its last hello, when it saw one, for
+    /// the answer of `server_status`.
+    pub(in crate::app) fn store_id(&self) -> Option<String> {
+        self.snapshot().store().map(str::to_owned)
+    }
+
     /// The machine store of this link: the mirror of the server and the queue.
     pub(in crate::app) fn store(&self) -> Arc<dyn MachineStore> {
         Arc::new(SyncedMachineStore::new(self.supervisor.handle().clone()))

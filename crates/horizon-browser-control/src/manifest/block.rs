@@ -189,6 +189,11 @@ pub enum Operation {
     /// `delete_machine_key` for that. A terminal that the machine opened keeps
     /// its own saved connection.
     MachineDelete { name: String },
+    /// How this computer reaches the Horizon server, the state of that link and
+    /// the store id that this computer saw last. It reads and writes nothing, and
+    /// it never answers a token, a key or a secret: an agent reads the entry that
+    /// the person saved, as the settings hold it.
+    ServerStatus,
     /// The machines of this Horizon, in name order, each with whether a terminal
     /// of it is open.
     Machines,
@@ -358,6 +363,38 @@ pub struct MachineKeySummary {
     pub created_at_millis: u64,
 }
 
+/// How this computer reaches the Horizon server, as `server_status` reports it.
+///
+/// Every field is the entry that the person saved in the settings and the state of
+/// the link of this run. A token, a private key and a secret are not part of such
+/// an entry, and this answer adds none.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[schemars(extend("type" = "object"))]
+pub struct ServerLink {
+    /// The SSH target of the entry, when the person named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_target: Option<String>,
+    /// The name of a machine of the machine list that runs the server, when the
+    /// entry names one. The link then uses the address and the login of that
+    /// machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// The command that the link runs on that computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The address of the listener of the server, `host:port`, when this computer
+    /// reaches it over TCP after a join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The state of the link: `off` when this computer follows no server, or
+    /// `connecting`, `in_step`, `behind`, `away`, `removed` or `not_logged_in`.
+    pub link: String,
+    /// The store id that this computer saw at its last hello, when it saw one. Two
+    /// computers that read one server answer the same id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<String>,
+}
+
 /// One machine of this Horizon as `machines` reports it.
 ///
 /// `provider` is the agent's claim, not verified Horizon state. `terminal_open`
@@ -481,6 +518,11 @@ pub enum Outcome {
     /// One machine that the caller forgot.
     MachineDeleted {
         name: String,
+    },
+    /// How this computer reaches its Horizon server now. The value is boxed, so
+    /// the outcome that every card operation answers stays small.
+    ServerStatus {
+        server: Box<ServerLink>,
     },
     /// The machines of this Horizon, in name order.
     Machines {
@@ -952,6 +994,7 @@ mod tests {
                 }),
                 "open_panel",
             ),
+            (serde_json::json!({"operation": "server_status"}), "server_status"),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
             let name = match parsed {
@@ -966,6 +1009,7 @@ mod tests {
                 Operation::OpenPanel { .. } => "open_panel",
                 Operation::MachineSet { .. } => "machine_set",
                 Operation::MachineDelete { .. } => "machine_delete",
+                Operation::ServerStatus => "server_status",
                 Operation::Machines => "machines",
                 Operation::MachineKey { .. } => "machine_key",
                 Operation::MachineKeys => "machine_keys",
