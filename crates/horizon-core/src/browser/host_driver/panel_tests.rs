@@ -238,3 +238,60 @@ fn a_chromium_host_does_not_start_the_driver_of_a_firefox() {
     // drives the real one over a stand-in `ssh`, so nothing else is started here.
     let _ = std::mem::size_of::<HostDriverSlot>();
 }
+
+/// The page of a browser host names the profile that it reads, so an agent reads
+/// where the page of the host keeps its sign-ins. A private page names the
+/// reserved word, and the profile of the host stays the one of the machine.
+#[test]
+fn a_private_page_of_a_firefox_host_reports_the_reserved_word() {
+    let directory = tempfile::tempdir().expect("owned fixture state");
+    let program = stand_in(directory.path(), "exit 0\n");
+    let ssh = Ssh::default().with_program(program);
+    let config = crate::browser::BrowserConfig {
+        profile: Some(horizon_browser::PRIVATE_PROFILE.to_string()),
+        ..crate::browser::BrowserConfig::default()
+    };
+    let panel = BrowserPanelState::start_host_driver_with(
+        ssh,
+        "panel-private",
+        &config,
+        None,
+        &host(BrowserHostEngine::Firefox),
+    );
+    assert_eq!(
+        panel.reported_profile(),
+        horizon_browser::PRIVATE_PROFILE,
+        "a private page keeps nothing of the profile of the host"
+    );
+    assert_eq!(
+        panel.host_driver_profile(),
+        Some("mail"),
+        "the page still runs in the browser of the host"
+    );
+}
+
+/// A shared page of a browser host names the profile of that machine, and a page
+/// of this computer names the shared profile that it joins.
+#[test]
+fn a_panel_names_the_profile_of_its_page() {
+    let directory = tempfile::tempdir().expect("owned fixture state");
+    let program = stand_in(directory.path(), "exit 0\n");
+    let shared = crate::browser::BrowserConfig {
+        profile: Some("mail".to_string()),
+        ..crate::browser::BrowserConfig::default()
+    };
+    let panel = BrowserPanelState::start_host_driver_with(
+        Ssh::default().with_program(program),
+        "panel-shared",
+        &shared,
+        None,
+        &host(BrowserHostEngine::Firefox),
+    );
+    assert_eq!(panel.reported_profile(), "mail");
+
+    assert_eq!(
+        BrowserPanelState::inert().reported_profile(),
+        horizon_browser::DEFAULT_PROFILE,
+        "a page that names no profile keeps the shared default of this computer"
+    );
+}

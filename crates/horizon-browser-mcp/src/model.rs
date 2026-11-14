@@ -1192,6 +1192,11 @@ mod tests {
         };
         assert_eq!(panel(Some("work"), false).as_deref(), Some("work"));
         assert_eq!(panel(Some("private"), false).as_deref(), Some("private"));
+        assert_eq!(
+            panel(Some("live42"), false).as_deref(),
+            Some("live42"),
+            "a page of a browser host names the profile of that machine"
+        );
         assert_eq!(panel(None, true), None, "a remote session names no local profile");
         assert_eq!(panel(None, false), None, "an older host states no profile");
     }

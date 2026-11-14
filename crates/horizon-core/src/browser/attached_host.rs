@@ -592,6 +592,18 @@ impl BrowserPanelState {
         }
     }
 
+    /// The profile that the page of this panel reads, as every panel reports it
+    /// in its manifest: the shared profile of this computer that it joins, the
+    /// profile of the browser host that serves it, or `private` for a page that
+    /// keeps nothing. It is the name that the MCP tools answer as `profile`.
+    #[must_use]
+    pub fn reported_profile(&self) -> String {
+        self.config
+            .profile
+            .clone()
+            .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string())
+    }
+
     /// The profile of the Chromium of this panel on that machine.
     #[must_use]
     pub fn attached_host_profile(&self) -> Option<&str> {
