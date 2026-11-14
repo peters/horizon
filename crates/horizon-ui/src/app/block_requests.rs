@@ -457,6 +457,7 @@ impl HorizonApp {
             revision: 1,
             owner_actor: Some(owner.to_owned()),
             updated_at_millis: manifest::now_millis(),
+            answered_callout: None,
         };
         let revision = state.revision;
         let options = PanelOptions {
@@ -779,11 +780,13 @@ pub(in crate::app) fn card_owner(panel: &Panel) -> Option<&str> {
 /// is read here at all. The answer holds no value, no length of a value and no
 /// hash of one.
 fn answer_secret_names() -> Outcome {
+    secret_names_outcome(&horizon_core::named_secrets::published_names())
+}
+
+/// The answer of `secret_names` for the names that this process published.
+fn secret_names_outcome(names: &[horizon_core::named_secrets::SecretName]) -> Outcome {
     Outcome::SecretNames {
-        names: horizon_core::named_secrets::published_names()
-            .iter()
-            .map(|name| name.as_str().to_owned())
-            .collect(),
+        names: names.iter().map(|name| name.as_str().to_owned()).collect(),
     }
 }
 

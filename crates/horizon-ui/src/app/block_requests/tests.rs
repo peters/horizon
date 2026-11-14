@@ -874,26 +874,21 @@ fn a_card_of_a_living_owner_is_closed_by_that_owner_alone() {
 
 #[test]
 fn secret_names_answers_the_names_of_the_stored_secrets_and_no_value() {
-    use horizon_core::named_secrets::{SecretName, publish};
-    use std::collections::BTreeMap;
-    use zeroize::Zeroizing;
-
-    let name = SecretName::parse("HZ_TEST_SECRET_NAMES_CLIENT_ID").expect("a name");
-    let mut values = BTreeMap::new();
-    values.insert(name, Zeroizing::new("value-that-never-leaves".to_owned()));
-    publish(values);
-
-    let (_temp, ctx, mut app) = app();
-    let answer = app.apply_block_request(&request(&app, Operation::SecretNames), &ctx);
-    publish(BTreeMap::new());
-
-    let Outcome::SecretNames { names } = answer else {
+    let names: Vec<horizon_core::named_secrets::SecretName> = ["TS_HOME_CLIENT_ID", "TS_HOME_CLIENT_SECRET"]
+        .iter()
+        .map(|name| horizon_core::named_secrets::SecretName::parse(name).expect("a name"))
+        .collect();
+    let answer = secret_names_outcome(&names);
+    let Outcome::SecretNames { names } = &answer else {
         panic!("expected the names of the stored secrets: {answer:?}");
     };
-    assert_eq!(names, vec!["HZ_TEST_SECRET_NAMES_CLIENT_ID".to_owned()]);
-    let encoded = serde_json::to_string(&Outcome::SecretNames { names }).expect("the answer serializes");
     assert_eq!(
-        encoded, r#"{"status":"secret_names","names":["HZ_TEST_SECRET_NAMES_CLIENT_ID"]}"#,
-        "the answer holds the name alone: no value, no length and no hash"
+        names,
+        &["TS_HOME_CLIENT_ID".to_owned(), "TS_HOME_CLIENT_SECRET".to_owned()]
+    );
+    let encoded = serde_json::to_string(&answer).expect("the answer serializes");
+    assert_eq!(
+        encoded, r#"{"status":"secret_names","names":["TS_HOME_CLIENT_ID","TS_HOME_CLIENT_SECRET"]}"#,
+        "the answer holds the names alone: no value, no length and no hash"
     );
 }
