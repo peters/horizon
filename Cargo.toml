@@ -71,6 +71,12 @@ tungstenite = "0.30.0"
 # JPEG decoder for CDP screencast frames (change-driven video stream).
 zune-jpeg = "0.5.15"
 png = "0.18.1"
+# The preview of a markdown note decodes the pictures that the workspace already
+# decodes: PNG and JPEG, which the clipboard and the image transfer use. The
+# parsers of `pulldown-cmark` find the pictures of the text, and that crate is
+# already in the tree through `egui_commonmark`.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 # AV1 encoder for browser-panel WebM export, with runtime-dispatched SIMD.
 # x86_64 video builds require NASM; encoding runs on a dedicated thread.
 rav1e = { version = "0.8.1", default-features = false, features = ["asm", "threading"] }

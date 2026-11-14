@@ -45,10 +45,16 @@ tempfile.workspace = true
 png.workspace = true
 alacritty_terminal.workspace = true
 egui_commonmark.workspace = true
+# The pictures of a markdown preview: the formats that the workspace already
+# decodes, and the parser that finds a picture in the text of a note.
+image.workspace = true
+pulldown-cmark.workspace = true
 arboard.workspace = true
 tokio = { workspace = true, features = ["io-util", "net", "process", "sync"] }
 
 [dev-dependencies]
+# A test makes a picture whose header claims a size that its data does not have.
+crc32fast = "1.5"
 horizon-browser = { workspace = true, features = ["test-support"] }
 horizon-vnc = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true

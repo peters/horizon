@@ -6,9 +6,12 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use horizon_core::{MarkdownEditor, Panel, PanelId, PreviewMode, ShortcutBinding};
 
 use crate::app::shortcuts::shortcut_pressed;
+use crate::editor_widget::preview_images::{Prepared, PreviewImages};
 use crate::screen_pane;
 use crate::theme;
 use crate::zoom_text;
+
+mod preview_images;
 
 const FONT_SIZE: f32 = 14.0;
 const MODE_BAR_HEIGHT: f32 = 28.0;
@@ -18,7 +21,13 @@ pub struct MarkdownEditorView<'a> {
     preview_cache: Option<&'a mut MarkdownPreviewCache>,
 }
 
-pub(crate) type MarkdownPreviewCache = CommonMarkCache;
+/// What the preview of one editor panel keeps between frames.
+#[derive(Default)]
+pub(crate) struct MarkdownPreviewCache {
+    viewer: CommonMarkCache,
+    /// The pictures of the note, from the first frame that has one.
+    pictures: Option<PreviewImages>,
+}
 
 impl<'a> MarkdownEditorView<'a> {
     pub fn new(panel: &'a mut Panel, preview_cache: Option<&'a mut MarkdownPreviewCache>) -> Self {
@@ -233,21 +242,38 @@ fn render_preview_pane(ui: &mut egui::Ui, panel: &mut Panel, preview_cache: Opti
     match screen_pane::canvas_scale(ui) {
         Some(scale) => {
             let mut screen = screen_pane::pane(ui, ("editor_preview", panel_id), scale);
-            preview_scroll(&mut screen, panel_id, cache, editor);
+            preview_scroll(&mut screen, panel_id, cache, editor, scale);
         }
-        None => preview_scroll(ui, panel_id, cache, editor),
+        None => preview_scroll(ui, panel_id, cache, editor, 1.0),
     }
 }
 
-/// The scroll area of the preview, with the markdown of `editor` in it.
-fn preview_scroll(ui: &mut egui::Ui, panel_id: u64, cache: &mut MarkdownPreviewCache, editor: &mut MarkdownEditor) {
+/// The scroll area of the preview, with the markdown of `editor` in it, at the
+/// zoom of the canvas that `ui` draws in.
+fn preview_scroll(
+    ui: &mut egui::Ui,
+    panel_id: u64,
+    cache: &mut MarkdownPreviewCache,
+    editor: &mut MarkdownEditor,
+    zoom: f32,
+) {
+    let folder = editor.file_path.as_deref().and_then(std::path::Path::parent);
+    let pictures = picture_text(ui, &mut cache.pictures, &editor.text, folder, zoom, editor.saving);
     ScrollArea::vertical()
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
         .id_salt(("editor_preview", panel_id))
         .show(ui, |ui| {
             ui.add_space(4.0);
             ui.style_mut().url_in_tooltip = true;
-            let response = CommonMarkViewer::new().show_mut(ui, cache, &mut editor.text);
+            let viewer = CommonMarkViewer::new();
+            let viewer = match pictures.as_ref().and_then(|pictures| pictures.scheme.as_deref()) {
+                Some(scheme) => viewer.default_implicit_uri_scheme(scheme),
+                None => viewer,
+            };
+            let response = match pictures.as_ref().and_then(|pictures| pictures.text) {
+                Some(text) => viewer.show(ui, &mut cache.viewer, text),
+                None => viewer.show_mut(ui, &mut cache.viewer, &mut editor.text),
+            };
             if response.response.changed() {
                 editor.dirty = true;
                 editor.request_save();
@@ -255,6 +281,23 @@ fn preview_scroll(ui: &mut egui::Ui, panel_id: u64, cache: &mut MarkdownPreviewC
             }
             ui.add_space(8.0);
         });
+}
+
+/// The text of the preview: `None` while the note has no picture, so the plain
+/// path of the preview keeps its work and starts no thread.
+fn picture_text<'a>(
+    ui: &egui::Ui,
+    cache: &'a mut Option<PreviewImages>,
+    text: &str,
+    folder: Option<&std::path::Path>,
+    zoom: f32,
+    saving: bool,
+) -> Option<Prepared<'a>> {
+    if !text.contains(preview_images::PICTURE_MARKER) {
+        return None;
+    }
+    let pictures = cache.get_or_insert_with(|| PreviewImages::new(ui.ctx()));
+    Some(pictures.prepare(text, folder, zoom, saving))
 }
 
 #[cfg(test)]
@@ -359,7 +402,7 @@ mod tests {
     const NOTE: &str = "# Notes\n\nA paragraph of the preview that is long enough to wrap over more than one line of a narrow panel.\n\n- the first point of the list\n- the second point of the list\n\n`cargo test --workspace`\n";
 
     /// The words of every row of every painted text of a pass, in paint order.
-    fn painted_rows(shapes: &[egui::epaint::ClippedShape]) -> Vec<Vec<String>> {
+    pub(super) fn painted_rows(shapes: &[egui::epaint::ClippedShape]) -> Vec<Vec<String>> {
         fn walk(shape: &egui::epaint::Shape, rows: &mut Vec<Vec<String>>) {
             match shape {
                 // A debug build of the toolkit marks every rectangle that sits
