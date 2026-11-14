@@ -47,6 +47,14 @@ The card is drawn in the caller's workspace. It does not take keyboard focus.
      {"id": "delete", "label": "Delete", "tone": "danger"}]}]}}
 ```
 
+A document may ask for a wide card: `"width": "wide"` beside `components`. A
+wide card opens at half of the width of the canvas view, between 1100 and 2400
+points, and its height fits its content up to 1200 points. The form of a
+component follows the real width of the card body: the wide form at 1000 points
+or more, the narrow form of today under it. A person who resizes the card
+changes the form and not the document. Use `wide` for a plan or a board that a
+person reads across, and omit `width` for every other card.
+
 Keep the returned `panel_id`. The answer is `created` with `panel_id` and
 `revision`: the first revision is 1.
 
@@ -544,6 +552,29 @@ A document holds components in draw order, and only these components:
   the default) and optional `at`, a short time at the right edge such as `38 s`
   or `now`. A step list reports progress and takes no click.
 - `buttons`: `items` with `id`, `label` and optional `tone`.
+- `board`: `columns`, `rows` and `items`. A column is one wave: `label`,
+  optional `tag` of at most 12 characters, optional `note`, optional `value`
+  and optional `current: true` for the wave that runs now. A row is one worker:
+  `label` such as `helper-1 · build-1`, and optional `subtitle` such as
+  `16 vCPU`. An item names its cell with `column` and `row`, counted from 0, and
+  holds `title`, optional `state`, optional `value`, optional `note` for the
+  evidence and optional `tag` of at most 12 characters. `state` is `waiting`
+  (the default), `now`, `done`, `needs_you` or `failed`, and each state has one
+  mark of its own. An item takes no click. The wide card draws the grid of the
+  waves and the workers; the narrow card draws one list grouped by wave, with
+  the label of the row in front of the evidence of every item. In the narrow
+  card the waves whose items all finished fold into one line, and that fold is
+  the person's own view of the card, not a click of the agent.
+- `callout`: `tone`, optional `caption`, `text` and optional `buttons` of 0 to 4
+  answers with `id`, `label` and optional `tone`. The wide card draws one strip
+  with the question at the left and the answers at the right; the narrow card
+  stacks them. An answer of a callout is a button: it shares the ids of the
+  `buttons` component and its press reaches `next_click` the same way. Use a
+  callout for the one question that holds the work, and put it above the board.
+- `log`: `entries` with `at`, a time such as `07:31`, and `text`. One line for
+  each event. The wide card flows the entries into columns of at least 330
+  points, row by row, and the narrow card keeps one column. A log line takes no
+  click.
 - `link`: `label` and `url`. The label is one line of 1 to 80 characters. The
   URL is an absolute `http` or `https` URL with a host, 1 to 2048 characters,
   with no credentials (`user:pass@`), no space and no control character. The card
@@ -559,6 +590,11 @@ The limits are:
 - 24 rows in one `kv` and 32 rows in one `list`.
 - 16 steps in one `steps`.
 - 8 buttons in one `buttons`, and 8 `link` components in one card.
+- 8 columns and 8 rows in one `board`, 32 items in it, and 4 items in one cell.
+- One column with `current: true` in one `board`, and every item inside the
+  columns and the rows of its board.
+- 4 answers in one `callout`.
+- 16 entries in one `log`.
 - 512 characters in one text, including `subtitle`, the `badge` text,
   `detail`, the `value` of a row and the `at` of a step.
 - Ids from `[a-z0-9_.-]`, at most 64 characters, unique in the whole document.
@@ -569,7 +605,12 @@ The limits are:
 
 Only the first `primary` button of a card is drawn as the primary action; a
 later one is drawn as a neutral button. A button with tone `danger` is drawn at
-the right edge of its row. Horizon draws every badge in the neutral tone when
+the right edge of its row, and in a wide card every button keeps that right
+edge. A `progress` that follows a `heading` directly stands at the right of the
+heading row in 320 points, and that heading takes a larger title. A list with
+`selection: none` draws no ring, gives its text the room of the ring, and gives
+every row of it the height of its tallest row, so the values of the rows end at
+one right edge. Horizon draws every badge in the neutral tone when
 the owner of the card is gone, with the prefix `Last seen: `.
 
 An unknown field, component or field value is refused. There are no inputs,
