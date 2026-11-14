@@ -463,10 +463,10 @@ panel: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read
 commands, the cards, the proof, the delete and the relay recipes.
 
 When two networks must reach one machine, the person shares the device with the
-other network in the Tailscale admin console, on the page of that device. You
-share no device. A machine carries the client of one network only: never install
-a second client and never join a machine that is already in a network to another
-one.
+other network. That share is in the Tailscale admin console, on the page of the
+device. You share no device. A machine carries the client of one network only:
+never install a second client and never join a machine that is already in a
+network to another one.
 
 Four rules have no exception:
 
@@ -485,6 +485,41 @@ Four rules have no exception:
   computer of the person can be in a network of the person's work, so you never
   run `tailscale up`, `down`, `login`, `logout`, `switch` or `set` on that
   computer. Read the state with `tailscale status --json` only.
+
+The key follows the scope of the client. Read `scope` of the token answer before
+you make the key:
+
+- A client with a devices scope makes the key and removes the device through the
+  API, as [tailscale](references/tailscale.md) says today.
+- A client with the scope `auth_keys` only makes the key of a rented machine with
+  `ephemeral: true`. The node leaves the network by itself after the machine is
+  gone, and the card says that. A key that is not ephemeral is made with such a
+  client only when the person asks for a machine that stays. The card says then
+  that the person removes the node in the admin console.
+- `Delete` runs `tailscale logout` on the machine before it removes the machine,
+  and the card says which node stays in the console, if any.
+
+Never ask the person for a client with a wider scope because a key or a delete is
+easier with it. The page gives the answer of each call and the words of the card.
+
+The computer of the person reads its own state and changes nothing. Read
+`tailscale status --json` when the program is there, and compare the suffix of
+MagicDNS with the suffix of the machine. That is how you learn whether this
+computer is in the same network. A command that changes the state of this
+computer moves it out of a network of the person's work.
+
+- Same network: prove the login with the machine key over the network name, and
+  then offer `Close port 22`, as section 9 of the page says.
+- Another network or no network: keep the public SSH rule with the machine key and
+  write on the card `This computer is not in the network <NET>; the machine is
+  reached over its public address`. Offer no close.
+
+A machine that must reach devices of the network needs a grant, and the grant
+belongs to the person. Propose a tag for the purpose and give the person the
+block of policy text. The person adds it in the admin console. The block names
+the tag of the machine as its source, the devices or their tag as its
+destination, and the ports. Never write the policy file and never ask for a
+client that can.
 
 Step 5b writes the record with the network name as its `ssh.host`, so a click in
 the Machines section connects over the network. The machine card of step 6 then
