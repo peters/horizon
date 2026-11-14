@@ -25,6 +25,7 @@ It sits beside `## Horizon plan` and it is read before any machine is rented.
 | `warmup` | Commands that fill the caches before the check runs | `cargo fetch` |
 | `check` | The one command that proves the machine | `cargo test --workspace` |
 | `repository` | How the repository arrives: `bundle`, or `clone` with the name of a credential | `bundle` |
+| `branch` | The branch that the machine holds, when `AGENTS.md` names the branch of the work. Absent when the work uses the branch that the clone has | `work/login-redirect` |
 
 A section of this shape is a recipe:
 
@@ -173,8 +174,18 @@ older Horizon refuses the record of a newer one.
   {"type": "text", "text": "cargo test --workspace: 412 tests pass, 0 failed"},
   {"type": "buttons", "items": [
     {"id": "connect", "label": "Connect", "tone": "primary"},
-    {"id": "delete", "label": "Delete the machine", "tone": "danger"}]}]}
+    {"id": "server_here", "label": "Put the Horizon server here"},
+    {"id": "browser_here", "label": "Add a browser"},
+    {"id": "stop", "label": "Stop"},
+    {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
+
+The ready card of a machine that was prepared for a repository keeps the buttons
+of every machine card of the skill `horizon-machines`: `Connect`, `Put the
+Horizon server here`, `Add a browser`, `Stop`, and `Delete`. Draw `Start` instead
+of `Stop` while the machine is stopped. A card that holds only `Connect` and
+`Delete` is a card that cannot continue the set-up, and the person must open
+another card to put the server or a browser there.
 
 ### 4. A step that fails keeps its card
 
@@ -214,8 +225,23 @@ scp -p <state>/example-repo.bundle <user>@<address>:~/example-repo.bundle
 ssh ... 'git clone ~/example-repo.bundle ~/example-repo && rm ~/example-repo.bundle'
 ```
 
-The bundle holds every branch and every tag of the clone that made it, and no
-credential reaches the machine. A clone from a remote is the other way, and it
+A repository whose `AGENTS.md` names the branch of the work, as the entry
+`branch` of the recipe gives it, gets the bundle of that branch and of the
+branches that it needs:
+
+```sh
+git bundle create <state>/example-repo.bundle <branch>
+```
+
+The machine then holds the branch that the person works on, and the card says
+which branch the machine holds and why: `The machine holds work/login-redirect,
+the branch that AGENTS.md names for this work. Say so if you want another
+branch.` A person reads the branch in one line of the card, and no run leaves the
+branch to a guess.
+
+A bundle of every branch holds every branch and every tag of the clone that made
+it, and it takes longer to copy and more room on the machine. Use it when the
+recipe names no `branch`. No credential reaches the machine either way. A clone from a remote is the other way, and it
 needs a credential on the machine:
 
 - Only when the `repository` entry of the recipe says `clone`.

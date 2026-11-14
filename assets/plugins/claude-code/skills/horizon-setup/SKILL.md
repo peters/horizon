@@ -315,15 +315,24 @@ session.
     {"id": "connect", "label": "Connect", "tone": "primary"},
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
+    {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}
 ]}
 ```
+
+The card of a machine holds the buttons of every machine card of the skill
+`horizon-machines`, and this card is no exception: `Connect`, `Put the Horizon
+server here`, `Add a browser`, `Stop`, and `Delete`. Draw `Start` instead of
+`Stop` while the machine is stopped. A machine that a run prepared for a
+repository keeps these buttons too, so a set-up continues from the card that the
+run left.
 
 - `Connect` opens the terminal of `horizon-machines`, with the machine record.
 - `Put the Horizon server here` continues with the goal `server` and this machine
   as its place.
 - `Add a browser` continues with the goal `browser` and this machine as its place.
-- `Delete` asks before it deletes, as `horizon-machines` says, and the record and
+- `Stop` stops the machine, and `Start` starts it again, as `horizon-machines`
+  says. `Delete` asks before it deletes, as that skill says, and the record and
   the key go with the machine.
 
 Then change the Set up card to the summary, so the person knows where the card
