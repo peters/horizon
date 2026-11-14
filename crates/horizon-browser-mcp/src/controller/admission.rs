@@ -1,5 +1,15 @@
 //! Admission of new browser panels: one panel per engine for each agent,
 //! counting the agent's creates that are still queued or in progress.
+//!
+//! The engine of a create is the engine that the create named. A create that
+//! names none claims no engine, and this server cannot supply the one that the
+//! host will use: it does not read the entry `browser_host` of the settings, so
+//! it cannot say whether that create opens a page of this computer or a page of
+//! that host. Such a create therefore conflicts with every panel that the agent
+//! owns and with every create of the agent that is still queued. That is one
+//! page of the host for each agent unless `allow_additional`, and the rule of
+//! the host never reads an engine of this server as another engine than the
+//! engine of that host.
 
 use horizon_browser::BackendKind;
 use horizon_browser_control::manifest::{BrowserManifest, PendingCreate, RemoteCreateParameters};
@@ -86,6 +96,46 @@ mod tests {
         assert!(
             matches!(check(&queued, &create(None, None)), Some(Conflict::Pending(_))),
             "a create of an unknown engine waits for every pending create"
+        );
+    }
+
+    /// The engine of the host is not an engine that this server claims: a create
+    /// that names no engine may be a second page of the browser host, so it waits
+    /// for every panel and every create of the agent, whichever engine they
+    /// report.
+    #[test]
+    fn a_create_that_names_no_engine_never_claims_the_engine_of_the_host() {
+        let page = |id: &str, backend: BackendKind| BrowserManifest {
+            panel_local_id: id.to_string(),
+            backend,
+            ..BrowserManifest::default()
+        };
+        for owned in [
+            page("page-of-host", BackendKind::FirefoxBidi),
+            page("page-here", BackendKind::ChromiumCdp),
+        ] {
+            let expected = Conflict::Panel {
+                panel_id: owned.panel_local_id.clone(),
+                backend: owned.backend,
+            };
+            assert_eq!(
+                conflict(std::iter::once(owned), &[], &create(None, None)),
+                Some(expected),
+                "a create with no engine may be a page of the host beside any panel of the agent"
+            );
+        }
+        assert_eq!(
+            conflict(
+                std::iter::empty(),
+                &[pending(Some(BackendKind::FirefoxBidi), false)],
+                &create(None, None)
+            ),
+            Some(Conflict::Pending(Some(BackendKind::FirefoxBidi)))
+        );
+        assert_eq!(
+            conflict(std::iter::empty(), &[], &create(None, None)),
+            None,
+            "the first panel of an agent needs no opt-in"
         );
     }
 
