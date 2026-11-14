@@ -549,7 +549,10 @@ mod tests {
             waited >= SENT_AFTER,
             "the wait answered before the input arrived: {waited:?}"
         );
-        assert!(waited < BOUND, "the wait slept its bound instead of answering the input: {waited:?}");
+        assert!(
+            waited < BOUND,
+            "the wait slept its bound instead of answering the input: {waited:?}"
+        );
         assert_eq!(receiver.drain(8).commands.len(), 1, "the input is taken once");
     }
 }
