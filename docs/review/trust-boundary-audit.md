@@ -102,6 +102,20 @@ boundary pages went away with their features.
   - Does not guarantee: one `read_dir`, `metadata` or open on a mount that hangs
     can block that background thread; a file swapped for a pipe between its
     check and its open can still be opened; a checkout can claim any origin.
+- [`markdown-preview-images`](trust-boundaries/markdown-preview-images.md)
+  (added after this audit, with the pictures of a markdown preview)
+  - Untrusted: the text of a note, which decides the path, the number and the
+    content of every picture that the preview reads.
+  - Guarantees: no network request for a picture, and one line of text for a
+    picture with a scheme other than `file:`; only a regular file, typed on the
+    open handle; at most 16 MiB of one file, checked on the open handle before
+    the first read; at most 16 777 216 decoded pixels, checked on the header
+    before the decode; the PNG and JPEG formats only; no read, file type or
+    decode on the UI thread; at most 32 pictures of one note; one bounded cache
+    that ends with the panel.
+  - Does not guarantee: the correctness of a decoder against a hostile file,
+    beyond the memory safety of safe Rust and its CPU time inside the length
+    and pixel limits; that the file is the picture that the author intended.
 
 ### Browser page input
 
