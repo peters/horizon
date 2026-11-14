@@ -72,8 +72,8 @@ person names the SSH target.
 
 The card of the move holds this list of steps, so the person reads the order:
 
-1. Read both computers: the system, the CPU, the free space and the service
-   system, as `horizon-server` says.
+1. Read both computers: the system, the CPU, the free space, the service system
+   and the start at boot choice of the old server, as `horizon-server` says.
 2. Prove that the binary of the new computer is the binary of this computer: the
    same system and the same CPU, copied from `HORIZON_EXECUTABLE`. Stop when they
    differ, and say on the card what the person must build.
@@ -82,8 +82,8 @@ The card of the move holds this list of steps, so the person reads the order:
    dated folder of the old computer.
 4. Copy the stopped store to the new server home, with `scp -p`, at mode 600 in a
    folder at mode 700.
-5. Start the new server with its service and read its log until it says
-   `the Horizon server answers`.
+5. Start the new server with its service, at boot as the old server started, and
+   read its log until it says `the Horizon server answers`.
 6. Read the store id and the counts of the old store and of the new store, and
    compare them.
 7. Ask for the entry of this computer with `server_link_request`, and read the
@@ -98,9 +98,19 @@ plan of the move, not on the card:
 - `uname -s; uname -m` and `id -un`;
 - `echo "$HOME"` and `df -h "$HOME" | tail -n 1`;
 - `command -v systemctl || true`;
-- the two files of the server home: `ls -l "$HOME/.horizon-server"`.
+- the two files of the server home: `ls -l "$HOME/.horizon-server"`;
+- the start at boot choice of the old server, from the lingering state of its
+  user: `loginctl show-user "$(id -un)" -p Linger` on Linux, and
+  `grep -c 'RunAtLoad' ~/Library/LaunchAgents/net.horizon.server.plist` on macOS.
 
-Result: both computers answer, and each has room for the store and the key.
+Result: both computers answer, each has room for the store and the key, and the
+old computer says `Linger=yes` or `Linger=no`.
+
+The start at boot choice belongs to the server and not to the computer that runs
+it, so the move keeps it: a new server takes the choice of the old one, and the
+person is not asked again. Ask only when the old state cannot be read, for
+example when the old computer is already gone, and say on the card which state you
+read. Write the choice in the row `Starts at boot` of the card of the move.
 
 ### 2. Prove the binary
 
@@ -194,6 +204,11 @@ Install the service of the new computer with the service steps of its system fro
 `horizon-server`, with the same flags as the old server: `--listen` and `--name`
 when the computers of the listener reach it, and `HORIZON_SERVER_HOME` only when
 the home is not `~/.horizon-server`.
+
+Start it at boot exactly as the old server started: run the linger step of
+`horizon-server` when step 1 read `Linger=yes`, and leave the linger away when it
+read `Linger=no`. That step needs the press of the person only when the old state
+could not be read, because the person already chose it for the old server.
 
 Start the service and read its log until it holds this line:
 
@@ -314,6 +329,7 @@ card of the move:
   {"type": "kv", "rows": [
     {"label": "Now", "value": "this computer"},
     {"label": "Goes to", "value": "build-1, a machine of your list"},
+    {"label": "Starts at boot", "value": "yes, as the old server does"},
     {"label": "Is copied", "value": "server.sqlite and secret.key, at mode 600"},
     {"label": "Is not copied", "value": "the lock, the socket and the log"},
     {"label": "Kept aside", "value": "the old store in a dated folder, never deleted"}]},

@@ -208,6 +208,11 @@ WantedBy=default.target
 > person forgot, and the server holds every secret of the person. Ask the person
 > before this step.
 
+   A move of a server reads the choice of the old server with
+   `loginctl show-user "$(id -un)" -p Linger`, as `horizon-server-move` says, and
+   applies the same choice here without a question: the person chose it once.
+   Ask only when the state of the old server could not be read.
+
 ```sh
 sudo loginctl enable-linger CHANGE-ME
 ```

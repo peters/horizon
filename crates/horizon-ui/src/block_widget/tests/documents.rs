@@ -523,3 +523,20 @@ fn the_cards_of_the_skills_keep_the_rules_of_a_card() {
         );
     }
 }
+
+/// A move keeps the start at boot choice of the server it moves, so the plan card
+/// of the move names that choice in one row: the person chose it once for the old
+/// server, and a move asks again only when the old state could not be read.
+#[test]
+fn the_plan_card_of_a_server_move_names_the_start_at_boot_choice() {
+    let cards = skill_cards();
+    let (name, plan) = cards
+        .iter()
+        .find(|(_, document)| heading_of(document) == Some("Move the server to build-1"))
+        .expect("the plan card of a move");
+    let rows = kv_of(plan);
+    assert!(
+        rows.iter().any(|(label, _)| *label == "Starts at boot"),
+        "{name}: the plan card of a move names the start at boot choice: {rows:?}"
+    );
+}
