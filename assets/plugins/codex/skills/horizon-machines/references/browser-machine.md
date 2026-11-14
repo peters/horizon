@@ -21,7 +21,9 @@ For the firefox engine, copy the horizon binary of this computer as a fifth
 input, and name the command that the setup prints as `browser_host.command`: the
 driver of Horizon runs inside the container, so that machine needs no horizon of
 its own outside it. The binary must be built for the system and the CPU of the
-destination.
+destination, and it must not need a newer C library than the image has. The
+setup checks that second rule before it builds anything, because a binary that
+cannot start costs a build of four minutes and a failure that reads worse.
 
 ## When to use it
 
@@ -38,6 +40,11 @@ Do not use it:
 - To pass a bot check. The container is a Linux browser with software graphics.
   Some sites refuse it. Tell the person this before the setup.
 - On a machine with no `apt-get` and no root. Only Debian and Ubuntu work.
+- When a Horizon binary of this computer cannot start in the image. The image is
+  Debian 14, whose C library is 2.43, and a binary that a newer distribution
+  built needs a newer library. The check of step 2 says so in one line, and the
+  flow stops before the image build. Use the Chromium engine, or a horizon
+  binary that a system of C library 2.43 or older built.
 
 The destination needs 3 GB of free disk and one profile name: 1 to 40
 characters of `a-z`, `0-9` and `-`.
@@ -86,6 +93,20 @@ would speak another version of the link, and the driver refuses it.
 The setup then ends with a `command=` value instead of a `port=` value. Write it
 as `browser_host.command` in step 4, and set the engine of the entry to Firefox.
 The horizon binary must be built for the system and the CPU of the destination.
+
+The setup of the firefox engine reads the C library that the copied binary needs
+and the C library of the image before it builds anything. Read the two versions
+on the card. When they do not allow the driver, the setup stops with a line for
+the person and with three ways forward, and no image is built. Run that check
+alone, before the files of a long setup:
+
+```sh
+ssh <target> 'sh setup.sh --engine firefox --horizon horizon --check'
+```
+
+Its last line names the two versions. Its exit code is `0` when the driver can
+start in the image and `3` when it cannot. The same check runs first inside the
+setup without `--check`, so `--check` is for the card and not for the rule.
 
 The setup installs `docker.io` when Docker is missing, builds the image, installs
 the wrapper as `/usr/local/bin/google-chrome` and starts the container through
@@ -140,6 +161,28 @@ panel without a start of Horizon.
 Tell the person to open a browser panel. The panel starts the container when it is
 stopped, and it writes the endpoint file. A fresh container can take 20 seconds.
 
+## The C library of the image, and the driver of this computer
+
+The driver of a Firefox host is the horizon binary of the person's computer, and
+it asks the loader of the image for the symbols of the C library that the
+distribution of that computer had when the binary was built. A library is
+compatible forward and never backward, so a binary of a newer distribution does
+not start in an older image.
+
+| Image or computer | C library |
+|---|---|
+| `debian:13-slim` | 2.41 |
+| `ubuntu:24.04`, the default image of many providers | 2.39 |
+| `debian:forky-slim`, the image of this reference | 2.43 |
+| `ubuntu:26.04` | 2.43 |
+| The horizon binary that a current Ubuntu built | needs 2.43 |
+
+The image is the C library that this reference chooses, and it does not depend on
+the provider of the machine. That is why the driver runs in the container and not
+on the host of the machine: the host takes the C library of the image of the
+provider, which is older than the computer of a person, while the container takes
+the one of this Dockerfile.
+
 ## How the DevTools port is published
 
 The wrapper publishes one Docker-chosen port on the loopback of the destination:
@@ -148,6 +191,27 @@ container, and a `socat` bridge carries the published port to it. The wrapper
 writes the published port as line 1 of
 `<profile folder>/DevToolsActivePort`, which Horizon reads. Chromium writes
 `9223` into that same file; the wrapper replaces it after the endpoint answers.
+
+## What the image holds
+
+The image is built on `debian:forky-slim`, which is Debian 14. Read the C library
+of a built image with:
+
+```sh
+docker run --rm --entrypoint sh horizon-browser-machine:local -c 'ldd --version | head -n 1'
+```
+
+It holds these programs:
+
+| Program | Source |
+|---|---|
+| `chromium` | The native package of Debian, which answers the `DevTools` port |
+| `firefox-esr` | The native package of Debian, which `/usr/bin/firefox` starts |
+| `geckodriver` | The release of Mozilla, pinned by version and checked against the checksum of that release, at `/usr/local/bin/geckodriver` |
+| `xvfb`, `openbox`, `socat`, `tini` | The native packages of Debian |
+
+The build needs the network one time: for `apt-get`, and for the release of
+geckodriver. Change `GECKODRIVER_VERSION` and its checksum together.
 
 ## Stop, start and remove
 
@@ -189,6 +253,16 @@ wrapper starts the container again at the next connect.
   `--disable-dev-shm-usage`. Without both, a page with many frames crashes.
 - **First start.** A fresh container is slower than a running one, and Horizon
   allows 20 seconds for a start.
+- **The image is Debian testing.** `debian:forky-slim` follows Debian 14, so the
+  packages of the image move. Pin the digest of a built image on a long-lived
+  machine, as the Dockerfile says.
+- **The build downloads geckodriver.** The image takes the release of Mozilla
+  that the Dockerfile pins, and the build needs the network for it one time.
+- **The driver of a Firefox host cannot be newer than the image.** A horizon
+  binary of a distribution newer than Debian 14 does not start in the container,
+  and the setup refuses it before the build. This is a limit of the driver in the
+  container; the Chromium engine has no such limit, because no Horizon program
+  runs on that machine.
 
 ## Check it by hand
 
@@ -237,12 +311,37 @@ lanes:
 
 These lanes are not proven:
 
+- The firefox engine in the container. Its steps, its refusals and its same-page
+  promise were proven on one computer with a second user account, and the image
+  of the container was measured but no live run drove a Firefox of a container
+  from a Horizon panel.
 - A sign-in that survives a restart of the container. The profile folder is a
   bind mount, but no run has signed in and then restarted the container.
 - A second profile on one machine, which needs a second container name.
 - `arm64`. The image packages are architecture-independent, but no run used it.
 - The profile lock after a change of the container hostname.
 - A site that refuses software graphics, and how it shows in the panel.
+
+## What a measurement proved, and what it did not
+
+The following facts of this lane were measured on one Linux computer with Docker
+and no rented machine:
+
+- The image of this reference builds from `debian:forky-slim` with the native
+  Chromium 156 and `firefox-esr` 153.5.1esr of Debian 14, and its C library is
+  `Debian GLIBC 2.43-7`.
+- The image holds `geckodriver 0.37.1` at `/usr/local/bin/geckodriver`, and
+  `/usr/bin/firefox` starts `firefox-esr`.
+- Chromium of that image answers `http://127.0.0.1:9222/json/version` on the
+  bridge port, as the entrypoint promises.
+- A `debian:13-slim` image has C library 2.41, and `ubuntu:24.04` has 2.39. A
+  horizon binary built on a current Ubuntu needs 2.43, so `--engine firefox`
+  with that binary stops before the build with the two versions and code 3.
+- The same binary against an image of C library 2.43 passes the check with
+  code 0.
+
+No run drove a Firefox of a container from a Horizon panel. That lane is the
+first live check of the next run of this reference.
 
 ## The four files are in this skill directory
 

@@ -528,15 +528,21 @@ Both rows take a press, and each engine has its own needs on that machine:
 
 - Chromium runs on that machine through its `DevTools` port. The machine needs a
   Chromium program, and no Horizon.
-- Firefox runs behind a driver of Horizon on that machine, so that machine needs
-  Firefox, `geckodriver` and a `horizon` binary of the same version. The picture
-  of that browser is pushed as compressed frames, so it is slower than Chromium.
-  Name the program of the driver with `browser_host.command` when the default
-  does not fit.
+- Firefox runs behind a driver of Horizon on that machine, so the binary of this
+  computer is the driver there, and that machine needs Firefox and `geckodriver`
+  beside it. The picture of that browser is pushed as compressed frames, so it is
+  slower than Chromium. Name the program of the driver with
+  `browser_host.command` when the default does not fit. On a machine without a
+  browser of its own, the browser machine reference of the skill
+  `horizon-machines` puts Firefox and `geckodriver` in a container and the driver
+  in that container as well.
 
 Read the binary of this computer from `HORIZON_EXECUTABLE` and never from `PATH`:
 that variable is the program that runs Horizon, so a copy of it is the version
-that the driver of that machine must speak.
+that the driver of that machine must speak. The copy also needs a C library that
+is not newer than the one of the machine, and a binary built on a newer
+distribution does not start on an older one. Read its C library before the setup
+of a long flow, as step 2 says.
 
 A press on `place.new_machine` runs the goal `rent` first and returns to this
 card. `Back` returns to the first card.
@@ -551,9 +557,10 @@ the steps of `browser-machine` and the browser host request:
   {"type": "heading", "text": "Preparing the browser",
    "subtitle": "The browser on helsinki-1. The first time takes some minutes.",
    "badge": {"text": "Working", "tone": "info"}},
-  {"type": "progress", "label": "Prepare the browser", "percent": 40, "detail": "2 of 5"},
+  {"type": "progress", "label": "Prepare the browser", "percent": 40, "detail": "2 of 6"},
   {"type": "steps", "steps": [
     {"label": "Copy the browser files to the machine", "state": "done", "at": "4 s"},
+    {"label": "Check the C library of the machine", "state": "done", "at": "22 s"},
     {"label": "Install the container program", "state": "done", "at": "41 s"},
     {"label": "Build the browser image", "state": "now", "at": "now"},
     {"label": "Start the browser with the profile work"},
@@ -569,11 +576,25 @@ The profile is the name of the person or `work` when the person names none: 1 to
 The engine of the press decides the steps:
 
 - Chromium: the steps of the reference `browser-machine` of the skill
-  `horizon-machines`. The machine needs a Chromium program there, and no Horizon.
+  `horizon-machines`, and no step of a C library. The machine needs a Chromium
+  program there, and no Horizon.
 - Firefox in the container: the same steps with `--engine firefox`, and the
   binary of this computer as a fifth input. The setup prints a `command=` value;
   name it as `browser_host.command`, because the driver of Horizon runs inside the
-  container and that machine needs no Horizon outside it.
+  container and that machine needs no Horizon outside it. That driver needs a C
+  library that the image has: read the two versions with the check of the setup
+  as its own step, and stop the flow with the failure card when they do not
+  allow the driver. The words of that card name the two versions and the three
+  ways forward: the engine Chromium, a horizon binary of a system of the library
+  of the image or older, or a base image with the newer library.
+
+  ```sh
+  ssh <target> 'sh setup.sh --engine firefox --horizon horizon --check'
+  ```
+
+  The last line names the two versions, such as
+  `the driver needs glibc 2.43 and the image debian:forky-slim has glibc 2.43: the driver can start there`.
+  The code is 0 when the driver can start in the image, and 3 when it cannot.
 - Firefox on a machine that already has one: probe it with
   `command -v firefox; command -v geckodriver`, and stop when one of them answers
   nothing. Then copy the binary of this computer to the machine:
@@ -587,8 +608,10 @@ The engine of the press decides the steps:
   driver of the machine speaks one version of the link.
 
 The last step needs the press of the person: call `browser_host_request` with the
-machine of the list or the SSH target, the profile and the engine, and wait while
-Horizon draws its own card. The press serves the next browser panel at once, so no
+machine of the list or the SSH target, the profile, the engine and, for a Firefox
+host whose driver starts another way, the `command` that the setup printed. Show
+that command in the row `Driver command` of the card, as Horizon holds it, and
+wait while Horizon draws its own card. The press serves the next browser panel at once, so no
 panel needs a start of Horizon: when the answer says `confirmed`, open the panel
 of that browser with `browser_create` beside this card and name no `backend`,
 because the host serves the engine of its profile. A panel that was open before

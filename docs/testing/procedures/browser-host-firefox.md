@@ -22,10 +22,11 @@ to the same page, and that every refusal gives its words.
   `browser_host`.
 - Platforms: Linux and macOS. The host is a second user account or a second
   folder on the same computer, so no rented machine is necessary.
-- This procedure does not test: a real far link with packet loss, a real
-  Firefox of a Windows host, or the container lane of
-  `packaging/browser-machine`. The container lane needs a Linux machine with
-  Docker.
+- This procedure does not test: a real far link with packet loss, or a real
+  Firefox of a Windows host.
+- The container lane of `packaging/browser-machine` is task C1 and task C2 of
+  this procedure. It needs one Linux machine with Docker and with no browser of
+  its own; a rented machine is such a machine. Tasks F1 to F5 need no Docker.
 
 ## 3. Safety
 
@@ -263,6 +264,117 @@ with that key.
    Result: the snapshot names the page of the host, the click changes the page,
    and the picture shows the new page.
 
+### 6.7 C1 — the container lane on a Linux machine with Docker
+
+These tasks prove the lane that the reference
+`horizon-machines/references/browser-machine.md` describes: Firefox and
+`geckodriver` in a container, and the driver of this computer in that same
+container. The tasks of this section need one Linux machine with Docker, no
+browser of its own, and about 5 GB of free disk.
+
+> **CAUTION:** DO NOT RUN THESE TASKS ON A MACHINE THAT A PERSON USES WITH REAL
+> BROWSER SIGN-INS. The tasks install Docker, build an image and start a
+> container, and the profile of the browser lives in that container.
+
+1. Copy the four files of the reference and the binary of this computer to one
+   folder of the machine, and read the two C libraries before anything is built.
+
+   ```sh
+   scp browser-machine/Dockerfile browser-machine/entrypoint.sh        browser-machine/horizon-browser-wrapper.sh browser-machine/setup.sh <target>:
+   scp "$HORIZON_EXECUTABLE" <target>:horizon
+   ssh <target> 'sh setup.sh --engine firefox --horizon horizon --check'
+   ```
+
+   Result: the last line starts with `setup: the driver needs glibc `, names the
+   library of the binary and the library of the image, and ends with
+   `the driver can start there`. The exit code is 0.
+
+2. Run the setup of the firefox engine.
+
+   ```sh
+   ssh <target> 'sh setup.sh --profile fftest --engine firefox --horizon horizon'
+   ```
+
+   Result: the log holds the same two library versions, then the build, then one
+   line `browser-machine ready profile=fftest engine=firefox command=docker exec -i -e HOME=/profile hz-bvm-fftest /opt/horizon/horizon --browser-host-driver`.
+   The code is 0.
+
+3. Prove that the image holds the browser of that driver.
+
+   ```sh
+   ssh <target> 'docker run --rm --entrypoint sh horizon-browser-machine:local -c \
+     "ldd --version | head -n 1; /usr/local/bin/geckodriver --version | head -n 1; firefox-esr --version"'
+   ```
+
+   Result: the C library of step 1, a line with `geckodriver 0.37`, and a line
+   with `Mozilla Firefox`. A container leaves no such program behind.
+
+4. Write the browser host of this machine in Horizon with the request, and press
+   **Use it** on the card.
+
+   Ask for `browser_host_request` with the machine of the list as `machine`, the
+   profile `fftest`, `engine` `firefox`, and the `command` of step 2 as `command`.
+
+   Result: the card holds the rows **Browser**, **Profile**, **Machine** and
+   **Driver command**, and the row **Driver command** is the whole command of
+   step 2. Settings, General, Browser host shows the same command in **Driver
+   program**.
+
+5. Open a browser panel and navigate to `example.com`.
+
+   Result: the panel paints the page of the container. The log of that machine
+   holds one `docker exec` of the driver, and the container holds a `firefox-esr`
+   process and a `geckodriver` process.
+
+6. Type text into a field of a page, end the link of the panel, and wait.
+
+   ```sh
+   pkill -f 'ssh.*<target>'
+   ```
+
+   Result: the panel counts down to the next attempt and then shows the same
+   page, with the text of the field. The container holds no second
+   `geckodriver`.
+
+7. Stop the container and open a panel again.
+
+   ```sh
+   ssh <target> 'docker stop hz-bvm-fftest'
+   ```
+
+   Result: the panel says that the link to the browser is lost and starts the
+   driver again, and a new page opens at the same address. The sign-ins of the
+   profile stay, because the profile folder is the mount of the machine.
+
+### 6.8 C2 — the refusal of a binary that the image cannot run
+
+1. Change the base image of the Dockerfile to one with an older C library, and
+   read the two libraries again.
+
+   ```sh
+   ssh <target> 'sed -i "s/^FROM debian:forky-slim$/FROM debian:13-slim/" Dockerfile'
+   ssh <target> 'sh setup.sh --engine firefox --horizon horizon --check'
+   ```
+
+   Result: three lines that name the library of the binary, the library of the
+   image `debian:13-slim`, and three ways forward: the engine Chromium, a horizon
+   binary of a system of that library or older, and a base image with the newer
+   library. The exit code is 3, and no image was built.
+
+2. Run the same setup without `--check`.
+
+   Result: the same lines, the last of them `setup: the driver cannot start in the
+   image of the browser machine`, the exit code 1, and no image was built.
+
+3. Restore the base image of the Dockerfile.
+
+   ```sh
+   ssh <target> 'sed -i "s/^FROM debian:13-slim$/FROM debian:forky-slim/" Dockerfile'
+   ```
+
+   Result: the line `FROM debian:forky-slim` is back, and step 1 of task C1 ends
+   with code 0 again.
+
 ## 7. Pass criteria
 
 - The panel paints the page of the host, and the input of the person reaches it.
@@ -275,6 +387,10 @@ with that key.
 - The latency lines of a press exist and are in order.
 - A browser host on a machine of the machine list opens a panel with the machine
   key of this computer, and no key of the person.
+- The container lane reads its two C libraries before the build, builds an image
+  whose C library, `geckodriver` and Firefox are named, paints a page of that
+  container in a panel, comes back to the same page after a cut link, and refuses
+  a binary that the image cannot run with the two versions and code 3.
 
 ## 8. Cleanup
 
