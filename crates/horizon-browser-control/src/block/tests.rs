@@ -1174,8 +1174,8 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
 
     assert_eq!(
         setup.len(),
-        16,
-        "the wizard ships the card of each step, the failure card of a step, and the card of a link that is away"
+        17,
+        "the wizard ships the card of each step, the failure card of a step, the card of a link that is away and the card of a machine that still accepts a password"
     );
     assert_eq!(
         machines.len(),
@@ -1222,6 +1222,7 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
             "The browser is ready",
             "Join a server that you already have",
             "The step did not finish",
+            "The machine still accepts a password",
         ],
         "every card of a goal is the card of the mock-up"
     );

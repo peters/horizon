@@ -201,7 +201,10 @@ Open SSH to every address, and let the machine key be the protection:
 
 - The machine holds no password of the person. The image has no root password,
   and the provider puts the public key of the machine key in `authorized_keys`.
-  Step 5 proves that the key logs in and that the ssh server refuses a password.
+  Several provider images still allow a login with a password, so the rent turns
+  password login off and proves a fresh login with the machine key, in step 2 of
+  step 5. It asks the person nothing, because the rent card says what the machine
+  gets, and it asks only when that proof fails.
 - A rule that names the address of this computer at this moment locks the person
   out when the address changes, when the person travels, and for every other
   computer of the person. Item 4 of the work of Set up asked for this.
@@ -217,8 +220,6 @@ commands.
 
 ### 5. Wait for SSH and prepare the machine
 
-### 5. Wait for SSH and prepare the machine
-
 A rent is not ready when the create command returns. Update the card to the step
 list of this work, with the time of each finished step and `now` for the step
 that runs, as the card of `horizon-setup` draws it:
@@ -227,11 +228,12 @@ that runs, as the card of `horizon-setup` draws it:
 {"components": [
   {"type": "heading", "text": "Renting the machine", "subtitle": "Small, Helsinki, Hetzner.",
    "badge": {"text": "Working", "tone": "info"}},
-  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 5"},
+  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 6"},
   {"type": "steps", "steps": [
     {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
     {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
     {"label": "Wait for SSH with the machine key", "state": "now", "at": "now"},
+    {"label": "Turn off password login"},
     {"label": "Check tmux on the machine"},
     {"label": "Add the machine to Machines"}]},
   {"type": "buttons", "items": [{"id": "stop", "label": "Stop and delete the machine", "tone": "danger"}]}
@@ -261,21 +263,19 @@ the `%` twice in `<known_hosts_path>` too.
 1. Wait until SSH answers: run the form with `true` as `<command>` every 10
    seconds, for at most 3 minutes. Update the card between the tries, and never
    show `Connect` before a try answers.
-2. Prove that the login is key-only, which is the protection of the rule that
-   lets every address in. The key answered step 1 with `BatchMode=yes`, so this
-   asks the ssh server what it accepts:
+2. Turn off password login, and prove a fresh login with the machine key. This is
+   part of the rent: the rent card says in one line
+   `SSH: the machine key only; password login is turned off`, so ask the person
+   nothing here. The first login of step 1 proved the key, so the machine
+   accepts it, and the new login below proves that it still does after the
+   change. Read what the ssh server accepts:
 
    ```
    sudo sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'
    ```
 
-   `passwordauthentication no` and `kbdinteractiveauthentication no` are the
-   answer of every Canonical, Debian and Hetzner cloud image. A machine that
-   answers `yes` accepts a password from every address, so tell the person, and
-   turn it off only when the person agrees:
-
    > CAUTION: `sshd -T` and the next command change who can log in. A mistake
-   > here closes the login of the machine. Keep the shell of step 1 open until
+   > here closes the login of the machine. Keep the session of step 1 open until
    > the new login answered.
 
    ```
@@ -284,8 +284,19 @@ the `%` twice in `<known_hosts_path>` too.
    sudo sshd -t && sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd
    ```
 
-   Run the `sshd -T` line again, and open one more SSH session with the machine
-   key before you close the first.
+   Then prove it, in this order: run the `sshd -T` line again and read
+   `passwordauthentication no` and `kbdinteractiveauthentication no`, and open
+   one more session with the machine key with the form of step 1 and
+   `true` as `<command>`. Close the session of step 1 only after that answer,
+   and mark the step `done` with its time on the card.
+
+   When the write, the reload, the read or the fresh login fails, the card says
+   what happened and asks: the heading says that the machine accepts a password,
+   one `text` line holds the last line of the command that failed, and the card
+   holds `Try again` with tone `primary` and `Delete the machine` with tone
+   `danger`. `Try again` repeats this step only, on the same machine. Never
+   leave the machine in this state without a card, and never leave port 22 open
+   on a machine that accepts a password.
 3. Check the multiplexer: `command -v tmux` answers a path when it is there.
 4. Install it when it is missing and the user can use sudo, with the install
    command of the provider reference. Never change another part of the machine
@@ -302,11 +313,12 @@ tone `danger`. Do not rent a second machine for the same card.
 {"components": [
   {"type": "heading", "text": "Renting the machine", "subtitle": "Small, Helsinki, Hetzner.",
    "badge": {"text": "No SSH yet", "tone": "warn"}},
-  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 5"},
+  {"type": "progress", "label": "Rent and prepare", "percent": 40, "detail": "2 of 6"},
   {"type": "steps", "steps": [
     {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
     {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
     {"label": "Wait for SSH with the machine key", "state": "failed", "at": "3 m"},
+    {"label": "Turn off password login"},
     {"label": "Check tmux on the machine"},
     {"label": "Add the machine to Machines"}]},
   {"type": "text", "text": "Connection timed out during banner exchange"},

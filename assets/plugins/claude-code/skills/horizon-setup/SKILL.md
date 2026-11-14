@@ -250,11 +250,19 @@ type of this place that holds what it needs:
   {"type": "list", "selection": "single", "layout": "pills", "rows": [
     {"id": "network.none", "title": "None", "selected": true},
     {"id": "network.home", "title": "home"}]},
+  {"type": "text", "text": "SSH: the machine key only; password login is turned off"},
   {"type": "buttons", "items": [
     {"id": "rent", "label": "Rent this machine", "tone": "primary"},
     {"id": "back", "label": "Back"}]}
 ]}
 ```
+
+The line `SSH: the machine key only; password login is turned off` is the same on
+every rent card, and it is the whole promise of the rent: the machine accepts the
+machine key, and it accepts no password. The rent turns password login off after
+the first key login and proves a fresh key login, as step 2 of the wait of
+`horizon-machines` says. Do not ask the person about it: the card stated it
+before the press, and the flow asks only when that proof fails.
 
 The numbers of this document are examples. Write the values that you read: the
 type name, the cores and the memory that the place answers. A size row whose
@@ -300,12 +308,13 @@ card between the steps, so the `now` step is the step that runs.
   {"type": "heading", "text": "Renting the machine",
    "subtitle": "Small, Helsinki, Hetzner. This takes about two minutes.",
    "badge": {"text": "Working", "tone": "info"}},
-  {"type": "progress", "label": "Rent and prepare", "percent": 60, "detail": "3 of 5"},
+  {"type": "progress", "label": "Rent and prepare", "percent": 60, "detail": "3 of 6"},
   {"type": "steps", "steps": [
     {"label": "Make a machine key for Horizon", "state": "done", "at": "2 s"},
     {"label": "Create the machine at the provider", "state": "done", "at": "11 s"},
     {"label": "Wait for SSH with the machine key", "state": "done", "at": "38 s"},
-    {"label": "Check tmux on the machine", "state": "now", "at": "now"},
+    {"label": "Turn off password login", "state": "now", "at": "now"},
+    {"label": "Check tmux on the machine"},
     {"label": "Add the machine to Machines"}]},
   {"type": "text", "text": "You can close this card. The work goes on, and the machine comes to Machines in the sidebar."},
   {"type": "buttons", "items": [
@@ -315,7 +324,9 @@ card between the steps, so the `now` step is the step that runs.
 
 Write the `subtitle` as the size, the place and the provider of the person, and
 the times as you measured them. `percent` is the share of the steps that are
-done. When the person chose a network, the list holds one step more,
+done. The step `Turn off password login` is part of every rent, after the first
+key login and before the check of the multiplexer, and it reports the proof of a
+fresh key login. When the person chose a network, the list holds one step more,
 `Join the network <NET>`, after `Check tmux on the machine` and before
 `Add the machine to Machines`. The page `references/tailscale.md` of the skill
 `horizon-machines` gives that card. A press on `Stop and delete the machine` deletes what this flow made, with
@@ -844,6 +855,27 @@ never a stack of terminal text.
 flow and deletes what the flow made that costs money, with the delete of
 `horizon-machines`, after the person confirms on this card. When a step changed
 nothing, the row `Undone` says `Nothing.`
+
+One failure is the one that the rent promised: a machine that still accepts a
+password after `Turn off password login`. That failure is the only question of a
+rent, and the card asks it, because a person must decide between another try and
+the delete of a machine that a password can reach:
+
+```json
+{"components": [
+  {"type": "heading", "text": "The machine still accepts a password",
+   "subtitle": "You chose the machine key only, and this machine answered that a password works.",
+   "badge": {"text": "Needs you", "tone": "danger"}},
+  {"type": "text", "text": "The write of /etc/ssh/sshd_config.d/10-horizon.conf answered permission denied."},
+  {"type": "text", "text": "Port 22 stays open, so a password would reach this machine from any address. The machine costs money until Delete."},
+  {"type": "buttons", "items": [
+    {"id": "try_again", "label": "Try again", "tone": "primary"},
+    {"id": "delete", "label": "Delete the machine", "tone": "danger"}]}
+]}
+```
+
+`Try again` repeats `Turn off password login` on the same machine. `Delete the
+machine` removes the machine and its key, and then the card says what is left.
 
 ## The words of the panel
 
