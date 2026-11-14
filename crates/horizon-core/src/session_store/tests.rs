@@ -127,6 +127,7 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
         .expect("create browser session");
     let launched_config = crate::browser::BrowserConfig {
         profile_root: Some(launched_profile_root),
+        profile: Some(horizon_browser::PRIVATE_PROFILE.to_string()),
         ..crate::browser::BrowserConfig::default()
     };
     let profile_dir = crate::browser::profile_dir_for_home(&launched_config, &home, browser_id);
@@ -196,11 +197,16 @@ fn delete_session_keeps_a_shared_browser_profile() {
         .create_session_from_runtime(runtime_state.clone())
         .expect("create browser session");
     let config = crate::browser::BrowserConfig {
-        profile_root: Some(profile_root),
+        profile_root: Some(profile_root.clone()),
         ..crate::browser::BrowserConfig::default()
     };
     let shared = crate::browser::profile_dir_for_home(&config, &home, "work");
-    let private = crate::browser::profile_dir_for_home(&config, &home, "page-2");
+    let private_config = crate::browser::BrowserConfig {
+        profile_root: Some(profile_root),
+        profile: Some(horizon_browser::PRIVATE_PROFILE.to_string()),
+        ..crate::browser::BrowserConfig::default()
+    };
+    let private = crate::browser::profile_dir_for_home(&private_config, &home, "page-2");
     std::fs::create_dir_all(&shared).expect("create shared profile");
     std::fs::write(shared.join("Cookies"), b"a sign-in").expect("write shared profile");
     std::fs::create_dir_all(&private).expect("create private profile");
@@ -245,6 +251,8 @@ fn a_delete_that_fails_keeps_the_newest_board_that_is_not_written() {
         ..RuntimeState::default()
     };
     let config = board.workspaces[0].panels[0].browser_config_for_restore(&board.browser);
+    let mut config = config;
+    config.profile = Some(horizon_browser::PRIVATE_PROFILE.to_string());
     let profile = crate::browser::profile_dir_for_home(&config, &home, "browser");
     // A file where the profile of the browser goes fails the delete.
     std::fs::create_dir_all(profile.parent().unwrap()).unwrap();

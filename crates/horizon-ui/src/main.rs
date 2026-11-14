@@ -121,6 +121,50 @@ fn main() -> eframe::Result {
     run_window(&prepare_home_or_exit(), &cli_args)
 }
 
+/// Remove the throwaway folders that private browser panels of a run that is gone
+/// left under the profiles of this home.
+///
+/// A private panel removes its own folder when it closes. A run that ends with
+/// the panel open and keeps no session of it leaves the folder, and no close ever
+/// comes. The rule is narrow: only a folder that this program marked as the folder
+/// of a private panel and that no saved session of this home names is removed. A
+/// folder of a shared profile, a folder that an earlier version made, and a folder
+/// that a browser of another run holds stay where they are.
+///
+/// The sweep reads the boards of the saved sessions and it deletes files, so it
+/// runs on a worker thread and the window never waits on the disk.
+fn sweep_private_browser_profiles(
+    session_store: &SessionStore,
+    config: &Config,
+    horizon_home: &horizon_core::HorizonHome,
+) {
+    let store = session_store.clone();
+    let configured = config.browser.profile_root.clone();
+    // The folder of the profiles of this home, resolved as a page resolves it: a
+    // confined browser of this system keeps its profiles outside the hidden home.
+    let effective = config
+        .browser
+        .effective_profile_root(&horizon_home.root().join("browser-profiles"));
+    let spawned = std::thread::Builder::new()
+        .name("browser-private-profiles".to_string())
+        .spawn(move || {
+            let named = store.saved_browser_profile_folders();
+            let mut roots = vec![effective];
+            if let Some(root) = configured
+                && !roots.contains(&root)
+            {
+                roots.push(root);
+            }
+            let sweep = horizon_core::browser::sweep_private_profiles(&roots, &named);
+            for folder in &sweep.removed {
+                tracing::info!(folder = %folder.display(), "removed the folder of a private browser panel that no session named");
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!("the sweep of the folders of private browser panels did not start");
+    }
+}
+
 /// The window of the person, or the command that ends without one.
 fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> eframe::Result {
     let resolved_config_path =
@@ -139,6 +183,7 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
     agent_integrations.install_desktop_entry();
     let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
+    sweep_private_browser_profiles(&session_store, &config, horizon_home);
     let startup = prepare_startup(&session_store, &config, cli_args);
 
     let window = startup_window_config(&startup, &config.window);

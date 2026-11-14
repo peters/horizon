@@ -14,6 +14,13 @@ pub const DEFAULT_PROFILE: &str = "default";
 /// throwaway folder, gone when the panel closes.
 pub const PRIVATE_PROFILE: &str = "private";
 
+/// The folder of the throwaway profiles of private pages, under a profile root.
+///
+/// The folder of a shared profile is a direct child of a profile root, so no
+/// sweep of the throwaway profiles can reach one: the two namespaces are apart
+/// on the disk and not by the shape of a name.
+pub const PRIVATE_PROFILES_FOLDER: &str = "private";
+
 /// The profile that a create names: one shared profile by name, or a folder of
 /// the panel alone.
 ///
@@ -124,7 +131,16 @@ pub(crate) fn panel_profile_dir_with_default_root(
     panel_local_id: &str,
     default_root: &Path,
 ) -> PathBuf {
-    effective_profile_root(config, default_root).join(paths::safe_local_id(panel_local_id))
+    let root = effective_profile_root(config, default_root);
+    // A page that keeps nothing lives under the folder of the private pages, so
+    // its folder never shares a name with the folder of a shared profile, whose
+    // folder is a direct child of the root.
+    if config.profile.as_deref() == Some(PRIVATE_PROFILE) {
+        return root
+            .join(PRIVATE_PROFILES_FOLDER)
+            .join(paths::safe_local_id(panel_local_id));
+    }
+    root.join(paths::safe_local_id(panel_local_id))
 }
 
 #[must_use]
