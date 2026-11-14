@@ -85,7 +85,7 @@ impl NewBrowserPanel {
 /// The rule: where the browser panel of one create runs.
 ///
 /// - `profile` is the `profile` field of the create as its caller wrote it, and
-///   `None` when the caller wrote no field.
+///   `None` when the caller wrote no field or a blank one.
 /// - `named_backend` is the `backend` field of the create as its caller wrote
 ///   it. A panel that a person makes names no engine, so the engine of the
 ///   preset is the configured engine and not a create field.
@@ -102,7 +102,10 @@ impl NewBrowserPanel {
 /// - `profile: "private"` is a private page of that host, in the engine of that
 ///   host, or a private panel of this computer when the create names another
 ///   engine;
-/// - a create that names a profile keeps a profile of this computer.
+/// - a create that names a profile keeps a profile of this computer. The shared
+///   profile `default` is such a name: a create that writes it asks for the
+///   profile of this computer, and a create that writes no field asks for the
+///   profile of the host.
 ///
 /// Without a host, and for a create that names a profile, the answer is a panel
 /// of this computer in the profile and the engine that the create asked for.
@@ -116,13 +119,14 @@ pub fn new_browser_panel(
     configured_backend: BackendKind,
     host: &BrowserHostConfig,
 ) -> Result<NewBrowserPanel, String> {
-    let choice = ProfileChoice::parse(profile)?;
+    let named_profile = profile.map(str::trim).filter(|name| !name.is_empty());
+    let choice = ProfileChoice::parse(named_profile)?;
     let private = matches!(choice, ProfileChoice::Private);
     // The host serves the page when it serves that engine, and when the create
     // asks for the profile of that machine: no field, or the reserved word of a
     // page that keeps nothing.
     let host_serves = host.names_host()
-        && (profile.is_none() || private)
+        && (named_profile.is_none() || private)
         && named_backend.is_none_or(|backend| host.backend_refusal(backend).is_none());
     if host_serves {
         return Ok(NewBrowserPanel {
@@ -285,6 +289,32 @@ mod tests {
         let note = panel.note.expect("the answer says that the page is not on the host");
         assert!(note.contains("work"), "{note}");
         assert!(note.contains("this computer"), "{note}");
+    }
+
+    #[test]
+    fn a_create_that_names_the_shared_default_asks_for_the_profile_of_this_computer() {
+        let panel = route(Some(horizon_browser::DEFAULT_PROFILE), None, &firefox_host());
+        assert_eq!(
+            panel.place,
+            BrowserPlace::ThisComputer {
+                backend: BackendKind::ChromiumCdp
+            },
+            "a create that writes the name default asks for a page of this computer"
+        );
+        assert_eq!(
+            panel.reported_profile(),
+            Some(horizon_browser::DEFAULT_PROFILE),
+            "the page joins the shared default of this computer"
+        );
+        let note = panel.note.expect("the answer says that the page is not on the host");
+        assert!(note.contains(horizon_browser::DEFAULT_PROFILE), "{note}");
+        assert!(note.contains("this computer"), "{note}");
+        let blank = route(Some("  "), None, &firefox_host());
+        assert_eq!(
+            blank.place,
+            BrowserPlace::Host { private: false },
+            "a blank field names no profile, so the host serves the page"
+        );
     }
 
     #[test]
