@@ -4,7 +4,7 @@
 //! owning agent. [`CardRuntime`] is what the person does with it between
 //! frames: clicks that wait for the agent and the row a list has selected.
 
-use horizon_browser_control::block::BlockDocument;
+use horizon_browser_control::block::{BlockDocument, Component};
 use serde::{Deserialize, Serialize};
 
 mod card;
@@ -34,6 +34,12 @@ pub struct BlockPanelState {
     /// epoch: zero for a card that records none.
     #[serde(default)]
     pub updated_at_millis: i64,
+    /// The callout whose answer the person pressed, as the document held it, so
+    /// the sidebar stops saying that this card needs the person until another
+    /// callout asks something else. A press is the person's answer to a question
+    /// of the card, and the answer outlives the frame and the run that saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_callout: Option<Component>,
 }
 
 impl BlockPanelState {
@@ -51,7 +57,27 @@ impl BlockPanelState {
             revision: 1,
             owner_actor: None,
             updated_at_millis: 0,
+            answered_callout: None,
         }
+    }
+
+    /// The callout whose answer the person pressed, as the document holds it.
+    #[must_use]
+    pub fn answered_callout(&self) -> Option<&Component> {
+        self.answered_callout.as_ref()
+    }
+
+    /// Records the person's answer to `callout`, as the document held it.
+    pub fn record_answer(&mut self, callout: Component) {
+        self.answered_callout = Some(callout);
+    }
+
+    /// Whether the person pressed an answer of `callout`, as the document holds
+    /// it now. A callout with another question or another answer is a new
+    /// question, so the card asks the person again.
+    #[must_use]
+    pub fn pressed_answer_of(&self, callout: &Component) -> bool {
+        self.answered_callout.as_ref() == Some(callout)
     }
 
     /// An empty document, which the panel shows as an empty card.

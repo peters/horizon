@@ -15,8 +15,8 @@ use horizon_browser_control::block::ClickEvent;
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
 use horizon_core::{
-    AgentStatus, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict, WorkspaceId, browser_actor,
-    wake_verdict,
+    AgentStatus, BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict,
+    WorkspaceId, browser_actor, wake_verdict,
 };
 
 use crate::block_widget::CardChip;
@@ -308,8 +308,61 @@ impl HorizonApp {
     /// nobody listens. Runs on every frame and on every request pump wake.
     pub(super) fn settle_block_clicks(&mut self) -> bool {
         let now_millis = manifest::now_millis();
+        let answered = self.settle_card_answers();
         self.prune_card_clicks(now_millis);
-        self.settle_click_waiters(now_millis) || self.wake_card_owners()
+        answered || self.settle_click_waiters(now_millis) || self.wake_card_owners()
+    }
+
+    /// Carries the answer that the person pressed to the saved card, and the
+    /// answer of a restored card back into the live one.
+    ///
+    /// A press belongs to the frame in which the person made it, so the widget
+    /// records it in the runtime state of the card. A restart has no runtime
+    /// state, so the answer is written to the saved card, which the sidebar reads
+    /// after a restart, and a card that comes back with an answered callout
+    /// starts quiet. Returns whether it saved an answer.
+    fn settle_card_answers(&mut self) -> bool {
+        let ids = self.block_card_ids();
+        let mut saved = false;
+        for id in ids {
+            let live = self
+                .panel_render_caches
+                .card_runtime
+                .get(&id)
+                .and_then(CardRuntime::answered_callout);
+            let recorded = self
+                .board
+                .panel(id)
+                .and_then(Panel::block)
+                .and_then(BlockPanelState::answered_callout);
+            if live == recorded {
+                continue;
+            }
+            if let Some(answer) = live.cloned() {
+                if let Some(state) = self.board.panel_mut(id).and_then(Panel::block_mut) {
+                    state.record_answer(answer);
+                    saved = true;
+                }
+            } else if let Some(answer) = recorded.cloned()
+                && let Some(card) = self.panel_render_caches.card_runtime.get_mut(&id)
+            {
+                card.record_answer(answer);
+            }
+        }
+        if saved {
+            self.mark_runtime_dirty();
+        }
+        saved
+    }
+
+    /// The cards of the board, in board order.
+    fn block_card_ids(&self) -> Vec<PanelId> {
+        self.board
+            .panels
+            .iter()
+            .filter(|panel| panel.kind == PanelKind::Block)
+            .map(|panel| panel.id)
+            .collect()
     }
 
     /// Answers the waits a click, a deadline or a closed card ends.

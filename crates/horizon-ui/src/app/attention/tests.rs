@@ -567,6 +567,7 @@ fn card_panel(
                     revision: 1,
                     owner_actor: None,
                     updated_at_millis: 0,
+                    answered_callout: None,
                 }),
                 ..PanelOptions::default()
             },
@@ -578,6 +579,69 @@ fn card_panel(
 /// The attention of the sidebar row of `panel`, as the sidebar reads it.
 fn row_attention(app: &crate::app::HorizonApp, panel: PanelId) -> Attention {
     app.panel_attention_of(app.board.panel(panel).expect("panel"))
+}
+
+/// The card panel that a restart of `app` brings back from `saved`, as the saved
+/// state of the session holds it.
+fn restored_card(
+    app: &mut crate::app::HorizonApp,
+    workspace: horizon_core::WorkspaceId,
+    saved: &horizon_core::BlockPanelState,
+) -> PanelId {
+    let state: horizon_core::BlockPanelState =
+        serde_json::from_str(&serde_json::to_string(saved).expect("the card saves")).expect("the card loads");
+    app.board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Block,
+                block: Some(state),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("the restored card")
+}
+
+/// The callout of one document, as the card that asks it holds it.
+fn callout_of(document: &horizon_browser_control::block::BlockDocument) -> horizon_browser_control::block::Component {
+    document
+        .components
+        .iter()
+        .find(|component| matches!(component, horizon_browser_control::block::Component::Callout { .. }))
+        .cloned()
+        .expect("the card asks a question")
+}
+
+#[test]
+fn a_restored_card_reads_the_answer_that_was_saved_with_it() {
+    let (_temp, mut app) = test_app();
+    let workspace = app.board.create_workspace("a");
+    let document = asking_card("Run the plan?", &[("go", "Go"), ("stop", "Stop")]);
+    let callout = callout_of(&document);
+
+    // A card that the person answered before the restart stays quiet.
+    let mut answered = horizon_core::BlockPanelState::new(document.clone());
+    answered.record_answer(callout);
+    let quiet = restored_card(&mut app, workspace, &answered);
+    assert_eq!(
+        row_attention(&app, quiet),
+        Attention::Idle,
+        "the answer is saved with the card, so a restart does not ask again"
+    );
+
+    // A callout that nobody answered still marks its row after a restart.
+    let asking = restored_card(&mut app, workspace, &horizon_core::BlockPanelState::new(document));
+    assert_eq!(row_attention(&app, asking), Attention::NeedsYou);
+
+    // The same card with another question asks again, because that answer was
+    // for the question that the person read.
+    let mut other = horizon_core::BlockPanelState::new(asking_card("Push the branch?", &[("push", "Push the branch")]));
+    other.record_answer(callout_of(&asking_card(
+        "Run the plan?",
+        &[("go", "Go"), ("stop", "Stop")],
+    )));
+    let asked_again = restored_card(&mut app, workspace, &other);
+    assert_eq!(row_attention(&app, asked_again), Attention::NeedsYou);
 }
 
 #[test]

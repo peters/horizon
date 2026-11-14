@@ -132,6 +132,102 @@ fn press(app: &mut HorizonApp, id: PanelId, component_id: &str) {
     );
 }
 
+/// A document that asks the person one question with `answers`.
+fn asking_document(answers: &[(&str, &str)]) -> serde_json::Value {
+    serde_json::json!({
+        "components": [
+            {"type": "heading", "text": "Run the plan?"},
+            {"type": "callout", "tone": "neutral", "text": "Nothing starts before Go.",
+             "buttons": answers
+                .iter()
+                .map(|(id, label)| serde_json::json!({"id": id, "label": label}))
+                .collect::<Vec<_>>()}
+        ]
+    })
+}
+
+/// Replaces the document of `panel_id` with `document`, and answers its panel id.
+fn update_card(app: &mut HorizonApp, ctx: &Context, panel_id: &str, document: serde_json::Value) -> PanelId {
+    app.apply_block_request(
+        &request_from(
+            app,
+            0,
+            Operation::Update {
+                panel_id: panel_id.to_owned(),
+                document,
+            },
+        ),
+        ctx,
+    );
+    app.board
+        .panel_id_by_local_id(panel_id)
+        .expect("the card is on the board")
+}
+
+#[test]
+fn the_answer_of_a_callout_is_saved_with_the_card() {
+    let (_temp, ctx, mut app) = app();
+    let (panel_id, _) = card(&mut app, &ctx, 0);
+    let id = update_card(&mut app, &ctx, &panel_id, asking_document(&[("go", "Go")]));
+    assert!(
+        app.board
+            .panel(id)
+            .and_then(Panel::block)
+            .and_then(BlockPanelState::answered_callout)
+            .is_none(),
+        "a new document asks its question"
+    );
+
+    press(&mut app, id, "go");
+    assert!(app.settle_block_clicks(), "the answer of the person is saved");
+    assert!(app.runtime_is_dirty(), "the card asks for the save of its panel");
+    let state = app.board.panel(id).and_then(Panel::block).expect("a card");
+    let answer = state.answered_callout().expect("the card holds the answer");
+    assert!(
+        matches!(answer, horizon_browser_control::block::Component::Callout { .. }),
+        "the card saves the callout that the person answered"
+    );
+    let saved = serde_json::to_string(state).expect("the card saves");
+    assert!(
+        saved.contains("\"answered_callout\""),
+        "the answer travels with the saved card: {saved}"
+    );
+    let loaded: BlockPanelState = serde_json::from_str(&saved).expect("a saved card loads");
+    assert_eq!(loaded, *state, "a restart reads the same answer back");
+}
+
+#[test]
+fn a_restored_card_answers_its_callout_with_the_saved_answer() {
+    let (_temp, ctx, mut app) = app();
+    let (panel_id, _) = card(&mut app, &ctx, 0);
+    let id = update_card(&mut app, &ctx, &panel_id, asking_document(&[("go", "Go")]));
+    press(&mut app, id, "go");
+    let _ = app.settle_block_clicks();
+
+    // A restart keeps the saved card and starts the runtime state of the card
+    // empty, as the first frame that draws it does.
+    app.panel_render_caches.card_runtime.remove(&id);
+    app.panel_render_caches.card_runtime.entry(id).or_default();
+    let _ = app.settle_block_clicks();
+    let callout = app
+        .board
+        .panel(id)
+        .and_then(Panel::block)
+        .and_then(BlockPanelState::answered_callout)
+        .cloned()
+        .expect("the saved answer");
+    let runtime = app
+        .panel_render_caches
+        .card_runtime
+        .get(&id)
+        .expect("the card is on the board");
+    assert_eq!(
+        runtime.answered_callout(),
+        Some(&callout),
+        "the live card of a restored run starts with the saved answer"
+    );
+}
+
 #[test]
 fn a_waiting_next_click_is_answered_with_the_click_that_arrives() {
     let (temp, ctx, mut app) = app();

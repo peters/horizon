@@ -380,6 +380,11 @@ impl HorizonApp {
     /// row of the card says `Needs you` in the sidebar even when the card itself
     /// is outside the view. A press on an answer of that callout ends it, and so
     /// does a document without such a callout.
+    ///
+    /// The answer is saved with the card, so a restored card reads it here. The
+    /// live card holds the press of this run, and the saved one holds the press of
+    /// the last frame that settled, so the two are read together: a press that a
+    /// frame has not yet written through ends the row at once.
     fn card_attention(&self, panel_id: PanelId, card: &horizon_core::BlockPanelState) -> Attention {
         let Some(callout) = card.document.components.iter().find(|component| match component {
             horizon_browser_control::block::Component::Callout { buttons, .. } => !buttons.is_empty(),
@@ -391,7 +396,8 @@ impl HorizonApp {
             .panel_render_caches
             .card_runtime
             .get(&panel_id)
-            .is_some_and(|runtime| runtime.pressed_answer_of(callout));
+            .is_some_and(|runtime| runtime.pressed_answer_of(callout))
+            || card.pressed_answer_of(callout);
         if answered { Attention::Idle } else { Attention::NeedsYou }
     }
 

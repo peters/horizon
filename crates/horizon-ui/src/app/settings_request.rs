@@ -217,6 +217,7 @@ impl HorizonApp {
             // controls and no agent reads a press on them.
             owner_actor: None,
             updated_at_millis: now_millis(),
+            answered_callout: None,
         };
         let options = PanelOptions {
             kind: PanelKind::Block,

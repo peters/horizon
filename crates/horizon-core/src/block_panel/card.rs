@@ -1,9 +1,11 @@
 //! What a card remembers between frames: the person's clicks and the row it
 //! has selected.
 //!
-//! None of this is saved. A click and a selection belong to the moment the
-//! person sees, so they live in the Horizon process; the document, its
-//! revision and the owner are what a restart keeps.
+//! A click and a selection belong to the moment the person sees, so they live in
+//! the Horizon process. The document, its revision, the owner and the callout
+//! whose answer the person pressed are what a restart keeps; the answer moves to
+//! the saved card as soon as a frame settles, because the sidebar reads it there
+//! after a restart.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -94,6 +96,18 @@ impl CardRuntime {
     #[must_use]
     pub fn pressed_answer_of(&self, callout: &Component) -> bool {
         self.answered_callout.as_ref() == Some(callout)
+    }
+
+    /// The callout whose answer the person pressed, as this card holds it now.
+    #[must_use]
+    pub fn answered_callout(&self) -> Option<&Component> {
+        self.answered_callout.as_ref()
+    }
+
+    /// Records an answer that the saved card already held, so the live card of a
+    /// restored run starts quiet.
+    pub fn record_answer(&mut self, callout: Component) {
+        self.answered_callout = Some(callout);
     }
 
     /// Selects `row_id` in the list of component `component`. Returns whether
