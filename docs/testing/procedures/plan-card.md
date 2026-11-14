@@ -124,8 +124,14 @@ Give this line to the stand-in agent:
 
 1. Read the card.
 
-   Result: the callout takes the warn tint, its caption is `NEEDS YOU · T5 ·
-   WAITS 3 MIN` in the monospace face, and the question stands above the board.
+   Result: the bar beside the heading holds the label `3 of 8 done · 1 needs you`
+   above the track and the detail `27 min so far · about 30 left` on the line
+   under the track, under the whole text of the detail, with the gap of the
+   metrics between the track and the line. No part of the detail is cut, and the
+   line stays inside the row of the heading, also when the heading has a second
+   line and a badge as A4 has. The callout takes the warn tint, its caption is
+   `NEEDS YOU · T5 · WAITS 3 MIN` in the monospace face, and the question stands
+   above the board.
    The third wave is the current one: its tag square is filled with the accent,
    a 2 point accent line stands under its head, and its cells carry a light
    accent tint. The item of t5 shows the warn ring and the warn value. No state
@@ -148,6 +154,28 @@ Give this line to the stand-in agent:
    Result: eight columns and five rows fit in one card. Every item is inside its
    row, no cell shows more than four items, and the question stands above the
    board. The card is at most 1200 points tall.
+
+2. Read the width of the card, and its left edge.
+
+   Result: the card is 2400 points wide at a canvas view of 5120 points, because
+   it has more than five waves, and it grew from the width of A4 at this update.
+   Its left edge did not move.
+
+3. Give the line of A3, which has two waves, to the stand-in agent again.
+
+   Result: the same card takes the width that two waves ask for, 1222 points at
+   that view, and the board is a grid. Its left edge did not move.
+
+4. Give the line of A1, which has no wide form, to the stand-in agent again.
+
+   Result: the same card takes the narrow width of 420 points and the narrow
+   form.
+
+5. Resize the card by hand to about 700 points, and give the line of A5 to the
+   stand-in agent again.
+
+   Result: the card keeps 700 points, because the person's own size outranks the
+   document.
 
 ### 6.6 A6 — the narrow form of the same plan
 

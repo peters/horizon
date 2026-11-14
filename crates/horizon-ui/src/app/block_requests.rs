@@ -501,8 +501,7 @@ impl HorizonApp {
             Ok(document) => document,
             Err(refusal) => return refusal,
         };
-        // The room of the canvas decides how wide a wide card opens, and the
-        // card below holds a borrow of the board for the rest of the update.
+        // The card below holds a borrow of the board for the rest of the update.
         let Some(state) = self.board.panel_mut(id).and_then(Panel::block_mut) else {
             return Outcome::failed("not_block_panel", "Target is not a card");
         };
