@@ -82,6 +82,29 @@ value are, where a value is allowed to go, and what it never reaches.
 - **The queue of the link holds the id and never the body**, as it does for every
   secret.
 
+## Untrusted: a name that an agent reads
+
+An agent reads the names of the stored secrets with `block_panel`
+`secret_names`. The answer is a read of names.
+
+- **Who can read a name.** Every agent panel of this Horizon reads the names, as
+  every such panel already sees the same names as the environment variables of
+  its own start. A name tells which services a person uses, so it is the same
+  disclosure in a shorter form and it adds no reach: a card, a terminal on a
+  machine and a panel of another kind still get no value.
+- **A name leaves and a value never does.** The answer holds the name, the count
+  of names and no value, no length of a value and no hash of one. There is no
+  operation that answers a value of a named secret to an agent.
+- **It answers the store, not the panel.** The answer is the snapshot that the
+  worker of this start published, which the write of a person refreshes, so it
+  names a secret that the person stored while the calling panel runs. The calling
+  panel's own environment keeps the values of its start, so a value of a later
+  store reaches only a panel that starts after it. Only a panel kind that
+  `PanelKind::is_agent` answers for gets a value, so a terminal that an agent
+  opens gets none.
+- **It reads and writes nothing else.** The operation changes no secret, starts
+  no program and returns no entry of the settings beyond the names.
+
 ## Untrusted: the output of a program that reads the keyring
 
 An older version of Horizon kept a value of a remote browser provider, and the

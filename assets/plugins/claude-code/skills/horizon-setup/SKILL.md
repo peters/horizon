@@ -266,11 +266,10 @@ when the panel holds a stored network.
 
 #### The network of the machine
 
-Read the names of the stored networks from the environment of your own panel, as
-the page `references/tailscale.md` of the skill `horizon-machines` says: the
-names only, never a value. A network is stored only when the panel holds all
-three of its names: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and
-`TS_<NET>_TAG`.
+Read the names of the stored networks with `block_panel` `secret_names`, as the
+page `references/tailscale.md` of the skill `horizon-machines` says: the names
+only, never a value. A network is stored only when all three of its names are
+there: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`.
 
 - At least one network is stored: draw the caption `Network` and its pills below
 the place list. The row `network.none` is the first row and it is
@@ -280,11 +279,14 @@ name order.
 on the card of a machine draws the card that says what the person stores.
 
 A pill is a choice of the person, and it changes no setting. One machine joins
-one network. A panel keeps the environment of its start, so a network that the
-person stores while this panel runs is in no pill. Ask the person to open a new
-agent panel, or to start Set Up again, after the person adds the three names.
-Never ask the person for a client id, a client secret or a tag in this panel, and
-never take one from the conversation.
+one network. The names reach this card at any time, but a VALUE reaches only a
+panel that starts after the store: only an agent panel gets the named secrets, so
+a terminal that `open_terminal` opens and this panel itself have none that the
+person stored after their start. A network that the person stores while this
+panel runs is a pill here, and its join needs a new panel: say that on the card
+and ask the person to open a new agent panel, or to start Set Up again, before
+the join runs its commands. Never ask the person for a client id, a client secret
+or a tag in this panel, and never take one from the conversation.
 
 ### 3. Renting the machine
 

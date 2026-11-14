@@ -476,11 +476,13 @@ from this computer before the address changes.
 
 The person can ask to put a machine on one of their Tailscale networks: "put
 `build-1` on my home network". A machine joins one network. The person can store
-several networks, and each one is a choice on the rent card. The stored
-networks are the three named secrets of each one, in the environment of your
-panel: `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read
-[tailscale](references/tailscale.md) for the one-time setup of the person, the
-commands, the cards, the proof, the delete and the relay recipes.
+several networks, and each one is a choice on the rent card. A network is stored
+when its three named secrets are there: `TS_<NET>_CLIENT_ID`,
+`TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. Read the names with `block_panel`
+`secret_names`, which answers the names that a panel of this computer gets now,
+and never read a value. Read [tailscale](references/tailscale.md) for the
+one-time setup of the person, the commands, the cards, the proof, the delete and
+the relay recipes.
 
 When two networks must reach one machine, the person shares the device with the
 other network. That share is in the Tailscale admin console, on the page of the

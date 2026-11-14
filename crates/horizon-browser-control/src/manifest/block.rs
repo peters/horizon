@@ -215,6 +215,15 @@ pub enum Operation {
     /// The machines of this Horizon, in name order, each with whether a terminal
     /// of it is open.
     Machines,
+    /// The NAMES of the named secrets that a panel of this computer gets when it
+    /// starts now. It is a read: the answer holds no value, no length of a value
+    /// and no hash of one, and it changes nothing.
+    ///
+    /// A panel reads its environment once, at its start, so a secret that a
+    /// person stores while a panel runs reaches the panel that starts after it
+    /// and not this one. A join that needs a stored value runs its command in a
+    /// terminal that starts after the store.
+    SecretNames,
     /// Make or read the key pair that Horizon keeps for one machine name in the
     /// caller's workspace, and answer its public key with the paths of the
     /// pair. Horizon makes an ed25519 pair with no passphrase under its own
@@ -617,6 +626,13 @@ pub enum Outcome {
     /// small.
     BrowserHostStatus {
         host: Box<BrowserHost>,
+    },
+    /// The names of the named secrets that a panel of this computer gets now, in
+    /// name order. A name is an environment variable name of at most 64
+    /// characters. No value, no length of a value and no hash of one is part of
+    /// the answer.
+    SecretNames {
+        names: Vec<String>,
     },
     /// The machines of this Horizon, in name order.
     Machines {
@@ -1119,6 +1135,7 @@ mod tests {
                 serde_json::json!({"operation": "browser_host_status"}),
                 "browser_host_status",
             ),
+            (serde_json::json!({"operation": "secret_names"}), "secret_names"),
             (serde_json::json!({"operation": "presets"}), "presets"),
         ] {
             let parsed: Operation = serde_json::from_value(operation).expect("operation");
@@ -1137,6 +1154,7 @@ mod tests {
                 Operation::MachineDelete { .. } => "machine_delete",
                 Operation::ServerStatus => "server_status",
                 Operation::BrowserHostStatus => "browser_host_status",
+                Operation::SecretNames => "secret_names",
                 Operation::Machines => "machines",
                 Operation::MachineKey { .. } => "machine_key",
                 Operation::MachineKeys => "machine_keys",
@@ -1146,6 +1164,10 @@ mod tests {
             };
             assert_eq!(name, expected);
         }
+    }
+
+    #[test]
+    fn an_unknown_field_beside_a_variant_and_a_wait_without_a_card() {
         // Serde cannot reject an unknown field beside a unit variant, so the
         // check is asserted where a caller can send one: on a variant that
         // carries fields.
@@ -1518,6 +1540,29 @@ mod tests {
             );
             assert!(refused.is_err(), "{actor} with host {host:?} must be refused");
         }
+    }
+
+    #[test]
+    fn the_names_of_the_stored_secrets_are_a_read_of_names_alone() {
+        let asked = serde_json::from_value::<Operation>(serde_json::json!({"operation": "secret_names"}))
+            .expect("secret_names parses");
+        assert_eq!(asked, Operation::SecretNames);
+        assert_eq!(asked.wait_timeout_millis(), None, "the read waits for nothing");
+
+        let answer = serde_json::to_value(Outcome::SecretNames {
+            names: vec!["TS_HOME_CLIENT_ID".into(), "TS_HOME_CLIENT_SECRET".into()],
+        })
+        .expect("serialize");
+        assert_eq!(answer["status"], serde_json::json!("secret_names"));
+        assert_eq!(
+            answer["names"],
+            serde_json::json!(["TS_HOME_CLIENT_ID", "TS_HOME_CLIENT_SECRET"])
+        );
+        assert_eq!(
+            answer.as_object().map(serde_json::Map::len),
+            Some(2),
+            "the answer holds the status and the names, and no value: {answer}"
+        );
     }
 
     #[test]

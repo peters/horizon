@@ -430,3 +430,23 @@ state: a default row is a row id that the person can change.
   saved document at its revision. Its owner is the persisted actor of the agent
   panel, so an agent panel that is not restored cannot change the card; a person
   can still close it in the UI.
+
+## An agent reads names, and no value
+
+`secret_names` answers the names of the named secrets that an agent panel of this
+computer gets when it starts, so an agent draws a choice of a stored network
+without reading a value.
+
+- **A name is the whole answer.** The outcome holds the names, in name order, and
+  no value, no length of a value and no hash of one. There is no operation of
+  `block_panel` that answers a value, and the card operations hold no field that
+  could carry one.
+- **It is a read.** The operation starts nothing, writes nothing and reads no
+  file: it answers the snapshot of the named secrets that the worker of this
+  start published. The boundary of that snapshot is
+  [`named-secrets.md`](named-secrets.md), which also states who can read a name
+  and why a value reaches only a panel that starts after the store.
+- **A panel's own environment does not change.** The calling panel keeps the
+  environment of its start, so a value of a secret that the person stores while
+  the panel runs reaches no command of that panel, of a card and of a terminal
+  that the agent opens.

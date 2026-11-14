@@ -18,8 +18,8 @@ panel gets `caller_unavailable`.
 
 `block_panel` operations are `create`, `update`, `list`, `inspect`,
 `next_click`, `visibility`, `close`, `open_terminal`, `open_panel`, `presets`,
-`machine_set`, `machine_delete`, `machines`, `machine_key`, `machine_keys`,
-`delete_machine_key`, `server_status`, `browser_host_status`,
+`machine_set`, `machine_delete`, `machines`, `secret_names`, `machine_key`,
+`machine_keys`, `delete_machine_key`, `server_status`, `browser_host_status`,
 `server_link_request` and `browser_host_request`.
 
 ## Create a card
@@ -384,6 +384,27 @@ focuses it instead of opening a second terminal.
 ```json
 {"operation": "open_terminal", "machine": "build-1"}
 ```
+
+## Read the names of the stored secrets
+
+`secret_names` answers the names of the named secrets that an agent panel of
+this computer gets when it starts now. A name is an environment variable name,
+and the value is the secret of that name. Read the names to draw a choice of a
+stored network or of a stored key; never read a value.
+
+```json
+{"operation": "secret_names"}
+```
+
+The answer is `secret_names` with `names`, in name order, and it is empty when
+this computer holds no named secret. The answer holds no value, no length of a
+value and no hash of one, and it changes nothing.
+
+A panel reads its environment once, at its own start. A secret that the person
+stores while your panel runs is in no name of your panel's environment and in no
+value of it: it reaches the panel that starts after the store. So a command that
+needs a stored value runs in a terminal that starts after the store, which
+`open_terminal` opens, and never in your own panel.
 
 ## Keep a key for a machine
 

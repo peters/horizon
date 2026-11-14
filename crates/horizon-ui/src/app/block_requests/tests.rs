@@ -871,3 +871,29 @@ fn a_card_of_a_living_owner_is_closed_by_that_owner_alone() {
     assert!(by_owner, "the owner closed its own card");
     assert_eq!(closed_by, closing);
 }
+
+#[test]
+fn secret_names_answers_the_names_of_the_stored_secrets_and_no_value() {
+    use horizon_core::named_secrets::{SecretName, publish};
+    use std::collections::BTreeMap;
+    use zeroize::Zeroizing;
+
+    let name = SecretName::parse("HZ_TEST_SECRET_NAMES_CLIENT_ID").expect("a name");
+    let mut values = BTreeMap::new();
+    values.insert(name, Zeroizing::new("value-that-never-leaves".to_owned()));
+    publish(values);
+
+    let (_temp, ctx, mut app) = app();
+    let answer = app.apply_block_request(&request(&app, Operation::SecretNames), &ctx);
+    publish(BTreeMap::new());
+
+    let Outcome::SecretNames { names } = answer else {
+        panic!("expected the names of the stored secrets: {answer:?}");
+    };
+    assert_eq!(names, vec!["HZ_TEST_SECRET_NAMES_CLIENT_ID".to_owned()]);
+    let encoded = serde_json::to_string(&Outcome::SecretNames { names }).expect("the answer serializes");
+    assert_eq!(
+        encoded, r#"{"status":"secret_names","names":["HZ_TEST_SECRET_NAMES_CLIENT_ID"]}"#,
+        "the answer holds the name alone: no value, no length and no hash"
+    );
+}

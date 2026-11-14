@@ -82,6 +82,7 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
         | Operation::MachineDelete { .. }
         | Operation::ServerStatus
         | Operation::BrowserHostStatus
+        | Operation::SecretNames
         | Operation::Presets
         | Operation::Machines
         | Operation::MachineKey { .. }
@@ -177,6 +178,7 @@ fn refused_key(operation: &Operation) -> Option<Outcome> {
         | Operation::MachineDelete { .. }
         | Operation::ServerStatus
         | Operation::BrowserHostStatus
+        | Operation::SecretNames
         | Operation::Presets
         | Operation::Machines
         | Operation::ServerLinkRequest { .. }

@@ -203,17 +203,24 @@ calls.
 
 1. Read the names of the networks. Never print a value:
 
-   ```sh
-   env | cut -d= -f1 | grep '^TS_.*_CLIENT_ID$'
+   ```json
+   {"operation": "secret_names"}
    ```
 
-   Result: one line for each network, such as `TS_HOME_CLIENT_ID`. A network is
-   usable only when its three names are there: `TS_<NET>_CLIENT_ID`,
-   `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. With more than one network and no
-   word from the person, show them in a `list` with `selection: single` and wait
-   for a click. A panel keeps the environment of its start, so a network that the
-   person stores while this panel runs is in no pill. Ask the person to open a new
-   agent panel, or to start Set Up again, after the three names are stored.
+   Result: `secret_names` with `names`, one name for each network, such as
+   `TS_HOME_CLIENT_ID`. A network is usable only when its three names are there:
+   `TS_<NET>_CLIENT_ID`, `TS_<NET>_CLIENT_SECRET` and `TS_<NET>_TAG`. With more
+   than one network and no word from the person, show them in a `list` with
+   `selection: single` and wait for a click.
+
+   The names are the ones that a panel of this computer gets now, so a network
+   that the person stores while this panel runs is in this answer and in the next
+   pill. Its VALUES are not: a panel keeps the environment of its start, and only
+   an agent panel gets the named secrets, so a terminal that `open_terminal` opens
+   gets none of them either. A join that needs a value of a network that the
+   person stored after this panel started runs in a new agent panel: say so on the
+   card, and ask the person to open a new agent panel or to start Set Up again
+   before the join runs its commands.
 
 2. Read the state of this computer, and change nothing there:
 

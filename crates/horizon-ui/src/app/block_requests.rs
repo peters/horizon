@@ -244,6 +244,7 @@ impl HorizonApp {
             | Operation::DeleteMachineKey { .. } => self.answer_machine_request(&request.operation, request, root, ctx),
             Operation::ServerStatus => Some(self.answer_server_status()),
             Operation::BrowserHostStatus => Some(self.answer_browser_host_status()),
+            Operation::SecretNames => Some(answer_secret_names()),
             Operation::Presets => Some(self.answer_presets()),
             Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
                 self.answer_setting_request(&request.operation, actor, request, root, ctx)
@@ -770,6 +771,20 @@ impl<'a> OpenTerminalFields<'a> {
 
 pub(in crate::app) fn card_owner(panel: &Panel) -> Option<&str> {
     panel.block()?.owner_actor.as_deref()
+}
+
+/// Answers `secret_names`: the names of the named secrets that a panel of this
+/// computer gets when it starts now, in name order. It reads the snapshot that
+/// the worker of this start published, so no frame waits for a file and no value
+/// is read here at all. The answer holds no value, no length of a value and no
+/// hash of one.
+fn answer_secret_names() -> Outcome {
+    Outcome::SecretNames {
+        names: horizon_core::named_secrets::published_names()
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect(),
+    }
 }
 
 /// The refusal of a request whose deadline passed before Horizon applied it.
