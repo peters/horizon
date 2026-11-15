@@ -36,7 +36,12 @@ contract, and `open_terminal` gives the shell.
   or Done. An agent that you start in a `tmux` session of that user on the
   machine is seen, and it needs no Horizon process and no program of its own on
   that machine. The watch runs `tmux`, `ps` and the shell alone there, and
-  `machines.watch_agents` turns it off. A press on the row of an agent opens the
+  `machines.watch_agents` turns it off. A row says `Needs you` from the title of a
+  Codex pane, or from the state that the program of the pane reports itself in the
+  `tmux` pane option `@horizon_state`: read
+  [the exact state](#the-exact-state-of-an-agent-on-a-machine). A pane whose
+  program is no agent tells its own state in the same option, and it is then a row
+  of its machine. A press on the row of an agent opens the
   terminal of its session in the workspace of that machine, a chevron folds the
   agents of a machine, and a change that no window of Horizon shows sends one
   desktop notification with the name of the machine.
@@ -379,13 +384,18 @@ The row `SSH from` says which rule is in force: `any address, machine key only`
 for the default, or `<address of this computer>/32, machine key only` for a rule
 that the person asked for. Then give
 `Connect` with tone `primary`, `Put the Horizon server here`, `Add a browser`,
-`Join a network`, `Stop`, and `Delete` in `danger`. When the machine is stopped,
-draw `Start` instead of `Stop`.
+`Join a network`, `Exact agent state`, `Stop`, and `Delete` in `danger`. When the
+machine is stopped, draw `Start` instead of `Stop`.
 
 `Join a network` draws the network card of
 [tailscale](references/tailscale.md). The card holds the stored networks as pills
 and no field for a secret. A machine that is already in a network shows its rows
 on the machine card and the same button says which network it joined.
+
+`Exact agent state` opens the card of
+[the exact state](#the-exact-state-of-an-agent-on-a-machine): it writes the hook
+entries of Claude Code into the settings of the machine, so the row of an agent
+says its exact state.
 
 The two buttons that name Horizon hand the work to the skill `horizon-setup`,
 with that goal and this machine as its place:
@@ -626,6 +636,200 @@ recipe asks for a clone with a credential that the person confirms. When the
 repository holds no such section, ask one question on a card and offer to write
 the section from what the repository says about its own machine.
 
+## The exact state of an agent on a machine
+
+Horizon shows the state of an agent of a machine from two signals: the title rule
+of the kind, which only Codex has, and one working line of the screen. A Claude
+Code agent has no such title, so its row says `Working` or nothing, and it says
+`Needs you` never. The exact state comes from the program of the pane itself: the
+hook of the agent writes one word into the `tmux` pane option `@horizon_state`,
+and the watch of Horizon reads that option.
+
+Codex needs nothing, because its title is exact. Pi and the other programs speak
+the same contract as the hook of Claude Code, in two lines:
+
+- The program runs `tmux set-option -p -t "$TMUX_PANE" @horizon_state <word>` with
+  `working`, `blocked`, `done` or `idle`, and `tmux set-option -p -u -t
+  "$TMUX_PANE" @horizon_state` when it takes the state back.
+- The word is exact and holds no other text. A pane that reports `working` shows
+  `Working`, `blocked` shows `Needs you`, and `done` shows `Done` until the person
+  looks at it.
+
+The person asks for this with the button `Exact agent state` on the machine card,
+or with the words "the exact state of my agents". The button stands after `Join a
+network` and before `Stop`, and it belongs to the work that prepares a machine.
+
+### 1. Show the card of the change
+
+Read `~/.claude/settings.json` on the machine first, with the form of the SSH
+login of step 5 of this skill. The card says what the change does and what it
+keeps:
+
+- The heading is `Exact agent state` and the subtitle is the name of the machine.
+- One `text` line names the file: `~/.claude/settings.json` of the SSH user of the
+  machine.
+- One `text` line says what the change does: nine hook entries of Claude Code run
+  one `tmux` command each, and Horizon then reads the exact state of the agent
+  from the pane option `@horizon_state`.
+- One `text` line says what the change does not do: it puts no program of Horizon
+  on the machine, it opens no network connection, and it changes no file but the
+  settings of the agent.
+- One `text` line says what the change keeps: every other key and every other hook
+  of the file, and one backup of the file with the name
+  `settings.json.horizon-bak` beside it.
+- One `text` line names the limit of the change: after the person allows a tool,
+  the row says `Needs you` until that tool ends, because Claude Code has no event
+  for "allowed". A job that an agent starts in the background has no such limit.
+- The buttons are `Set it up` with tone `primary` and `Cancel` when the file holds
+  no entry of Horizon, and `Remove` with tone `primary` and `Cancel` when it does.
+  A machine whose file already holds all nine entries says so in one `text` line
+  and offers `Remove` only.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Exact agent state", "subtitle": "build-1"},
+  {"type": "kv", "rows": [
+    {"label": "File", "value": "~/.claude/settings.json", "mono": true},
+    {"label": "Backup", "value": "settings.json.horizon-bak", "mono": true},
+    {"label": "Entries", "value": "9 hooks of Claude Code"}]},
+  {"type": "text", "text": "Each entry runs one tmux command in the pane of the agent. Horizon reads the word that it writes there, so the row says the exact state of the agent."},
+  {"type": "text", "text": "This puts no program of Horizon on the machine, opens no network connection and changes no other file. The program reads the file first and keeps every other key and every other hook."},
+  {"type": "text", "text": "After the person allows a tool, the row says Needs you until that tool ends: Claude Code has no event for an allowed tool."},
+  {"type": "buttons", "items": [
+    {"id": "set_up", "label": "Set it up", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
+```
+
+Wait for a press. `Cancel` ends the step, and `Set it up` continues with step 2.
+
+### 2. Read the settings of the agent
+
+Use the form of step 5 of this skill with the two paths that `machine_key`
+answered, and read the file and the two tools of the machine:
+
+```sh
+ssh <options of the machine key> <user>@<address> \
+  'ls -l ~/.claude/settings.json; command -v python3; command -v jq'
+```
+
+A missing line for `python3` and for `jq` is the answer that the machine has that
+tool. The card keeps the account of what the machine answered.
+
+### 3. Write the entries
+
+This is the block of the change, complete. It is the words of the turn ledger of
+Horizon: a session start is `idle`, a prompt is `working`, a permission request
+and a question of the agent are `blocked`, the end of a tool and of an answer are
+`working`, the end of a turn is `done`, and the end of the session takes the
+report back.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state idle"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state working"}]}],
+    "PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state blocked"}]}],
+    "PermissionRequest": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state blocked"}]}],
+    "Elicitation": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state blocked"}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state working"}]}],
+    "ElicitationResult": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state working"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -t \"$TMUX_PANE\" @horizon_state done"}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "[ -z \"$TMUX_PANE\" ] || tmux set-option -p -u -t \"$TMUX_PANE\" @horizon_state"}]}]
+  }
+}
+```
+
+The command of every hook is one `sh` line. The first word of it keeps a program
+that runs outside `tmux` from failing: without `$TMUX_PANE` there is no pane to
+report. No entry names a path of this computer, an address, a token or a program
+of Horizon.
+
+Three cases follow the answer of step 2. Put the block in one shell word for the
+program, with no newline in it:
+
+```sh
+BLOCK='<the block of this step, in one line>'
+```
+
+- **The file does not exist.** Write it with the block, and make the folder:
+
+  ```sh
+  ssh <options of the machine key> <user>@<address> \
+    'mkdir -p "$HOME/.claude" && cat > "$HOME/.claude/settings.json"' <<'JSON'
+  <the block of this step, with its indentation>
+  JSON
+  ```
+
+- **The file exists and the machine has `python3` or `jq`.** Make one backup, and
+  then merge the block into the file with one program on the machine. Copy the
+  file first: `cp -p ~/.claude/settings.json ~/.claude/settings.json.horizon-bak`,
+  and keep a backup that is already there. The program below writes the whole file
+  again with two spaces of indentation, so the text of the file changes and every
+  key stays:
+
+  ```sh
+  ssh <options of the machine key> <user>@<address> python3 - set "$BLOCK" <<'PY'
+  import json, pathlib, sys
+
+  mode, block = sys.argv[1], json.loads(sys.argv[2])
+  path = pathlib.Path.home() / ".claude" / "settings.json"
+  settings = json.loads(path.read_text()) if path.exists() else {}
+  hooks = settings.setdefault("hooks", {})
+  for event, entries in block.items():
+      held = hooks.setdefault(event, [])
+      if mode == "set":
+          held.extend(entry for entry in entries if entry not in held)
+      else:
+          for entry in entries:
+              while entry in held:
+                  held.remove(entry)
+      if not held:
+          del hooks[event]
+  if not hooks:
+      settings.pop("hooks", None)
+  path.parent.mkdir(mode=0o700, exist_ok=True)
+  path.write_text(json.dumps(settings, indent=2) + "\n")
+  print(path)
+  PY
+  ```
+
+  A machine with `jq` and no `python3` merges the block with
+  `jq --argjson block "$BLOCK" '.hooks = ((.hooks // {}) | . * $block)'` only when
+  the two files hold no entry of Horizon. Prefer `python3`, and use `jq` only when
+  the person asks for it.
+- **The file exists and the machine has neither tool.** Change nothing. Show the
+  block of this step in one `text` component, or in a second card, for the person
+  to add by hand, and say that Horizon changes no file of this machine.
+
+### 4. Say what happened
+
+Update the card; do not close it until the person reads it.
+
+- One `text` line names the file that changed and its backup, for example
+  `Wrote ~/.claude/settings.json; the old file is settings.json.horizon-bak.`
+- One `text` line says when the state shows: the next report of the watch, about
+  two seconds after the next hook of the agent.
+- One `text` line says what to do when the row stays wrong: read the pane option
+  of the session by hand with `tmux show-options -p -t <pane> @horizon_state`, and
+  read the log of the hook of the agent.
+- The button is `Close`.
+
+Do not claim a state that you did not see. A row that you did not read after the
+change is `not proved`.
+
+### 5. Remove the entries
+
+`Remove` runs the same program with the word `remove`:
+
+```sh
+ssh <options of the machine key> <user>@<address> python3 - remove "$BLOCK" <<'PY'
+<the program of step 3>
+PY
+```
+
+It takes out exactly the entries of this section and keeps every other key and
+hook. It keeps the backup, and it says on the card that the backup stays. A file
+that held no other hook loses its `hooks` key.
+
 ## Card documents
 
 These are the values of `document` for `create` and `update`: the overview card,
@@ -697,6 +901,7 @@ The machine runs. The person may connect, stop or delete it:
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
     {"id": "join_network", "label": "Join a network"},
+    {"id": "exact_state", "label": "Exact agent state"},
     {"id": "stop", "label": "Stop"}, {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 
