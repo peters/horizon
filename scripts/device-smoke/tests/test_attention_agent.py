@@ -209,6 +209,51 @@ class AttentionAgentTests(unittest.TestCase):
             self.assertEqual({key: value for key, value in panels[0].items() if key != 'cwd'}, shared)
             self.assertEqual(panels[0]['cwd'], str(state / serve.ATTENTION_STANDIN_FOLDER))
 
+    def test_a_pi_panel_is_the_entry_of_the_pi_stand_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, bin_dir = serve.attention_agent(state, 0, kind='pi')
+            self.assertEqual(len(panels), 1)
+            panel = panels[0]
+            # A pi launch receives the report extension of the candidate with `-e`,
+            # so the entry names no command and Horizon resolves `pi` on the PATH
+            # of the candidate, where the stand-in is.
+            self.assertIsNone(panel['command'])
+            self.assertEqual(panel['kind'], 'pi', 'the agent kind whose report Horizon attaches')
+            self.assertEqual(panel['args'], [])
+            self.assertFalse(panel['work_resume']['enabled'], 'the panel offers no resume of pi work')
+            shared = json.loads(serve.ATTENTION_PI_PANEL_ENTRY.read_text())
+            self.assertEqual({key: value for key, value in panel.items() if key != 'cwd'}, shared)
+            program = bin_dir / serve.ATTENTION_PI_PROGRAM
+            self.assertEqual(program.name, 'pi', 'the name that the pi preset resolves')
+            self.assertEqual(program.read_text(), SCRIPT.read_text(), 'the program is the stand-in itself')
+            self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
+            self.assertFalse((bin_dir / serve.ATTENTION_PROGRAM).exists(), 'no claude name comes with a pi panel')
+
+    def test_a_pi_panel_of_its_own_command_names_the_stand_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, bin_dir = serve.attention_agent(state, 0, count=1, command=True, kind='pi')
+            self.assertEqual(len(panels), 2)
+            default, own = panels
+            self.assertEqual({panel['kind'] for panel in panels}, {'pi'}, 'both panels are pi panels')
+            self.assertIsNone(default['command'])
+            self.assertEqual(own['command'], str(bin_dir / serve.ATTENTION_PI_PROGRAM))
+            self.assertTrue(Path(own['command']).is_file(), 'the command names a program of the run')
+            self.assertIn('with its own command', own['name'])
+            self.assertNotEqual(own['cwd'], default['cwd'], 'each panel writes its own session')
+            self.assertEqual(default['name'], 'Pi attention stand-in 1', 'a count names the cells')
+
+    def test_an_unknown_agent_kind_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            with self.assertRaises(SystemExit) as raised:
+                serve.attention_agent(state, 0, kind='gemini')
+            self.assertIn('--attention-agent-kind', str(raised.exception))
+
     def test_a_count_outside_the_bound_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'

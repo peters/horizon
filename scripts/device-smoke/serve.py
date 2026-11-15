@@ -29,7 +29,17 @@ ATTENTION_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel.json'
 # itself, and whose work continuation is off. Horizon gives such a panel its
 # arguments too, so the sidebar still follows its ledger, and no resume is offered.
 ATTENTION_COMMAND_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel_command.json'
+# The third shape: a pi panel of the same stand-in. Horizon gives a pi launch the
+# report extension of its own home with `-e`, and the extension sends the events of
+# the panel to the same work entry. The panel of that entry continues no work, so a
+# restored panel shows no card of a continuation.
+ATTENTION_PI_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel_pi.json'
 ATTENTION_PROGRAM = 'claude'
+# The name that a pi panel of the fixture resolves on its `PATH`: the command of the
+# pi preset is `pi`.
+ATTENTION_PI_PROGRAM = 'pi'
+# The two agent kinds of the stand-in, and the program name of each kind.
+ATTENTION_KINDS = ('claude', 'pi')
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
 ATTENTION_TIMER_FILE = 'stand-in.json'
@@ -642,7 +652,8 @@ def panel_programs_in_state(panels, state, folder=None):
     return panels
 
 
-def attention_agent(state, timer=6.0, program_folder=None, count=1, command=False):
+def attention_agent(state, timer=6.0, program_folder=None, count=1, command=False,
+                    kind='claude'):
     """The panel entries and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
@@ -661,9 +672,17 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
     `command` adds one panel of the second shape, so a procedure sees the state
     of a panel that no policy of its own supports.
 
+    `kind` chooses the agent of the panels: `claude` attaches the plugin folder of
+    the work hooks to the launch, and `pi` attaches the state report extension. Both
+    report through the work entry of the candidate, and the stand-in is the program
+    of the panel either way: `claude` or `pi` on the `PATH` of the candidate.
+
     Answers the panel entries of the fixture config and the folder to put first on
     the `PATH` of the candidate.
     """
+    if kind not in ATTENTION_KINDS:
+        raise SystemExit(f'--attention-agent-kind takes one of {", ".join(ATTENTION_KINDS)}, not {kind}')
+    program_name = ATTENTION_PI_PROGRAM if kind == 'pi' else ATTENTION_PROGRAM
     total = count + (1 if command else 0)
     if not 1 <= total <= ATTENTION_MAX_AGENTS:
         raise SystemExit(f'--attention-agent-count and --attention-agent-command take 1 to '
@@ -674,22 +693,28 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # The stand-in is the program itself: it has a `#!` line and the executable
     # mode of the file that the repository keeps.
-    program_in_state(script, bin_dir / ATTENTION_PROGRAM, state)
+    program_in_state(script, bin_dir / program_name, state)
     (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
-    entry = json.loads(ATTENTION_PANEL_ENTRY.read_text())
+    default_entry = ATTENTION_PI_PANEL_ENTRY if kind == 'pi' else ATTENTION_PANEL_ENTRY
+    entry = json.loads(default_entry.read_text())
     panels = []
     for index in range(total):
         own_command = command and index == count
-        panel = json.loads(ATTENTION_COMMAND_PANEL_ENTRY.read_text()) if own_command else dict(entry)
+        if own_command and kind != 'claude':
+            # The second shape of a pi panel: the preset command is the stand-in.
+            panel = dict(entry)
+            panel['name'] = f'{entry["name"]} with its own command'
+        else:
+            panel = json.loads(ATTENTION_COMMAND_PANEL_ENTRY.read_text()) if own_command else dict(entry)
         folder = work if total == 1 else work / f'panel-{index + 1}'
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         panel['cwd'] = str(folder)
         if own_command:
             # The preset runs the stand-in itself, so Horizon gives it no name to
             # resolve on the `PATH`; the copy in the state folder is the program.
-            panel['command'] = str(bin_dir / ATTENTION_PROGRAM)
+            panel['command'] = str(bin_dir / program_name)
         elif total > 1:
-            panel['name'] = f'{ATTENTION_PANEL_NAME} {index + 1}'
+            panel['name'] = f'{entry["name"]} {index + 1}'
         if total > 1:
             panel['position'] = [ATTENTION_ROW_LEFT + index * ATTENTION_ROW_STEP, ATTENTION_ROW_TOP]
             panel['size'] = list(ATTENTION_ROW_SIZE)
@@ -1063,6 +1088,12 @@ def arguments():
              'ledger of that panel too, so the sidebar shows its state while no resume is offered. '
              'Needs --attention-agent, and both flags open at most four panels')
     parser.add_argument(
+        '--attention-agent-kind', choices=ATTENTION_KINDS, default=ATTENTION_KINDS[0],
+        help='The agent kind of the stand-in panels: claude attaches the plugin folder of the '
+             'work hooks to the launch, and pi attaches the state report extension of the '
+             'candidate. Both report their state through the work entry, so the sidebar shows '
+             'the same states. Needs --attention-agent')
+    parser.add_argument(
         '--attention-agent-count', type=int, default=None, metavar='N',
         help='Open N panels of the stand-in agent, 1 to 4, so that a change of two panels at '
              'the same time shows the count of a notification; needs --attention-agent. Each panel '
@@ -1263,7 +1294,7 @@ def main():
             # procedure are the first ones that the person sees.
             panels, attention_bin = attention_agent(
                 args.state, args.attention_agent, count=args.attention_agent_count or 1,
-                command=args.attention_agent_command)
+                command=args.attention_agent_command, kind=args.attention_agent_kind)
             extra_panels = panels
             # The children of this run keep this object, so the value is changed
             # here and not by a second dictionary.
@@ -1271,6 +1302,9 @@ def main():
         elif args.attention_agent_count is not None or args.attention_agent_command:
             raise SystemExit('--attention-agent-count and --attention-agent-command open panels of '
                              '--attention-agent, which this run lacks')
+        elif args.attention_agent_kind != ATTENTION_KINDS[0]:
+            raise SystemExit('--attention-agent-kind names the agent of --attention-agent, '
+                             'which this run lacks')
         if args.notifications_log:
             notification_bin = notification_standin(args.state)
             env.update(attention_environment(env, notification_bin))

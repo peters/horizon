@@ -42,6 +42,8 @@ fn node() -> Option<PathBuf> {
 /// recorder in place of the entry of Horizon.
 struct Fixture {
     root: tempfile::TempDir,
+    /// The program in place of the entry of Horizon.
+    recorder: PathBuf,
 }
 
 impl Fixture {
@@ -54,9 +56,9 @@ impl Fixture {
         // One file for each call, so two reports of one event cannot overwrite
         // each other. The program writes its file at once and then holds, which
         // is how the test sees that a report waits for nothing.
-        let recorder = root.path().join("recorder.sh");
-        std::fs::write(
-            &recorder,
+        let recorder = horizon_core::stand_in_program_in(
+            root.path(),
+            "recorder",
             concat!(
                 "#!/bin/sh\n",
                 "file=\"$HORIZON_TEST_RECORD/call-$$\"\n",
@@ -65,9 +67,7 @@ impl Fixture {
             ),
         )
         .expect("recorder program");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&recorder, std::fs::Permissions::from_mode(0o755)).expect("recorder mode");
-        Self { root }
+        Self { root, recorder }
     }
 
     fn report(&self) -> PathBuf {
@@ -75,7 +75,7 @@ impl Fixture {
     }
 
     fn recorder(&self) -> PathBuf {
-        self.root.path().join("recorder.sh")
+        self.recorder.clone()
     }
 
     fn calls_directory(&self) -> PathBuf {

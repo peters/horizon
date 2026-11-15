@@ -23,6 +23,11 @@ One line for each event, and the event it fires:
   esc     agent_settled {aborted:true}            -> Done, interrupted
   quit    session_shutdown {reason:"quit"}         -> no claim
 
+A word that ends a turn shows **Done** only while the panel has no focus: a look
+at the panel clears the finished turn. `after SECONDS WORD` therefore sends
+`WORD` after that delay, so the person can type the line, give the focus to
+another panel, and still see the state. The delay is at most 60 seconds.
+
 Standard library only, Python 3.10+, no network.
 """
 from __future__ import annotations
@@ -33,6 +38,8 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 PROGRAM = 'pi-attention-stand-in'
 HARNESS = pathlib.Path(__file__).with_name('pi_extension_harness.mjs')
@@ -48,6 +55,9 @@ WORK_VARIABLES = (
     'HORIZON_WORK_EXECUTABLE',
 )
 WORDS = ('start', 'ask', 'answer', 'stop', 'esc', 'quit')
+# The longest delay of `after`, in seconds: a person waits for an event and not
+# for minutes.
+MAX_AFTER_SECONDS = 60
 # The events that each word fires, in the order that pi fires them. The fallback
 # of a computer without `node` sends the documents of these events.
 EVENTS = {
@@ -166,6 +176,48 @@ class Harness:
         self.child.wait(timeout=30)
 
 
+class Words:
+    """One sender of the stand-in, used by the person and by a delayed line."""
+
+    def __init__(self, sender):
+        self.sender = sender
+        self.lock = threading.Lock()
+
+    def send(self, word):
+        with self.lock:
+            answer = self.sender.fire(word)
+        if isinstance(self.sender, Harness):
+            return f'{word}: {answer}'
+        return f'{word}: {answer or "sent"}'
+
+    def close(self):
+        if isinstance(self.sender, Harness):
+            self.sender.close()
+
+
+def parse_delay(text):
+    """The delay and the word of `after SECONDS WORD`, or `None` for another line."""
+    parts = text.split()
+    if not parts or parts[0] != 'after':
+        return None
+    if len(parts) != 3:
+        raise ValueError(f'{text!r}: write "after SECONDS WORD"')
+    try:
+        seconds = float(parts[1])
+    except ValueError:
+        raise ValueError(f'{parts[1]!r} is no number of seconds') from None
+    if not 0 <= seconds <= MAX_AFTER_SECONDS:
+        raise ValueError(f'{seconds:g} s is outside 0 to {MAX_AFTER_SECONDS} s')
+    if parts[2] not in WORDS:
+        raise ValueError(f'unknown word {parts[2]!r}; use {", ".join(WORDS)}')
+    return seconds, parts[2]
+
+
+def send_later(words, word):
+    """Sends `word` when its delay ends, so the person can move the focus away first."""
+    print(f'{PROGRAM}: {words.send(word)}', flush=True)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     missing = [name for name in WORK_VARIABLES if not os.environ.get(name)]
@@ -184,30 +236,45 @@ def main(argv=None):
             sender = Fallback()
             print(f'{PROGRAM}: no node on PATH, so this stand-in sends the documents of the report; '
                   f'type one of {", ".join(WORDS)}', flush=True)
+    words = Words(sender) if sender is not None else None
+    pending = []
     for line in sys.stdin:
-        word = line.strip().lower()
-        if not word:
+        text = line.strip().lower()
+        if not text:
             continue
-        if sender is None:
-            print(f'{PROGRAM}: {word} fired nothing, because this launch has no report', flush=True)
-            if word == 'quit':
+        if words is None:
+            print(f'{PROGRAM}: {text} fired nothing, because this launch has no report', flush=True)
+            if text == 'quit':
                 return 0
             continue
-        if word == 'quit':
-            answer = sender.fire('quit')
-            if isinstance(sender, Harness):
-                print(f'{PROGRAM}: {answer}', flush=True)
-                sender.close()
+        if text == 'quit':
+            print(f'{PROGRAM}: {words.send("quit")}', flush=True)
+            words.close()
             print(f'{PROGRAM}: quit fired', flush=True)
             return 0
-        if word not in WORDS:
-            print(f'{PROGRAM}: unknown word {word!r}; use {", ".join(WORDS)}', flush=True)
+        try:
+            delay = parse_delay(text)
+        except ValueError as error:
+            print(f'{PROGRAM}: {error}', flush=True)
             continue
-        answer = sender.fire(word)
-        if isinstance(sender, Harness):
-            print(f'{PROGRAM}: {answer}', flush=True)
-        else:
-            print(f'{PROGRAM}: {word} {answer or "sent"}', flush=True)
+        if delay is None:
+            if text not in WORDS:
+                print(f'{PROGRAM}: unknown word {text!r}; use {", ".join(WORDS)}', flush=True)
+                continue
+            print(f'{PROGRAM}: {words.send(text)}', flush=True)
+            continue
+        seconds, word = delay
+        later = threading.Timer(seconds, send_later, args=(words, word))
+        # A delay must not hold the panel after `quit`, so the thread ends with
+        # this process.
+        later.daemon = True
+        later.start()
+        pending.append(later)
+        print(f'{PROGRAM}: {word} in {seconds:g} s', flush=True)
+    # A delay outlives the typed lines: the panel ends after the last one sends.
+    deadline = time.monotonic() + MAX_AFTER_SECONDS + 1
+    for later in pending:
+        later.join(max(deadline - time.monotonic(), 0))
     return 0
 
 

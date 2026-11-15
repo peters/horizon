@@ -1,0 +1,9 @@
+{
+  "name": "Pi attention stand-in",
+  "kind": "pi",
+  "command": null,
+  "args": [],
+  "work_resume": {"enabled": false},
+  "position": [40, 60],
+  "size": [640, 420]
+}
