@@ -58,6 +58,15 @@ pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
     run_app_frame_with_input(ctx, app, RawInput::default());
 }
 
+/// One short folder of a test, for a path that has a bound of its own: the temporary
+/// folder of macOS holds 49 bytes, and the path of a Unix socket takes 100.
+pub(super) fn short_temp(prefix: &str) -> TempDir {
+    ["/tmp", "/var/tmp"]
+        .iter()
+        .find_map(|base| tempfile::Builder::new().prefix(prefix).tempdir_in(base).ok())
+        .expect("a short folder of a test")
+}
+
 /// The options of a browser panel of a test: a program that never starts, so the
 /// panel starts no browser and a test judges the route that the host chose.
 ///

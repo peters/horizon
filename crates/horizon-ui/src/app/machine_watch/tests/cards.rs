@@ -23,12 +23,15 @@ fn card_socket(app: &HorizonApp, machine: &str, session: &str) -> PathBuf {
 }
 
 /// One machine whose cards are set up, over a private `tmux` server and the stand-in
-/// `ssh` of the test.
-fn watched_cards(server: &Server, ssh: &Ssh) -> (tempfile::TempDir, HorizonApp, Context) {
+/// `ssh` of the test. The sockets of the cards are bound in `cards`, a short folder,
+/// because the path of a Unix socket has a bound and the temporary folder of macOS is
+/// long: a nested folder of a test would refuse every path on that computer.
+fn watched_cards(server: &Server, ssh: &Ssh, cards: &tempfile::TempDir) -> (tempfile::TempDir, HorizonApp, Context) {
     let (temp, mut app) = test_app();
     settle_machine_load(&mut app);
     app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
     app.node_cards.program = ssh.program();
+    app.node_cards.base = cards.path().to_path_buf();
     let _ = server;
     with_machines(
         &mut app,
@@ -48,7 +51,8 @@ fn the_card_sockets_follow_the_sessions_of_a_machine_and_not_its_agents() {
     let Some(ssh) = Ssh::new(&server) else {
         return;
     };
-    let (_temp, mut app, ctx) = watched_cards(&server, &ssh);
+    let cards = crate::app::test_support::short_temp("hz-cards");
+    let (_temp, mut app, ctx) = watched_cards(&server, &ssh, &cards);
     // A session whose program is no agent, with no state in its pane: it holds no row,
     // and it gets a card socket all the same.
     server.run(&[

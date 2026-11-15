@@ -274,6 +274,7 @@ fn card_machine(app: &crate::app::HorizonApp) -> crate::app::node_cards::CardMac
         )
         .expect("the login of the machine"),
         sessions: vec!["night".to_owned()],
+        refused: Vec::new(),
         links: crate::app::node_cards::Links::clone(&app.node_cards.links),
     }
 }
@@ -319,14 +320,26 @@ fn frame_until(
 
 #[test]
 fn a_card_link_that_is_not_up_says_so_under_its_machine() {
-    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, short_temp, test_app_with_startup};
     use horizon_core::browser::manifest;
+    use horizon_core::node_cards;
     use horizon_core::stand_in_program_in;
     use horizon_core::{RuntimeState, StartupDecision};
 
-    for (words, down) in [
-        (format!("printf '{REFUSED_FORWARD}\\n' >&2\nexit 255\n"), true),
-        ("sleep 30\n".to_owned(), false),
+    // A folder whose path is above the bound of a Unix socket, as the temporary folder
+    // of a computer can be: the reason of the refusal of its one session, in its words.
+    let deep = std::path::Path::new("/tmp").join("d".repeat(100));
+    let reason = node_cards::local_socket(&node_cards::local_dir(&deep), "build-1", "night")
+        .expect_err("a path above the bound of a socket")
+        .message;
+
+    // The words of the stand-in `ssh`, whether the card link of the machine is up, and
+    // the folder of the sockets of the cards: none, which is a short folder of the
+    // test, or `deep`, whose paths refuse every session of the machine.
+    for (words, down, folder) in [
+        (format!("printf '{REFUSED_FORWARD}\\n' >&2\nexit 255\n"), true, None),
+        ("sleep 30\n".to_owned(), false, None),
+        ("sleep 30\n".to_owned(), true, Some(deep.clone())),
     ] {
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState::default()),
@@ -336,9 +349,11 @@ fn a_card_link_that_is_not_up_says_so_under_its_machine() {
         // the quiet line of the watch would take the line of the card link away.
         app.template_config.machines.watch_agents = false;
         crate::app::block_machines::settle_machine_load(&mut app);
-        let folder = tempfile::tempdir().expect("a folder of the stand-in");
-        let ssh = stand_in_program_in(folder.path(), "ssh", &words).expect("the stand-in ssh");
+        let stand = tempfile::tempdir().expect("a folder of the stand-in");
+        let ssh = stand_in_program_in(stand.path(), "ssh", &words).expect("the stand-in ssh");
         app.node_cards.program = ssh.to_string_lossy().into_owned();
+        let cards = short_temp("hz-cards");
+        app.node_cards.base = folder.clone().unwrap_or_else(|| cards.path().to_path_buf());
         with_cards(&mut app);
         let _ = frame_until(&ctx, &mut app, WINDOW, "the machine of the watch", |app| {
             app.machine_watch
@@ -379,13 +394,16 @@ fn a_card_link_that_is_not_up_says_so_under_its_machine() {
                 Some(super::agents::CARDS_DOWN),
                 "the line of the card link"
             );
-            let spoken = format!(
-                "{} The last words of ssh were: {REFUSED_FORWARD}",
-                horizon_core::machine_watch::WatchRefusal::Other.sentence()
-            );
+            let spoken = match &folder {
+                Some(_) => format!("night: {reason}"),
+                None => format!(
+                    "{} The last words of ssh were: {REFUSED_FORWARD}",
+                    horizon_core::machine_watch::WatchRefusal::Other.sentence()
+                ),
+            };
             assert!(
                 screen_reader_hears(&output, &spoken),
-                "a screen reader hears why the card link is not up, with the last words of ssh"
+                "a screen reader hears why the card link is not up, with the last words of ssh or the refused path"
             );
         } else {
             assert!(line.is_none(), "a child that holds its link draws no line: {line:?}");

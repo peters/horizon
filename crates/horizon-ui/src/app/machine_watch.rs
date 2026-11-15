@@ -116,6 +116,7 @@ impl HorizonApp {
                     name: record.name.clone(),
                     login,
                     sessions,
+                    refused: Vec::new(),
                     links: Links::clone(&self.node_cards.links),
                 }),
                 Err(error) => tracing::warn!(machine = %record.name, %error, "no card link for a machine"),

@@ -41,6 +41,8 @@ pub(in crate::app) struct CardMachine {
     pub(in crate::app) name: String,
     pub(in crate::app) login: SshConnection,
     pub(in crate::app) sessions: Vec<String>,
+    /// Why a session of the machine has no socket here, in its words.
+    pub(in crate::app) refused: Vec<String>,
     pub(in crate::app) links: Links,
 }
 
@@ -181,15 +183,22 @@ async fn apply_set(
     for machine in machines {
         names.insert(machine.name.as_str());
         let mut forwards = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
         for session in &machine.sessions {
             let Ok(actor) = node_cards::actor(&machine.name, session) else {
                 continue;
             };
-            let (Ok(remote), Ok(local)) = (
-                node_cards::remote_socket(&machine.name, session),
-                node_cards::local_socket(folder, &machine.name, session),
-            ) else {
-                continue;
+            let pair = node_cards::remote_socket(&machine.name, session).and_then(|remote| {
+                node_cards::local_socket(folder, &machine.name, session).map(|local| (remote, local))
+            });
+            let (remote, local) = match pair {
+                Ok(pair) => pair,
+                Err(refusal) => {
+                    // A path that this build cannot bind is no silent session: the line
+                    // of the card link of the machine says why it has no card.
+                    refused.push(format!("{session}: {}", refusal.message));
+                    continue;
+                }
             };
             forwards.push((remote, local));
             if !bound.contains_key(&actor) {
@@ -210,8 +219,13 @@ async fn apply_set(
             stop(child).await;
         }
         let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(carry(machine.clone(), program.to_owned(), args.clone(), stopped));
-        carried.insert(machine.name.clone(), Carried { args, stop, task });
+        let name = machine.name.clone();
+        let machine = CardMachine {
+            refused,
+            ..machine.clone()
+        };
+        let task = tokio::spawn(carry(machine, program.to_owned(), args.clone(), stopped));
+        carried.insert(name, Carried { args, stop, task });
     }
     let left: Vec<String> = bound.keys().filter(|actor| !actors.contains(*actor)).cloned().collect();
     for actor in left {
@@ -249,6 +263,9 @@ async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut sto
         {
             let mut lost = machine.links.lock().unwrap_or_else(PoisonError::into_inner);
             lost.remove(&machine.name);
+            if !machine.refused.is_empty() {
+                lost.insert(machine.name.clone(), machine.refused.join(" "));
+            }
         }
         // The child before this one left a socket file for each of these paths.
         prune_stale(&program, &prune).await;

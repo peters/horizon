@@ -117,6 +117,7 @@ fn machine_of(cards: &NodeCards, folder: &Path, name: &str, sessions: &[&str]) -
         name: name.to_owned(),
         login: login(folder, name),
         sessions: sessions.iter().map(|session| (*session).to_owned()).collect(),
+        refused: Vec::new(),
         links: super::Links::clone(&cards.links),
     }
 }
