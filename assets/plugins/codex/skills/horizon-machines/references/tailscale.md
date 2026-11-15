@@ -99,6 +99,53 @@ fields):
 UNVERIFIED: this page read no policy file of a network live, so the person
 checks the preview of the console before the person saves the file.
 
+### 1.1.1 Tailscale SSH from the machine to other devices
+
+A machine that upgrades other devices one after another reaches them over
+Tailscale SSH. That needs two rules in the policy of the network, and both belong
+to the person:
+
+1. A network rule from the tag of the machine to the tags of the devices for
+   `tcp:22`.
+2. An `ssh` rule from the tag of the machine to the user name on the devices, with
+   `"action": "accept"`.
+
+**A `check` rule serves no machine (doc).** The Tailscale SSH page says, read on
+2026-11-15: "An SSH access rule from a tagged device cannot be in check mode." A
+tagged machine that starts the connection is a device and no person, so a `check`
+rule never answers for it, whatever the person does in a browser.
+
+The devices answer Tailscale SSH when they were enabled with
+`tailscale set --ssh` (doc). That command is the work of the owner of the device:
+the agent runs no such command on a device of another person, and it changes no
+policy.
+
+This is the block of policy for a machine with the placeholder tag `tag:runner`,
+devices with the placeholder tag `tag:device`, and the user name `operator` on
+those devices:
+
+```json
+{
+  "tagOwners": {"tag:runner": ["autogroup:admin"], "tag:device": ["autogroup:admin"]},
+  "grants": [
+    {"src": ["tag:runner"], "dst": ["tag:device"], "ip": ["tcp:22"]}
+  ],
+  "ssh": [
+    {"action": "accept", "src": ["tag:runner"], "dst": ["tag:device"], "users": ["operator"]}
+  ]
+}
+```
+
+The person adds it at **Access controls** of the admin console, after the preview
+answers without an error. Then the machine proves the login in one `tmux` session
+of its own: `ssh operator@<device>`. A machine that runs outside `tmux` loses the
+connection when the session ends, so the proof and the job both run in a session
+of `tmux`.
+
+UNVERIFIED: this page ran no such connection. The block follows the field names of
+its documents and the rule of the mode above, and the person checks the preview
+and one login before the job runs.
+
 ### 1.2 A machine that two networks must reach
 
 One machine joins one network (see section 6). When a second network must reach

@@ -596,11 +596,12 @@ computer moves it out of a network of the person's work.
   write on the card `This computer is not in the network <NET>; the machine is
   reached over its public address`. Offer no close.
 
-A machine that must reach devices of the network needs a grant, and the grant
-belongs to the person. Propose a tag for the purpose and give the person the
-block of policy text. The person adds it in the admin console. The block names
-the tag of the machine as its source, the devices or their tag as its
-destination, and the ports. Never write the policy file and never ask for a
+A machine that must reach devices of the network needs two rules of policy, and
+both belong to the person: a network rule for `tcp:22`, and an `ssh` rule with
+`"action": "accept"` for the user name on the devices. A `check` rule never serves
+a machine (doc). Section 1.1.1 of [tailscale](references/tailscale.md) gives the
+block. Propose a tag for the purpose and give the person that text. The person
+adds it in the admin console. Never write the policy file and never ask for a
 client that can.
 
 Step 5b writes the record with the network name as its `ssh.host`, so a click in
