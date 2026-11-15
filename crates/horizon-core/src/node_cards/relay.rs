@@ -82,7 +82,7 @@ while 1:
 pub fn relay_command(machine: &str, program: RelayProgram) -> Result<RelayCommand, super::MachineRefusal> {
     let machine = block_machines::check_machine_name(machine)?;
     let directory = format!("{REMOTE_DIR}/{machine}");
-    let socket = format!("\"$d/$s.sock\"");
+    let socket = "\"$d/$s.sock\"".to_string();
     let relay = match program {
         RelayProgram::Socat => format!("exec socat - UNIX-CONNECT:{socket}"),
         RelayProgram::Nc => format!("exec nc -U {socket}"),

@@ -27,6 +27,7 @@ fn machine(name: &str) -> Machine {
         provider: Some("Hetzner, hel1".to_owned()),
         repository: Some("example-org/shop".to_owned()),
         added_at_millis: 7,
+        cards: false,
     }
 }
 

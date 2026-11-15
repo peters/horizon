@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use horizon_core::node_cards;
@@ -73,7 +73,7 @@ fn initialize(cards: &NodeCards, machine: &str, session: &str) -> String {
     line
 }
 
-fn wait_gone(path: &PathBuf) {
+fn wait_gone(path: &Path) {
     let deadline = Instant::now() + WAIT;
     while path.exists() {
         assert!(Instant::now() < deadline, "{} stays", path.display());
