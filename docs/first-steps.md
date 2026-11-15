@@ -469,6 +469,46 @@ The three reports have limits that their programs set:
 - A hostile program in any agent panel can claim a state for its own panel. See
   [the boundary of the work ledger](review/trust-boundaries/agent-work-ledger.md).
 
+## See the agents of a machine
+
+Horizon asks each machine of your machine list which agents run there in `tmux`,
+and it shows them under the row of that machine in the sidebar, with no panel
+open. This works while you close every panel, and while you close the lid of the
+laptop.
+
+```
+Machines
+● build-1
+  Hetzner, hel1
+  └ CX shop        Needs you
+  └ CC notes       Working ●
+```
+
+1. Start one or more agents in `tmux` sessions on the machine. You can start them
+   in a terminal of Horizon or by hand over `ssh`.
+2. Read the machine section of the sidebar.
+
+   Result: one row stands under the machine for each agent, with the two letters
+   of its kind, the name of the last part of the folder of its pane, and the same
+   word and dot that a local agent panel shows.
+
+A press on the row of an agent goes to the terminal that already shows its
+session, or opens one in the workspace that carries the name of the machine. The
+press is your look at the agent, so a finished turn stops saying **Done**.
+
+Press the chevron in front of the name of a machine to fold its agents. A folded
+machine says how many of its agents wait for you, or how many work. Close the lid
+of the laptop, and the row of the machine says `link lost just now` until the
+link comes back; the place of the agents then says how many it saw.
+
+When an agent of a machine changes to **Needs you** or to **Done** while no
+Horizon window has the focus, Horizon sends one notification that names the agent
+and its machine, as it does for a local panel.
+
+The check box **Show the agents of each machine** in Settings, General,
+**Machines** turns this off. The shortcut for the next agent that waits for you
+also reaches the agents of your machines, after the panels of this window.
+
 ## Open a browser panel
 
 Browser panels need a source build from `main`. The **Browser** preset uses a

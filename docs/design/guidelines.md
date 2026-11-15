@@ -1061,23 +1061,42 @@ The page that shows while the board is empty answers the size of the window.
 - The Machines section sits below the last workspace row, inside the same
   scroll area, and only while this Horizon keeps a machine. Its header is the
   sidebar group header: sentence case, Inter 13 at weight 620 in `FG_SOFT`,
-  18 px from the left edge. A row is 38 high with no vertical gap, an 8 px
-  inset for the hover card (radius 10, `alpha(PANEL_BG_ALT, 170)`), and the
-  pointing hand cursor. The state dot is 9 px in diameter at 8 px from the
-  card's left edge: hollow `FG_DIM` when no terminal of the machine is open,
-  hollow `FG_SOFT` while one connects, filled `PALETTE_YELLOW` while it waits
-  to reach the machine again after a lost link, filled `PALETTE_GREEN` when it
-  is connected, and filled `PALETTE_RED` when it is disconnected. The name is
-  Inter 13 at weight 500 `FG` on the first line; the provider line that the
-  agent reported is Inter 11 `FG_SOFT` blended 0.14 toward `BG_ELEVATED` on the
-  second line, cut with an ellipsis. A name that is cut shows the whole name in
-  its hover text. A refused record shows one line 11 in `PALETTE_RED` under the
+  18 px from the left edge. The agents of the machines that wait for the person
+  are at the right of that header, in the words and the size of the word of a
+  panel row (`1 needs you · 1 done`). A row is 38 high with no vertical gap, an
+  8 px inset for the hover card (radius 10, `alpha(PANEL_BG_ALT, 170)`), and the
+  pointing hand cursor. The fold control is a 12 px chevron (`▾` open, `▸`
+  folded), 10 pt, 8 px from the card's left edge and in `FG` while the row is
+  hovered; its hover text is `Show the agents of <machine>` or `Fold the agents
+  of <machine>`, which is also what a screen reader says. The state dot is 9 px
+  in diameter right of that control: hollow `FG_DIM` when no terminal of the
+  machine is open, hollow `FG_SOFT` while one connects, filled `PALETTE_YELLOW`
+  while it waits to reach the machine again after a lost link, filled
+  `PALETTE_GREEN` when it is connected, and filled `PALETTE_RED` when it is
+  disconnected. The name is Inter 13 at weight 500 `FG` on the first line; the
+  provider line that the agent reported is Inter 11 `FG_SOFT` blended 0.14
+  toward `BG_ELEVATED` on the second line, cut with an ellipsis. A machine whose
+  link is lost says `link lost <relative time>` in the place of that line, and a
+  folded machine shows its summary at the right of the second line, in 9.5 pt
+  like the word of a panel row: `1 needs you · 1 done`, else `2 working`, else
+  nothing. A name that is cut shows the whole name in its hover text. A refused record shows one line 11 in `PALETTE_RED` under the
   rows for ten seconds. That line is the one notice of this window for an action
   of the person that opened nothing, so it also says why a panel that the person
   started could not start, as `<kind> panel: <reason>`, and it stays visible when
   this Horizon keeps no machine. The row menu holds `Focus` (or `Connect` when no
   terminal is open) and `Forget this machine`, whose confirm line is the
   menu's own text.
+- The agents of a machine hang under its row, in the form and the painter of
+  the panel rows of a workspace: a 1 px tree guide (`BORDER_STRONG` alpha 200)
+  from the state dot of the machine, the two letters of the kind, the name of
+  the last part of the folder of the pane, and at the right the word and the dot
+  of the state that a local agent panel shows (`Working ●`, `Needs you`, `Done`,
+  or nothing). A row is 30 high, and the rows of the last agent end the guide.
+  Instead of the rows, a machine whose link is down shows one line 11 in the
+  muted text of a row: `Last seen: 3 agents. Horizon tries again.`, a machine
+  with no `tmux` shows `No tmux on this machine.`, and a refusal shows its typed
+  reason. A machine with no agent shows no row and no line. The row menu of a
+  machine is the one it had.
 - A workspace that lives on a machine says so on the second line of its row,
   before the status text: `on <machine> · <status text>`, or `on <machine>`
   when the workspace has no status text yet. The name line is unchanged, so a

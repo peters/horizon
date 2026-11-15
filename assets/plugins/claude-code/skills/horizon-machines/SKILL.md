@@ -36,7 +36,10 @@ contract, and `open_terminal` gives the shell.
   or Done. An agent that you start in a `tmux` session of that user on the
   machine is seen, and it needs no Horizon process and no program of its own on
   that machine. The watch runs `tmux`, `ps` and the shell alone there, and
-  `machines.watch_agents` turns it off.
+  `machines.watch_agents` turns it off. A press on the row of an agent opens the
+  terminal of its session in the workspace of that machine, a chevron folds the
+  agents of a machine, and a change that no window of Horizon shows sends one
+  desktop notification with the name of the machine.
 - A terminal that attaches a tmux session reconnects by itself when its link was
   lost: its titlebar says `Reconnecting`, it keeps its last screen, and it runs
   its command again after 3, 6, 12 and 24 seconds, then every 30 seconds, until

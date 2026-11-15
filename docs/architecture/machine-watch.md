@@ -2,8 +2,9 @@
 
 A person rents a machine, starts agents there in `tmux` and closes the panels or
 the laptop lid. This page describes the watch that names those agents in the
-sidebar of Horizon without a panel. The core part is in this build. The sidebar
-row, the click that opens a panel and the notification come in the next rounds.
+sidebar of Horizon without a panel: one row under each machine, the state of each
+agent, the click that opens the terminal of a session, and the notification of a
+change that the person did not see.
 
 The page states the flow, the format of one report, the bounds of an untrusted
 machine, and the state rules that the watch shares with a local panel. The trust
@@ -51,6 +52,12 @@ the next report. It prints that report only when it differs from the report
 before it: a machine whose report did not change prints the short line `B`
 instead. A machine with no `tmux`, or with no `tmux` server, prints one note and
 repeats it after `SLOW_INTERVAL_SECS` (30) seconds.
+
+The text asks `tmux` with `-u`. A shell that an `ssh` command starts often has no
+UTF-8 locale, and such a client of `tmux` prints `_` in the place of every
+character outside ASCII, which would drop the braille frame of the title of a
+Codex pane. A version of `tmux` that replaces that frame in the pane itself keeps
+the rule of the screen: the title names no state, so the working line answers.
 
 The text reads the panes of every `tmux` session of that user:
 
@@ -167,15 +174,45 @@ refuses, or a record that no longer passes the rule of an SSH terminal.
 | `MachineAgent::can_open` | Whether the session name of the agent passes the rule of this build. |
 
 The snapshot holds the machines in name order, the agents of each machine in
-session and pane order, and the totals `needs_you` and `done`, which the attention
-summary adds to its own.
+session and pane order, and the totals `needs_you` and `done`, which the heading
+of the machine section shows and the attention summary adds to its own.
 
-## What the next round builds
+## The window
 
-- A sidebar row for each machine with the state of its link and its agents.
-- A click on an agent: `open_command` and a terminal panel with the connection of
-  that machine, and `mark_seen` after it opens.
-- The notice of a row that changed to **Needs you** or **Done** while no window
-  of Horizon has the focus.
-- The call of `reconcile` when the machine list or the setting changes, on a
-  worker thread, and a frame that reads the snapshot version.
+- **One worker, no frame.** `MachineWatch::reconcile` joins threads, so the
+  coordination worker of the window calls it. A frame reads the snapshot, which is
+  one `Arc`, and it starts a new reconcile only when the records, a machine key,
+  the setting `machines.watch_agents` or the presets changed. At the end of the
+  window the watch stops every reader and joins it, so no `ssh` child outlives it.
+- **The rows come from one snapshot.** The machine section builds the rows of the
+  agents when the version of the snapshot changed, and a frame that did not change
+  it builds nothing. An agent row is drawn by the painter of a panel row of a
+  workspace (`sidebar/panel_rows.rs`): the kind label, the name and the word and
+  the dot of `AgentState::attention`, which is the state type of a local panel.
+- **A machine folds.** A chevron in front of the dot of a machine row hides its
+  agent rows, and the row then says `1 needs you · 1 done`, else `2 working`, else
+  nothing, in the words of a workspace row. The fold lives in the window and
+  outlives no start.
+- **A link that is down says so.** The second line of the machine row says
+  `link lost 2 minutes ago` in the words of a relative time of this build, and the
+  place of the agent rows holds one quiet line: `Last seen: 3 agents. Horizon tries
+  again.` A machine with no `tmux` says `No tmux on this machine.`, and a refusal
+  says its typed reason.
+- **A press opens the session.** A press on the row of an agent goes to the panel
+  that already shows its session, or opens one in the workspace of the machine:
+  the workspace that carries the name of the machine, which the press makes with
+  the place of that machine when it is not there. The person's press and the
+  keyboard focus of a panel that shows the session are the look that
+  `mark_seen` records.
+- **The shortcut reaches the agents of a machine.** The shortcut for the next
+  agent that waits for the person reaches the panels of this window first, then
+  the agents of a machine that need an answer, then the ones that finished unseen,
+  and it does what a press on the row does.
+- **The notice of a change.** An agent of a machine that changes to **Needs you**
+  or to **Done** while no window of Horizon has the focus sends one desktop
+  notification through the path of a local panel, with the name of the machine
+  beside the name of the agent. The setting that turns notifications off turns
+  this one off too.
+- **The setting.** Settings, General, Machines holds `Show the agents of each
+  machine`, which is `machines.watch_agents`. With it off, every reader stops and
+  the machine section shows no agent.

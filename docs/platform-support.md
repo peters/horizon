@@ -165,19 +165,21 @@ POSIX shell on the machine.
    the interpreter alone and an agent behind one keeps no row. The text of the
    watch still runs there.
 3. The `tmux` of the machine decides whether the title of a pane keeps a
-   character outside ASCII. On this project's Linux test computer, `tmux` 3.6
-   keeps the braille frame of a Codex title, and the title rule answers. On the
-   project's macOS test computer, `tmux` 3.8 replaces that frame by `_`, so a
-   Codex pane of such a machine reports Working and no Needs you: its screen
-   keeps the working line, and a title that holds no state is no claim. The
-   version of `tmux` decides, not the system.
+   character outside ASCII. The text of the watch asks `tmux` with `-u`, so a
+   shell with no UTF-8 locale, which an `ssh` command often is, still reads the
+   braille frame of a Codex title, and the title rule answers. A version of
+   `tmux` that replaces that frame inside the pane keeps the screen rule: such a
+   Codex pane reports Working and no Needs you, because a title that holds no
+   state is no claim.
 4. The text is POSIX shell and its tests run it under each shell that the test
    computer has. macOS has `sh` and `bash` by default and no `dash` and no
    `BusyBox`, so those two lanes run on Linux only. This computer needs the
    OpenSSH client `ssh` in its `PATH`.
 
-The sidebar row of these agents comes in the next round. Until then the watch
-runs its tests and starts no process at the start of Horizon.
+The sidebar shows these agents under each machine of the list, with the state
+that a local agent panel shows, and a press on a row opens the terminal of that
+`tmux` session. Settings, General, Machines holds the check box that turns the
+watch off. The click needs the OpenSSH client, which both systems have.
 
 ## The keyboard
 

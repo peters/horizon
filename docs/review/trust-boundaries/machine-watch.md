@@ -106,6 +106,30 @@ It cannot:
 - make a row of its report the row of a local panel or of an agent of another
   machine.
 
+## What the window does with a row
+
+- **A name and a state are plain text.** The sidebar draws the name of an agent,
+  the name of its machine and its one state word as text, cut with an ellipsis at
+  the width of the row. A name that is cut shows the whole name in its hover. No
+  text of a report becomes the label of a file, a command line or a settings
+  value.
+- **A click passes the checked session name and nothing else.** The row of an
+  agent carries no command from the machine. A press asks the record for the
+  route again, and the command is the constant text of
+  `machines::session_command` with the session name as its one argument, which
+  `block_machines::check_session_name` accepts first. A session name outside that
+  rule has no press: its row says so in its hover and opens nothing.
+- **The terminal is a machine terminal of this build.** The connection holds the
+  options of a terminal of that machine, the key of the record when it binds one,
+  and no command of the report. The panel's title is the name of the agent, which
+  is a value of the machine: it is cleaned and cut as the title of a panel, and it
+  reaches no file and no command line.
+- **The notice of a change is the notice of a panel.** An agent of a machine that
+  changes to **Needs you** or to **Done** while no window of Horizon has the focus
+  sends one desktop notification through the path of a local panel, with the name
+  of the machine beside the name of the agent, and the bounds of that path:
+  [`desktop-notifications.md`](desktop-notifications.md) states them.
+
 ## What the watch does not guarantee
 
 - **That a state is true.** A state is the claim of a machine, as a hook event is

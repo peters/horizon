@@ -5,11 +5,14 @@ applyTo: "crates/horizon-core/src/notify.rs,crates/horizon-core/src/notify/**,cr
 # Trust boundary of a desktop notification
 
 Horizon sends one desktop notification when an agent panel starts to need the
-person or finishes while no Horizon window has the focus of the desktop. The
+person or finishes while no Horizon window has the focus of the desktop, and for
+an agent of a machine of its machine list that changes in the same two ways. The
 body of that notification names the panel, and the name of a panel comes from the
 terminal title of an agent or from a name that the person typed. An agent sets
 its own terminal title, so that name is untrusted text that leaves Horizon
-through a program of the system.
+through a program of the system. The notice of an agent of a machine also names
+that machine, and the name of its agent is the last part of the folder of a pane
+of that machine, which is untrusted text too.
 
 This page states what is untrusted, what Horizon guarantees and what it does not
 guarantee. The module comment of
@@ -72,4 +75,7 @@ states the same rules for the text.
   desktop.
 - **A name can be wrong or long.** An agent can set a title that says anything, so
   a notification can name a panel in a way that misleads the person. It cannot
-  carry more than 60 characters, a line break or a control character.
+  carry more than 60 characters, a line break or a control character. A machine
+  names its own panes, its folders and its programs, so the notice of an agent of
+  a machine follows the same rule and no other: it is text of the machine, cut
+  and cleaned as the name of a panel.

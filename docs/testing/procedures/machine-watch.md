@@ -11,8 +11,9 @@ owner: peters
 # Machine watch test procedure
 
 This procedure tests the part of the watch of the agents of a machine that has no
-user interface. The sidebar row, the click that opens a panel and the
-notification come in the next round, and section 6.6 gives their place.
+user interface, and the rows that the sidebar shows for those agents: the fold,
+the line of a lost link, the press that opens a session, the jump, the totals,
+the shortcut and the notification.
 
 ## 1. Purpose
 
@@ -26,9 +27,10 @@ starts and stops one `ssh` child per machine of the list.
 - Platforms: Linux and macOS as this computer. The machine under test is a Linux
   machine with `tmux`, or this computer itself when a test uses a private `tmux`
   server.
-- This procedure does not test: the sidebar row, the click on an agent, the
-  desktop notification and the jump to the panel. It does not test a machine that
-  is behind a jump host.
+- This procedure tests sections 6.1 to 6.5 without a desktop. Sections 6.6 and
+  6.7 need a desktop, because they read the sidebar and the notification of the
+  system.
+- This procedure does not test a machine that is behind a jump host.
 
 ## 3. Safety
 
@@ -156,40 +158,108 @@ starts and stops one `ssh` child per machine of the list.
    Result: the first line is `HZ	1`, one `P` line names `hz-mw-1`, and the last
    line of the report is `Z`.
 
-3. Start Horizon with the setting `machines.watch_agents` and read the snapshot
-   through the next round, when the sidebar row exists. Until then, this step is
-   not run, and the report of the run says so.
+3. Start Horizon. Read the machine section of the sidebar.
 
-### 6.6 MW-6 — The sidebar, the click and the notice (next round)
+   Result: the row of the machine stands under the heading **Machines**, the
+   agents of its `tmux` sessions stand under that row, and the snapshot of step 4
+   of this section names the same agents.
 
-This procedure gains these tasks when the sidebar row of a machine shows its
-agents:
+### 6.6 MW-6 — The rows of the sidebar
 
-- MW-6.1 The sidebar shows the agent of MW-5 within two seconds.
-- MW-6.2 A turn that ends while the person looks elsewhere says **Done**.
-- MW-6.3 A click on the row opens the panel of that `tmux` session, and the row
-  says no state after the click.
-- MW-6.4 A denied approval says **Needs you** until the agent stops its wait.
-- MW-6.5 A desktop notification tells a row that changed to **Needs you** while
-  no window of Horizon has the focus.
+1. Run the tests of the rows, of the press and of the notice:
+
+   ```bash
+   cargo test -j 8 -p horizon-ui machine_watch
+   ```
+
+   Result: every test passes within 30 seconds. Each test starts a private
+   `tmux` server and a stand-in `ssh`.
+
+2. Start two agents on the machine by hand, each in its own `tmux` session:
+
+   ```bash
+   ssh <machine> "tmux new-session -d -s hz-mw-a '<agent command>'"
+   ssh <machine> "tmux new-session -d -s hz-mw-b '<agent command>'"
+   ```
+
+3. Read the sidebar within four seconds.
+
+   Result: one row stands under the machine for each session. Each row shows the
+   two letters of its kind, the name of the last part of the folder of its pane,
+   and the word and the dot of its state. A working agent shows `Working` with a
+   green dot. An agent that waits for an approval shows `Needs you`.
+
+4. Begin a turn in one agent, and then close and open the lid of the laptop.
+
+   Result: the row of the machine says `link lost just now`, and the place of
+   the agent rows holds one line: `Last seen: 2 agents. Horizon tries again.`
+   After the link comes back, the rows and their states return.
+
+5. Press the chevron in front of the name of the machine.
+
+   Result: the agent rows fold away, and the row of the machine says `1 needs you ·
+   1 done`, else `2 working`, else nothing, in the place of its second line.
+   Press the chevron again: the rows return.
+
+6. Press the row of one agent.
+
+   Result: Horizon opens a terminal in the workspace that carries the name of the
+   machine, and that terminal holds the `tmux` session of the agent. Press the row
+   again: the window goes to that terminal and opens no second one.
+
+7. Begin a turn in one agent, focus another panel, and wait for the turn to end.
+
+   Result: the row of the agent says `Done`. The heading of the machine section
+   says `1 done`. Press the shortcut for the next agent that waits for the person.
+
+   Result: the window opens the terminal of that agent, and its row says no state.
+
+8. Turn the setting off: **Settings**, **General**, **Machines**, clear **Show the
+   agents of each machine**.
+
+   Result: the agent rows leave the machine section within one frame, and the
+   section keeps the row of the machine alone. Turn the setting on again: the rows
+   return.
+
+### 6.7 MW-7 — The notification of a change
+
+> **CAUTION:** THIS STEP SENDS A NOTIFICATION THROUGH THE NOTIFICATION PROGRAM OF
+> THE DESKTOP. A desktop that shows notifications of other work shows this one
+> too.
+
+1. Focus another window of the desktop, so no window of Horizon has the focus.
+
+2. Begin a turn in one agent on the machine, and wait until it asks for an
+   approval.
+
+   Result: one notification of the system says `<agent> needs you · <machine>`.
+
+3. Focus the window of Horizon again, and repeat step 2.
+
+   Result: no notification arrives, because the sidebar shows the change.
 
 ## 7. Pass criteria
 
-- Every test of section 6.1 to 6.4 passes.
-- `cargo clippy -p horizon-core --all-targets -- -D warnings` passes.
+- Every test of section 6.1 to 6.6 passes.
+- The tasks of section 6.6 and of section 6.7 show the results that they name.
+- `cargo clippy -p horizon-core -p horizon-ui --all-targets -- -D warnings` passes.
 - `./scripts/check-maintainability.sh` passes.
-- No `ssh` child of a test stays after its test: `ps -A -o args= | grep -c hzw-child`
+- No `ssh` child of a test stays after its test: `ps -A -o args= | grep -c hzw-ui-ssh`
   prints `0`.
+- No `tmux` server of a test stays after its test: `tmux -L hzw-ui-<pid>-1 ls`
+  prints `no server running`.
 
 ## 8. Cleanup
 
-1. End the `tmux` session of MW-5. Run:
+1. End the `tmux` sessions of MW-5 and MW-6. Run:
 
    ```bash
    ssh <machine> "tmux kill-session -t hz-mw-1"
+   ssh <machine> "tmux kill-session -t hz-mw-a"
+   ssh <machine> "tmux kill-session -t hz-mw-b"
    ```
 
-   Result: `ssh <machine> "tmux list-sessions"` does not name `hz-mw-1`.
+   Result: `ssh <machine> "tmux list-sessions"` names none of them.
 
 2. Remove the build folder of the test. Run:
 
