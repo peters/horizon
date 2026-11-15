@@ -620,8 +620,7 @@ fn render_settings_panel(
         .fixed_pos(rect.min)
         .default_size(rect.size())
         .order(egui::Order::Tooltip)
-        // The pane is no overlay that appears over the work: it takes its edge of the
-        // window at once, as the panel did before it had a layer of its own.
+        // The pane takes its edge of the window at once, as it did as a panel.
         .fade_in(false)
         .show(ui.ctx(), |ui| {
             ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {

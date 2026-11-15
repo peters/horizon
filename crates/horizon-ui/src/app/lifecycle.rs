@@ -47,10 +47,10 @@ impl HorizonApp {
             }
             self.theme_settling = true;
         } else if std::mem::take(&mut self.theme_settling) {
-            // The pass that changed the theme built its text with the font atlas of the
-            // theme before it, because a pass takes its text options before this call.
-            // The atlas of the new theme is built in the pass that follows, so the shapes
-            // of the change are stale and the text of those caches is built again.
+            // The pass that changed the theme built its text with the atlas of the theme
+            // before it, because a pass takes its text options before this call. The atlas
+            // of the new theme is built in the pass that follows, so the text of those
+            // caches is built again there.
             self.panel_render_caches.terminal_grid_cache.clear();
             self.panel_render_caches.editor_preview_cache.clear();
         }
