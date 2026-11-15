@@ -13,9 +13,11 @@ cards of a machine forwards one Unix socket of each session. This test proves:
     one, in both directions;
   * `machine_card_agent.py` speaks MCP over such a socket: it sends `initialize`,
     then `block_panel create` with a card of two buttons, and `--once` ends it;
-  * a click that the server answers leads to one `block_panel update` whose document
-    names the label that the person pressed;
-  * a socket that never answers ends the program with one line and a status.
+  * a click that the server answers in the shape of the block skill leads to one
+    `block_panel update` whose document names the label that the person pressed;
+  * a socket that never answers ends the program with one line and a status;
+  * the machine record that the fixture writes carries the mark of the cards, which
+    is the field that the record reader in core reads.
 
 Standard library only. Nothing is written outside the folder of a test.
 """
@@ -34,12 +36,21 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FIXTURE = HERE.parent
+ROOT = FIXTURE.parents[1]
 AGENT = FIXTURE / 'machine_card_agent.py'
 sys.path.insert(0, str(FIXTURE))
 import serve  # noqa: E402
 
 # How long a test waits for a socket or for a line of the agent, in seconds.
 DEADLINE = 20.0
+
+# The answer of one press, as the block skill prints it
+# (`assets/plugins/claude-code/skills/horizon-block/SKILL.md`, "Read a click"), with
+# the panel and the revision of the card of this test. The press is the object
+# `click`, and the button that the person hit is its `component_id`.
+CLICK_ANSWER = {'status': 'clicked', 'click': {
+    'event_id': 4, 'panel_id': 'card-1', 'component_id': 'continue',
+    'revision': 1, 'selected': [], 'at_millis': 1700000000000, 'stale': False}}
 
 
 def wait_for(what, wanted, deadline=DEADLINE):
@@ -191,7 +202,7 @@ class MachineCardAgentTest(unittest.TestCase):
         socket_path = self.root / 'cards' / 'build-1' / 'hz-night.sock'
         server = OneServer(socket_path, [
             {'status': 'created', 'panel_id': 'card-1', 'revision': 1},
-            {'status': 'clicked', 'component_id': 'stop', 'panel_id': 'card-1', 'revision': 1},
+            CLICK_ANSWER,
             {'status': 'updated', 'panel_id': 'card-1', 'revision': 2},
         ])
         server.start()
@@ -203,7 +214,7 @@ class MachineCardAgentTest(unittest.TestCase):
         self.assertEqual([call['operation'] for call in calls[:3]], ['create', 'next_click', 'update'], calls)
         self.assertEqual(calls[1]['panel_id'], 'card-1')
         texts = [component.get('text', '') for component in calls[2]['document']['components']]
-        self.assertTrue(any('Stop' in text for text in texts), texts)
+        self.assertIn('The person pressed Continue.', texts)
         wait_for('the end of the agent', lambda: server.done.is_set() or child.poll() is not None)
 
     def test_a_socket_that_never_answers_says_so_and_ends(self):
@@ -212,6 +223,23 @@ class MachineCardAgentTest(unittest.TestCase):
         output, _ = agent.communicate(timeout=60)
         self.assertEqual(agent.returncode, 1, output)
         self.assertIn('machine-card-agent:', output)
+
+
+class MachineRecordOfTheFixture(unittest.TestCase):
+    """The record that the fixture writes says what the reader in core reads."""
+
+    def test_the_machine_record_marks_the_cards_of_that_machine(self):
+        with tempfile.TemporaryDirectory(prefix='hz-machine-record-') as folder:
+            written = json.loads(serve.machine_watch_record(folder).read_text(encoding='utf-8'))
+        record = written['machines'][0]
+        self.assertIs(record.get(serve.MACHINE_RECORD_CARDS), True,
+                      'the record that the fixture writes marks the cards of its machine')
+        # The mark is a field of the record that the candidate reads. A fixture that
+        # writes another name seeds a record with no card socket, so the agent of the
+        # machine waits for ever and no card is drawn.
+        reader = (ROOT / 'crates/horizon-core/src/machines/record.rs').read_text(encoding='utf-8')
+        self.assertTrue(f'pub {serve.MACHINE_RECORD_CARDS}: bool,' in reader,
+                        'the record in core declares the mark that the fixture writes')
 
 
 class StandInSshTest(unittest.TestCase):

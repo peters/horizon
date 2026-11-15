@@ -835,6 +835,11 @@ MACHINE_WATCH_FOLDER = 'machine-watch'
 MACHINE_WATCH_PROGRAM = 'ssh'
 MACHINE_WATCH_SOCKET = 'hz-watch'
 MACHINE_WATCH_MACHINE = 'build-1'
+# The field of a machine record that says the setup of the cards of that machine ran:
+# without it the candidate serves no card socket for its sessions. It is the field
+# that `crates/horizon-core/src/machines/record.rs` reads, so a rename there is a
+# record that no card of the fixture can reach.
+MACHINE_RECORD_CARDS = 'cards'
 # The folder of the card sockets of the machine, which the sandbox sees as `/tmp`.
 HORIZON_CARDS_FOLDER = 'horizon-cards'
 # The two agents of that server: the session, the folder of its pane, which names the
@@ -1044,10 +1049,8 @@ def machine_watch_record(private_home):
     """
     root = Path(private_home) / HORIZON_HOME_FOLDER / 'machines'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # `cards` is the mark that the setup of the cards writes with `machine_set`:
-    # without it Horizon serves no card socket for the sessions of this machine.
     record = {'name': MACHINE_WATCH_MACHINE, 'host': MACHINE_WATCH_MACHINE,
-              'provider': 'Stand-in, this fixture', 'cards': True, 'added_at_millis': 0}
+              'provider': 'Stand-in, this fixture', MACHINE_RECORD_CARDS: True, 'added_at_millis': 0}
     (root / 'registry.json').write_text(json.dumps({'machines': [record]}, indent=2), encoding='utf-8')
     return root / 'registry.json'
 
