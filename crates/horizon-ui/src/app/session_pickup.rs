@@ -72,9 +72,8 @@ pub(in crate::app) struct SessionPickup {
     confirm: Option<AgentSessionKey>,
     /// Why a press opened nothing, in the words of the window.
     notice: Option<String>,
-    /// The folder whose agent stores a test reads in the place of the home of the
-    /// person.
-    #[cfg(test)]
+    /// A folder that stands in for the home of the person. A test names one; a
+    /// window of a person has none.
     stores_home: Option<std::path::PathBuf>,
 }
 
@@ -83,11 +82,7 @@ impl SessionPickup {
     /// there (`.claude`, `.codex`). It is NOT the home of Horizon, which holds
     /// the state of Horizon alone and no store of another program.
     fn stores_home(&self) -> Option<std::path::PathBuf> {
-        #[cfg(test)]
-        if let Some(home) = &self.stores_home {
-            return Some(home.clone());
-        }
-        horizon_core::user_home_dir()
+        self.stores_home.clone().or_else(horizon_core::user_home_dir)
     }
 }
 
