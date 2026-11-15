@@ -5,10 +5,11 @@
 //! only when the report changed. The command of that child is the one word `sh`, which
 //! no login shell of a machine has to read, and the text arrives on its input. The
 //! report names the panes of the `tmux` sessions of that user, the program of a pane,
-//! its folder, its title, the command line of its program when an interpreter runs
-//! there, and the last rows of its screen. The watch turns it into one row for each
-//! pane whose program is one of the agent kinds of [`crate::agents`], with the state
-//! that a local panel of that kind would show.
+//! its folder, its title, the state that its program reports in the pane option
+//! `@horizon_state`, the command line of its program when an interpreter runs there,
+//! and the last rows of its screen. The watch turns it into one row for each pane whose
+//! program is one of the agent kinds of [`crate::agents`], or whose program reports a
+//! state, with the state that a local panel of that kind would show.
 //!
 //! Every byte that a machine returns is untrusted, and the page
 //! `docs/review/trust-boundaries/machine-watch.md` states that boundary: the report
