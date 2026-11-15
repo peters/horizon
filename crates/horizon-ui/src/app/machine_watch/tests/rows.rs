@@ -187,6 +187,42 @@ fn a_turn_that_ends_in_the_panel_of_the_session_that_has_the_focus_is_no_done() 
 }
 
 #[test]
+fn a_pane_that_reports_a_state_says_needs_you_before_the_title_of_its_agent() {
+    let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
+        return;
+    };
+    server.send("hz-shop-1", "start");
+    wait_for(&ctx, &mut app, "the working turn of the agent", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::Working)
+    });
+    // The title of the stand-in says that its turn runs, and the program of the pane
+    // reports that the turn waits for the person.
+    server.report("hz-shop-1", Some("blocked"));
+    wait_for(&ctx, &mut app, "the state that the pane reports", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::NeedsYou)
+    });
+    let texts = sidebar_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|text| text == "Needs you"),
+        "the report of the pane answers before the working title: {texts:?}"
+    );
+    // A word outside the four of the contract is no state, and the title answers again.
+    server.report("hz-shop-1", Some("blocked please"));
+    wait_for(
+        &ctx,
+        &mut app,
+        "the title rule after a word outside the contract",
+        |app| agent_state(app, "hz-shop-1") == Some(AgentState::Working),
+    );
+    server.report("hz-shop-1", None);
+    let texts = sidebar_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|text| text == "Working"),
+        "a state that the program took back leaves the title rule: {texts:?}"
+    );
+}
+
+#[test]
 fn a_frame_whose_snapshot_did_not_change_builds_no_row_again() {
     let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
         return;

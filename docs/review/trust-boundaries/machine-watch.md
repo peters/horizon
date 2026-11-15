@@ -38,11 +38,12 @@ state.
   POSIX cannot run. The reader writes the text of the watch to the standard input
   of the `ssh` child and closes that pipe at once, so `sh` reads it there.
 - **The remote text is one constant of this build.** It is POSIX `sh` and it uses
-  `tmux`, `ps`, `cksum` and the built-ins of `sh`. It runs in a loop, and it
-  prints a report only when the report changed; a still machine prints one short
-  heartbeat line instead. The text is no argument of a process, so no command
-  line of this computer and no process list of the machine holds it.
-- **No value of a record reaches that text, and no value of a report reaches a
+  `tmux`, `ps`, `cksum` and the built-ins of `sh`. It reads the panes of the
+  `tmux` sessions of that user, and the pane option `@horizon_state` of each pane.
+  It runs in a loop, and it prints a report only when the report changed; a still
+  machine prints one short heartbeat line instead. The text is no argument of a
+  process, so no command line of this computer and no process list of the machine
+  holds it.- **No value of a record reaches that text, and no value of a report reaches a
   command line of this computer.** The route and the key are arguments of `ssh`,
   and they pass the rule of an SSH terminal first. The text reads no name, no
   path, no session and no key of the record.
@@ -89,6 +90,14 @@ state.
 - **The state is a claim of the machine.** A row says that its machine claims an
   agent pane with a state. It is not proof that the agent runs, that its state is
   true, or that the pane belongs to the person.
+- **The state of a pane is one of four words or no report.** The text reads the
+  `tmux` pane option `@horizon_state` and sends it as one field of the pane line.
+  The parser accepts `working`, `blocked`, `done` and `idle`, with the exact case,
+  and it reads every other word, every empty field and a field above its bound as
+  no report. A report of a pane is therefore one of the four states of this build
+  or nothing, and no text of a program of a machine becomes a name, a word or a
+  state of this window. The option itself is a value that any program of that
+  user, and the machine, can set: it proves nothing.
 
 ## What a taken-over machine can do, and what it cannot do
 

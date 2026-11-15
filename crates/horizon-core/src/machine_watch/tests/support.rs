@@ -172,6 +172,17 @@ impl Server {
         let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_title}"]);
         String::from_utf8_lossy(&output.stdout).trim_end().to_owned()
     }
+
+    /// The state that the program of the pane of `session` reports in the pane option
+    /// `@horizon_state`, as the program of a pane sets it, or the removal of it.
+    pub(crate) fn report(&self, session: &str, word: Option<&str>) {
+        let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_id}"]);
+        let pane = String::from_utf8_lossy(&output.stdout).trim_end().to_owned();
+        match word {
+            Some(word) => self.run(&["set-option", "-p", "-t", &pane, "@horizon_state", word]),
+            None => self.run(&["set-option", "-p", "-u", "-t", &pane, "@horizon_state"]),
+        }
+    }
 }
 
 impl Drop for Server {

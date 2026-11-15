@@ -4,7 +4,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::machine_watch::{MAX_PANES, REMOTE_TEXT, SLOW_INTERVAL_SECS, WATCH_FORMAT_VERSION, WATCH_INTERVAL_SECS};
+use crate::machine_watch::{
+    AgentPrograms, AgentState, MAX_PANES, MachineAgent, MachineModel, REMOTE_TEXT, SLOW_INTERVAL_SECS,
+    WATCH_FORMAT_VERSION, WATCH_INTERVAL_SECS, observations, parse_report,
+};
 use crate::util::stand_in_program_in;
 
 use super::support::{self, Server, Shell, field, has, pane_of, run_text, run_text_with, wait_until};
@@ -107,8 +110,8 @@ fn a_pane_names_its_session_its_program_and_its_folder() {
     );
     assert_eq!(
         pane.split('\t').count(),
-        6,
-        "a pane line holds five values and no more: {pane:?}"
+        7,
+        "a pane line holds six values and no more: {pane:?}"
     );
 }
 
@@ -234,6 +237,78 @@ fn a_codex_stand_in_is_a_pane_whose_title_names_its_state() {
     );
 }
 
+/// The rows of the model of the report that `run` printed: what the whole reader makes
+/// of the text of the watch, from its lines to the state of each agent.
+fn rows_of(run: &support::RunOutput) -> Vec<MachineAgent> {
+    let lines: Vec<Vec<u8>> = run.lines.iter().map(|line| line.as_bytes().to_vec()).collect();
+    let report = parse_report(&lines).expect("the report of the text parses");
+    let mut model = MachineModel::new("build-1");
+    model.observe(&observations(&report, &AgentPrograms::builtin()));
+    model.rows()
+}
+
+/// The state of the agent of `session` in `rows`, or `None` for no row of it.
+fn state_of(rows: &[MachineAgent], session: &str) -> Option<AgentState> {
+    rows.iter()
+        .find(|agent| agent.session == session)
+        .map(|agent| agent.state)
+}
+
+#[test]
+fn a_state_that_a_pane_reports_answers_before_the_title_of_its_program() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    let Some((_folder, command)) = codex_command() else {
+        return;
+    };
+    server.session("hz-claim-1", &command);
+    server.run(&["send-keys", "-t", "hz-claim-1", "start", "Enter"]);
+    wait_until("a frame of the spinner in the title of the stand-in", || {
+        server
+            .title("hz-claim-1")
+            .chars()
+            .next()
+            .is_some_and(|first| ('\u{2800}'..='\u{28ff}').contains(&first))
+    });
+    let run = run_text(&server, &SH);
+    assert_eq!(
+        field(pane_of(&run, "hz-claim-1"), 6),
+        "",
+        "a pane that reports no state gives an empty field: {:?}",
+        pane_of(&run, "hz-claim-1")
+    );
+    assert_eq!(
+        state_of(&rows_of(&run), "hz-claim-1"),
+        Some(AgentState::Working),
+        "the working title of the program answers when the pane reports no state"
+    );
+    server.report("hz-claim-1", Some("blocked"));
+    let run = run_text(&server, &SH);
+    assert_eq!(
+        field(pane_of(&run, "hz-claim-1"), 6),
+        "blocked",
+        "the pane option of the pane is one field of its line"
+    );
+    assert_eq!(
+        state_of(&rows_of(&run), "hz-claim-1"),
+        Some(AgentState::NeedsYou),
+        "the state of the pane answers before the working title of its program"
+    );
+    server.report("hz-claim-1", None);
+    assert_eq!(
+        state_of(&rows_of(&run_text(&server, &SH)), "hz-claim-1"),
+        Some(AgentState::Working),
+        "a state that the program took back leaves the title rule"
+    );
+    server.report("hz-claim-1", Some("BLOCKED"));
+    assert_eq!(
+        state_of(&rows_of(&run_text(&server, &SH)), "hz-claim-1"),
+        Some(AgentState::Working),
+        "a word outside the four of the contract is no state, and the title answers"
+    );
+}
+
 #[test]
 fn a_working_line_that_a_pane_prints_is_one_of_its_last_rows() {
     let Some(server) = Server::new() else {
@@ -343,6 +418,21 @@ fn codex_stand_in() -> Option<(tempfile::TempDir, PathBuf)> {
     let body = format!("#!/bin/sh\nexec {python} {} \"$@\"\n", script.display());
     let program = stand_in_program_in(folder.path(), "codex", &body).ok()?;
     Some((folder, program))
+}
+
+/// The command line of the Codex stand-in of this repository in a pane of a test: an
+/// interpreter and a copy of the script under the name `codex`, so the command line of
+/// the interpreter names the agent kind of the pane.
+fn codex_command() -> Option<(tempfile::TempDir, String)> {
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/device-smoke/codex_attention_standin.py")
+        .canonicalize()
+        .ok()?;
+    let python = ["python3", "python"].into_iter().find(|program| has(program))?;
+    let folder = tempfile::tempdir().ok()?;
+    let program = folder.path().join("codex");
+    std::fs::copy(script, &program).ok()?;
+    Some((folder, format!("{python} {}", program.display())))
 }
 
 /// A program that writes the frame of a Codex turn into the title of its pane, and

@@ -11,7 +11,7 @@ use crate::machine_watch::{
 fn report(panes: &[(&str, &str, &str)]) -> crate::machine_watch::Report {
     let mut lines = vec![format!("HZ\t{WATCH_FORMAT_VERSION}").into_bytes()];
     for (pane, command, title) in panes {
-        lines.push(format!("P\t{pane}\thz-1\t{command}\t/home/person/shop\t{title}").into_bytes());
+        lines.push(format!("P\t{pane}\thz-1\t{command}\t/home/person/shop\t{title}\t").into_bytes());
     }
     lines.push(b"Z".to_vec());
     parse_report(&lines).expect("the report of the test parses")

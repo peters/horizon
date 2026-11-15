@@ -108,6 +108,27 @@ fn an_agent_of_a_machine_that_waits_sends_one_notice_with_the_name_of_its_machin
 }
 
 #[test]
+fn a_state_that_the_pane_reports_sends_the_notice_of_today() {
+    let Some((_folder, server, _ssh, ctx, mut app, recorder)) = app_with_one_agent() else {
+        return;
+    };
+    frame_with_focus(&ctx, &mut app, false);
+    // The title of the stand-in names no wait, and the program of its pane reports one.
+    server.report("hz-shop-1", Some("blocked"));
+    wait_for_unfocused(&ctx, &mut app, "the state that the pane reports", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::NeedsYou)
+    });
+    frame_with_focus(&ctx, &mut app, false);
+    app.notifications
+        .poll(app.board.workspaces.len() > 1, Instant::now() + GROUP, &ctx);
+    assert_eq!(
+        recorder.lines(),
+        vec!["shop needs you \u{00b7} build-1"],
+        "a report of a pane is the notice of an agent of a machine"
+    );
+}
+
+#[test]
 fn an_agent_of_a_machine_that_waits_sends_nothing_while_a_window_is_in_front() {
     let Some((_folder, server, _ssh, ctx, mut app, recorder)) = app_with_one_agent() else {
         return;

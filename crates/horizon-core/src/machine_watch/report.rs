@@ -7,6 +7,7 @@
 //! the watch goes on with the report before it. No value of a report is interpreted as
 //! a path, a command or a name of anything of this computer.
 
+use super::state::AgentState;
 use super::{
     MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_BYTES, MAX_REPORT_LINES, MAX_ROWS, WATCH_FORMAT_VERSION,
 };
@@ -45,6 +46,10 @@ pub struct PaneReport {
     pub command: String,
     pub cwd: String,
     pub title: String,
+    /// The state that the program of the pane reports in the pane option
+    /// `@horizon_state`, or `None` for no report and for a word outside the four of the
+    /// contract.
+    pub claim: Option<AgentState>,
     /// The command lines of the processes of the pane's terminal, newest first, which
     /// the text reports only when an interpreter runs in the pane.
     pub command_lines: Vec<String>,
@@ -166,8 +171,8 @@ impl Report {
         match kind {
             "P" => {
                 let fields: Vec<&str> = rest.split('\t').collect();
-                let [pane, session, command, cwd, title] = fields.as_slice() else {
-                    return Err(shape("a pane line holds five values"));
+                let [pane, session, command, cwd, title, claim] = fields.as_slice() else {
+                    return Err(shape("a pane line holds six values"));
                 };
                 if !is_pane_id(pane) {
                     return Err(shape("a pane id is '%' and digits"));
@@ -181,6 +186,7 @@ impl Report {
                     command: (*command).to_owned(),
                     cwd: (*cwd).to_owned(),
                     title: (*title).to_owned(),
+                    claim: AgentState::claim_of(claim),
                     command_lines: Vec::new(),
                     rows: Vec::new(),
                 });

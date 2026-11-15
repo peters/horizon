@@ -14,7 +14,15 @@ fn one(title: TitleState, working: bool) -> Vec<AgentObservation> {
         name: "shop".to_owned(),
         title,
         working,
+        claim: None,
     }]
+}
+
+/// One report of the agent of `one` whose program reports `claim` in its pane option.
+fn claiming(title: TitleState, claim: AgentState) -> Vec<AgentObservation> {
+    let mut observations = one(title, false);
+    observations[0].claim = Some(claim);
+    observations
 }
 
 /// The state of the only row of `model`.
@@ -134,6 +142,58 @@ fn a_working_line_of_the_screen_answers_when_the_title_names_no_state() {
         state(&model),
         AgentState::Working,
         "a title that names a state answers before the screen"
+    );
+}
+
+#[test]
+fn a_state_that_the_pane_reports_answers_before_the_title_and_the_screen() {
+    let mut model = MachineModel::new("build-1");
+    model.observe(&claiming(TitleState::Plain, AgentState::NeedsYou));
+    assert_eq!(state(&model), AgentState::NeedsYou);
+    model.observe(&claiming(TitleState::Working, AgentState::Idle));
+    assert_eq!(
+        state(&model),
+        AgentState::Idle,
+        "a report of no state answers before the working title"
+    );
+    model.observe(&claiming(TitleState::Plain, AgentState::Working));
+    assert_eq!(
+        state(&model),
+        AgentState::Working,
+        "a report that works answers without a title and without a screen"
+    );
+    model.observe(&one(TitleState::NeedsYou, false));
+    assert_eq!(
+        state(&model),
+        AgentState::NeedsYou,
+        "a report that the program took back leaves the title rule"
+    );
+}
+
+#[test]
+fn a_done_that_the_pane_reports_is_seen_as_a_done_of_the_title_is_seen() {
+    let mut model = MachineModel::new("build-1");
+    model.observe(&claiming(TitleState::Plain, AgentState::Working));
+    model.observe(&claiming(TitleState::Plain, AgentState::Done));
+    assert_eq!(
+        state(&model),
+        AgentState::Done,
+        "a turn that ended while the person did not look is unread"
+    );
+    assert!(!model.observe(&claiming(TitleState::Plain, AgentState::Done)));
+    assert!(model.mark_seen("hz-1", "%0"), "the look clears the finished turn");
+    assert_eq!(state(&model), AgentState::Idle);
+    assert!(
+        !model.observe(&claiming(TitleState::Plain, AgentState::Done)),
+        "a report of the same done after the look changes no row"
+    );
+    assert_eq!(state(&model), AgentState::Idle);
+    model.observe(&claiming(TitleState::Plain, AgentState::Working));
+    model.observe(&claiming(TitleState::Plain, AgentState::Done));
+    assert_eq!(
+        state(&model),
+        AgentState::Done,
+        "a later turn that ends unseen is unread"
     );
 }
 

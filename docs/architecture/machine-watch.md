@@ -45,11 +45,11 @@ says `OverTheLimit`.
 
 ## The remote text
 
-The text is one constant of this build, and it is 60 statements of POSIX shell.
-It runs under `dash`, under `bash` and under the shell of `BusyBox`, and its tests
-run it under each shell that this computer has. It uses `tmux`, `ps` and the
-built-ins of the shell. It is no argument of `ssh`: the command of the child is
-the one word `sh`, and the text arrives on its standard input.
+The text is one constant of this build, and it is POSIX shell. It runs under
+`dash`, under `bash` and under the shell of `BusyBox`, and its tests run it under
+each shell that this computer has. It uses `tmux`, `ps` and the built-ins of the
+shell. It is no argument of `ssh`: the command of the child is the one word `sh`,
+and the text arrives on its standard input.
 
 The loop prints one report, waits `WATCH_INTERVAL_SECS` (2) seconds, and builds
 the next report. It prints that report only when it differs from the report
@@ -72,6 +72,7 @@ The text reads the panes of every `tmux` session of that user:
 | The foreground program | `#{pane_current_command}` |
 | The folder | `#{pane_current_path}` |
 | The title | `#{pane_title}` |
+| The state that the program of the pane reports | `#{@horizon_state}` |
 | The command lines of the pane, when an interpreter runs there | `ps -t` of `#{pane_tty}` |
 | The last six rows of the screen | `tmux capture-pane -p` |
 
@@ -96,7 +97,7 @@ One report holds these lines, separated by a tab:
 | Line | Fields |
 |---|---|
 | `HZ` | The version of the format, which is `1`. |
-| `P` | The pane id, the session, the program, the folder and the title. |
+| `P` | The pane id, the session, the program, the folder, the title and the reported state. |
 | `A` | The pane id and one command line of the processes of its terminal. |
 | `R` | The pane id and one row of its screen. |
 | `X` | The note `no-tmux` or `no-server`. |
@@ -130,14 +131,21 @@ machine and on this computer.
 
 | Signal | Word |
 |---|---|
+| The program of the pane reports `working` | Working |
+| The program of the pane reports `blocked` | Needs you |
+| The program of the pane reports `done` after the last look of the person | Done |
+| The program of the pane reports `idle` | No word |
 | The title rule of the kind says that the program works, or a row of the screen holds a working line | Working |
 | The title rule of the kind says that an approval waits | Needs you |
 | The turn ended after the last look of the person | Done |
 | Idle, and the person saw it | No word |
 
-The title rule of the kind answers first, and the working line of the last rows
-of the screen answers after it. Only the Codex kind has a title rule in this
-build, so only a Codex pane reports **Needs you** in this round.
+The state that the program of the pane reports answers first, because that
+program knows its own state; the title rule of the kind answers next, and the
+working line of the last rows of the screen answers last. A report of `blocked`
+and one of `working` are a turn that runs, so an end of that turn is unread.
+Only the Codex kind has a title rule in this build, so only a Codex pane reports
+**Needs you** from its title.
 
 The `tmux` of a machine decides whether the title of a pane keeps a character
 outside ASCII. `tmux` 3.6 keeps the braille frame of a Codex title and `tmux` 3.8

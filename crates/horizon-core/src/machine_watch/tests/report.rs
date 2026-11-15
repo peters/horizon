@@ -3,8 +3,8 @@
 
 use crate::PanelKind;
 use crate::machine_watch::{
-    AgentPrograms, MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_LINES, MAX_ROWS, MachineNote, ReportError,
-    WATCH_FORMAT_VERSION, observations, parse_report,
+    AgentPrograms, AgentState, MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_LINES, MAX_ROWS, MachineNote,
+    ReportError, WATCH_FORMAT_VERSION, observations, parse_report,
 };
 
 /// One line of a report, as the text of the watch writes it.
@@ -22,7 +22,12 @@ fn report_of(lines: &[&str]) -> Vec<Vec<u8>> {
 
 /// One pane line of the report of `pane`.
 fn pane_line(pane: &str, session: &str, command: &str, cwd: &str, title: &str) -> String {
-    format!("P\t{pane}\t{session}\t{command}\t{cwd}\t{title}")
+    reports(pane, session, command, cwd, title, "")
+}
+
+/// One pane line of the report of `pane`, whose program reports the state `claim`.
+fn reports(pane: &str, session: &str, command: &str, cwd: &str, title: &str, claim: &str) -> String {
+    format!("P\t{pane}\t{session}\t{command}\t{cwd}\t{title}\t{claim}")
 }
 
 #[test]
@@ -67,7 +72,7 @@ fn a_report_without_its_header_or_its_terminator_is_dropped() {
         })
     );
     assert_eq!(
-        parse_report(&[line("HZ\t1"), line("P\t%0\thz\tcodex\t/w\tt")]),
+        parse_report(&[line("HZ\t1"), line("P\t%0\thz\tcodex\t/w\tt\t")]),
         Err(ReportError::Shape {
             line: 2,
             reason: "the report does not end with its terminator",
@@ -104,7 +109,7 @@ fn a_cut_line_and_a_line_of_another_shape_drop_the_report() {
         parse_report(&[line("HZ\t1"), cut, line("Z")]),
         Err(ReportError::Shape {
             line: 2,
-            reason: "a pane line holds five values",
+            reason: "a pane line holds six values",
         })
     );
     assert_eq!(
@@ -238,6 +243,32 @@ fn a_pane_from_a_program_of_an_agent_kind_is_one_agent_with_its_folder() {
     assert!(
         !agent.working,
         "the Codex title answers and no row holds a working line"
+    );
+}
+
+#[test]
+fn a_pane_names_the_state_that_its_program_reports() {
+    let report = parse_report(&report_of(&[
+        &reports("%0", "hz-1", "claude", "/w/shop", "shop", "blocked"),
+        &reports("%1", "hz-1", "claude", "/w/shop", "shop", "Working"),
+        &reports("%2", "hz-1", "claude", "/w/shop", "shop", ""),
+        &reports("%3", "hz-1", "sleep", "/w", "", "working"),
+        &reports("%4", "hz-1", "sleep", "/w", "", "done"),
+        &reports("%5", "hz-1", "sleep", "/w", "", "idle"),
+    ]))
+    .expect("the report parses");
+    let claims: Vec<Option<crate::machine_watch::AgentState>> = report.panes.iter().map(|pane| pane.claim).collect();
+    assert_eq!(
+        claims,
+        vec![
+            Some(AgentState::NeedsYou),
+            None,
+            None,
+            Some(AgentState::Working),
+            Some(AgentState::Done),
+            Some(AgentState::Idle),
+        ],
+        "each of the four words of the contract is one state, and another word is none"
     );
 }
 

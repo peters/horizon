@@ -110,6 +110,17 @@ impl Server {
     pub(crate) fn send(&self, session: &str, word: &str) {
         self.run(&["send-keys", "-t", session, word, "Enter"]);
     }
+
+    /// The state that the program of the pane of `session` reports in the pane option
+    /// `@horizon_state`, as the hook of an agent sets it, or the removal of it.
+    pub(crate) fn report(&self, session: &str, word: Option<&str>) {
+        let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_id}"]);
+        let pane = String::from_utf8_lossy(&output.stdout).trim_end().to_owned();
+        match word {
+            Some(word) => self.run(&["set-option", "-p", "-t", &pane, "@horizon_state", word]),
+            None => self.run(&["set-option", "-p", "-u", "-t", &pane, "@horizon_state"]),
+        }
+    }
 }
 
 impl Drop for Server {

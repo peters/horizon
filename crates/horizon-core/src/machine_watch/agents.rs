@@ -7,9 +7,9 @@
 //! pane's terminal when an interpreter runs there, and this module finds the kind in
 //! the first words of those lines.
 //!
-//! Every other pane is ignored: a shell, an editor and a plain command are no agent,
-//! and a machine cannot make Horizon keep a row by naming a program that no kind of
-//! this build uses.
+//! Every other pane is ignored: a shell, an editor and a plain command are no agent, and
+//! a machine cannot make Horizon keep a row by naming a program that no kind of this
+//! build uses.
 
 use crate::PanelKind;
 use crate::agent_work::TitleState;
@@ -22,6 +22,7 @@ use crate::is_agent_working_line;
 
 use super::MAX_NAME_CHARS;
 use super::report::{PaneReport, Report};
+use super::state::AgentState;
 
 /// The words of a command line of a pane that this module reads, from its first
 /// word: an interpreter and the program that it runs.
@@ -104,6 +105,9 @@ pub struct AgentObservation {
     pub title: TitleState,
     /// Whether one of the last rows of the pane holds a working line.
     pub working: bool,
+    /// The state that the program of the pane reports in `@horizon_state`, which answers
+    /// before the title and before the screen.
+    pub claim: Option<AgentState>,
 }
 
 /// The agents of the panes of `report`, in the order of its panes.
@@ -121,6 +125,7 @@ pub fn observations(report: &Report, programs: &AgentPrograms) -> Vec<AgentObser
                 name: name_of(pane, kind),
                 title: title_state(kind, &pane.title),
                 working: pane.rows.iter().any(|row| is_agent_working_line(row)),
+                claim: pane.claim,
             })
         })
         .collect()

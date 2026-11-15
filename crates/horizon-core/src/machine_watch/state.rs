@@ -1,10 +1,12 @@
 //! The state of the agents of one machine, from the same rules that a local panel
 //! reads, so one agent looks the same on a machine and on this computer.
 //!
-//! The title rule of the kind answers first, because `tmux` keeps the title of every
-//! pane; when the title names no state, the working line of the last rows of the screen
-//! answers. The four words follow the attention state of a panel, and
-//! [`MachineModel::mark_seen`] is the look of the person.
+//! The state that the program of a pane reports in the pane option `@horizon_state`
+//! answers first, because that program knows its own state. Without a report, the title
+//! rule of the kind answers, because `tmux` keeps the title of every pane; when the title
+//! names no state either, the working line of the last rows of the screen answers. The
+//! four words follow the attention state of a panel, and [`MachineModel::mark_seen`] is
+//! the look of the person.
 //!
 //! A pane that the watch sees for the first time claims nothing while it is idle, so no
 //! turn ended there. A pane that is already working is **Working**, because the watch may
@@ -33,6 +35,20 @@ pub enum AgentState {
 }
 
 impl AgentState {
+    /// The state that one word of the pane option `@horizon_state` names, or `None` for
+    /// a word outside the four of the contract: the text of a machine is untrusted, so
+    /// another word of it is no state.
+    #[must_use]
+    pub fn claim_of(word: &str) -> Option<Self> {
+        match word {
+            "working" => Some(Self::Working),
+            "blocked" => Some(Self::NeedsYou),
+            "done" => Some(Self::Done),
+            "idle" => Some(Self::Idle),
+            _ => None,
+        }
+    }
+
     /// The one word of a row; an idle agent says nothing.
     #[must_use]
     pub const fn word(self) -> Option<&'static str> {
@@ -141,15 +157,27 @@ impl MachineModel {
             let key = (observation.session.clone(), observation.pane.clone());
             seen.push(key.clone());
             let held = self.panes.get(&key);
-            let working = !matches!(observation.title, TitleState::Plain) || observation.working;
+            // The report of the program of the pane answers first, then the title of its
+            // program, then the working line of its screen. A report that waits or that
+            // works is a turn that runs, as a title of those two states is.
+            let claim = observation.claim;
+            let working = match claim {
+                Some(AgentState::Working | AgentState::NeedsYou) => true,
+                Some(AgentState::Idle | AgentState::Done) => false,
+                None => !matches!(observation.title, TitleState::Plain) || observation.working,
+            };
             // A turn that ends in this report ends after every look before it.
             let unread = held.is_some_and(|held| held.unread || (held.working && !working));
-            let state = match observation.title {
-                TitleState::NeedsYou => AgentState::NeedsYou,
-                TitleState::Working => AgentState::Working,
-                TitleState::Plain if working => AgentState::Working,
-                TitleState::Plain if unread => AgentState::Done,
-                TitleState::Plain => AgentState::Idle,
+            let state = match claim {
+                Some(AgentState::Done) if !unread => AgentState::Idle,
+                Some(state) => state,
+                None => match observation.title {
+                    TitleState::NeedsYou => AgentState::NeedsYou,
+                    TitleState::Working => AgentState::Working,
+                    TitleState::Plain if working => AgentState::Working,
+                    TitleState::Plain if unread => AgentState::Done,
+                    TitleState::Plain => AgentState::Idle,
+                },
             };
             let next = PaneState {
                 kind: observation.kind,

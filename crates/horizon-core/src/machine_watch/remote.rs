@@ -50,18 +50,22 @@ terminal() {
     done
   }
 }
-# One pane: session, program, folder, title, the command line of an interpreter
-# that runs there, and the last six rows of its screen.
+# One pane: session, program, folder, title, the state that its program reports in the
+# pane option @horizon_state, the command line of an interpreter that runs there, and
+# the last six rows of its screen.
 pane() {
   p=$1
   s=$(tm display-message -p -t "$p" '#{session_name}' 2>/dev/null) || return 0
   c=$(tm display-message -p -t "$p" '#{pane_current_command}' 2>/dev/null)
   d=$(tm display-message -p -t "$p" '#{pane_current_path}' 2>/dev/null)
   t=$(tm display-message -p -t "$p" '#{pane_title}' 2>/dev/null)
+  # The state of a program of the pane. tmux keeps a user option of a pane, so a job or a
+  # hook of an agent reports its state there, which no screen escape sequence can reach.
+  r=$(tm display-message -p -t "$p" '#{@horizon_state}' 2>/dev/null)
   set -f
-  set -- $s; s=$*; set -- $c; c=$*; set -- $d; d=$*; set -- $t; t=$*
+  set -- $s; s=$*; set -- $c; c=$*; set -- $d; d=$*; set -- $t; t=$*; set -- $r; r=$*
   set +f
-  printf 'P\t%s\t%s\t%s\t%s\t%s\n' "$p" "$s" "$c" "$d" "$t"
+  printf 'P\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$s" "$c" "$d" "$t" "$r"
   # The name of a program has no fixed case: the tmux of macOS names the python of a
   # panel `Python`, and the list below holds the lower-case names.
   lc=$(printf '%s' "$c" | tr 'A-Z' 'a-z')
