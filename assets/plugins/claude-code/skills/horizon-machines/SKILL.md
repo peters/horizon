@@ -1032,11 +1032,12 @@ The card says what the change does and what it keeps:
   {"type": "heading", "text": "Horizon cards for agents here", "subtitle": "build-1"},
   {"type": "kv", "rows": [
     {"label": "Entry", "value": "horizon-cards", "mono": true},
+    {"label": "Relay", "value": "~/.horizon-cards/relay.py", "mono": true},
     {"label": "File", "value": "the settings of the agent program", "mono": true},
     {"label": "Backup", "value": "<file>.horizon-bak", "mono": true}]},
-  {"type": "text", "text": "Each MCP entry runs one shell line that relays the stream of its tmux session to the socket that Horizon forwards. The agent then draws a card in the workspace of this machine."},
+  {"type": "text", "text": "Each MCP entry runs one small relay program of this account, which carries the stream of the tmux session of the agent to the socket that Horizon forwards. The agent then draws a card in the workspace of this machine."},
   {"type": "text", "text": "This puts no program of Horizon on the machine and the machine opens no connection. The setup reads the file first and keeps every other entry."},
-  {"type": "text", "text": "The agent keeps its next_click call open: a card of a machine has no wake line."},
+  {"type": "text", "text": "The relay survives a link that ends: it answers a cut call with an error, and the agent calls again."},
   {"type": "buttons", "items": [
     {"id": "set_up", "label": "Set it up", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
 ```
@@ -1050,64 +1051,157 @@ the machine once:
 
 ```sh
 ssh <options of the machine key> <user>@<address> \
-  'command -v socat || command -v nc || command -v python3'
+  'command -v python3 || command -v nc'
 ```
 
-The first line of the answer is the program of the relay, in this order: `socat`,
-`nc`, `python3`. A machine with none of the three gets no entry: answer the
-refusal `relay_missing`, write nothing on the machine, and say on the card that a
-person can install `socat` or `netcat-openbsd` there and ask again.
+The first line of the answer is the program of the relay, in this order: `python3`
+and `nc`. A machine with neither gets no entry: answer the refusal `relay_missing`,
+write nothing on the machine, and say on the card that a person can install
+`python3` or `netcat-openbsd` there and ask again.
 
 ### 3. Write the entry of the agent
 
-The entry is one command for every session of the user: it learns the `tmux`
-session that the agent runs in, and it relays the stream of the agent to the socket
-of that session. The folder of the sockets is `/tmp/horizon-cards/<machine>/`, and
-the relay makes it again on every start, so a reboot of the machine takes nothing
-with it.
+The entry runs one small relay program of the person's own account. The setup writes
+it once, with mode 700, and every agent program of that machine starts it. The relay
+survives a link that ends: it finds the `tmux` session of the agent, waits for the
+socket of that session, and answers the calls that a lost link cut with an error. The
+agent calls again, and the relay is there.
 
-The line, with `socat`:
+The relay holds no secret and opens no network connection: it talks to one Unix
+socket of that machine and to the standard input and output of its agent.
+
+Step 1 of this section writes the file; step 2 writes the entry.
+
+#### 1. Write the relay program
+
+Make the folder 700:
 
 ```sh
-d=/tmp/horizon-cards/<machine>; s=$(tmux display-message -p '#S') || exit 1; mkdir -p "$d" && chmod 700 "$d" || exit 1; exec socat - UNIX-CONNECT:"$d/$s.sock"
+mkdir -p ~/.horizon-cards && chmod 700 ~/.horizon-cards
 ```
 
-With `nc`, replace the last word with `exec nc -U "$d/$s.sock"`. With `python3`,
-replace it with `exec python3 -c "<script>" "$d/$s.sock"`, where the script holds
-no single quote, so a shell passes it in double quotes:
+Write `~/.horizon-cards/relay.py` on the machine with exactly this text:
 
-```sh
-import socket,sys,threading
-s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1])
-def r():
- while 1:
-  b=s.recv(65536)
-  if not b:break
-  sys.stdout.buffer.write(b);sys.stdout.buffer.flush()
-threading.Thread(target=r,daemon=True).start()
-while 1:
- b=sys.stdin.buffer.read1(65536)
- if not b:break
- s.sendall(b)
+```python
+#!/usr/bin/env python3
+"""Relay the MCP stream of an agent of a machine to the card socket of its tmux session."""
+import json, os, select, socket, subprocess, sys, time
+
+DIR = os.environ.get('HORIZON_CARDS_DIR', '/tmp/horizon-cards')
+LOST = 'The link to Horizon was lost. Call again.'
+RETRY, WAIT = 0.5, 30.0
+try:
+    SESSION = subprocess.run(['tmux', 'display-message', '-p', '#S'], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL).stdout.decode('utf-8', 'replace').strip()
+except OSError:
+    SESSION = ''
+PATH = os.path.join(DIR, sys.argv[1] if len(sys.argv) > 1 else '', SESSION + '.sock')
+
+
+def split(buffer, chunk):
+    lines = (buffer + chunk).split(b'\n')
+    return lines.pop(), [line.strip() for line in lines if line.strip()]
+
+class Relay:
+    def __init__(self):
+        self.sock = None
+        self.pending, self.waiting, self.drop, self.again = [], None, False, False
+        self.init = self.ready = None
+        self.out = self.incoming = self.answers = b''
+
+    def lost(self):
+        for number in self.pending:
+            os.write(1, json.dumps({'jsonrpc': '2.0', 'id': number, 'error': {'code': -32000, 'message': LOST}}).encode() + b'\n')
+        self.pending, self.waiting, self.out, self.again = [], None, b'', True
+        if self.sock: self.sock.close(); self.sock = None
+    def connect(self):
+        held = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try: held.connect(PATH)
+        except OSError: held.close(); return
+        self.sock = held
+        if self.again and self.init: self.drop, self.out = True, self.out + self.init + b'\n' + (self.ready + b'\n' if self.ready else b'')
+
+    def line(self, line):
+        self.out += line + b'\n'
+        try: message = json.loads(line)
+        except ValueError: return
+        method, ident = message.get('method'), message.get('id') if isinstance(message, dict) else None
+        self.init = line if method == 'initialize' else self.init
+        self.ready = line if method == 'notifications/initialized' else self.ready
+        if method and ident is not None: self.pending.append(ident)
+        self.waiting = self.waiting or (time.monotonic() if self.pending else None)
+    def answered(self, line):
+        try: ident = json.loads(line).get('id')
+        except (ValueError, AttributeError): ident = None
+        if ident is not None: self.pending = [one for one in self.pending if one != ident]
+
+    def take(self):
+        chunk = os.read(0, 65536)
+        if not chunk: return False
+        self.incoming, found = split(self.incoming, chunk)
+        for line in found: self.line(line)
+        return True
+    def run(self):
+        while True:
+            if self.sock is None: self.connect()
+            watched = [0] if self.sock is None else [0, self.sock]
+            try: ready, writable, _ = select.select(watched, [self.sock] if self.sock and self.out else [], [], RETRY)
+            except (OSError, select.error): ready, writable = [], []
+            if self.sock in writable:
+                try: self.sock.sendall(self.out); self.out = b''
+                except OSError: self.lost()
+            if 0 in ready and not self.take(): return
+            if self.sock in ready:
+                chunk = self.sock.recv(65536)
+                if not chunk: self.lost()
+                else:
+                    self.answers, found = split(self.answers, chunk)
+                    for line in found:
+                        if self.drop: self.drop = False
+                        else: os.write(1, line + b'\n')
+                        self.answered(line)
+            if self.waiting and time.monotonic() - self.waiting > WAIT: self.lost()
+
+Relay().run()
 ```
 
-Prefer the writer of the agent program itself, so Horizon merges no file and keeps
-no backup. Ask the machine for the program, then write the entry with it:
+Make the file 700:
 
 ```sh
-claude mcp add --scope user horizon-cards -- sh -c '<the line>'
-codex mcp add horizon-cards -- sh -c '<the line>'
-pi mcp add horizon-cards -- sh -c '<the line>'
+chmod 700 ~/.horizon-cards/relay.py
+```
+
+#### 2. Write the entry
+
+The entry is one program and two arguments, so it needs no shell and no quote. The
+shell that runs the command expands `~`, the entry holds the whole path, and the name
+of the machine is `<machine>` in the record of this Horizon:
+
+```sh
+claude mcp add --scope user horizon-cards -- python3 ~/.horizon-cards/relay.py <machine>
+codex mcp add horizon-cards -- python3 ~/.horizon-cards/relay.py <machine>
+pi mcp add horizon-cards -- python3 ~/.horizon-cards/relay.py <machine>
+```
+
+A machine with no `python3` gets the `nc` line instead. This line waits at most 30
+seconds for the socket, and then `nc` ends with the socket: the cards of that machine
+end with a lost link, and the agent starts a new entry only when it starts again. Say
+this on the card.
+
+```sh
+d=/tmp/horizon-cards/<machine>; s=$(tmux display-message -p "#S") || exit 1; i=0; while [ ! -S "$d/$s.sock" ]; do i=$((i + 1)); [ "$i" -le 60 ] || exit 1; sleep 0.5; done; exec nc -U "$d/$s.sock"
 ```
 
 A machine with no such program gets a merge, and the merge keeps one backup with
-the name `<file>.horizon-bak` beside it:
+the name `<file>.horizon-bak` beside it. Read the home of the machine with
+`ssh <options> <user>@<address> 'printf %s "$HOME"'` for the whole path of the
+relay:
 
 - Claude Code and pi hold `mcpServers.horizon-cards` in their user-scope file,
   which is `~/.claude.json` and `~/.pi/agent/mcp.json`. The value is
-  `{"command": "sh", "args": ["-c", "<the line>"]}`.
+  `{"command": "python3", "args": ["<home>/.horizon-cards/relay.py", "<machine>"]}`.
 - Codex holds `[mcp_servers.horizon-cards]` in `~/.codex/config.toml`, with
-  `command = "sh"` and `args = ["-c", "<the line>"]`.
+  `command = "python3"` and `args = ["<home>/.horizon-cards/relay.py", "<machine>"]`.
 
 Merge with the program of step 2 of
 [the exact state](#the-exact-state-of-an-agent-on-a-machine): copy the file first,
@@ -1124,9 +1218,10 @@ cards:      true
 ```
 
 The field is `cards`, and it is false for a machine that has no card setup. Horizon
-starts the `ssh` child of a machine that says true and has at least one session
-that its watch reports, and the machine carries no socket before that. `Remove`
-writes `cards: false` again.
+starts the `ssh` child of a machine that says true and has at least one `tmux`
+session of that user, and the machine carries no socket before that. The child
+carries one socket for each session, also a session that runs no agent program.
+`Remove` writes `cards: false` again.
 
 ### 5. Say what happened
 
@@ -1135,13 +1230,15 @@ Update the card; do not close it until the person reads it.
 - One `text` line names the entry and the file that holds it, for example
   `Wrote mcpServers.horizon-cards in ~/.claude.json.`
 - One `text` line says when a card can appear: after the next report of the watch,
-  and after the agent starts again in its session.
+  which is at most two seconds later. A new session of the user gets its socket
+  without a restart of anything, and an agent program that starts again in its
+  session keeps its socket.
 - One `text` line says what the agent on the machine must know, and it is the text
   that the person can paste into the session of the agent:
 
   > The tool is `block_panel`, and it draws cards only: no terminal, no browser
   > panel and no machine key. Keep `next_click` open: a card of a machine has no
-  > wake line. A lost link ends the call, and the agent calls again.
+  > wake line. A lost link answers your call with an error, and you call again.
 
 - The button is `Close`.
 
@@ -1152,8 +1249,9 @@ Do not claim a card that you did not see.
 `Remove` takes the entry out with the writer of the program when the machine has
 it (`claude mcp remove --scope user horizon-cards`, `codex mcp remove
 horizon-cards`, `pi mcp remove horizon-cards`), and otherwise with the merge
-program in its second direction. It keeps the backup, it writes `cards: false`
-with `machine_set`, and it says on the card that the backup stays.
+program in its second direction. It removes `~/.horizon-cards/relay.py` and its
+folder. It keeps the backup, it writes `cards: false` with `machine_set`, and it
+says on the card that the backup stays.
 
 ## Card documents
 
