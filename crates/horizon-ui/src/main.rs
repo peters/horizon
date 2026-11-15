@@ -134,8 +134,16 @@ fn main() -> eframe::Result {
         eprintln!("error: this file is a build artifact; start target/<profile>/horizon");
         std::process::exit(2);
     }
+    let horizon_home = prepare_home_or_exit();
+    // A start that names a folder while a window of this home runs is a client of
+    // that window. It asks, prints one sentence and ends before the tracing of the
+    // terminal, the settings of the person and the plugins of the home, so a second
+    // start of the same home writes no line of the log and changes no file.
+    if let Some(status) = ask_the_running_window(&horizon_home, &cli_args) {
+        plugin_install::exit_after_releasing_plugins(status);
+    }
     init_tracing();
-    run_window(&prepare_home_or_exit(), &cli_args)
+    run_window(&horizon_home, &cli_args)
 }
 
 /// Remove the throwaway folders that private browser panels of a run that is gone
@@ -201,7 +209,6 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
     let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     sweep_private_browser_profiles(&session_store, &config, horizon_home);
-    show_folder_in_running_horizon(&session_store, cli_args, horizon_home);
     let startup = prepare_startup(&session_store, &config, cli_args);
 
     let window = startup_window_config(&startup, &config.window);
@@ -524,23 +531,23 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
     }
 }
 
-/// Shows the folder of `horizon <folder>` in a Horizon of this home that already
-/// runs, and ends this start with one line.
+/// Asks a Horizon of this home that runs to show the folder of `horizon <folder>`,
+/// and answers the status that this start ends with; `None` says that no window of
+/// this home runs, so the start opens its own.
 ///
 /// A running Horizon keeps a lease with a heartbeat for each session that it
-/// holds, so this start can see it. It then sends one request into the home and
-/// waits a bounded time for the answer of that window. This start never opens a
-/// second window in that case, and it writes one line whatever the answer is.
-fn show_folder_in_running_horizon(
-    session_store: &SessionStore,
-    cli_args: &CliArgs,
-    horizon_home: &horizon_core::HorizonHome,
-) {
-    let Some(folder) = cli_args.folder.as_deref() else {
-        return;
-    };
-    if !a_horizon_already_runs(session_store) {
-        return;
+/// holds, so this start can see it through the files of the home alone. It then
+/// sends one request into the home and waits a bounded time for the answer of that
+/// window, and it writes one sentence whatever the answer is. It reads no setting
+/// and starts no plugin, because a start that only asks a window is a client, not a
+/// window of its own.
+fn ask_the_running_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> Option<i32> {
+    let folder = cli_args.folder.as_deref()?;
+    let config_path =
+        Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
+    let session_store = SessionStore::new(horizon_home.clone(), config_path);
+    if !a_horizon_already_runs(&session_store) {
+        return None;
     }
     let (line, status) = match horizon_core::folder_requests::ask(horizon_home.root(), folder) {
         Ok(Some(answer)) => folder_answer_line(folder, &answer),
@@ -557,7 +564,7 @@ fn show_folder_in_running_horizon(
         0 => println!("{line}"),
         _ => eprintln!("error: {line}"),
     }
-    plugin_install::exit_after_releasing_plugins(status);
+    Some(status)
 }
 
 /// The one line of a window that answered the request of `folder`, and the status
