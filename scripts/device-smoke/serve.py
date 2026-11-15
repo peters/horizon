@@ -838,38 +838,61 @@ MACHINE_WATCH_MACHINE = 'build-1'
 # The two agents of that server: the session, the folder of its pane, which names the
 # agent, and the words that the stand-in of a codex panel receives.
 MACHINE_WATCH_AGENTS = (
-    ('hz-shop', 'shop', ('--startup-question',)),
+    ('hz-shop', 'shop', ('start', 'ask')),
     ('hz-notes', 'notes', ('start',)),
 )
+
+
+def machine_watch_environment(private_tmp):
+    """The environment of a tmux command of this run, outside the sandbox.
+
+    tmux places its socket in the folder that `TMUX_TMPDIR` names and does not read
+    `TMPDIR`, so this names the folder that the sandbox sees as `/tmp`.
+    """
+    return dict(os.environ, TMUX_TMPDIR=str(private_tmp))
+
+
+def machine_watch_stop(private_tmp):
+    """Stop the private tmux server of this run, which is no child of the run."""
+    subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'kill-server'],
+                   env=machine_watch_environment(private_tmp), check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def machine_watch_server(state, private_tmp, python):
     """A private tmux server with two Codex stand-ins, and the text of the watch.
 
     The candidate runs the text of the watch through the stand-in `ssh` of
-    [`machine_watch_standin`], which names this server by `-L`. A tmux client reads
-    that name in the folder that `TMPDIR` names, and the namespace of the fixture
-    binds its private `TMPDIR` over `/tmp`, so the server starts here with the same
-    `TMPDIR` and the client of the sandbox finds its socket.
+    [`machine_watch_standin`], which names this server by `-L`. The client of the
+    sandbox reads that name under `/tmp`, which the namespace of the fixture binds
+    to its private folder, so the server starts with [`machine_watch_environment`].
 
-    The two sessions show the two states of a row: the first one blinks the trust
-    question of a launch, which is an approval that waits for the person, and the
-    second one works through a turn of the stand-in.
+    The two sessions show the two states of a row: the first one asks for an
+    approval in a turn, which waits for the person, and the second one works
+    through a turn of the stand-in.
     """
     work = Path(state) / MACHINE_WATCH_FOLDER
     work.mkdir(mode=0o700, parents=True, exist_ok=True)
     program = program_in_state(fixture_program(ATTENTION_KIND_SCRIPT['codex']),
                                work / 'bin' / ATTENTION_CODEX_PROGRAM, state)
-    environment = dict(os.environ, TMPDIR=str(private_tmp))
+    environment = machine_watch_environment(private_tmp)
     for session, folder, words in MACHINE_WATCH_AGENTS:
         pane = work / folder
         pane.mkdir(mode=0o700, exist_ok=True)
+        # A word that starts with two dashes is an argument of the stand-in. Every
+        # other word is a line that a person types into it: tmux reads a word with
+        # a dash as a flag of `send-keys`, so the line goes in as literal text.
+        arguments = [word for word in words if word.startswith('--')]
+        command = ' '.join(shlex.quote(part) for part in (python, str(program), *arguments))
         subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, '-f', '/dev/null', 'new-session', '-d',
-                        '-s', session, '-c', str(pane), '-x', '100', '-y', '20',
-                        f'{python} {program}'],
+                        '-s', session, '-c', str(pane), '-x', '100', '-y', '20', command],
                        env=environment, check=True)
         for word in words:
-            subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'send-keys', '-t', session, word, 'Enter'],
+            if word.startswith('--'):
+                continue
+            subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'send-keys', '-t', session, '-l', word],
+                           env=environment, check=True)
+            subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'send-keys', '-t', session, 'Enter'],
                            env=environment, check=True)
     return program
 
@@ -878,15 +901,24 @@ def machine_watch_standin(state):
     """The stand-in `ssh` of the watch, and the folder to find it in.
 
     The candidate starts `ssh` for each machine of its list and the text of the
-    watch arrives as the last argument of that call. This stand-in runs that text
-    with the private tmux server of the fixture, so a procedure sees the agents of
-    a machine without a machine. It answers no other call: a run with this stand-in
-    first on the `PATH` reads no machine of the person.
+    watch arrives as the last argument of that call, as does the command of a panel
+    that opens an agent. This stand-in runs that text with a `tmux` that names the
+    private server of the fixture, as the `tmux` of a machine names the server of
+    its user, so a procedure sees and opens the agents of a machine without a
+    machine. It answers no other call: a run with this stand-in first on the `PATH`
+    reads no machine of the person.
     """
     work = Path(state) / MACHINE_WATCH_FOLDER
+    tmux = shutil.which('tmux')
+    if tmux is None:
+        raise SystemExit('--machine-watch needs tmux on this computer')
+    remote = body_in_state(work / 'remote-bin' / 'tmux',
+                           '#!/bin/sh\n'
+                           f'exec {shlex.quote(tmux)} -L {shlex.quote(MACHINE_WATCH_SOCKET)} '
+                           '-f /dev/null "$@"\n', state)
     body = ('#!/bin/sh\n'
-            f'HORIZON_MACHINE_WATCH_TMUX_SOCKET={shlex.quote(MACHINE_WATCH_SOCKET)}\n'
-            'export HORIZON_MACHINE_WATCH_TMUX_SOCKET\n'
+            f'PATH={shlex.quote(str(remote.parent))}:$PATH\n'
+            'export PATH\n'
             'for a in "$@"; do last=$a; done\n'
             'exec sh -c "$last"\n')
     program = body_in_state(work / 'bin' / MACHINE_WATCH_PROGRAM, body, state)
@@ -1542,6 +1574,8 @@ def main():
             sandbox.end(child)
         for log in logs:
             log.close()
+        if args.machine_watch:
+            machine_watch_stop(box.private_tmp)
         # A reused state is what the next run starts from; a fresh one leaves nothing.
         if not args.reuse_state:
             shutil.rmtree(args.state / 'data', ignore_errors=True)
