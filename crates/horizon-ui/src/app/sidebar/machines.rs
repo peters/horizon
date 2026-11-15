@@ -26,7 +26,7 @@ use super::text;
 use super::{SidebarActions, rows};
 
 pub(in crate::app) use agents::MachineWatchRow;
-use agents::{fold_mark, fold_spoken};
+use agents::fold_spoken;
 
 /// The height of one machine row.
 pub(super) const ROW_HEIGHT: f32 = 38.0;
@@ -42,6 +42,8 @@ pub(super) const SET_UP_HOVER: &str = "Rent a machine, add the Horizon server, o
 pub(super) const DOT_SIDE: f32 = 9.0;
 /// The side of the fold control in front of the state dot.
 pub(super) const FOLD_SIDE: f32 = 12.0;
+/// The mark of the fold control: the agents are open, then folded.
+const FOLD_MARKS: [&str; 2] = ["\u{25BE}", "\u{25B8}"];
 /// How long the reason of a refused machine stays in the section.
 pub(super) const NOTICE: Duration = Duration::from_secs(10);
 /// The side of the close control of the line that stays until a person closes it.
@@ -157,21 +159,6 @@ impl MachineRows {
         &self.rows
     }
 
-    /// The state line of the link to the server, when the settings name one.
-    pub(in crate::app) fn server_line(&self) -> Option<&str> {
-        self.server_line.as_deref()
-    }
-
-    /// Why the last attempt at that link did not open it, when one failed.
-    pub(in crate::app) fn server_reason(&self) -> Option<&'static str> {
-        self.server_reason
-    }
-
-    /// The agents of the machines that wait for the person, or nothing.
-    pub(in crate::app) fn totals(&self) -> Option<&str> {
-        self.totals.as_deref()
-    }
-
     /// What the rows were read from, so a test can see that nothing was read
     /// again.
     #[cfg(test)]
@@ -214,7 +201,7 @@ impl HorizonApp {
                     second: watch
                         .lost
                         .clone()
-                        .or_else(|| second_line(machine.repository.as_deref(), machine.provider.as_deref())),
+                        .or(second_line(machine.repository.as_deref(), machine.provider.as_deref())),
                     state: MachineState::of(panel.and_then(horizon_core::Panel::ssh_status)),
                     pending: pending.contains(machine.name.as_str()),
                     panel: panel.map(|panel| panel.id),
@@ -290,15 +277,9 @@ impl HorizonApp {
         // The rows are borrowed out for the pass, because a press changes the
         // actions and the board; nothing in the pass reads the cache again.
         let rows = std::mem::take(&mut self.machine_rows);
-        Self::render_machines_header(
-            ui,
-            actions,
-            rows.server_line().is_none(),
-            rows.rows().is_empty(),
-            rows.totals(),
-        );
-        if let Some(line) = rows.server_line() {
-            let reason = rows.server_reason();
+        Self::render_machines_header(ui, actions, &rows);
+        if let Some(line) = rows.server_line.as_deref() {
+            let reason = rows.server_reason;
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
                 let painted = ui.label(text::line(
@@ -365,18 +346,14 @@ impl HorizonApp {
         ui.add_space(6.0);
     }
 
-    /// The title of the machine section, its Set up control, the state of the
-    /// link to a server and, while the list is empty, where a machine comes from.
+    /// The title of the machine section, its Set up control, the agents that wait for the
+    /// person, the state of the link to a server and, while the list is empty, where a
+    /// machine comes from.
     ///
     /// It is here while this Horizon has no machine at all: a person who starts
     /// with an empty window has to be able to get one.
-    fn render_machines_header(
-        ui: &mut egui::Ui,
-        actions: &mut SidebarActions,
-        no_server: bool,
-        no_machine: bool,
-        totals: Option<&str>,
-    ) {
+    fn render_machines_header(ui: &mut egui::Ui, actions: &mut SidebarActions, rows: &MachineRows) {
+        let (no_server, no_machine) = (rows.server_line.is_none(), rows.rows.is_empty());
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(18.0);
@@ -396,7 +373,7 @@ impl HorizonApp {
                 if control.clicked() {
                     actions.press_set_up = true;
                 }
-                if let Some(totals) = totals {
+                if let Some(totals) = rows.totals.as_deref() {
                     ui.add_space(8.0);
                     ui.label(text::line(
                         ui,
@@ -452,20 +429,21 @@ impl HorizonApp {
                 .rect_filled(card, CARD_RADIUS, theme::alpha(theme::PANEL_BG_ALT(), 170));
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        // The agents of the machine hang under its row while it is open, and a folded
-        // row says how many of them wait for the person.
-        let mut folded = self.machine_watch.folded(&row.name);
-        let fold = fold_rect(card);
-        if render_fold_control(ui, fold, &row.name, folded, hovered) {
+        // The agents hang under an open row, and a folded row says in one line who waits.
+        let fold = Rect::from_center_size(
+            pos2(card.min.x + rows::TILE_INSET + FOLD_SIDE / 2.0, card.min.y + 12.0),
+            Vec2::new(FOLD_SIDE, ROW_HEIGHT / 2.0),
+        );
+        if render_fold_control(ui, fold, &row.name, self.machine_watch.folded(&row.name), hovered) {
             self.machine_watch.toggle_fold(&row.name);
-            folded = !folded;
         }
+        let folded = self.machine_watch.folded(&row.name);
         let dot = dot_center(card);
         paint_machine_dot(ui.painter(), dot, row.state);
 
         let text_left = dot.x + DOT_SIDE / 2.0 + 10.0;
         let text_right = card.max.x - 8.0;
-        let summary = folded.then_some(row.watch.summary.as_deref()).flatten().map(|words| {
+        let summary = row.watch.summary.as_deref().filter(|_| folded).map(|words| {
             text::line(
                 ui,
                 words,
@@ -546,16 +524,8 @@ impl HorizonApp {
     }
 }
 
-/// The press target of the fold control of a machine row.
-fn fold_rect(card: Rect) -> Rect {
-    Rect::from_center_size(
-        pos2(card.min.x + rows::TILE_INSET + FOLD_SIDE / 2.0, card.min.y + 12.0),
-        Vec2::new(FOLD_SIDE, ROW_HEIGHT / 2.0),
-    )
-}
-
-/// Paints the fold control of a machine row, which a screen reader names, and answers
-/// whether the person pressed it.
+/// Paints the fold control of a machine row at the left of its card, which a screen
+/// reader names, and answers whether the person pressed it.
 fn render_fold_control(ui: &egui::Ui, rect: Rect, machine: &str, folded: bool, lit: bool) -> bool {
     let spoken = fold_spoken(folded, machine);
     let response = ui.interact(
@@ -565,7 +535,14 @@ fn render_fold_control(ui: &egui::Ui, rect: Rect, machine: &str, folded: bool, l
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
     let color = if lit { theme::FG() } else { text::secondary() };
-    let mark = text::line(ui, fold_mark(folded), 10.0, text::REGULAR, color, FOLD_SIDE);
+    let mark = text::line(
+        ui,
+        FOLD_MARKS[usize::from(folded)],
+        10.0,
+        text::REGULAR,
+        color,
+        FOLD_SIDE,
+    );
     ui.painter().galley(rect.center() - mark.size() / 2.0, mark, color);
     response.on_hover_text(spoken).clicked()
 }

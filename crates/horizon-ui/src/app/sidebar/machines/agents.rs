@@ -1,11 +1,6 @@
-//! The agents of a machine under its row, in the form of the panel rows of a workspace:
-//! the tree guide from the state dot of the machine, the kind label, the name of the
-//! agent and, at the right, the word and the dot of the same state that a panel row
-//! shows.
-//!
-//! The rows come from the snapshot of the watch, which a frame reads once and rebuilds
-//! only when its version changed. A machine whose link is down has no rows and says in
-//! one quiet line what happened to them.
+//! The agents of a machine under its row, in the form of the panel rows of a workspace.
+//! The rows come from the snapshot of the watch, and a machine whose link is down says
+//! in one quiet line what happened to them.
 
 use egui::{Rect, Sense, Vec2, pos2};
 use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchState, WatchLink};
@@ -21,15 +16,12 @@ use super::{MachineRow, card, dot_center};
 /// The sentence of a machine that runs no `tmux`.
 pub(super) const NO_TMUX: &str = "No tmux on this machine.";
 
-/// The height of the quiet line in the place of the agent rows.
 const QUIET_HEIGHT: f32 = 24.0;
 
-/// What the watch of one machine says, in the words of its row.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) struct MachineWatchRow {
     /// `link lost 2 minutes ago`, in the place of the provider line.
     pub(in crate::app) lost: Option<String>,
-    /// The one line in the place of the agent rows.
     pub(in crate::app) quiet: Option<String>,
     /// The agents of the machine, in session and pane order.
     pub(in crate::app) agents: Vec<MachineAgent>,
@@ -38,7 +30,6 @@ pub(in crate::app) struct MachineWatchRow {
 }
 
 impl MachineWatchRow {
-    /// The watch of one machine of the snapshot, in the words of a row.
     pub(in crate::app) fn of(state: Option<&MachineWatchState>, now_millis: i64) -> Self {
         let Some(state) = state else {
             return Self::default();
@@ -55,11 +46,9 @@ impl MachineWatchRow {
             ),
             WatchLink::NoTmux => (None, Some(NO_TMUX.to_owned())),
             WatchLink::Refused { reason, .. } => (None, Some(reason.sentence().to_owned())),
-            WatchLink::Connecting
-            | WatchLink::Watching
-            | WatchLink::NoServer
-            | WatchLink::OverTheLimit
-            | WatchLink::Off => (None, None),
+            // A link that connects or that is up says nothing in these two lines, and so
+            // does the watch of a machine that is off.
+            _ => (None, None),
         };
         Self {
             lost,
@@ -69,24 +58,21 @@ impl MachineWatchRow {
         }
     }
 
-    /// Paints the agent rows of the machine under its row, or the one quiet line in
-    /// their place. A machine with no agent paints nothing.
+    /// Paints the agent rows of the machine under its row, or its one quiet line.
     pub(super) fn paint_rows(&self, ui: &mut egui::Ui, row: &MachineRow, actions: &mut SidebarActions) {
-        if !self.agents.is_empty() {
-            let last = self.agents.len() - 1;
-            for (index, agent) in self.agents.iter().enumerate() {
-                paint_agent(ui, row, agent, index == last, actions);
-            }
-            return;
+        let last = self.agents.len().saturating_sub(1);
+        for (index, agent) in self.agents.iter().enumerate() {
+            paint_agent(ui, row, agent, index == last, actions);
         }
-        if let Some(line) = &self.quiet {
+        if self.agents.is_empty()
+            && let Some(line) = &self.quiet
+        {
             paint_quiet_line(ui, line);
         }
     }
 }
 
-/// Paints one agent of the machine, as a panel row of a workspace is painted, and turns
-/// a press on it into an action.
+/// Paints one agent of the machine as a panel row, and turns a press on it into an action.
 fn paint_agent(ui: &mut egui::Ui, row: &MachineRow, agent: &MachineAgent, last: bool, actions: &mut SidebarActions) {
     let rect = ui.allocate_space(Vec2::new(ui.available_width(), PANEL_ROW_HEIGHT)).1;
     let hovered = ui.rect_contains_pointer(rect);
@@ -118,51 +104,41 @@ fn paint_agent(ui: &mut egui::Ui, row: &MachineRow, agent: &MachineAgent, last: 
     );
     let spoken = text::panel_spoken(agent.kind, &agent.name, agent.state.attention());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &spoken));
-    let response = if agent.can_open() {
-        response.on_hover_text(spoken)
+    let hint = if agent.can_open() {
+        spoken
     } else {
-        response.on_hover_text(format!("{spoken}\n{}", cannot_open()))
+        format!("{spoken}\n{CANNOT_OPEN}")
     };
-    if response.clicked() && agent.can_open() {
+    if response.on_hover_text(hint).clicked() && agent.can_open() {
         actions.open_machine_agent = Some(agent.clone());
     }
 }
 
-/// What a row says about an agent whose session name no terminal of this build can
-/// open.
-pub(super) const fn cannot_open() -> &'static str {
-    "The name of this tmux session is not one word, so Horizon does not open it."
-}
+/// What a row says about an agent whose session name no terminal of this build opens.
+pub(super) const CANNOT_OPEN: &str = "The name of this tmux session is not one word, so Horizon does not open it.";
 
 /// The one line in the place of the agent rows of a machine whose link is down.
 fn last_seen(agents: usize) -> String {
-    format!(
-        "Last seen: {agents} {}. Horizon tries again.",
-        if agents == 1 { "agent" } else { "agents" }
-    )
+    let word = if agents == 1 { "agent" } else { "agents" };
+    format!("Last seen: {agents} {word}. Horizon tries again.")
 }
 
-/// The summary of the folded row: the agents that wait for the person in the words of
-/// a workspace row, then the agents that work while none waits.
+/// The agents that wait for the person in the words of a workspace row, then the ones
+/// that work while none waits.
 fn summary_of(agents: &[MachineAgent]) -> Option<String> {
-    let waiting = agents.iter().fold(Waiting::default(), |mut waiting, agent| {
-        match agent.state {
-            AgentState::NeedsYou => waiting.needs_you += 1,
-            AgentState::Done => waiting.done += 1,
-            AgentState::Idle | AgentState::Working => {}
-        }
-        waiting
-    });
-    if let Some(line) = waiting.line() {
-        return Some(line);
-    }
-    let working = agents.iter().filter(|agent| agent.state == AgentState::Working).count();
-    (working > 0).then(|| format!("{working} working"))
+    let count = |state: AgentState| agents.iter().filter(|agent| agent.state == state).count();
+    let waiting = Waiting {
+        needs_you: count(AgentState::NeedsYou),
+        done: count(AgentState::Done),
+    };
+    waiting.line().or_else(|| match count(AgentState::Working) {
+        0 => None,
+        working => Some(format!("{working} working")),
+    })
 }
 
-/// Paints the one quiet line in the place of the agent rows, in the colour and the
-/// size of the second line of a row. A line that is too long for the sidebar is cut,
-/// and its whole text is in its hover.
+/// Paints the quiet line of a machine in the colour and size of a row's second line: a
+/// line that is too long for the sidebar is cut, and its whole text is in its hover.
 fn paint_quiet_line(ui: &mut egui::Ui, line: &str) {
     let rect = ui.allocate_space(Vec2::new(ui.available_width(), QUIET_HEIGHT)).1;
     let card = card(rect);
@@ -190,11 +166,6 @@ fn paint_quiet_line(ui: &mut egui::Ui, line: &str) {
     if elided {
         response.on_hover_text(line);
     }
-}
-
-/// The mark of the fold control of a machine: folded, or open.
-pub(super) const fn fold_mark(folded: bool) -> &'static str {
-    if folded { "\u{25B8}" } else { "\u{25BE}" }
 }
 
 /// What the fold control says to a screen reader.
