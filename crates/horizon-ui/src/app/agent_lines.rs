@@ -226,7 +226,8 @@ pub(super) fn line_paths(
     paths
 }
 
-/// The colour of the lines of one agent.
+/// The colour of the lines of one agent, at the strength that this frame gives
+/// them.
 fn line_color(
     accent: usize,
     agent: PanelId,
@@ -234,10 +235,7 @@ fn line_color(
     zoom: f32,
     theme: theme::ResolvedTheme,
 ) -> Color32 {
-    theme::alpha(
-        theme::workspace_accent_for(theme, accent),
-        line_alpha(agent, focus, zoom),
-    )
+    theme::agent_line_color(theme, accent, line_alpha(agent, focus, zoom))
 }
 
 /// The strength of the line of one pair, in alpha.

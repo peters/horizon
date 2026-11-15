@@ -6,7 +6,7 @@ use horizon_core::{
 
 use super::{
     AgentLines, CLEAR_ALPHA, FAINT_ALPHA, LINE_WIDTH, OVERVIEW_ALPHA, OVERVIEW_ZOOM, Side, focus_agent, line_alpha,
-    line_paths,
+    line_color, line_paths,
 };
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_config_and_startup};
 use crate::theme::ResolvedTheme;
@@ -823,6 +823,78 @@ fn a_line_between_two_panels_that_stand_close_stays_in_the_gap() {
         assert!(
             (marks[0].curve.last().expect("a last point").x - marks[0].ring.x).abs() < 0.01,
             "the curve reaches the ring at the edge of the card"
+        );
+    }
+}
+
+/// A line is a graphic that a person must see: every line of the light theme holds
+/// 3 to 1 against the light canvas at the clear strength, and every line of the
+/// dark theme keeps the colour and the contrast that it has today.
+///
+/// The floor darkens the colour of the line only. The accent of the workspace
+/// keeps the colour that its fills and outlines take, which this test reads on the
+/// three accents whose line stood under the floor.
+#[test]
+fn every_line_of_the_light_theme_holds_three_to_one_against_the_canvas() {
+    /// The contrast of every line of the dark theme today, in the order of the
+    /// workspace accents.
+    const DARK_TODAY: [f32; 8] = [7.7308, 10.8938, 12.6750, 7.0703, 10.6108, 10.8581, 8.0581, 9.1097];
+    /// The accents whose line stood under the floor of 3 to 1 in the light theme,
+    /// with the colour that the accent of the workspace keeps: the yellow, the
+    /// teal and the peach.
+    const DARKENED: [(usize, (u8, u8, u8)); 3] = [
+        (2, (0xBC, 0x80, 0x00)),
+        (5, (0x00, 0x92, 0xA8)),
+        (7, (0xDB, 0x6F, 0x28)),
+    ];
+
+    let agent = PanelId(1);
+    for (accent, today) in DARK_TODAY.iter().enumerate() {
+        let light = line_color(accent, agent, Some(agent), 1.0, ResolvedTheme::Light);
+        let contrast = crate::theme::canvas_contrast_for_test(ResolvedTheme::Light, light);
+        assert!(
+            contrast >= 3.0,
+            "the line of accent {accent} holds 3 to 1 on the light canvas, and it reads {contrast}"
+        );
+        let accent_color = crate::theme::workspace_accent_for(ResolvedTheme::Light, accent);
+        let at_clear_strength = crate::theme::alpha(accent_color, CLEAR_ALPHA);
+        if let Some((_, accent_rgb)) = DARKENED.iter().find(|(index, _)| *index == accent) {
+            assert_eq!(
+                (accent_color.r(), accent_color.g(), accent_color.b()),
+                *accent_rgb,
+                "the accent of the workspace keeps the colour that it has"
+            );
+            let before = crate::theme::canvas_contrast_for_test(ResolvedTheme::Light, at_clear_strength);
+            assert!(
+                before < 3.0,
+                "the line of accent {accent} stood under the floor before the rule: {before}"
+            );
+            assert_ne!(
+                (light.r(), light.g(), light.b()),
+                (accent_color.r(), accent_color.g(), accent_color.b()),
+                "the line of accent {accent} takes a darker colour than the accent of the workspace"
+            );
+        } else {
+            assert_eq!(
+                light, at_clear_strength,
+                "the line of accent {accent} keeps the colour of the accent, which already holds the floor"
+            );
+        }
+
+        let dark = line_color(accent, agent, Some(agent), 1.0, DARK);
+        assert_eq!(
+            dark,
+            crate::theme::alpha(crate::theme::workspace_accent_for(DARK, accent), CLEAR_ALPHA),
+            "the dark theme keeps the colour of the line of accent {accent}"
+        );
+        let dark_contrast = crate::theme::canvas_contrast_for_test(DARK, dark);
+        assert!(
+            (dark_contrast - today).abs() < 0.01,
+            "the line of accent {accent} reads {dark_contrast} on the dark canvas, and it read {today}"
+        );
+        assert!(
+            dark_contrast >= 3.0,
+            "the dark theme already holds the floor on the dark canvas: {dark_contrast}"
         );
     }
 }

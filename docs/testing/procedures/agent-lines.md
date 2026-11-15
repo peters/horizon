@@ -227,6 +227,27 @@ defect, and do not expect the line to go around a panel.
 
    Result: the line of the Codex panel goes, and its card has no line.
 
+### 6.5b AL-5b — The light theme
+
+1. Open Settings and set the theme to Light.
+
+   Result: the canvas is paper white and the lines of the two agents keep their
+   two colours.
+
+2. Click the body of the Claude panel, so its lines are clear, and look at the
+   two colours of the agents.
+
+   Result: both lines stand out against the light canvas. The line of the deep
+   yellow accent, of the teal accent and of the peach accent is darker than the
+   tab of that workspace, and the line of every other accent has the colour of
+   its tab. Every line reads at least 3 to 1 against the canvas; the test
+   `every_line_of_the_light_theme_holds_three_to_one_against_the_canvas` holds
+   the exact numbers.
+
+3. Open Settings and set the theme back to Dark.
+
+   Result: the lines take the accents of the dark theme again.
+
 ### 6.6 AL-6 — The setting
 
 1. Open Settings, General, Canvas.
@@ -258,6 +279,9 @@ defect, and do not expect the line to go around a panel.
 - Two panels that stand closer than 8 points carry no line, and two panels that
   stand 14 points apart carry one.
 - The clear check box draws no line.
+- In the light theme every line holds at least 3 to 1 against the light canvas at
+  the clear strength, while the accent of the workspace keeps the colour of its
+  own tab.
 - All of this holds in the dark theme and in the light theme, and after a restart
   the lines of a card appear again while the line of a page appears only after an
   agent drives that page again.

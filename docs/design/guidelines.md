@@ -306,9 +306,14 @@ Rules that follow:
 | `BORDER_SUBTLE` | 1.39 | 1.42 |
 | `BORDER_STRONG` | 2.41 | 2.27 |
 | `GRID_DOT` on `BG` | 1.26 | 1.36 |
+| Weakest agent line on `BG` (clear) | 7.73 | 3.13 |
 | `ACCENT` outline / focus | 6.18 | 5.86 |
 | `FG` focus ring | 15.13 | 16.13 |
 | Primary button outline on `BG_ELEVATED` | 4.99 | 4.47 |
+
+A line of an agent is a graphic and not a separator, so the light theme lifts the
+weakest of its accents to 3:1 at the clear strength (see
+[Agent lines](#agent-lines)).
 
 `BORDER_SUBTLE` and `BORDER_STRONG` are separators and grouping cues, below the
 3:1 needed to identify a control on their own. Controls are therefore
@@ -667,7 +672,13 @@ workspace, and no panel when two do.
 
 - Colour: the workspace accent of the agent, so two agents of one workspace
   differ. The agent takes the accent of its place among the agent panels of its
-  workspace, which keeps the colour while the board does not change.
+  workspace, which keeps the colour while the board does not change. A line is a
+  graphic that a person must see, so the light theme keeps a floor of 3 to 1
+  against the light canvas at the clear strength: the accent of a line that reads
+  weaker there, the deep yellow, the teal and the peach, is darkened in the
+  colour of the line alone. The accent of the workspace keeps the colour of its
+  fills, outlines and tabs, and the dark theme keeps every line, because each of
+  its accents already stands at 7.7 to 1 or above on the dark canvas.
 - Width: 1.5 screen points at every canvas zoom. The end marks are 3 screen
   points: a filled dot at the agent end and a ring at the other end.
 - Geometry: the line leaves the side of the panel that faces the other panel, at
