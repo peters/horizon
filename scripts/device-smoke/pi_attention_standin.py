@@ -28,7 +28,7 @@ at the panel clears the finished turn. `after SECONDS WORD` therefore sends
 `WORD` after that delay, so the person can type the line, give the focus to
 another panel, and still see the state. The delay is at most 60 seconds.
 
-Standard library only, Python 3.10+, no network.
+Standard library only, Python 3.9+, no network.
 """
 from __future__ import annotations
 
