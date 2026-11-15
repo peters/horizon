@@ -14,6 +14,7 @@ use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
 mod browser_host;
+mod machines;
 mod presets;
 mod remote_hosts;
 mod secrets;
@@ -21,6 +22,7 @@ mod server;
 mod speech;
 
 pub use browser_host::{BrowserHostConfig, BrowserHostEngine, browser_mcp_args, valid_driver_command};
+pub use machines::MachinesConfig;
 use presets::default_presets;
 pub use presets::{PresetConfig, preset_named};
 pub(crate) use presets::{
@@ -63,6 +65,8 @@ pub struct Config {
     #[serde(default)]
     pub secrets: SecretsConfig,
     #[serde(default)]
+    pub machines: MachinesConfig,
+    #[serde(default)]
     pub speech: SpeechConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
@@ -92,6 +96,7 @@ impl Default for Config {
             browser_host: BrowserHostConfig::default(),
             server: ServerConfig::default(),
             secrets: SecretsConfig::default(),
+            machines: MachinesConfig::default(),
             speech: SpeechConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),

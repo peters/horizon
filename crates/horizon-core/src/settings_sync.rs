@@ -144,6 +144,10 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::Shared,
     },
     Section {
+        name: "machines",
+        scope: Scope::Local("whether this computer watches the agents of its machine list"),
+    },
+    Section {
         name: "speech",
         scope: Scope::Shared,
     },

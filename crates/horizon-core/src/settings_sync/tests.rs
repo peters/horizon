@@ -93,8 +93,8 @@ fn every_local_section_says_why_it_stays() {
         .collect();
     assert_eq!(
         local.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
-        vec!["version", "window", "server"],
-        "the three sections that stay with one computer"
+        vec!["version", "window", "server", "machines"],
+        "the four sections that stay with one computer"
     );
     for (name, reason) in local {
         assert!(reason.len() > 20, "the reason of {name} is one sentence: {reason}");
@@ -119,7 +119,7 @@ fn a_shared_section_travels_in_one_envelope_and_a_local_one_does_not() {
         json!({ "theme": "light" })
     );
 
-    for local in ["window", "server", "version"] {
+    for local in ["window", "server", "version", "machines"] {
         assert_eq!(encode_body(&config, local).expect("the section"), None, "{local} stays");
     }
     assert!(
@@ -132,7 +132,7 @@ fn a_shared_section_travels_in_one_envelope_and_a_local_one_does_not() {
     );
     assert_eq!(
         shared_sections().count(),
-        SECTIONS.len() - 3,
+        SECTIONS.len() - 4,
         "one shared section per section that does not stay"
     );
     assert_eq!(
