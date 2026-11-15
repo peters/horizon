@@ -14,7 +14,9 @@ of its turn into the title of its own terminal, and this test proves:
   * `spin N` writes the frames of the turn, and `plain SECONDS` writes a plain
     title and then the spinner of the same turn again;
   * a delayed line sends its word when the delay ends, and `quit` ends the
-    program.
+    program;
+  * `--protocol` writes the reports of the program status protocol in the bytes
+    of the real program, and a run without it writes no report at all.
 
 Standard library only, no network. Nothing is written outside the folder of a
 test.
@@ -97,16 +99,53 @@ class Reader(threading.Thread):
         with self.lock:
             return len(self.titles)
 
+    def wait_for_reports(self, count, timeout=PATIENCE):
+        """Waits until `count` reports of the protocol arrived, and answers the raw bytes."""
+        marker = b'\x1b]7501;'
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self.lock:
+                raw = self.raw
+            if raw.count(marker) >= count:
+                return raw
+            if self.done.is_set():
+                break
+            time.sleep(0.01)
+        with self.lock:
+            raise AssertionError(f'{count} reports did not arrive: {self.raw[-400:]!r}')
+
+
+def reports_of(raw):
+    """The payloads of the reports of the protocol, in the bytes that arrived.
+
+    A report ends with ST, so a payload that reaches one is a whole report.
+    """
+    marker = b'\x1b]7501;'
+    reports = []
+    rest = raw
+    while True:
+        start = rest.find(marker)
+        if start < 0:
+            return reports
+        end = rest.find(b'\x1b\\', start)
+        if end < 0:
+            return reports
+        reports.append(rest[start + len(marker):end])
+        rest = rest[end + 2:]
+
 
 class StandIn:
     """The program of one panel, with the words of a person at its input."""
 
-    def __init__(self, folder=FOLDER):
+    def __init__(self, folder=FOLDER, protocol=False):
         self.root = tempfile.TemporaryDirectory(prefix='codex-standin-')
         self.cwd = Path(self.root.name) / folder
         self.cwd.mkdir()
+        arguments = [sys.executable, '-B', str(SCRIPT)]
+        if protocol:
+            arguments.append('--protocol')
         self.child = subprocess.Popen(
-            [sys.executable, '-B', str(SCRIPT)],
+            arguments,
             cwd=self.cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -128,8 +167,8 @@ class StandIn:
 
 
 class CodexAttentionStandInTests(unittest.TestCase):
-    def start(self, folder=FOLDER):
-        stand_in = StandIn(folder)
+    def start(self, folder=FOLDER, protocol=False):
+        stand_in = StandIn(folder, protocol)
         self.addCleanup(stand_in.close)
         return stand_in
 
@@ -240,6 +279,49 @@ class CodexAttentionStandInTests(unittest.TestCase):
         self.assertEqual(stand_in.child.wait(timeout=30), 0)
         titles = list(stand_in.reader.titles)
         self.assertEqual(titles, [FOLDER], 'only the plain title of quit is written')
+
+    def test_the_protocol_argument_writes_the_reports_of_the_real_program(self):
+        stand_in = self.start(protocol=True)
+        for index, word in enumerate(('start', 'ask', 'answer', 'stop', 'fail', 'foreign')):
+            stand_in.word(word)
+            # The words before `foreign` write one report each; `stop` writes two.
+            stand_in.reader.wait_for_reports(index + 1 + int(word == 'stop'))
+        stand_in.word('quit')
+        raw = stand_in.reader.wait_for_reports(8)
+        self.assertEqual(stand_in.child.wait(timeout=30), 0)
+        reports = reports_of(raw)
+        self.assertEqual(
+            reports,
+            [
+                b'state=working:app=codex',
+                b'state=blocked:app=codex:kind=permission',
+                b'state=working:app=codex',
+                b'state=done:app=codex',
+                b'state=idle:app=codex',
+                b'state=error:app=codex',
+                b'state=working:app=other',
+                b'state=clear',
+            ],
+        )
+
+    def test_a_run_without_the_argument_writes_no_report(self):
+        stand_in = self.start()
+        for word in ('start', 'ask', 'answer', 'stop', 'esc', 'fail', 'foreign'):
+            stand_in.word(word)
+        stand_in.reader.wait_for(6)
+        stand_in.word('quit')
+        self.assertEqual(stand_in.child.wait(timeout=30), 0)
+        with stand_in.reader.lock:
+            raw = stand_in.reader.raw
+        self.assertNotIn(b'\x1b]7501;', raw, 'the titles alone are the panel of a real program')
+
+    def test_work_writes_the_reports_of_a_working_turn_at_once(self):
+        stand_in = self.start(protocol=True)
+        stand_in.word('work 3')
+        raw = stand_in.reader.wait_for_reports(3)
+        stand_in.word('quit')
+        self.assertEqual(stand_in.child.wait(timeout=30), 0)
+        self.assertEqual(raw.count(b'\x1b]7501;state=working:app=codex'), 3)
 
 
 if __name__ == '__main__':

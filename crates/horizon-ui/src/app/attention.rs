@@ -16,7 +16,9 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use horizon_core::agent_work::{TurnLedger, WorkStore, title_reports_state};
+use horizon_core::agent_work::{
+    ProgramStatus, TurnLedger, WorkStore, program_status_reports_state, title_reports_state,
+};
 use horizon_core::{Attention, AttentionBoard, AttentionTarget, PanelId, current_unix_millis};
 
 use super::HorizonApp;
@@ -164,7 +166,7 @@ impl HorizonApp {
         // The title of an agent that reports its state there changes about ten
         // times a second, and only a change of the state is work: the claim of a
         // panel that holds its state wakes no frame.
-        let (titled, moved) = self.observe_agent_titles(current_unix_millis());
+        let (titled, moved) = self.observe_agent_claims(current_unix_millis());
         if titled {
             self.attention.count_change();
             ctx.request_repaint();
@@ -288,32 +290,49 @@ impl HorizonApp {
         self.note_attention_changes(panels, ctx);
     }
 
-    /// Records the state that the title of each agent panel claims, for the kinds
-    /// that write their state into the title of their terminal.
+    /// Records the state that each agent panel claims: the reports of the program
+    /// status protocol first, and the title of its terminal for the kinds that
+    /// write their state there.
     ///
-    /// The read is a value that the frame already holds: the panel compares the
-    /// title of its terminal when that title changes, and the claim of the state
-    /// does no work for a spinner frame of the state that it already holds. Only a
-    /// panel of a kind with a state title is asked, so a board of other panels
-    /// pays one comparison for each of them.
+    /// The read is a value that the frame already holds: the panel keeps the newest
+    /// report that the reader of its PTY handed over, and it compares the title of
+    /// its terminal when that title changes. The protocol answers for a panel from
+    /// the first report of its launch on, so the titles of a program that speaks it
+    /// are not read. Neither claim does work for a report or a title that repeats
+    /// the state that it already holds. Only a panel of a kind with one of the two
+    /// sources is asked, so a board of other panels pays two comparisons for each
+    /// of them.
     ///
     /// Answers whether a panel shows another state, and the panels whose state
     /// changed, so the caller wakes one frame and queues the notifications of the
     /// panels that wait.
-    fn observe_agent_titles(&mut self, now_millis: i64) -> (bool, Vec<String>) {
+    fn observe_agent_claims(&mut self, now_millis: i64) -> (bool, Vec<String>) {
         let focused = self.focused_panel_local_id();
         let mut changed = false;
         let mut moved = Vec::new();
         for panel in &self.board.panels {
-            if !title_reports_state(panel.kind) {
+            let reports = program_status_reports_state(panel.kind);
+            if !reports && !title_reports_state(panel.kind) {
                 continue;
             }
-            if self.attention.states.observe_title(
-                &panel.local_id,
-                panel.launched_at_millis,
-                panel.title_state(),
-                now_millis,
-            ) {
+            let mut answered = false;
+            if reports && panel.program_status() != ProgramStatus::Unknown {
+                answered = self.attention.states.observe_program(
+                    &panel.local_id,
+                    panel.launched_at_millis,
+                    panel.program_status(),
+                    now_millis,
+                );
+            }
+            if title_reports_state(panel.kind) {
+                answered |= self.attention.states.observe_title(
+                    &panel.local_id,
+                    panel.launched_at_millis,
+                    panel.title_state(),
+                    now_millis,
+                );
+            }
+            if answered {
                 changed = true;
                 moved.push(panel.local_id.clone());
             }
@@ -477,6 +496,8 @@ impl HorizonApp {
     }
 }
 
+#[cfg(test)]
+mod codex_status_tests;
 #[cfg(test)]
 mod codex_title_tests;
 #[cfg(test)]

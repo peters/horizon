@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::PanelId;
-use crate::agent_work::{TitleClaim, TitleState, TurnLedger, TurnState};
+use crate::agent_work::{ProgramClaim, ProgramStatus, TitleClaim, TitleState, TurnLedger, TurnState};
 
 /// The state of one agent panel, in the order of weight that a workspace row
 /// compares its panels by.
@@ -140,6 +140,12 @@ struct Panel {
     /// again in the same panel is a launch of its own, and its titles claim the
     /// turns of that launch.
     title_launch_millis: Option<i64>,
+    /// The states that the program of this launch reported with the program
+    /// status protocol. A program that speaks the protocol answers for its panel
+    /// from its first report on, and its title is not read after that.
+    program: ProgramClaim,
+    /// The launch whose reports the claim holds, as the titles have one.
+    program_launch_millis: Option<i64>,
     /// The working indicator of a panel without lifecycle hooks.
     working: bool,
     /// The last moment the person looked at the panel.
@@ -161,6 +167,8 @@ impl Panel {
             background_tasks: 0,
             title: TitleClaim::default(),
             title_launch_millis: None,
+            program: ProgramClaim::default(),
+            program_launch_millis: None,
             working: false,
             seen_at_millis: now_millis,
             marked_unread: false,
@@ -172,9 +180,10 @@ impl Panel {
     }
 
     /// Whether a source of this launch answers for the panel: the record that a
-    /// hook keeps, or the titles of the program itself.
+    /// hook keeps, the reports of the protocol, or the titles of the program
+    /// itself.
     fn answers(&self) -> bool {
-        self.hooked || self.title.answers()
+        self.hooked || self.program.answers() || self.title.answers()
     }
 
     fn attention(&self) -> Attention {
@@ -276,7 +285,7 @@ impl AttentionBoard {
             .panels
             .entry(panel.to_owned())
             .or_insert_with(|| Panel::new(now_millis));
-        if held.hooked {
+        if held.hooked || held.program.answers() {
             return false;
         }
         // A launch that the panel replaced starts on the signal of its screen, as
@@ -292,6 +301,38 @@ impl AttentionBoard {
         if held.title.answers() {
             let (state, ended_at) = ledger_outcome(held.title.ledger());
             let background_tasks = held.title.ledger().background_tasks;
+            held.apply(state, ended_at, background_tasks);
+        }
+        self.state(panel) != before
+    }
+
+    /// Records the state that the program of `panel` reported with the program
+    /// status protocol, for a launch that `launch_millis` started. Answers whether
+    /// the state of the panel changed.
+    ///
+    /// A hook record answers for the panel before these reports do, and a launch
+    /// that Horizon started again is a launch of its own. A report that repeats
+    /// the state the claim already holds changes nothing, so a program that
+    /// reports its state as fast as it writes does no work per frame.
+    pub fn observe_program(&mut self, panel: &str, launch_millis: i64, status: ProgramStatus, now_millis: i64) -> bool {
+        let before = self.state(panel);
+        let held = self
+            .panels
+            .entry(panel.to_owned())
+            .or_insert_with(|| Panel::new(now_millis));
+        if held.hooked {
+            return false;
+        }
+        if held.program_launch_millis != Some(launch_millis) {
+            held.program_launch_millis = Some(launch_millis);
+            held.program = ProgramClaim::default();
+            held.seen_at_millis = now_millis;
+            held.apply(TurnState::Unknown, None, 0);
+        }
+        held.program.hear(status, now_millis);
+        if held.program.answers() {
+            let (state, ended_at) = ledger_outcome(held.program.ledger());
+            let background_tasks = held.program.ledger().background_tasks;
             held.apply(state, ended_at, background_tasks);
         }
         self.state(panel) != before
@@ -375,6 +416,13 @@ impl AttentionBoard {
     #[must_use]
     pub fn from_title(&self, panel: &str) -> bool {
         self.panels.get(panel).is_some_and(|held| held.title.answers())
+    }
+
+    /// Whether the state of `panel` comes from the reports of the program status
+    /// protocol now, because a report of this launch has arrived.
+    #[must_use]
+    pub fn from_status(&self, panel: &str) -> bool {
+        self.panels.get(panel).is_some_and(|held| held.program.answers())
     }
 
     /// Whether the state of `panel` comes from its lifecycle hooks now, because

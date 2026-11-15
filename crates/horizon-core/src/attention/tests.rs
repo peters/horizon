@@ -1,5 +1,8 @@
 use super::{Attention, AttentionBoard, AttentionTarget, next_attention_target};
-use crate::agent_work::{TITLE_SETTLE_MILLIS, TitleState, TurnLedger, TurnState, title_reports_state, title_state};
+use crate::agent_work::{
+    ProgramStatus, TITLE_SETTLE_MILLIS, TitleState, TurnLedger, TurnState, program_status,
+    program_status_reports_state, title_reports_state, title_state,
+};
 use crate::{PanelId, PanelKind};
 
 fn ledger(state: TurnState, updated_at_millis: i64) -> TurnLedger {
@@ -537,4 +540,192 @@ fn a_kind_without_a_state_title_keeps_the_signal_of_its_screen() {
         assert_eq!(title_state(kind, "\u{280b} work"), TitleState::Plain, "{kind:?}");
     }
     assert!(title_reports_state(PanelKind::Codex));
+}
+
+fn program(board: &mut AttentionBoard, status: ProgramStatus, now_millis: i64) -> bool {
+    board.observe_program("panel", LAUNCH, status, now_millis)
+}
+
+#[test]
+fn the_reports_of_a_panel_take_the_four_words_of_its_turn() {
+    let mut board = board();
+    // The first report of a launch answers for the panel, also when nothing runs.
+    program(&mut board, ProgramStatus::Idle, LAUNCH);
+    assert!(board.from_status("panel"));
+    assert_eq!(board.state("panel"), Attention::Idle);
+
+    program(&mut board, ProgramStatus::Working, LAUNCH + 10);
+    assert_eq!(board.state("panel"), Attention::Working);
+
+    program(&mut board, ProgramStatus::Blocked, LAUNCH + 20);
+    assert_eq!(board.state("panel"), Attention::NeedsYou);
+
+    program(&mut board, ProgramStatus::Working, LAUNCH + 30);
+    assert_eq!(board.state("panel"), Attention::Working, "the answer clears the wait");
+
+    // The turn ends while the person is elsewhere.
+    program(&mut board, ProgramStatus::Done, LAUNCH + 40);
+    assert_eq!(board.state("panel"), Attention::Done);
+    assert!(board.note_look("panel", LAUNCH + 50));
+    assert_eq!(board.state("panel"), Attention::Idle);
+
+    // A second turn, interrupted with Escape: the protocol says idle and no done.
+    program(&mut board, ProgramStatus::Working, LAUNCH + 60);
+    program(&mut board, ProgramStatus::Idle, LAUNCH + 70);
+    assert_eq!(board.state("panel"), Attention::Done, "an interrupted turn is done");
+}
+
+#[test]
+fn a_failed_report_waits_for_the_person() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    program(&mut board, ProgramStatus::Failed, LAUNCH + 10);
+    assert_eq!(board.state("panel"), Attention::NeedsYou);
+    board.note_look("panel", LAUNCH + 20);
+    assert_eq!(board.state("panel"), Attention::Idle, "a look clears the failed turn");
+}
+
+#[test]
+fn a_report_of_no_turn_leaves_the_screen_to_answer() {
+    let mut board = board();
+    // `done` and `error` of a launch that never reported a turn name no turn.
+    program(&mut board, ProgramStatus::Done, LAUNCH);
+    assert_eq!(board.state("panel"), Attention::Idle);
+    board.observe_working("panel", true, false, LAUNCH + 1);
+    assert_eq!(
+        board.state("panel"),
+        Attention::Idle,
+        "the launch reported, so its screen no longer answers"
+    );
+}
+
+#[test]
+fn a_thousand_repeated_reports_change_no_state_and_wake_no_caller() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    for report in 0..1_000_i64 {
+        assert!(
+            !program(&mut board, ProgramStatus::Working, LAUNCH + 1 + report),
+            "a repeated report of one state changes nothing"
+        );
+        assert_eq!(board.state("panel"), Attention::Working);
+    }
+}
+
+#[test]
+fn a_late_report_cannot_open_or_close_a_turn_of_another_one() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    program(&mut board, ProgramStatus::Done, LAUNCH + 10);
+    assert_eq!(board.state("panel"), Attention::Done);
+    // The report of the turn that ended arrives again.
+    assert!(!program(&mut board, ProgramStatus::Done, LAUNCH + 20));
+    assert_eq!(board.state("panel"), Attention::Done);
+    // A new turn runs, and the state of the report before it is not reapplied.
+    program(&mut board, ProgramStatus::Working, LAUNCH + 30);
+    assert_eq!(board.state("panel"), Attention::Working);
+    assert!(!program(&mut board, ProgramStatus::Working, LAUNCH + 31));
+    assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn a_report_of_another_program_claims_nothing() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Idle, LAUNCH);
+    // The payload of another program is `Unknown` to the parser of this kind.
+    assert_eq!(
+        program_status(PanelKind::Codex, b"state=working:app=cargo"),
+        ProgramStatus::Unknown
+    );
+    assert!(!program(&mut board, ProgramStatus::Unknown, LAUNCH + 10));
+    assert_eq!(board.state("panel"), Attention::Idle);
+}
+
+#[test]
+fn a_clear_of_the_program_forgets_the_launch() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    assert!(board.from_status("panel"));
+    assert!(program(&mut board, ProgramStatus::Clear, LAUNCH + 10));
+    assert!(!board.from_status("panel"), "the program removed its record");
+    assert_eq!(board.state("panel"), Attention::Idle);
+    // The launch answers again from its next report.
+    program(&mut board, ProgramStatus::Working, LAUNCH + 20);
+    assert!(board.from_status("panel"));
+    assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn the_record_of_a_hook_wins_over_a_report_of_the_program() {
+    let mut board = board();
+    board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+    assert!(!program(&mut board, ProgramStatus::Blocked, LAUNCH));
+    assert!(!board.from_status("panel"));
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "the record of the hooks answers"
+    );
+}
+
+#[test]
+fn a_report_of_the_program_wins_over_the_title_of_the_program() {
+    let mut board = board();
+    assert!(title(&mut board, TitleState::Working, LAUNCH));
+    assert_eq!(board.state("panel"), Attention::Working);
+    // The program speaks the protocol, so its title is no longer a source: its
+    // reports answer, and the settle time of a plain title does not apply to it.
+    program(&mut board, ProgramStatus::Working, LAUNCH + 5);
+    assert!(board.from_status("panel"));
+    program(&mut board, ProgramStatus::Done, LAUNCH + 10);
+    assert_eq!(board.state("panel"), Attention::Done);
+    assert!(board.from_status("panel"));
+    assert!(
+        !title(&mut board, TitleState::NeedsYou, LAUNCH + 20),
+        "the title of a launch that reported a state is not read"
+    );
+    assert_eq!(board.state("panel"), Attention::Done);
+}
+
+#[test]
+fn a_program_that_horizon_starts_again_is_a_new_launch_for_its_reports() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    assert!(board.from_status("panel"));
+    let relaunched = LAUNCH + 5_000;
+    board.observe_program("panel", relaunched, ProgramStatus::Unknown, relaunched);
+    assert!(!board.from_status("panel"), "the claim of the launch before it is gone");
+    board.observe_working("panel", true, true, relaunched + 1);
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "the new launch starts on its screen"
+    );
+    board.observe_program("panel", relaunched, ProgramStatus::Blocked, relaunched + 2);
+    assert!(board.from_status("panel"));
+    assert_eq!(board.state("panel"), Attention::NeedsYou);
+}
+
+#[test]
+fn the_screen_cannot_end_or_reopen_a_turn_of_a_report() {
+    let mut board = board();
+    program(&mut board, ProgramStatus::Working, LAUNCH);
+    board.observe_working("panel", false, false, LAUNCH + 1);
+    assert_eq!(board.state("panel"), Attention::Working);
+    program(&mut board, ProgramStatus::Done, LAUNCH + 10);
+    board.observe_working("panel", true, false, LAUNCH + 20);
+    assert_eq!(board.state("panel"), Attention::Done);
+}
+
+#[test]
+fn a_kind_whose_program_reports_no_state_reads_no_report() {
+    for kind in [PanelKind::Claude, PanelKind::Pi, PanelKind::Shell] {
+        assert!(!program_status_reports_state(kind), "{kind:?}");
+        assert_eq!(
+            program_status(kind, b"state=working:app=codex"),
+            ProgramStatus::Unknown,
+            "{kind:?}"
+        );
+    }
+    assert!(program_status_reports_state(PanelKind::Codex));
 }
