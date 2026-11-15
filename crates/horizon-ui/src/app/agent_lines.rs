@@ -506,9 +506,13 @@ impl HorizonApp {
         let focus = self.agent_line_focus(ctx);
         let view = self.canvas_view;
         let theme = theme::current_theme();
-        let painter = ctx
-            .layer_painter(LayerId::new(Order::Background, Id::unique("agent_lines")))
-            .with_clip_rect(canvas_rect);
+        // A workspace frame is a layer of its own in `Order::Background`, and the
+        // layer of a workspace that a person creates in this run comes after this
+        // one. The last place of that order keeps the lines above every workspace
+        // frame and below the panels of `Order::Middle`.
+        let layer = LayerId::new(Order::Background, Id::unique("agent_lines"));
+        ctx.move_to_top(layer);
+        let painter = ctx.layer_painter(layer).with_clip_rect(canvas_rect);
         for shape in self.agent_lines.shapes(canvas_rect, view, focus, theme, &places) {
             paint(&painter, shape);
         }
