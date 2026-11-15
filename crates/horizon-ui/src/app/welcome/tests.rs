@@ -3,7 +3,8 @@
 use egui::Context;
 
 use super::{
-    HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_RADIUS, WelcomeTile, page_top, welcome_page_shows,
+    HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_PAD, TILE_RADIUS, WelcomeTile, page_top,
+    welcome_page_shows,
 };
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
@@ -11,12 +12,16 @@ use crate::typeface::Weight;
 
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
-fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
+pub(super) fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
     frame_shapes_at(ctx, app, [1200.0, 900.0])
 }
 
 /// The shapes of the last frame of the page on a window of `size` points.
-fn frame_shapes_at(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 2]) -> Vec<egui::epaint::ClippedShape> {
+pub(super) fn frame_shapes_at(
+    ctx: &Context,
+    app: &mut crate::app::HorizonApp,
+    size: [f32; 2],
+) -> Vec<egui::epaint::ClippedShape> {
     let _ = frame_texts_at(ctx, app, size);
     let output = ctx.run_ui(crate::app::test_support::raw_input(size, None), |ui| {
         app.render_welcome_page(ui.ctx());
@@ -26,7 +31,7 @@ fn frame_shapes_at(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 
 }
 
 /// The rectangles of the four tiles that this frame painted.
-fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
+pub(super) fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
     fn walk(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
         match shape {
             egui::Shape::Rect(rect) if rect.corner_radius == egui::CornerRadius::same(TILE_RADIUS) => {
@@ -40,6 +45,47 @@ fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
                 }
             }
             _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// One drawing that a frame painted: the band that it stands on, and the box of
+/// every shape of it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PaintedDrawing {
+    /// The plate of the drawing, as the frame painted it.
+    pub band: egui::Rect,
+    /// The box of every shape of the drawing, its band included.
+    pub bounds: egui::Rect,
+}
+
+/// The drawings that this frame painted, in the order of the four tiles.
+///
+/// A drawing is the group of shapes that `art::art` builds: one shape of the
+/// frame holds the band of the drawing and the shapes on it.
+pub(super) fn painted_drawings(shapes: &[egui::epaint::ClippedShape]) -> Vec<PaintedDrawing> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<PaintedDrawing>) {
+        if let egui::Shape::Vec(inner) = shape {
+            let band = inner.iter().find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.corner_radius == egui::CornerRadius::same(super::art::BAND_RADIUS) => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            });
+            if let Some(band) = band {
+                let bounds = inner
+                    .iter()
+                    .map(egui::Shape::visual_bounding_rect)
+                    .filter(|rect| rect.is_finite() && rect.is_positive())
+                    .reduce(egui::Rect::union)
+                    .unwrap_or(band);
+                out.push(PaintedDrawing { band, bounds });
+            }
         }
     }
     let mut out = Vec::new();
@@ -155,7 +201,7 @@ fn walk_text<'a>(shape: &'a egui::Shape, text: &str, out: &mut Option<&'a egui::
 }
 
 /// The text shape that painted `text`, with the rectangle it was clipped to.
-fn text_shape<'a>(
+pub(super) fn text_shape<'a>(
     shapes: &'a [egui::epaint::ClippedShape],
     text: &str,
 ) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
@@ -469,3 +515,5 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
     run_app_frame(ctx, app);
     true
 }
+
+mod drawings;
