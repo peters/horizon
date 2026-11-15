@@ -703,3 +703,135 @@ fn the_list_of_the_theme_drop_down_opens_above_the_pane() {
         "the press on the entry of the list takes the theme of the draft"
     );
 }
+
+/// The rectangle that the pane takes of the window.
+fn pane_rect(app: &crate::app::HorizonApp) -> egui::Rect {
+    app.settings
+        .as_ref()
+        .and_then(|editor| editor.panel_rect)
+        .expect("the rectangle of the pane")
+}
+
+/// The rectangle of the text `wanted` after the pane scrolled far enough to show
+/// its centre, or `None` while the tab has nothing more to show.
+fn window_text_scrolled_to(ctx: &egui::Context, app: &mut crate::app::HorizonApp, wanted: &str) -> Option<egui::Rect> {
+    let pane = pane_rect(app);
+    for _ in 0..8 {
+        if let Some(rect) = window_text(&window_frame(ctx, app, Vec::new()), wanted)
+            && pane.contains(rect.center())
+        {
+            return Some(rect);
+        }
+        let mut input = raw_input([1200.0, 600.0], None);
+        input.events = vec![
+            egui::Event::PointerMoved(pane.center()),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                source: egui::MouseWheelSource::Unknown,
+                delta: egui::vec2(0.0, -3.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let _ = run_app_frame_with_input(ctx, app, input);
+    }
+    None
+}
+
+/// A press on a check box of the pane changes its value, and the terminal that
+/// its panel draws behind the pane receives nothing; the canvas clips that panel
+/// at its edge, so only the layer of the pane can take the press.
+#[test]
+fn a_press_on_a_check_box_of_the_pane_reaches_no_terminal_behind_it() {
+    let (_temp, ctx, mut app, _panel) = app_with_a_terminal_under_the_pane();
+    app.board.focused = None;
+    let check_box = window_text_scrolled_to(&ctx, &mut app, "Organize Workspaces on Session Load")
+        .expect("the pane scrolled to the check box of the test");
+    let before = app
+        .settings
+        .as_ref()
+        .expect("the pane is open")
+        .config
+        .features
+        .organize_workspaces_on_session_load;
+
+    // The hit test of the next frame reads the widgets of this one, so the press
+    // lands on the box that the frame above found.
+    let _ = window_frame(&ctx, &mut app, press_and_release(check_box.center()));
+    let _ = window_frame(&ctx, &mut app, Vec::new());
+
+    assert_ne!(
+        app.settings
+            .as_ref()
+            .expect("the pane is open")
+            .config
+            .features
+            .organize_workspaces_on_session_load,
+        before,
+        "the press on the check box of the pane changed it"
+    );
+    assert_eq!(
+        app.board.focused, None,
+        "the terminal behind the pane received no press, so no panel took the focus"
+    );
+}
+
+/// A drag that starts on the title bar of a panel and passes over the pane keeps
+/// moving that panel until the release: the pane takes the pointer only while no
+/// pointer button is held.
+#[test]
+fn a_drag_of_a_panel_over_the_pane_keeps_moving_the_panel_until_the_release() {
+    let (_temp, ctx, mut app, panel) = app_with_a_terminal_under_the_pane();
+    let pane = pane_rect(&app);
+    // The canvas shows only what the pane leaves of it, so the panel keeps its
+    // room there while the drag moves it to the right.
+    app.board.move_panel(panel, [100.0, 60.0]);
+    let _ = window_frame(&ctx, &mut app, Vec::new());
+    let screen = *app.panel_screen_rects.get(&panel).expect("the panel is on screen");
+    let start = egui::Pos2::new(screen.max.x - 10.0, screen.min.y + 17.0);
+    assert!(!pane.contains(start), "the drag starts beside the pane");
+    let position = |app: &crate::app::HorizonApp| {
+        let panel = app.board.panel(panel).expect("the panel of the test");
+        egui::Pos2::new(panel.layout.position[0], panel.layout.position[1])
+    };
+    let before = position(&app);
+    let _ = window_frame(
+        &ctx,
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(start),
+            egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let mut held = position(&app);
+    for step in [100.0, 200.0] {
+        let point = start + egui::vec2(step, 0.0);
+        assert!(pane.contains(point), "the drag passes over the pane");
+        let _ = window_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(point)]);
+        let moved = position(&app);
+        assert!(
+            moved.x > held.x + 90.0,
+            "the panel follows the pointer over the pane: {held:?} -> {moved:?}"
+        );
+        held = moved;
+    }
+    let end = start + egui::vec2(200.0, 0.0);
+    let _ = window_frame(
+        &ctx,
+        &mut app,
+        vec![egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    let released = position(&app);
+    assert_eq!(released, held, "the release keeps the panel where the drag left it");
+    assert!(released.x > before.x + 150.0, "the drag moved the panel over the pane");
+}
