@@ -207,6 +207,7 @@ mod tests {
 #[cfg(test)]
 mod start_tests {
     use std::path::Path;
+    use std::time::{Duration, Instant};
 
     use egui::Context;
 
@@ -214,6 +215,15 @@ mod start_tests {
     use crate::app::test_support::{run_app_frame, test_app_with_startup};
 
     use horizon_core::{PresetConfig, RuntimeState, StartupDecision, WorkspaceState};
+
+    /// How long a test waits for the worker that searches the programs of the
+    /// folder.
+    ///
+    /// The search reads the folders of `PATH` on the coordination worker, so the
+    /// panel opens on a later frame. The bound is the hang guard of the test and
+    /// not a rule of the product: a computer that runs this suite beside other
+    /// work schedules that worker late, so a count of frames is no wait.
+    const PATIENCE: Duration = Duration::from_secs(120);
 
     /// A board of the last run with one workspace of `name` in `folder` and one
     /// editor panel in it, so the workspace survives the start.
@@ -288,11 +298,16 @@ mod start_tests {
             request: None,
         });
         run_app_frame(&ctx, &mut app);
-        for _ in 0..80 {
+        // The worker of the folder answers the frame after the request, and this
+        // test waits for the state that it asserts.
+        let deadline = Instant::now() + PATIENCE;
+        while app.board.panels.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the folder of the start opened no panel within {PATIENCE:?}"
+            );
             run_app_frame(&ctx, &mut app);
-            if !app.board.panels.is_empty() {
-                break;
-            }
+            std::thread::sleep(Duration::from_millis(2));
         }
 
         let workspace = app.workspace_of_folder(&repo).expect("the workspace of the folder");
