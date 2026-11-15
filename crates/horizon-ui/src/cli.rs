@@ -4,7 +4,7 @@
 //! sessions or the skills of the person: a mode prints what it prints and ends, and
 //! an argument that this build does not know names itself and exits 2.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use horizon_core::HorizonHome;
 
@@ -178,13 +178,17 @@ pub(crate) fn parse_browser_mcp_args(mut args: impl Iterator<Item = std::ffi::Os
     Ok(true)
 }
 
-pub(crate) const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
+pub(crate) const CLI_USAGE: &str = "usage: horizon [<folder>] [--config <path>] [--ephemeral] [--new-session] [--blank]
        horizon [--config <path>] --export-remote-profile <path>
        horizon [--config <path>] --import-remote-profile <path>
        horizon --server [--listen <ip>:<port>] [--name <dns-name>]
        horizon --server-link
        horizon --server-invite
-       horizon --browser-host-driver [--profile <name>] [--engine <engine>]";
+       horizon --browser-host-driver [--profile <name>] [--engine <engine>]
+
+A folder argument opens the board of that folder: Horizon shows the workspace of
+the folder, or makes it with one panel of the first agent preset of the settings
+whose program this computer has, or a terminal in that folder.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RemoteProfileCommand {
@@ -195,10 +199,34 @@ pub(crate) enum RemoteProfileCommand {
 #[derive(Debug)]
 pub(crate) struct CliArgs {
     pub(crate) config_path: Option<PathBuf>,
+    /// The folder of this start, as the person wrote it. [`resolve_folder`] turns
+    /// it into the folder that the board shows.
+    pub(crate) folder: Option<PathBuf>,
     pub(crate) new_session: bool,
     pub(crate) ephemeral: bool,
     pub(crate) blank: bool,
     pub(crate) command: Option<Command>,
+}
+
+/// The folder that `path` names, or the one sentence that says why it does not
+/// name a folder.
+///
+/// A relative path and `.` resolve against the current directory of this start.
+/// The answer is the folder as the board names it: its identity, so a symbolic
+/// link, a trailing separator and an interior `.` name one folder. This is the
+/// only file read of the arguments, and it runs before a window opens.
+///
+/// # Errors
+///
+/// Returns one sentence when the path is not there, or when it is not a folder.
+pub(crate) fn resolve_folder(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!("{} is not there", path.display()));
+    }
+    if !path.is_dir() {
+        return Err(format!("{} is not a folder", path.display()));
+    }
+    Ok(horizon_core::folder_identity(path))
 }
 
 /// A command that finishes without opening a window.
@@ -213,6 +241,7 @@ pub(crate) enum Command {
 /// through to an ordinary launch or run another command.
 pub(crate) fn parse_cli_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<CliArgs, String> {
     let mut config_path = None;
+    let mut folder: Option<PathBuf> = None;
     let mut new_session = false;
     let mut ephemeral = false;
     let mut blank = false;
@@ -223,6 +252,14 @@ pub(crate) fn parse_cli_args(args: impl IntoIterator<Item = std::ffi::OsString>)
         let Some(flag) = arg.to_str() else {
             return Err(unknown_argument(&arg));
         };
+        // One folder of this start, as a person types `horizon .`: an argument
+        // that names no flag. The path is judged after every argument is read.
+        if !flag.starts_with('-') && !flag.is_empty() {
+            if folder.replace(PathBuf::from(flag)).is_some() {
+                return Err("give one folder only".to_string());
+            }
+            continue;
+        }
         let mut operand = |flag: &str| -> Result<PathBuf, String> {
             match args.next() {
                 Some(value) if !value.is_empty() && !value.to_string_lossy().starts_with('-') => {
@@ -257,6 +294,7 @@ pub(crate) fn parse_cli_args(args: impl IntoIterator<Item = std::ffi::OsString>)
 
     Ok(CliArgs {
         config_path,
+        folder,
         new_session,
         ephemeral,
         blank,
@@ -276,7 +314,10 @@ fn set_command(command: &mut Option<Command>, next: Command) -> Result<(), Strin
 mod tests {
     use std::ffi::OsString;
 
-    use super::{Command, RemoteProfileCommand, Start, SyncMode, parse_cli_args, parse_start, parse_sync_mode};
+    use super::{
+        CLI_USAGE, Command, RemoteProfileCommand, Start, SyncMode, parse_cli_args, parse_start, parse_sync_mode,
+        resolve_folder,
+    };
 
     fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
         parse_cli_args(args.iter().map(|arg| OsString::from(*arg)))
@@ -345,13 +386,70 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_is_one_operand_of_this_start() {
+        let args = parse(&["."]).expect("the current folder");
+        assert_eq!(args.folder.as_deref(), Some(std::path::Path::new(".")));
+        assert_eq!(
+            parse(&["--config", "c.json", "repo", "--ephemeral"])
+                .expect("a folder beside the other options")
+                .folder
+                .as_deref(),
+            Some(std::path::Path::new("repo")),
+            "a folder stands beside the options of the start"
+        );
+        assert_eq!(
+            parse(&["--blank", "/tmp/my repo"]).expect("a path with a space").folder,
+            Some(std::path::PathBuf::from("/tmp/my repo"))
+        );
+        assert!(
+            parse(&["one", "two"]).is_err(),
+            "one folder only: a second operand is an error"
+        );
+        assert!(
+            parse(&[]).expect("no argument").folder.is_none(),
+            "a start without a folder opens the board of the last run"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_folder_ends_with_one_sentence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let file = temp.path().join("a-file");
+        std::fs::write(&file, b"not a folder").expect("the file");
+
+        let missing = resolve_folder(&temp.path().join("gone")).expect_err("a path that is gone");
+        assert_eq!(missing, format!("{} is not there", temp.path().join("gone").display()));
+
+        let refused = resolve_folder(&file).expect_err("a file is not a folder");
+        assert_eq!(refused, format!("{} is not a folder", file.display()));
+
+        let folder = temp.path().join("repo");
+        std::fs::create_dir(&folder).expect("the folder");
+        assert_eq!(
+            resolve_folder(&folder).expect("a folder"),
+            horizon_core::folder_identity(&folder),
+            "the answer is the identity of the folder"
+        );
+        let spelled = std::path::PathBuf::from(format!("{}/", folder.display()));
+        assert_eq!(
+            resolve_folder(&spelled).expect("a folder with a trailing separator"),
+            horizon_core::folder_identity(&folder)
+        );
+    }
+
+    #[test]
+    fn the_usage_names_the_folder_of_a_start() {
+        assert!(CLI_USAGE.contains("horizon [<folder>]"), "{CLI_USAGE}");
+        assert!(CLI_USAGE.contains("one panel"), "the usage says what the folder gives");
+    }
+
+    #[test]
     fn an_argument_that_this_build_does_not_know_ends_the_start() {
         for arguments in [
             &["--list"][..],
             &["--nocapture"],
             &["--test-threads", "4"],
             &["--config", "c.json", "--list"],
-            &["stray"],
         ] {
             let error = start(arguments).expect_err("the argument is refused");
             assert!(error.starts_with("unknown argument "), "{arguments:?}: {error}");

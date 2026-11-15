@@ -47,6 +47,7 @@ fn test_persistent_recovery_app(runtime_state: RuntimeState) -> (TempDir, Horizo
             session: Box::new(session),
         },
         input::ObservedKeyboardInputs::default(),
+        None,
     );
     assert!(app.startup_receiver.is_none());
     app.pending_startup_runtime_state = Some(pending_runtime_state);

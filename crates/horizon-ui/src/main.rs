@@ -110,6 +110,22 @@ fn main() -> eframe::Result {
         }
         Start::Desktop(cli_args) => cli_args,
     };
+    // A folder that this start names is judged before anything of this computer
+    // is touched, so a path that is not a folder ends with one sentence and never
+    // opens a window.
+    let cli_args = match cli_args.folder.as_deref() {
+        Some(named) => match cli::resolve_folder(named) {
+            Ok(folder) => CliArgs {
+                folder: Some(folder),
+                ..cli_args
+            },
+            Err(problem) => {
+                eprintln!("error: {problem}");
+                std::process::exit(2);
+            }
+        },
+        None => cli_args,
+    };
     // The copy of this binary that cargo keeps in `deps` sits beside the test
     // binaries, and a start of it cannot tell a person from a test runner. Every
     // mode that ends early has already left, so this refuses only a start that
@@ -185,6 +201,7 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
     let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     sweep_private_browser_profiles(&session_store, &config, horizon_home);
+    refuse_folder_when_horizon_runs(&session_store, cli_args);
     let startup = prepare_startup(&session_store, &config, cli_args);
 
     let window = startup_window_config(&startup, &config.window);
@@ -244,6 +261,7 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
                 session_store.clone(),
                 startup.clone(),
                 app_keyboard_inputs.clone(),
+                cli_args.folder.clone(),
             );
             device_requests_for_app.install(host, cc.egui_ctx.clone());
             Ok(Box::new(app::BridgeApp::new(device_requests_for_app)))
@@ -504,6 +522,44 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
             }
         },
     }
+}
+
+/// Ends the start of `horizon <folder>` with one line when a Horizon of this home
+/// already runs.
+///
+/// A running Horizon keeps a lease with a heartbeat for each session that it
+/// holds, so this start can see it. This build has no channel that asks the
+/// running window to open a folder, and this round builds none: the sentence says
+/// that the folder was not opened there, and the status is zero because the
+/// person asked for a board that is already there.
+fn refuse_folder_when_horizon_runs(session_store: &SessionStore, cli_args: &CliArgs) {
+    let Some(folder) = cli_args.folder.as_deref() else {
+        return;
+    };
+    if !a_horizon_already_runs(session_store) {
+        return;
+    }
+    println!("{}", folder_already_open_sentence(folder));
+    plugin_install::exit_after_releasing_plugins(0);
+}
+
+/// Whether a Horizon of this home holds a session now.
+///
+/// A window writes a lease with a heartbeat for each session that it holds, and a
+/// lease that two seconds old is a window that runs. A window of another home, or
+/// one that runs with `--ephemeral`, keeps no lease and is not seen here.
+fn a_horizon_already_runs(session_store: &SessionStore) -> bool {
+    session_store
+        .list_profile_sessions()
+        .is_ok_and(|sessions| sessions.iter().any(|session| session.is_live))
+}
+
+/// The one line of `horizon <folder>` when a Horizon of this home already runs.
+fn folder_already_open_sentence(folder: &std::path::Path) -> String {
+    format!(
+        "Horizon already runs for this home, so the folder {} was not opened there.",
+        folder.display()
+    )
 }
 
 /// Read the settings of this start, or stop with the reason when they cannot be
@@ -828,6 +884,41 @@ mod tests {
         let window = startup_chooser_window_config(&chooser_with_sessions(8));
 
         assert!((window.height - 618.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_folder_of_a_start_sees_the_horizon_that_runs_and_says_so_in_one_line() {
+        use horizon_core::{Config, HorizonHome, SessionStore};
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = SessionStore::new(
+            HorizonHome::from_root(temp.path().join(".horizon")),
+            temp.path().join("config.json"),
+        );
+        let folder = temp.path().join("repo");
+        std::fs::create_dir(&folder).expect("the folder");
+
+        assert!(!super::a_horizon_already_runs(&store), "no session of this home runs");
+
+        let session = store
+            .create_session_from_runtime(horizon_core::RuntimeState::from_config(&Config::default()))
+            .expect("a session of this home");
+        assert!(
+            !super::a_horizon_already_runs(&store),
+            "a saved session is not a running one"
+        );
+        store.acquire_lease(&session.session_id).expect("the lease of a window");
+
+        let sentence = super::folder_already_open_sentence(&folder);
+        assert!(super::a_horizon_already_runs(&store), "the lease of a window that runs");
+        assert_eq!(
+            sentence,
+            format!(
+                "Horizon already runs for this home, so the folder {} was not opened there.",
+                folder.display()
+            )
+        );
+        assert_eq!(sentence.lines().count(), 1, "one line, not a usage: {sentence}");
     }
 
     #[test]

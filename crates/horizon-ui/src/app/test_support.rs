@@ -44,6 +44,7 @@ pub(super) fn test_app_with_config_and_startup(
         session_store,
         startup,
         input::ObservedKeyboardInputs::default(),
+        None,
     );
     (temp, ctx, app)
 }

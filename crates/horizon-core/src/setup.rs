@@ -174,6 +174,34 @@ pub fn first_installed(agents: &[SetupAgent], mut installed: impl FnMut(&str) ->
         .position(|agent| !agent.program.is_empty() && installed(&agent.program))
 }
 
+/// What the single panel of a workspace of a folder is: the program of one
+/// preset of the settings, or the general program of this computer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderPanel {
+    /// The index of the preset of the settings whose program starts the panel.
+    Preset(usize),
+    /// A terminal of this computer.
+    Terminal,
+}
+
+/// The choice of the one panel of a workspace that Horizon makes for a folder.
+///
+/// The rule is the rule of Set up: the first agent preset of the settings, in the
+/// order of the settings, whose program this computer has. The caller gives the
+/// answer of whether a program is installed, because the search reads folders and
+/// runs off the frame. A computer with no agent program starts a terminal instead.
+#[must_use]
+pub fn folder_panel(presets: &[PresetConfig], mut installed: impl FnMut(&str) -> bool) -> FolderPanel {
+    let agents = setup_agents(presets);
+    let programs: Vec<String> = agents.iter().map(|agent| agent.program.clone()).collect();
+    let found: Vec<bool> = programs.iter().map(|program| installed(program)).collect();
+    agents
+        .iter()
+        .zip(found)
+        .find(|(_, found)| *found)
+        .map_or(FolderPanel::Terminal, |(agent, _)| FolderPanel::Preset(agent.preset))
+}
+
 /// The file that runs `program` on this computer, or `None` when no folder of
 /// `PATH` holds an executable of that name.
 ///
@@ -214,7 +242,10 @@ fn is_executable_file(file: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{SetupGoal, find_program, first_installed, first_message_args, setup_agents, takes_first_message};
+    use super::{
+        FolderPanel, SetupGoal, find_program, first_installed, first_message_args, folder_panel, setup_agents,
+        takes_first_message,
+    };
     use crate::config::PresetConfig;
     use crate::panel::{PanelKind, PanelResume};
 
@@ -228,6 +259,51 @@ mod tests {
             resume: PanelResume::Fresh,
             ssh_connection: None,
         }
+    }
+
+    #[test]
+    fn a_folder_takes_the_first_agent_preset_whose_program_this_computer_has() {
+        let presets = vec![
+            preset("Shell", PanelKind::Shell, None),
+            preset("Gemini", PanelKind::Gemini, None),
+            preset("Claude Code", PanelKind::Claude, None),
+            preset("Codex", PanelKind::Codex, None),
+        ];
+
+        assert_eq!(
+            folder_panel(&presets, |program| program == "codex"),
+            FolderPanel::Preset(3),
+            "only Codex is installed, so its preset starts the panel"
+        );
+        assert_eq!(
+            folder_panel(&presets, |_| true),
+            FolderPanel::Preset(2),
+            "the order of the settings decides between two installed agents"
+        );
+        assert_eq!(
+            folder_panel(&presets, |_| false),
+            FolderPanel::Terminal,
+            "a computer with no agent program starts a terminal"
+        );
+        assert_eq!(
+            folder_panel(&presets[..1], |_| true),
+            FolderPanel::Terminal,
+            "a settings list of one terminal preset starts a terminal"
+        );
+    }
+
+    #[test]
+    fn a_folder_never_takes_an_agent_that_has_no_first_message() {
+        let presets = vec![
+            preset("Kilo", PanelKind::KiloCode, None),
+            preset("Gemini", PanelKind::Gemini, None),
+        ];
+
+        assert_eq!(
+            folder_panel(&presets, |_| true),
+            FolderPanel::Terminal,
+            "a program that takes no first message is no agent of a folder"
+        );
     }
 
     #[test]

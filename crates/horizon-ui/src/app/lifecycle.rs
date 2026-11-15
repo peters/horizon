@@ -54,6 +54,11 @@ impl HorizonApp {
         if self.startup_chooser.is_none() && !self.initial_pan_done && !self.startup_workspace_organization_pending {
             self.seed_initial_pan(ui, None, false);
         }
+        // The folder of a `horizon <folder>` start waits for the board of the last
+        // run, so its workspace stands beside the restored ones.
+        if self.startup_chooser.is_none() && self.initial_pan_done {
+            self.apply_startup_folder(ui.ctx());
+        }
 
         true
     }
