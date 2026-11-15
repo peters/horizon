@@ -34,12 +34,30 @@ ATTENTION_COMMAND_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_pan
 # the panel to the same work entry. The panel of that entry continues no work, so a
 # restored panel shows no card of a continuation.
 ATTENTION_PI_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel_pi.json'
+# The fourth shape: a codex panel of the same stand-in. Codex writes its state into
+# the title of its own terminal, so Horizon reads it through the reader of the panel
+# and no file of a launch takes part.
+ATTENTION_CODEX_PANEL_ENTRY = Path(__file__).resolve().parent / 'attention_panel_codex.json'
 ATTENTION_PROGRAM = 'claude'
 # The name that a pi panel of the fixture resolves on its `PATH`: the command of the
 # pi preset is `pi`.
 ATTENTION_PI_PROGRAM = 'pi'
-# The two agent kinds of the stand-in, and the program name of each kind.
-ATTENTION_KINDS = ('claude', 'pi')
+# The name that a codex panel of the fixture resolves on its `PATH`: the command of
+# the codex preset is `codex`.
+ATTENTION_CODEX_PROGRAM = 'codex'
+# The three agent kinds of the stand-in, their panel entries, the program name of
+# each kind and the script that its panel runs.
+ATTENTION_KINDS = ('claude', 'pi', 'codex')
+ATTENTION_KIND_PROGRAM = {
+    'claude': ATTENTION_PROGRAM,
+    'pi': ATTENTION_PI_PROGRAM,
+    'codex': ATTENTION_CODEX_PROGRAM,
+}
+ATTENTION_KIND_ENTRY = {
+    'claude': ATTENTION_PANEL_ENTRY,
+    'pi': ATTENTION_PI_PANEL_ENTRY,
+    'codex': ATTENTION_CODEX_PANEL_ENTRY,
+}
 ATTENTION_BIN_FOLDER = 'bin'
 ATTENTION_STANDIN_FOLDER = 'attention-agent'
 ATTENTION_TIMER_FILE = 'stand-in.json'
@@ -99,7 +117,23 @@ FILE_AGENT_LAUNCHER = 'file-agent.sh'
 FIXTURE_FOLDER = Path(__file__).resolve().parent
 WORKTREE_CARD_PROGRAM = 'card_agent.py'
 ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
-PANEL_PROGRAMS = (WORKTREE_CARD_PROGRAM, ATTENTION_STANDIN_PROGRAM, FILE_AGENT_PROGRAM)
+ATTENTION_CODEX_STANDIN_PROGRAM = 'codex_attention_standin.py'
+# The script that the panel of each agent kind of the stand-in runs. A pi launch
+# receives the same five variables of a work launch, and the stand-in of the
+# lifecycle events ignores the arguments of its launch, so it reports for a pi
+# panel as it does for a Claude panel. A codex panel reports through the title of
+# its own terminal, which no file and no argument takes part in.
+ATTENTION_KIND_SCRIPT = {
+    'claude': ATTENTION_STANDIN_PROGRAM,
+    'pi': ATTENTION_STANDIN_PROGRAM,
+    'codex': ATTENTION_CODEX_STANDIN_PROGRAM,
+}
+PANEL_PROGRAMS = (
+    WORKTREE_CARD_PROGRAM,
+    ATTENTION_STANDIN_PROGRAM,
+    ATTENTION_CODEX_STANDIN_PROGRAM,
+    FILE_AGENT_PROGRAM,
+)
 PANEL_PROGRAM_FOLDER = 'programs'
 
 
@@ -682,12 +716,12 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
     """
     if kind not in ATTENTION_KINDS:
         raise SystemExit(f'--attention-agent-kind takes one of {", ".join(ATTENTION_KINDS)}, not {kind}')
-    program_name = ATTENTION_PI_PROGRAM if kind == 'pi' else ATTENTION_PROGRAM
+    program_name = ATTENTION_KIND_PROGRAM[kind]
     total = count + (1 if command else 0)
     if not 1 <= total <= ATTENTION_MAX_AGENTS:
         raise SystemExit(f'--attention-agent-count and --attention-agent-command take 1 to '
                          f'{ATTENTION_MAX_AGENTS} panels together, not {total}')
-    script = fixture_program(ATTENTION_STANDIN_PROGRAM, program_folder)
+    script = fixture_program(ATTENTION_KIND_SCRIPT[kind], program_folder)
     work = Path(state) / ATTENTION_STANDIN_FOLDER
     bin_dir = work / ATTENTION_BIN_FOLDER
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -695,13 +729,14 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
     # mode of the file that the repository keeps.
     program_in_state(script, bin_dir / program_name, state)
     (bin_dir / ATTENTION_TIMER_FILE).write_text(json.dumps({'timer': timer or 0}))
-    default_entry = ATTENTION_PI_PANEL_ENTRY if kind == 'pi' else ATTENTION_PANEL_ENTRY
+    default_entry = ATTENTION_KIND_ENTRY[kind]
     entry = json.loads(default_entry.read_text())
     panels = []
     for index in range(total):
         own_command = command and index == count
         if own_command and kind != 'claude':
-            # The second shape of a pi panel: the preset command is the stand-in.
+            # The second shape of a pi or a codex panel: the preset command is the
+            # stand-in itself.
             panel = dict(entry)
             panel['name'] = f'{entry["name"]} with its own command'
         else:
@@ -1090,9 +1125,10 @@ def arguments():
     parser.add_argument(
         '--attention-agent-kind', choices=ATTENTION_KINDS, default=ATTENTION_KINDS[0],
         help='The agent kind of the stand-in panels: claude attaches the plugin folder of the '
-             'work hooks to the launch, and pi attaches the state report extension of the '
-             'candidate. Both report their state through the work entry, so the sidebar shows '
-             'the same states. Needs --attention-agent')
+             'work hooks to the launch, pi attaches the state report extension of the candidate, '
+             'and codex writes the state of its turn into the title of its own terminal, which '
+             'needs no argument of the launch. All three reach the same four words of the '
+             'sidebar. Needs --attention-agent')
     parser.add_argument(
         '--attention-agent-count', type=int, default=None, metavar='N',
         help='Open N panels of the stand-in agent, 1 to 4, so that a change of two panels at '

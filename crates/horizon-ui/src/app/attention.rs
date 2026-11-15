@@ -164,11 +164,11 @@ impl HorizonApp {
         // The title of an agent that reports its state there changes about ten
         // times a second, and only a change of the state is work: the claim of a
         // panel that holds its state wakes no frame.
-        let titled = self.observe_agent_titles(current_unix_millis());
-        if !titled.is_empty() {
+        let (titled, moved) = self.observe_agent_titles(current_unix_millis());
+        if titled {
             self.attention.count_change();
             ctx.request_repaint();
-            self.note_changed_panels(titled, ctx);
+            self.note_changed_panels(moved, ctx);
         }
         let now = Instant::now();
         let focus_changed = self.attention.focused != self.board.focused;
@@ -296,7 +296,13 @@ impl HorizonApp {
     /// does no work for a spinner frame of the state that it already holds. Only a
     /// panel of a kind with a state title is asked, so a board of other panels
     /// pays one comparison for each of them.
-    fn observe_agent_titles(&mut self, now_millis: i64) -> Vec<String> {
+    ///
+    /// Answers whether a panel shows another state, and the panels whose state
+    /// changed, so the caller wakes one frame and queues the notifications of the
+    /// panels that wait.
+    fn observe_agent_titles(&mut self, now_millis: i64) -> (bool, Vec<String>) {
+        let focused = self.focused_panel_local_id();
+        let mut changed = false;
         let mut moved = Vec::new();
         for panel in &self.board.panels {
             if !title_reports_state(panel.kind) {
@@ -308,10 +314,16 @@ impl HorizonApp {
                 panel.title_state(),
                 now_millis,
             ) {
+                changed = true;
                 moved.push(panel.local_id.clone());
             }
+            if focused.as_deref() == Some(panel.local_id.as_str()) {
+                // The person looks at this panel, so a turn of it that ends is no
+                // state that waits for them.
+                changed |= self.attention.states.note_look(&panel.local_id, now_millis);
+            }
         }
-        moved
+        (changed, moved)
     }
 
     /// Records the working indicator of each agent panel whose launch has no
@@ -465,5 +477,7 @@ impl HorizonApp {
     }
 }
 
+#[cfg(test)]
+mod codex_title_tests;
 #[cfg(test)]
 mod tests;

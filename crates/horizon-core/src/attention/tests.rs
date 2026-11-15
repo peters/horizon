@@ -518,6 +518,19 @@ fn a_title_of_a_launch_that_hooks_report_on_is_not_read() {
 }
 
 #[test]
+fn a_codex_panel_whose_titles_claim_nothing_keeps_the_signal_of_its_screen() {
+    let mut board = board();
+    for _ in 0..5 {
+        title(&mut board, TitleState::Plain, LAUNCH);
+    }
+    assert!(!board.from_title("panel"), "no title of the launch claimed a state");
+    board.observe_working("panel", true, true, LAUNCH + 1);
+    assert_eq!(board.state("panel"), Attention::Working, "the screen answers");
+    board.observe_working("panel", false, false, LAUNCH + 2);
+    assert_eq!(board.state("panel"), Attention::Done);
+}
+
+#[test]
 fn a_kind_without_a_state_title_keeps_the_signal_of_its_screen() {
     for kind in [PanelKind::Claude, PanelKind::Pi, PanelKind::Shell] {
         assert!(!title_reports_state(kind), "{kind:?}");

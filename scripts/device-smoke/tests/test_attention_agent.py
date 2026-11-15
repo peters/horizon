@@ -231,6 +231,43 @@ class AttentionAgentTests(unittest.TestCase):
             self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
             self.assertFalse((bin_dir / serve.ATTENTION_PROGRAM).exists(), 'no claude name comes with a pi panel')
 
+    def test_a_codex_panel_is_the_entry_of_the_codex_stand_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, bin_dir = serve.attention_agent(state, 0, kind='codex')
+            self.assertEqual(len(panels), 1)
+            panel = panels[0]
+            # A codex launch needs no argument for its state title, so the entry
+            # names no command and Horizon resolves `codex` on the PATH of the
+            # candidate, where the stand-in is.
+            self.assertIsNone(panel['command'])
+            self.assertEqual(panel['kind'], 'codex', 'the agent kind that writes its state in its title')
+            self.assertEqual(panel['args'], [])
+            self.assertFalse(panel['work_resume']['enabled'], 'a codex panel continues no work')
+            shared = json.loads(serve.ATTENTION_CODEX_PANEL_ENTRY.read_text())
+            self.assertEqual({key: value for key, value in panel.items() if key != 'cwd'}, shared)
+            program = bin_dir / serve.ATTENTION_CODEX_PROGRAM
+            self.assertEqual(program.name, 'codex', 'the name that the codex preset resolves')
+            self.assertEqual(
+                program.read_text(),
+                (SCRIPT.parent / serve.ATTENTION_CODEX_STANDIN_PROGRAM).read_text(),
+                'the program is the codex stand-in itself',
+            )
+            self.assertTrue(program.stat().st_mode & stat.S_IXUSR, 'the program is executable')
+            self.assertFalse((bin_dir / serve.ATTENTION_PROGRAM).exists(), 'no claude name comes with a codex panel')
+
+    def test_every_kind_of_the_stand_in_names_its_own_program_and_entry(self):
+        self.assertEqual(set(serve.ATTENTION_KINDS), set(serve.ATTENTION_KIND_PROGRAM))
+        self.assertEqual(set(serve.ATTENTION_KINDS), set(serve.ATTENTION_KIND_ENTRY))
+        self.assertEqual(set(serve.ATTENTION_KINDS), set(serve.ATTENTION_KIND_SCRIPT))
+        for kind in serve.ATTENTION_KINDS:
+            entry = json.loads(serve.ATTENTION_KIND_ENTRY[kind].read_text())
+            self.assertEqual(entry['kind'], kind, 'the entry is the kind that names it')
+            script = SCRIPT.parent / serve.ATTENTION_KIND_SCRIPT[kind]
+            self.assertTrue(script.is_file(), f'the program of {kind} is in this folder: {script}')
+            self.assertIn(script.name, serve.PANEL_PROGRAMS, 'the fixture copies the program of the panel')
+
     def test_a_pi_panel_of_its_own_command_names_the_stand_in(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'

@@ -1,0 +1,9 @@
+{
+  "name": "Codex attention stand-in",
+  "kind": "codex",
+  "command": null,
+  "args": [],
+  "work_resume": {"enabled": false},
+  "position": [40, 60],
+  "size": [640, 420]
+}
