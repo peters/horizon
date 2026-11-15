@@ -1,12 +1,17 @@
 //! A card takes the size its content needs, once per document and per set of
 //! Horizon-owned frames.
 
+use egui::{Pos2, Rect, Vec2};
 use horizon_browser_control::block::{BlockDocument, BoardColumn, BoardItem, BoardRow, BoardState, Component, Width};
+use horizon_core::browser::manifest::{
+    self,
+    block::{Operation, Outcome, Request},
+};
 use horizon_core::{BlockPanelState, CardFrames, Panel, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 
 use super::*;
 use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use crate::block_widget::CARD_CHROME_HEIGHT;
+use crate::block_widget::{CARD_CHROME_HEIGHT, CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS};
 
 /// A board with one card panel that measured `measured_content_height`.
 fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, HorizonApp, PanelId) {
@@ -59,14 +64,10 @@ fn a_card_takes_the_height_of_the_content_that_the_pass_measured() {
 }
 
 #[test]
-fn a_card_stays_between_the_card_limits() {
+fn a_card_never_takes_less_than_the_floor_of_a_card() {
     let (_short, ctx, mut short, short_id) = app_with_card(5.0);
     short.fit_block_cards(&ctx);
     assert!((height(&short, short_id) - 140.0).abs() < f32::EPSILON, "the floor");
-
-    let (_tall, ctx, mut tall, tall_id) = app_with_card(5_000.0);
-    tall.fit_block_cards(&ctx);
-    assert!((height(&tall, tall_id) - 900.0).abs() < f32::EPSILON, "the ceiling");
 }
 
 #[test]
@@ -330,4 +331,271 @@ fn a_card_that_the_person_resized_by_hand_keeps_its_size_at_every_update() {
             "the person's own size stays: {size:?}"
         );
     }
+}
+
+/// An app whose first panel is an agent, so a card request of that panel applies.
+fn agent_app() -> (tempfile::TempDir, Context, HorizonApp) {
+    let runtime = RuntimeState {
+        workspaces: vec![editor_workspace_state("first", [0.0, 0.0])],
+        ..RuntimeState::default()
+    };
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(runtime),
+    });
+    app.board.panels[0].kind = PanelKind::Claude;
+    app.sidebar_visible = false;
+    (temp, ctx, app)
+}
+
+/// One request of the agent panel of `app`, as the queue carries it.
+fn request(app: &HorizonApp, operation: Operation) -> Request {
+    Request {
+        request_id: "test".into(),
+        actor: format!("horizon:{}", app.board.panels[0].local_id),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation,
+    }
+}
+
+/// The id of the card that an answer of `create` names.
+fn created_card(outcome: Outcome) -> String {
+    match outcome {
+        Outcome::Created { panel_id, .. } => panel_id,
+        other => panic!("expected a created card: {other:?}"),
+    }
+}
+
+/// The card that a setup agent draws for a machine that it rented: a heading
+/// with a badge, nine pairs, six steps, three lines of text and eight buttons
+/// that take three rows of the card width.
+fn setup_document() -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = [
+        ("Kind", "sample.2cpu"),
+        ("Address", "203.0.113.10"),
+        ("Session", "sample-session"),
+        ("Folder", "/work/sample-folder"),
+        ("Trusted for", "Sample Agent 1.0"),
+        ("Label", "purpose=sample"),
+        ("Key from", "any address, key only"),
+        ("Rented at", "2026-01-01 10:00 UTC"),
+        ("Cost", "0.033 EUR / hour, IPv4 extra"),
+    ]
+    .iter()
+    .map(|(label, value)| serde_json::json!({"label": label, "value": value}))
+    .collect();
+    let steps: Vec<serde_json::Value> = [
+        "Prepare the system",
+        "Install the sample",
+        "Bring the folder here",
+        "Trust the folder",
+        "Warm up",
+        "Run the check",
+    ]
+    .iter()
+    .map(|label| serde_json::json!({"label": label, "state": "done", "at": "1 s"}))
+    .collect();
+    serde_json::json!({
+        "components": [
+            {"type": "heading", "text": "Ready for sample-machine", "subtitle": "sample · example",
+             "badge": {"text": "Ready", "tone": "ok"}},
+            {"type": "kv", "rows": rows},
+            {"type": "steps", "steps": steps},
+            {"type": "text", "text": "The check passed.\nThe server and browser buttons continue the setup.\nThe rent is ready."},
+            {"type": "buttons", "items": [
+                {"id": "start", "label": "Start the machine", "tone": "primary"},
+                {"id": "place", "label": "Put the server here", "tone": "neutral"},
+                {"id": "browser", "label": "Add a browser", "tone": "neutral"},
+                {"id": "network", "label": "Join a network", "tone": "neutral"},
+                {"id": "state", "label": "Show the agent state", "tone": "neutral"},
+                {"id": "stop", "label": "Stop", "tone": "warn"},
+                {"id": "close", "label": "Close", "tone": "neutral"},
+                {"id": "delete", "label": "Delete", "tone": "danger"}
+            ]}
+        ]
+    })
+}
+
+/// The first document of the same card: the two controls that start a setup.
+fn step_document() -> serde_json::Value {
+    serde_json::json!({
+        "components": [
+            {"type": "heading", "text": "Preparing sample-machine", "badge": {"text": "Working", "tone": "info"}},
+            {"type": "buttons", "items": [{"id": "start", "label": "Start the machine", "tone": "primary"}]}
+        ]
+    })
+}
+
+/// A document that needs more room than any window shows: every pair and every
+/// step that a card holds.
+fn taller_than_the_view_document() -> serde_json::Value {
+    let rows: Vec<serde_json::Value> = (0..24)
+        .map(|index| serde_json::json!({"label": format!("Label {index}"), "value": "value"}))
+        .collect();
+    let steps: Vec<serde_json::Value> = (0..16)
+        .map(|index| serde_json::json!({"label": format!("Step {index}"), "state": "done"}))
+        .collect();
+    serde_json::json!({
+        "components": [
+            {"type": "heading", "text": "Ready for sample-machine"},
+            {"type": "kv", "rows": rows},
+            {"type": "steps", "steps": steps},
+            {"type": "buttons", "items": [{"id": "delete", "label": "Delete", "tone": "danger"}]}
+        ]
+    })
+}
+
+/// The ink of the text `text` that a frame drew.
+fn drawn_text(output: &egui::FullOutput, text: &str) -> Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::epaint::Shape::Text(shape) if shape.galley.text() == text => {
+                Some(Rect::from_min_size(shape.pos, shape.galley.size()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the frame drew no {text}"))
+}
+
+/// The room that the canvas view of this moment shows, in canvas points.
+fn room_of_the_view(app: &HorizonApp, ctx: &Context) -> f32 {
+    app.canvas_rect(ctx).height() / app.canvas_view.zoom
+}
+
+/// The card panel that `card` names, as the canvas draws it this frame.
+fn card_panel(app: &HorizonApp, ctx: &Context, card: &str) -> Rect {
+    let panel = app
+        .board
+        .panel(app.board.panel_id_by_local_id(card).expect("the card"))
+        .expect("the card");
+    let min = app.canvas_to_screen(
+        app.canvas_rect(ctx),
+        Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+    );
+    Rect::from_min_size(min, app.canvas_size_to_screen(Vec2::from(panel.layout.size)))
+}
+
+/// The room that the body of a card panel draws in: below its titlebar and above
+/// the footer that stays at its bottom.
+fn card_body(panel: Rect, zoom: f32) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(panel.min.x, panel.min.y + (CARD_CHROME_HEIGHT - CARD_FOOT_SPAN) * zoom),
+        Pos2::new(panel.max.x, panel.max.y - CARD_FOOT_SPAN * zoom),
+    )
+}
+
+/// The height of the card panel that `card` names.
+fn card_height(app: &HorizonApp, card: &str) -> f32 {
+    app.board
+        .panel(app.board.panel_id_by_local_id(card).expect("the card"))
+        .expect("the card")
+        .layout
+        .size[1]
+}
+
+/// Creates the card of a person's window from its first document and lets it
+/// settle. Returns the card and the height it took.
+fn card_of_first_document(ctx: &Context, app: &mut HorizonApp) -> (String, f32) {
+    let card = created_card(app.apply_block_request(
+        &request(
+            app,
+            Operation::Create {
+                title: Some("sample-machine".into()),
+                document: step_document(),
+            },
+        ),
+        ctx,
+    ));
+    for _ in 0..2 {
+        let _ = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+    }
+    let height = card_height(app, &card);
+    (card, height)
+}
+
+/// Updates the card `card` to `document` and runs the frames that the layout
+/// needs: one pass measures the body of the new document, and the host gives the
+/// card the room that fits it.
+fn grow_card(ctx: &Context, app: &mut HorizonApp, card: &str, document: serde_json::Value) -> egui::FullOutput {
+    let _ = app.apply_block_request(
+        &request(
+            app,
+            Operation::Update {
+                panel_id: card.to_owned(),
+                document,
+            },
+        ),
+        ctx,
+    );
+    let mut output = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+    for _ in 0..2 {
+        output = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+    }
+    output
+}
+
+#[test]
+fn a_card_that_grows_by_an_update_shows_its_last_button_without_a_scroll() {
+    let (_temp, ctx, mut app) = agent_app();
+    let (card, opened) = card_of_first_document(&ctx, &mut app);
+
+    let output = grow_card(&ctx, &mut app, &card, setup_document());
+
+    let panel = card_panel(&app, &ctx, &card);
+    let body = card_body(panel, app.canvas_view.zoom);
+    let ink = drawn_text(&output, "Delete");
+    assert!(
+        body.contains_rect(ink),
+        "the last button of the card lies inside the room that the card gives its body: {ink:?} in {body:?}"
+    );
+    let grown = card_height(&app, &card);
+    assert!(
+        grown > opened && grown > CARD_HEIGHT_LIMITS[1],
+        "the card grew to the room that its document needs, past the ceiling of a narrow card: {opened} to {grown}"
+    );
+}
+
+#[test]
+fn a_card_that_the_person_resized_by_hand_keeps_its_size_when_it_grows() {
+    let (_temp, ctx, mut app) = agent_app();
+    let (card, _) = card_of_first_document(&ctx, &mut app);
+    let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    let card_of_a_person = app.panel_render_caches.card_runtime.entry(id).or_default();
+    card_of_a_person.mark_hand_resized();
+    assert!(
+        app.board.resize_panel(id, [420.0, 500.0]),
+        "the person resizes the card"
+    );
+
+    let _ = grow_card(&ctx, &mut app, &card, setup_document());
+
+    assert!(
+        (card_height(&app, &card) - 500.0).abs() < f32::EPSILON,
+        "the person's own size outranks the document: {}",
+        card_height(&app, &card)
+    );
+}
+
+#[test]
+fn a_card_that_is_taller_than_the_room_of_the_view_scrolls_in_its_body() {
+    let (_temp, ctx, mut app) = agent_app();
+    let (card, _) = card_of_first_document(&ctx, &mut app);
+    let room = room_of_the_view(&app, &ctx);
+
+    let output = grow_card(&ctx, &mut app, &card, taller_than_the_view_document());
+
+    let height = card_height(&app, &card);
+    assert!(
+        (height - room.max(CARD_HEIGHT_LIMITS[1])).abs() < f32::EPSILON,
+        "a content that no window shows keeps a card at the room of the view: {height} of {room}"
+    );
+    let panel = card_panel(&app, &ctx, &card);
+    let body = card_body(panel, app.canvas_view.zoom);
+    let ink = drawn_text(&output, "Delete");
+    assert!(
+        ink.min.y > body.max.y,
+        "the body scrolls the last button below the room that the card gives it: {ink:?} in {body:?}"
+    );
 }

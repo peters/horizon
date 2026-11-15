@@ -8,6 +8,11 @@
 //! than its content scrolls its body above a footer that stays put. One repaint
 //! settles a new size, so no frame loop starts.
 //!
+//! The height of a card is bounded by the ceiling of its document and by the room
+//! that the canvas view shows at the zoom of the moment: a card that fits in the
+//! window of the person takes the height of its content, so nothing of it hides
+//! under its footer, and a card that is taller than that room scrolls as before.
+//!
 //! The width follows the document too: a wide document takes the width that its
 //! board asks for at every update, and a document that is narrow again takes the
 //! narrow card. The left edge of the panel stays where it is, so the card grows
@@ -43,8 +48,11 @@ impl HorizonApp {
             .filter(|panel| panel.kind == PanelKind::Block)
             .map(|panel| panel.id)
             .collect();
-        // The room of the canvas decides how wide a wide card may be.
-        let canvas_width = self.canvas_rect(ctx).width();
+        // The room of the canvas decides how wide a wide card may be, and how tall
+        // a card may grow: the visible height of the view at the zoom of this moment.
+        let canvas = self.canvas_rect(ctx);
+        let canvas_width = canvas.width();
+        let canvas_height = canvas.height() / self.canvas_view.zoom;
         let mut resized = false;
         for id in cards {
             let Some(revision) = self
@@ -67,7 +75,7 @@ impl HorizonApp {
             let hand_resized = card.hand_resized();
             // The bounds of the height and the width come from the document: a
             // wide card may grow taller and wider than the narrow card of today.
-            let Some((limits, width, current, workspace_id)) = self.board.panel(id).and_then(|panel| {
+            let Some((mut limits, width, current, workspace_id)) = self.board.panel(id).and_then(|panel| {
                 let document = &panel.block()?.document;
                 Some((
                     card_height_limits(document),
@@ -86,6 +94,10 @@ impl HorizonApp {
             {
                 continue;
             }
+            // A card of a person's window may take the room that the view shows, so
+            // a card that fits there needs no scroll. A card that a short window
+            // cannot show keeps the ceiling of its document and scrolls as before.
+            limits[1] = limits[1].max(canvas_height);
             let fitted = fitted_card_height(measured, hand_resized, current[1], limits);
             let fitted_width = if hand_resized { current[0] } else { width };
             let wider = (fitted_width - current[0]).abs() > f32::EPSILON;

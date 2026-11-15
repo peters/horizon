@@ -65,7 +65,9 @@ fn asks_wide(document: &BlockDocument) -> bool {
 }
 
 /// The bounds of the height of a card that draws `document`: the wide card may
-/// grow taller, because a board grows with its waves.
+/// grow taller, because a board grows with its waves. The host lifts the ceiling
+/// to the room that the canvas view shows, so a card of a person's window fits
+/// its content without a scroll.
 pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
     let ceiling = if asks_wide(document) {
         WIDE_CARD_MAX_HEIGHT
