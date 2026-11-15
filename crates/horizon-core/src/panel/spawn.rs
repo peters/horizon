@@ -635,9 +635,8 @@ fn resolve_agent_launch_command(
         {
             vec!["--no-leader".to_string()]
         }
-        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp | AgentIntegrationKind::GrokMcp => Vec::new(),
-        AgentIntegrationKind::PiExtension => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
+        _ => Vec::new(),
     };
     match definition.resume_mode {
         AgentResumeMode::ExactSubcommand { subcommand } => {
@@ -969,9 +968,11 @@ fn horizon_codex_mcp_args() -> Vec<String> {
 
 fn horizon_claude_plugin_args() -> Vec<String> {
     let path = HorizonHome::resolve().claude_plugin_dir_for_host(crate::browser::manifest::host_instance());
-    path.is_dir()
-        .then(|| vec!["--plugin-dir".to_string(), path.display().to_string()])
-        .unwrap_or_default()
+    if path.is_dir() {
+        vec!["--plugin-dir".to_string(), path.display().to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {

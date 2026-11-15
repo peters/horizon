@@ -101,9 +101,7 @@ impl WorkLaunch<'_> {
             .ok()?;
         let home = HorizonHome::resolve();
         let report = self.report_argument(&home)?;
-        let Some(kind) = super::work_kind_name(self.kind) else {
-            return None;
-        };
+        let kind = super::work_kind_name(self.kind)?;
         let executable = std::env::current_exe().ok()?;
         let executable = executable.to_str()?;
         let root = home.root().to_str()?;

@@ -217,20 +217,8 @@ impl Harness {
     }
 }
 
-#[test]
-fn the_report_starts_the_entry_once_for_each_event_without_a_text() {
-    let Some(_) = node() else {
-        eprintln!("skipped: this computer has no node on PATH, and the report of a pi panel runs under Node");
-        return;
-    };
-    let fixture = Fixture::new();
-    let mut harness = fixture.harness(&fixture.recorder());
-    let banner = harness.line();
-    assert!(
-        banner.contains("8 events of the report are subscribed"),
-        "the report subscribes the events of a pi turn: {banner}"
-    );
-
+/// The words of one turn, fired into the report, with the answer of each.
+fn fire_turn(harness: &mut Harness) -> Vec<String> {
     let mut answers = Vec::new();
     for word in ["start", "ask", "answer", "stop", "start", "esc"] {
         let (answer, took) = harness.fire(word);
@@ -244,6 +232,38 @@ fn the_report_starts_the_entry_once_for_each_event_without_a_text() {
         );
         answers.push(answer);
     }
+    answers
+}
+
+/// One call of the entry, with a document that reads.
+fn call_document(call: &Call) -> &serde_json::Value {
+    call.document
+        .as_ref()
+        .unwrap_or_else(|error| panic!("the document of {} does not read: {error}", call.argv))
+}
+
+/// The turn identity of one call, or the empty text for an event without one.
+fn call_turn(call: &Call) -> String {
+    call_document(call)["prompt_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn the_report_starts_the_entry_once_for_each_event_of_a_turn() {
+    let Some(_) = node() else {
+        eprintln!("skipped: this computer has no node on PATH, and the report of a pi panel runs under Node");
+        return;
+    };
+    let fixture = Fixture::new();
+    let mut harness = fixture.harness(&fixture.recorder());
+    let banner = harness.line();
+    assert!(
+        banner.contains("8 events of the report are subscribed"),
+        "the report subscribes the events of a pi turn: {banner}"
+    );
+    let answers = fire_turn(&mut harness);
     let calls = fixture.wait_for_calls(6);
     assert_eq!(
         calls.iter().map(Call::event).collect::<Vec<String>>(),
@@ -263,10 +283,42 @@ fn the_report_starts_the_entry_once_for_each_event_without_a_text() {
             "the entry receives its own argument and nothing else: {}",
             call.argv
         );
-        let document = call
-            .document
-            .as_ref()
-            .unwrap_or_else(|error| panic!("the document of {} does not read: {error}", call.argv));
+    }
+    // The turn id of a closing event is the id of the turn that opened it, so a
+    // late or a repeated event cannot close another turn of this launch.
+    let ids: Vec<String> = calls.iter().map(call_turn).collect();
+    assert_eq!(ids[0], ids[3], "the stop closes the turn of the prompt");
+    assert_eq!(ids[4], ids[5], "the interrupt closes the second turn");
+    assert_ne!(ids[0], ids[4], "every busy span opens a turn of its own");
+    harness.end();
+    let calls = fixture.wait_for_calls(7);
+    let last = calls.last().expect("the call of the session end");
+    assert_eq!(last.event(), "SessionEnd", "the end of the session is recorded");
+    assert_eq!(
+        call_document(last)["reason"].as_str(),
+        Some("quit"),
+        "the session ended because pi quit"
+    );
+    assert!(
+        call_document(last)["prompt_id"].is_null(),
+        "a session end names no turn"
+    );
+}
+
+#[test]
+fn the_documents_of_the_report_carry_no_text_and_name_their_launch() {
+    let Some(_) = node() else {
+        eprintln!("skipped: this computer has no node on PATH, and the report of a pi panel runs under Node");
+        return;
+    };
+    let fixture = Fixture::new();
+    let mut harness = fixture.harness(&fixture.recorder());
+    let banner = harness.line();
+    assert!(banner.contains("subscribed"), "{banner}");
+    fire_turn(&mut harness);
+    let calls = fixture.wait_for_calls(6);
+    for call in &calls {
+        let document = call_document(call);
         for field in ["session_id", "cwd", "transcript_path"] {
             assert!(
                 document[field].as_str().is_some_and(|value| !value.is_empty()),
@@ -290,43 +342,7 @@ fn the_report_starts_the_entry_once_for_each_event_without_a_text() {
             "the document holds no prompt and no message: {document}"
         );
     }
-    // The turn id of a closing event is the id of the turn that opened it, so a
-    // late or a repeated event cannot close another turn of this launch.
     harness.end();
-    let calls = fixture.wait_for_calls(7);
-    let last = calls.last().expect("the call of the session end");
-    assert_eq!(last.event(), "SessionEnd", "the end of the session is recorded");
-    assert_eq!(
-        last.document
-            .as_ref()
-            .ok()
-            .and_then(|document| document["reason"].as_str()),
-        Some("quit"),
-        "the session ended because pi quit"
-    );
-    let calls = &calls[..6];
-    let ids: Vec<String> = calls
-        .iter()
-        .map(|call| {
-            call.document
-                .as_ref()
-                .ok()
-                .and_then(|document| document["prompt_id"].as_str())
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect();
-    assert_eq!(ids[0], ids[3], "the stop closes the turn of the prompt");
-    assert_eq!(ids[4], ids[5], "the interrupt closes the second turn");
-    assert_ne!(ids[0], ids[4], "every busy span opens a turn of its own");
-    assert!(
-        last.document
-            .as_ref()
-            .ok()
-            .is_some_and(|document| document["prompt_id"].is_null()),
-        "a session end names no turn"
-    );
-    assert_eq!(ids.len(), 6, "every event of the turn names its turn");
 }
 
 #[test]
