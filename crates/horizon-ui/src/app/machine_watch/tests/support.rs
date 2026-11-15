@@ -184,18 +184,21 @@ impl Ssh {
             .output()
             .expect("the process list of this computer");
         let text = String::from_utf8_lossy(&output.stdout).into_owned();
-        let rows: Vec<(u32, u32, &str)> = text
+        // The pid column is right-aligned to the width of the widest pid of this
+        // computer, so a line of a shorter pid starts with spaces and the words of a
+        // line are read without them.
+        let rows: Vec<(u32, u32, bool)> = text
             .lines()
             .filter_map(|line| {
-                let mut words = line.splitn(3, char::is_whitespace);
-                let pid = words.next()?.trim().parse().ok()?;
-                let parent = words.next()?.trim().parse().ok()?;
-                Some((pid, parent, words.next().unwrap_or_default()))
+                let mut words = line.split_whitespace();
+                let pid = words.next()?.parse().ok()?;
+                let parent = words.next()?.parse().ok()?;
+                Some((pid, parent, line.contains(&self.marker)))
             })
             .collect();
         let marked: std::collections::BTreeSet<u32> = rows
             .iter()
-            .filter(|(_, _, args)| args.contains(&self.marker))
+            .filter(|(_, _, marked)| *marked)
             .map(|(pid, _, _)| *pid)
             .collect();
         rows.iter()
