@@ -13,13 +13,15 @@ owner: peters
 This procedure tests the part of the watch of the agents of a machine that has no
 user interface, and the rows that the sidebar shows for those agents: the fold,
 the line of a lost link, the press that opens a session, the jump, the shortcut
-and the notification.
+and the notification. It tests the state that the program of a pane reports in its
+pane option, and the row of a job that reports one.
 
 ## 1. Purpose
 
 This procedure proves that this build reads the agents that run in `tmux` on one
-machine, that it keeps their states by the rules of a local panel, and that it
-starts and stops one `ssh` child per machine of the list.
+machine, that it keeps their states by the rules of a local panel, that it reads
+the state that the program of a pane reports, and that it starts and stops one
+`ssh` child per machine of the list.
 
 ## 2. Applicability
 
@@ -93,6 +95,29 @@ starts and stops one `ssh` child per machine of the list.
    Result: the test found the working line of the pane among the rows that the
    text reported.
 
+3. Read the report of a pane that reports a state:
+
+   ```bash
+   cargo test -j 8 -p horizon-core --lib machine_watch::tests::remote::a_state_that_a_pane_reports \
+     machine_watch::tests::remote::a_pane_that_reports
+   ```
+
+   Result: both tests pass. The first one sets the pane option `@horizon_state` of
+   a Codex stand-in to `blocked` and reads the sixth field of its pane line, and
+   the second one gives a report to a `sleep` pane.
+
+   Read the same field by hand on the machine of MW-5. Run in one `tmux` session
+   of the machine:
+
+   ```bash
+   tmux set-option -p -t "$TMUX_PANE" @horizon_state working
+   ```
+
+   Run the text of step 2 of MW-5 again. Result: the sixth field of the pane line
+   of that session is `working`. Run
+   `tmux set-option -p -u -t "$TMUX_PANE" @horizon_state` in the session, and run
+   the text again: the field is empty, and the title or the screen answers again.
+
 ### 6.2 MW-2 — The parser and the bounds
 
 1. Run the tests of the parser:
@@ -112,7 +137,9 @@ starts and stops one `ssh` child per machine of the list.
    cargo test -j 8 -p horizon-core --lib machine_watch::tests::state
    ```
 
-   Result: every test passes, including `a_first_sight_in_the_middle_of_a_turn_is_working_and_its_end_is_done`.
+   Result: every test passes, including `a_first_sight_in_the_middle_of_a_turn_is_working_and_its_end_is_done`,
+   `a_state_that_the_pane_reports_answers_before_the_title_and_the_screen` and
+   `a_done_that_the_pane_reports_is_seen_as_a_done_of_the_title_is_seen`.
 
 ### 6.4 MW-4 — The supervisor and its snapshot
 
@@ -190,33 +217,48 @@ starts and stops one `ssh` child per machine of the list.
    and the word and the dot of its state. A working agent shows `Working` with a
    green dot. An agent that waits for an approval shows `Needs you`.
 
-4. Begin a turn in one agent, and then close and open the lid of the laptop.
+4. Read the row of a job that reports its state. Run on the machine:
+
+   ```bash
+   ssh <machine> "tmux new-session -d -s hz-mw-job -c /tmp 'sleep 300'"
+   ssh <machine> "tmux set-option -p -t hz-mw-job @horizon_state working"
+   ```
+
+   Result: the sidebar shows one row with the mark `>_`, the name `hz-mw-job` and
+   the word `Working`. Press the row: Horizon opens the terminal of that session.
+   Run `ssh <machine> "tmux set-option -p -t hz-mw-job @horizon_state blocked"`:
+   the row says `Needs you`. Run
+   `ssh <machine> "tmux set-option -p -u -t hz-mw-job @horizon_state"`: the row
+   leaves within two seconds, because a pane with no report and no agent program
+   is no row.
+
+5. Begin a turn in one agent, and then close and open the lid of the laptop.
 
    Result: the row of the machine says `link lost just now`, and the place of
    the agent rows holds one line: `2 agents · trying again`. Its hover says
    `Last seen: 2 agents. Horizon tries again.` After the link comes back, the
    rows and their states return.
 
-5. Press the chevron in front of the name of the machine.
+6. Press the chevron in front of the name of the machine.
 
    Result: the agent rows fold away, and the row of the machine says `1 needs you ·
    1 done`, else `2 working`, else nothing, in the place of its second line.
    Press the chevron again: the rows return.
 
-6. Press the row of one agent.
+7. Press the row of one agent.
 
    Result: Horizon opens a terminal in the workspace that carries the name of the
    machine, and that terminal holds the `tmux` session of the agent. Press the row
    again: the window goes to that terminal and opens no second one.
 
-7. Begin a turn in one agent, focus another panel, and wait for the turn to end.
+8. Begin a turn in one agent, focus another panel, and wait for the turn to end.
 
    Result: the row of the agent says `Done`. Press the shortcut for the next agent
    that waits for the person.
 
    Result: the window opens the terminal of that agent, and its row says no state.
 
-8. Turn the setting off: **Settings**, **General**, **Machines**, clear **Show the
+9. Turn the setting off: **Settings**, **General**, **Machines**, clear **Show the
    agents of each machine**.
 
    Result: the agent rows leave the machine section within one frame, and the
@@ -242,7 +284,8 @@ starts and stops one `ssh` child per machine of the list.
 
 ## 7. Pass criteria
 
-- Every test of section 6.1 to 6.6 passes.
+- Every test of section 6.1 to 6.6 passes, including the tests of the state that a
+  pane reports and of the row of a job.
 - The tasks of section 6.6 and of section 6.7 show the results that they name.
 - `cargo clippy -p horizon-core -p horizon-ui --all-targets -- -D warnings` passes.
 - `./scripts/check-maintainability.sh` passes.
@@ -259,6 +302,7 @@ starts and stops one `ssh` child per machine of the list.
    ssh <machine> "tmux kill-session -t hz-mw-1"
    ssh <machine> "tmux kill-session -t hz-mw-a"
    ssh <machine> "tmux kill-session -t hz-mw-b"
+   ssh <machine> "tmux kill-session -t hz-mw-job"
    ```
 
    Result: `ssh <machine> "tmux list-sessions"` names none of them.
