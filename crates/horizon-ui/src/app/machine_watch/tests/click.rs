@@ -160,11 +160,17 @@ fn a_press_on_the_row_of_an_agent_brings_its_new_terminal_into_view() {
         agent_state(app, "hz-shop-1").is_some()
     });
     press(&ctx, &mut app, "Codex: shop");
+    let session = Some("hz-shop-1");
     wait_for(&ctx, &mut app, "the terminal of the agent", |app| {
-        !app.board.panels.is_empty()
+        app.board.panels.iter().any(|panel| panel.machine_session() == session)
     });
-    let panel = app.board.panels.last().expect("the terminal of the agent");
-    let panel_id = panel.id;
+    let panel_id = app
+        .board
+        .panels
+        .iter()
+        .find(|panel| panel.machine_session() == session)
+        .expect("the terminal of the agent")
+        .id;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !app.panel_screen_rects.contains_key(&panel_id) {
         assert!(
