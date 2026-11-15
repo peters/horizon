@@ -92,7 +92,9 @@ impl HorizonApp {
             return;
         }
         self.machine_watch.programs = Some(fingerprint);
-        self.machine_watch.watch.set_programs(AgentPrograms::builtin().with_presets(presets));
+        self.machine_watch
+            .watch
+            .set_programs(AgentPrograms::builtin().with_presets(presets));
     }
 
     /// Starts and stops the readers of the watch, on the coordination worker, once for

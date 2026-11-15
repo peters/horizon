@@ -72,6 +72,8 @@ struct SidebarActions {
     close_all_in_workspace: Option<WorkspaceId>,
     /// A click on the row of this machine: focus its terminal, or open one.
     connect_machine: Option<String>,
+    /// A click on the row of an agent of a machine: go to its terminal, or open one.
+    open_machine_agent: Option<horizon_core::machine_watch::MachineAgent>,
     /// A confirmed "Forget this machine" on the row of this machine.
     forget_machine: Option<String>,
     remove_empty_workspace: Option<WorkspaceId>,
@@ -481,12 +483,18 @@ impl HorizonApp {
         let by_pointer = ui.input(|input| input.pointer.any_click());
         let close_clicked = close.clicked() && (armed || close.has_focus() || !by_pointer);
         let blind_tap = close.clicked() && !close_clicked;
+        let look = panel_rows::PanelRowLook {
+            guide_x: panel_rows::guide_x(rows::card(row_rect)),
+            accent: workspace.color,
+            kind: panel.kind,
+            focused: panel.is_focused,
+            label,
+            attention: panel.attention,
+        };
         let title_elided = panel_rows::paint_panel_row(
             ui,
             row_rect,
-            workspace,
-            panel,
-            label,
+            &look,
             panel_rows::PanelRowState {
                 hovered,
                 close: close_shows.then(|| close.hovered() || close.has_focus()),
