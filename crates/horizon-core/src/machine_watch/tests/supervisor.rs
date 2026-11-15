@@ -18,6 +18,10 @@ const DEADLINE: Duration = Duration::from_secs(25);
 /// How often a test reads the snapshot while it waits.
 const POLL: Duration = Duration::from_millis(20);
 
+/// How long a test waits for the next attempt of a watch: the first delay of the
+/// reconnect rule with a margin for a loaded computer.
+const ATTEMPT: Duration = Duration::from_secs(5);
+
 /// One machine record of a test.
 fn record(name: &str) -> Machine {
     Machine {
@@ -129,7 +133,12 @@ fn quoted(value: &str) -> String {
 
 /// Waits until `wanted` holds, and names what the test waited for.
 fn wait_until(what: &str, wanted: impl Fn() -> bool) {
-    let deadline = Instant::now() + DEADLINE;
+    wait_until_within(DEADLINE, what, wanted);
+}
+
+/// Waits until `wanted` holds within `limit`, and names what the test waited for.
+fn wait_until_within(limit: Duration, what: &str, wanted: impl Fn() -> bool) {
+    let deadline = Instant::now() + limit;
     while !wanted() {
         assert!(Instant::now() < deadline, "the test waited for {what}");
         std::thread::sleep(POLL);
@@ -297,6 +306,66 @@ fn a_link_that_drops_comes_back_by_the_rule_of_a_lost_link() {
     );
     wait_until("the second attempt of the watch", || stand_in.calls() >= 2);
     assert_eq!(stand_in.calls(), 2, "two attempts of one watch");
+}
+
+/// One stand-in `ssh` that ends its first call with `end` and runs the text of the
+/// watch from its second call, with the folder that holds the phase of the two calls.
+fn stand_in_that_ends(server: &Server, end: &str) -> Option<(StandIn, tempfile::TempDir)> {
+    let phase = tempfile::tempdir().ok()?;
+    let counter = phase.path().join("phase");
+    let stand_in = StandIn::of(
+        server,
+        &format!(
+            "if [ -f {counter} ]; then exec sh -c \"$last\" \"$marker\"; fi\n\
+             printf 'x' > {counter}\nprintf 'HZ\\t1\\nZ\\n'\n{end}",
+            counter = quoted(&counter.to_string_lossy()),
+        ),
+    )?;
+    Some((stand_in, phase))
+}
+
+#[test]
+fn a_child_that_ends_with_its_own_status_is_a_lost_link_that_comes_back() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    let Some((stand_in, _phase)) = stand_in_that_ends(&server, "exit 1") else {
+        return;
+    };
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let (machines, keys) = machines_of(folder.path(), &["build-1"]);
+    let watch = MachineWatch::with_program(stand_in.program());
+    watch.reconcile(&machines, &keys, true);
+    wait_for(&watch, "build-1", |link| matches!(link, WatchLink::Lost { .. }));
+    wait_until_within(ATTEMPT, "the second attempt of the watch", || stand_in.calls() >= 2);
+    assert_eq!(
+        wait_for(&watch, "build-1", WatchLink::watching),
+        WatchLink::Watching,
+        "the machine answered after the child ended with a status of its own"
+    );
+    watch.stop_all();
+}
+
+#[test]
+fn a_child_that_a_signal_ends_is_a_lost_link_that_comes_back() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    let Some((stand_in, _phase)) = stand_in_that_ends(&server, "kill -TERM $$") else {
+        return;
+    };
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let (machines, keys) = machines_of(folder.path(), &["build-1"]);
+    let watch = MachineWatch::with_program(stand_in.program());
+    watch.reconcile(&machines, &keys, true);
+    wait_for(&watch, "build-1", |link| matches!(link, WatchLink::Lost { .. }));
+    wait_until_within(ATTEMPT, "the second attempt of the watch", || stand_in.calls() >= 2);
+    assert_eq!(
+        wait_for(&watch, "build-1", WatchLink::watching),
+        WatchLink::Watching,
+        "the machine answered after a signal ended the child"
+    );
+    watch.stop_all();
 }
 
 #[test]

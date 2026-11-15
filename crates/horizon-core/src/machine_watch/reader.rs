@@ -7,9 +7,10 @@
 //! words of `ssh` on its standard error are read to their bound for one classification
 //! and then dropped.
 //!
-//! An end of the child is a lost link: the reader waits the delay of
-//! [`crate::place::after_connection_loss`] and starts the next attempt. A stop of the
-//! supervisor kills the child, so the reader ends within its bound.
+//! An end of the child is a lost link, whatever its status: the text of the watch
+//! never ends by itself, so only a stop of the supervisor ends the loop. The reader
+//! waits the delay of [`crate::place::reconnect_delay`] and starts the next attempt. A
+//! stop of the supervisor kills the child, so the reader ends within its bound.
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -17,7 +18,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
-use crate::place::{ConnectionLoss, after_connection_loss};
+use crate::place::{RECONNECT_RESET_AFTER, reconnect_delay};
 
 use super::report::parse_report;
 use super::snapshot::{Shared, WatchLink, WatchRefusal, unix_millis};
@@ -84,35 +85,23 @@ pub(super) fn run(
         let Some(mut child) = slot.lock().unwrap_or_else(PoisonError::into_inner).take() else {
             return;
         };
-        let status = child.wait();
+        let _ = child.wait();
         let refused = refusal
             .and_then(|words| words.join().ok())
             .map_or(WatchRefusal::Other, |words| WatchRefusal::of_ssh(&words));
         if stopped(stop) {
             return;
         }
-        let loss = ConnectionLoss {
-            exit_code: status.ok().and_then(|status| status.code()),
-            connected_for: Some(started.elapsed()),
-            // A watch changes nothing on its machine, so a second attempt loses no
-            // work of the person.
-            machine_tied: true,
-            closed_by_the_person: false,
-            attempts,
-        };
-        match after_connection_loss(loss) {
-            crate::place::AfterConnectionLoss::Reconnect { attempt, after } => {
-                attempts = attempt;
-                shared.set_link(machine, lost_link(refused, attempt));
-                match stop.recv_timeout(after) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
-                    Err(RecvTimeoutError::Timeout) => {}
-                }
-            }
-            crate::place::AfterConnectionLoss::Stay => {
-                shared.set_link(machine, lost_link(refused, attempts));
-                return;
-            }
+        // The text of the watch never ends by itself, so every end of its child is a
+        // lost link, and a refusal of a host key or of a key is one too.
+        if started.elapsed() >= RECONNECT_RESET_AFTER {
+            attempts = 0;
+        }
+        attempts = attempts.saturating_add(1);
+        shared.set_link(machine, lost_link(refused, attempts));
+        match stop.recv_timeout(reconnect_delay(attempts)) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }
