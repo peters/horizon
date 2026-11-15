@@ -1,6 +1,7 @@
 //! The watch of the machines of the window: the readers follow the machine list and
 //! the setting, and a quit leaves no child behind.
 
+mod click;
 mod rows;
 mod support;
 

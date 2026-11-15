@@ -32,6 +32,8 @@ pub(in crate::app) struct MachinesWatch {
     programs: Option<u64>,
     /// The machines whose agents the person folded.
     folded: BTreeSet<String>,
+    /// The panel that had the keyboard focus at the last look at a machine terminal.
+    pub(in crate::app) looked_at: Option<horizon_core::PanelId>,
 }
 
 impl MachinesWatch {
@@ -44,6 +46,7 @@ impl MachinesWatch {
             reconciled: None,
             programs: None,
             folded: BTreeSet::new(),
+            looked_at: None,
         }
     }
 
@@ -76,6 +79,7 @@ impl HorizonApp {
         self.watch_programs();
         self.reconcile_watch();
         self.machine_watch.snapshot = Some(self.machine_watch.watch.snapshot());
+        self.look_at_machine_session();
     }
 
     /// Gives the watch the programs of the agent kinds of the presets, once for one

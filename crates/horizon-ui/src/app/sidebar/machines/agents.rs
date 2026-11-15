@@ -123,7 +123,7 @@ fn paint_agent(ui: &mut egui::Ui, row: &MachineRow, agent: &MachineAgent, last: 
     } else {
         response.on_hover_text(format!("{spoken}\n{}", cannot_open()))
     };
-    if response.clicked() {
+    if response.clicked() && agent.can_open() {
         actions.open_machine_agent = Some(agent.clone());
     }
 }

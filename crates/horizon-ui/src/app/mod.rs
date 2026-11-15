@@ -56,6 +56,7 @@ mod folder_requests;
 mod frame_stats;
 mod keyboard_focus;
 mod lifecycle;
+mod machine_agent_open;
 mod machine_click;
 mod machine_open;
 mod machine_watch;

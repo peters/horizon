@@ -606,6 +606,9 @@ impl HorizonApp {
         if let Some(name) = actions.connect_machine.clone() {
             self.connect_machine(&name, ctx);
         }
+        if let Some(agent) = actions.open_machine_agent.clone() {
+            self.open_machine_agent(&agent, ctx);
+        }
         if let Some(panel_id) = actions.focus_panel {
             // A click on a row of an open machine or of a panel is the person's,
             // so the terminal of that panel takes the next key.

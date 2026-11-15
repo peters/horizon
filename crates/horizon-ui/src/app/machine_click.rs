@@ -100,7 +100,7 @@ impl HorizonApp {
     }
 
     /// Says why a click on a machine opened nothing, in the sidebar.
-    fn machine_refused(&mut self, name: &str, error: &MachineError) {
+    pub(in crate::app) fn machine_refused(&mut self, name: &str, error: &MachineError) {
         self.set_sidebar_notice(format!("{name}: {} ({})", error, error.code()));
     }
 }
