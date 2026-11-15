@@ -24,6 +24,7 @@ mod local_store;
 pub mod machine_watch;
 pub mod machines;
 pub mod named_secrets;
+pub mod node_cards;
 pub mod notify;
 mod opencode_paths;
 mod panel;
