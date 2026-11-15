@@ -272,6 +272,27 @@ takes the focus of the desktop away from Horizon: `xterm` when this computer has
 it, and `xmessage` or a window of Tk otherwise. The procedure is
 [the desktop notification procedure](../../docs/testing/procedures/desktop-notifications.md).
 
+### The agents of a machine in the sidebar
+
+The fixture shows the agents of a machine without a machine, with the private
+`tmux` server of its state folder.
+
+```bash
+scripts/device-smoke/serve.py --horizon target/debug/horizon \
+  --state /var/tmp/machine-watch-1 --native-view --machine-watch
+```
+
+`--machine-watch` writes the record of one machine, `build-1`, into the machine
+list of the private home, starts one private `tmux` server with two sessions of
+the Codex stand-in, and puts a stand-in `ssh` first on the `PATH` of the
+candidate. That `ssh` runs the text of the watch on that server, and it answers
+no other call: a run with it reads no machine of the person. The session
+`hz-shop` blinks the trust question of a launch, which is an approval that waits,
+and `hz-notes` works through a turn, so the section shows **Needs you** and
+**Working** in one frame. A press on a row opens the terminal of that session, a
+chevron folds the agents of the machine, and the setting **Show the agents of
+each machine** turns the watch off.
+
 ### Speech input with the real recorder of the session
 
 The fixture writes the section `speech` of its private settings, so a procedure
