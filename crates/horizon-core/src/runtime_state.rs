@@ -349,6 +349,7 @@ impl RuntimeState {
                                 }),
                             block: panel.block().cloned(),
                             opened_by: panel.opened_by().map(str::to_string),
+                            opened_by_actor: panel.opened_by_actor().map(str::to_string),
                             machine: panel.machine().map(str::to_string),
                             machine_session: panel.machine_session().map(str::to_string),
                         }

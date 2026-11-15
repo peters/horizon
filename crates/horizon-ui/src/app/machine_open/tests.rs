@@ -121,6 +121,11 @@ fn an_agent_terminal_of_a_machine_opens_the_panel_of_the_record() {
     );
     assert_eq!(panel.machine(), Some("build-1"), "the panel is tied to the machine");
     assert_eq!(panel.opened_by(), Some("Claude"));
+    assert_eq!(
+        panel.opened_by_actor(),
+        Some(horizon_core::browser_actor(&app.board.panels[0].local_id).as_str()),
+        "the machine terminal holds the actor of the agent panel that asked"
+    );
     let args = panel.ssh_connection.as_ref().expect("the connection").to_command_args();
     let directory = MachineKeys::from_home(app.session_store.home())
         .key_directory()

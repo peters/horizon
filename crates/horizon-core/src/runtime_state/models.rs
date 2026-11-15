@@ -153,6 +153,12 @@ pub struct PanelState {
     /// keeps `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<String>,
+    /// The agent panel that opened this panel, as its `horizon:<local id>`
+    /// actor, so the pairs of the board name one panel also when two agent
+    /// panels of one kind stand in a workspace. A session of an older build
+    /// saved no actor, and keeps `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by_actor: Option<String>,
     /// The machine of Horizon's machine list that this terminal connects to, so
     /// a restored panel attaches to the same tmux session and a click on the
     /// machine row focuses it instead of opening a second one.
@@ -259,6 +265,7 @@ impl PanelState {
             browser_url: None,
             block: None,
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
         }
@@ -338,6 +345,7 @@ impl PanelState {
             launch_wrapper: Vec::new(),
             block: self.block.clone(),
             opened_by: self.opened_by.clone(),
+            opened_by_actor: self.opened_by_actor.clone(),
             machine: self.machine.clone(),
             machine_session: self.machine_session.clone(),
         }
@@ -369,6 +377,7 @@ impl Default for PanelState {
             browser_url: None,
             block: None,
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
         }

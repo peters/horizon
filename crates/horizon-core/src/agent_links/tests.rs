@@ -50,6 +50,29 @@ fn opened_terminal(board: &mut Board, workspace: WorkspaceId, mark: &str) -> Pan
         .expect("a terminal that an agent opened")
 }
 
+/// An SSH terminal that the agent panel `opener` opened for the person, as the
+/// terminal tool records it: the mark of the kind and the actor of that panel.
+fn opened_terminal_of(board: &mut Board, workspace: WorkspaceId, opener: PanelId) -> PanelId {
+    let mark = board
+        .panel(opener)
+        .map(|panel| panel.kind.display_name().to_owned())
+        .expect("the agent panel");
+    let actor = actor_of(board, opener);
+    let options = PanelOptions {
+        kind: PanelKind::Ssh,
+        opened_by: Some(mark),
+        opened_by_actor: Some(actor),
+        ssh_connection: Some(SshConnection {
+            host: "192.0.2.12".to_owned(),
+            ..SshConnection::default()
+        }),
+        ..PanelOptions::default()
+    };
+    board
+        .create_panel_waiting(options, workspace)
+        .expect("a terminal that an agent opened")
+}
+
 /// A terminal that the person opened themselves.
 fn person_terminal(board: &mut Board, workspace: WorkspaceId) -> PanelId {
     let options = PanelOptions {
@@ -165,6 +188,41 @@ fn two_agents_of_one_kind_leave_the_mark_of_an_opened_panel_unresolved() {
         )],
         "the mark of the other workspace names its one agent of that kind"
     );
+}
+
+/// The actor of an opened panel names one agent panel also when two of them have
+/// one kind: each terminal pairs with the panel that opened it.
+#[test]
+fn two_agents_of_one_kind_each_pair_with_the_terminal_that_it_opened() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace("Work");
+    let first = agent(&mut board, workspace, PanelKind::Claude);
+    let second = agent(&mut board, workspace, PanelKind::Claude);
+    let first_terminal = opened_terminal_of(&mut board, workspace, first);
+    let second_terminal = opened_terminal_of(&mut board, workspace, second);
+
+    assert_eq!(
+        pairs(&board),
+        vec![(first, first_terminal), (second, second_terminal)],
+        "the actor of each opener names its own panel"
+    );
+}
+
+/// A terminal of a session of an older build holds no actor, and the mark of its
+/// kind keeps the answer that it gave before.
+#[test]
+fn a_terminal_of_an_older_build_still_pairs_by_its_mark() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace("Work");
+    let claude = agent(&mut board, workspace, PanelKind::Claude);
+    let terminal = opened_terminal(&mut board, workspace, "Claude");
+
+    assert_eq!(pairs(&board), vec![(claude, terminal)]);
+
+    // A second agent of that kind leaves the mark of the older terminal
+    // unresolved, exactly as it did before an actor was saved.
+    agent(&mut board, workspace, PanelKind::Claude);
+    assert!(pairs(&board).is_empty());
 }
 
 /// The place of an agent among the agent panels of its workspace is the accent

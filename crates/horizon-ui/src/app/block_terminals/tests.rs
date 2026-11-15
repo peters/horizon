@@ -258,8 +258,19 @@ fn a_route_or_a_command_that_is_not_plain_is_refused_without_a_panel() {
 #[test]
 fn the_mark_of_an_opened_terminal_is_saved_with_the_panel_and_survives_a_restore() {
     let (_temp, ctx, mut app) = app();
+    let caller = app.board.panels[0].id;
+    let actor = horizon_core::browser_actor(&app.board.panels[0].local_id);
     let panel_id = opened(app.apply_block_request(&request(&app, open_terminal(None, None)), &ctx));
     let id = app.board.panel_id_by_local_id(&panel_id).expect("terminal");
+    assert_eq!(
+        app.board.panel(id).expect("the terminal").opened_by_actor(),
+        Some(actor.as_str()),
+        "the actor of the agent panel that asked is saved with the mark"
+    );
+    assert_eq!(
+        app.board.panel(id).expect("the terminal").workspace_id,
+        app.board.panel(caller).expect("the calling agent").workspace_id
+    );
 
     let saved = RuntimeState::from_board(
         &app.board,
@@ -272,6 +283,7 @@ fn the_mark_of_an_opened_terminal_is_saved_with_the_panel_and_survives_a_restore
         .find(|panel| panel.local_id == panel_id)
         .expect("the saved terminal");
     assert_eq!(state.opened_by.as_deref(), Some("Claude"));
+    assert_eq!(state.opened_by_actor.as_deref(), Some(actor.as_str()));
     assert_eq!(
         state
             .to_panel_options(&horizon_core::browser::BrowserConfig::default())
@@ -279,11 +291,20 @@ fn the_mark_of_an_opened_terminal_is_saved_with_the_panel_and_survives_a_restore
         Some("Claude".to_string()),
         "a restored terminal keeps its mark"
     );
+    assert_eq!(
+        state
+            .to_panel_options(&horizon_core::browser::BrowserConfig::default())
+            .opened_by_actor,
+        Some(actor.clone()),
+        "a restored terminal keeps the actor of its opener"
+    );
 
     // A snapshot that a previous Horizon wrote holds no such field.
     let mut older = serde_json::to_value(state).expect("the saved panel");
     older.as_object_mut().expect("an object").remove("opened_by");
+    older.as_object_mut().expect("an object").remove("opened_by_actor");
     let loaded: horizon_core::PanelState = serde_json::from_value(older).expect("an older panel loads");
     assert_eq!(loaded.opened_by, None);
+    assert_eq!(loaded.opened_by_actor, None, "an older snapshot holds no actor");
     assert_eq!(app.board.panels.iter().filter(|panel| panel.id == id).count(), 1);
 }

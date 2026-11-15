@@ -396,6 +396,17 @@ impl HorizonApp {
             .map_or_else(|| "Agent".to_owned(), |panel| panel.kind.display_name().to_owned())
     }
 
+    /// The actor of the panel that opened a panel, in the same `horizon:<local
+    /// id>` form that a card owner and a browser panel owner carry.
+    ///
+    /// The mark above names a kind, so two agent panels of one kind leave it
+    /// ambiguous. The actor names the one panel that asked.
+    pub(super) fn opener_actor(&self, actor: ActorPanel) -> Option<String> {
+        self.board
+            .panel(actor.panel_id)
+            .map(|panel| horizon_core::browser_actor(&panel.local_id))
+    }
+
     /// The cards of one workspace as `list` reports them.
     fn workspace_card_summaries(&mut self, workspace: WorkspaceId, caller: &str) -> Vec<CardSummary> {
         let cards: Vec<PanelId> = self.workspace_cards(workspace).iter().map(|panel| panel.id).collect();

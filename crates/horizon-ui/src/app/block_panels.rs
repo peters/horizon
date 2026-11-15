@@ -253,6 +253,7 @@ impl HorizonApp {
         );
         options.cwd = Some(directory.to_path_buf());
         options.opened_by = Some(mark);
+        options.opened_by_actor = self.opener_actor(actor);
         super::actions::panels::normalize_new_panel_resume(&mut options);
         let focused = self.board.focused;
         let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
