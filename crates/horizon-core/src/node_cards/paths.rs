@@ -3,7 +3,7 @@
 //! Both paths end in `<machine>/<session>.sock` and both names pass the rules of
 //! [`block_machines`](horizon_browser_control::manifest::block_machines), so no
 //! path leaves its folder. The folder here is under the temporary folder of this
-//! computer, inside the 104 bytes that a Unix socket path takes on macOS.
+//! computer, inside the 104 bytes of a Unix socket path on macOS.
 
 use std::path::{Path, PathBuf};
 
@@ -16,21 +16,20 @@ pub(crate) const REMOTE_DIR: &str = "/tmp/horizon-cards";
 /// identity: this computer builds it from the two names of the session.
 const ACTOR_PREFIX: &str = "horizon:machine/";
 
-/// Longest socket path that a Unix listener takes on every platform of this
-/// build. The kernel limit is 104 bytes on macOS and 108 on Linux.
+/// Longest socket path of this build: 104 bytes on macOS and 108 on Linux.
 pub(crate) const MAX_SOCKET_PATH_BYTES: usize = 100;
 
 /// The path on `machine` of the socket of `session`.
 ///
 /// # Errors
-/// Describes the name rule that the machine name or the session name broke.
+/// Names the rule that a name broke.
 pub fn remote_socket(machine: &str, session: &str) -> Result<String, super::MachineRefusal> {
     let (machine, session) = check_pair(machine, session)?;
     Ok(format!("{REMOTE_DIR}/{machine}/{session}.sock"))
 }
 
-/// The folder here that holds the socket of each session of each machine. It
-/// carries the process id, so two Horizon processes never share one path.
+/// The folder here of the sockets of this process, which carries its id so two
+/// Horizon processes never share one path.
 #[must_use]
 pub fn local_dir(base: &Path) -> PathBuf {
     base.join(format!("horizon-cards-{}", std::process::id()))
@@ -39,8 +38,7 @@ pub fn local_dir(base: &Path) -> PathBuf {
 /// The path here of the socket of `session` of `machine`.
 ///
 /// # Errors
-/// Describes the name rule that a name broke, or a path above
-/// [`MAX_SOCKET_PATH_BYTES`].
+/// Names the rule that a name broke, or a path above the socket bound.
 pub fn local_socket(dir: &Path, machine: &str, session: &str) -> Result<PathBuf, super::MachineRefusal> {
     let (machine, session) = check_pair(machine, session)?;
     let path = dir.join(machine).join(format!("{session}.sock"));
@@ -52,7 +50,7 @@ pub fn local_socket(dir: &Path, machine: &str, session: &str) -> Result<PathBuf,
 /// The identity of one session of one machine, as the actor of its cards.
 ///
 /// # Errors
-/// Describes the name rule that a name broke.
+/// Names the rule that a name broke.
 pub fn actor(machine: &str, session: &str) -> Result<String, super::MachineRefusal> {
     let (machine, session) = check_pair(machine, session)?;
     Ok(format!("{ACTOR_PREFIX}{machine}/{session}"))

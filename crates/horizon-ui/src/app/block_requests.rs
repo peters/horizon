@@ -17,6 +17,7 @@ use horizon_core::browser::manifest::{
     self,
     block::{self, CardSummary, Operation, Outcome, Request},
 };
+use horizon_core::node_cards;
 use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::HorizonApp;
@@ -105,6 +106,29 @@ fn card_document(document: &serde_json::Value) -> Result<BlockDocument, Outcome>
     parse_document(&encoded).map_err(|error| Outcome::failed(error.code(), &error.to_string()))
 }
 
+/// Who asked for a card: an agent panel, or a session of a machine of the list.
+#[derive(Clone, Copy)]
+pub(in crate::app) enum CardCaller<'a> {
+    Panel(ActorPanel),
+    Session { machine: &'a str },
+}
+
+impl CardCaller<'_> {
+    /// The agent panel of this caller, when a panel of this board asked.
+    pub(super) fn panel(self) -> Option<ActorPanel> {
+        match self {
+            Self::Panel(panel) => Some(panel),
+            Self::Session { .. } => None,
+        }
+    }
+}
+
+/// The refusal of a caller that cannot ask for what it asks, such as a session of
+/// a machine that asks outside the cards.
+pub(super) fn caller_unavailable() -> Outcome {
+    Outcome::failed("caller_unavailable", "The agent that asked is no longer in this host")
+}
+
 impl HorizonApp {
     /// The frame poll. See [`Self::drain_block_panel_requests`].
     pub(super) fn poll_block_panel_requests(&mut self, ctx: &Context) -> bool {
@@ -181,45 +205,48 @@ impl HorizonApp {
     /// Applies one request and returns its answer, or `None` for a `next_click`
     /// the host now holds open.
     fn apply_block_request_at(&mut self, request: &Request, root: Option<&Path>, ctx: &Context) -> Option<Outcome> {
-        let actor = match self.request_caller(request) {
-            Ok(actor) => actor,
+        let caller = match self.request_caller(request) {
+            Ok(caller) => caller,
             Err(refusal) => return Some(refusal),
         };
         match &request.operation {
             Operation::Create { title, document } => {
-                Some(self.create_card(title.as_deref(), document, actor, &request.actor, ctx))
+                Some(self.create_card(title.as_deref(), document, caller, &request.actor, ctx))
             }
-            Operation::Update { panel_id, document } => {
-                Some(self.update_card(panel_id, document, actor, &request.actor, ctx))
-            }
+            Operation::Update { panel_id, document } => Some(self.update_card(panel_id, document, &request.actor, ctx)),
             Operation::List => Some(Outcome::Panels {
-                panels: self.workspace_card_summaries(actor.workspace_id, &request.actor),
+                panels: self.owner_workspace(&request.actor).map_or_else(Vec::new, |workspace| {
+                    self.workspace_card_summaries(workspace, &request.actor)
+                }),
             }),
-            Operation::Inspect { panel_id } => Some(self.inspect_card(panel_id, actor, &request.actor)),
+            Operation::Inspect { panel_id } => Some(self.inspect_card(panel_id, &request.actor)),
             Operation::NextClick { panel_id, .. } => self.begin_click_wait(root, request, panel_id.as_deref()),
             Operation::Visibility { panel_id, visible } => {
-                Some(self.change_card(panel_id, *visible, actor, &request.actor, ctx))
+                Some(self.change_card(panel_id, *visible, &request.actor, ctx))
             }
-            Operation::Close { panel_id } => Some(self.close_card(panel_id, actor, &request.actor, ctx)),
+            Operation::Close { panel_id } => Some(self.close_card(panel_id, &request.actor, ctx)),
             Operation::OpenTerminal {
                 ssh,
                 remote_command,
                 title,
                 key,
                 machine,
-            } => self.answer_open_terminal(
-                &OpenTerminalFields::of(
-                    ssh.as_ref(),
-                    remote_command.as_deref(),
-                    title.as_deref(),
-                    key.as_deref(),
-                    machine.as_deref(),
+            } => match caller {
+                CardCaller::Panel(actor) => self.answer_open_terminal(
+                    &OpenTerminalFields::of(
+                        ssh.as_ref(),
+                        remote_command.as_deref(),
+                        title.as_deref(),
+                        key.as_deref(),
+                        machine.as_deref(),
+                    ),
+                    actor,
+                    request,
+                    root,
+                    ctx,
                 ),
-                actor,
-                request,
-                root,
-                ctx,
-            ),
+                CardCaller::Session { .. } => Some(caller_unavailable()),
+            },
             Operation::OpenPanel {
                 preset,
                 directory,
@@ -246,9 +273,10 @@ impl HorizonApp {
             Operation::BrowserHostStatus => Some(self.answer_browser_host_status()),
             Operation::SecretNames => Some(answer_secret_names()),
             Operation::Presets => Some(self.answer_presets()),
-            Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => {
-                self.answer_setting_request(&request.operation, actor, request, root, ctx)
-            }
+            Operation::ServerLinkRequest { .. } | Operation::BrowserHostRequest { .. } => match caller {
+                CardCaller::Panel(actor) => self.answer_setting_request(&request.operation, actor, request, root, ctx),
+                CardCaller::Session { .. } => Some(caller_unavailable()),
+            },
         }
     }
 
@@ -370,21 +398,36 @@ impl HorizonApp {
         }
     }
 
-    /// The checks every request passes before Horizon applies it: the host it
-    /// belongs to, its deadline, and the calling agent panel.
-    pub(super) fn request_caller(&self, request: &Request) -> Result<ActorPanel, Outcome> {
+    /// The checks every request passes before Horizon applies it: the host, the
+    /// deadline, and the caller, a panel of this board or a session of a machine.
+    pub(super) fn request_caller<'a>(&self, request: &'a Request) -> Result<CardCaller<'a>, Outcome> {
         if request.host_instance != manifest::host_instance() {
             return Err(Outcome::failed("wrong_host", "Request belongs to another Horizon host"));
         }
         if request.deadline_at_millis <= manifest::now_millis() {
             return Err(request_expired());
         }
-        actor_panel(&self.board, &request.actor).ok_or_else(|| {
-            Outcome::failed(
-                "caller_unavailable",
-                "The calling agent panel is no longer in this host",
-            )
-        })
+        if let Some(panel) = actor_panel(&self.board, &request.actor) {
+            return Ok(CardCaller::Panel(panel));
+        }
+        let (machine, _session) = node_cards::actor_parts(&request.actor).ok_or_else(caller_unavailable)?;
+        if self.machine_list.find(machine).is_none() {
+            return Err(caller_unavailable());
+        }
+        Ok(CardCaller::Session { machine })
+    }
+
+    /// The workspace of the cards of `owner`: its panel's, or its machine's.
+    pub(super) fn owner_workspace(&self, owner: &str) -> Option<WorkspaceId> {
+        if let Some(panel) = actor_panel(&self.board, owner) {
+            return Some(panel.workspace_id);
+        }
+        let (machine, _session) = node_cards::actor_parts(owner)?;
+        self.board
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.name == machine)
+            .map(|workspace| workspace.id)
     }
 
     /// The mark of a panel that an agent panel opened: the display name of the
@@ -436,7 +479,7 @@ impl HorizonApp {
         &mut self,
         title: Option<&str>,
         document: &serde_json::Value,
-        actor: ActorPanel,
+        caller: CardCaller<'_>,
         owner: &str,
         ctx: &Context,
     ) -> Outcome {
@@ -444,8 +487,13 @@ impl HorizonApp {
             Ok(document) => document,
             Err(refusal) => return refusal,
         };
+        // The first card of a session makes the workspace of its machine.
+        let workspace = match caller {
+            CardCaller::Panel(panel) => panel.workspace_id,
+            CardCaller::Session { machine } => self.machine_workspace(machine, ctx),
+        };
         let card_count = self
-            .workspace_cards(actor.workspace_id)
+            .workspace_cards(workspace)
             .iter()
             .filter(|panel| card_owner(panel) == Some(owner))
             .count();
@@ -479,8 +527,8 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let beside = self.new_card_beside(actor, owner);
-        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, beside) else {
+        let beside = caller.panel().map(|panel| self.new_card_beside(panel, owner));
+        let Ok(id) = self.create_agent_child_panel(options, workspace, beside) else {
             return Outcome::failed("panel_unavailable", "Horizon could not create a card in this workspace");
         };
         // Creating a card must not steal keyboard input from the caller.
@@ -498,15 +546,8 @@ impl HorizonApp {
         }
     }
 
-    fn update_card(
-        &mut self,
-        panel_id: &str,
-        document: &serde_json::Value,
-        actor: ActorPanel,
-        owner: &str,
-        ctx: &Context,
-    ) -> Outcome {
-        let id = match self.owned_card(panel_id, actor, owner) {
+    fn update_card(&mut self, panel_id: &str, document: &serde_json::Value, owner: &str, ctx: &Context) -> Outcome {
+        let id = match self.owned_card(panel_id, owner) {
             Ok(id) => id,
             Err(refusal) => return refusal,
         };
@@ -534,8 +575,8 @@ impl HorizonApp {
         }
     }
 
-    fn inspect_card(&mut self, panel_id: &str, actor: ActorPanel, owner: &str) -> Outcome {
-        let panel = match self.card_panel(panel_id, actor.workspace_id) {
+    fn inspect_card(&mut self, panel_id: &str, owner: &str) -> Outcome {
+        let panel = match self.owner_card(panel_id, owner) {
             Ok(panel) => panel,
             Err(refusal) => return refusal,
         };
@@ -548,7 +589,7 @@ impl HorizonApp {
         let document = state.document.clone();
         let visible = panel.visible;
         let owned_by_caller = state.owner_actor.as_deref() == Some(owner);
-        let agent_present = self.card_owner_panel(panel).is_some();
+        let agent_present = self.card_owner_present(panel);
         Outcome::Inspected {
             panel_id: panel_id.to_owned(),
             title,
@@ -562,8 +603,8 @@ impl HorizonApp {
         }
     }
 
-    fn change_card(&mut self, panel_id: &str, visible: bool, actor: ActorPanel, owner: &str, ctx: &Context) -> Outcome {
-        let id = match self.owned_card(panel_id, actor, owner) {
+    fn change_card(&mut self, panel_id: &str, visible: bool, owner: &str, ctx: &Context) -> Outcome {
+        let id = match self.owned_card(panel_id, owner) {
             Ok(id) => id,
             Err(refusal) => return refusal,
         };
@@ -571,8 +612,11 @@ impl HorizonApp {
         if !visible && self.fullscreen_panel == Some(id) {
             self.fullscreen_panel = None;
         }
-        if !visible && self.board.focused.is_none() {
-            self.board.focus(actor.panel_id);
+        if !visible
+            && self.board.focused.is_none()
+            && let Some(panel) = actor_panel(&self.board, owner)
+        {
+            self.board.focus(panel.panel_id);
         }
         self.mark_runtime_dirty();
         ctx.request_repaint();
@@ -585,35 +629,37 @@ impl HorizonApp {
     /// Answers `close`: the caller's own card, or the card of an owner panel that
     /// left the workspace, so a later coordinator can clean up after a plan of an
     /// earlier run. A card with a living owner stays closed to every other agent.
-    fn close_card(&mut self, panel_id: &str, actor: ActorPanel, owner: &str, ctx: &Context) -> Outcome {
-        let panel = match self.card_panel(panel_id, actor.workspace_id) {
+    fn close_card(&mut self, panel_id: &str, owner: &str, ctx: &Context) -> Outcome {
+        let panel = match self.owner_card(panel_id, owner) {
             Ok(panel) => panel,
             Err(refusal) => return refusal,
         };
         let by_owner = card_owner(panel) == Some(owner);
-        if !by_owner && self.card_owner_panel(panel).is_some() {
+        if !by_owner && self.card_owner_present(panel) {
             return Outcome::failed(
                 "not_owner",
                 "Only the agent that created this card may close it: its owner is still in this workspace",
             );
         }
         let id = panel.id;
+        // Only a panel of this board takes the keyboard back: the session of a
+        // machine is no panel here.
+        let closing = actor_panel(&self.board, owner).map(|closer| closer.panel_id);
         if self.fullscreen_panel == Some(id) {
             self.fullscreen_panel = None;
         }
         let focused = self.board.focused == Some(id);
         let _ = self.close_panel_returning_teardown(id);
-        if focused {
-            self.board.focus(actor.panel_id);
+        if focused && let Some(closer) = closing {
+            self.board.focus(closer);
         }
         self.mark_runtime_dirty();
         ctx.request_repaint();
         Outcome::Closed {
             panel_id: panel_id.to_owned(),
             by_owner,
-            closed_by: self
-                .board
-                .panel(actor.panel_id)
+            closed_by: closing
+                .and_then(|closer| self.board.panel(closer))
                 .map_or_else(String::new, |panel| panel.local_id.clone()),
         }
     }
@@ -652,10 +698,15 @@ impl HorizonApp {
         Ok(panel)
     }
 
-    /// The panel of a card that this caller owns; every other agent of the
-    /// workspace reads it and changes nothing.
-    pub(super) fn owned_card(&self, panel_id: &str, actor: ActorPanel, owner: &str) -> Result<PanelId, Outcome> {
-        let panel = self.card_panel(panel_id, actor.workspace_id)?;
+    /// A card of the workspace of `owner`, or the refusal of a caller that is gone.
+    pub(super) fn owner_card(&self, panel_id: &str, owner: &str) -> Result<&Panel, Outcome> {
+        let workspace = self.owner_workspace(owner).ok_or_else(caller_unavailable)?;
+        self.card_panel(panel_id, workspace)
+    }
+
+    /// The panel of a card that this caller owns; every other agent reads it.
+    pub(super) fn owned_card(&self, panel_id: &str, owner: &str) -> Result<PanelId, Outcome> {
+        let panel = self.owner_card(panel_id, owner)?;
         if card_owner(panel) != Some(owner) {
             return Err(Outcome::failed(
                 "not_owner",

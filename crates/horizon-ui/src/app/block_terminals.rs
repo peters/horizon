@@ -83,7 +83,7 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, Some(actor.panel_id)) else {
             return block::Outcome::failed(
                 "terminal_unavailable",
                 "Horizon could not open the SSH terminal in this workspace",

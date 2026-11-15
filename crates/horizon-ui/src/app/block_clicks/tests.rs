@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use egui::Context;
 use horizon_browser_control::block::BlockDocument;
 use horizon_browser_control::manifest::block;
-use horizon_core::{PanelKind, RuntimeState, StartupDecision};
+use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchSnapshot, MachineWatchState, WatchLink};
+use horizon_core::{Machine, MachineRegistry, Machines, PanelKind, RuntimeState, StartupDecision};
 
 use super::*;
 use crate::app::block_requests::ClaimedBlockRequest;
@@ -643,4 +644,106 @@ fn an_any_card_wait_does_not_take_a_click_of_another_agents_card() {
 /// The actor string of the agent panel at `panel`.
 fn app_actor(app: &HorizonApp, panel: usize) -> String {
     format!("horizon:{}", app.board.panels[panel].local_id)
+}
+
+/// Keeps the machine `build-1` in the list of the app, with the mark of its cards.
+fn keep_machine(app: &mut HorizonApp) {
+    let machine = Machine {
+        name: "build-1".to_owned(),
+        host: "127.0.0.1".to_owned(),
+        user: None,
+        port: Some(2222),
+        session: None,
+        provider: None,
+        repository: None,
+        added_at_millis: 0,
+        cards: true,
+    };
+    app.machine_list = Machines::with_records(MachineRegistry::from_home(app.session_store.home()), vec![machine]);
+}
+
+/// Keeps a watch snapshot that reports the session `session` of `build-1`.
+fn watch_reports(app: &mut HorizonApp, session: &str) {
+    app.machine_watch.snapshot = Some(std::sync::Arc::new(MachineWatchSnapshot {
+        version: 1,
+        machines: vec![MachineWatchState {
+            machine: "build-1".to_owned(),
+            link: WatchLink::Watching,
+            agents: vec![MachineAgent {
+                machine: "build-1".to_owned(),
+                session: session.to_owned(),
+                pane: "%1".to_owned(),
+                kind: PanelKind::Claude,
+                name: "night".to_owned(),
+                state: AgentState::default(),
+            }],
+        }],
+        ..MachineWatchSnapshot::default()
+    }));
+}
+
+/// A request of the session `session` of `build-1`.
+fn session_request(session: &str, operation: Operation) -> Request {
+    Request {
+        request_id: format!("test-{session}"),
+        actor: horizon_core::node_cards::actor("build-1", session).expect("a plain pair"),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation,
+    }
+}
+
+#[test]
+fn a_press_on_a_card_of_a_machine_session_reaches_that_session_and_no_other() {
+    let (temp, ctx, mut app) = app();
+    keep_machine(&mut app);
+    watch_reports(&mut app, "night");
+    let create = session_request(
+        "night",
+        Operation::Create {
+            title: Some("cloud-1".into()),
+            document: document("cloud-1"),
+        },
+    );
+    let Outcome::Created { panel_id, .. } = app.apply_block_request(&create, &ctx) else {
+        panic!("the session of the machine draws a card");
+    };
+    let id = app
+        .board
+        .panel_id_by_local_id(&panel_id)
+        .expect("the card is on the board");
+
+    // The session of the owner waits for a click on its card.
+    let waiting = session_request(
+        "night",
+        Operation::NextClick {
+            panel_id: Some(panel_id.clone()),
+            timeout_millis: Some(60_000),
+        },
+    );
+    let root = temp.path();
+    claim_request(&mut app, &ctx, root, &waiting);
+    assert!(app.block_clicks.card_waiters.contains_key(&id), "the wait is open");
+    assert!(app.block_listening(id), "the card of the session says that it listens");
+
+    press(&mut app, id, "continue");
+    let Outcome::Clicked { click } = wait_answer(&mut app, &ctx, root, &waiting) else {
+        panic!("the click of the person reaches the session of the machine");
+    };
+    assert_eq!(click.panel_id, panel_id);
+    assert_eq!(click.component_id, "continue");
+
+    // A second session of the same machine owns nothing of this card.
+    let stranger = session_request(
+        "plan",
+        Operation::NextClick {
+            panel_id: Some(panel_id.clone()),
+            timeout_millis: Some(1_000),
+        },
+    );
+    let refusal = app.apply_block_request(&stranger, &ctx);
+    assert!(
+        matches!(refusal, Outcome::Failed { ref code, .. } if code == "not_owner"),
+        "the card of one session against another session: {refusal:?}"
+    );
 }

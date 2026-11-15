@@ -24,7 +24,7 @@ use horizon_core::{AgentStatus, BlockPanelState, Panel, PanelId, PanelKind, Pres
 
 use super::HorizonApp;
 use super::actions::support::preset_panel_options;
-use super::block_requests::BlockAnswer;
+use super::block_requests::{BlockAnswer, caller_unavailable};
 use super::browser_requests::ActorPanel;
 
 /// The panels each agent panel opened from a preset inside the window of
@@ -163,7 +163,10 @@ impl HorizonApp {
             move || block_preset::check_directory_on_disk(&directory),
             move |app, checked| {
                 app.block_claim.worker_job_finished();
-                let outcome = match app.request_caller(&request) {
+                let outcome = match app
+                    .request_caller(&request)
+                    .and_then(|caller| caller.panel().ok_or_else(caller_unavailable))
+                {
                     Err(refusal) => refusal,
                     Ok(actor) => match checked {
                         Some(Ok(path)) => app.open_panel(
@@ -256,7 +259,7 @@ impl HorizonApp {
         options.opened_by_actor = self.opener_actor(actor);
         super::actions::panels::normalize_new_panel_resume(&mut options);
         let focused = self.board.focused;
-        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, Some(actor.panel_id)) else {
             return block::Outcome::failed(
                 block_preset::PANEL_UNAVAILABLE,
                 "Horizon could not open the panel of the preset in this workspace",

@@ -142,4 +142,3 @@ fn three_sessions_of_one_machine_get_three_forwards_of_one_child() {
     // The login of a machine terminal ends the argv, after the forwards.
     assert_eq!(args.last().map(String::as_str), Some("127.0.0.1"));
 }
-

@@ -26,10 +26,8 @@ const SOCKET_PATH_TOO_LONG: &str = "socket_path_too_long";
 /// terminal and no remote command, one `-R <socket on the machine>:<socket here>`
 /// for each session, and an end at once when `sshd` refuses one of them.
 ///
-/// `StreamLocalBindUnlink=yes` is the client rule that a stale socket of a lost
-/// link does not refuse the next attempt. The login options come from the
-/// connection of a machine terminal, so this child holds the same route, the
-/// same key and the same bounds as the watch of that machine.
+/// The login options are those of a machine terminal, so this child holds the
+/// same route, key and bounds as the watch of that machine.
 #[must_use]
 pub fn forward_args(connection: &SshConnection, sockets: &[(String, PathBuf)]) -> Vec<String> {
     let mut args = vec!["-N".to_owned(), "-T".to_owned()];

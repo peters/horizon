@@ -110,6 +110,7 @@ fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (
                             interactive: true,
                             now_millis: 1_000,
                             owner_name: Owner::Listening.name(),
+                            owner_session: None,
                             updated_at_millis: 1_790_883_960_000,
                             opened_link: &mut opened_link,
                             pressed: &mut pressed,

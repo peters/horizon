@@ -93,6 +93,8 @@ pub(crate) struct CardView<'a> {
     /// Display name of the agent that owns the card, while it is in the
     /// workspace.
     pub(crate) owner_name: Option<&'a str>,
+    /// The machine and the session of an owner that runs on a machine.
+    pub(crate) owner_session: Option<(&'a str, &'a str)>,
     /// Wall-clock time of the last create or update, in milliseconds.
     pub(crate) updated_at_millis: i64,
     /// The address of the link the person pressed this frame, while the card

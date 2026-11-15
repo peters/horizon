@@ -226,6 +226,10 @@ fn show_panel_body_contents(
                     interactive,
                     now_millis: horizon_browser_control::manifest::now_millis(),
                     owner_name: body_context.card_owner_name,
+                    owner_session: block
+                        .owner_actor
+                        .as_deref()
+                        .and_then(horizon_core::node_cards::actor_parts),
                     updated_at_millis: block.updated_at_millis,
                     opened_link,
                     pressed: body_context.card_pressed,

@@ -305,7 +305,7 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, actor.panel_id) else {
+        let Ok(id) = self.create_agent_child_panel(options, actor.workspace_id, Some(actor.panel_id)) else {
             return Outcome::failed(
                 "invalid_endpoint",
                 "Device viewer requires a numeric loopback address and nonzero port",

@@ -161,19 +161,23 @@ impl HorizonApp {
     /// Creates a panel that an agent asked for in its own workspace.
     ///
     /// The panel takes a free place, never on top of another panel, nearest to
-    /// `beside`: the agent panel itself, or the agent's previous card.
+    /// `beside`: the agent panel itself, or its previous card. A caller with no
+    /// panel of this board, such as a session of a machine, passes none.
     pub(in crate::app) fn create_agent_child_panel(
         &mut self,
         options: PanelOptions,
         workspace: WorkspaceId,
-        beside: PanelId,
+        beside: Option<PanelId>,
     ) -> horizon_core::Result<PanelId> {
         let mut options = options;
         // An agent's create of a browser panel of a machine of the list takes the
         // login of that machine, as a panel of the person does.
         self.resolve_browser_host_login(&mut options)
             .map_err(horizon_core::Error::Config)?;
-        self.board.create_panel_beside_waiting(options, workspace, beside)
+        match beside {
+            Some(beside) => self.board.create_panel_beside_waiting(options, workspace, beside),
+            None => self.board.create_panel_waiting(options, workspace),
+        }
     }
 
     /// Reveal a panel the same way a sidebar panel-row click does: detached

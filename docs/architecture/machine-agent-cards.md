@@ -76,10 +76,13 @@ machine with the mark carries nothing.
 
 ## What is not built yet
 
-- **A card of a machine session.** The host resolves a caller to an agent panel
-  of its board today. A request whose actor is a machine session must become the
-  second kind of caller: its workspace, `beside: None`, its presence from the
-  watch snapshot, and a footer that names `<machine> · <session>`.
+- **A card of a machine session** is built: the second kind of caller is
+  `block_requests::CardCaller`, whose session variant carries the machine name
+  that the actor of the request was checked to hold. Its first card makes the
+  workspace of the machine, its card takes a free place instead of one beside a
+  panel, its presence is the row of the watch snapshot of that machine and
+  session, and its footer names `<machine> · <session>` in Horizon's own words.
+  The chip of its titlebar names the machine, through `CardChip::on_machine`.
 - **The setup on the machine.** The probe of the relay program, the writer of
   the agent, the merge with one backup, the `Remove` direction and the text that
   the agent on the machine reads are the section of the machines skill and the

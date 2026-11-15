@@ -160,7 +160,11 @@ impl HorizonApp {
             .as_ref()
             .and_then(horizon_core::browser::RemoteSessionRequest::orientation);
         let recovery = options.remote_session.as_ref().map(|session| session.recovery.clone());
-        let panel_id = match self.create_agent_child_panel(options, actor_panel.workspace_id, actor_panel.panel_id) {
+        let panel_id = match self.create_agent_child_panel(
+            options,
+            actor_panel.workspace_id,
+            Some(actor_panel.panel_id),
+        ) {
             Ok(panel_id) => panel_id,
             Err(error) => {
                 if let Some(recovery) = &recovery {

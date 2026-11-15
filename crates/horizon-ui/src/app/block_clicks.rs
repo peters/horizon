@@ -14,6 +14,7 @@ use std::time::Instant;
 use horizon_browser_control::block::ClickEvent;
 use horizon_browser_control::manifest;
 use horizon_browser_control::manifest::block::{HOST_APPLY_TIMEOUT, Operation, Outcome, Request};
+use horizon_core::node_cards;
 use horizon_core::{
     AgentStatus, BlockPanelState, CardRuntime, Panel, PanelId, PanelKind, WAKE_LINE, WakeContext, WakeVerdict,
     WorkspaceId, browser_actor, wake_verdict,
@@ -23,7 +24,6 @@ use crate::block_widget::CardChip;
 
 use super::HorizonApp;
 use super::block_requests::{BlockAnswer, card_owner};
-use super::browser_requests::{ActorPanel, actor_panel};
 
 /// A `next_click` that waits until a click arrives or the person's wait ends.
 pub(in crate::app) struct ClickWaiter {
@@ -97,7 +97,7 @@ impl HorizonApp {
 
     /// The state chip a card shows in its titlebar: who owns it and whether
     /// that agent waits for a click right now.
-    pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'static>> {
+    pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'_>> {
         let panel = self.board.panel(panel_id)?;
         let owned_by_an_agent = panel.block()?.owner_actor.is_some();
         // A card that Horizon wrote itself names Horizon, not an agent that is
@@ -108,6 +108,12 @@ impl HorizonApp {
         let listening = self.block_listening(panel_id);
         Some(match self.card_owner_panel(panel) {
             Some(owner) => CardChip::for_panel(self.board.panel(owner)?.kind, listening, true),
+            // The owner runs on a machine of the list, so the chip names that machine:
+            // the session is no panel of this board.
+            None if self.card_owner_present(panel) => {
+                let (machine, _session) = card_owner(panel).and_then(node_cards::actor_parts)?;
+                CardChip::on_machine(machine)
+            }
             None => CardChip::for_panel(PanelKind::Block, false, false),
         })
     }
@@ -121,12 +127,26 @@ impl HorizonApp {
             .is_some_and(|block| block.owner_actor.is_none())
     }
 
-    /// Whether an agent panel of a card's owner is in its workspace, so its
-    /// buttons and rows are live.
+    /// Whether the owner of a card is here: a panel of its workspace, or the
+    /// session of a machine that the watch reports.
+    pub(in crate::app) fn card_owner_present(&self, panel: &Panel) -> bool {
+        if self.card_owner_panel(panel).is_some() {
+            return true;
+        }
+        let Some((machine, session)) = card_owner(panel).and_then(node_cards::actor_parts) else {
+            return false;
+        };
+        self.machine_watch
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.agents(machine).iter().any(|agent| agent.session == session))
+    }
+
+    /// Whether the owner of a card is here, so its buttons are live.
     pub(in crate::app) fn card_agent_present(&self, panel_id: PanelId) -> bool {
         self.board
             .panel(panel_id)
-            .is_some_and(|panel| self.card_owner_panel(panel).is_some())
+            .is_some_and(|panel| self.card_owner_present(panel))
     }
 
     /// Whether a `next_click` waits on a card, alone or on any card of its
@@ -199,25 +219,18 @@ impl HorizonApp {
         let Operation::NextClick { .. } = &request.operation else {
             return None;
         };
-        let caller = match self.request_caller(request) {
-            Ok(caller) => caller,
-            Err(refusal) => return Some(refusal),
-        };
+        if let Err(refusal) = self.request_caller(request) {
+            return Some(refusal);
+        }
         match panel_id {
-            Some(panel_id) => self.begin_card_click_wait(root, request, caller, panel_id),
-            None => self.begin_any_card_click_wait(root, request, caller),
+            Some(panel_id) => self.begin_card_click_wait(root, request, panel_id),
+            None => self.begin_any_card_click_wait(root, request),
         }
     }
 
     /// Starts a wait that names one card.
-    fn begin_card_click_wait(
-        &mut self,
-        root: Option<&Path>,
-        request: &Request,
-        caller: ActorPanel,
-        panel_id: &str,
-    ) -> Option<Outcome> {
-        let card = match self.owned_card(panel_id, caller, &request.actor) {
+    fn begin_card_click_wait(&mut self, root: Option<&Path>, request: &Request, panel_id: &str) -> Option<Outcome> {
+        let card = match self.owned_card(panel_id, &request.actor) {
             Ok(card) => card,
             Err(refusal) => return Some(refusal),
         };
@@ -244,13 +257,10 @@ impl HorizonApp {
     /// Starts a wait that covers every card of the caller. A caller that owns
     /// no card learns that at once, and a second wait of one agent ends the
     /// older one first: one agent waits once.
-    fn begin_any_card_click_wait(
-        &mut self,
-        root: Option<&Path>,
-        request: &Request,
-        caller: ActorPanel,
-    ) -> Option<Outcome> {
-        let cards = self.owned_card_ids(caller.workspace_id, &request.actor);
+    fn begin_any_card_click_wait(&mut self, root: Option<&Path>, request: &Request) -> Option<Outcome> {
+        let cards = self
+            .owner_workspace(&request.actor)
+            .map_or_else(Vec::new, |workspace| self.owned_card_ids(workspace, &request.actor));
         if cards.is_empty() {
             return Some(Outcome::failed(
                 "no_cards",
@@ -391,7 +401,7 @@ impl HorizonApp {
 
     /// Answers one wait that covers every card of `owner`.
     fn settle_agent_wait(&mut self, owner: &str, now_millis: i64) -> bool {
-        let Some(caller) = actor_panel(&self.board, owner) else {
+        let Some(workspace) = self.owner_workspace(owner) else {
             let Some(waiter) = self.block_clicks.agent_waiters.remove(owner) else {
                 return false;
             };
@@ -404,7 +414,7 @@ impl HorizonApp {
             );
             return true;
         };
-        let cards = self.owned_card_ids(caller.workspace_id, owner);
+        let cards = self.owned_card_ids(workspace, owner);
         let Some(waiter) = self.block_clicks.agent_waiters.remove(owner) else {
             return false;
         };

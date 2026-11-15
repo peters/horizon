@@ -865,7 +865,7 @@ fn a_pressed_use_it_serves_every_browser_panel_that_a_create_makes_after_it() {
     assert_attached(&app, person);
 
     let agent = app
-        .create_agent_child_panel(browser_panel_options(&app, true), workspace, person)
+        .create_agent_child_panel(browser_panel_options(&app, true), workspace, Some(person))
         .expect("a browser panel of an agent");
     assert_attached(&app, agent);
 
@@ -915,7 +915,7 @@ fn a_pressed_use_it_serves_a_firefox_host_and_a_machine_of_the_list() {
     app.settle_browser_host_io();
 
     let firefox = app
-        .create_agent_child_panel(browser_panel_options(&app, true), workspace, rented)
+        .create_agent_child_panel(browser_panel_options(&app, true), workspace, Some(rented))
         .expect("a browser panel of a Firefox host");
     let driver = browser_of(&app, firefox);
     assert!(

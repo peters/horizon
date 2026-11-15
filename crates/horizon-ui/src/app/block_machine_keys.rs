@@ -18,7 +18,7 @@ use horizon_browser_control::manifest::block_terminal::CheckedTerminal;
 use horizon_core::{MachineKeyError, MachineKeys};
 
 use super::HorizonApp;
-use super::block_requests::BlockAnswer;
+use super::block_requests::{BlockAnswer, caller_unavailable};
 
 impl HorizonApp {
     /// The key pairs of this Horizon home.
@@ -126,7 +126,10 @@ impl HorizonApp {
             move || keys.require(&name),
             move |app, required| {
                 app.block_claim.worker_job_finished();
-                let outcome = match app.request_caller(&request) {
+                let outcome = match app
+                    .request_caller(&request)
+                    .and_then(|caller| caller.panel().ok_or_else(caller_unavailable))
+                {
                     Err(refusal) => refusal,
                     Ok(actor) => match required {
                         Some(Ok(key)) => {
