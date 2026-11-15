@@ -286,7 +286,7 @@ fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], canvas: 
         for (slot, (agent, target)) in group.into_iter().enumerate() {
             let start = side.spread(agent, slot, count);
             let end = side.opposite().middle(target);
-            if let Some(path) = curve(start, end, side, (agent, target), color)
+            if let Some(path) = curve(start, end, side, agent, target, color)
                 && path.touches(canvas)
             {
                 paths.push(path);
@@ -298,8 +298,7 @@ fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], canvas: 
 
 /// The curve from `start` on `side` to `end`, or `None` when the two panels of the
 /// pair stand closer than [`MIN_LINK_GAP`].
-fn curve(start: Pos2, end: Pos2, side: Side, panels: (Rect, Rect), color: Color32) -> Option<LinePath> {
-    let (agent, target) = panels;
+fn curve(start: Pos2, end: Pos2, side: Side, agent: Rect, target: Rect, color: Color32) -> Option<LinePath> {
     if separation(agent, target) < MIN_LINK_GAP {
         return None;
     }
