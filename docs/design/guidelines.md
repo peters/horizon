@@ -1011,6 +1011,11 @@ The page that shows while the board is empty answers the size of the window.
   three forms gives no band and scrolls: the wheel, the trackpad, Page Down and
   Page Up move the page, and a tile that Tab reaches below the canvas comes into
   view.
+- While the page shows, the wheel belongs to the page: a vertical wheel or
+  trackpad scroll moves the page, a horizontal scroll moves nothing, and a
+  Ctrl/Cmd wheel moves nothing, because the page has nothing to zoom. The canvas
+  under the page neither pans nor zooms for these wheels, and a page that the
+  window holds does not move at all.
 - A row of the section **Pick up where you left off** keeps the program of the
   session at the start of its detail and the time and the state at its end. A
   folder that does not fit is cut in its middle with an ellipsis. The press of a

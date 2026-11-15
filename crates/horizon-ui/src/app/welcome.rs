@@ -225,7 +225,7 @@ impl HorizonApp {
 
     /// Whether the first page shows: no workspace, no panel, and no dialog over
     /// the canvas.
-    fn welcome_page_visible(&self) -> bool {
+    pub(in crate::app) fn welcome_page_visible(&self) -> bool {
         welcome_page_shows(
             self.board.workspaces.len(),
             self.board.panels.len(),

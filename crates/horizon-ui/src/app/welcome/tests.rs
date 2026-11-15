@@ -10,6 +10,8 @@ use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
 use crate::typeface::Weight;
 
+mod wheel;
+
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
 pub(super) fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {

@@ -240,20 +240,32 @@ Horizon before they write anything.
     right edge.
 
 12. At the window size 800 x 600, push Page Down two times, then Page Up two
-    times. Move the wheel over the page.
+    times. Then put the pointer on the middle of the page and roll the wheel of
+    the mouse three notches down, three notches up, and two notches to the side
+    while you hold Ctrl.
 
-    Result: The page moves down and up for the keys, and the wheel moves it too.
-    At the largest scroll, the last row of the page, which starts with
-    `You know Horizon already?`, is whole inside the canvas. At the top of the
-    page, the heading is whole and no part of it stands under the titlebar.
+    Result: The page moves down and up for the keys, and it moves down and up for
+    the wheel of the mouse and for a scroll of a touchpad. The two side notches
+    and the Ctrl notches move no pixel of the window, and the board behind the
+    page never moves sideways or changes its zoom. At the largest scroll, the
+    last row of the page, which starts with `You know Horizon already?`, is whole
+    inside the canvas. At the top of the page, the heading is whole and no part
+    of it stands under the titlebar.
 
-13. At the window size 800 x 600, push Page Up until the page stops. Then push
+13. Make the window 1600 x 1000, where the page is whole inside the canvas.
+    Put the pointer on the middle of the page and roll the wheel down three
+    notches.
+
+    Result: No pixel of the window changes: a page that the window holds has
+    nothing to scroll, and the board behind it does not move either.
+
+14. At the window size 800 x 600, push Page Up until the page stops. Then push
     Tab four times.
 
     Result: Each press moves the focus ring to the next tile. The fourth tile
     comes whole into the canvas, and the page moves to it.
 
-14. Make the window 1000 x 700. Look at a row of the section **Pick up where you
+15. Make the window 1000 x 700. Look at a row of the section **Pick up where you
     left off** whose folder path is longer than the row.
 
     Result: The detail line of the row starts with the program of the session and
