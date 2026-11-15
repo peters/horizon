@@ -28,6 +28,15 @@ impl HorizonApp {
         workspace_id
     }
 
+    /// The workspace that carries `name`, or a new one with that name that is brought
+    /// into the view.
+    pub(super) fn ensure_workspace_of_name(&mut self, ctx: &Context, name: &str) -> WorkspaceId {
+        if let Some(workspace) = self.board.workspaces.iter().find(|workspace| workspace.name == name) {
+            return workspace.id;
+        }
+        self.create_workspace_visible(ctx, name)
+    }
+
     pub(super) fn create_workspace_at_visible(&mut self, ctx: &Context, name: &str, position: [f32; 2]) -> WorkspaceId {
         let workspace_count_before = self.board.workspaces.len();
         let workspace_id = self.board.create_workspace_at(name, position);

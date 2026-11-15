@@ -225,13 +225,7 @@ impl HorizonApp {
     /// The workspace of `machine`: the one that carries its name, or a new one whose
     /// terminals run on that machine.
     fn machine_workspace(&mut self, machine: &str, ctx: &Context) -> WorkspaceId {
-        let existing = self
-            .board
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.name == machine)
-            .map(|workspace| workspace.id);
-        let workspace = existing.unwrap_or_else(|| self.create_workspace_visible(ctx, machine));
+        let workspace = self.ensure_workspace_of_name(ctx, machine);
         self.board
             .set_workspace_place(workspace, WorkspacePlace::Machine(machine.to_owned()));
         self.mark_runtime_dirty();
