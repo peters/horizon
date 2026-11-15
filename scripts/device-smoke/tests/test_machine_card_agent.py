@@ -71,10 +71,16 @@ class Bridge:
         self.program = folder / serve.MACHINE_CARD_BRIDGE
         self.program.write_text(serve.MACHINE_CARD_BRIDGE_BODY)
         self.program.chmod(0o700)
-        self.child = subprocess.Popen([sys.executable, '-u', str(self.program), *(
-            f'{remote}:{local}' for remote, local in pairs)], stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL)
+        self.log = folder / f'{serve.MACHINE_CARD_BRIDGE}.log'
+        with self.log.open('a') as words:
+            self.child = subprocess.Popen([sys.executable, '-u', str(self.program), *(
+                f'{remote}:{local}' for remote, local in pairs)], stdout=words,
+                stderr=subprocess.STDOUT)
         self.pairs = pairs
+
+    def says(self) -> str:
+        """The words of the bridge of this run, as a person reads them in its pane."""
+        return self.log.read_text(encoding='utf-8') if self.log.exists() else ''
 
     def stop(self) -> None:
         self.child.terminate()
@@ -223,6 +229,79 @@ class MachineCardAgentTest(unittest.TestCase):
         output, _ = agent.communicate(timeout=60)
         self.assertEqual(agent.returncode, 1, output)
         self.assertIn('machine-card-agent:', output)
+
+
+class RelayOfTheSkillTest(unittest.TestCase):
+    """The relay program of the machines skill, and the fault that a restart proves."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(prefix='hz-relay-')
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+
+    def test_the_fixture_runs_the_relay_program_of_the_skill(self):
+        with tempfile.TemporaryDirectory(prefix='hz-relay-state-') as state:
+            program = serve.machine_relay_program(state)
+            shipped = serve.machine_relay_text()
+            self.assertEqual(program.read_text(encoding='utf-8'), shipped,
+                             'the fixture runs the relay that the skill ships')
+            self.assertEqual(program.stat().st_mode & 0o777, 0o700, 'the relay of a person is 700')
+            self.assertLessEqual(len(shipped.splitlines()), 80, 'the relay stays short')
+            self.assertIn(serve.MACHINE_RELAY_SESSION, 'hz-relay')
+
+    def test_the_agent_draws_its_card_through_the_shipped_relay(self):
+        session = 'hz-relay'
+        socket_path = self.root / 'horizon-cards' / 'build-1' / f'{session}.sock'
+        server = OneServer(socket_path, [{'status': 'created', 'panel_id': 'card-relay', 'revision': 1}])
+        server.start()
+        wait_for('the socket of the server', lambda: server.ready.is_set())
+        relay = self.root / 'relay.py'
+        relay.write_text(serve.machine_relay_text(), encoding='utf-8')
+        relay.chmod(0o700)
+        # The relay learns its session from the tmux client of the pane, which this
+        # stand-in answers for a machine without a tmux server.
+        programs = self.root / 'bin'
+        programs.mkdir()
+        tmux = programs / 'tmux'
+        tmux.write_text(f'#!/bin/sh\nprintf "%s\\n" {session}\n', encoding='utf-8')
+        tmux.chmod(0o700)
+        child = subprocess.Popen(
+            [sys.executable, '-u', str(AGENT), '--relay', str(relay), 'build-1',
+             '--title', serve.MACHINE_RELAY_TITLE, '--once'],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env=dict(os.environ, HORIZON_CARDS_DIR=str(self.root / 'horizon-cards'),
+                     PATH=str(programs) + os.pathsep + os.environ.get('PATH', '')))
+        output, _ = child.communicate(timeout=60)
+        self.assertEqual(child.returncode, 0, output)
+        self.assertIn('card-relay', output)
+        calls = server.tool_calls()
+        self.assertEqual([call['operation'] for call in calls], ['create'], calls)
+        self.assertEqual(calls[0]['title'], serve.MACHINE_RELAY_TITLE)
+        wait_for('the end of the server', lambda: server.done.is_set())
+
+    def test_the_bridge_leaves_its_socket_file_and_refuses_it_again(self):
+        remote = str(self.root / 'there' / 'build-1' / 'hz-night.sock')
+        here = self.root / 'here'
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(here))
+        listener.listen(2)
+        self.addCleanup(listener.close)
+        bridge = Bridge(self.root, [(remote, str(here))])
+        wait_for('the socket of the machine', bridge.binds)
+        bridge.stop()
+        self.assertTrue(Path(remote).exists(), 'the file of a child that ended stays, as sshd leaves it')
+
+        again = Bridge(self.root, [(remote, str(here))])
+        self.addCleanup(again.stop)
+        wait_for('the refusal of the taken path', lambda: 'is taken' in again.says())
+        self.assertIn('hz-night.sock', again.says())
+
+        # The removal that Horizon makes before its child starts is the one thing that
+        # lets the next child bind the path of the session.
+        Path(remote).unlink()
+        third = Bridge(self.root, [(remote, str(here))])
+        self.addCleanup(third.stop)
+        wait_for('the socket of the restarted child', third.binds)
 
 
 class MachineRecordOfTheFixture(unittest.TestCase):

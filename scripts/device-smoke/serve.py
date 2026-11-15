@@ -856,6 +856,12 @@ MACHINE_CARD_AGENT = 'machine_card_agent.py'
 # `-R` on the machine and copies every connection of it to the path here. The
 # stand-in names the same pairs, so a card of that session reaches Horizon.
 MACHINE_CARD_BRIDGE = 'card-bridge.py'
+# The relay program of the machines skill: the fixture runs one session through it, so a
+# person sees a card that came the way a real agent program's card comes.
+MACHINE_RELAY_PROGRAM = 'relay.py'
+MACHINE_RELAY_SESSION = 'hz-relay'
+MACHINE_RELAY_TITLE = 'Night shift by relay'
+MACHINE_RELAY_SKILL = 'assets/plugins/claude-code/skills/horizon-machines/SKILL.md'
 MACHINE_CARD_BRIDGE_BODY = """#!/usr/bin/env python3
 import os, socket, sys, threading
 
@@ -871,13 +877,17 @@ def pump(source, target):
         pass
 
 def serve(remote, local):
-    try:
-        os.unlink(remote)
-    except FileNotFoundError:
-        pass
     os.makedirs(os.path.dirname(remote), mode=0o700, exist_ok=True)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(remote)
+    # sshd with its default StreamLocalBindUnlink=no: a path that a file still holds is
+    # not bound, and the socket file of the child before this one stays there. Horizon
+    # removes that file before it starts the child again, and this stand-in proves it:
+    # a restart of the child binds only after that removal.
+    try:
+        listener.bind(remote)
+    except OSError as error:
+        print(f'card-bridge: {remote} is taken ({error.strerror})', flush=True)
+        return
     listener.listen(4)
     print(f'card-bridge: {remote} -> {local}', flush=True)
     while True:
@@ -951,6 +961,7 @@ def machine_watch_server(state, private_tmp, python):
             subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'send-keys', '-t', session, 'Enter'],
                            env=environment, check=True)
     machine_watch_card_agent(state, work, python, private_tmp)
+    machine_watch_relay_session(state, work, python, private_tmp)
     return program
 
 
@@ -981,6 +992,49 @@ def machine_watch_card_agent(state, work, python, private_tmp):
     subprocess.run([*tmux, 'set-option', '-p', '-t', pane_id, '@horizon_state', 'idle'],
                    env=environment, check=True)
     return socket_path
+
+
+def machine_relay_text():
+    """The relay program of the machines skill: the python block of its card section.
+
+    The fixture runs the text that the skill ships, so the relay of a card of this
+    fixture is the relay that a person writes on their own machine.
+    """
+    skill = FIXTURE_FOLDER.parents[1] / MACHINE_RELAY_SKILL
+    for block in skill.read_text(encoding='utf-8').split('```python\n')[1:]:
+        body = block.split('\n```\n', 1)[0]
+        if body.startswith('#!/usr/bin/env python3') and 'HORIZON_CARDS_DIR' in body:
+            return body + '\n'
+    raise SystemExit(f'{skill} holds no relay program')
+
+
+def machine_relay_program(state):
+    """The relay program in the state folder, which the relay session of this fixture runs."""
+    work = Path(state) / MACHINE_WATCH_FOLDER
+    return body_in_state(work / 'bin' / MACHINE_RELAY_PROGRAM, machine_relay_text(), state)
+
+
+def machine_watch_relay_session(state, work, python, private_tmp):
+    """One more session of the private server: the shipped relay program of the skill.
+
+    The session runs the stand-in agent with `--relay`, so the agent speaks MCP to the
+    standard input and output of the relay program that the setup of a machine writes.
+    The relay learns its own session from `tmux`, meets the socket of that session, and
+    the card reaches the workspace of the machine the way a real agent program's card
+    does. `HORIZON_CARDS_DIR` names the folder that the sandbox sees as `/tmp`.
+    """
+    environment = dict(machine_watch_environment(private_tmp),
+                       HORIZON_CARDS_DIR=str((Path(private_tmp) / HORIZON_CARDS_FOLDER).resolve()))
+    agent = program_in_state(fixture_program(MACHINE_CARD_AGENT), work / 'bin' / MACHINE_CARD_AGENT, state)
+    relay = machine_relay_program(state)
+    pane = work / 'relay'
+    pane.mkdir(mode=0o700, exist_ok=True)
+    tmux = ['tmux', '-L', MACHINE_WATCH_SOCKET, '-f', '/dev/null']
+    command = [python, '-u', str(agent), '--relay', str(relay), MACHINE_WATCH_MACHINE,
+               '--title', MACHINE_RELAY_TITLE]
+    subprocess.run([*tmux, 'new-session', '-d', '-s', MACHINE_RELAY_SESSION, '-c', str(pane),
+                    '-x', '100', '-y', '20', *command], env=environment, check=True)
+    return command
 
 
 def machine_card_socket(private_tmp, session):
