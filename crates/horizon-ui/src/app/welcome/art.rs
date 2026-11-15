@@ -13,6 +13,10 @@ use super::tiles::WelcomeTile;
 
 /// The height of the band of a drawing.
 pub(in crate::app) const ART_HEIGHT: f32 = 92.0;
+/// The height of the drawing band of the compact form of the page: the tallest
+/// band that keeps the four choices of a window of 1000 by 700 points whole. A
+/// smaller window gives the drawing no band at all.
+pub(in crate::app) const ART_COMPACT_HEIGHT: f32 = 30.0;
 /// The width that the drawings are drawn for: the widest of them reaches 101
 /// points from the middle of its band, and four points of air stay on each side.
 pub(in crate::app) const ART_WIDTH: f32 = 210.0;

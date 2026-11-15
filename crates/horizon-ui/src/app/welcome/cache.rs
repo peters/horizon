@@ -20,8 +20,8 @@ use super::pickup;
 use super::tiles::WelcomeTile;
 use super::{
     ACTION_FONT, ACTION_LINE_HEIGHT, HEADING_BLOCK_GAP, HEADING_FONT, HEADING_GAP, HEADING_LINE_HEIGHT,
-    HEADING_MAX_WIDTH, LEAD_FONT, SENTENCE_FONT, SENTENCE_LINE_HEIGHT, SHORTCUTS_FONT, SHORTCUTS_GAP, TILE_INNER_GAP,
-    TILE_PAD, TITLE_FONT, TITLE_LINE_HEIGHT, tile_title_job,
+    HEADING_MAX_WIDTH, LEAD_FONT, PAGE_PAD_TOP, SENTENCE_FONT, SENTENCE_LINE_HEIGHT, SHORTCUTS_FONT, SHORTCUTS_GAP,
+    TILE_INNER_GAP, TILE_PAD, TITLE_FONT, TITLE_LINE_HEIGHT, tile_title_job,
 };
 use crate::theme;
 use crate::typeface::Weight;
@@ -41,21 +41,32 @@ pub(in crate::app) struct WelcomeCache {
 }
 
 impl WelcomeCache {
-    /// The metrics of the page for `width` and `pickup_rows` rows of the section,
-    /// measured with `painter`.
-    pub(in crate::app) fn metrics(&mut self, painter: &Painter, width: f32, pickup_rows: usize) -> WelcomeMetrics {
+    /// The metrics of the page for `width`, `pickup_rows` rows of the section and
+    /// a canvas `canvas_height` tall, measured with `painter`.
+    ///
+    /// The height of the canvas is part of the key because it decides the form of
+    /// the page: a window that a person makes short first gives the drawings a
+    /// smaller band and then no band at all.
+    pub(in crate::app) fn metrics(
+        &mut self,
+        painter: &Painter,
+        width: f32,
+        pickup_rows: usize,
+        canvas_height: f32,
+    ) -> WelcomeMetrics {
         let key = WelcomeKey {
             width: width.to_bits(),
+            canvas: canvas_height.to_bits(),
             theme: theme::current_theme(),
             pickup_rows,
         };
         if self.key != Some(key) {
-            let metrics = WelcomeMetrics::measure(painter, width, pickup_rows);
+            let metrics = WelcomeMetrics::measure(painter, width, pickup_rows, canvas_height);
             self.key = Some(key);
             self.metrics = Some(metrics);
         }
         self.metrics
-            .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows))
+            .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows, canvas_height))
     }
 
     /// The drawing of `tile`, the tile at `index`, for a band of `size`, in the
@@ -102,6 +113,12 @@ struct Drawings {
     shapes: [Option<Shape>; WelcomeTile::ALL.len()],
 }
 
+/// Whether a block of `block_height` points fits a canvas `canvas_height` tall
+/// with the top pad of the page above it and the same pad under it.
+fn fits(canvas_height: f32, block_height: f32) -> bool {
+    canvas_height >= block_height + 2.0 * f32::from(PAGE_PAD_TOP)
+}
+
 /// The size of a band and the theme that one drawing belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DrawingKey {
@@ -113,6 +130,7 @@ struct DrawingKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WelcomeKey {
     width: u32,
+    canvas: u32,
     theme: theme::ResolvedTheme,
     /// The rows of the section **Pick up where you left off**, which add their
     /// height to the block of the page.
@@ -136,14 +154,18 @@ pub(in crate::app) struct WelcomeMetrics {
     /// The height of the section **Pick up where you left off**, or zero when the
     /// page shows no row.
     pub(in crate::app) pickup_height: f32,
+    /// The height of the drawing band of a tile: [`art::ART_HEIGHT`], the compact
+    /// height, or zero for the form of the page that draws no band.
+    pub(in crate::app) art_height: f32,
     /// The height of everything the page draws, its pads excluded.
     pub(in crate::app) block_height: f32,
 }
 
 impl WelcomeMetrics {
     /// Measures the page that `width` and `pickup_rows` rows of the section give,
-    /// with the wrapped texts laid out once.
-    fn measure(painter: &Painter, width: f32, pickup_rows: usize) -> Self {
+    /// with the wrapped texts laid out once, in the tallest form that a canvas
+    /// `canvas_height` tall holds whole.
+    fn measure(painter: &Painter, width: f32, pickup_rows: usize, canvas_height: f32) -> Self {
         let columns = welcome_columns(width);
         let tile = tile_width(width, columns);
         let inner_width = (tile - 2.0 * TILE_PAD).max(1.0);
@@ -212,7 +234,7 @@ impl WelcomeMetrics {
             + pickup_height
             + SHORTCUTS_GAP
             + shortcuts_height;
-        Self {
+        let page = Self {
             columns,
             tile_width: tile,
             tile_height,
@@ -221,7 +243,45 @@ impl WelcomeMetrics {
             heading_height,
             lead_height,
             pickup_height,
+            art_height: art::ART_HEIGHT,
             block_height,
+        };
+        let art_height = page.art_height_that_fits(canvas_height);
+        page.with_art_height(art_height)
+    }
+
+    /// The number of rows of tiles of the page.
+    #[allow(clippy::cast_precision_loss)]
+    fn rows(&self) -> f32 {
+        WelcomeTile::ALL.len().div_ceil(self.columns.max(1)) as f32
+    }
+
+    /// The height of the drawing band of the first form of the page that a canvas
+    /// `canvas_height` tall holds whole: the band of the mockup, then the compact
+    /// band, then no band.
+    ///
+    /// A window that a person makes small keeps its four choices reachable this
+    /// way. A canvas that holds none of the three forms gives no band, and the page
+    /// scrolls.
+    fn art_height_that_fits(&self, canvas_height: f32) -> f32 {
+        let rows = self.rows();
+        [art::ART_HEIGHT, art::ART_COMPACT_HEIGHT, 0.0]
+            .into_iter()
+            .find(|height| {
+                let saved = rows * (art::ART_HEIGHT - height);
+                fits(canvas_height, self.block_height - saved)
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// The page with a drawing band of `art_height` points in every tile.
+    fn with_art_height(self, art_height: f32) -> Self {
+        let shorter = (art::ART_HEIGHT - art_height).max(0.0);
+        Self {
+            art_height,
+            tile_height: self.tile_height - shorter,
+            block_height: self.block_height - self.rows() * shorter,
+            ..self
         }
     }
 

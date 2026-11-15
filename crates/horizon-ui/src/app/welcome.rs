@@ -120,7 +120,7 @@ impl HorizonApp {
             Order::Background,
             Id::unique("welcome_page_measure"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len());
+        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
         let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
         // A canvas that is wider than the reading width of the page keeps the same
         // air on both sides of the block.
@@ -143,6 +143,14 @@ impl HorizonApp {
                 // block scrolls inside the canvas and a block that fits is drawn
                 // whole, whatever room the layer around the page has.
                 ui.set_max_size(inner.size());
+                // A page that is taller than the canvas moves one canvas for Page
+                // Up and Page Down, in the sign of the scroll of the page.
+                if metrics.block_height + PAGE_PAD_BOTTOM > inner.height() {
+                    let step = page_step(ui, inner.height());
+                    if step != 0.0 {
+                        ui.scroll_with_delta(Vec2::new(0.0, step));
+                    }
+                }
                 egui::ScrollArea::vertical()
                     .id_salt("welcome_page_scroll")
                     .max_height(inner.height())
@@ -238,6 +246,26 @@ fn page_top(canvas_height: f32, block_height: f32) -> f32 {
     } else {
         top
     }
+}
+
+/// How far Page Up and Page Down move a page of a canvas `page` high, in the sign
+/// that the scroll of the page takes: Page Down moves to the rows below the
+/// canvas, Page Up back to the rows above it.
+fn page_step(ui: &Ui, page: f32) -> f32 {
+    let (down, up) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::PageDown),
+            input.key_pressed(egui::Key::PageUp),
+        )
+    });
+    let mut step = 0.0;
+    if down {
+        step -= page;
+    }
+    if up {
+        step += page;
+    }
+    step
 }
 
 /// Whether the first page shows, from the counts of the board.
@@ -368,6 +396,11 @@ fn paint_tile(
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, tile.spoken()));
     let hovered = response.hovered();
     let focused = response.has_focus();
+    // Tab may reach a tile that stands below the canvas of a small window, and the
+    // page moves to the tile that the keyboard reached.
+    if response.gained_focus() {
+        response.scroll_to_me(Some(egui::Align::Center));
+    }
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -400,11 +433,15 @@ fn paint_tile(
         Pos2::new(rect.max.x - TILE_PAD, rect.max.y - TILE_PAD),
     );
     // The drawing of a tile is static, so it is built once per size of its band
-    // and theme and painted in the place of the band on every frame.
-    let band = Rect::from_min_size(inner.min, Vec2::new(inner.width(), art::ART_HEIGHT));
-    let mut drawing = cache.drawing(tile, index, band.size());
-    drawing.translate(band.min.to_vec2());
-    painter.add(drawing);
+    // and theme and painted in the place of the band on every frame. The compact
+    // form of the page gives the band no height, and then the tile keeps no
+    // drawing at all.
+    let band = Rect::from_min_size(inner.min, Vec2::new(inner.width(), metrics.art_height));
+    if band.height() > 0.0 {
+        let mut drawing = cache.drawing(tile, index, band.size());
+        drawing.translate(band.min.to_vec2());
+        painter.add(drawing);
+    }
 
     let mut y = band.max.y + TILE_INNER_GAP;
     let headline = painter.layout_job(tile_title_job(
@@ -508,7 +545,7 @@ impl HorizonApp {
             Order::Background,
             Id::unique("welcome_page_measure_test"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len());
+        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
         (metrics.block_height, metrics.pickup_height)
     }
 }

@@ -54,6 +54,36 @@ pub(super) fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rec
     out
 }
 
+/// The shapes of one frame of the page of `size`, with `events` fed to it.
+pub(super) fn frame_with(
+    ctx: &Context,
+    app: &mut crate::app::HorizonApp,
+    size: [f32; 2],
+    events: Vec<egui::Event>,
+) -> Vec<egui::epaint::ClippedShape> {
+    let mut input = crate::app::test_support::raw_input(size, None);
+    input.events = events;
+    let output = ctx.run_ui(input, |ui| app.render_welcome_page(ui.ctx()));
+    let output: egui::FullOutput = output.discard_textures();
+    output.shapes
+}
+
+/// One press of `key`, as the person makes it.
+pub(super) fn key_press(key: egui::Key, pressed: bool) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// The box of the text `text` that this frame painted.
+pub(super) fn text_box(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Rect> {
+    text_shape(shapes, text).map(|(shape, _)| egui::Rect::from_min_size(shape.pos, shape.galley.size()))
+}
+
 /// The block of the page, from the tiles that this frame painted.
 pub(super) fn block_rect(shapes: &[egui::epaint::ClippedShape]) -> egui::Rect {
     tile_rects(shapes)
@@ -526,3 +556,4 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
 
 mod block;
 mod drawings;
+mod scroll;
