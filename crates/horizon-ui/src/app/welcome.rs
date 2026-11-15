@@ -144,6 +144,12 @@ struct WelcomeMetrics {
     columns: usize,
     tile_width: f32,
     tile_height: f32,
+    /// The height of the tallest title of the four tiles, which every tile gives
+    /// its own title, so the sentences of the four tiles stand on one line.
+    title_band: f32,
+    /// The height of the tallest sentence of the four tiles, so the press of every
+    /// tile keeps the same gap under it.
+    sentence_band: f32,
     heading_height: f32,
     lead_height: f32,
     /// The height of the section **Pick up where you left off**, or zero when the
@@ -159,7 +165,23 @@ impl WelcomeMetrics {
     fn measure(painter: &Painter, width: f32, pickup_rows: usize) -> Self {
         let columns = welcome_columns(width);
         let tile = tile_width(width, columns);
-        let sentence_width = (tile - 2.0 * TILE_PAD).max(1.0);
+        let inner_width = (tile - 2.0 * TILE_PAD).max(1.0);
+        // A title or a sentence of one row more than the others must not push the
+        // parts of its own tile onto each other, so every tile gives its title and
+        // its sentence the room of the tallest one.
+        let titles: f32 = WelcomeTile::ALL
+            .iter()
+            .map(|entry| {
+                let wrapped = painter.layout_job(tile_title_job(
+                    entry.title(),
+                    &FontId::proportional(TITLE_FONT),
+                    theme::FG(),
+                    inner_width,
+                    Weight::Bold,
+                ));
+                wrapped.size().y
+            })
+            .fold(0.0, f32::max);
         let sentences: f32 = WelcomeTile::ALL
             .iter()
             .map(|entry| {
@@ -167,19 +189,21 @@ impl WelcomeMetrics {
                     entry.sentence().to_owned(),
                     FontId::proportional(SENTENCE_FONT),
                     theme::FG_SOFT(),
-                    sentence_width,
+                    inner_width,
                 );
                 galley.size().y
             })
             .fold(0.0, f32::max);
+        let title_band = titles.max(TITLE_FONT * TITLE_LINE_HEIGHT);
+        let sentence_band = sentences.max(SENTENCE_FONT * SENTENCE_LINE_HEIGHT);
         #[allow(clippy::cast_precision_loss)]
         let rows = WelcomeTile::ALL.len().div_ceil(columns.max(1)) as f32;
         let tile_height = TILE_PAD
             + art::ART_HEIGHT
             + TILE_INNER_GAP
-            + TITLE_FONT * TITLE_LINE_HEIGHT
+            + title_band
             + TILE_INNER_GAP
-            + sentences.max(SENTENCE_FONT * SENTENCE_LINE_HEIGHT)
+            + sentence_band
             + TILE_INNER_GAP
             + ACTION_FONT * ACTION_LINE_HEIGHT
             + TILE_PAD;
@@ -211,6 +235,8 @@ impl WelcomeMetrics {
             columns,
             tile_width: tile,
             tile_height,
+            title_band,
+            sentence_band,
             heading_height,
             lead_height,
             pickup_height,
@@ -395,7 +421,7 @@ fn paint_page(
         #[allow(clippy::cast_precision_loss)]
         let top = y + row as f32 * (metrics.tile_height + ROW_GAP);
         let rect = Rect::from_min_size(Pos2::new(x, top), Vec2::new(metrics.tile_width, metrics.tile_height));
-        if paint_tile(ui, cache, *tile, rect, index) {
+        if paint_tile(ui, cache, *tile, rect, index, metrics) {
             pressed = Some(*tile);
         }
     }
@@ -476,7 +502,14 @@ fn tile_title_job(text: &str, font: &FontId, color: Color32, max_width: f32, wei
 }
 
 /// Paints one tile, and answers whether the person pressed it.
-fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Rect, index: usize) -> bool {
+fn paint_tile(
+    ui: &mut Ui,
+    cache: &mut WelcomeCache,
+    tile: WelcomeTile,
+    rect: Rect,
+    index: usize,
+    metrics: WelcomeMetrics,
+) -> bool {
     let response = ui.interact(rect, ui.make_persistent_id(("welcome_tile", index)), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, tile.spoken()));
     let hovered = response.hovered();
@@ -526,8 +559,11 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
         inner.width(),
         Weight::Bold,
     ));
-    painter.galley(Pos2::new(inner.min.x, y), headline.clone(), theme::FG());
-    y += headline.size().y + TILE_INNER_GAP;
+    painter.galley(Pos2::new(inner.min.x, y), headline, theme::FG());
+    // The band of the tallest title keeps the sentence of every tile on one line,
+    // and the band of the tallest sentence keeps the press of the tile at the
+    // inner gap under it.
+    y += metrics.title_band + TILE_INNER_GAP;
     let sentence = painter.layout(
         tile.sentence().to_owned(),
         FontId::proportional(SENTENCE_FONT),

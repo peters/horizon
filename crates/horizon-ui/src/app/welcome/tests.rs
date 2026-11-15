@@ -2,7 +2,9 @@
 
 use egui::Context;
 
-use super::{HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, WelcomeTile, page_top, welcome_page_shows};
+use super::{
+    HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_RADIUS, WelcomeTile, page_top, welcome_page_shows,
+};
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
 use crate::typeface::Weight;
@@ -10,21 +12,111 @@ use crate::typeface::Weight;
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
 fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
-    let _ = frame_texts(ctx, app);
-    let output = ctx.run_ui(crate::app::test_support::raw_input([1200.0, 900.0], None), |ui| {
+    frame_shapes_at(ctx, app, [1200.0, 900.0])
+}
+
+/// The shapes of the last frame of the page on a window of `size` points.
+fn frame_shapes_at(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 2]) -> Vec<egui::epaint::ClippedShape> {
+    let _ = frame_texts_at(ctx, app, size);
+    let output = ctx.run_ui(crate::app::test_support::raw_input(size, None), |ui| {
         app.render_welcome_page(ui.ctx());
     });
     let output: egui::FullOutput = output.discard_textures();
     output.shapes
 }
 
+/// The rectangles of the four tiles that this frame painted.
+fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.corner_radius == egui::CornerRadius::same(TILE_RADIUS) => {
+                if !out.contains(&rect.rect) {
+                    out.push(rect.rect);
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// Every tile keeps the gap of the page between its title, its sentence and its
+/// action, also when a title or a sentence takes one row more: the four tiles
+/// have one height, which follows the tallest content, and the four presses stand
+/// on one line.
+#[test]
+fn the_four_tiles_keep_their_gaps_and_one_height() {
+    for width in [1_240.0, 1_300.0, 1_400.0] {
+        let (_temp, mut app) = test_app();
+        let ctx = Context::default();
+        let shapes = frame_shapes_at(&ctx, &mut app, [width, 900.0]);
+
+        let mut action_tops = Vec::new();
+        for tile in WelcomeTile::ALL {
+            let (title, _) = text_shape(&shapes, tile.title()).expect("the title of a tile is drawn");
+            let (sentence, _) = text_shape(&shapes, tile.sentence()).expect("the sentence of a tile is drawn");
+            let (action, _) = text_shape(&shapes, tile.action()).expect("the press of a tile is drawn");
+            let title_bottom = title.pos.y + title.galley.size().y;
+            let sentence_bottom = sentence.pos.y + sentence.galley.size().y;
+            assert!(
+                sentence.pos.y - title_bottom >= TILE_INNER_GAP - 0.5,
+                "the title of {:?} keeps the inner gap above its sentence at {width}: {}",
+                tile.title(),
+                sentence.pos.y - title_bottom
+            );
+            assert!(
+                action.pos.y - sentence_bottom >= TILE_INNER_GAP - 0.5,
+                "the sentence of {:?} ends at {sentence_bottom} and keeps the inner gap {TILE_INNER_GAP} above its \
+                 press at {} (a width of {width})",
+                tile.title(),
+                action.pos.y
+            );
+            action_tops.push(action.pos.y);
+        }
+
+        let rects = tile_rects(&shapes);
+        assert_eq!(
+            rects.len(),
+            WelcomeTile::ALL.len(),
+            "the page paints four tiles: {rects:?}"
+        );
+        let height = rects[0].height();
+        for rect in &rects {
+            assert!(
+                (rect.height() - height).abs() < 0.01,
+                "the four tiles have one height at {width}: {rects:?}"
+            );
+        }
+        for top in &action_tops {
+            assert!(
+                (top - action_tops[0]).abs() < 0.01,
+                "the presses of the four tiles stand on one line at {width}: {action_tops:?}"
+            );
+        }
+    }
+}
+
 /// Every text that a frame of the window painted.
 fn frame_texts(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<String> {
+    frame_texts_at(ctx, app, [1200.0, 900.0])
+}
+
+/// Every text that a frame of the window of `size` painted.
+fn frame_texts_at(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 2]) -> Vec<String> {
     let mut texts = Vec::new();
     // A panel shows from its second frame on.
     for _ in 0..2 {
         texts.clear();
-        let output = ctx.run_ui(crate::app::test_support::raw_input([1200.0, 900.0], None), |ui| {
+        let output = ctx.run_ui(crate::app::test_support::raw_input(size, None), |ui| {
             app.render_welcome_page(ui.ctx());
         });
         let output: egui::FullOutput = output.discard_textures();

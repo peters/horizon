@@ -197,12 +197,21 @@ Horizon before they write anything.
    rows. Under about 520 points they stand in one column. No tile cuts its
    title or its sentence.
 
-8. Change the theme to the light theme in the settings.
+8. Make the window wide enough for four tiles, and then narrow it step by step
+   to about 1 200 points of window width, where a title takes two rows.
+
+   Result: The four tiles of a row have one height, which follows the tallest
+   title and the tallest sentence of the row. The sentence of every tile keeps
+   a gap of 14 points above the line of its press, so a sentence never ends on
+   that line, also when its title takes two rows. The presses of the tiles of
+   one row stand on one line.
+
+9. Change the theme to the light theme in the settings.
 
    Result: The page, the drawings and the keys are in the light palette, and no
    text touches an edge.
 
-9. Leave the page still for one minute without a pointer move.
+10. Leave the page still for one minute without a pointer move.
 
    Result: The process uses no central processor time for the page. The
    `fps` counter of the titlebar says that no frame was drawn.
