@@ -46,7 +46,6 @@ enum State {
 
 struct Entry {
     state: State,
-    seen: u64,
 }
 
 struct Job {
@@ -60,7 +59,6 @@ struct Job {
 struct Inner {
     entries: HashMap<PathBuf, Entry>,
     jobs: Option<mpsc::Sender<Job>>,
-    tick: u64,
     pixels: u64,
 }
 
@@ -109,19 +107,10 @@ impl NoteImages {
     /// about it for the first time.
     pub(crate) fn request(&self, ctx: &Context, key: &Path, paths: &[PathBuf], max_side: u32) -> Seen {
         let mut inner = lock(&self.inner);
-        inner.tick += 1;
-        let tick = inner.tick;
-        if let Some(entry) = inner.entries.get_mut(key) {
-            entry.seen = tick;
+        if let Some(entry) = inner.entries.get(key) {
             return Seen::of(&entry.state);
         }
-        inner.entries.insert(
-            key.to_path_buf(),
-            Entry {
-                state: State::Queued,
-                seen: tick,
-            },
-        );
+        inner.entries.insert(key.to_path_buf(), Entry { state: State::Queued });
         let jobs = inner
             .jobs
             .get_or_insert_with(|| spawn_worker(Arc::downgrade(&self.inner)));
@@ -162,12 +151,9 @@ impl TextureLoader for NoteImages {
             return Err(LoadError::NotSupported);
         };
         let mut inner = lock(&self.inner);
-        inner.tick += 1;
-        let tick = inner.tick;
         let Some(entry) = inner.entries.get_mut(&key) else {
             return Ok(TexturePoll::Pending { size: None });
         };
-        entry.seen = tick;
         match &mut entry.state {
             State::Queued => Ok(TexturePoll::Pending { size: None }),
             State::Size(natural) => Ok(TexturePoll::Pending {
@@ -243,6 +229,11 @@ fn decode(shared: &Mutex<Inner>, job: &Job) {
     let outcome = picture(shared, job);
     {
         let mut inner = lock(shared);
+        if !inner.entries.contains_key(&job.key) {
+            // The panel closed or changed its note while this picture was read,
+            // so its pixels must not stay in the budget of the pictures shown.
+            return;
+        }
         let state = match outcome {
             Ok((image, pixels)) => {
                 inner.pixels += pixels;
@@ -250,10 +241,9 @@ fn decode(shared: &Mutex<Inner>, job: &Job) {
             }
             Err(failure) => State::Failed(failure),
         };
-        let Some(entry) = inner.entries.get_mut(&job.key) else {
-            return;
-        };
-        entry.state = state;
+        if let Some(entry) = inner.entries.get_mut(&job.key) {
+            entry.state = state;
+        }
     }
     job.ctx.request_repaint();
 }
