@@ -1,18 +1,26 @@
-//! The card sockets of the sessions of the machines of the machine list.
+//! The card sockets of the sessions of the machines of the machine list, and the
+//! `ssh` child that carries them from those machines to here.
 //!
 //! One Unix socket here carries each session, and this module serves the card
 //! contract of [`horizon_browser_mcp::serve_stream`] on it, under the identity
-//! that this computer minted for the session. A frame only sends the set of
-//! sessions to one supervisor thread, which binds, joins and removes the sockets;
-//! dropping it ends every socket and the thread. The design is
+//! that this computer minted for the session. One `ssh` child for each machine
+//! forwards the socket of every session of that machine to it. A frame only sends
+//! the set of machines to one supervisor thread, which binds, joins and removes the
+//! sockets and starts, replaces and stops the children; dropping it ends every
+//! socket, every child and the thread. The design is
 //! `docs/architecture/machine-agent-cards.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Instant;
 
+use horizon_core::machine_watch::{MAX_REFUSAL_BYTES, WatchRefusal};
 use horizon_core::node_cards;
+use horizon_core::{RECONNECT_RESET_AFTER, SshConnection, reconnect_delay};
+use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -20,13 +28,28 @@ use tokio::sync::mpsc::UnboundedSender;
 /// opens more drops them, so one agent cannot fill this window.
 const MAX_CONNECTIONS: usize = 4;
 
-/// One set of sessions to serve, with the identity of the host that serves them.
-type Wanted = (Vec<(String, String)>, String);
+/// The program of the `ssh` child of the cards: the `ssh` of the `PATH`.
+const SSH_PROGRAM: &str = "ssh";
 
-/// The card sockets of the sessions of the machines of the list.
+/// One machine that has its cards set up: the login of its `ssh` child and the
+/// sessions that the watch reports there.
+pub(in crate::app) struct CardMachine {
+    pub(in crate::app) name: String,
+    pub(in crate::app) login: SshConnection,
+    pub(in crate::app) sessions: Vec<String>,
+}
+
+/// One set of machines to serve, with the identity of the host that serves their
+/// sockets.
+type Wanted = (Vec<CardMachine>, String);
+
+/// The card sockets of the sessions of the machines of the list, and their
+/// `ssh` children.
 pub(in crate::app) struct NodeCards {
     /// The temporary folder whose folder holds the sockets of this process.
-    base: PathBuf,
+    pub(in crate::app) base: PathBuf,
+    /// The program of the `ssh` children.
+    pub(in crate::app) program: String,
     wanted: Option<UnboundedSender<Wanted>>,
     supervisor: Option<JoinHandle<()>>,
 }
@@ -35,6 +58,7 @@ impl Default for NodeCards {
     fn default() -> Self {
         Self {
             base: std::env::temp_dir(),
+            program: SSH_PROGRAM.to_owned(),
             wanted: None,
             supervisor: None,
         }
@@ -48,16 +72,16 @@ impl Drop for NodeCards {
 }
 
 impl NodeCards {
-    /// Serves exactly the sockets of `sessions`, whose every connection is
-    /// `host_instance` beside the actor of its session. The frame sends the set
-    /// and returns; the supervisor binds, joins and removes the sockets.
-    pub(in crate::app) fn set_sessions(&mut self, sessions: &[(String, String)], host_instance: &str) {
+    /// Serves exactly `machines`, whose every connection is `host_instance` beside
+    /// the actor of its session. The frame sends the set and returns; the
+    /// supervisor binds, joins, starts and stops.
+    pub(in crate::app) fn set_sessions(&mut self, machines: Vec<CardMachine>, host_instance: &str) {
         if self.wanted.is_none() {
             let (wanted, orders) = tokio::sync::mpsc::unbounded_channel();
-            let base = self.base.clone();
+            let (base, program) = (self.base.clone(), self.program.clone());
             match std::thread::Builder::new()
                 .name("horizon-card-sockets".to_owned())
-                .spawn(move || supervise(orders, &base))
+                .spawn(move || supervise(orders, &base, &program))
             {
                 Ok(supervisor) => {
                     self.wanted = Some(wanted);
@@ -70,11 +94,12 @@ impl NodeCards {
             }
         }
         if let Some(wanted) = &self.wanted {
-            let _ = wanted.send((sessions.to_vec(), host_instance.to_owned()));
+            let _ = wanted.send((machines, host_instance.to_owned()));
         }
     }
 
-    /// Ends every socket, removes every socket file and joins the supervisor.
+    /// Ends every socket, stops every child, removes every socket file and joins
+    /// the supervisor.
     pub(in crate::app) fn stop_all(&mut self) {
         self.wanted = None;
         if let Some(supervisor) = self.supervisor.take() {
@@ -90,60 +115,178 @@ struct Bound {
     accepts: tokio::task::JoinHandle<()>,
 }
 
+/// One `ssh` child of one machine: the argv it carries, the loop that restarts it
+/// and its stop.
+struct Carried {
+    args: Vec<String>,
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
 /// The loop of the supervisor: serve the set that each message names, and end
-/// every socket when the window drops its sender.
-fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path) {
+/// every socket and child when the window drops its sender.
+fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, program: &str) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
         return;
     };
     let folder = node_cards::local_dir(base);
+    let program = program.to_owned();
     runtime.block_on(async {
         let mut bound: BTreeMap<String, Bound> = BTreeMap::new();
+        let mut carried: BTreeMap<String, Carried> = BTreeMap::new();
         let mut orders = orders;
-        while let Some((sessions, host_instance)) = orders.recv().await {
-            serve_set(&folder, &sessions, &host_instance, &mut bound).await;
+        while let Some((machines, host_instance)) = orders.recv().await {
+            apply_set(&folder, &program, &machines, &host_instance, &mut bound, &mut carried).await;
         }
         for (_, socket) in std::mem::take(&mut bound) {
             end(socket).await;
+        }
+        for (_, child) in std::mem::take(&mut carried) {
+            stop(child).await;
         }
     });
     drop(runtime);
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// The sockets of exactly `sessions`: a new session binds one, a session that
-/// left loses its socket, and every other socket stays.
-async fn serve_set(
+/// One pass over the machines: a new session binds a socket, a machine whose
+/// forwards changed ends its child before the next one starts, and a session or a
+/// machine that left loses its socket or its child.
+async fn apply_set(
     folder: &Path,
-    sessions: &[(String, String)],
+    program: &str,
+    machines: &[CardMachine],
     host_instance: &str,
     bound: &mut BTreeMap<String, Bound>,
+    carried: &mut BTreeMap<String, Carried>,
 ) {
-    let mut keep = BTreeSet::new();
-    for (machine, session) in sessions {
-        let Ok(actor) = node_cards::actor(machine, session) else {
-            continue;
-        };
-        keep.insert(actor.clone());
-        if bound.contains_key(&actor) {
-            continue;
-        }
-        match bind(folder, machine, session, &actor, host_instance) {
-            Ok(socket) => {
-                bound.insert(actor, socket);
+    let (mut actors, mut names) = (BTreeSet::new(), BTreeSet::new());
+    for machine in machines {
+        names.insert(machine.name.as_str());
+        let mut forwards = Vec::new();
+        for session in &machine.sessions {
+            let Ok(actor) = node_cards::actor(&machine.name, session) else {
+                continue;
+            };
+            let (Ok(remote), Ok(local)) = (
+                node_cards::remote_socket(&machine.name, session),
+                node_cards::local_socket(folder, &machine.name, session),
+            ) else {
+                continue;
+            };
+            forwards.push((remote, local));
+            if !bound.contains_key(&actor) {
+                match bind(folder, &machine.name, session, &actor, host_instance) {
+                    Ok(socket) => {
+                        bound.insert(actor.clone(), socket);
+                    }
+                    Err(error) => tracing::warn!(%error, "a card socket of a session did not bind"),
+                }
             }
-            Err(error) => tracing::warn!(%error, "a card socket of a session did not bind"),
+            actors.insert(actor);
         }
+        let args = node_cards::forward_args(&machine.login, &forwards);
+        if carried.get(&machine.name).is_some_and(|child| child.args == args) {
+            continue;
+        }
+        if let Some(child) = carried.remove(&machine.name) {
+            stop(child).await;
+        }
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(carry(program.to_owned(), machine.name.clone(), args.clone(), stopped));
+        carried.insert(machine.name.clone(), Carried { args, stop, task });
     }
-    let left: Vec<String> = bound.keys().filter(|actor| !keep.contains(*actor)).cloned().collect();
+    let left: Vec<String> = bound.keys().filter(|actor| !actors.contains(*actor)).cloned().collect();
     for actor in left {
         if let Some(socket) = bound.remove(&actor) {
             end(socket).await;
         }
     }
+    let left: Vec<String> = carried
+        .keys()
+        .filter(|name| !names.contains(name.as_str()))
+        .cloned()
+        .collect();
+    for name in left {
+        if let Some(child) = carried.remove(&name) {
+            stop(child).await;
+        }
+    }
     if bound.is_empty() {
         let _ = std::fs::remove_dir_all(folder);
     }
+}
+
+/// Runs the `ssh` child of one machine until its stop: an end of the child waits
+/// the delay of [`reconnect_delay`] and starts the next attempt, and the words of
+/// `ssh` are read for the refusal that they name.
+async fn carry(program: String, machine: String, args: Vec<String>, mut stop: tokio::sync::oneshot::Receiver<()>) {
+    let mut attempts = 0u32;
+    loop {
+        let started = Instant::now();
+        let mut child = match tokio::process::Command::new(&program)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                tracing::warn!(machine, %error, "no ssh child for the card sockets of a machine");
+                return;
+            }
+        };
+        let words = child.stderr.take().map(|pipe| {
+            tokio::spawn(async move {
+                let mut words = Vec::new();
+                let _ = pipe.take(MAX_REFUSAL_BYTES as u64).read_to_end(&mut words).await;
+                String::from_utf8_lossy(&words).into_owned()
+            })
+        });
+        tokio::select! {
+            _ = &mut stop => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return;
+            }
+            _ = child.wait() => {}
+        }
+        // A child that ends is a lost link of the cards of that machine, and the
+        // words of `ssh` name why. No card of it is served while it is gone.
+        let refused = match words {
+            Some(handle) => handle
+                .await
+                .map_or(WatchRefusal::Other, |words| WatchRefusal::of_ssh(&words)),
+            None => WatchRefusal::Other,
+        };
+        tracing::warn!(machine, refusal = ?refused, "the card link of a machine ended");
+        if started.elapsed() >= RECONNECT_RESET_AFTER {
+            attempts = 0;
+        }
+        attempts = attempts.saturating_add(1);
+        tokio::select! {
+            _ = &mut stop => return,
+            () = tokio::time::sleep(reconnect_delay(attempts)) => {}
+        }
+    }
+}
+
+/// Ends one socket: its loop stops, its task ends and its file goes; a child that
+/// carries it kills it and returns.
+async fn end(bound: Bound) {
+    let Bound { socket, stop, accepts } = bound;
+    let _ = stop.send(());
+    let _ = accepts.await;
+    let _ = std::fs::remove_file(&socket);
+}
+
+/// Ends one `ssh` child, so no child outlives the stop of this window.
+async fn stop(child: Carried) {
+    let Carried { stop, task, .. } = child;
+    let _ = stop.send(());
+    let _ = task.await;
 }
 
 /// One socket, bound and served, for `actor` of this host.
@@ -188,14 +331,6 @@ async fn accept(
             }
         }
     }
-}
-
-/// Ends one socket: its loop stops, its task ends and its file goes.
-async fn end(bound: Bound) {
-    let Bound { socket, stop, accepts } = bound;
-    let _ = stop.send(());
-    let _ = accepts.await;
-    let _ = std::fs::remove_file(&socket);
 }
 
 #[cfg(test)]

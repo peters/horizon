@@ -24,6 +24,7 @@ or key operation of a machine agent.
 | The identity `horizon:machine/<machine>/<session>` | `paths::actor`, `paths::actor_parts` |
 | The relay command, the MCP entry and the words of the agent | the text of the machines skill, which the setup runs on the machine; no Rust of this build writes them |
 | The card contract over one stream, one tool, seven operations | `crates/horizon-browser-mcp/src/node.rs`, `server.rs` (`for_cards`), `controller/block.rs` |
+| The `ssh` child of one machine, and its `-R` of each session | `HorizonApp::reconcile_card_sockets`, `node_cards::forward_args` |
 | One listener for each card socket | `crates/horizon-ui/src/app/node_cards.rs` |
 | The sessions to serve, from the watch snapshot | `HorizonApp::reconcile_card_sockets` |
 
@@ -54,15 +55,27 @@ number changed. The supervisor binds a new socket, joins a socket of a session
 that left, and removes its file. No frame binds a socket and no frame starts a
 thread.
 
+## The child of one machine
+
+One second `ssh` child for each machine that has the mark carries one
+`-R <socket on the machine>:<socket here>` for each session that the watch
+reports there, with `-N -T -o ExitOnForwardFailure=yes
+-o StreamLocalBindUnlink=yes` and the login options of a terminal of that
+machine. The machine opens no connection and is given no address of this
+computer.
+
+A child that ends waits the delay of `place::reconnect_delay` and starts again,
+and the words of `ssh` name the refusal in the log. The child of a machine ends
+and starts again when the set of its sessions changes, because its argv changed
+with it. The stop of the window kills the child of every machine and joins its
+loop, so no child outlives Horizon.
+
+A machine with no known session gets no socket and no child: the watch is the
+only source of the sessions of a machine, so with `machines.watch_agents` off a
+machine with the mark carries nothing.
+
 ## What is not built yet
 
-- **The `ssh` child of the cards.** One second child for each machine with the
-  mark carries one `-R <socket on the machine>:<socket here>` for each of its
-  sessions, with `-o BatchMode=yes -o ExitOnForwardFailure=yes
-  -o StreamLocalBindUnlink=yes`, the login options of a terminal of that machine,
-  and the delay rule of `place/reconnect_delay`. Until it exists, the local
-  socket of a session accepts a connection from this computer only, and no
-  machine reaches it.
 - **A card of a machine session.** The host resolves a caller to an agent panel
   of its board today. A request whose actor is a machine session must become the
   second kind of caller: its workspace, `beside: None`, its presence from the

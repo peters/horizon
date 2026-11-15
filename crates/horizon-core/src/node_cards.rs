@@ -13,10 +13,35 @@ pub use paths::{actor, actor_parts, local_dir, local_socket, remote_socket};
 #[cfg(test)]
 mod tests;
 
+use std::path::PathBuf;
+
 use horizon_browser_control::manifest::block_machines::{self, MachineRefusal};
+
+use crate::ssh::SshConnection;
 
 /// Refusal code of a socket path that no Unix listener of this build takes.
 const SOCKET_PATH_TOO_LONG: &str = "socket_path_too_long";
+
+/// The argv of the `ssh` child that carries the card sockets of one machine: no
+/// terminal and no remote command, one `-R <socket on the machine>:<socket here>`
+/// for each session, and an end at once when `sshd` refuses one of them.
+///
+/// `StreamLocalBindUnlink=yes` is the client rule that a stale socket of a lost
+/// link does not refuse the next attempt. The login options come from the
+/// connection of a machine terminal, so this child holds the same route, the
+/// same key and the same bounds as the watch of that machine.
+#[must_use]
+pub fn forward_args(connection: &SshConnection, sockets: &[(String, PathBuf)]) -> Vec<String> {
+    let mut args = vec!["-N".to_owned(), "-T".to_owned()];
+    for (remote, local) in sockets {
+        args.extend(["-R".to_owned(), format!("{remote}:{}", local.display())]);
+    }
+    for option in ["ExitOnForwardFailure=yes", "StreamLocalBindUnlink=yes"] {
+        args.extend(["-o".to_owned(), option.to_owned()]);
+    }
+    args.extend(connection.ssh_transport_args());
+    args
+}
 
 /// The two names of one session of a machine, which every path and the actor of
 /// the session are built from.

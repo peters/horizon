@@ -13,10 +13,11 @@ use std::sync::Arc;
 use egui::Context;
 use horizon_core::MachineKeys;
 use horizon_core::browser::manifest;
-use horizon_core::machine_watch::{AgentPrograms, MachineAgent, MachineWatch, MachineWatchSnapshot};
+use horizon_core::machine_watch::{AgentPrograms, MachineAgent, MachineWatch, MachineWatchSnapshot, connection};
 use horizon_core::notify::Change;
 
 use super::HorizonApp;
+use super::node_cards::CardMachine;
 
 /// The watch of the machines of one window, and what a frame holds of it.
 #[derive(Default)]
@@ -77,29 +78,48 @@ impl HorizonApp {
     }
 
     /// Gives the card sockets of the machines that have their setup the sessions
-    /// that the watch reports. The set is the whole input of that work, so a
-    /// snapshot that names the same sessions sends nothing: a frame reads the
-    /// snapshot, compares it and returns.
+    /// that the watch reports, and one `ssh` child for each of those machines. The
+    /// set is the whole input of that work, so a snapshot that names the same
+    /// sessions sends nothing: a frame reads the snapshot, compares it and returns.
     fn reconcile_card_sockets(&mut self, snapshot: &MachineWatchSnapshot) {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         snapshot.version.hash(&mut hasher);
         for record in self.machine_list.records().iter().filter(|record| record.cards) {
             record.name.hash(&mut hasher);
+            record.host.hash(&mut hasher);
+            record.user.hash(&mut hasher);
+            record.port.hash(&mut hasher);
+            self.machine_list.key(&record.name).hash(&mut hasher);
         }
         let fingerprint = hasher.finish();
         if self.machine_watch.card_fingerprint.replace(fingerprint) == Some(fingerprint) {
             return;
         }
-        let mut sessions: Vec<(String, String)> = Vec::new();
-        for machine in self.machine_list.records().iter().filter(|record| record.cards) {
-            for agent in snapshot.agents(&machine.name) {
-                sessions.push((machine.name.clone(), agent.session.clone()));
+        let keys = MachineKeys::from_home(self.session_store.home());
+        let mut machines: Vec<CardMachine> = Vec::new();
+        for record in self.machine_list.records().iter().filter(|record| record.cards) {
+            let mut sessions: Vec<String> = snapshot
+                .agents(&record.name)
+                .iter()
+                .map(|agent| agent.session.clone())
+                .collect();
+            sessions.sort();
+            sessions.dedup();
+            // A machine with no known session carries no socket: the watch is the
+            // only source of the sessions of a machine.
+            if sessions.is_empty() {
+                continue;
+            }
+            match connection(&self.machine_list, &keys, &record.name) {
+                Ok(login) => machines.push(CardMachine {
+                    name: record.name.clone(),
+                    login,
+                    sessions,
+                }),
+                Err(error) => tracing::warn!(machine = %record.name, %error, "no card link for a machine"),
             }
         }
-        sessions.sort();
-        sessions.dedup();
-        let host_instance = manifest::host_instance();
-        self.node_cards.set_sessions(&sessions, host_instance);
+        self.node_cards.set_sessions(machines, manifest::host_instance());
     }
 
     /// Queues one desktop notification for each agent of a machine that changed to a state

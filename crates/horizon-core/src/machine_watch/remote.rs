@@ -138,29 +138,40 @@ impl WatchTarget {
     /// One sentence for a machine that the list does not hold, and the refusal of
     /// the record when its route no longer passes the rule of an SSH terminal.
     pub fn of(machines: &Machines, keys: &MachineKeys, name: &str) -> Result<Self, MachineError> {
-        let record = machines.find(name).ok_or_else(|| MachineError::Unavailable {
-            reason: format!("The machine list of this computer has no machine {name}."),
-        })?;
-        // The route passes the rule of an SSH terminal, as it does for a terminal
-        // of that machine. The watch is no terminal: it takes no `-t`, because its
-        // report is a pipe and not a screen.
-        let mut terminal = record.checked_terminal()?;
-        terminal.remote_command = None;
-        let connection = match machines.key(&record.name) {
-            Some(key) => SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
-            None => SshConnection::for_agent_terminal(&terminal),
-        }
-        .as_machine_terminal();
         // The login of a machine terminal, in the form that a child with its own
         // bounds takes: `BatchMode=yes`, so a machine that asks for a password or a
         // passphrase fails an attempt instead of waiting for a person who is not
         // there. The login shell of the machine runs one word, and the text of the
         // watch arrives on the input of the child.
-        let mut args = connection.ssh_transport_args();
+        let mut args = connection(machines, keys, name)?.ssh_transport_args();
         args.push(REMOTE_PROGRAM.to_owned());
         Ok(Self {
-            machine: record.name.clone(),
+            machine: name.to_owned(),
             args,
         })
     }
+}
+
+/// The login of a machine terminal for `name`: the route of the record, the key
+/// that this computer binds to it, the bounds of a machine, and no remote command
+/// of its own. Every child that connects on its own — the watch of a machine and
+/// the `ssh` of its card sockets — starts from it.
+///
+/// # Errors
+/// One sentence for a machine that the list does not hold, and the refusal of the
+/// record when its route no longer passes the rule of an SSH terminal.
+pub fn connection(machines: &Machines, keys: &MachineKeys, name: &str) -> Result<SshConnection, MachineError> {
+    let record = machines.find(name).ok_or_else(|| MachineError::Unavailable {
+        reason: format!("The machine list of this computer has no machine {name}."),
+    })?;
+    // The route passes the rule of an SSH terminal, as it does for a terminal of
+    // that machine. A child of Horizon is no terminal: it takes no `-t`, because
+    // its report is a pipe and not a screen.
+    let mut terminal = record.checked_terminal()?;
+    terminal.remote_command = None;
+    Ok(match machines.key(&record.name) {
+        Some(key) => SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
+        None => SshConnection::for_agent_terminal(&terminal),
+    }
+    .as_machine_terminal())
 }

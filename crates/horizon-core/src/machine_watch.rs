@@ -34,7 +34,7 @@ mod supervisor;
 mod tests;
 
 pub use agents::{AgentObservation, AgentPrograms, observations};
-pub use remote::{REMOTE_PROGRAM, REMOTE_TEXT, WatchTarget};
+pub use remote::{REMOTE_PROGRAM, REMOTE_TEXT, WatchTarget, connection};
 pub use report::{MachineNote, PaneReport, Report, ReportError, parse_report};
 pub use snapshot::{MachineWatchSnapshot, MachineWatchState, Shared, WatchLink, WatchRefusal, unix_millis};
 pub use state::{AgentState, MachineAgent, MachineModel};
