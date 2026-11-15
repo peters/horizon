@@ -11,6 +11,10 @@
 //! name, a title or a program name can break a line. The format and its bounds are in
 //! [`super::report`].
 //!
+//! The text asks `tmux` with `-u`: an `ssh` command of a machine often has no UTF-8
+//! locale, and such a client of `tmux` prints `_` in the place of every character
+//! outside ASCII, which would drop the braille frame of the title of a Codex pane.
+//!
 //! `HORIZON_MACHINE_WATCH_TMUX_SOCKET` is unset in real use; a test sets it, so the
 //! same text talks to a private `tmux` server instead of the server of the person.
 
@@ -25,8 +29,9 @@ use crate::ssh::{MachineKeys, SshConnection};
 pub const REMOTE_TEXT: &str = r#"V=1
 FAST=2
 SLOW=30
-# The tmux of the watch: the private server of a test, or the person's own.
-tm() { tmux ${HORIZON_MACHINE_WATCH_TMUX_SOCKET:+-L "$HORIZON_MACHINE_WATCH_TMUX_SOCKET" -f /dev/null} "$@"; }
+# The tmux of the watch: the private server of a test, or the person's own, and -u
+# because the client of an ssh command often has no UTF-8 locale.
+tm() { tmux -u ${HORIZON_MACHINE_WATCH_TMUX_SOCKET:+-L "$HORIZON_MACHINE_WATCH_TMUX_SOCKET" -f /dev/null} "$@"; }
 # The last processes of the terminal `1`, newest first: the program of a pane whose
 # foreground process is an interpreter such as node. The pane is `p` of `pane`.
 terminal() {

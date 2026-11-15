@@ -165,10 +165,32 @@ fn a_still_machine_sends_one_report_and_a_few_heartbeat_lines() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "the tmux of this system replaces a character outside ASCII in the title of a pane by               '_', so the title of the stand-in holds no spinner frame; the screen rule answers there"
-)]
+fn a_title_keeps_its_frame_without_a_utf8_locale() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    let Some((_folder, titled)) = titled_pane() else {
+        return;
+    };
+    server.session("hz-locale-1", &titled.display().to_string());
+    wait_until("the frame of the title of the pane", || {
+        server.title("hz-locale-1").starts_with('\u{280b}')
+    });
+    // An `ssh` command of a machine often has no UTF-8 locale, and the client of
+    // `tmux` of such a shell prints `_` for every character outside ASCII. The text
+    // of the watch asks with `-u`, so the frame of a Codex title arrives anyway.
+    let report = run_text_with(server.socket(), &SH, |command| {
+        command.env_remove("LANG").env_remove("LC_ALL").env_remove("LC_CTYPE")
+    });
+    let title = field(pane_of(&report, "hz-locale-1"), 5).to_owned();
+    assert!(
+        title.starts_with('\u{280b}'),
+        "the title keeps its frame without a UTF-8 locale: {title:?}"
+    );
+    assert!(title.ends_with("working shop"), "the words of the title: {title:?}");
+}
+
+#[test]
 fn a_codex_stand_in_is_a_pane_whose_title_names_its_state() {
     let Some(server) = Server::new() else {
         return;
@@ -303,6 +325,15 @@ fn codex_stand_in() -> Option<(tempfile::TempDir, PathBuf)> {
     let folder = tempfile::tempdir().ok()?;
     let body = format!("#!/bin/sh\nexec {python} {} \"$@\"\n", script.display());
     let program = stand_in_program_in(folder.path(), "codex", &body).ok()?;
+    Some((folder, program))
+}
+
+/// A program that writes the frame of a Codex turn into the title of its pane, and
+/// keeps it there.
+fn titled_pane() -> Option<(tempfile::TempDir, PathBuf)> {
+    let folder = tempfile::tempdir().ok()?;
+    let body = "#!/bin/sh\nprintf '\\033]0;\\342\\240\\213 working shop\\007'\nsleep 120\n";
+    let program = stand_in_program_in(folder.path(), "titled", body).ok()?;
     Some((folder, program))
 }
 
