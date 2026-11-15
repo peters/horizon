@@ -52,13 +52,14 @@ wide card opens at half of the width of the canvas view, between 1100 and 2400
 points. A card fits its content: it takes the height that the content needs, up
 to the room that the canvas view shows or the ceiling of the card, whichever is
 more. The ceiling is 900 points for a card of the default width and 1200 points
-for a wide card, and a card that is taller than both scrolls. A person who
-resizes the card by hand keeps that size, since the size of the person outranks
-the content. The form of a component follows the real width of the card body:
-the wide form at 1000 points or more, the narrow form of today under it. A
-person who resizes the card changes the form and not the document. Use `wide`
-for a plan or a board that a person reads across, and omit `width` for every
-other card.
+for a wide card, and a card that is taller than both scrolls: Horizon fades its
+last rows and marks its lower edge with `More below`, so put the buttons that
+matter in the first rows. A person who resizes the card by hand keeps that size,
+since the size of the person outranks the content. The form of a component
+follows the real width of the card body: the wide form at 1000 points or more,
+the narrow form of today under it. A person who resizes the card changes the
+form and not the document. Use `wide` for a plan or a board that a person reads
+across, and omit `width` for every other card.
 
 Keep the returned `panel_id`. The answer is `created` with `panel_id` and
 `revision`: the first revision is 1.

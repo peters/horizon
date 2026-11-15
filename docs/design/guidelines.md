@@ -953,6 +953,14 @@ the rules from the modules beside it.
   `FG_DIM`, which does not reach 4.5:1 on a panel), 16 of horizontal inset. Left
   `Card drawn by the agent <name>`, or `Card drawn by an agent` when the owner
   is gone; right `updated HH:MM` in local time from the last create or update.
+- Mark of a body that holds more: while the content continues under the lower
+  edge of the body, the last 32 points of the body fade into the body colour,
+  and the words `More below` stand centred 16 above the edge, in 11 `FG_SOFT`,
+  with a small down mark 8 to their left. The mark is a control: a press on it
+  takes one page of the scroll, with no animation. Horizon draws it above the
+  footer, so a document can neither draw it, cover it nor hide it. A card whose
+  body holds all of its content draws no mark, and the mark announces
+  `More below, press to scroll` to a screen reader.
 - Status frame: radius 8, 12 above and below, 12 on both sides,
   `alpha(colour, 23)` fill, 1 px `alpha(colour, 90)` outline, strong line 12.5
   in the colour and a second line 12 `FG_SOFT` at line height 1.45. A card
