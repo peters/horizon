@@ -54,6 +54,14 @@ pub(super) fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rec
     out
 }
 
+/// The block of the page, from the tiles that this frame painted.
+pub(super) fn block_rect(shapes: &[egui::epaint::ClippedShape]) -> egui::Rect {
+    tile_rects(shapes)
+        .into_iter()
+        .reduce(egui::Rect::union)
+        .expect("the page paints its tiles")
+}
+
 /// One drawing that a frame painted: the band that it stands on, and the box of
 /// every shape of it.
 #[derive(Clone, Copy, Debug)]
@@ -516,4 +524,5 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
     true
 }
 
+mod block;
 mod drawings;

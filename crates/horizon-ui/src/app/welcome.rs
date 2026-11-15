@@ -32,7 +32,7 @@ use crate::typeface::{self, Weight};
 
 pub(in crate::app) use self::cache::WelcomeCache;
 use self::cache::WelcomeMetrics;
-use self::layout::{ROW_GAP, TILE_GAP};
+use self::layout::{ROW_GAP, TILE_GAP, page_width};
 use self::pickup as pickup_section;
 use super::HorizonApp;
 use super::session_pickup::SessionPickup;
@@ -110,8 +110,7 @@ impl HorizonApp {
             return;
         }
         let canvas = self.canvas_rect(ctx);
-        let pad_side = f32::from(PAGE_PAD_SIDE);
-        let width = (canvas.width() - 2.0 * pad_side).max(1.0);
+        let width = page_width(canvas.width());
         // The rows of the section are read before the block is measured, because
         // they are part of its height.
         let pickup = self.session_pickup.first_page();
@@ -123,10 +122,10 @@ impl HorizonApp {
         ));
         let metrics = self.welcome.metrics(&measure, width, pickup.len());
         let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
-        let inner = Rect::from_min_max(
-            Pos2::new(canvas.min.x + pad_side, top),
-            Pos2::new((canvas.max.x - pad_side).max(canvas.min.x), canvas.max.y),
-        );
+        // A canvas that is wider than the reading width of the page keeps the same
+        // air on both sides of the block.
+        let left = canvas.min.x + (canvas.width() - width) * 0.5;
+        let inner = Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, canvas.max.y));
         let shortcut_lines = self.shortcut_lines();
         let mut pressed = None;
         let mut pickup_press = None;
@@ -503,7 +502,7 @@ impl HorizonApp {
     /// test that pins the layout of the page.
     pub(in crate::app) fn welcome_block_heights_for_test(&mut self, ctx: &Context) -> (f32, f32) {
         let canvas = self.canvas_rect(ctx);
-        let width = (canvas.width() - 2.0 * f32::from(PAGE_PAD_SIDE)).max(1.0);
+        let width = page_width(canvas.width());
         let pickup = self.session_pickup.first_page();
         let measure = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
