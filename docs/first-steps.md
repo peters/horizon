@@ -394,8 +394,8 @@ the lines off in Settings, General, Canvas.
 ## Read the state of an agent panel
 
 The sidebar says **Needs you**, **Done**, **Working** or **Background** for an
-agent panel. Two agent programs tell Horizon that state themselves, on Linux and
-on macOS, with the default command or with a command of its own:
+agent panel. Three agent programs tell Horizon that state themselves, on Linux
+and on macOS, with the default command or with a command of its own:
 
 - **Claude Code** reports its turns through the plugin folder that Horizon gives
   it at the launch. **Continue work after restart** works on both systems for
@@ -404,23 +404,32 @@ on macOS, with the default command or with a command of its own:
 - **pi** reports its turns through one extension file that Horizon gives it at
   the launch. The file is Horizon's own, it goes beside the extensions of the
   person instead of replacing them, and it sends no text.
+- **Codex** reports its turns through the title of its own terminal. Codex writes
+  a spinner and the name of the folder while it works, and a line with
+  `Action Required` while an approval waits. Horizon reads those titles and needs
+  no setting, no argument and no file for them.
 
 Every other agent panel takes the state from the text on its screen, and it
-keeps that signal until its agent reports its first event. Codex is one of those
-panels: Horizon does not read the private state sequence that Codex writes to its
-terminal, because the terminal parser of Horizon drops it (see
-[the boundary of the work ledger](review/trust-boundaries/agent-work-ledger.md)).
-A panel in which you start an agent by hand in a shell keeps the screen rule too.
+keeps that signal until its agent reports its first event. A panel in which you
+start an agent by hand in a shell keeps the screen rule too.
 
-The two reports have limits that their programs set:
+The three reports have limits that their programs set:
 
 - A Claude turn can name the work that continues in the background, so
-  **Background** comes from a Claude panel. pi reports no such count.
+  **Background** comes from a Claude panel. pi and Codex report no such count.
 - pi asks you for no permission. Its **Needs you** means that a dialog of an
   extension waits for you, or that the message ended with a question in its
   text, which the screen still guesses.
-- A turn of pi that fails ends as a finished turn. Codex and the other agents
-  keep the rule of the screen.
+- A turn of pi or of Codex that fails ends as a finished turn, and so does a
+  turn that you interrupt with Escape. Horizon cannot tell those turns apart,
+  because the programs do not report the difference.
+- A Codex panel reports only when its titles take one of the two forms. A person
+  who changes the title setting of Codex, and another version of Codex with
+  another title, keep the rule of the screen. Under `tmux` the title arrives
+  only when that `tmux` sets `set-titles on` and
+  `set-titles-string '#{pane_title}'`.
+- A hostile program in any agent panel can claim a state for its own panel. See
+  [the boundary of the work ledger](review/trust-boundaries/agent-work-ledger.md).
 
 ## Open a browser panel
 

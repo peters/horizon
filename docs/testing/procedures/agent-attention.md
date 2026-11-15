@@ -27,10 +27,9 @@ clears a finished turn, and that the states come back after a restart.
   prove the macOS lane; a live macOS run needs a real agent and is not part of
   this procedure.
 - This procedure does not test: a real coding agent. The fixture runs a stand-in
-  program that sends the lifecycle events itself, and a stand-in panel whose
-  preset has a command of its own. It does not test Codex: Horizon does not read
-  the private state sequence of Codex, so a Codex panel keeps the rule of its
-  screen like any other panel.
+  program that sends the lifecycle events itself, a stand-in panel whose preset
+  has a command of its own, and a stand-in codex panel that writes the state
+  titles of the real program.
 
 ## 3. Safety
 
@@ -43,9 +42,9 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   [the fixture guide](../../../scripts/device-smoke/README.md).
 - A debug build of the candidate: `cargo build`.
 - A free TCP port for the loopback VNC server, which the fixture chooses itself.
-- Four new evidence folders below `/var/tmp`: `/var/tmp/attention-timer`,
-  `/var/tmp/attention-typed`, `/var/tmp/attention-pi` and
-  `/var/tmp/attention-command`.
+- Five new evidence folders below `/var/tmp`: `/var/tmp/attention-timer`,
+  `/var/tmp/attention-typed`, `/var/tmp/attention-pi`,
+  `/var/tmp/attention-command` and `/var/tmp/attention-codex`.
 
 ## 5. Setup
 
@@ -341,6 +340,74 @@ step 6, and **pi** is the command of step 5.
    a pi panel that runs a command of its own therefore comes from the report, as
    it does for a Claude panel.
 
+### 6.11 A11 — A codex panel reports its turn through its title (codex)
+
+1. Stop the fixture with `Ctrl-C`, then start it with the codex agent kind:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/attention-codex --native-view --attention-agent 0 \
+     --attention-agent-kind codex
+   ```
+
+   Result: the board shows one panel, **Codex attention stand-in**. The stand-in
+   prints one line. The row of the panel shows no state, because no title of the
+   launch has claimed one.
+
+2. Type `start` and press Enter.
+
+   Result: the row says **Working** within one second. The launch of this panel
+   receives no file and no argument for this state: the stand-in writes a braille
+   spinner frame and the name of its folder into the title of the panel.
+
+3. Wait three seconds without a word.
+
+   Result: the row still says **Working**. The screen of the stand-in prints no
+   working indicator, so this state comes from the title alone.
+
+4. Type `spin 1000`.
+
+   Result: the row stays **Working**. One thousand frames of the same state
+   change nothing, and the window shows no other word.
+
+5. Type `ask`.
+
+   Result: the row says **Needs you**. The stand-in writes the two frames of
+   `Action Required | Create a file | work`.
+
+6. Type `answer`.
+
+   Result: the row says **Working** again, in the same turn.
+
+7. Type `plain 0.1`.
+
+   Result: the row stays **Working**. The stand-in writes a plain title for
+   0.1 seconds in the middle of the turn, and the settle time of 0.4 seconds
+   keeps the turn open.
+
+8. Click the row of the other panel, then type `after 3 stop` in the codex panel.
+
+   Result: at the end of the three seconds the row of the codex panel says
+   **Done**. The plain title of the stand-in ended the turn, and the panel had no
+   focus at that moment. A click on the row of the codex panel clears the word.
+
+9. Type `start`, click the row of the other panel, then type `after 3 esc`.
+
+   Result: after `start` the row says **Working**. At the end of the three
+   seconds it says **Done**. An interrupted turn ends as a finished turn, because
+   the title of Codex names no interruption.
+
+10. Type `quit`.
+
+    Result: the stand-in ends, the panel shows that its program ended, and its row
+    shows no **Working** and no **Needs you**.
+
+11. Press `Ctrl-C` in the terminal of the fixture, then start the same command
+    again.
+
+    Result: the codex panel of the new run starts on the rule of its screen. No
+    state of a title survives a restart of Horizon.
+
 ## 7. Pass criteria
 
 - Each of the four states appears in the panel row and in the workspace badge as
@@ -357,6 +424,10 @@ step 6, and **pi** is the command of step 5.
 - A pi panel reaches **Working**, **Needs you** and **Done** from the report of
   its launch, keeps **Working** while its screen is still, shows **Done** after an
   aborted run, and shows no claim after its program ended.
+- A codex panel reaches **Working**, **Needs you** and **Done** from the title of
+  its own terminal, keeps **Working** while its screen is still, keeps its turn
+  through a plain title of a tenth of a second, shows **Done** after an
+  interrupted turn, and shows no claim after its program ended.
 - No step needs a login of an agent.
 
 ## 8. Cleanup

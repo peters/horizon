@@ -233,9 +233,15 @@ when it names one of those kinds.
   `board.rs` can stay focused on production orchestration.
 - `panel.rs` owns panel models and content access; explicit restart logic lives
   in `panel/lifecycle.rs`, and the sizes and scrollback limits of a new panel
-  live in `panel/metrics.rs`. `panel/spawn.rs` keeps content selection and command
-  resolution, while `panel/spawn/terminal.rs` owns terminal construction,
-  transcript restoration and disconnected/failure snapshots. Remote client views
+  live in `panel/metrics.rs`. `panel/spawn.rs` keeps the selection of the content
+  of a new panel, its saved session binding and its seed of the common fields,
+  while `panel/spawn/terminal.rs` owns terminal construction, transcript
+  restoration and disconnected/failure snapshots. The spawn answers one job per
+  module beside it: `panel/spawn/launch_arguments.rs` builds the program and the
+  arguments of a launch, `panel/spawn/environment.rs` builds the environment of
+  the process and the one line of a launch whose named secrets were late,
+  `panel/spawn/editor.rs` opens a file panel, and `panel/spawn/browser.rs` owns
+  the browser panels beside the rule that chooses their machine. Remote client views
   retain an execution reference independently of visual workspace membership;
   creation restores an inert transcript and restart refuses local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,

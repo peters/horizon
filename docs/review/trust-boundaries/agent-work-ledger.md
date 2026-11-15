@@ -1,12 +1,12 @@
 ---
-applyTo: "crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
+applyTo: "crates/horizon-core/src/panel.rs,crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
 ---
 
 # Trust boundary of the agent work ledger and of the attention state
 
-Horizon gives an agent panel a way to report its state at the launch, on Linux
-and on macOS, with the default command of the preset or with a command of its
-own. Two programs use it:
+Horizon gives an agent panel a way to report its state, on Linux and on macOS,
+with the default command of the preset or with a command of its own. Three
+programs use it, and the third needs nothing of Horizon:
 
 - A **Claude Code** launch receives the plugin folder of the work hooks with
   `--plugin-dir`. Each hook event reaches Horizon as one line of JSON on the
@@ -16,10 +16,18 @@ own. Two programs use it:
   with one call for each event. It sends no text of the person and no text of the
   model, it waits for no answer, and it does nothing at all when the five
   `HORIZON_WORK_*` variables of the launch are absent.
+- A **Codex** launch receives no argument and no file for its state. Codex writes
+  its state into the title of the terminal that runs it, and the reader of the
+  panel already holds every title that the program writes (OSC 0 and OSC 2).
+  Horizon matches the title of a panel of that kind against one table
+  (`crates/horizon-core/src/agent_work/title.rs`), and the matched state enters
+  the same turn ledger that a hook event writes.
 
-Each event writes one **work ledger** per panel in the Horizon home. The sidebar
-reads that ledger to say which agent panel needs the person, which one finished
-while the person looked elsewhere, and which one works.
+Each event or title claim writes the state of one **work ledger** per panel. A
+hook event writes the record of the panel in the Horizon home, and a title claim
+stays in memory, because a title names no turn that survives a restart. The
+sidebar reads that state to say which agent panel needs the person, which one
+finished while the person looked elsewhere, and which one works.
 
 The module of a pi launch is a file that Horizon owns and writes
 (`crates/horizon-ui/src/plugin_install/work_extension.rs`), and a launch adds it
@@ -67,6 +75,9 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   changes no state: the panel keeps the rule of its terminal screen. An agent
   that runs no hooks, and a preset command that is a wrapper and drops Horizon's
   arguments, therefore keep the signal of the screen instead of a silent ledger.
+  The titles of a program follow the same rule: they answer only from the first
+  working or waiting title of a launch, and a launch whose titles never take one
+  of the forms keeps the screen rule.
 - **A later launch is not the earlier one.** A read of a launch whose generation
   is older than the one the sidebar holds changes nothing, so a delayed read of a
   panel process that is gone cannot decide the panel that replaced it.
@@ -130,6 +141,38 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   answer differs from the one before it. A record leaves the home on a worker
   thread when its panel closes.
 
+## Untrusted: the title of a panel, when its agent kind has a rule
+
+The title is the program's own statement about its own panel. Codex writes it
+with no configuration, and Horizon reads it without `unsafe` code and without a
+second pass over the output of the terminal.
+
+- **The rule is a table of agent kinds.** Only a panel of the Codex kind has a
+  rule today. A shell panel in which a person starts `codex` by hand has no rule,
+  so it reports nothing, and another program with a state title is one more row.
+- **Two forms are a state, and every other title is plain.** A working title
+  begins with one frame of the braille block and a space or the end. A waiting
+  title begins with `[ . ] Action Required` or `[ ! ] Action Required`, then ends
+  or continues with ` | `. Every other title, an empty title and a title beyond
+  512 bytes claim nothing.
+- **No text of the title is stored.** The words of the request and the name of
+  the folder are the text of the program: no record holds them, and no view of
+  this round shows them.
+- **The turn belongs to the launch.** A title claim carries a turn number from a
+  counter of its launch. A working title opens a turn when none is open, a
+  waiting title blocks that turn, and a plain title ends only the turn that the
+  claim holds open. A program that Horizon starts again in the same panel is a
+  launch of its own: the claim of the launch before it answers nothing.
+- **A plain title must stand.** A program may write a plain title between two
+  parts of one turn, so the end of a turn waits 400 ms of plain title. A working
+  or waiting title in that window cancels the end, and the frame that asks for
+  the end is the frame that already runs.
+- **A frame of one state is no work.** A title of a working program changes about
+  ten times a second. A state that the claim already holds changes no field, no
+  record and no row, and it wakes no frame.
+- **The claim is memory.** A title names no session, so a restart of Horizon
+  starts every panel on the screen rule, and a title claim never reaches a file.
+
 ## Does not guarantee
 
 - **A hook is evidence, not proof.** A process of the person that can write the
@@ -146,12 +189,21 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   adapter counted its work.
 - **A private sequence of a program in a terminal is not read.** A program in a
   panel can write a sequence of its own into its terminal stream, such as the
-  state sequence that Codex writes. Horizon does not read it: the VT parser of
-  the terminal drops a private OSC sequence, and the terminal wrapper of this
-  workspace forbids the `unsafe` code that a read of those bytes would need. Such
-  a panel keeps the rule of its screen. A hostile program in a panel can claim a
-  state for its own panel through the report of its launch, and it cannot claim
-  one for another panel.
+  `7501` state sequence that Codex writes. Horizon does not read it: the VT
+  parser of the terminal drops a private OSC sequence, and the terminal wrapper
+  of this workspace forbids the `unsafe` code that a read of those bytes would
+  need. The title of the panel is the one sequence of a program that Horizon
+  reads, because the parser already hands it on. A hostile program in a panel can
+  claim a state for its own panel through the report of its launch or through its
+  title, and it cannot claim one for another panel.
+- **The title claim is not exact.** It names no turn identity, no tool and no
+  count of background work. A failed turn and an interrupted turn end like a
+  finished one, so **Background** never comes from a Codex panel. A denied
+  approval shows **Needs you** until the next title of that panel says otherwise.
+- **A title through a multiplexer depends on that multiplexer.** `tmux` keeps the
+  titles of its panes. A Codex panel behind such a `tmux` reports only when that
+  `tmux` sets `set-titles on` and `set-titles-string '#{pane_title}'`, and it
+  keeps the screen rule otherwise.
 - **A program that a person starts by hand reports nothing.** A shell panel in
   which a person starts Claude Code, pi or another agent receives no argument and
   no variable of a launch, so its panel keeps the rule of its screen. Horizon

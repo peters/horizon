@@ -110,16 +110,23 @@ function, update this document in the same PR.
    the Dock until the person makes the bundle (note 3 under "Install and
    update").
 
-10. Claude Code and pi report the state of their turns to the sidebar on both
-    systems. Horizon gives a Claude launch the plugin folder of the work hooks
-    with `--plugin-dir`, and a pi launch one extension file of its own home with
-    `-e` (`crates/horizon-core/src/agent_work/lifecycle.rs`,
+10. Claude Code, pi and Codex report the state of their turns to the sidebar on
+    both systems. Horizon gives a Claude launch the plugin folder of the work
+    hooks with `--plugin-dir`, and a pi launch one extension file of its own home
+    with `-e` (`crates/horizon-core/src/agent_work/lifecycle.rs`,
     `crates/horizon-ui/src/plugin_install/work_extension.rs`). The pi file is
     written at the start of Horizon, and a launch adds it to the command line
     only while it is a file, because pi does not start at a path that names no
     file. The file must be on the computer that runs pi: Horizon writes it into
     the home of its own computer, so a pi panel of another computer would need its
-    own copy there, and Horizon does not place one today. Codex and the other
+    own copy there, and Horizon does not place one today. A Codex launch needs no
+    argument, no file and no setting of Codex: Codex writes its state into the
+    title of its own terminal, which the panel already reads
+    (`crates/horizon-core/src/agent_work/title.rs`). A `tmux` between Codex and
+    Horizon keeps the titles of its panes, so such a panel reports only when that
+    `tmux` sets `set-titles on` and `set-titles-string '#{pane_title}'`; the
+    default setting of `tmux` gives no title, and its default string prefixes the
+    pane title with the session name, which Horizon reads as no state. The other
     agents keep the rule of their screen on both systems: Horizon does not read
     the private state sequence of Codex, because the terminal parser drops it.
 
