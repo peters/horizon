@@ -87,8 +87,12 @@ machine with the mark carries nothing.
   the agent, the merge with one backup, the `Remove` direction and the text that
   the agent on the machine reads are the section of the machines skill and the
   button of the machine card.
-- **The live proof.** The fixture of `scripts/device-smoke` and the procedure
-  `docs/testing/procedures/` do not cover a card of a machine yet.
+- **The live proof** is the fixture of `scripts/device-smoke`: one session of its
+  private `tmux` server runs `machine_card_agent.py`, and its stand-in `ssh`
+  carries that session's socket as `sshd` carries it on a machine. The procedure
+  is
+  [`docs/testing/procedures/machine-agent-cards.md`](../testing/procedures/machine-agent-cards.md).
+  A real `sshd` and a real agent program of a machine still need a rented machine.
 
 ## The bounds
 

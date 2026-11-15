@@ -835,12 +835,62 @@ MACHINE_WATCH_FOLDER = 'machine-watch'
 MACHINE_WATCH_PROGRAM = 'ssh'
 MACHINE_WATCH_SOCKET = 'hz-watch'
 MACHINE_WATCH_MACHINE = 'build-1'
+# The folder of the card sockets of the machine, which the sandbox sees as `/tmp`.
+HORIZON_CARDS_FOLDER = 'horizon-cards'
 # The two agents of that server: the session, the folder of its pane, which names the
 # agent, and the words that the stand-in of a codex panel receives.
 MACHINE_WATCH_AGENTS = (
     ('hz-shop', 'shop', ('start', 'ask')),
     ('hz-notes', 'notes', ('start',)),
 )
+# The session that draws a card through the card socket of that session, and the
+# program of its agent, which is the client of `machine_card_agent.py`.
+MACHINE_CARD_SESSION = 'hz-night'
+MACHINE_CARD_AGENT = 'machine_card_agent.py'
+# The program of the stand-in forward of one machine: `sshd` binds the path of each
+# `-R` on the machine and copies every connection of it to the path here. The
+# stand-in names the same pairs, so a card of that session reaches Horizon.
+MACHINE_CARD_BRIDGE = 'card-bridge.py'
+MACHINE_CARD_BRIDGE_BODY = """#!/usr/bin/env python3
+import os, socket, sys, threading
+
+def pump(source, target):
+    while True:
+        data = source.recv(65536)
+        if not data:
+            break
+        target.sendall(data)
+    try:
+        target.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+
+def serve(remote, local):
+    try:
+        os.unlink(remote)
+    except FileNotFoundError:
+        pass
+    os.makedirs(os.path.dirname(remote), mode=0o700, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(remote)
+    listener.listen(4)
+    print(f'card-bridge: {remote} -> {local}', flush=True)
+    while True:
+        held, _ = listener.accept()
+        near = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            near.connect(local)
+        except OSError:
+            held.close()
+            continue
+        for source, target in ((held, near), (near, held)):
+            threading.Thread(target=pump, args=(source, target), daemon=True).start()
+
+pairs = [argument.split(':', 1) for argument in sys.argv[1:]]
+for remote, local in pairs:
+    threading.Thread(target=serve, args=(remote, local), daemon=True).start()
+threading.Event().wait()
+"""
 
 
 def machine_watch_environment(private_tmp):
@@ -869,7 +919,8 @@ def machine_watch_server(state, private_tmp, python):
 
     The two sessions show the two states of a row: the first one asks for an
     approval in a turn, which waits for the person, and the second one works
-    through a turn of the stand-in.
+    through a turn of the stand-in. A third session runs an agent that draws a card
+    of its own through the card socket of that session.
     """
     work = Path(state) / MACHINE_WATCH_FOLDER
     work.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -894,7 +945,47 @@ def machine_watch_server(state, private_tmp, python):
                            env=environment, check=True)
             subprocess.run(['tmux', '-L', MACHINE_WATCH_SOCKET, 'send-keys', '-t', session, 'Enter'],
                            env=environment, check=True)
+    machine_watch_card_agent(state, work, python, private_tmp)
     return program
+
+
+def machine_watch_card_agent(state, work, python, private_tmp):
+    """One more session of the private server: an agent that draws a card of its own.
+
+    The session runs `machine_card_agent.py`, which speaks MCP to the socket of this
+    session. `sshd` binds that path on a machine; here the stand-in `ssh` of
+    [`machine_watch_standin`] binds it, so the card of this session reaches the
+    workspace of the machine while no terminal of the session is open.
+
+    The session reports `idle` in the pane option `@horizon_state`, as the hook of an
+    agent of a machine does, because the watch keeps a row for a pane whose program is
+    no agent program only while that option holds a word.
+    """
+    environment = machine_watch_environment(private_tmp)
+    agent = program_in_state(fixture_program(MACHINE_CARD_AGENT), work / 'bin' / MACHINE_CARD_AGENT, state)
+    socket_path = machine_card_socket(private_tmp, MACHINE_CARD_SESSION)
+    pane = work / 'night'
+    pane.mkdir(mode=0o700, exist_ok=True)
+    tmux = ['tmux', '-L', MACHINE_WATCH_SOCKET, '-f', '/dev/null']
+    subprocess.run([*tmux, 'new-session', '-d', '-s', MACHINE_CARD_SESSION, '-c', str(pane),
+                    '-x', '100', '-y', '20', python, '-u', str(agent), '--socket', str(socket_path)],
+                   env=environment, check=True)
+    reported = subprocess.run([*tmux, 'list-panes', '-t', MACHINE_CARD_SESSION, '-F', '#{pane_id}'],
+                              env=environment, check=True, capture_output=True, text=True)
+    pane_id = reported.stdout.strip().splitlines()[0]
+    subprocess.run([*tmux, 'set-option', '-p', '-t', pane_id, '@horizon_state', 'idle'],
+                   env=environment, check=True)
+    return socket_path
+
+
+def machine_card_socket(private_tmp, session):
+    """The path of the card socket of `session` of the machine of this fixture.
+
+    Horizon forwards `/tmp/horizon-cards/<machine>/<session>.sock` of the machine,
+    and the namespace of the fixture binds `/tmp` to its private folder, so the agent
+    of the session reaches the same path from outside that namespace.
+    """
+    return Path(private_tmp).resolve() / HORIZON_CARDS_FOLDER / MACHINE_WATCH_MACHINE / f'{session}.sock'
 
 
 def machine_watch_standin(state):
@@ -918,10 +1009,24 @@ def machine_watch_standin(state):
                            '#!/bin/sh\n'
                            f'exec {shlex.quote(tmux)} -L {shlex.quote(MACHINE_WATCH_SOCKET)} '
                            '-f /dev/null "$@"\n', state)
+    bridge = body_in_state(work / 'bin' / MACHINE_CARD_BRIDGE, MACHINE_CARD_BRIDGE_BODY, state)
+    bridge.chmod(0o700)
     body = ('#!/bin/sh\n'
             f'PATH={shlex.quote(str(remote.parent))}:$PATH\n'
             'export PATH\n'
-            'for a in "$@"; do last=$a; done\n'
+            'forward=\n'
+            'last=\n'
+            'while [ $# -gt 0 ]; do\n'
+            '  case $1 in\n'
+            '    -R) forward="$forward $2"; shift 2; continue ;;\n'
+            '    -o|-p|-i|-J) shift 2; continue ;;\n'
+            '    -*) shift; continue ;;\n'
+            '  esac\n'
+            '  last=$1; shift\n'
+            'done\n'
+            '# The child of the cards of a machine forwards a socket of each session: the\n'
+            '# stand-in of that forward binds the path of the machine and copies both ways.\n'
+            f'[ -z "$forward" ] || exec {shlex.quote(sys.executable)} -u {shlex.quote(str(bridge))} $forward\n'
             'case $last in\n'
             '  *[!A-Za-z0-9_./-]*) exec sh -c "$last" ;;\n'
             '  *) exec "$last" ;;\n'

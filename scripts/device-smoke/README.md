@@ -302,6 +302,29 @@ types `start` into `hz-notes`, which works through a turn. The section shows
 of that session, a chevron folds the agents of the machine, and the setting
 **Show the agents of each machine** turns the watch off.
 
+### The card of an agent on that machine
+
+The same run shows a card of an agent that runs on the machine, with no terminal
+of its session open.
+
+The private `tmux` server holds a third session, `hz-night`, which runs
+`machine_card_agent.py`. That program speaks MCP to the card socket of its
+session, `/tmp/horizon-cards/build-1/hz-night.sock` of the machine, and it reports
+`idle` in the pane option `@horizon_state`, as the hook of an agent of a machine
+does. Horizon serves a card socket for each session that its watch reports, and it
+carries that socket with one `ssh` child for the machine.
+
+The stand-in `ssh` of `--machine-watch` reads `-R <socket of the machine>:<socket
+here>` out of the arguments of that child, binds the first path, and copies every
+connection of it to the second one, which is the work of `sshd` on a machine. The
+program of the bridge is `card-bridge.py` of the state folder. The card of
+`hz-night` therefore stands in the workspace of `build-1`, a press of the person
+reaches the agent through `next_click`, and the agent updates the card with the
+label of that press.
+
+The procedure is
+[the machine agent cards procedure](../../docs/testing/procedures/machine-agent-cards.md).
+
 ### Speech input with the real recorder of the session
 
 The fixture writes the section `speech` of its private settings, so a procedure

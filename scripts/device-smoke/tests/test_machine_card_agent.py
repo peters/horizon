@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Self test for machine_card_agent.py, and for the stand-in forward of that card.
+
+The repository runs it with the other device smoke tests:
+
+    python3 -B -m unittest discover -s scripts/device-smoke/tests -v
+
+`serve.py --machine-watch` names a stand-in `ssh`, and the child that carries the
+cards of a machine forwards one Unix socket of each session. This test proves:
+
+  * the stand-in `ssh` reads `-R <socket of the machine>:<socket here>` out of its
+    arguments, binds the first path and copies every connection of it to the second
+    one, in both directions;
+  * `machine_card_agent.py` speaks MCP over such a socket: it sends `initialize`,
+    then `block_panel create` with a card of two buttons, and `--once` ends it;
+  * a click that the server answers leads to one `block_panel update` whose document
+    names the label that the person pressed;
+  * a socket that never answers ends the program with one line and a status.
+
+Standard library only. Nothing is written outside the folder of a test.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+FIXTURE = HERE.parent
+AGENT = FIXTURE / 'machine_card_agent.py'
+sys.path.insert(0, str(FIXTURE))
+import serve  # noqa: E402
+
+# How long a test waits for a socket or for a line of the agent, in seconds.
+DEADLINE = 20.0
+
+
+def wait_for(what, wanted, deadline=DEADLINE):
+    """Waits until `wanted` holds, and names what the test waited for."""
+    end = time.monotonic() + deadline
+    while time.monotonic() < end:
+        held = wanted()
+        if held:
+            return held
+        time.sleep(0.02)
+    raise AssertionError(f'the test waited for {what}')
+
+
+class Bridge:
+    """The stand-in forward of one run: a program from `serve.py` and its child."""
+
+    def __init__(self, folder: Path, pairs: list[tuple[str, str]]):
+        self.program = folder / serve.MACHINE_CARD_BRIDGE
+        self.program.write_text(serve.MACHINE_CARD_BRIDGE_BODY)
+        self.program.chmod(0o700)
+        self.child = subprocess.Popen([sys.executable, '-u', str(self.program), *(
+            f'{remote}:{local}' for remote, local in pairs)], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        self.pairs = pairs
+
+    def stop(self) -> None:
+        self.child.terminate()
+        self.child.wait(timeout=10)
+
+    def binds(self) -> bool:
+        return all(Path(remote).exists() for remote, _ in self.pairs)
+
+
+class OneServer(threading.Thread):
+    """One MCP server on a Unix socket, which answers from `answers`."""
+
+    def __init__(self, path: Path, answers: list[dict]):
+        super().__init__(daemon=True)
+        self.path = path
+        self.answers = answers
+        self.calls: list[dict] = []
+        self.ready = threading.Event()
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        path = Path(self.path)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(path))
+        listener.listen(1)
+        self.ready.set()
+        held, _ = listener.accept()
+        stream = held.makefile('rwb')
+        try:
+            for line in stream:
+                message = json.loads(line)
+                if 'id' not in message:
+                    continue
+                self.calls.append(message)
+                answer = {'jsonrpc': '2.0', 'id': message['id'], 'result': self.answer(message)}
+                stream.write(json.dumps(answer).encode('utf-8') + b'\n')
+                stream.flush()
+                # The server of a test holds one answer for each call of the agent;
+                # the socket closes when the answers end, which ends the agent.
+                if message['method'] == 'tools/call' and len(self.tool_calls()) >= len(self.answers):
+                    break
+        finally:
+            stream.close()
+            held.close()
+            listener.close()
+            self.done.set()
+
+    def answer(self, message: dict) -> dict:
+        if message['method'] == 'initialize':
+            return {'protocolVersion': '2025-06-18', 'capabilities': {}, 'serverInfo': {'name': 'test', 'version': '1'}}
+        return {'structuredContent': self.answers[self.answered]}
+
+    @property
+    def answered(self) -> int:
+        """How many `tools/call` calls this server answered before this one."""
+        return len(self.tool_calls()) - 1
+
+    def tool_calls(self) -> list[dict]:
+        """The `block_panel` operations that the agent asked for, in order."""
+        return [message['params']['arguments'] for message in self.calls
+                if message['method'] == 'tools/call']
+
+
+class MachineCardAgentTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory(prefix='hz-machine-card-')
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+
+    def start_agent(self, socket_path: Path, *extra: str) -> subprocess.Popen:
+        child = subprocess.Popen(
+            [sys.executable, '-u', str(AGENT), '--socket', str(socket_path), *extra],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        return child
+
+    def test_the_forward_of_a_machine_copies_a_stream_both_ways(self):
+        here = self.root / 'here'
+        there = self.root / 'there'
+        here.parent.mkdir(parents=True, exist_ok=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(here))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        pair = (str(there / 'build-1' / 'hz-night.sock'), str(here))
+        bridge = Bridge(self.root, [pair])
+        self.addCleanup(bridge.stop)
+        wait_for('the socket of the machine', bridge.binds)
+
+        near = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        near.connect(pair[0])
+        self.addCleanup(near.close)
+        far, _ = listener.accept()
+        self.addCleanup(far.close)
+
+        near.sendall(b'hello\n')
+        self.assertEqual(wait_for('the bytes here', lambda: far.recv(64)), b'hello\n')
+        far.sendall(b'world\n')
+        self.assertEqual(wait_for('the bytes there', lambda: near.recv(64)), b'world\n')
+
+    def test_the_agent_draws_one_card_and_ends_after_it(self):
+        socket_path = self.root / 'cards' / 'build-1' / 'hz-night.sock'
+        server = OneServer(socket_path, [{'status': 'created', 'panel_id': 'card-1', 'revision': 1}])
+        server.start()
+        wait_for('the socket of the server', lambda: server.ready.is_set())
+        agent = self.start_agent(socket_path, '--once')
+        output, _ = agent.communicate(timeout=30)
+        self.assertEqual(agent.returncode, 0, output)
+        self.assertIn('card-1', output)
+
+        calls = server.tool_calls()
+        self.assertEqual([call['operation'] for call in calls], ['create'], calls)
+        document = calls[0]['document']
+        kinds = [component['type'] for component in document['components']]
+        self.assertEqual(kinds, ['heading', 'text', 'buttons'], kinds)
+        labels = [item['label'] for item in document['components'][-1]['items']]
+        self.assertEqual(labels, ['Continue', 'Stop'], labels)
+
+    def test_a_click_becomes_an_update_with_the_label_of_the_press(self):
+        socket_path = self.root / 'cards' / 'build-1' / 'hz-night.sock'
+        server = OneServer(socket_path, [
+            {'status': 'created', 'panel_id': 'card-1', 'revision': 1},
+            {'status': 'clicked', 'component_id': 'stop', 'panel_id': 'card-1', 'revision': 1},
+            {'status': 'updated', 'panel_id': 'card-1', 'revision': 2},
+        ])
+        server.start()
+        wait_for('the socket of the server', lambda: server.ready.is_set())
+        child = self.start_agent(socket_path)
+
+        wait_for('the update of the click', lambda: len(server.tool_calls()) >= 3)
+        calls = server.tool_calls()
+        self.assertEqual([call['operation'] for call in calls[:3]], ['create', 'next_click', 'update'], calls)
+        self.assertEqual(calls[1]['panel_id'], 'card-1')
+        texts = [component.get('text', '') for component in calls[2]['document']['components']]
+        self.assertTrue(any('Stop' in text for text in texts), texts)
+        wait_for('the end of the agent', lambda: server.done.is_set() or child.poll() is not None)
+
+    def test_a_socket_that_never_answers_says_so_and_ends(self):
+        missing = self.root / 'cards' / 'build-1' / 'nothing.sock'
+        agent = self.start_agent(missing, '--once', '--connect-timeout', '1')
+        output, _ = agent.communicate(timeout=60)
+        self.assertEqual(agent.returncode, 1, output)
+        self.assertIn('machine-card-agent:', output)
+
+
+class StandInSshTest(unittest.TestCase):
+    """The stand-in `ssh` of the fixture reads the forwards of the child of a machine."""
+
+    def test_the_stand_in_starts_the_bridge_for_a_forward_and_no_remote_command(self):
+        with tempfile.TemporaryDirectory(prefix='hz-standin-') as folder:
+            state = Path(folder)
+            bin_folder = serve.machine_watch_standin(str(state))
+            program = Path(bin_folder) / serve.MACHINE_WATCH_PROGRAM
+            body = program.read_text()
+            self.assertIn('-R)', body)
+            self.assertIn(serve.MACHINE_CARD_BRIDGE, body)
+            self.assertTrue((state / serve.MACHINE_WATCH_FOLDER / 'bin' / serve.MACHINE_CARD_BRIDGE).exists())
+
+    def test_the_stand_in_runs_a_remote_command_of_a_panel(self):
+        with tempfile.TemporaryDirectory(prefix='hz-standin-') as folder:
+            state = Path(folder)
+            bin_folder = serve.machine_watch_standin(str(state))
+            program = Path(bin_folder) / serve.MACHINE_WATCH_PROGRAM
+            answer = subprocess.run([str(program), 'sh', '-c', 'printf yes'],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(answer.stdout, 'yes', answer.stderr)
+
+    def test_a_machine_name_outside_the_rule_is_no_path(self):
+        # The agent is the only program that names the socket of its session, and it
+        # takes the path of the fixture and never a name of a report.
+        with tempfile.TemporaryDirectory(prefix='hz-standin-') as folder:
+            path = serve.machine_card_socket(folder, 'hz-night')
+            self.assertTrue(str(path).endswith('/horizon-cards/build-1/hz-night.sock'), path)
+
+
+if __name__ == '__main__':
+    unittest.main()
