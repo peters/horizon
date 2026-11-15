@@ -211,10 +211,9 @@ fn a_codex_stand_in_is_a_pane_whose_title_names_its_state() {
     });
     let report = run_text(&server, &SH);
     let pane = pane_of(&report, "hz-codex-1");
-    assert_eq!(
-        field(pane, 3),
-        "python3",
-        "the stand-in runs under an interpreter: {pane:?}"
+    assert!(
+        is_interpreter(field(pane, 3)),
+        "the stand-in runs under an interpreter, in any case: {pane:?}"
     );
     let title = field(pane, 5);
     assert!(
@@ -322,6 +321,14 @@ fn seventy_panes_report_the_bound_and_no_more() {
         MAX_PANES,
         "the text reports the panes of the bound and not the seventieth"
     );
+}
+
+/// Whether the program of a pane is an interpreter, in any case: the `tmux` of macOS
+/// reports the python of a pane as `Python`, and the text of the watch reads the
+/// command lines of a pane for every interpreter of its list, with no regard for the
+/// case that a system gives the name.
+fn is_interpreter(program: &str) -> bool {
+    matches!(program.to_ascii_lowercase().as_str(), "python" | "python3")
 }
 
 /// The program of the Codex stand-in of this repository, under the name `codex`,
