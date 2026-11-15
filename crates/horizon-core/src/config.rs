@@ -1323,6 +1323,23 @@ mod tests {
     }
 
     #[test]
+    fn the_lines_between_an_agent_and_its_panels_are_on_and_keep_their_default() {
+        assert!(
+            Config::default().canvas.agent_lines,
+            "the lines are drawn until a person turns them off"
+        );
+        let store_without_the_value = Config::from_json(r#"{"canvas": {"fit_floor_zoom": 0.6}}"#)
+            .expect("a store of an older build reads the default");
+        assert!(store_without_the_value.canvas.agent_lines);
+
+        let off = Config::from_json(r#"{"canvas": {"agent_lines": false}}"#).expect("config should deserialize");
+        assert!(!off.canvas.agent_lines);
+        let document = off.to_json().expect("config should serialize");
+        assert!(document.contains(r#""agent_lines": false"#), "{document}");
+        assert!(!Config::from_json(&document).expect("parse").canvas.agent_lines);
+    }
+
+    #[test]
     fn duplicate_shortcuts_are_rejected() {
         let error =
             Config::from_json(r#"{"shortcuts": {"command_palette": "Ctrl+Shift+K", "new_terminal": "Ctrl+Shift+K"}}"#)

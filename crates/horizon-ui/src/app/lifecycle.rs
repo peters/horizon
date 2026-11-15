@@ -329,7 +329,10 @@ impl HorizonApp {
         self.render_canvas(ui, settings_panel_rect);
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, workspace_bounds, &overlay_zones);
-        self.render_browser_connector_lines(ui.ctx(), self.canvas_rect(ui.ctx()), None);
+        // The lines of the agents run under the panels and over the canvas
+        // decoration, so this runs after the workspace frames and before the
+        // panels of the root window.
+        self.render_agent_lines(ui.ctx(), self.canvas_rect(ui.ctx()));
         self.render_welcome_page(ui);
         if !self.host_dialog_open() {
             self.handle_canvas_double_click(ui);

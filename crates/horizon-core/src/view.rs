@@ -46,7 +46,8 @@ pub fn reveal_zoom(current: f32, fit: f32, floor: f32) -> f32 {
     wanted.clamp(floor, DEFAULT_CANVAS_ZOOM)
 }
 
-/// The canvas of the window: what a Fit of a workspace may do.
+/// The canvas of the window: what a Fit of a workspace may do, and whether the
+/// lines between an agent and the panels that it controls are drawn.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CanvasConfig {
@@ -54,12 +55,16 @@ pub struct CanvasConfig {
     /// for one point of the canvas. A workspace that does not fit at this zoom
     /// is shown from its top left instead of being made smaller.
     pub fit_floor_zoom: f32,
+    /// Whether a line runs from an agent panel to each panel that the agent
+    /// controls. A stored settings file without this value draws the lines.
+    pub agent_lines: bool,
 }
 
 impl Default for CanvasConfig {
     fn default() -> Self {
         Self {
             fit_floor_zoom: DEFAULT_FIT_FLOOR_ZOOM,
+            agent_lines: true,
         }
     }
 }

@@ -1,4 +1,5 @@
 mod actions;
+mod agent_lines;
 mod answer_retries;
 mod attention;
 mod block_clicks;
@@ -12,7 +13,6 @@ mod board_notice;
 pub(crate) mod bootstrap;
 mod browser_cleanup;
 mod browser_close_requests;
-mod browser_connectors;
 mod browser_create_dispatch;
 mod browser_create_failure;
 mod browser_create_lifecycle;
@@ -368,6 +368,9 @@ pub struct HorizonApp {
     /// because a unit test starts no `ssh`.
     link_child: Option<String>,
     canvas_grid_cache: CanvasGridCache,
+    /// The lines between an agent panel and the panels that it controls, with
+    /// the shapes of the frame that last changed.
+    agent_lines: agent_lines::AgentLines,
     frame_stats: FrameStats,
     /// The callback that asks this window for the frame that shows the echo of a
     /// key press in a terminal panel.

@@ -58,6 +58,19 @@ fn render_canvas_section(ui: &mut Ui, config: &mut Config) -> bool {
             "0.85 keeps the smallest text of a card at about 9 screen points and the text of a \
              terminal at about 11.",
         );
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        changed |= ui
+            .checkbox(&mut config.canvas.agent_lines, "Lines between an agent and its panels")
+            .changed();
+        super::dim_label(
+            ui,
+            "One thin curve from an agent panel to each card, page, terminal or panel that it \
+             controls. The lines of the agent in focus are clear, the lines of every other agent \
+             are faint, and at a zoom below 0.6 all of them are alike.",
+        );
     });
     changed
 }
