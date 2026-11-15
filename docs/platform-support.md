@@ -161,6 +161,8 @@ POSIX shell on the machine.
 2. The program of a pane answers first. When an interpreter such as `node` or
    `python3` runs there, the watch reads the command lines of the processes of
    that pane's terminal with `ps -t`, which GNU `ps` and the `ps` of macOS have.
+   The name of that program is compared without its case, because the `tmux` of
+   macOS names the python of a panel `Python`.
    A small appliance with a `BusyBox` `ps` has no `-t`, so such a machine names
    the interpreter alone and an agent behind one keeps no row. The text of the
    watch still runs there.

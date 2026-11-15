@@ -75,7 +75,9 @@ The text reads the panes of every `tmux` session of that user:
 reports its own state there. A pane that runs an interpreter such as `node` or
 `python3` names the interpreter and not the program, so the text reads the
 command lines of the processes of that terminal and reports the newest three.
-The model finds the agent kind in the first words of those lines.
+The model finds the agent kind in the first words of those lines. The name of the
+program is compared without its case: the `tmux` of macOS names the python of a
+panel `Python`, and the list of interpreters holds the lower-case names.
 
 Every field of a report is one line of words. The text replaces each run of
 spaces, tabs and newlines of a field by one space, so a value that a program or a

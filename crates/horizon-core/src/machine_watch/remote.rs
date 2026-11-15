@@ -58,8 +58,11 @@ pane() {
   set -- $s; s=$*; set -- $c; c=$*; set -- $d; d=$*; set -- $t; t=$*
   set +f
   printf 'P\t%s\t%s\t%s\t%s\t%s\n' "$p" "$s" "$c" "$d" "$t"
+  # The name of a program has no fixed case: the tmux of macOS names the python of a
+  # panel `Python`, and the list below holds the lower-case names.
+  lc=$(printf '%s' "$c" | tr 'A-Z' 'a-z')
   case " sh bash dash zsh ksh fish node nodejs deno bun python python3 ruby perl php java env " in
-    *" $c "*) terminal "$(tm display-message -p -t "$p" '#{pane_tty}' 2>/dev/null)" ;;
+    *" $lc "*) terminal "$(tm display-message -p -t "$p" '#{pane_tty}' 2>/dev/null)" ;;
   esac
   tm capture-pane -p -t "$p" 2>/dev/null | {
     r1=; r2=; r3=; r4=; r5=; r6=

@@ -74,9 +74,13 @@ impl Server {
     }
 
     /// One command of the server, with the output of its client.
+    ///
+    /// The client asks with `-u`, as the text of the watch does: without it a client
+    /// of a shell that has no UTF-8 locale, which a test of this module often is,
+    /// prints `_` in the place of every character outside ASCII.
     pub(crate) fn tmux(&self, args: &[&str]) -> std::process::Output {
         let mut command = Command::new("tmux");
-        command.args(["-L", &self.socket, "-f", "/dev/null"]).args(args);
+        command.args(["-u", "-L", &self.socket, "-f", "/dev/null"]).args(args);
         command
             .stdin(Stdio::null())
             .output()

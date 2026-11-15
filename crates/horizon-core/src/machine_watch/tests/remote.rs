@@ -263,6 +263,16 @@ fn a_working_line_that_a_pane_prints_is_one_of_its_last_rows() {
 }
 
 #[test]
+fn a_pane_command_is_read_without_its_case() {
+    // The tmux of macOS names the python of a panel `Python`, and the list of
+    // interpreters of the text holds the lower-case names.
+    assert!(
+        REMOTE_TEXT.contains("lc=$(printf '%s' \"$c\" | tr 'A-Z' 'a-z')"),
+        "the text compares the program of a pane without its case"
+    );
+}
+
+#[test]
 fn a_pane_whose_program_is_no_interpreter_reports_no_command_line() {
     let Some(server) = Server::new() else {
         return;
