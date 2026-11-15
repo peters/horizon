@@ -14,6 +14,7 @@ mod config_migration;
 pub mod config_store;
 mod device;
 pub mod dir_search;
+pub mod folder_requests;
 mod editor;
 mod error;
 mod folder_id;
