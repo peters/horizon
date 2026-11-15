@@ -216,6 +216,51 @@ Horizon before they write anything.
    Result: The process uses no central processor time for the page. The
    `fps` counter of the titlebar says that no frame was drawn.
 
+11. Resize the window through these sizes, in this order. Wait for one second at
+    each size. At each size, count the columns of tiles, look at the picture of a
+    tile, look for a scroll bar at the right edge of the page, and measure the
+    width of the block: the distance from the left edge of the first tile of a
+    row to the right edge of the last tile of that row.
+
+    | Window size | Tiles | Picture of a tile | Scroll bar | Block width |
+    |---|---|---|---|---|
+    | 1600 x 1000 | Four in one row | 92 points high | No | 1270 points |
+    | 5120 x 1348 | Four in one row | 92 points high | No | 1480 points |
+    | 2560 x 1300 | Four in one row | 92 points high | No | 1480 points |
+    | 1280 x 800 | Four in one row | 92 points high | No | 950 points |
+    | 1000 x 700 | Two in two rows | 30 points high | No | 700 points |
+    | 800 x 600 | One in one column | None | Yes | 512 points |
+
+    Result: The page answers each size as the table says. The size of a row of
+    the section **Pick up where you left off** follows the block. After each
+    resize, every picture of a tile stands inside the band of its own tile: no
+    picture stands on the heading, on another tile or under the sidebar. On a
+    canvas that is wider than 1 480 points, the distance from the left edge of
+    the canvas to the block is the same as the distance from the block to the
+    right edge.
+
+12. At the window size 800 x 600, push Page Down two times, then Page Up two
+    times. Move the wheel over the page.
+
+    Result: The page moves down and up for the keys, and the wheel moves it too.
+    At the largest scroll, the last row of the page, which starts with
+    `You know Horizon already?`, is whole inside the canvas. At the top of the
+    page, the heading is whole and no part of it stands under the titlebar.
+
+13. At the window size 800 x 600, push Page Up until the page stops. Then push
+    Tab four times.
+
+    Result: Each press moves the focus ring to the next tile. The fourth tile
+    comes whole into the canvas, and the page moves to it.
+
+14. Make the window 1000 x 700. Look at a row of the section **Pick up where you
+    left off** whose folder path is longer than the row.
+
+    Result: The detail line of the row starts with the program of the session and
+    ends with its time and its state. The middle of the path is cut with an
+    ellipsis, and the start and the end of the path stay. The press of the row
+    keeps its width.
+
 ### 6.2 F02 — The three entry points of Set up
 
 1. Examine the machine section of the sidebar before the first machine.

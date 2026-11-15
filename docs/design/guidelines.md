@@ -988,6 +988,34 @@ the rules from the modules beside it.
   the left edges level, or beside its row with the top edges level. It covers no
   panel of its workspace in any of these places.
 
+### First start page
+
+The page that shows while the board is empty answers the size of the window.
+
+- The block of the page takes the canvas width less 60 points on each side, and
+  1 480 points at most. It stands in the middle of a wider canvas, so a large
+  screen does not stretch a sentence or a row over 4 000 points. The pads of the
+  page are 60 on both sides, 44 above the heading and 28 under the row of
+  shortcuts.
+- The line under the heading wraps at 720 points, and each of its rows is
+  centred in the block.
+- The block is centred in the height of the canvas when the canvas holds it with
+  the top pad above and the same pad under it. A block that needs more room keeps
+  the top pad, so the page never stands under the titlebar.
+- The drawing band of a tile is 92 points high and holds a drawing that is drawn
+  for 210 points of width. A band that is narrower or shorter draws the drawing
+  smaller, and no shape of a drawing leaves its band.
+- A canvas that does not hold the whole block first gives the band the compact
+  height of 30 points, then no band, so the four choices stay reachable without
+  a scroll for as long as the numbers allow. A canvas that holds none of the
+  three forms gives no band and scrolls: the wheel, the trackpad, Page Down and
+  Page Up move the page, and a tile that Tab reaches below the canvas comes into
+  view.
+- A row of the section **Pick up where you left off** keeps the program of the
+  session at the start of its detail and the time and the state at its end. A
+  folder that does not fit is cut in its middle with an ellipsis. The press of a
+  row keeps 74 points of width, and the detail keeps a gap of 8 points to it.
+
 ### Panels and workspaces
 
 - Terminal panel: body `PANEL_BG` blended with its accent by 0.06 when
