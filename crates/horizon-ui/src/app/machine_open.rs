@@ -210,9 +210,15 @@ impl HorizonApp {
                 );
                 options.machine_session = session.as_ref().map(|agent| agent.session.clone());
                 // The person pressed the row, so the reason of a terminal that did not
-                // start is theirs to read, not the log's only.
-                if let Err(error) = app.create_machine_panel(workspace, options, None) {
-                    app.set_sidebar_notice(format!("{title}: {error}"));
+                // start is theirs to read, not the log's only, and the terminal comes into
+                // view as the panel of a second press does.
+                match app.create_machine_panel(workspace, options, None) {
+                    Ok(panel) => {
+                        if let Some(panel) = app.board.panel_id_by_local_id(&panel) {
+                            app.reveal_selected_panel(&opening, panel);
+                        }
+                    }
+                    Err(error) => app.set_sidebar_notice(format!("{title}: {error}")),
                 }
                 if let Some(agent) = &session {
                     app.mark_machine_agent_seen(agent);

@@ -10,6 +10,7 @@ use horizon_core::machine_watch::{AgentState, MachineWatch};
 use crate::app::HorizonApp;
 use crate::app::block_machines::settle_machine_load;
 use crate::app::test_support::{raw_input, run_app_frame, test_app};
+use horizon_core::StartupDecision;
 use crate::test_egui::DiscardTextures;
 
 use super::support::{Server, Ssh, codex_command, record, wait_for, with_machines};
@@ -71,6 +72,9 @@ fn press(ctx: &Context, app: &mut HorizonApp, label: &str) {
 
 /// One app with a stand-in `ssh`, the machine `build-1` and one Codex stand-in in a
 /// `tmux` pane of the folder `shop` of the session `session`.
+///
+/// `workspaces` seeds that many workspace rows, so the workspace of the machine is made
+/// beside them on the canvas.
 fn app_with_one_agent(session: &str) -> Option<(tempfile::TempDir, Server, Ssh, Context, HorizonApp)> {
     let server = Server::new()?;
     let ssh = Ssh::new(&server)?;
@@ -145,6 +149,81 @@ fn a_press_on_the_row_of_an_agent_opens_its_session_in_the_workspace_of_the_mach
         Some(panel_id),
         "the second press goes to the terminal of the session"
     );
+}
+
+#[test]
+fn a_press_on_the_row_of_an_agent_brings_its_new_terminal_into_view() {
+    let Some((_folder, _server, _ssh, ctx, mut app)) = app_with_one_agent_beside_three_workspaces("hz-shop-1") else {
+        return;
+    };
+    wait_for(&ctx, &mut app, "the agent of the machine", |app| {
+        agent_state(app, "hz-shop-1").is_some()
+    });
+    press(&ctx, &mut app, "Codex: shop");
+    wait_for(&ctx, &mut app, "the terminal of the agent", |app| {
+        !app.board.panels.is_empty()
+    });
+    let panel = app.board.panels.last().expect("the terminal of the agent");
+    let panel_id = panel.id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !app.panel_screen_rects.contains_key(&panel_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the view of the first press holds the terminal: the canvas is {:?} and the terminal is at {:?}",
+            app.canvas_rect(&ctx),
+            app.board
+                .panel(panel_id)
+                .map(|panel| (panel.layout.position, panel.layout.size))
+        );
+        run_app_frame(&ctx, &mut app);
+    }
+    let painted = app.panel_screen_rects[&panel_id];
+    let canvas = app.canvas_rect(&ctx);
+    assert!(
+        canvas.contains_rect(painted),
+        "the first press brings the terminal into view: the canvas holds {canvas:?} and the terminal is {painted:?}"
+    );
+    assert_eq!(
+        app.board.focused,
+        Some(panel_id),
+        "the first press gives the terminal the keyboard, as the second one does"
+    );
+}
+
+/// The app of one agent, beside three workspace rows of the board, so the workspace of the
+/// machine is made beyond the view.
+fn app_with_one_agent_beside_three_workspaces(
+    session: &str,
+) -> Option<(tempfile::TempDir, Server, Ssh, Context, HorizonApp)> {
+    let server = Server::new()?;
+    let ssh = Ssh::new(&server)?;
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let command = codex_command(folder.path())?;
+    let shop = folder.path().join("shop");
+    std::fs::create_dir_all(&shop).expect("the folder of the pane");
+    server.session_in(session, &shop, &command);
+    let seeded = horizon_core::RuntimeState {
+        workspaces: ["first", "second", "third"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                #[allow(clippy::cast_precision_loss)]
+                let column = index as f32;
+                crate::app::test_support::editor_workspace_state(name, [column * 900.0, 0.0])
+            })
+            .collect(),
+        ..horizon_core::RuntimeState::default()
+    };
+    let (_temp, ctx, mut app) = crate::app::test_support::test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(seeded),
+    });
+    app.initial_pan_done = true;
+    settle_machine_load(&mut app);
+    app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
+    with_machines(&mut app, vec![record("build-1")]);
+    run_app_frame(&ctx, &mut app);
+    app.canvas_view = horizon_core::CanvasViewState::default();
+    Some((folder, server, ssh, ctx, app))
 }
 
 #[test]
