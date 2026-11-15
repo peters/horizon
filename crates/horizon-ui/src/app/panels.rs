@@ -700,7 +700,27 @@ impl HorizonApp {
 
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
-        // (titlebar drag, close, resize handles) click-through.
+        // (titlebar drag, close, resize handles) click-through. It is not
+        // interactable where the Settings pane holds the pointer, so the layer of
+        // the pane takes the wheel and the presses there, and it stays
+        // interactable while a button is held, so a drag that passes over the pane
+        // keeps moving its panel until the release.
+        let pane_owns_pointer = !scope.detached
+            && self
+                .settings
+                .as_ref()
+                .and_then(|editor| editor.panel_rect)
+                .is_some_and(|pane| {
+                    ctx.input(|input| {
+                        input
+                            .pointer
+                            .interact_pos()
+                            .or_else(|| input.pointer.hover_pos())
+                            .is_some_and(|position| pane.contains(position))
+                            && !input.pointer.any_down()
+                            && !input.pointer.any_released()
+                    })
+                });
         egui::Area::new(Id::unique(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
             .clip_to_canvas(canvas_layer_clip)
@@ -709,6 +729,7 @@ impl HorizonApp {
             } else {
                 Order::Middle
             })
+            .interactable(!pane_owns_pointer)
             .show(ctx, |ui| {
                 self.apply_canvas_layer_transform(ui, canvas_rect);
                 let (panel_rect, _) = ui.allocate_exact_size(snapshot.canvas_size, Sense::hover());

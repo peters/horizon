@@ -1,4 +1,4 @@
-use horizon_core::{Config, RuntimeState, StartupDecision};
+use horizon_core::{AppearanceTheme, Config, RuntimeState, StartupDecision};
 
 use super::{SettingsAction, SettingsStatus};
 use crate::app::test_support::{
@@ -574,13 +574,41 @@ fn app_with_a_terminal_under_the_pane() -> (
     (temp, ctx, app, panel)
 }
 
-/// The y of the text `wanted` in one frame of the window.
-fn window_text_y(ctx: &egui::Context, app: &mut crate::app::HorizonApp, wanted: &str) -> Option<f32> {
-    let output = run_app_frame_with_input(ctx, app, raw_input([1200.0, 600.0], None));
+/// One frame of the window with the events of the person.
+fn window_frame(ctx: &egui::Context, app: &mut crate::app::HorizonApp, events: Vec<egui::Event>) -> egui::FullOutput {
+    let mut input = raw_input([1200.0, 600.0], None);
+    input.events = events;
+    run_app_frame_with_input(ctx, app, input)
+}
+
+/// The rectangle that the text `wanted` covers in one frame of the window.
+fn window_text(output: &egui::FullOutput, wanted: &str) -> Option<egui::Rect> {
     output.shapes.iter().find_map(|clipped| match &clipped.shape {
-        egui::epaint::Shape::Text(text) if text.galley.job.text == wanted => Some(text.pos.y),
+        egui::epaint::Shape::Text(text) if text.galley.job.text == wanted => {
+            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+        }
         _ => None,
     })
+}
+
+/// A press and its release at `pos` in the events of one frame: a display that
+/// reports slowly delivers both before the next frame draws.
+fn press_and_release(pos: egui::Pos2) -> Vec<egui::Event> {
+    let mut events = vec![egui::Event::PointerMoved(pos)];
+    for pressed in [true, false] {
+        events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    events
+}
+
+/// The y of the text `wanted` in one frame of the window.
+fn window_text_y(ctx: &egui::Context, app: &mut crate::app::HorizonApp, wanted: &str) -> Option<f32> {
+    window_text(&window_frame(ctx, app, Vec::new()), wanted).map(|rect| rect.min.y)
 }
 
 #[test]
@@ -630,5 +658,48 @@ fn the_wheel_over_the_settings_pane_scrolls_the_settings_and_not_the_terminal_be
     assert!(
         moved.is_some_and(|moved| moved < heading),
         "the pane scrolls: the section was at {heading} and is at {moved:?}"
+    );
+}
+
+/// The theme drop-down of the General tab is a combo box: its list is a pop-up
+/// that the pane opens over itself. The pointer must belong to that list where
+/// the list is painted, and a press on its entry must reach the list.
+#[test]
+fn the_list_of_the_theme_drop_down_opens_above_the_pane() {
+    let (_temp, ctx, mut app, _panel) = app_with_a_terminal_under_the_pane();
+    let button = window_text(&window_frame(&ctx, &mut app, Vec::new()), "Auto (system)")
+        .expect("the theme drop-down shows the theme of the draft");
+    let _ = window_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(button.center())]);
+    let pane_layer = ctx
+        .layer_id_at(button.center())
+        .expect("the layer of the pane holds the drop-down");
+    // A slow display delivers the press and its release in one frame.
+    let _ = window_frame(&ctx, &mut app, press_and_release(button.center()));
+    // The first frame of a pop-up sizes it; the list of entries follows it.
+    let mut opened = None;
+    for _ in 0..3 {
+        opened = window_text(&window_frame(&ctx, &mut app, Vec::new()), "Light");
+    }
+    let entry = opened.expect("the list of the drop-down opened");
+    let entry_layer = ctx
+        .layer_id_at(entry.center())
+        .expect("a layer holds the entry of the list");
+    assert_ne!(
+        entry_layer, pane_layer,
+        "the pointer over the entry belongs to the list and not to the pane"
+    );
+    assert_eq!(
+        entry_layer.order,
+        egui::Order::Foreground,
+        "the list is the pop-up layer above the pane"
+    );
+
+    let _ = window_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(entry.center())]);
+    let _ = window_frame(&ctx, &mut app, press_and_release(entry.center()));
+    let _ = window_frame(&ctx, &mut app, Vec::new());
+    assert_eq!(
+        app.settings.as_ref().expect("the pane is open").config.appearance.theme,
+        AppearanceTheme::Light,
+        "the press on the entry of the list takes the theme of the draft"
     );
 }
