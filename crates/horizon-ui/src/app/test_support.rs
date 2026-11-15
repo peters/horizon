@@ -38,7 +38,7 @@ pub(super) fn test_app_with_config_and_startup(
         config_path.clone(),
     );
     let ctx = Context::default();
-    let app = HorizonApp::new_with_egui_context(
+    let mut app = HorizonApp::new_with_egui_context(
         &ctx,
         config,
         config_path,
@@ -47,6 +47,10 @@ pub(super) fn test_app_with_config_and_startup(
         input::ObservedKeyboardInputs::default(),
         None,
     );
+    // The card sockets of a test are bound in the folder of that test: two apps of one
+    // process would otherwise share the folder of the process, and the end of one would
+    // remove the sockets of the other.
+    app.node_cards.base = temp.path().join("cards");
     (temp, ctx, app)
 }
 

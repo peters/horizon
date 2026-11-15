@@ -669,6 +669,7 @@ fn watch_reports(app: &mut HorizonApp, session: &str) {
         machines: vec![MachineWatchState {
             machine: "build-1".to_owned(),
             link: WatchLink::Watching,
+            sessions: vec![session.to_owned()],
             agents: vec![MachineAgent {
                 machine: "build-1".to_owned(),
                 session: session.to_owned(),

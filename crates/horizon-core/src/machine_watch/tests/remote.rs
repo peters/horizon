@@ -40,6 +40,30 @@ fn the_intervals_of_the_loop_are_the_two_named_consts() {
 }
 
 #[test]
+fn the_text_names_a_session_whose_program_is_no_agent() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    // The session `warm-up` of the server runs `sleep`: no agent program, and no state
+    // in its pane, so its pane is no row of the watch.
+    let report = run_text(&server, &SH);
+    assert!(
+        report.of_kind("S").any(|line| line == "S\twarm-up"),
+        "the text names a session with no agent: {:?}",
+        report.lines
+    );
+    let lines: Vec<Vec<u8>> = report.lines.iter().map(|line| line.as_bytes().to_vec()).collect();
+    let parsed = parse_report(&lines).expect("the report of the text parses");
+    assert!(parsed.sessions.iter().any(|session| session == "warm-up"));
+    assert!(
+        observations(&parsed, &AgentPrograms::builtin())
+            .iter()
+            .all(|agent| agent.session != "warm-up"),
+        "the session with no agent holds no row"
+    );
+}
+
+#[test]
 fn every_shell_of_this_computer_reports_the_panes_of_a_server() {
     let Some(server) = Server::new() else {
         return;

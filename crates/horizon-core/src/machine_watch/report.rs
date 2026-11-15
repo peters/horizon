@@ -9,7 +9,8 @@
 
 use super::state::AgentState;
 use super::{
-    MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_BYTES, MAX_REPORT_LINES, MAX_ROWS, WATCH_FORMAT_VERSION,
+    MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_BYTES, MAX_REPORT_LINES, MAX_ROWS, MAX_SESSIONS,
+    WATCH_FORMAT_VERSION,
 };
 
 /// The note of a machine that runs no `tmux` session for the person.
@@ -62,6 +63,9 @@ pub struct PaneReport {
 pub struct Report {
     /// The note of a machine with no `tmux` or no `tmux` server.
     pub note: Option<MachineNote>,
+    /// The names of every `tmux` session of the user of the machine, which the card
+    /// sockets of that machine are made for.
+    pub sessions: Vec<String>,
     /// The panes of the report, in the order that the machine named them.
     pub panes: Vec<PaneReport>,
 }
@@ -212,6 +216,13 @@ impl Report {
                     return Err(bound("the rows of one pane", MAX_ROWS));
                 }
                 held.rows.push(row.to_owned());
+                Ok(())
+            }
+            "S" => {
+                if self.sessions.len() >= MAX_SESSIONS {
+                    return Err(bound("the count of sessions", MAX_SESSIONS));
+                }
+                self.sessions.push(rest.to_owned());
                 Ok(())
             }
             "X" => {

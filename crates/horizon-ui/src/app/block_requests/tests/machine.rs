@@ -40,6 +40,7 @@ fn watch_reports(app: &mut HorizonApp, session: Option<&str>) {
         machines: vec![MachineWatchState {
             machine: "build-1".to_owned(),
             link: WatchLink::Watching,
+            sessions: session.map(str::to_owned).into_iter().collect(),
             agents,
         }],
         ..MachineWatchSnapshot::default()

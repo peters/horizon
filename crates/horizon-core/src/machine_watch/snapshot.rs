@@ -125,6 +125,8 @@ pub struct MachineWatchState {
     pub machine: String,
     /// The state of the link to that machine.
     pub link: WatchLink,
+    /// The names of every `tmux` session of the user of that machine.
+    pub sessions: Vec<String>,
     /// The agents of that machine, in session and pane order.
     pub agents: Vec<MachineAgent>,
 }
@@ -187,6 +189,7 @@ impl Shared {
                 snapshot: Arc::new(MachineWatchSnapshot::default()),
                 models: BTreeMap::new(),
                 links: BTreeMap::new(),
+                sessions: BTreeMap::new(),
                 programs: AgentPrograms::builtin(),
             }),
         }
@@ -227,6 +230,7 @@ impl Shared {
         };
         let mut inner = self.lock();
         inner.link(machine, link);
+        inner.sessions.insert(machine.to_owned(), report.sessions.clone());
         inner
             .models
             .entry(machine.to_owned())
@@ -252,7 +256,10 @@ impl Shared {
     /// Forgets `machine`: its link and its rows leave the snapshot.
     pub fn remove(&self, machine: &str) {
         let mut inner = self.lock();
-        if inner.links.remove(machine).is_some() | inner.models.remove(machine).is_some() {
+        if inner.links.remove(machine).is_some()
+            | inner.models.remove(machine).is_some()
+            | inner.sessions.remove(machine).is_some()
+        {
             inner.publish();
         }
     }
@@ -286,6 +293,7 @@ struct Inner {
     snapshot: Arc<MachineWatchSnapshot>,
     models: BTreeMap<String, MachineModel>,
     links: BTreeMap<String, WatchLink>,
+    sessions: BTreeMap<String, Vec<String>>,
     programs: AgentPrograms,
 }
 
@@ -306,10 +314,11 @@ impl Inner {
             link => link,
         };
         self.links.insert(machine.to_owned(), link);
-        if !link.watching()
-            && let Some(model) = self.models.get_mut(machine)
-        {
-            model.clear();
+        if !link.watching() {
+            self.sessions.remove(machine);
+            if let Some(model) = self.models.get_mut(machine) {
+                model.clear();
+            }
         }
     }
 
@@ -321,6 +330,7 @@ impl Inner {
             machines.push(MachineWatchState {
                 machine: machine.clone(),
                 link: *link,
+                sessions: self.sessions.get(machine).cloned().unwrap_or_default(),
                 agents,
             });
         }

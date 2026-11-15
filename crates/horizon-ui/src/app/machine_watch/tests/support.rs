@@ -134,6 +134,7 @@ impl Drop for Server {
 pub(crate) struct Ssh {
     folder: tempfile::TempDir,
     calls: PathBuf,
+    argv: PathBuf,
     marker: String,
 }
 
@@ -162,19 +163,28 @@ impl Ssh {
         }
         let folder = tempfile::tempdir().ok()?;
         let calls = folder.path().join("calls");
+        let argv = folder.path().join("argv");
         // The marker ends with its own word, so the marker of another test of this
         // process, whose socket number starts with the same digits, is another word.
         let marker = format!("hzw-ui-ssh-{}-{}-end", std::process::id(), server.socket());
         let body = format!(
-            "#!/bin/sh\nprintf 'c' >> {calls}\nmarker={marker}\n\
+            "#!/bin/sh\nprintf 'c' >> {calls}\nprintf '%s\\n' \"$*\" >> {argv}\nmarker={marker}\n\
              for a in \"$@\"; do last=$a; done\n\
+             case $last in rm*--*) exit 0 ;; esac\n\
+             case \" $* \" in *\" -R \"*) exec sh -c 'sleep 300' -s \"$marker\" ;; esac\n\
              HORIZON_MACHINE_WATCH_TMUX_SOCKET={socket}\nexport HORIZON_MACHINE_WATCH_TMUX_SOCKET\n\
              {body}\n",
             calls = quoted(&calls.to_string_lossy()),
+            argv = quoted(&argv.to_string_lossy()),
             socket = quoted(server.socket()),
         );
         horizon_core::stand_in_program_in(folder.path(), "ssh", &body).ok()?;
-        Some(Self { folder, calls, marker })
+        Some(Self {
+            folder,
+            calls,
+            argv,
+            marker,
+        })
     }
 
     /// The program of the stand-in.
@@ -185,6 +195,12 @@ impl Ssh {
     /// How many times the watch started this program.
     pub(crate) fn calls(&self) -> usize {
         std::fs::metadata(&self.calls).map_or(0, |held| usize::try_from(held.len()).unwrap_or(0))
+    }
+
+    /// How many children of this stand-in carried the card sockets of a machine: the
+    /// one call of a machine that names a forward, and no call of the watch.
+    pub(crate) fn forwards(&self) -> usize {
+        std::fs::read_to_string(&self.argv).map_or(0, |held| held.lines().filter(|line| line.contains("-R")).count())
     }
 
     /// How many `sh` children of this stand-in run now: the shells that run the text,

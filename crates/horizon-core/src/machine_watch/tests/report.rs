@@ -3,8 +3,8 @@
 
 use crate::PanelKind;
 use crate::machine_watch::{
-    AgentPrograms, AgentState, MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_LINES, MAX_ROWS, MachineNote,
-    ReportError, WATCH_FORMAT_VERSION, observations, parse_report,
+    AgentPrograms, AgentState, MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_LINES, MAX_ROWS, MAX_SESSIONS,
+    MachineNote, ReportError, WATCH_FORMAT_VERSION, observations, parse_report,
 };
 
 /// One line of a report, as the text of the watch writes it.
@@ -48,6 +48,31 @@ fn a_report_of_one_pane_is_one_pane_with_its_fields() {
     assert_eq!(pane.title, "⠙ shop");
     assert_eq!(pane.command_lines, vec!["node /home/person/.local/bin/pi"]);
     assert_eq!(pane.rows, vec!["⠋ Working... (esc to interrupt)", ">"]);
+}
+
+#[test]
+fn the_session_lines_of_a_report_name_every_session_of_the_user() {
+    let lines = report_of(&[
+        "S\thz-shop",
+        "S\thz-night",
+        &pane_line("%3", "hz-shop", "codex", "/home/person/shop", "⠙ shop"),
+    ]);
+    let report = parse_report(&lines).expect("the report of the test parses");
+    assert_eq!(report.sessions, vec!["hz-shop", "hz-night"]);
+    assert_eq!(report.panes.len(), 1, "a session line is no pane");
+
+    let mut many = vec![line(&format!("HZ\t{WATCH_FORMAT_VERSION}"))];
+    for number in 0..=MAX_SESSIONS {
+        many.push(line(&format!("S\thz-{number}")));
+    }
+    many.push(line("Z"));
+    assert_eq!(
+        parse_report(&many),
+        Err(ReportError::Bound {
+            what: "the count of sessions",
+            limit: MAX_SESSIONS
+        })
+    );
 }
 
 #[test]

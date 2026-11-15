@@ -98,11 +98,12 @@ impl HorizonApp {
         let keys = MachineKeys::from_home(self.session_store.home());
         let mut machines: Vec<CardMachine> = Vec::new();
         for record in self.machine_list.records().iter().filter(|record| record.cards) {
+            // The sessions of the machine, and not the rows of its agents: a session
+            // whose agent program starts or ends keeps the same name, so its socket
+            // outlives that change.
             let mut sessions: Vec<String> = snapshot
-                .agents(&record.name)
-                .iter()
-                .map(|agent| agent.session.clone())
-                .collect();
+                .machine(&record.name)
+                .map_or_else(Vec::new, |held| held.sessions.clone());
             sessions.sort();
             sessions.dedup();
             // A machine with no known session carries no socket: the watch is the
