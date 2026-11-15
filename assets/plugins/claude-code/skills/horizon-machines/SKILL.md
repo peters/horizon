@@ -630,12 +630,14 @@ the way that the repository arrives. Use
 machine for a repository, or when a plan needs a place that is `rent a machine`.
 
 That page gives the recipe, the card of the rent with the price of every machine
-of the run together, one steps card for each machine, the card that says
-`Ready for <repository>` with the check as evidence, the card of a step that
-failed, and the rule that the repository arrives as a `git bundle` unless the
-recipe asks for a clone with a credential that the person confirms. When the
-repository holds no such section, ask one question on a card and offer to write
-the section from what the repository says about its own machine.
+of the run together, one steps card for each machine, the step that writes the
+trust of the folder of the repository for each agent program that the machine
+has, the card that says `Ready for <repository>` with the check as evidence, the
+card of a step that failed, and the rule that the repository arrives as a `git
+bundle` unless the recipe asks for a clone with a credential that the person
+confirms. When the repository holds no such section, ask one question on a card
+and offer to write the section from what the repository says about its own
+machine.
 
 ## The logins and the private files of a repository on a machine
 
@@ -790,6 +792,12 @@ the same contract as the hook of Claude Code, in two lines:
 - The word is exact and holds no other text. A pane that reports `working` shows
   `Working`, `blocked` shows `Needs you`, and `done` shows `Done` until the person
   looks at it.
+
+The question of a first start in a folder, whether the person trusts that folder,
+is no report, so a row of a machine says `Needs you` never for the question alone.
+The step `Trust the repository folder` of [a machine for a
+repository](#a-machine-for-a-repository) answers the question for the folder of
+the rent, so no agent of that machine stops at it.
 
 The person asks for this with the button `Exact agent state` on the machine card,
 or with the words "the exact state of my agents". The button stands after `Join a

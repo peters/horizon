@@ -6,9 +6,9 @@ that repository: the system packages are there, the tools are there, the
 repository is there, its caches are warm, and the check of the repository passed
 on the machine.
 
-This page holds the recipe, the cards of one run, and the way that the
-repository arrives. The provider commands, the rent, the wait for SSH and the
-delete are the steps of the skill.
+This page holds the recipe, the cards of one run, the way that the repository
+arrives, and the trust of the folder that it made. The provider commands, the
+rent, the wait for SSH and the delete are the steps of the skill.
 
 ## The recipe
 
@@ -118,7 +118,7 @@ machine out of every network.
 ### 2. One steps card for each machine
 
 After the press, rent each machine and give each one a card of its own, titled
-with its name. The card shows the five steps of the machine, and one step more
+with its name. The card shows the six steps of the machine, and one step more
 when the machine joins a network:
 
 1. `Prepare the system`: the packages of the recipe, with the package manager of
@@ -129,21 +129,25 @@ when the machine joins a network:
    page [tailscale](tailscale.md) gives the commands and the proof. The machine
    joins after `Prepare the system` and before the repository arrives.
 4. `Bring the repository`: the bundle or the clone of the section below.
-5. `Warm up`: the `warmup` commands of the recipe, in the folder of the
+5. `Trust the repository folder`: the trust of the folder of the clone for each
+   agent program on the machine, as
+   [the trust of the folder](#the-trust-of-the-folder-of-the-repository) says.
+6. `Warm up`: the `warmup` commands of the recipe, in the folder of the
    repository.
-6. `Run the check`: the `check` command of the recipe, in the folder of the
+7. `Run the check`: the `check` command of the recipe, in the folder of the
    repository.
 
 ```json
 {"components": [
   {"type": "heading", "text": "build-1", "subtitle": "Ready for example-repo",
    "badge": {"text": "Working", "tone": "info"}},
-  {"type": "progress", "label": "Prepare the machine", "percent": 50, "detail": "3 of 6"},
+  {"type": "progress", "label": "Prepare the machine", "percent": 50, "detail": "3 of 7"},
   {"type": "steps", "steps": [
     {"label": "Prepare the system", "state": "done", "at": "18 s"},
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
     {"label": "Join the network home", "state": "now", "at": "now"},
     {"label": "Bring the repository"},
+    {"label": "Trust the repository folder"},
     {"label": "Warm up"},
     {"label": "Run the check"}]},
   {"type": "buttons", "items": [
@@ -193,9 +197,11 @@ older Horizon refuses the record of a newer one.
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
     {"label": "Join the network home", "state": "done", "at": "31 s"},
     {"label": "Bring the repository", "state": "done", "at": "8 s"},
+    {"label": "Trust the repository folder", "state": "done", "at": "2 s"},
     {"label": "Warm up", "state": "done", "at": "1 m 40 s"},
     {"label": "Run the check", "state": "done", "at": "6 m 02 s"}]},
   {"type": "kv", "rows": [
+    {"label": "Folder trusted for", "value": "Claude Code, Codex"},
     {"label": "Network", "value": "home", "mono": true}]},
   {"type": "text", "text": "cargo test --workspace: 412 tests pass, 0 failed"},
   {"type": "buttons", "items": [
@@ -206,6 +212,12 @@ older Horizon refuses the record of a newer one.
     {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
+
+The ready card of a machine that was prepared for a repository holds the row
+`Folder trusted for` with the programs that trust the folder of the repository,
+for example `Folder trusted for: Claude Code, Codex`. The step that writes the
+trust names the programs, and a machine whose agent programs were installed
+before the repository arrived holds that row too.
 
 The ready card of a machine that joined a network holds the row `Network` with
 the stored name of that network, and a machine in no network has no such row.
@@ -238,6 +250,7 @@ hide a failed step under a `Working` badge.
     {"label": "Prepare the system", "state": "done", "at": "18 s"},
     {"label": "Install the tools", "state": "done", "at": "2 m 10 s"},
     {"label": "Bring the repository", "state": "done", "at": "8 s"},
+    {"label": "Trust the repository folder", "state": "done", "at": "2 s"},
     {"label": "Warm up", "state": "failed", "at": "40 s"},
     {"label": "Run the check"}]},
   {"type": "text", "text": "cargo fetch: error: failed to load source for dependency `ring`"},
@@ -292,6 +305,166 @@ needs a credential on the machine:
 A repository folder on the machine is the clone of one machine: the helper that
 works there writes in that clone, and a second helper of the same repository gets
 a worktree of it, as the skill `horizon-worktree` says.
+
+## The trust of the folder of the repository
+
+An agent program asks at its first start in a folder whether the person trusts
+that folder, and it waits for the answer before it works. A machine that was
+rented for one repository has nobody at that question, so the step `Trust the
+repository folder` answers it: after `Bring the repository` it writes the trust
+of the folder of the clone, for each agent program that the machine has.
+
+A folder can hold settings that run code when the program starts, so the question
+protects the person from a folder that they did not choose. The rent named the
+repository of this machine, so the rent is the answer of the person for that
+folder; a repository of another party that the person does not know is a reason
+to rent with no repository and to clone it by hand.
+
+The step writes the trust of one folder, the folder of the clone, and of no other
+folder:
+
+- Read `<path>` with `realpath` on the machine, so it is the absolute canonical
+  path.
+- Never a parent folder, never the home folder, and never the setting
+  `defaultProjectTrust` of pi. Never a flag that turns the approval of a tool call
+  off: the trust of a folder is not the permission mode of a program, and this
+  step changes no permission mode.
+- Only for a program that the machine has: `command -v claude`, `command -v
+  codex` and `command -v pi` answer a path when it is there. A program that the
+  person installs on the machine later is no part of this step: it gets its entry
+  when the person asks, for example "trust the repository folder for pi on
+  build-1".
+- Merge into each file and never replace it. When the machine has no `python3` and
+  no `jq`, the file of that program stays as it is, and the card names that
+  program with the reason.
+- A file that does not exist is made with the mode 600, in a folder with the mode
+  700.
+
+Run each block on the machine with the form of step 5 of the skill. A second run
+of a block changes no byte of the file.
+
+### The trust of Claude Code
+
+The file is `~/.claude.json` of the SSH user, and the entry is
+`projects["<path>"].hasTrustDialogAccepted = true`. The block keeps every other
+key of the file and of that project.
+
+```sh
+ssh <options of the machine key> <user>@<address> sh <<'SH'
+command -v claude >/dev/null || exit 0
+path=$(realpath ~/example-repo)
+file=$HOME/.claude.json
+if [ ! -e "$file" ]; then
+  printf '{"projects": {"%s": {"hasTrustDialogAccepted": true}}}\n' "$path" > "$file"
+  chmod 600 "$file"
+  echo "$file: written"
+  exit 0
+fi
+if command -v python3 >/dev/null; then
+  python3 - "$file" "$path" <<'PY'
+import json, pathlib, sys
+
+file, folder = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = json.loads(file.read_text())
+project = data.setdefault("projects", {}).setdefault(folder, {})
+if project.get("hasTrustDialogAccepted") is not True:
+    project["hasTrustDialogAccepted"] = True
+    file.write_text(json.dumps(data, indent=2) + "\n")
+print(f"{file}: holds the trust of {folder}")
+PY
+elif command -v jq >/dev/null; then
+  if ! jq -e --arg path "$path" '.projects[$path].hasTrustDialogAccepted == true' "$file" >/dev/null 2>&1; then
+    tmp=$(mktemp)
+    jq --arg path "$path" \
+      '.projects = ((.projects // {}) | .[$path] = ((.[$path] // {}) + {hasTrustDialogAccepted: true}))' \
+      "$file" > "$tmp" && mv "$tmp" "$file"
+  fi
+  jq -e --arg path "$path" '.projects[$path].hasTrustDialogAccepted == true' "$file" >/dev/null \
+    && echo "$file: holds the trust of $path"
+else
+  echo "$file: no python3 and no jq here, so no change"
+  exit 0
+fi
+chmod 600 "$file"
+SH
+```
+
+### The trust of Codex
+
+The file is `~/.codex/config.toml` of the SSH user, and the entry is the table
+`[projects."<path>"]` with `trust_level = "trusted"`. The block appends the table
+only when the file holds no table of that path.
+
+```sh
+ssh <options of the machine key> <user>@<address> sh <<'SH'
+command -v codex >/dev/null || exit 0
+path=$(realpath ~/example-repo)
+file=$HOME/.codex/config.toml
+table="[projects.\"$path\"]"
+mkdir -p "$(dirname "$file")" && chmod 700 "$HOME/.codex"
+[ -e "$file" ] || { : > "$file" && chmod 600 "$file"; }
+if grep -qxF -- "$table" "$file"; then
+  echo "$file: holds $table, so no change"
+  exit 0
+fi
+printf '\n%s\ntrust_level = "trusted"\n' "$table" >> "$file"
+chmod 600 "$file"
+echo "$file: added $table"
+SH
+```
+
+### The trust of pi
+
+The file is `~/.pi/agent/trust.json` of the SSH user, and the entry is
+`{"<path>": true}` merged into the object. pi asks only for a folder that holds
+`.pi/settings.json`, `.pi/mcp.json`, `.pi/extensions`, `.pi/skills`, `.pi/prompts`,
+`.pi/themes`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` or `.agents/skills`, and an
+entry for a folder with none of them is harmless.
+
+```sh
+ssh <options of the machine key> <user>@<address> sh <<'SH'
+command -v pi >/dev/null || exit 0
+path=$(realpath ~/example-repo)
+file=$HOME/.pi/agent/trust.json
+mkdir -p "$(dirname "$file")" && chmod 700 "$HOME/.pi" "$HOME/.pi/agent"
+if [ ! -e "$file" ]; then
+  printf '{"%s": true}\n' "$path" > "$file"
+  chmod 600 "$file"
+  echo "$file: written"
+  exit 0
+fi
+if command -v python3 >/dev/null; then
+  python3 - "$file" "$path" <<'PY'
+import json, pathlib, sys
+
+file, folder = pathlib.Path(sys.argv[1]), sys.argv[2]
+data = json.loads(file.read_text())
+if data.get(folder) is not True:
+    data[folder] = True
+    file.write_text(json.dumps(data, indent=2) + "\n")
+print(f"{file}: holds the trust of {folder}")
+PY
+elif command -v jq >/dev/null; then
+  if ! jq -e --arg path "$path" '.[$path] == true' "$file" >/dev/null 2>&1; then
+    tmp=$(mktemp)
+    jq --arg path "$path" '. + {($path): true}' "$file" > "$tmp" && mv "$tmp" "$file"
+  fi
+  jq -e --arg path "$path" '.[$path] == true' "$file" >/dev/null \
+    && echo "$file: holds the trust of $path"
+else
+  echo "$file: no python3 and no jq here, so no change"
+  exit 0
+fi
+chmod 600 "$file"
+SH
+```
+
+The step is `done` when every block that ran named its file and the trust that it
+holds, and the ready card then says in one line which programs those are, for
+example `Folder trusted for: Claude Code, Codex`. A file that a block left as it
+is says so on the card with the reason, and no `Folder trusted for` line names
+that program. No question to the person stands before this step, because the rent
+named the repository.
 
 ## The plan uses the recipe
 
