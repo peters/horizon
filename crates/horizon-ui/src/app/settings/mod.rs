@@ -612,9 +612,8 @@ fn render_settings_panel(
     general_view: general::GeneralView<'_>,
 ) -> (SettingsAction, bool, speech::SpeechRequest) {
     let rect = panel_rect(ui);
-    // The pane is its own area on the top layer: every panel of the canvas is an area
-    // of its own, and the area of a panel covers the pane for the pointer, so a wheel
-    // over the pane would reach the terminal behind it and not the settings.
+    // The pane is an area on the top layer: the area of a panel covers the pane for the
+    // pointer, so a wheel over the pane would reach the terminal behind it.
     let mut pane = None;
     egui::Area::new(egui::Id::unique("settings_pane"))
         .fixed_pos(rect.min)
@@ -626,12 +625,9 @@ fn render_settings_panel(
             ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 pane = Some(
                     egui::Panel::right(SETTINGS_PANEL_ID)
-                        // One width for every tab, and the same width that the panel
-                        // opens with. The rectangle comes from `panel_rect`, which the
-                        // canvas reads as well, so a tab with a long path or a long
-                        // secret name cannot move the edge between the panel and the
-                        // canvas. The content wraps, scrolls or is cut inside this
-                        // width instead.
+                        // One width for every tab, and the same width that the panel opens
+                        // with: a tab cannot move the edge between the panel and the canvas,
+                        // so its content wraps, scrolls or is cut inside this width.
                         .exact_size(rect.width())
                         .frame(
                             egui::Frame::default()
