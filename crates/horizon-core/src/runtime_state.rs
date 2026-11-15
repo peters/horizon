@@ -20,11 +20,13 @@ use crate::retired_panel_kinds::RetiredPanels;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
+pub(crate) use agent_sessions::load_sessions_of_home;
 pub use agent_sessions::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionDeletionCleanupWarning, AgentSessionDeletionFailure,
     AgentSessionDeletionRecovery, AgentSessionDeletionReport, AgentSessionDeletionReservation, AgentSessionRecord,
     reserve_saved_session_deletions, saved_session_deletion_pending,
 };
+pub(crate) use claude_live_sessions::live_claude_session_ids_in;
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 /// What a saved panel records about its browser: the profile it used, the
 /// backend that served it, and the browser host of another machine when one

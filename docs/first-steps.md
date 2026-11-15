@@ -205,6 +205,43 @@ or push Tab until it has the focus ring and then push Enter or Space.
 Under the tiles is the row of shortcuts of this computer: New terminal,
 Quick Nav and Machines you have. On macOS, the primary key is Cmd.
 
+### Pick up where you left off
+
+A row of the section is a conversation of Claude Code or Codex that an agent
+program keeps on this computer. The section shows the newest conversation of
+each folder, six folders at most. The control `Show all`, and the row
+**Recent agent sessions** in the Menu of the titlebar, open the full list: 24
+conversations at most, of the last 14 days, grouped by folder.
+
+Each row shows the title of the conversation, its program, its folder, the time
+of its last activity and the state of the conversation. The home folder is `~`.
+
+1. Click `Open` on a row, or push Tab until the row has the focus ring and then
+   push Enter.
+
+   Result: Horizon shows the workspace of that folder, or makes it when the board
+   has none, and opens a panel of that program in it. The panel continues that
+   conversation, and the keyboard is in the panel.
+
+2. Click `Open all` on a folder of the list.
+
+   Result: One panel opens for each conversation of that folder, four at most.
+   The other conversations stay in the list.
+
+A row says `folder is gone` when its folder is not there: the row cannot open.
+A row says `program is not installed` when Horizon cannot find the program of the
+conversation: install the program, then push `Show all` again.
+
+A row says `open in another program` when a program has that conversation open
+now. Two programs in one conversation is a known hazard, so the row opens only
+after a second press on `Open anyway`.
+
+Horizon reads the conversations of Claude Code from `~/.claude/projects` and the
+conversations of Codex from `~/.codex`. It writes nothing there. Another agent
+program, such as Gemini or KiloCode, keeps no conversation that Horizon can
+continue, so it has no row. A conversation that an open panel of Horizon already
+has is not a row.
+
 Set up opens a panel of your agent and gives it one sentence: `Use the
 horizon-setup skill. The person pressed Set up. Goal: <goal>.` The agent then
 does the work and shows each step as a card.
@@ -264,6 +301,27 @@ keeps its browser until you close it.
 When a step fails, the card says what failed, what was undone and what is left,
 with `Try again` and `Stop`. A secret, such as a token or a private key, never
 appears on a card or in the panel of the agent.
+
+## Start Horizon in a folder
+
+1. Open a terminal in the repository or the folder that you want to work in.
+2. Type `horizon .`
+
+   Result: Horizon starts with the board of the last run, and then shows the
+   workspace of that folder with the keyboard in it. When the board has no
+   workspace of that folder, Horizon makes one with the name of the folder and
+   opens one panel in it: the first agent preset of your settings whose program
+   this computer has, or a terminal in that folder when no agent program is there.
+
+3. Type `horizon ~/github/my-repo` to start in another folder.
+4. Type `horizon <path> --ephemeral` to start a board that keeps nothing.
+
+A path that is not a folder, or a path that is not there, ends the start with one
+sentence and status 2, and no window opens. When a Horizon of this home already
+runs, `horizon <path>` writes one line that says that the folder was not opened
+there, and ends with status 0: this build has no channel that asks a running
+window to open a folder. Open the folder in the running window, or close that
+window and start again.
 
 ## Use the board
 

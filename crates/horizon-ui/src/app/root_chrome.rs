@@ -24,6 +24,8 @@ pub(super) enum ToolbarAction {
     QuickNav,
     RemoteHosts,
     Sessions,
+    /// The window of the sessions that the agent programs already keep.
+    RecentSessions,
     SetUp,
     Settings,
 }

@@ -37,6 +37,29 @@ pub struct PanelStart {
     pub(in crate::panel) work_brief_wanted: bool,
 }
 
+impl PanelStart {
+    /// The program and the arguments that the process of this panel starts with,
+    /// or `None` for a panel that starts none.
+    ///
+    /// An agent panel starts through the login shell of this computer, so the
+    /// vector names that shell and the one command string that the shell runs.
+    #[must_use]
+    pub fn launch_command(&self) -> Option<(&str, &[String])> {
+        self.launch
+            .as_ref()
+            .map(|launch| (launch.program.as_str(), launch.args.as_slice()))
+    }
+
+    /// Whether the panel can start its process in its own directory.
+    ///
+    /// A panel whose directory was renamed or deleted cannot: it reports the
+    /// directory instead of running in the directory of Horizon.
+    #[must_use]
+    pub fn working_directory_is_usable(&self) -> bool {
+        self.working_directory.is_none()
+    }
+}
+
 /// The launch of the process of a panel, resolved off the frame.
 pub struct PreparedLaunch {
     pub(in crate::panel) session_binding: Option<AgentSessionBinding>,

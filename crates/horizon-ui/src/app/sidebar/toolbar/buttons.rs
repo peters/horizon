@@ -4,6 +4,7 @@ use egui::{Align2, CursorIcon, FontId, Popup, Pos2, Rect, Sense, Stroke, StrokeK
 
 use crate::app::HorizonApp;
 use crate::app::root_chrome::{ROOT_TOOLBAR_BUTTON_HEIGHT, ROOT_TOOLBAR_MENU_WIDTH, ToolbarAction};
+use crate::app::session_pickup::{MENU_DETAIL, MENU_TITLE};
 use crate::app::sidebar::rich_menu;
 use crate::app::util;
 use crate::theme;
@@ -38,6 +39,13 @@ const MENU: &[MenuEntry] = &[
         detail: "Switch between saved boards",
         action: Some(ToolbarAction::Sessions),
         choice: MenuChoice::Action(ToolbarAction::Sessions),
+    },
+    MenuEntry {
+        group: None,
+        title: MENU_TITLE,
+        detail: MENU_DETAIL,
+        action: None,
+        choice: MenuChoice::Action(ToolbarAction::RecentSessions),
     },
     MenuEntry {
         group: None,
@@ -116,8 +124,9 @@ impl HorizonApp {
             ToolbarAction::QuickNav => shortcuts.command_palette.display_label(label),
             ToolbarAction::RemoteHosts => shortcuts.open_remote_hosts.display_label(label),
             ToolbarAction::Sessions => shortcuts.toggle_sessions.display_label(label),
-            // Set up has no key of its own: its row says what it does.
-            ToolbarAction::SetUp => String::new(),
+            // Set up and the recent agent sessions have no key of their own:
+            // their rows say what they do.
+            ToolbarAction::SetUp | ToolbarAction::RecentSessions => String::new(),
             ToolbarAction::Settings => shortcuts.toggle_settings.display_label(label),
         };
         (!text.is_empty()).then_some(text)

@@ -16,6 +16,7 @@
 
 mod art;
 mod layout;
+mod pickup;
 mod tiles;
 
 pub(in crate::app) use tiles::WelcomeTile;
@@ -29,7 +30,11 @@ use crate::theme;
 use crate::typeface::{self, Weight};
 
 use self::layout::{ROW_GAP, TILE_GAP, tile_width, welcome_columns};
+use self::pickup as pickup_section;
 use super::HorizonApp;
+use super::session_pickup::SessionPickup;
+
+use self::pickup::PickupSectionPress;
 
 /// The space between the edge of the canvas and the page, in whole points.
 const PAGE_PAD_SIDE: i8 = 60;
@@ -97,26 +102,30 @@ pub(in crate::app) const SHORTCUTS_LEAD: &str = "You know Horizon already?";
 /// What the page remembers, so a still page lays nothing out again.
 #[derive(Default)]
 pub(in crate::app) struct WelcomeCache {
-    /// The width and the theme that the metrics and the drawings belong to.
+    /// The width, the theme and the rows of the section that the metrics and the
+    /// drawings belong to.
     key: Option<WelcomeKey>,
     metrics: Option<WelcomeMetrics>,
     drawings: [Option<Shape>; WelcomeTile::ALL.len()],
 }
 
 impl WelcomeCache {
-    /// The metrics of the page for `width`, measured with `painter`.
-    fn metrics(&mut self, painter: &Painter, width: f32) -> WelcomeMetrics {
+    /// The metrics of the page for `width` and `pickup_rows` rows of the section,
+    /// measured with `painter`.
+    fn metrics(&mut self, painter: &Painter, width: f32, pickup_rows: usize) -> WelcomeMetrics {
         let key = WelcomeKey {
             width: width.to_bits(),
             theme: theme::current_theme(),
+            pickup_rows,
         };
         if self.key != Some(key) {
-            let metrics = WelcomeMetrics::measure(painter, width);
+            let metrics = WelcomeMetrics::measure(painter, width, pickup_rows);
             self.key = Some(key);
             self.metrics = Some(metrics);
             self.drawings = Default::default();
         }
-        self.metrics.unwrap_or_else(|| WelcomeMetrics::measure(painter, width))
+        self.metrics
+            .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows))
     }
 }
 
@@ -124,6 +133,9 @@ impl WelcomeCache {
 struct WelcomeKey {
     width: u32,
     theme: theme::ResolvedTheme,
+    /// The rows of the section **Pick up where you left off**, which add their
+    /// height to the block of the page.
+    pickup_rows: usize,
 }
 
 /// Where every part of the page stands, for one width and one theme.
@@ -134,14 +146,17 @@ struct WelcomeMetrics {
     tile_height: f32,
     heading_height: f32,
     lead_height: f32,
+    /// The height of the section **Pick up where you left off**, or zero when the
+    /// page shows no row.
+    pickup_height: f32,
     /// The height of everything the page draws, its pads excluded.
     block_height: f32,
 }
 
 impl WelcomeMetrics {
-    /// Measures the page that `width` gives, with the wrapped texts laid out
-    /// once.
-    fn measure(painter: &Painter, width: f32) -> Self {
+    /// Measures the page that `width` and `pickup_rows` rows of the section give,
+    /// with the wrapped texts laid out once.
+    fn measure(painter: &Painter, width: f32, pickup_rows: usize) -> Self {
         let columns = welcome_columns(width);
         let tile = tile_width(width, columns);
         let sentence_width = (tile - 2.0 * TILE_PAD).max(1.0);
@@ -177,6 +192,11 @@ impl WelcomeMetrics {
         );
         let lead_height = lead.size().y;
         let shortcuts_height = SHORTCUTS_FONT * 1.45;
+        let pickup_height = if pickup_rows == 0 {
+            0.0
+        } else {
+            pickup::SECTION_GAP + pickup::section_height(pickup_rows)
+        };
         let block_height = HEADING_GAP
             + heading_height
             + HEADING_GAP
@@ -184,6 +204,7 @@ impl WelcomeMetrics {
             + HEADING_BLOCK_GAP
             + rows * tile_height
             + (rows - 1.0).max(0.0) * ROW_GAP
+            + pickup_height
             + SHORTCUTS_GAP
             + shortcuts_height;
         Self {
@@ -192,6 +213,7 @@ impl WelcomeMetrics {
             tile_height,
             heading_height,
             lead_height,
+            pickup_height,
             block_height,
         }
     }
@@ -214,13 +236,16 @@ impl HorizonApp {
         let canvas = self.canvas_rect(ctx);
         let pad_side = f32::from(PAGE_PAD_SIDE);
         let width = (canvas.width() - 2.0 * pad_side).max(1.0);
+        // The rows of the section are read before the block is measured, because
+        // they are part of its height.
+        let pickup = self.session_pickup.first_page();
         // The block is measured before it is shown, because a block that fits
         // the canvas is centred in it and one that does not starts at the top.
         let measure = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
             Id::unique("welcome_page_measure"),
         ));
-        let metrics = self.welcome.metrics(&measure, width);
+        let metrics = self.welcome.metrics(&measure, width, pickup.len());
         let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
         let inner = Rect::from_min_max(
             Pos2::new(canvas.min.x + pad_side, top),
@@ -228,6 +253,7 @@ impl HorizonApp {
         );
         let shortcut_lines = self.shortcut_lines();
         let mut pressed = None;
+        let mut pickup_press = None;
 
         egui::Area::new(Id::unique("welcome_page"))
             .fixed_pos(inner.min)
@@ -251,12 +277,25 @@ impl HorizonApp {
                             Vec2::new(inner.width(), metrics.block_height + PAGE_PAD_BOTTOM),
                             Sense::hover(),
                         );
-                        pressed = paint_page(ui, &mut self.welcome, content, metrics, &shortcut_lines);
+                        let painted = paint_page(
+                            ui,
+                            &mut self.welcome,
+                            content,
+                            metrics,
+                            &shortcut_lines,
+                            &pickup,
+                            &self.session_pickup,
+                        );
+                        pressed = painted.tile;
+                        pickup_press = painted.pickup;
                     });
             });
 
         if let Some(tile) = pressed {
             self.start_welcome_tile(ctx, tile);
+        }
+        if let Some(press) = pickup_press {
+            self.apply_pickup_press(ctx, &press);
         }
     }
 
@@ -326,15 +365,25 @@ pub(in crate::app) fn welcome_page_shows(workspace_count: usize, panel_count: us
     overlays_visible && workspace_count == 0 && panel_count == 0
 }
 
-/// Paints the whole page inside `content` and answers the tile that the person
-/// pressed.
+/// What a frame of the page pressed.
+#[derive(Default)]
+struct WelcomePagePress {
+    /// The tile that the person pressed.
+    tile: Option<WelcomeTile>,
+    /// The row of the section that the person pressed, or its control `Show all`.
+    pickup: Option<PickupSectionPress>,
+}
+
+/// Paints the whole page inside `content` and answers the presses of the person.
 fn paint_page(
     ui: &mut Ui,
     cache: &mut WelcomeCache,
     content: Rect,
     metrics: WelcomeMetrics,
     shortcuts: &[(String, String)],
-) -> Option<WelcomeTile> {
+    pickup: &[horizon_core::PickupFolder],
+    state: &SessionPickup,
+) -> WelcomePagePress {
     let painter = ui.painter().clone();
     let mut y = content.min.y + HEADING_GAP;
     y = paint_heading(&painter, content, metrics, y);
@@ -352,9 +401,24 @@ fn paint_page(
     }
     #[allow(clippy::cast_precision_loss)]
     let rows = WelcomeTile::ALL.len().div_ceil(metrics.columns.max(1)) as f32;
-    let below = y + rows * metrics.tile_height + (rows - 1.0).max(0.0) * ROW_GAP + SHORTCUTS_GAP;
-    paint_shortcuts(&painter, content, below, shortcuts);
-    pressed
+    let below_tiles = y + rows * metrics.tile_height + (rows - 1.0).max(0.0) * ROW_GAP;
+    let pickup_press = if metrics.pickup_height > 0.0 {
+        pickup_section::paint_section(ui, content, below_tiles + pickup_section::SECTION_GAP, pickup, |row| {
+            state.is_confirmed(row.kind, &row.session_id)
+        })
+    } else {
+        None
+    };
+    paint_shortcuts(
+        &painter,
+        content,
+        below_tiles + metrics.pickup_height + SHORTCUTS_GAP,
+        shortcuts,
+    );
+    WelcomePagePress {
+        tile: pressed,
+        pickup: pickup_press,
+    }
 }
 
 /// Paints the heading and its line, and answers the top of the tiles.
@@ -521,6 +585,23 @@ fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String,
         );
         painter.galley(chip.min + Vec2::new(6.0, 2.0), key, theme::FG_SOFT());
         x = chip.max.x + SHORTCUT_GAP;
+    }
+}
+
+#[cfg(test)]
+impl HorizonApp {
+    /// The height of the block of the first start page and of its section, for a
+    /// test that pins the layout of the page.
+    pub(in crate::app) fn welcome_block_heights_for_test(&mut self, ctx: &Context) -> (f32, f32) {
+        let canvas = self.canvas_rect(ctx);
+        let width = (canvas.width() - 2.0 * f32::from(PAGE_PAD_SIDE)).max(1.0);
+        let pickup = self.session_pickup.first_page();
+        let measure = ctx.layer_painter(egui::LayerId::new(
+            Order::Background,
+            Id::unique("welcome_page_measure_test"),
+        ));
+        let metrics = self.welcome.metrics(&measure, width, pickup.len());
+        (metrics.block_height, metrics.pickup_height)
     }
 }
 

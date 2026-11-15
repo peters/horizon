@@ -58,6 +58,7 @@ impl HorizonApp {
         session_store: SessionStore,
         startup: StartupDecision,
         observed_keyboard_inputs: input::ObservedKeyboardInputs,
+        startup_folder: Option<PathBuf>,
     ) -> Self {
         let mut app = Self::new_with_egui_context(
             &cc.egui_ctx,
@@ -66,6 +67,7 @@ impl HorizonApp {
             session_store,
             startup,
             observed_keyboard_inputs,
+            startup_folder,
         );
         // One worker for the run: a frame only writes one value into it.
         app.notifications.use_desktop_sink();
@@ -79,6 +81,7 @@ impl HorizonApp {
         session_store: SessionStore,
         startup: StartupDecision,
         observed_keyboard_inputs: input::ObservedKeyboardInputs,
+        startup_folder: Option<PathBuf>,
     ) -> Self {
         // The window exists: everything below this line runs on the UI thread of
         // the frame that the window draws.
@@ -110,6 +113,9 @@ impl HorizonApp {
             output_wake: terminal_output_wake(egui_ctx),
         };
         let mut app = Self::initial_state(config, bootstrap);
+        // The folder of a `horizon <folder>` start opens after the board of the
+        // last run is back, so its workspace stands beside the restored ones.
+        app.startup_folder = startup_folder;
         // The hotkey of speech input comes with the settings of this start, so it
         // works before the first save of the window.
         app.speech.configure(config);
@@ -203,8 +209,8 @@ impl HorizonApp {
             pending_detached_reattach: BTreeSet::new(),
             pending_detached_window_position_restore: BTreeSet::new(),
             session_catalog: AgentSessionCatalog::default(),
-            startup_receiver: None,
-            pending_startup_runtime_state: None,
+            session_pickup: super::session_pickup::SessionPickup::default(), startup_folder: None,
+            startup_receiver: None, pending_startup_runtime_state: None,
             pending_startup_runtime_state_changed: false,
             startup_bootstrap_failure: None, busy_claude_session_ids: std::collections::HashSet::new(),
             session_catalog_refresh: super::session::SessionCatalogRefreshState::default(),

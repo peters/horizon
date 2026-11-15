@@ -77,6 +77,7 @@ mod session;
 mod session_jobs;
 mod session_kill;
 mod session_manager;
+mod session_pickup;
 mod settings;
 mod settings_io;
 mod settings_request;
@@ -87,6 +88,7 @@ mod sidebar;
 mod speech;
 mod ssh_hosts;
 mod ssh_upload;
+mod startup_folder;
 mod startup_session;
 #[cfg(test)]
 mod test_support;
@@ -412,6 +414,12 @@ pub struct HorizonApp {
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
+    /// The sessions that the agent programs of this computer already keep, read
+    /// on a worker for the first start page and the Menu.
+    session_pickup: session_pickup::SessionPickup,
+    /// The folder of a `horizon <folder>` start, until the first frame that can
+    /// show its workspace.
+    startup_folder: Option<std::path::PathBuf>,
     startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
     pending_startup_runtime_state: Option<RuntimeState>,
     pending_startup_runtime_state_changed: bool,

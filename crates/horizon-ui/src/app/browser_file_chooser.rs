@@ -35,7 +35,7 @@ impl HorizonApp {
     }
 
     pub(super) fn host_content_dialog_open(&self) -> bool {
-        if self.saved_session_deletion.has_notice() {
+        if self.saved_session_deletion.has_notice() || self.session_pickup.window_open() {
             return true;
         }
         self.browser_file_chooser_open()

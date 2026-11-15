@@ -695,6 +695,7 @@ fn a_session_that_left_panels_out_sets_the_line_that_stays() {
             session: Box::new(session),
         },
         crate::input::ObservedKeyboardInputs::default(),
+        None,
     );
 
     assert_eq!(
