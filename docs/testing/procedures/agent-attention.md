@@ -408,6 +408,80 @@ step 6, and **pi** is the command of step 5.
     Result: the codex panel of the new run starts on the rule of its screen. No
     state of a title survives a restart of Horizon.
 
+### 6.12 A12 — A codex panel reports its turn through the program status protocol (codex)
+
+The program status protocol (OSC 7501) is the exact report of the program. A
+panel reads it in the reader of its terminal, beside the title. The report
+answers before the title does.
+
+1. Stop the fixture with `Ctrl-C`, then start it with the codex agent kind and
+   the report of the protocol:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/attention-codex-status --native-view --attention-agent 0 \
+     --attention-agent-kind codex --attention-agent-protocol
+   ```
+
+   Result: the board shows one panel, **Codex attention stand-in**. The stand-in
+   writes `ESC ] 7501 ; state=working:app=codex ST` beside the titles of a turn.
+   Watch the isolated desktop in a native VNC Device panel of your own Horizon.
+
+2. Type `start` and press Enter.
+
+   Result: the row says **Working** within one second. The report of the program
+   claims the turn, and no title is needed for it.
+
+3. Type `ask`.
+
+   Result: the row says **Needs you**. The report is
+   `state=blocked:app=codex:kind=permission`.
+
+4. Type `answer`.
+
+   Result: the row says **Working** again, in the same turn.
+
+5. Click the row of the other panel, then type `after 3 stop`.
+
+   Result: at the end of the three seconds the row of the codex panel says
+   **Done**. The report `state=done` ended the turn, and the panel had no focus.
+
+6. Click the row of the codex panel, then type `start` and `after 3 esc`.
+
+   Result: the row says **Working**, and after three seconds it says **Done**. An
+   interrupted turn reports `state=idle` and no done.
+
+7. Type `start`, then `fail`.
+
+   Result: the row says **Needs you**. A failed turn reports `state=error`, and
+   the title of the program cannot report a failure. This is the step that a
+   titles-only panel cannot pass.
+
+8. Type `foreign`.
+
+   Result: the row does not change. The report names another program in its `app`
+   value, so it claims nothing for this panel.
+
+9. Type `work 1000`.
+
+   Result: the row stays as it is, and the window shows no other word. One
+   thousand reports of the state that stands change nothing.
+
+10. Type `quit`.
+
+    Result: the stand-in ends, the panel shows that its program ended, and its row
+    shows no **Working** and no **Needs you**.
+
+11. Stop the fixture with `Ctrl-C`, start it again without
+    `--attention-agent-protocol`, and type `start` and then `ask`.
+
+    Result: the row says **Working** and then **Needs you**, from the title alone.
+    A launch that reports no state of the protocol keeps the path of its titles.
+
+**Pass criteria for A12.** Every step above shows the word that it names. A
+repeated report changes no word and no badge. A report of another program changes
+nothing.
+
 ## 7. Pass criteria
 
 - Each of the four states appears in the panel row and in the workspace badge as
@@ -428,6 +502,10 @@ step 6, and **pi** is the command of step 5.
   its own terminal, keeps **Working** while its screen is still, keeps its turn
   through a plain title of a tenth of a second, shows **Done** after an
   interrupted turn, and shows no claim after its program ended.
+- A codex panel that reports the program status protocol reaches **Working**,
+  **Needs you** and **Done** from the report of the program, shows **Needs you**
+  for a failed turn, changes no word for a repeated report or for a report of
+  another program, and shows no claim after its program ended.
 - No step needs a login of an agent.
 
 ## 8. Cleanup

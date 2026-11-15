@@ -211,6 +211,16 @@ fn a_clear_forgets_the_launch() {
 }
 
 #[test]
+fn a_repeated_clear_does_no_work() {
+    let mut claim = claimed(&[ProgramStatus::Clear]);
+    let before = claim.clone();
+    claim.hear(ProgramStatus::Clear, 9_000);
+    assert_eq!(claim.ledger().state, before.ledger().state);
+    assert_eq!(claim.ledger().updated_at_millis, before.ledger().updated_at_millis);
+    assert!(!claim.answers());
+}
+
+#[test]
 fn a_report_that_claims_nothing_changes_nothing() {
     let mut claim = claimed(&[ProgramStatus::Working]);
     let before = claim.ledger().clone();

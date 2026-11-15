@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/panel.rs,crates/horizon-core/src/panel/agent_status.rs,crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
+applyTo: "crates/horizon-core/src/panel.rs,crates/horizon-core/src/panel/agent_status.rs,crates/horizon-core/src/agent_work/**,crates/horizon-pty-tap/**,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/terminal/events.rs,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
 ---
 
 # Trust boundary of the agent work ledger and of the attention state
@@ -16,12 +16,14 @@ programs use it, and the third needs nothing of Horizon:
   with one call for each event. It sends no text of the person and no text of the
   model, it waits for no answer, and it does nothing at all when the five
   `HORIZON_WORK_*` variables of the launch are absent.
-- A **Codex** launch receives no argument and no file for its state. Codex writes
-  its state into the title of the terminal that runs it, and the reader of the
-  panel already holds every title that the program writes (OSC 0 and OSC 2).
-  Horizon matches the title of a panel of that kind against one table
-  (`crates/horizon-core/src/agent_work/title.rs`), and the matched state enters
-  the same turn ledger that a hook event writes.
+- A **Codex** launch receives no argument and no file for its state. Codex
+  reports its state with the Program Status Protocol (OSC 7501), which the reader
+  of the panel hands over (`crates/horizon-pty-tap`), and it also writes the state
+  into the title of its terminal, which the VT parser already hands on. Horizon
+  matches the payload of a panel of that kind against one table
+  (`crates/horizon-core/src/agent_work/program_status.rs`), matches the title
+  against another (`crates/horizon-core/src/agent_work/title.rs`), and both
+  matched states enter the same turn ledger that a hook event writes.
 
 Each event or title claim writes the state of one **work ledger** per panel. A
 hook event writes the record of the panel in the Horizon home, and a title claim
@@ -141,6 +143,49 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   answer differs from the one before it. A record leaves the home on a worker
   thread when its panel closes.
 
+## Untrusted: every byte of a panel's output
+
+A program in a terminal panel controls every byte of its own output, and the
+report of the program status protocol is one of those bytes. Horizon reads it in
+the reader of the panel's PTY, because the VT parser of this workspace drops a
+private OSC number.
+
+- **The scanner is bounded.** It keeps at most 256 bytes of one payload, and a
+  longer report is read to its end and dropped whole, as the protocol allows a
+  terminal to choose a lower limit than its 4096 bytes. It allocates nothing, it
+  cannot block, and it cannot panic on any byte of a stream, including a sequence
+  that a read splits at any byte and bytes that are not UTF-8.
+- **The screen is unchanged.** The reader hands every byte to the VT parser
+  before the scanner looks at it, so the grid of the panel shows what the program
+  wrote, with or without a report.
+- **The reader never waits for a frame.** A complete payload reaches a queue of
+  eight reports that drops its oldest entry, and a frame reads the newest one. A
+  program that writes as fast as it can therefore slows neither the event loop nor
+  the frame, and a report that a newer one replaced before a frame ran is not
+  replayed.
+- **A report answers for one panel.** The bytes come from the program of that
+  panel's own PTY, so one panel cannot report the state of another. There is no
+  file and no identity to forge, and the claim never leaves the process.
+- **`app` is a claim, and it only selects the table.** A panel of the Codex kind
+  reads a report only while its `app` value is `codex`. A report of another
+  program, a report with no `app`, a report of a record beneath the root, a state
+  that the protocol does not name and a report that is not UTF-8 claim nothing.
+- **No text of a report is stored.** The parser keeps the state and drops the
+  keys: the `kind` of a wait, the `progress`, the `msg`, the `title` and the `id`
+  of a record never reach a field, a view or a file.
+- **A report opens and closes only its own turn.** A report names no turn, so the
+  claim numbers one from a counter of the launch. A repeated report of the state
+  that stands does no work, a `done`, an `error` or an `idle` ends only the turn
+  that the claim holds open, and a `clear` forgets the launch. A launch that
+  Horizon started again is a launch of its own.
+- **One source answers, in one order.** A record of a hook answers first, then
+  the reports of the protocol, then the title, then the screen. A launch that has
+  given one recognized report no longer reads its title, so a person who changes
+  the title of a program cannot overrule a report.
+- **The answer is constant.** The only bytes that Horizon writes for the protocol
+  are the reply to its feature detection query, which is one constant sequence
+  and holds nothing of any report. The protocol forbids any other write.
+
 ## Untrusted: the title of a panel, when its agent kind has a rule
 
 The title is the program's own statement about its own panel. Codex writes it
@@ -187,15 +232,22 @@ second pass over the output of the terminal.
   two adapters that ship with Horizon. The stand-in of the fixture and an adapter
   that a person adds send their own events, and Horizon cannot tell how such an
   adapter counted its work.
-- **A private sequence of a program in a terminal is not read.** A program in a
-  panel can write a sequence of its own into its terminal stream, such as the
-  `7501` state sequence that Codex writes. Horizon does not read it: the VT
-  parser of the terminal drops a private OSC sequence, and the terminal wrapper
-  of this workspace forbids the `unsafe` code that a read of those bytes would
-  need. The title of the panel is the one sequence of a program that Horizon
-  reads, because the parser already hands it on. A hostile program in a panel can
-  claim a state for its own panel through the report of its launch or through its
-  title, and it cannot claim one for another panel.
+- **Two sequences of a program are read, and no others.** Horizon reads the
+  report of the program status protocol from the reader of the panel's PTY, and
+  the title of the panel from the VT parser. Every other private sequence of a
+  program is dropped. A hostile program in a panel can claim a state for its own
+  panel through a report, a title or the events of its launch, and it cannot claim
+  one for another panel.
+- **A report that a newer one replaced is lost.** The protocol keeps one record
+  for a panel, so the queue hands on the newest report of a frame and no backlog.
+  A program that writes `error` and then `idle` before a frame runs shows the turn
+  as interrupted rather than failed. Real programs pace their reports, and Codex
+  has no error state.
+- **A `clear` with no `app` claims nothing.** The protocol's own exit sequence is
+  `state=clear` without `app`, and this panel reads a report only while it names
+  the program of the kind. The end of the program is what clears the row, so the
+  visible result is the same, and the record of a claim that speaks the protocol
+  stays until the next launch.
 - **The title claim is not exact.** It names no turn identity, no tool and no
   count of background work. A failed turn and an interrupted turn end like a
   finished one, so **Background** never comes from a Codex panel. A denied

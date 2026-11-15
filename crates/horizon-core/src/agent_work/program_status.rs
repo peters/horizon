@@ -159,10 +159,11 @@ pub struct ProgramClaim {
 
 impl ProgramClaim {
     /// Whether a program of this launch reported a state. A launch that has
-    /// reported once answers for its panel, and its title is no longer read.
+    /// reported once answers for its panel, and its title is no longer read. The
+    /// `clear` of a program removes that answer again.
     #[must_use]
     pub fn answers(&self) -> bool {
-        self.heard.is_some()
+        matches!(self.heard, Some(status) if status != ProgramStatus::Clear)
     }
 
     /// The ledger of the claim, read the way the record of a launch with hooks is.
@@ -178,8 +179,12 @@ impl ProgramClaim {
         }
         if status == ProgramStatus::Clear {
             // The program removes its record: the panel answers from the screen
-            // again, as a panel that started now does.
-            *self = Self::default();
+            // again, as a panel that started now does. The report stays the state
+            // that this claim heard, so a repeated `clear` does no work.
+            *self = Self {
+                heard: Some(ProgramStatus::Clear),
+                ..Self::default()
+            };
             return;
         }
         self.heard = Some(status);

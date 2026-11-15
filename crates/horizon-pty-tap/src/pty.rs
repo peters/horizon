@@ -52,12 +52,6 @@ where
             inbox,
         ))
     }
-
-    /// The PTY that this wrapper owns.
-    #[must_use]
-    pub fn inner(&self) -> &P {
-        &self.pty
-    }
 }
 
 impl<P> EventedReadWrite for TapPty<P>

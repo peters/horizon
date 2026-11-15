@@ -95,7 +95,8 @@ when it names one of those kinds.
   `#![deny(unsafe_code)]` with one scoped `#[allow]` and a `// SAFETY:`
   rationale each; the exception must not widen. The crates permitted
   to use scoped unsafe code are `horizon-wayland` and its single call site
-  in `horizon-ui`; every other crate keeps `forbid`.
+  in `horizon-ui`; every other crate keeps `forbid`, except the one function
+  that `horizon-pty-tap` describes below.
 - `wayland-client` is requested with its `system` feature explicitly, since
   only the libwayland backend can adopt a foreign display. The bridge is
   Linux-only and returns `None` off Wayland, so X11 sessions keep the XInput
@@ -214,6 +215,29 @@ when it names one of those kinds.
   bounds of a connect, and `remote_browser.rs` holds the two `sh` snippets that
   start a Chromium and read its endpoint. The crate holds no Horizon program on
   the far side and no record file.
+
+### `horizon-pty-tap`
+
+- Owns the reader of a panel's pseudo terminal that reports the program status
+  protocol (OSC 7501) of the program in it. The VT parser of this workspace drops
+  a private OSC number, so the crate wraps the PTY in `TapPty`: every call of the
+  terminal event loop reaches the PTY that the wrapper owns, and its reader hands
+  every byte on unchanged while a bounded scanner looks at it.
+- The interface it implements, `alacritty_terminal::tty::EventedReadWrite`, cannot
+  be implemented without one `unsafe fn`, because the trait declares `register` as
+  an unsafe function and the wrapper must forward it. That forward is the only
+  `unsafe` in the crate: the wrapper registers exactly the sources of the PTY it
+  owns and adds no source of its own. It is why this crate carries
+  `#![deny(unsafe_code)]` with one scoped `#[allow(unsafe_code)]` and a
+  `// SAFETY:` rationale, and why every other crate keeps `forbid`.
+- The scanner keeps at most 256 bytes of one payload, drops a longer report whole,
+  allocates nothing and cannot block or panic on any byte of a stream. A complete
+  payload reaches a frame through a queue of eight reports that drops its oldest
+  entry, so the event loop thread never waits for the UI thread, and a report
+  that a newer one replaced before a frame ran is not replayed.
+- The crate depends on `alacritty_terminal` and on `polling` for the types that
+  the forwarded method names. It holds no state of the product: the panel parses
+  the payload and owns the claim, so this crate has no Horizon dependency.
 
 ### `horizon-core`
 

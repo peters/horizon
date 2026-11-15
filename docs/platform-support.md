@@ -120,15 +120,21 @@ function, update this document in the same PR.
     file. The file must be on the computer that runs pi: Horizon writes it into
     the home of its own computer, so a pi panel of another computer would need its
     own copy there, and Horizon does not place one today. A Codex launch needs no
-    argument, no file and no setting of Codex: Codex writes its state into the
-    title of its own terminal, which the panel already reads
-    (`crates/horizon-core/src/agent_work/title.rs`). A `tmux` between Codex and
-    Horizon keeps the titles of its panes, so such a panel reports only when that
-    `tmux` sets `set-titles on` and `set-titles-string '#{pane_title}'`; the
-    default setting of `tmux` gives no title, and its default string prefixes the
-    pane title with the session name, which Horizon reads as no state. The other
-    agents keep the rule of their screen on both systems: Horizon does not read
-    the private state sequence of Codex, because the terminal parser drops it.
+    argument, no file and no setting of Codex: Codex reports its state with the
+    program status protocol (OSC 7501), which the reader of the panel's terminal
+    hands over (`crates/horizon-pty-tap`,
+    `crates/horizon-core/src/agent_work/program_status.rs`), and it also writes
+    the state into the title of that terminal
+    (`crates/horizon-core/src/agent_work/title.rs`), which the panel reads when no
+    report arrives. The reader of the panel is the one place of the product that
+    carries a scoped `unsafe` function, because the interface of the terminal
+    library declares the method it forwards as `unsafe`. A `tmux` between Codex
+    and Horizon drops the report of the protocol, and it keeps the titles of its
+    panes, so such a panel reports only when that `tmux` sets `set-titles on` and
+    `set-titles-string '#{pane_title}'`; the default setting of `tmux` gives no
+    title, and its default string prefixes the pane title with the session name,
+    which Horizon reads as no state. The other agents keep the rule of their
+    screen on both systems.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux

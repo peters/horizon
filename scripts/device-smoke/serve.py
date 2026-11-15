@@ -117,6 +117,9 @@ FILE_AGENT_LAUNCHER = 'file-agent.sh'
 FIXTURE_FOLDER = Path(__file__).resolve().parent
 WORKTREE_CARD_PROGRAM = 'card_agent.py'
 ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
+# The argument that makes the stand-in of a codex panel report the program status
+# protocol beside the titles of its turn.
+ATTENTION_PROTOCOL_ARGUMENT = '--protocol'
 ATTENTION_CODEX_STANDIN_PROGRAM = 'codex_attention_standin.py'
 # The script that the panel of each agent kind of the stand-in runs. A pi launch
 # receives the same five variables of a work launch, and the stand-in of the
@@ -687,7 +690,7 @@ def panel_programs_in_state(panels, state, folder=None):
 
 
 def attention_agent(state, timer=6.0, program_folder=None, count=1, command=False,
-                    kind='claude'):
+                    kind='claude', protocol=False):
     """The panel entries and the program folder of the stand-in agent.
 
     The sidebar takes the state of an agent panel from the work ledger of its
@@ -710,6 +713,10 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
     the work hooks to the launch, and `pi` attaches the state report extension. Both
     report through the work entry of the candidate, and the stand-in is the program
     of the panel either way: `claude` or `pi` on the `PATH` of the candidate.
+
+    `protocol` starts the stand-in of a codex panel with `--protocol`, so it writes
+    the reports of the program status protocol beside the titles of its turn, as
+    the real program does with no configuration.
 
     Answers the panel entries of the fixture config and the folder to put first on
     the `PATH` of the candidate.
@@ -744,6 +751,8 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
         folder = work if total == 1 else work / f'panel-{index + 1}'
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         panel['cwd'] = str(folder)
+        if protocol:
+            panel['args'] = [ATTENTION_PROTOCOL_ARGUMENT]
         if own_command:
             # The preset runs the stand-in itself, so Horizon gives it no name to
             # resolve on the `PATH`; the copy in the state folder is the program.
@@ -1123,6 +1132,11 @@ def arguments():
              'ledger of that panel too, so the sidebar shows its state while no resume is offered. '
              'Needs --attention-agent, and both flags open at most four panels')
     parser.add_argument(
+        '--attention-agent-protocol', action='store_true',
+        help='Start the stand-in of a codex panel with --protocol, so it writes the reports of '
+             'the program status protocol beside the titles of its turn, as the real program '
+             'does. Needs --attention-agent with the codex kind')
+    parser.add_argument(
         '--attention-agent-kind', choices=ATTENTION_KINDS, default=ATTENTION_KINDS[0],
         help='The agent kind of the stand-in panels: claude attaches the plugin folder of the '
              'work hooks to the launch, pi attaches the state report extension of the candidate, '
@@ -1330,7 +1344,8 @@ def main():
             # procedure are the first ones that the person sees.
             panels, attention_bin = attention_agent(
                 args.state, args.attention_agent, count=args.attention_agent_count or 1,
-                command=args.attention_agent_command, kind=args.attention_agent_kind)
+                command=args.attention_agent_command, kind=args.attention_agent_kind,
+                protocol=args.attention_agent_protocol)
             extra_panels = panels
             # The children of this run keep this object, so the value is changed
             # here and not by a second dictionary.

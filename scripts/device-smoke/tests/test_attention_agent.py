@@ -283,6 +283,26 @@ class AttentionAgentTests(unittest.TestCase):
             self.assertNotEqual(own['cwd'], default['cwd'], 'each panel writes its own session')
             self.assertEqual(default['name'], 'Pi attention stand-in 1', 'a count names the cells')
 
+    def test_the_protocol_of_a_codex_panel_is_an_argument_of_its_entry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, _bin_dir = serve.attention_agent(state, 0, kind='codex', protocol=True)
+            self.assertEqual(panels[0]['kind'], 'codex')
+            self.assertEqual(
+                panels[0]['args'],
+                [serve.ATTENTION_PROTOCOL_ARGUMENT],
+                'the stand-in writes the reports of the program status protocol',
+            )
+            self.assertIsNone(panels[0]['command'], 'the default command is the stand-in of the kind')
+
+    def test_a_panel_without_the_protocol_names_no_argument(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder) / 'state'
+            state.mkdir()
+            panels, _bin_dir = serve.attention_agent(state, 0, kind='codex')
+            self.assertEqual(panels[0]['args'], [], 'the titles alone are the report of that panel')
+
     def test_an_unknown_agent_kind_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'

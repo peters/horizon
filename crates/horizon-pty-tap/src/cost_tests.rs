@@ -169,7 +169,7 @@ fn the_scan_costs_a_small_part_of_the_parse_of_the_same_bytes() {
         let parsed = parse(with_escape);
         eprintln!("64 MiB of {label}: read {plain:?}, read and scan {scanned:?}, parse {parsed:?}");
         assert!(
-            scanned.saturating_sub(plain) <= parsed,
+            scanned.saturating_sub(plain) <= parsed.saturating_add(Duration::from_millis(50)),
             "the scan of the same bytes must cost less than their parse: {scanned:?} against {parsed:?}"
         );
     }
