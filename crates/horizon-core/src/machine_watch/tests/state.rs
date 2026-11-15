@@ -104,9 +104,8 @@ fn the_title_of_a_waiting_agent_needs_the_person() {
     model.observe(&one(TitleState::NeedsYou, false));
     assert_eq!(state(&model), AgentState::NeedsYou);
     assert_eq!(AgentState::NeedsYou.word(), Some("Needs you"));
-    assert_eq!(
-        model.mark_seen("hz-1", "%0"),
-        false,
+    assert!(
+        !model.mark_seen("hz-1", "%0"),
         "a look does not answer the question of the agent"
     );
     assert_eq!(state(&model), AgentState::NeedsYou);
@@ -142,7 +141,7 @@ fn a_working_line_of_the_screen_answers_when_the_title_names_no_state() {
 fn a_pane_that_leaves_drops_its_row_and_comes_back_as_a_first_sight() {
     let mut model = MachineModel::new("build-1");
     model.observe(&one(TitleState::Working, false));
-    assert!(model.rows()[0].machine == "build-1");
+    assert_eq!(model.rows()[0].machine, "build-1");
     assert!(model.observe(&[]), "a report without the pane is a change");
     assert!(model.rows().is_empty(), "the row left with its pane");
     assert!(!model.observe(&[]), "an empty report of an empty model changes nothing");

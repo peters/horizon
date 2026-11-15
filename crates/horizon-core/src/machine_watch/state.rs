@@ -163,46 +163,43 @@ impl MachineModel {
                 TitleState::Plain if observation.working => AgentState::Working,
                 TitleState::Plain => AgentState::Idle,
             };
-            match self.panes.get_mut(&key) {
-                Some(held) => {
-                    if held.working && !working {
-                        // The turn ended in this report, which is after every look
-                        // of the person before it.
-                        held.unread = true;
-                    }
-                    held.working = working;
-                    let state = match state {
-                        AgentState::Idle if held.unread => AgentState::Done,
-                        state => state,
-                    };
-                    if state != held.state {
-                        held.state = state;
-                        changed = true;
-                    }
-                    if held.kind != observation.kind {
-                        held.kind = observation.kind;
-                        changed = true;
-                    }
-                    if held.name != observation.name {
-                        held.name.clone_from(&observation.name);
-                        changed = true;
-                    }
+            if let Some(held) = self.panes.get_mut(&key) {
+                if held.working && !working {
+                    // The turn ended in this report, which is after every look
+                    // of the person before it.
+                    held.unread = true;
                 }
-                None => {
-                    // The first sight of an idle pane claims nothing: the watch may
-                    // start long after the turn of another person ended there.
-                    self.panes.insert(
-                        key,
-                        PaneState {
-                            kind: observation.kind,
-                            name: observation.name.clone(),
-                            state,
-                            working,
-                            unread: false,
-                        },
-                    );
+                held.working = working;
+                let state = match state {
+                    AgentState::Idle if held.unread => AgentState::Done,
+                    state => state,
+                };
+                if state != held.state {
+                    held.state = state;
                     changed = true;
                 }
+                if held.kind != observation.kind {
+                    held.kind = observation.kind;
+                    changed = true;
+                }
+                if held.name != observation.name {
+                    held.name.clone_from(&observation.name);
+                    changed = true;
+                }
+            } else {
+                // The first sight of an idle pane claims nothing: the watch may
+                // start long after the turn of another person ended there.
+                self.panes.insert(
+                    key,
+                    PaneState {
+                        kind: observation.kind,
+                        name: observation.name.clone(),
+                        state,
+                        working,
+                        unread: false,
+                    },
+                );
+                changed = true;
             }
         }
         let before = self.panes.len();

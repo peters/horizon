@@ -179,7 +179,7 @@ pub fn parse_report(lines: &[Vec<u8>]) -> Result<Report, ReportError> {
             reason: "the report is empty",
         });
     };
-    parsed.header(first)?;
+    header(first)?;
     if *last != "Z" {
         return Err(ReportError::Shape {
             line: text.len(),
@@ -199,24 +199,25 @@ struct Parsed {
     panes: Vec<PaneReport>,
 }
 
-impl Parsed {
-    fn header(&mut self, line: &str) -> Result<(), ReportError> {
-        let fields: Vec<&str> = line.split('\t').collect();
-        let ["HZ", version] = fields.as_slice() else {
-            return Err(ReportError::Shape {
-                line: 1,
-                reason: "the report does not start with its header",
-            });
-        };
-        if *version != WATCH_FORMAT_VERSION.to_string() {
-            return Err(ReportError::Version {
-                version: (*version).to_owned(),
-                expected: WATCH_FORMAT_VERSION,
-            });
-        }
-        Ok(())
+/// Reads the header of a report, which names the version of its format.
+fn header(line: &str) -> Result<(), ReportError> {
+    let fields: Vec<&str> = line.split('\t').collect();
+    let ["HZ", version] = fields.as_slice() else {
+        return Err(ReportError::Shape {
+            line: 1,
+            reason: "the report does not start with its header",
+        });
+    };
+    if version.parse::<u32>().ok() != Some(WATCH_FORMAT_VERSION) {
+        return Err(ReportError::Version {
+            version: (*version).to_owned(),
+            expected: WATCH_FORMAT_VERSION,
+        });
     }
+    Ok(())
+}
 
+impl Parsed {
     fn line(&mut self, line: &str, number: usize) -> Result<(), ReportError> {
         let shape = |reason: &'static str| ReportError::Shape { line: number, reason };
         let Some((kind, rest)) = line.split_once('\t') else {

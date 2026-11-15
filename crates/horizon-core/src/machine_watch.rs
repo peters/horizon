@@ -28,16 +28,21 @@
 use std::time::Duration;
 
 mod agents;
+mod reader;
 mod remote;
 mod report;
+mod snapshot;
 mod state;
+mod supervisor;
 #[cfg(test)]
 mod tests;
 
 pub use agents::{AgentObservation, AgentPrograms, observations};
 pub use remote::{REMOTE_TEXT, WatchTarget};
 pub use report::{MachineNote, PaneReport, Report, ReportError, parse_report};
+pub use snapshot::{MachineWatchSnapshot, MachineWatchState, Shared, WatchLink, WatchRefusal, unix_millis};
 pub use state::{AgentState, MachineAgent, MachineModel};
+pub use supervisor::MachineWatch;
 
 /// The version of the format of one report of a machine. A report of another
 /// version is dropped whole.
@@ -81,3 +86,7 @@ pub const MAX_WATCHED_MACHINES: usize = 8;
 /// How long the stop of one watch waits for its `ssh` child and for its reader
 /// before it kills the child and gives up on the thread.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The bytes of the standard error of one `ssh` child that the watch keeps to
+/// classify a refusal. The words are dropped after the classification.
+pub const MAX_REFUSAL_BYTES: usize = 1024;

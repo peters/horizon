@@ -6,4 +6,5 @@
 mod remote;
 mod report;
 mod state;
+mod supervisor;
 mod support;

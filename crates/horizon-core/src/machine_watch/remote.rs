@@ -1,9 +1,9 @@
 //! The text that one watch runs on its machine, and the whole `ssh` command line
 //! of that watch.
 //!
-//! [`REMOTE_TEXT`] is one constant of this build. It is POSIX `sh` that runs on
-//! `dash`, on `bash` and on the `sh` of BusyBox, and it uses `tmux`, `ps` and the
-//! built-ins of `sh`. No value of a machine record and no value of a report takes
+//! [`REMOTE_TEXT`] is one constant of this build. It is POSIX shell that runs on
+//! `dash`, on `bash` and on the shell of `BusyBox`, and it uses `tmux`, `ps` and the
+//! built-ins of that shell. No value of a machine record and no value of a report takes
 //! part in it: the route and the key are arguments of `ssh`, and the text itself
 //! names the two programs that it runs.
 //!
@@ -27,7 +27,7 @@ use crate::ssh::{MachineKeys, SshConnection};
 /// It reads the panes of every `tmux` session of that user. A machine with no
 /// `tmux`, or with no `tmux` server, says that in one line and repeats it at the
 /// slower interval.
-pub const REMOTE_TEXT: &str = r##"V=1
+pub const REMOTE_TEXT: &str = r#"V=1
 FAST=2
 SLOW=30
 # The tmux of the watch: the private server of a test, or the person's own.
@@ -96,17 +96,18 @@ while :; do
   if [ "$now" = "$last" ]; then printf 'B\n'; else printf '%s\n' "$now"; last=$now; fi
   sleep "$step"
 done
-"##;
+"#;
 
 /// One machine that the watch reaches: its name and the whole `ssh` command line
 /// of the watch of that machine.
 ///
-/// The command line is the one that a terminal of that machine builds, with the
-/// text of the watch in place of the session command: the route of the record,
-/// `BatchMode=yes`, the connect bound and the keepalives of a machine terminal,
+/// The command line holds what the login of a terminal of that machine holds: the
+/// route of the record, the connect bound and the keepalives of a machine terminal,
 /// and, when the record binds a machine key, that key file, `IdentitiesOnly`,
-/// `IdentityAgent=none` and the known-hosts file of that key. The watch asks for
-/// no terminal, so the command line holds no `-t`.
+/// `IdentityAgent=none` and the known-hosts file of that key. It adds
+/// `BatchMode=yes`, so an attempt that the machine would answer with a prompt fails
+/// instead, and it asks for no terminal, so it holds no `-t`. The last argument is
+/// [`REMOTE_TEXT`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WatchTarget {
     /// The name of the machine in the machine list.
@@ -131,15 +132,20 @@ impl WatchTarget {
         // report is a pipe and not a screen.
         let mut terminal = record.checked_terminal()?;
         terminal.remote_command = None;
-        let mut connection = match machines.key(&record.name) {
+        let connection = match machines.key(&record.name) {
             Some(key) => SshConnection::for_agent_terminal_with_key(&terminal, &keys.binding(key)),
             None => SshConnection::for_agent_terminal(&terminal),
         }
         .as_machine_terminal();
-        connection.remote_command = Some(REMOTE_TEXT.to_owned());
+        // The login of a machine terminal, in the form that a child with its own
+        // bounds takes: `BatchMode=yes`, so a machine that asks for a password or a
+        // passphrase fails an attempt instead of waiting for a person who is not
+        // there. The text of the watch is one argument of the remote command.
+        let mut args = connection.ssh_transport_args();
+        args.push(REMOTE_TEXT.to_owned());
         Ok(Self {
             machine: record.name.clone(),
-            args: connection.to_command_args(),
+            args,
         })
     }
 }
