@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::Context;
+use horizon_core::agent_work::TurnState;
 use horizon_core::{Attention, Config, PanelId, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 
 use crate::app::HorizonApp;
@@ -344,6 +345,43 @@ fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
         stand_in.wait_for(Attention::Idle),
         "the ready report of a launch clears its own question, which showed {:?}",
         stand_in.shown()
+    );
+    stand_in.word("quit");
+}
+
+#[test]
+fn a_denied_approval_is_an_interrupted_turn() {
+    let Some(mut stand_in) = StandIn::start(true) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    stand_in.word("start");
+    assert!(stand_in.wait_for(Attention::Working));
+    stand_in.word("ask");
+    assert!(
+        stand_in.wait_for(Attention::NeedsYou),
+        "the approval that waits, which showed {:?}",
+        stand_in.shown()
+    );
+
+    // The person denies the approval. The program writes a plain title and reports
+    // that it is idle, with no done: the turn was stopped, not finished.
+    stand_in.app.board.focused = None;
+    stand_in.word("deny");
+    let local_id = stand_in.local_id.clone();
+    assert!(
+        stand_in.wait_until(|app| app.attention.states.turn_state(&local_id) == TurnState::Interrupted),
+        "a denied approval ends as an interrupted turn, and its record says {:?}",
+        stand_in.app.attention.states.turn_state(&local_id)
+    );
+    assert_eq!(
+        stand_in.shown(),
+        Attention::Done,
+        "the word of an interrupted turn that the person did not see"
+    );
+    assert!(
+        stand_in.app.attention.states.from_status(&local_id),
+        "the report of the program answered for the panel, not its title"
     );
     stand_in.word("quit");
 }

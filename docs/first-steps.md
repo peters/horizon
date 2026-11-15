@@ -444,6 +444,9 @@ The three reports have limits that their programs set:
   says **Needs you**. A turn that you interrupt reports the idle state, and its
   row reaches **Done** as a finished turn does: the record keeps a finished turn
   and an interrupted turn apart, and the row says the same word for both.
+- An approval that you deny ends its turn as an interruption too, and its row
+  leaves **Needs you**: the request that you refused closes with the turn. A turn
+  that you deny is not a finished turn, so Horizon offers no continuation for it.
 - A Codex panel whose title claims a state reports only while the title takes one
   of the two forms: a person who changes the title setting of Codex, and another
   version of Codex with another title, keep the rule of the screen. Under `tmux`

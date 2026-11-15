@@ -229,6 +229,26 @@ fn a_plain_title_of_an_earlier_turn_cannot_close_the_turn_of_a_newer_one() {
 }
 
 #[test]
+fn a_wait_that_a_plain_title_ends_is_an_interrupted_turn() {
+    let mut claim = ready_claim();
+    claim.hear(TitleState::Working, 10);
+    claim.hear(TitleState::NeedsYou, 20);
+    assert_eq!(claim.ledger().state, TurnState::Blocked);
+
+    // The person denies the approval. A program writes no title for the denial, so
+    // the plain title after it ends the turn, and a turn that an approval stopped
+    // is an interrupted turn.
+    claim.hear(TitleState::Plain, 30);
+    assert!(claim.settle(30 + TITLE_SETTLE_MILLIS));
+    assert_eq!(claim.ledger().state, TurnState::Interrupted);
+    // A turn that ends without a wait finishes.
+    claim.hear(TitleState::Working, 1_000);
+    claim.hear(TitleState::Plain, 1_010);
+    assert!(claim.settle(1_010 + TITLE_SETTLE_MILLIS));
+    assert_eq!(claim.ledger().state, TurnState::Finished);
+}
+
+#[test]
 fn the_start_up_of_a_launch_claims_no_turn() {
     let mut claim = TitleClaim::default();
     assert!(!claim.answers(), "no title of this launch has claimed a state");

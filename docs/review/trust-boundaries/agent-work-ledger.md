@@ -173,6 +173,12 @@ private OSC number.
 - **No text of a report is stored.** The parser keeps the state and drops the
   keys: the `kind` of a wait, the `progress`, the `msg`, the `title` and the `id`
   of a record never reach a field, a view or a file.
+- **A turn that ends while a wait is open is the end of that wait.** The ledger
+  keeps a turn whose question no answer closed **Needs you**, so a `done`, an
+  `error` or an `idle` removes the request of the wait before the turn closes. An
+  approval that the person denies reports `idle` and no done, so its turn is an
+  interrupted turn and not a finished one, and the row returns to no state instead
+  of staying **Needs you**.
 - **A report opens and closes only its own turn.** A report names no turn, so the
   claim numbers one from a counter of the launch. A repeated report of the state
   that stands does no work, a `done`, an `error` or an `idle` ends only the turn
@@ -271,9 +277,10 @@ second pass over the output of the terminal.
   visible result is the same, and the record of a claim that speaks the protocol
   stays until the next launch.
 - **The title claim is not exact.** It names no turn identity, no tool and no
-  count of background work. A failed turn and an interrupted turn end like a
-  finished one, so **Background** never comes from a Codex panel. A denied
-  approval shows **Needs you** until the next title of that panel says otherwise.
+  count of background work. A failed turn ends like a finished one, so
+  **Background** never comes from a Codex panel. A denial has no title of its own:
+  the plain title that the program writes after it ends the turn that the approval
+  waited in, and that end is an interrupted turn.
 - **A title through a multiplexer depends on that multiplexer.** `tmux` keeps the
   titles of its panes. A Codex panel behind such a `tmux` reports only when that
   `tmux` sets `set-titles on` and `set-titles-string '#{pane_title}'`, and it

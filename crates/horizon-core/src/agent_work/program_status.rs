@@ -263,11 +263,22 @@ impl ProgramClaim {
 
     /// Ends the turn that the claim holds open, and nothing when it holds none: a
     /// report of a turn that ended cannot end another one.
+    ///
+    /// A turn that ends while an approval waited is a turn that the person stopped
+    /// or answered: a denial and an interruption leave a request that no answer
+    /// closed, so it is removed before the turn closes. The ledger keeps a turn
+    /// whose question is still open blocked, and a denial would stay **Needs you**
+    /// for the rest of the turn.
     fn end(&mut self, state: TurnState, now_millis: i64) {
         if !self.open() {
             return;
         }
         let prompt = self.ledger.prompt_id.clone();
+        if self.ledger.state == TurnState::Blocked {
+            let wait = format!("status-wait-{}", self.turn);
+            self.ledger
+                .apply(&Self::event("PostToolUse", prompt.clone(), Some(wait)), now_millis);
+        }
         let name = match state {
             TurnState::Failed => "StopFailure",
             TurnState::Interrupted => "Interrupt",

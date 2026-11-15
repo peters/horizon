@@ -153,6 +153,18 @@ fn the_words_of_a_turn_reach_the_four_states() {
 }
 
 #[test]
+fn a_wait_that_an_idle_report_ends_is_an_interrupted_turn() {
+    // The person denies the approval: the program reports idle and no done.
+    let denied = claimed(&[ProgramStatus::Working, ProgramStatus::Blocked, ProgramStatus::Idle]);
+    assert_eq!(denied.ledger().state, TurnState::Interrupted, "a denial stops the turn");
+    assert!(denied.ledger().prompt_id.is_some(), "the turn keeps its identity");
+
+    // An approval that the person allows and a turn that then finishes is a finish.
+    let allowed = claimed(&[ProgramStatus::Working, ProgramStatus::Blocked, ProgramStatus::Done]);
+    assert_eq!(allowed.ledger().state, TurnState::Finished);
+}
+
+#[test]
 fn a_launch_that_reports_once_answers_for_its_panel() {
     assert!(
         claimed(&[ProgramStatus::Idle]).answers(),

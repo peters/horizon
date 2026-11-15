@@ -411,6 +411,14 @@ impl AttentionBoard {
         self.panels.get(panel).map_or(Attention::Idle, Panel::attention)
     }
 
+    /// The state of the turn of `panel` that its record holds, which the words of a
+    /// row show as one of four. A finished turn and an interrupted turn share one
+    /// word, so a caller that must tell them apart reads this.
+    #[must_use]
+    pub fn turn_state(&self, panel: &str) -> TurnState {
+        self.panels.get(panel).map_or(TurnState::Unknown, |held| held.state)
+    }
+
     /// Whether the state of `panel` comes from the titles of its own program now,
     /// because a working or waiting title of its launch has arrived.
     #[must_use]

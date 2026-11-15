@@ -390,30 +390,42 @@ step 6, and **pi** is the command of step 5.
    Result: the row says **Working** again, in the same turn, and the names are the
    same names.
 
-8. Type `plain 0.1`.
+8. Type `ask` again, then type `deny`.
+
+   CAUTION: `deny` answers an approval that the person refused. It types no
+   permission and changes no file.
+
+   Result: while the approval waits the row says **Needs you**. After `deny` the
+   row leaves **Needs you** within one second: it says **Done** while the panel
+   does not have the focus, and no word while it has. The turn was stopped and not
+   finished, and the request that you refused closed with it. The stand-in writes
+   the plain title of a stopped turn for `deny`, which is the title that the real
+   program writes after a denial.
+
+9. Type `plain 0.1`.
 
    Result: the row stays **Working**. The stand-in writes a plain title for
    0.1 seconds in the middle of the turn, and the settle time of 0.4 seconds
    keeps the turn open.
 
-9. Click the row of the other panel, then type `after 3 stop` in the codex panel.
+10. Click the row of the other panel, then type `after 3 stop` in the codex panel.
 
    Result: at the end of the three seconds the row of the codex panel says
    **Done**. The plain title of the stand-in ended the turn, and the panel had no
    focus at that moment. A click on the row of the codex panel clears the word.
 
-10. Type `start`, click the row of the other panel, then type `after 3 esc`.
+11. Type `start`, click the row of the other panel, then type `after 3 esc`.
 
    Result: after `start` the row says **Working**. At the end of the three
    seconds it says **Done**. An interrupted turn ends as a finished turn, because
    the title of Codex names no interruption.
 
-11. Type `quit`.
+12. Type `quit`.
 
     Result: the stand-in ends, the panel shows that its program ended, and its row
     shows no **Working** and no **Needs you**.
 
-12. Press `Ctrl-C` in the terminal of the fixture, then start the same command
+13. Press `Ctrl-C` in the terminal of the fixture, then start the same command
     again.
 
     Result: the codex panel of the new run starts on the rule of its screen. No
@@ -462,38 +474,46 @@ answers before the title does.
 
    Result: the row says **Working** again, in the same turn.
 
-6. Click the row of the other panel, then type `after 3 stop`.
+6. Type `ask` again, then type `deny`.
+
+   Result: while the approval waits the row says **Needs you**. After `deny` the
+   row leaves **Needs you** within one second: it says **Done** while the panel
+   does not have the focus, and no word while it has. The program reports
+   `state=idle` and no done, and the record of the turn keeps an interrupted turn,
+   so Horizon offers no continuation for it.
+
+7. Click the row of the other panel, then type `after 3 stop`.
 
    Result: at the end of the three seconds the row of the codex panel says
    **Done**. The report `state=done` ended the turn, and the panel had no focus.
 
-7. Click the row of the codex panel, then type `start` and `after 3 esc`.
+8. Click the row of the codex panel, then type `start` and `after 3 esc`.
 
    Result: the row says **Working**, and after three seconds it says **Done**. An
    interrupted turn reports `state=idle` and no done.
 
-8. Type `start`, then `fail`.
+9. Type `start`, then `fail`.
 
    Result: the row says **Needs you**. A failed turn reports `state=error`, and
    the title of the program cannot report a failure. This is the step that a
    titles-only panel cannot pass.
 
-9. Type `foreign`.
+10. Type `foreign`.
 
    Result: the row does not change. The report names another program in its `app`
    value, so it claims nothing for this panel.
 
-10. Type `work 1000`.
+11. Type `work 1000`.
 
    Result: the row stays as it is, and the window shows no other word. One
    thousand reports of the state that stands change nothing.
 
-11. Type `quit`.
+12. Type `quit`.
 
     Result: the stand-in ends, the panel shows that its program ended, and its row
     shows no **Working** and no **Needs you**.
 
-12. Stop the fixture with `Ctrl-C`, start it again without
+13. Stop the fixture with `Ctrl-C`, start it again without
     `--attention-agent-protocol`, and type `start` and then `ask`.
 
     Result: the row says **Working** and then **Needs you**, from the title alone.

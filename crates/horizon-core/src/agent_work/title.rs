@@ -242,6 +242,12 @@ impl TitleClaim {
 
     /// Ends the open turn when a plain title has stood for the settle time.
     /// Answers whether an open turn ended.
+    ///
+    /// A turn that the plain title ends while an approval waited is a turn that the
+    /// person stopped: the program writes no title for a denial, and the request
+    /// that no answer closed is removed before the turn closes. The ledger keeps a
+    /// turn whose question is still open blocked, so the wait must go first, and
+    /// the end of such a turn is an interruption and not a finish.
     pub fn settle(&mut self, now_millis: i64) -> bool {
         let Some(since) = self.plain_since_millis else {
             return false;
@@ -254,7 +260,15 @@ impl TitleClaim {
             return false;
         }
         let prompt = self.ledger.prompt_id.clone();
-        self.ledger.apply(&Self::event("Stop", prompt, None), now_millis);
+        let end = if self.ledger.state == TurnState::Blocked {
+            let wait = format!("title-wait-{}", self.turn);
+            self.ledger
+                .apply(&Self::event("PostToolUse", prompt.clone(), Some(wait)), now_millis);
+            "Interrupt"
+        } else {
+            "Stop"
+        };
+        self.ledger.apply(&Self::event(end, prompt, None), now_millis);
         true
     }
 
