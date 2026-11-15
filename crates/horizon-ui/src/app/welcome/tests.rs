@@ -113,6 +113,29 @@ fn the_line_under_the_heading_is_centred_row_by_row() {
     }
 }
 
+/// The title of a tile starts at the left edge of the tile, where the press of
+/// that tile starts. A title with centred rows that is painted at that edge
+/// hangs half outside its tile, and the first title goes under the sidebar.
+#[test]
+fn the_title_of_every_tile_starts_at_the_left_edge_of_its_tile() {
+    let (_temp, mut app) = test_app();
+    let ctx = Context::default();
+    let shapes = frame_shapes(&ctx, &mut app);
+    for tile in WelcomeTile::ALL {
+        let (title, _) = text_shape(&shapes, tile.title()).expect("the title of a tile is drawn");
+        let (press, _) = text_shape(&shapes, tile.action()).expect("the press of a tile is drawn");
+        for placed in &title.galley.rows {
+            let row_left = title.pos.x + placed.pos.x;
+            assert!(
+                (row_left - press.pos.x).abs() < 0.6,
+                "a row of the title {:?} starts at {row_left}, and its tile starts its text at {}",
+                tile.title(),
+                press.pos.x
+            );
+        }
+    }
+}
+
 #[test]
 fn the_shortcut_line_is_drawn_whole_inside_the_canvas() {
     let (_temp, mut app) = test_app();

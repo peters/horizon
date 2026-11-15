@@ -435,24 +435,33 @@ fn open_all_leaves_a_row_that_waits_for_a_confirmation_in_the_list() {
 
 #[test]
 fn the_pickup_of_this_window_is_read_from_the_stores_on_a_worker() {
-    let (_temp, ctx, mut app) = app_with_pickup(Vec::new());
-    let home = app.session_store.home().root().to_path_buf();
-    let project = home.join(".claude").join("projects").join("-repo");
-    std::fs::create_dir_all(&project).expect("the Claude store");
+    let (temp, ctx, mut app) = app_with_pickup(Vec::new());
+    // The agent programs keep their stores in the home of the person. The home of
+    // Horizon is another folder, and a store that stands there is no store of an
+    // agent program: the pickup must not read it.
+    let home = temp.path().join("home-of-the-person");
+    let horizon_home = app.session_store.home().root().to_path_buf();
+    assert_ne!(home, horizon_home);
     let folder = home.join("repo");
     std::fs::create_dir_all(&folder).expect("the folder");
-    let record = serde_json::json!({
-        "type": "user",
-        "sessionId": SESSION,
-        "cwd": folder.display().to_string(),
-    });
-    let prompt = serde_json::json!({"type": "last-prompt", "lastPrompt": "Pick this one up"});
-    std::fs::write(
-        project.join(format!("{SESSION}.jsonl")),
-        format!("{record}\n{prompt}\n"),
-    )
-    .expect("the transcript");
-    app.session_pickup = SessionPickup::default();
+    let transcript = |store_home: &Path, session: &str, prompt: &str| {
+        let project = store_home.join(".claude").join("projects").join("-repo");
+        std::fs::create_dir_all(&project).expect("the Claude store");
+        let record = serde_json::json!({
+            "type": "user",
+            "sessionId": session,
+            "cwd": folder.display().to_string(),
+        });
+        let prompt = serde_json::json!({"type": "last-prompt", "lastPrompt": prompt});
+        std::fs::write(
+            project.join(format!("{session}.jsonl")),
+            format!("{record}\n{prompt}\n"),
+        )
+        .expect("the transcript");
+    };
+    transcript(&home, SESSION, "Pick this one up");
+    transcript(&horizon_home, OTHER_SESSION, "A file in the home of Horizon");
+    app.session_pickup = SessionPickup::reading(home);
 
     // The window reads the store on its worker, so the answer comes after a frame
     // or two. The whole suite runs under the strict guard of the UI thread, so a
@@ -469,6 +478,11 @@ fn the_pickup_of_this_window_is_read_from_the_stores_on_a_worker() {
 
     let page = app.session_pickup.first_page();
     assert_eq!(page.len(), 1);
+    assert_eq!(
+        page[0].rows.len(),
+        1,
+        "the home of Horizon holds no store of an agent program"
+    );
     assert_eq!(page[0].rows[0].title, "Pick this one up");
     assert_eq!(page[0].rows[0].session_id, SESSION);
     assert_eq!(page[0].name, "repo");
