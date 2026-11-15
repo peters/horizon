@@ -156,7 +156,7 @@ fn a_new_terminal_of_a_placed_workspace_runs_ssh_into_its_own_session() {
     assert!(options.args.is_empty());
 
     let directory = keys.key_directory();
-    let remote = "tmux new-session -A -s hz-c8dfe3af-1 \\; set-option status off";
+    let remote = "tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off";
     let expected = vec![
         "-i".to_owned(),
         directory.join("build-1").display().to_string(),
@@ -216,7 +216,7 @@ fn a_machine_without_a_key_offers_the_keys_of_the_person() {
     assert!(!args.iter().any(|argument| argument.starts_with("IdentitiesOnly")));
     assert_eq!(
         args.last().map(String::as_str),
-        Some("tmux new-session -A -s hz-c8dfe3af-1 \\; set-option status off")
+        Some("tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off")
     );
 }
 
@@ -461,7 +461,7 @@ fn a_place_of_a_machine_named_an_empty_string_is_this_computer() {
 fn the_remote_command_of_a_place_keeps_the_tmux_status_line_out_of_the_panel() {
     assert_eq!(
         session_command("hz-c8dfe3af-1"),
-        "tmux new-session -A -s hz-c8dfe3af-1 \\; set-option status off"
+        "tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off"
     );
     assert_eq!(kill_command("hz-c8dfe3af-1"), "tmux kill-session -t hz-c8dfe3af-1");
 }

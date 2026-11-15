@@ -113,7 +113,7 @@ fn a_shell_panel_of_a_placed_workspace_runs_ssh_into_a_session_of_its_own() {
     assert_eq!(args[args.len() - 2], "root@203.0.113.10");
     assert_eq!(
         args.last().map(String::as_str),
-        Some("tmux new-session -A -s hz-c8dfe3af-1 \\; set-option status off"),
+        Some("tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off"),
         "the panel attaches to its own session and keeps the status line out of it"
     );
 }
@@ -145,7 +145,7 @@ fn the_person_path_makes_the_ssh_panel_and_the_next_terminal_takes_the_next_sess
             .ssh_connection
             .as_ref()
             .and_then(|connection| connection.remote_command.as_deref()),
-        Some("tmux new-session -A -s hz-c8dfe3af-1 \\; set-option status off")
+        Some("tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off")
     );
 
     let second = app
