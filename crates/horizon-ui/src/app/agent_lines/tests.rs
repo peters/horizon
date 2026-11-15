@@ -775,3 +775,54 @@ fn three_cards_on_one_side_all_draw_their_line() {
         "the three lines leave the agent panel at three places: {dots:?}"
     );
 }
+
+/// A line between two panels that stand close stays a short, plain link in the
+/// gap: every point of its curve lies between the two facing edges, and the curve
+/// never turns back along the axis of those edges.
+///
+/// The two cases are a card in the band of the agent panel and a card that stands
+/// higher than the agent panel. The distance along the axis is 14 points in both,
+/// and the second case is the one where a control point that does not follow the
+/// gap would draw the line into the card.
+#[test]
+fn a_line_between_two_panels_that_stand_close_stays_in_the_gap() {
+    for card_y in [0.0, -150.0] {
+        let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+        let card = rect(GRID.x + GRID_GAP, card_y, GRID.x, GRID.y);
+        let (_temp, ctx, mut app) = app_with_cards(agent, &[card]);
+        let card_id = card_at(&app, card);
+        let marks = frame_marks(&ctx, &mut app);
+        let agent_place = screen_place(&app, &ctx, app.board.panels[0].id);
+        let card_place = screen_place(&app, &ctx, card_id);
+        assert_eq!(marks.len(), 1, "the card beside the agent panel draws its line");
+
+        let gap = card_place.min.x - agent_place.max.x;
+        assert!(
+            (gap - GRID_GAP).abs() < 0.01,
+            "the two panels stand {GRID_GAP} points apart: {gap}"
+        );
+        let band = Rect::from_min_max(
+            Pos2::new(agent_place.max.x, agent_place.min.y.min(card_place.min.y)),
+            Pos2::new(card_place.min.x, agent_place.max.y.max(card_place.max.y)),
+        )
+        .expand(2.0);
+        for point in &marks[0].curve {
+            assert!(
+                band.contains(*point),
+                "every point of the curve lies between the two facing edges, and {point:?} does not: {band:?}"
+            );
+        }
+        for pair in marks[0].curve.windows(2) {
+            assert!(
+                pair[1].x >= pair[0].x - 0.01,
+                "the curve never turns back along the axis of the two facing edges: {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            (marks[0].curve.last().expect("a last point").x - marks[0].ring.x).abs() < 0.01,
+            "the curve reaches the ring at the edge of the card"
+        );
+    }
+}

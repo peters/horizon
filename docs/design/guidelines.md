@@ -678,7 +678,11 @@ workspace, and no panel when two do.
   merge into one mark. The two panels of a pair decide that, never the two
   places that the starts take: a start follows the number of lines of one side
   and the height of its panel, so a card beside its agent would draw its line in
-  one frame and lose it in the next.
+  one frame and lose it in the next. Each control point pulls at most half of
+  the way along the axis between the two facing edges, so a short line is a
+  plain curve in the gap: it never passes the other panel and never folds back
+  under the two panels as a curl beside the agent. A long line pulls 0.45 of
+  the distance between its two ends, between 40 and 260 points.
 - Strength: the lines of the agent in focus are clear (alpha 230), the lines of
   every other agent are faint (alpha 46), and at a canvas zoom of 0.6 or less
   every line takes one middle strength (alpha 153). The agent in focus is the

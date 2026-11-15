@@ -106,7 +106,8 @@ points. The line of that pair is short.
    Result: two cards appear. Card A stands directly right of the agent panel,
    and card B stands right of card A. Two lines are drawn: a short line with its
    ring at the left edge of card A, and a line to card B that passes behind
-   card A.
+   card A. The short line is a plain curve in the gap: it does not curl beside
+   the agent panel and it does not pass under either panel.
 
 3. Drag card B with the pointer to a free place below and to the right of
    card A. Release the pointer.
