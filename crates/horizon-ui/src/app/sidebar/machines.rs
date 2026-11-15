@@ -406,11 +406,13 @@ impl HorizonApp {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
         // The agents hang under an open row, and a folded row says in one line who waits.
+        // A machine with no line under its row has nothing to fold, so it has no mark.
+        let foldable = !row.watch.agents.is_empty() || row.watch.quiet.is_some();
         let fold = Rect::from_center_size(
             pos2(card.min.x + rows::TILE_INSET + FOLD_SIDE / 2.0, card.min.y + 12.0),
             Vec2::new(FOLD_SIDE, ROW_HEIGHT / 2.0),
         );
-        if render_fold_control(ui, fold, &row.name, self.machine_watch.folded(&row.name), hovered) {
+        if foldable && render_fold_control(ui, fold, &row.name, self.machine_watch.folded(&row.name), hovered) {
             self.machine_watch.toggle_fold(&row.name);
         }
         let folded = self.machine_watch.folded(&row.name);
@@ -477,7 +479,7 @@ impl HorizonApp {
 
         // The press of the fold control is no press on the machine, so the row starts
         // after it.
-        let click_rect = Rect::from_min_max(pos2(fold.max.x, rect.min.y), rect.max);
+        let click_rect = Rect::from_min_max(pos2(if foldable { fold.max.x } else { rect.min.x }, rect.min.y), rect.max);
         let response = ui.interact(
             click_rect,
             ui.make_persistent_id(("sidebar_machine", row.name.as_str())),

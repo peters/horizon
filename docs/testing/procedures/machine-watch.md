@@ -192,8 +192,9 @@ starts and stops one `ssh` child per machine of the list.
 4. Begin a turn in one agent, and then close and open the lid of the laptop.
 
    Result: the row of the machine says `link lost just now`, and the place of
-   the agent rows holds one line: `Last seen: 2 agents. Horizon tries again.`
-   After the link comes back, the rows and their states return.
+   the agent rows holds one line: `2 agents · trying again`. Its hover says
+   `Last seen: 2 agents. Horizon tries again.` After the link comes back, the
+   rows and their states return.
 
 5. Press the chevron in front of the name of the machine.
 

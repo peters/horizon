@@ -1093,10 +1093,11 @@ The page that shows while the board is empty answers the size of the window.
   of the state that a local agent panel shows (`Working ●`, `Needs you`, `Done`,
   or nothing). A row is 30 high, and the rows of the last agent end the guide.
   Instead of the rows, a machine whose link is down shows one line 11 in the
-  muted text of a row: `Last seen: 3 agents. Horizon tries again.`, a machine
-  with no `tmux` shows `No tmux on this machine.`, and a refusal shows its typed
-  reason. A machine with no agent shows no row and no line. The row menu of a
-  machine is the one it had.
+  muted text of a row: `3 agents · trying again`, whose hover says the whole
+  sentence `Last seen: 3 agents. Horizon tries again.` A machine with no `tmux`
+  shows `No tmux on this machine.`, and a refusal shows its typed reason. A
+  machine with no agent shows no row and no line, and its row paints no chevron.
+  The row menu of a machine is the one it had.
 - A workspace that lives on a machine says so on the second line of its row,
   before the status text: `on <machine> · <status text>`, or `on <machine>`
   when the workspace has no status text yet. The name line is unchanged, so a

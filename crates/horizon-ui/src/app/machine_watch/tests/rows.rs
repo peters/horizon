@@ -9,7 +9,7 @@ use horizon_core::machine_watch::{AgentState, MachineWatch, WatchLink};
 
 use crate::app::HorizonApp;
 use crate::app::block_machines::settle_machine_load;
-use crate::app::test_support::{raw_input, run_app_frame, test_app};
+use crate::app::test_support::{raw_input, run_app_frame, run_app_frame_with_input, test_app};
 use crate::test_egui::DiscardTextures;
 
 use super::support::{Server, Ssh, codex_command, record, wait_for, with_machines};
@@ -34,12 +34,8 @@ fn link(app: &mut HorizonApp, machine: &str) -> Option<WatchLink> {
         .map(|state| state.link)
 }
 
-/// The texts that one frame of the sidebar draws, after a frame of the window took
-/// the snapshot of the watch that its rows come from.
-fn sidebar_texts(ctx: &Context, app: &mut HorizonApp) -> Vec<String> {
-    run_app_frame(ctx, app);
-    let input = raw_input([1200.0, 900.0], None);
-    let output = ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures();
+/// The texts of one frame of the sidebar.
+fn texts_of(output: &egui::FullOutput) -> Vec<String> {
     output
         .shapes
         .iter()
@@ -48,6 +44,38 @@ fn sidebar_texts(ctx: &Context, app: &mut HorizonApp) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The texts that one frame of the sidebar draws, after a frame of the window took
+/// the snapshot of the watch that its rows come from.
+fn sidebar_texts(ctx: &Context, app: &mut HorizonApp) -> Vec<String> {
+    run_app_frame(ctx, app);
+    let input = raw_input([1200.0, 900.0], None);
+    let output = ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures();
+    texts_of(&output)
+}
+
+/// Where one frame of the window draws the text `wanted`, in screen points.
+fn window_text_pos(ctx: &Context, app: &mut HorizonApp, wanted: &str) -> Option<egui::Pos2> {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1200.0, 900.0], None));
+    output.shapes.iter().find_map(|clipped| match &clipped.shape {
+        egui::epaint::Shape::Text(text) if text.galley.job.text == wanted => Some(text.pos),
+        _ => None,
+    })
+}
+
+/// The texts that one frame of the window draws at `seconds`, with the pointer moved to
+/// `pointer` when one is given.
+fn window_texts_at(
+    ctx: &Context,
+    app: &mut HorizonApp,
+    pointer: Option<egui::Pos2>,
+    seconds: f64,
+) -> Vec<String> {
+    let mut input = raw_input([1200.0, 900.0], None);
+    input.time = Some(seconds);
+    input.events = pointer.map(egui::Event::PointerMoved).into_iter().collect();
+    texts_of(&run_app_frame_with_input(ctx, app, input))
 }
 
 /// One app with a stand-in `ssh`, a machine of the list and one Codex stand-in in a
@@ -81,6 +109,10 @@ fn the_agents_of_a_machine_are_rows_under_its_row_through_a_turn_and_an_approval
         agent_state(app, "hz-shop-1") == Some(AgentState::Working)
     });
     let texts = sidebar_texts(&ctx, &mut app);
+    assert!(
+        texts.iter().any(|text| text == "\u{25BE}"),
+        "a machine with a line under its row paints the mark of the fold: {texts:?}"
+    );
     for word in ["build-1", "CX", "shop", "Working"] {
         assert!(
             texts.iter().any(|text| text == word),
@@ -191,10 +223,21 @@ fn a_lost_link_says_when_it_was_lost_and_how_many_agents_it_saw() {
         "the row of the machine says when the link was lost: {texts:?}"
     );
     assert!(
-        texts
+        texts.iter().any(|text| text == "1 agent \u{00B7} trying again"),
+        "the place of the rows says what the last report held in words that fit: {texts:?}"
+    );
+    // The whole sentence is the hover of that line.
+    let at = window_text_pos(&ctx, &mut app, "1 agent \u{00B7} trying again").expect("the quiet line of the row");
+    let pointer = at + egui::vec2(10.0, 5.0);
+    let mut hovered = Vec::new();
+    for (pointer, seconds) in [(Some(pointer), 0.0), (None, 1.0), (None, 1.5)] {
+        hovered = window_texts_at(&ctx, &mut app, pointer, seconds);
+    }
+    assert!(
+        hovered
             .iter()
             .any(|text| text == "Last seen: 1 agent. Horizon tries again."),
-        "the place of the rows says what the last report held: {texts:?}"
+        "the whole sentence is in the hover of the line: {hovered:?}"
     );
 
     wait_for(&ctx, &mut app, "the link that came back", |app| {
@@ -227,5 +270,9 @@ fn the_setting_off_removes_the_rows_of_every_machine() {
     assert!(
         !texts.iter().any(|text| text == "shop"),
         "the setting off removes the rows of the agents: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text == "\u{25BE}" || text == "\u{25B8}"),
+        "a machine with no line under its row paints no fold mark: {texts:?}"
     );
 }

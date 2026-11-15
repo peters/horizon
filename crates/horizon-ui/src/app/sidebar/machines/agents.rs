@@ -22,11 +22,31 @@ const QUIET_HEIGHT: f32 = 24.0;
 pub(in crate::app) struct MachineWatchRow {
     /// `link lost 2 minutes ago`, in the place of the provider line.
     pub(in crate::app) lost: Option<String>,
-    pub(in crate::app) quiet: Option<String>,
+    pub(in crate::app) quiet: Option<Quiet>,
     /// The agents of the machine, in session and pane order.
     pub(in crate::app) agents: Vec<MachineAgent>,
     /// The summary of the folded row: `1 needs you · 1 done`, `2 working`, or nothing.
     pub(in crate::app) summary: Option<String>,
+}
+
+/// The one line in the place of the agent rows of a machine: the words that fit the
+/// sidebar, and the whole sentence for the hover and for a screen reader.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app) struct Quiet {
+    /// The words that the row draws.
+    line: String,
+    /// The whole sentence.
+    sentence: String,
+}
+
+impl Quiet {
+    /// One line whose words are its own sentence.
+    fn of(sentence: &str) -> Self {
+        Self {
+            line: sentence.to_owned(),
+            sentence: sentence.to_owned(),
+        }
+    }
 }
 
 impl MachineWatchRow {
@@ -44,8 +64,8 @@ impl MachineWatchRow {
                 )),
                 Some(last_seen(agents)),
             ),
-            WatchLink::NoTmux => (None, Some(NO_TMUX.to_owned())),
-            WatchLink::Refused { reason, .. } => (None, Some(reason.sentence().to_owned())),
+            WatchLink::NoTmux => (None, Some(Quiet::of(NO_TMUX))),
+            WatchLink::Refused { reason, .. } => (None, Some(Quiet::of(reason.sentence()))),
             // A link that connects or that is up says nothing in these two lines, and so
             // does the watch of a machine that is off.
             _ => (None, None),
@@ -117,10 +137,14 @@ fn paint_agent(ui: &mut egui::Ui, row: &MachineRow, agent: &MachineAgent, last: 
 /// What a row says about an agent whose session name no terminal of this build opens.
 pub(super) const CANNOT_OPEN: &str = "The name of this tmux session is not one word, so Horizon does not open it.";
 
-/// The one line in the place of the agent rows of a machine whose link is down.
-fn last_seen(agents: usize) -> String {
+/// The one line in the place of the agent rows of a machine whose link is down: the
+/// words fit the sidebar, and the whole sentence is in the hover.
+fn last_seen(agents: usize) -> Quiet {
     let word = if agents == 1 { "agent" } else { "agents" };
-    format!("Last seen: {agents} {word}. Horizon tries again.")
+    Quiet {
+        line: format!("{agents} {word} · trying again"),
+        sentence: format!("Last seen: {agents} {word}. Horizon tries again."),
+    }
 }
 
 /// The agents that wait for the person in the words of a workspace row, then the ones
@@ -137,21 +161,20 @@ fn summary_of(agents: &[MachineAgent]) -> Option<String> {
     })
 }
 
-/// Paints the quiet line of a machine in the colour and size of a row's second line: a
-/// line that is too long for the sidebar is cut, and its whole text is in its hover.
-fn paint_quiet_line(ui: &mut egui::Ui, line: &str) {
+/// Paints the quiet line of a machine in the colour and size of a row's second line. Its
+/// whole sentence is in its hover and in its spoken text.
+fn paint_quiet_line(ui: &mut egui::Ui, quiet: &Quiet) {
     let rect = ui.allocate_space(Vec2::new(ui.available_width(), QUIET_HEIGHT)).1;
     let card = card(rect);
     let left = dot_center(card).x + 13.0;
     let galley = text::line(
         ui,
-        line,
+        &quiet.line,
         11.0,
         text::REGULAR,
         text::secondary(),
         card.max.x - 8.0 - left,
     );
-    let elided = galley.elided;
     ui.painter().galley(
         pos2(left, rect.center().y - galley.size().y / 2.0),
         galley,
@@ -159,13 +182,11 @@ fn paint_quiet_line(ui: &mut egui::Ui, line: &str) {
     );
     let response = ui.interact(
         Rect::from_min_max(pos2(left, rect.min.y), pos2(card.max.x, rect.max.y)),
-        ui.make_persistent_id(("sidebar_machine_quiet", line)),
+        ui.make_persistent_id(("sidebar_machine_quiet", &quiet.line)),
         Sense::hover(),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, line));
-    if elided {
-        response.on_hover_text(line);
-    }
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &quiet.sentence));
+    response.on_hover_text(&quiet.sentence);
 }
 
 /// What the fold control says to a screen reader.

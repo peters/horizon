@@ -197,9 +197,13 @@ attention summary adds to its own.
   outlives no start.
 - **A link that is down says so.** The second line of the machine row says
   `link lost 2 minutes ago` in the words of a relative time of this build, and the
-  place of the agent rows holds one quiet line: `Last seen: 3 agents. Horizon tries
+  place of the agent rows holds one quiet line: `3 agents · trying again`, whose
+  hover and spoken text are the sentence `Last seen: 3 agents. Horizon tries
   again.` A machine with no `tmux` says `No tmux on this machine.`, and a refusal
   says its typed reason.
+- **A mark says only what a row holds.** The chevron of a machine is painted and
+  sensed only while that machine has a line under its row: an agent, or the quiet
+  line of a link that is down. A machine with no line has no chevron.
 - **A press opens the session.** A press on the row of an agent goes to the panel
   that already shows its session, or opens one in the workspace of the machine:
   the workspace that carries the name of the machine, which the press makes with
