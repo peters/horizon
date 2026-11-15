@@ -309,11 +309,10 @@ when it names one of those kinds.
   resume/copy actions without changing provider bindings.
 - `agent_links.rs` answers, from the board alone, the pairs of an agent panel
   and the panels that it controls: the owner of a card, the live claim of a
-  browser page, and the mark of a panel that an agent opened for the person. It
-  stores nothing and keeps no state for a pair. The mark holds the kind of the
-  opener, so it names one panel only when one agent panel of that kind stands in
-  the workspace; a Device viewer is left out, because its owner is a field of
-  the UI caches and not of the board.
+  browser page, and the actor of a panel that an agent opened for the person. It
+  stores nothing and keeps no state for a pair. The kind name of that opener is
+  only the text of the chip of the titlebar and names no pair; a Device viewer is
+  left out, because its owner is a field of the UI caches and not of the board.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
   `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded

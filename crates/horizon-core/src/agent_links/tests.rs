@@ -125,7 +125,7 @@ fn a_controlled_panel_pairs_with_the_agent_that_names_it() {
     let actor = actor_of(&board, claude);
     let owned = card(&mut board, workspace, Some(&actor));
     let gone = card(&mut board, workspace, Some(&browser_actor("a-panel-that-closed")));
-    let opened = opened_terminal(&mut board, workspace, "Claude");
+    let opened = opened_terminal_of(&mut board, workspace, claude);
     let person = person_terminal(&mut board, workspace);
 
     assert_eq!(
@@ -146,47 +146,19 @@ fn a_helper_agent_pairs_with_its_opener_and_controls_its_own_card() {
     let workspace = board.create_workspace("Work");
     let claude = agent(&mut board, workspace, PanelKind::Claude);
     let helper = agent(&mut board, workspace, PanelKind::Codex);
+    let claude_actor = actor_of(&board, claude);
     if let Some(panel) = board.panels.iter_mut().find(|panel| panel.id == helper) {
         panel.opened_by = Some("Claude".to_owned());
+        panel.opened_by_actor = Some(claude_actor);
     }
     let helper_actor = actor_of(&board, helper);
     let helper_card = card(&mut board, workspace, Some(&helper_actor));
-    let claude_terminal = opened_terminal(&mut board, workspace, "Claude");
+    let claude_terminal = opened_terminal_of(&mut board, workspace, claude);
 
     assert_eq!(
         pairs(&board),
         vec![(claude, helper), (claude, claude_terminal), (helper, helper_card)],
         "the helper pairs with its opener and is the agent end of its own card"
-    );
-}
-
-/// The mark of an opened panel names a kind, so it names one panel only when one
-/// agent panel of that kind stands in the workspace of that panel.
-#[test]
-fn two_agents_of_one_kind_leave_the_mark_of_an_opened_panel_unresolved() {
-    let mut board = Board::new();
-    let workspace = board.create_workspace("Work");
-    agent(&mut board, workspace, PanelKind::Claude);
-    agent(&mut board, workspace, PanelKind::Claude);
-    opened_terminal(&mut board, workspace, "Claude");
-
-    assert!(
-        pairs(&board).is_empty(),
-        "one mark for two agents of one kind names neither of them, so nothing is drawn"
-    );
-
-    // An agent of that kind in another workspace changes nothing: the mark names
-    // an agent of the workspace of the panel that it opened.
-    let other = board.create_workspace("Other");
-    let third = agent(&mut board, other, PanelKind::Claude);
-    opened_terminal(&mut board, other, "Claude");
-    assert_eq!(
-        pairs(&board),
-        vec![(
-            third,
-            board.panels.last().expect("the terminal of the other workspace").id
-        )],
-        "the mark of the other workspace names its one agent of that kind"
     );
 }
 
@@ -208,21 +180,18 @@ fn two_agents_of_one_kind_each_pair_with_the_terminal_that_it_opened() {
     );
 }
 
-/// A terminal of a session of an older build holds no actor, and the mark of its
-/// kind keeps the answer that it gave before.
+/// A terminal of a session of an older build holds no actor, and its mark names no
+/// pair: only the actor of an opener pairs a panel.
 #[test]
-fn a_terminal_of_an_older_build_still_pairs_by_its_mark() {
+fn a_terminal_of_an_older_build_names_no_opener() {
     let mut board = Board::new();
     let workspace = board.create_workspace("Work");
     let claude = agent(&mut board, workspace, PanelKind::Claude);
     let terminal = opened_terminal(&mut board, workspace, "Claude");
 
-    assert_eq!(pairs(&board), vec![(claude, terminal)]);
-
-    // A second agent of that kind leaves the mark of the older terminal
-    // unresolved, exactly as it did before an actor was saved.
-    agent(&mut board, workspace, PanelKind::Claude);
-    assert!(pairs(&board).is_empty());
+    assert!(pairs(&board).is_empty(), "a mark without an actor pairs no panel");
+    assert!(!board.has_agent_links(), "a mark is not an owner fact");
+    assert_ne!(claude, terminal);
 }
 
 /// The place of an agent among the agent panels of its workspace is the accent
@@ -235,9 +204,9 @@ fn the_accent_of_an_agent_follows_the_order_of_its_workspace() {
     let first = agent(&mut board, workspace, PanelKind::Claude);
     let second = agent(&mut board, workspace, PanelKind::Codex);
     let alone = agent(&mut board, other, PanelKind::Pi);
-    let first_terminal = opened_terminal(&mut board, workspace, "Claude");
-    let second_terminal = opened_terminal(&mut board, workspace, "Codex");
-    let alone_terminal = opened_terminal(&mut board, other, "Pi");
+    let first_terminal = opened_terminal_of(&mut board, workspace, first);
+    let second_terminal = opened_terminal_of(&mut board, workspace, second);
+    let alone_terminal = opened_terminal_of(&mut board, other, alone);
 
     let links: Vec<AgentLink> = board.agent_links();
     let link = |agent: PanelId, target: PanelId| {
@@ -278,8 +247,14 @@ fn a_board_without_an_owner_fact_has_no_pair() {
     assert!(board.agent_links().is_empty());
     assert!(!board.has_agent_links(), "no panel of this board carries an owner fact");
 
-    let terminal = opened_terminal(&mut board, workspace, "Claude");
-    assert!(board.has_agent_links(), "the mark of an opened panel is an owner fact");
+    let claude = board
+        .panels
+        .iter()
+        .find(|panel| panel.kind == PanelKind::Claude)
+        .expect("the agent panel")
+        .id;
+    let terminal = opened_terminal_of(&mut board, workspace, claude);
+    assert!(board.has_agent_links(), "the actor of an opened panel is an owner fact");
     assert_eq!(board.agent_links()[0].target, terminal);
 }
 

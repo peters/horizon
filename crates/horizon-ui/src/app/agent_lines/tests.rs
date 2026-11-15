@@ -219,8 +219,8 @@ fn two_agents() -> (Board, PanelId, PanelId, PanelId, PanelId) {
     let workspace = board.create_workspace("Work");
     let claude = agent(&mut board, workspace, PanelKind::Claude);
     let codex = agent(&mut board, workspace, PanelKind::Codex);
-    let claude_terminal = opened_terminal(&mut board, workspace, "Claude");
-    let codex_terminal = opened_terminal(&mut board, workspace, "Codex");
+    let claude_terminal = opened_terminal(&mut board, workspace, claude);
+    let codex_terminal = opened_terminal(&mut board, workspace, codex);
     (board, claude, codex, claude_terminal, codex_terminal)
 }
 
@@ -236,20 +236,27 @@ fn agent(board: &mut Board, workspace: WorkspaceId, kind: PanelKind) -> PanelId 
         .expect("an agent panel")
 }
 
-fn opened_terminal(board: &mut Board, workspace: WorkspaceId, mark: &str) -> PanelId {
+/// The options of an SSH terminal that the agent panel `opener` opened for the
+/// person, as the terminal tool of that agent records it: the mark of its kind for
+/// the chip of the titlebar and the actor of the panel for the pair of the board.
+fn opened_ssh_terminal(board: &Board, opener: PanelId) -> PanelOptions {
+    let panel = board.panel(opener).expect("the agent panel");
+    PanelOptions {
+        kind: PanelKind::Ssh,
+        opened_by: Some(panel.kind.display_name().to_owned()),
+        opened_by_actor: Some(horizon_core::browser_actor(&panel.local_id)),
+        ssh_connection: Some(SshConnection {
+            host: "192.0.2.10".to_owned(),
+            ..SshConnection::default()
+        }),
+        ..PanelOptions::default()
+    }
+}
+
+fn opened_terminal(board: &mut Board, workspace: WorkspaceId, opener: PanelId) -> PanelId {
+    let options = opened_ssh_terminal(board, opener);
     board
-        .create_panel_waiting(
-            PanelOptions {
-                kind: PanelKind::Ssh,
-                opened_by: Some(mark.to_owned()),
-                ssh_connection: Some(SshConnection {
-                    host: "192.0.2.10".to_owned(),
-                    ..SshConnection::default()
-                }),
-                ..PanelOptions::default()
-            },
-            workspace,
-        )
+        .create_panel_waiting(options, workspace)
         .expect("a terminal that an agent opened")
 }
 
@@ -460,26 +467,30 @@ fn app_with_two_agents() -> (tempfile::TempDir, egui::Context, crate::app::Horiz
         },
     );
     let workspace = app.board.create_workspace("Work");
-    let mut panel = |kind: PanelKind, x: f32, opened_by: Option<&str>| {
+    let mut panel = |kind: PanelKind, x: f32| {
         let options = PanelOptions {
             kind,
             position: Some([x, 40.0]),
             size: Some([320.0, 240.0]),
-            opened_by: opened_by.map(str::to_owned),
-            ssh_connection: opened_by.map(|_| SshConnection {
-                host: "192.0.2.10".to_owned(),
-                ..SshConnection::default()
-            }),
             ..PanelOptions::default()
         };
         app.board
             .create_panel_waiting(options, workspace)
-            .expect("a panel of the test board");
+            .expect("a panel of the test board")
     };
-    panel(PanelKind::Claude, 40.0, None);
-    panel(PanelKind::Codex, 40.0, None);
-    panel(PanelKind::Ssh, 420.0, Some("Claude"));
-    panel(PanelKind::Ssh, 420.0, Some("Codex"));
+    let claude = panel(PanelKind::Claude, 40.0);
+    let codex = panel(PanelKind::Codex, 40.0);
+    drop(panel);
+    for opener in [claude, codex] {
+        let options = PanelOptions {
+            position: Some([420.0, 40.0]),
+            size: Some([320.0, 240.0]),
+            ..opened_ssh_terminal(&app.board, opener)
+        };
+        app.board
+            .create_panel_waiting(options, workspace)
+            .expect("a terminal that an agent opened");
+    }
     // No process of this test starts: the panels of the board wait for a
     // preparation that no worker of the test reads.
     app.board.take_pending_starts();

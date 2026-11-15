@@ -10,17 +10,13 @@
 //!   page, in the same actor form;
 //! - the opener of a terminal or of a preset panel that an agent opened for the
 //!   person: [`crate::Panel::opened_by_actor`], the `horizon:<local_id>` actor of
-//!   the agent panel that asked, and [`crate::Panel::opened_by`], the display name
-//!   of the kind of that panel, because that is the text that the titlebar shows.
+//!   the agent panel that asked. The display name of the kind of that panel,
+//!   [`crate::Panel::opened_by`], is only the text of the chip of the titlebar and
+//!   names no pair.
 //!
-//! The first two name one panel of the board with no ambiguity, and so does the
-//! actor of an opener. The mark of an opener names one panel only when exactly
-//! one agent panel of that kind stands in the workspace of the panel, its own
-//! panel aside: with two agents of one kind the mark names neither, and this
-//! module draws no pair for it instead of guessing. The mark is read only for a
-//! panel that a session of an older build saved, which holds no actor.
-//! A person who takes a browser panel over from an agent clears the claim, so
-//! that panel loses its pair at once and needs no special rule here.
+//! Every one of the three names one panel of the board with no ambiguity. A
+//! person who takes a browser panel over from an agent clears the claim, so that
+//! panel loses its pair at once and needs no special rule here.
 //!
 //! Every pair is derived from the board on each call. Nothing is stored for it.
 //! The owner of a card survives a restart, because it is saved with the panel,
@@ -87,15 +83,14 @@ impl Board {
         }
     }
 
-    /// Whether any panel of this board carries an owner or an opener fact at
-    /// all. A board without one has no pair, so a caller pays this scan and
-    /// nothing else. It reads one field of each panel and allocates nothing.
+    /// Whether any panel of this board carries an owner or an opener actor at all.
+    /// A board without one has no pair, so a caller pays this scan and nothing
+    /// else. It reads one field of each panel and allocates nothing.
     #[must_use]
     pub fn has_agent_links(&self) -> bool {
         self.panels.iter().any(|panel| {
             panel.block().is_some_and(|block| block.owner_actor.is_some())
                 || panel.browser().is_some_and(|browser| browser.owner.is_some())
-                || panel.opened_by().is_some()
                 || panel.opened_by_actor().is_some()
         })
     }
@@ -103,20 +98,17 @@ impl Board {
 
 /// The agent panel that controls `target`, from the facts that the board holds.
 ///
-/// A panel with a saved owner names no pair when that owner is not an agent
-/// panel of this board any more, so a gone owner draws nothing.
+/// A panel with a saved owner names no pair when that owner is not an agent panel
+/// of this board any more, so a gone owner draws nothing. A panel that an agent
+/// opened with no actor, which a session of a build before the actor saved, names
+/// no opener until an agent opens a panel in it again.
 fn owner_agent(panels: &[crate::Panel], target: &crate::Panel) -> Option<PanelId> {
     let actor = target
         .block()
         .and_then(|block| block.owner_actor.as_deref())
         .or_else(|| target.browser().and_then(|browser| browser.owner.as_deref()))
-        .or_else(|| target.opened_by_actor());
-    match actor {
-        // A saved actor names no pair when that panel is not an agent panel of
-        // this board any more, and the mark of the same panel says nothing more.
-        Some(actor) => panel_of_actor(panels, actor),
-        None => panel_of_mark(panels, target),
-    }
+        .or_else(|| target.opened_by_actor())?;
+    panel_of_actor(panels, actor)
 }
 
 /// The prefix of the actor that `crate::browser_actor` writes for a panel. A test
@@ -135,31 +127,6 @@ fn panel_of_actor(panels: &[crate::Panel], actor: &str) -> Option<PanelId> {
         .iter()
         .find(|panel| panel.kind.is_agent() && panel.local_id == local_id)
         .map(|panel| panel.id)
-}
-
-/// The agent panel that the mark of an opened panel names.
-///
-/// The mark is the display name of the kind of the opener, so it names one panel
-/// only when one agent panel of that kind stands in the workspace of `target`.
-/// Only a panel that a session of an older build saved, or one that a test built
-/// without an actor, has no actor; a mark of a panel that has one is not read.
-fn panel_of_mark(panels: &[crate::Panel], target: &crate::Panel) -> Option<PanelId> {
-    let mark = target.opened_by()?;
-    let mut found = None;
-    for panel in panels {
-        if panel.id == target.id
-            || panel.workspace_id != target.workspace_id
-            || !panel.kind.is_agent()
-            || panel.kind.display_name() != mark
-        {
-            continue;
-        }
-        if found.is_some() {
-            return None;
-        }
-        found = Some(panel.id);
-    }
-    found
 }
 
 /// The place of the agent panel at `index` among the agent panels of

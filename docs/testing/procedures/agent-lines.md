@@ -25,12 +25,11 @@ the lines off.
 - This procedure does not test: a line to a Device viewer or to a card that
   Horizon wrote itself, because those panels carry no owner fact.
 - This procedure also tests two agents of one kind in one workspace, because an
-  opened panel saves the actor of the panel that opened it beside the mark of its
-  kind. Section 6.2 names that case.
+  opened panel saves the actor of the panel that opened it. Section 6.2 names that
+  case.
 - This procedure does not test: a panel that a session of an older build saved
-  without the actor of its opener. Such a panel keeps the older rule: its mark
-  names one panel only when one agent panel of that kind stands in its
-  workspace.
+  without the actor of its opener. Such a panel keeps its mark in the titlebar and
+  has no line to its opener, because only the actor of an opener pairs a panel.
 
 ## 3. Safety
 

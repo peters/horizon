@@ -234,7 +234,8 @@ pub struct PanelOptions {
     /// that holds every process the program starts; empty for none.
     pub launch_wrapper: Vec<String>,
     /// The agent that opened this panel for the person, as Horizon names that
-    /// agent; `None` for a panel the person made.
+    /// agent; `None` for a panel the person made. It is the text of the chip of the
+    /// titlebar, and the actor below names the pair of the board.
     pub opened_by: Option<String>,
     /// The agent panel that opened this panel, as the `horizon:<local id>` actor
     /// of the owner of a card and of a browser panel. It names one panel of the
@@ -378,9 +379,8 @@ pub struct Panel {
     /// panel so a person can tell it from one they opened themselves.
     pub(crate) opened_by: Option<String>,
     /// The agent panel that opened this panel, as the `horizon:<local id>`
-    /// actor that a card owner and a browser panel owner also carry. The mark of
-    /// `opened_by` names a kind, so two agent panels of one kind leave it
-    /// ambiguous; this actor names the one panel.
+    /// actor that a card owner and a browser panel owner also carry. It names the
+    /// one panel, also when two agent panels of one kind stand in a workspace.
     pub(crate) opened_by_actor: Option<String>,
     /// The machine of Horizon's machine list that this terminal connects to.
     pub(crate) machine: Option<String>,
@@ -435,6 +435,7 @@ impl Panel {
         self.content.terminal_mut()
     }
 
+    /// The text of the chip of the titlebar of a panel that an agent opened, and
     /// `None` for a panel the person made.
     #[must_use]
     pub fn opened_by(&self) -> Option<&str> {
