@@ -127,7 +127,6 @@ fn only_the_kind_of_an_agent_with_a_state_title_has_the_rule() {
 fn ready_claim() -> TitleClaim {
     let mut claim = TitleClaim::default();
     claim.hear(TitleState::Plain, 0);
-    assert!(claim.ready(), "the plain title of a launch is its ready title");
     claim
 }
 
@@ -253,14 +252,12 @@ fn the_start_up_of_a_launch_claims_no_turn() {
     assert!(!claim.answers(), "no title of this launch has claimed a state");
     for frame in 0..8 {
         claim.hear(TitleState::Working, 100 + frame);
-        assert!(!claim.ready(), "the program is loading");
         assert!(!claim.answers(), "the frames of the start-up claim nothing");
         assert_eq!(claim.ledger().state, TurnState::Unknown);
     }
     // The plain title is the moment the program is ready for the person, and the
     // spinner of a turn after it opens the first turn of the launch.
     claim.hear(TitleState::Plain, 900);
-    assert!(claim.ready());
     assert!(!claim.answers(), "the ready title claims no turn");
     claim.hear(TitleState::Working, 1_000);
     assert!(claim.answers());
@@ -279,7 +276,6 @@ fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
     // its end is no **Done**.
     claim.hear(TitleState::Working, 300);
     claim.hear(TitleState::Plain, 400);
-    assert!(claim.ready());
     assert_eq!(claim.ledger().state, TurnState::Unknown);
     assert!(!claim.settle(400 + TITLE_SETTLE_MILLIS), "no turn of the person ran");
 }

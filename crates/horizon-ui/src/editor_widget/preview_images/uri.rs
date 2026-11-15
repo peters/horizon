@@ -77,18 +77,6 @@ fn encode_path(path: &Path) -> String {
 }
 
 fn decode_path(encoded: &str) -> Option<PathBuf> {
-    let bytes = encoded.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = encoded.get(index + 1..index + 3)?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
+    let decoded = super::percent_decoded(encoded, true)?;
     Some(PathBuf::from(std::ffi::OsString::from_vec(decoded)))
 }

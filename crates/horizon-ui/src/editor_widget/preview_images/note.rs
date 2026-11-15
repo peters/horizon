@@ -223,31 +223,8 @@ fn candidates(written: &str, folder: Option<&Path>) -> Option<Vec<PathBuf>> {
     Some(paths)
 }
 
-/// `written` with each `%XX` escape worked out, when it has a valid escape and
-/// the result is text.
+/// `written` with each `%XX` escape worked out, when it has an escape and the
+/// result is text.
 fn percent_decode(written: &str) -> Option<String> {
-    if !written.contains('%') {
-        return None;
-    }
-    let bytes = written.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    let mut any = false;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let hex = written.get(index + 1..index + 3)?;
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                decoded.push(byte);
-                index += 3;
-                any = true;
-                continue;
-            }
-        }
-        decoded.push(bytes[index]);
-        index += 1;
-    }
-    if !any {
-        return None;
-    }
-    String::from_utf8(decoded).ok()
+    String::from_utf8(super::percent_decoded(written, false)?).ok()
 }

@@ -1,7 +1,5 @@
 use super::ACTOR_PREFIX;
-use crate::{
-    AgentLink, BlockPanelState, Board, PanelId, PanelKind, PanelOptions, SshConnection, WorkspaceId, browser_actor,
-};
+use crate::{BlockPanelState, Board, PanelId, PanelKind, PanelOptions, SshConnection, WorkspaceId, browser_actor};
 
 /// An agent panel of `workspace`. An agent panel waits for the preparation of
 /// its process, so the test starts none.
@@ -105,11 +103,9 @@ fn browser_panel(board: &mut Board, workspace: WorkspaceId) -> PanelId {
 
 /// The pairs of `board` as `(agent, target)`, in a fixed order.
 fn pairs(board: &Board) -> Vec<(PanelId, PanelId)> {
-    let mut pairs: Vec<(PanelId, PanelId)> = board
-        .agent_links()
-        .iter()
-        .map(|link| (link.agent, link.target))
-        .collect();
+    let mut links = Vec::new();
+    board.fill_agent_links(&mut links);
+    let mut pairs: Vec<(PanelId, PanelId)> = links.iter().map(|link| (link.agent, link.target)).collect();
     pairs.sort_by_key(|(agent, target)| (agent.0, target.0));
     pairs
 }
@@ -208,7 +204,8 @@ fn the_accent_of_an_agent_follows_the_order_of_its_workspace() {
     let second_terminal = opened_terminal_of(&mut board, workspace, second);
     let alone_terminal = opened_terminal_of(&mut board, other, alone);
 
-    let links: Vec<AgentLink> = board.agent_links();
+    let mut links = Vec::new();
+    board.fill_agent_links(&mut links);
     let link = |agent: PanelId, target: PanelId| {
         links
             .iter()
@@ -244,7 +241,9 @@ fn a_board_without_an_owner_fact_has_no_pair() {
     card(&mut board, workspace, None);
     agent(&mut board, workspace, PanelKind::Claude);
 
-    assert!(board.agent_links().is_empty());
+    let mut links = Vec::new();
+    board.fill_agent_links(&mut links);
+    assert!(links.is_empty());
     assert!(!board.has_agent_links(), "no panel of this board carries an owner fact");
 
     let claude = board
@@ -255,7 +254,8 @@ fn a_board_without_an_owner_fact_has_no_pair() {
         .id;
     let terminal = opened_terminal_of(&mut board, workspace, claude);
     assert!(board.has_agent_links(), "the actor of an opened panel is an owner fact");
-    assert_eq!(board.agent_links()[0].target, terminal);
+    board.fill_agent_links(&mut links);
+    assert_eq!(links[0].target, terminal);
 }
 
 /// The prefix of this module is the prefix of the actor of a panel.
@@ -279,7 +279,7 @@ fn a_browser_panel_pairs_with_the_agent_that_claims_it() {
     let browser = browser_panel(&mut board, workspace);
 
     assert!(
-        board.agent_links().is_empty(),
+        pairs(&board).is_empty(),
         "a page that no agent drives pairs with no one"
     );
 

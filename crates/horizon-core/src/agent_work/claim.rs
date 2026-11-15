@@ -75,12 +75,6 @@ impl<S: ClaimSource> Claim<S> {
         self.heard.is_some_and(|state| state.answers(&self.ledger))
     }
 
-    /// Whether the ready state of this launch has arrived.
-    #[must_use]
-    pub fn ready(&self) -> bool {
-        self.ready
-    }
-
     /// The ledger of the claim, read the way the record of a launch with hooks is.
     #[must_use]
     pub fn ledger(&self) -> &TurnLedger {

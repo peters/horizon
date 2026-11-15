@@ -66,6 +66,41 @@ const WRITTEN_TAIL: char = '?';
 /// The tail of a URI that this module builds: an encoded path.
 const PATH_TAIL: char = '!';
 
+/// The bytes of `written` with each `%XX` escape worked out.
+///
+/// A strict decode reads an escape only whole and answers `None` for one that is
+/// not two hex digits or that ends the text. A lenient decode keeps such an escape
+/// as written, and answers `None` when nothing was escaped.
+fn percent_decoded(written: &str, strict: bool) -> Option<Vec<u8>> {
+    let bytes = written.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        // A lenient decode keeps the `%` of an escape that ends the text, so it
+        // reads only an escape that has one byte after its two hex digits.
+        let end = index + 3;
+        if bytes[index] == b'%'
+            && end <= bytes.len()
+            && (strict || end < bytes.len())
+            && let Some(byte) = written
+                .get(index + 1..end)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            decoded.push(byte);
+            escaped = true;
+            index = end;
+            continue;
+        }
+        if strict && bytes[index] == b'%' {
+            return None;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    (strict || escaped).then_some(decoded)
+}
+
 /// The marker of a picture in the text of a note. A note without it runs the
 /// plain path of the preview and starts no thread.
 pub(crate) const PICTURE_MARKER: &str = "![";

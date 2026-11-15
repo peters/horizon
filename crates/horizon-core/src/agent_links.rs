@@ -46,15 +46,6 @@ pub struct AgentLink {
 }
 
 impl Board {
-    /// The pairs of this board, ordered by the agent panel and then by the
-    /// target panel as the board holds them.
-    #[must_use]
-    pub fn agent_links(&self) -> Vec<AgentLink> {
-        let mut links = Vec::new();
-        self.fill_agent_links(&mut links);
-        links
-    }
-
     /// Fill `out` with the pairs of this board. A caller that keeps the vector
     /// makes no allocation for a board whose pairs do not grow.
     pub fn fill_agent_links(&self, out: &mut Vec<AgentLink>) {

@@ -26,6 +26,13 @@ fn view(zoom: f32) -> CanvasViewState {
     CanvasViewState::new([0.0, 0.0], zoom)
 }
 
+/// The pairs of `board`, as the canvas reads them for a frame.
+fn pairs(board: &Board) -> Vec<AgentLink> {
+    let mut links = Vec::new();
+    board.fill_agent_links(&mut links);
+    links
+}
+
 fn link(agent: u64, target: u64, accent: usize) -> AgentLink {
     AgentLink {
         agent: PanelId(agent),
@@ -265,7 +272,7 @@ fn opened_terminal(board: &mut Board, workspace: WorkspaceId, opener: PanelId) -
 #[test]
 fn the_agent_in_focus_follows_the_pointer_and_the_keyboard() {
     let (mut board, claude, codex, claude_terminal, _codex_terminal) = two_agents();
-    let links = board.agent_links();
+    let links = pairs(&board);
 
     assert_eq!(
         focus_agent(&board, &links, Some(claude)),
@@ -350,7 +357,7 @@ fn a_second_frame_with_no_change_builds_no_shape() {
         }
         assert_eq!(index + 1, agents.iter().take(index + 1).count());
     }
-    let links = board.agent_links();
+    let links = pairs(&board);
     assert_eq!(links.len(), 60, "twenty agents with three cards each");
 
     // The places of a board of 80 panels: the agent column and the cards beside it.
@@ -502,7 +509,7 @@ fn app_with_two_agents() -> (tempfile::TempDir, egui::Context, crate::app::Horiz
 #[test]
 fn the_frame_draws_the_lines_and_the_setting_turns_them_off() {
     let (_temp, ctx, mut app) = app_with_two_agents();
-    assert_eq!(app.board.agent_links().len(), 2, "two terminals that two agents opened");
+    assert_eq!(pairs(&app.board).len(), 2, "two terminals that two agents opened");
 
     for _ in 0..3 {
         run_app_frame_with_input(&ctx, &mut app, canvas_input());

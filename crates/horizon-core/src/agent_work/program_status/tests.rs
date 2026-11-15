@@ -243,14 +243,12 @@ fn the_start_up_of_a_launch_claims_no_turn() {
     let mut claim = ProgramClaim::default();
     for index in 0..8 {
         claim.hear(ProgramStatus::Working, 100 + index);
-        assert!(!claim.ready(), "the program is loading");
         assert!(!claim.answers(), "the launch claims nothing before its idle report");
         assert_eq!(claim.ledger().state, TurnState::Unknown);
     }
     // The idle report is the moment the program is ready, and no turn of the
     // person ran before it.
     claim.hear(ProgramStatus::Idle, 900);
-    assert!(claim.ready());
     assert_eq!(claim.ledger().state, TurnState::Unknown);
     assert!(claim.answers(), "the launch speaks the protocol");
 
