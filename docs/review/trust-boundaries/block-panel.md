@@ -358,10 +358,11 @@ are written by Horizon and no document field can set them:
   drawn neutral, and every control of a card without its agent is drawn
   disabled.
 - **The mark of a body that holds more** says `More below` at the lower edge of
-  the body, above the footer, and a press on it takes one page of the scroll.
-  Horizon draws it from the height of the content and the offset of the scroll,
-  so a document can neither draw it, cover it nor hide it, and the press is not a
-  click of `next_click`.
+  the body, above the footer, and a press on it takes one page of the scroll, or,
+  when the body shows its end, it moves the view so that the foot of a card that
+  the view cuts comes into it. Horizon draws it from the height of the content
+  and the offset of the scroll, so a document can neither draw it, cover it nor
+  hide it, and the press is not a click of `next_click`.
 - **The panel size and title** of a new card come from the host: 420 wide and
   as tall as the host measured its content needs, between 140 points and the
   ceiling of the card, and a title that the host trims to one line. A document

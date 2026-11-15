@@ -958,7 +958,12 @@ the rules from the modules beside it.
   and the last 20 of them are a strip in the full body colour. The words
   `More below` stand centred on that strip, in 11 `FG_SOFT`, with a small down
   mark 8 to their left, so that no faded content shows under them. The mark is a
-  control: a press on it takes one page of the scroll, with no animation.
+  control: a press on it takes one page of the scroll, with no animation. A body
+  that already shows its end asks for its foot instead: a press moves the card up
+  by the room that the lower edge of the view hides, with the margin of a jump,
+  and keeps the zoom of the moment. The top of a card that is taller than the
+  view then leaves it, because the person asked for what is below. The mark goes
+  with the foot.
   Horizon draws it above the footer, so a document can neither draw it, cover it
   nor hide it. A card whose body holds all of its content draws no mark, and the
   mark announces `More below, press to scroll` to a screen reader.

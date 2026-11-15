@@ -282,6 +282,19 @@ impl HorizonApp {
         self.reveal_panel_in_rect(panel_id, self.reveal_rect(ctx));
     }
 
+    /// Brings the lower edge of a panel that the view cuts into the view at the
+    /// zoom of the moment and leaves the top of it where it stands, so a card
+    /// taller than the canvas leaves the view from its top.
+    pub(super) fn reveal_panel_foot(&mut self, ctx: &Context, panel_id: PanelId) {
+        let Some(((pos, size), _workspace_pos)) = self.reveal_frames(panel_id) else {
+            return;
+        };
+        let foot = reveal_pan_offset(self.canvas_rect(ctx), pos, size, pos, self.canvas_view.zoom).y;
+        self.pan_target = None;
+        self.canvas_view.set_pan_offset([self.canvas_view.pan_offset[0], foot]);
+        self.mark_runtime_dirty();
+    }
+
     /// The rectangle that a jump reveals a panel into.
     ///
     /// The canvas leaves the sidebar, the settings panel and the settings bar

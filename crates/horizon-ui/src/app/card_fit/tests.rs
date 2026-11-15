@@ -678,28 +678,35 @@ fn a_card_that_holds_more_than_it_shows_marks_the_lower_edge_of_its_body() {
     );
 }
 
-/// The top of the card of the person's picture: it rests 40 points under the top
-/// of the view, so its footer stays out of sight under the lower edge.
-const CARD_REST: f32 = 40.0;
-
+/// The card of the person's picture stands where a card of an agent lands, and
+/// the floor of the person's Fit holds the zoom, so a jump of the view makes the
+/// cards neither smaller nor larger.
 #[test]
 fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
     let (_temp, ctx, mut app) = agent_app();
+    app.sidebar_visible = true;
+    app.template_config.canvas.fit_floor_zoom = 1.0;
     let (card, _) = card_of_first_document(&ctx, &mut app, PERSON_WINDOW);
     let _ = grow_card(&ctx, &mut app, PERSON_WINDOW, &card, longer_than_the_bound_document());
-    let id = app.board.panel_id_by_local_id(&card).expect("the card");
-    let canvas = app.canvas_rect(&ctx);
-    let top = app.screen_to_canvas(canvas, canvas.min).y;
-    assert!(
-        app.board.move_panel(id, [20.0, top + CARD_REST]),
-        "the person leaves the foot of the card under the lower edge of the view"
-    );
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
-    let mark = drawn_text(&output, "More below");
-    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+
+    // The body of the document needs more room than the ceiling of a card gives
+    // it, so the card rests at the ceiling and the view cuts its foot.
+    let canvas = app.canvas_rect(&ctx);
+    let panel = card_panel(&app, &ctx, &card);
     assert!(
-        app.canvas_rect(&ctx).contains_rect(mark),
-        "the mark stands in the view of the person: {mark:?}"
+        (panel.height() - 900.0).abs() < f32::EPSILON,
+        "the card holds the ceiling of its height: {panel:?}"
+    );
+    assert!(
+        panel.max.y > canvas.max.y,
+        "the view cuts the foot of the card: {panel:?} of {canvas:?}"
+    );
+    let body = card_body(panel, app.canvas_view.zoom);
+    let mark = drawn_text(&output, "More below");
+    assert!(
+        canvas.contains_rect(mark),
+        "the mark stands in the view of the person: {mark:?} of {canvas:?}"
     );
     assert!(
         body.contains_rect(mark),
@@ -727,23 +734,45 @@ fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
         "the press scrolled the body: {after:?} from {before:?}"
     );
 
-    // The next press finds the end of the body and brings the foot of the card into
-    // the view, which is where the last button of the card is.
+    // The body shows its end, so the next press brings the foot of the card into
+    // the view at the zoom of the moment, which takes the top of a taller card out
+    // of it, and the mark goes with the foot.
+    let zoom = app.canvas_view.zoom;
     let mark = drawn_text(&output, "More below");
     press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
-    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+    let canvas = app.canvas_rect(&ctx);
+    let panel = card_panel(&app, &ctx, &card);
+    let body = card_body(panel, app.canvas_view.zoom);
+    assert!(
+        (app.canvas_view.zoom - zoom).abs() < f32::EPSILON,
+        "the press keeps the zoom of the moment: {} of {zoom}",
+        app.canvas_view.zoom
+    );
+    assert!(
+        canvas.contains(panel.max),
+        "the foot of the card stands in the view: {panel:?} of {canvas:?}"
+    );
     assert!(
         !drew_text(&output, "More below"),
         "nothing of the card hides under the lower edge of the view"
     );
     let last = drawn_text(&output, "Delete");
     assert!(
-        app.canvas_rect(&ctx).contains_rect(last),
-        "the last button of the card stands in the view: {last:?}"
+        canvas.contains_rect(last),
+        "the last button of the card stands in the view: {last:?} of {canvas:?}"
     );
     assert!(
         body.contains_rect(last),
         "the last button of the card stands in the body: {last:?} in {body:?}"
+    );
+
+    // A press on the place of the mark leaves no mark behind: the view shows the
+    // foot of the card and a press has nothing left to bring in.
+    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    assert!(
+        !drew_text(&output, "More below"),
+        "a press of the person leaves no mark behind"
     );
 }

@@ -20,9 +20,10 @@ Horizon. It then makes sure that a click of the person reaches the agent that
 owns the card, with its selection and its time, that one wait covers every card
 of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
-scrolling of a card that is shorter than its content, the frame that a card fits
-for its own notices, the selected row of a card without its agent, and the press
-of a button at a low canvas zoom. The next tasks check that an agent can open an
+scrolling of a card that is shorter than its content, the mark that brings the
+foot of a card that the view cuts into the view, the frame that a card fits for
+its own notices, the selected row of a card without its agent, and the press of a
+button at a low canvas zoom. The next tasks check that an agent can open an
 SSH terminal panel for the person: the checked route, each refusal, the keyboard
 focus, the mark of the agent that opened it, and the mark after a restart. The
 last checks of the terminals make sure that Horizon keeps one SSH key per rented
@@ -32,9 +33,9 @@ of that workspace, and a restored terminal whose key was deleted.
 
 The tasks B01 to B24 send their requests from a small MCP client that carries the
 identity of an agent panel, so one person reads each answer of the host. The
-tasks B25 to B28 use the scripted card agent instead: an agent panel that draws
-its own cards, answers the clicks of the person and opens a terminal, without an
-AI model. Section 6 repeats the four interactions that a real agent must pass,
+tasks B25 to B28 and B30 use the scripted card agent instead: an agent panel that
+draws its own cards, answers the clicks of the person and opens a terminal,
+without an AI model. Section 6 repeats the four interactions that a real agent must pass,
 with Claude Code and with a Codex panel.
 
 ## 2. Applicability
@@ -45,7 +46,7 @@ with Claude Code and with a Codex panel.
 - The click tasks send pointer presses to the fixture display with `xdotool`,
   scoped to the display and the process of the fixture. A pointer press on a card
   gives the keyboard focus to that card, because the card is a panel.
-- The tasks B25 to B28 need the scripted card agent of the candidate's
+- The tasks B25 to B28 and B30 need the scripted card agent of the candidate's
   repository, `scripts/device-smoke/card_agent.py`, and Python 3. The script is
   deterministic: each click of the person makes one fixed change to its card, so
   a second run gives the same result.
@@ -68,8 +69,9 @@ with Claude Code and with a Codex panel.
   repository that built the candidate, with Python 3 and its standard library.
 - An empty evidence folder `<state>` for the fixture state of the protocol tasks,
   an empty evidence folder `<state-agent>` for the scripted agent, an empty
-  evidence folder `<state-light>` for the light theme, and an empty work folder
-  `<work>` for the files of this procedure.
+  evidence folder `<state-tall>` for the tall card, an empty evidence folder
+  `<state-light>` for the light theme, and an empty work folder `<work>` for the
+  files of this procedure.
 
 ## 4. Setup
 
@@ -1146,6 +1148,52 @@ stop the server in step 8.
    Result: The line under the link is gone after the press that opened the page,
    and the server exits.
 
+### 5.30 B30 — The mark brings the foot of a card that the view cuts
+
+The document of the scenario `tall` needs more room than the ceiling of a card
+gives it, so the card rests at the ceiling and the view of a window of 900 points
+cuts its foot.
+
+1. Write this panel list to `<work>/tall-panels.json`:
+
+   ```json
+   [
+     {"name": "Scripted tall card", "kind": "claude", "command": "/bin/sh",
+      "args": ["-c", "exec /usr/bin/python3 -u <repo>/scripts/device-smoke/card_agent.py \\\n  --mcp-command \"<candidate> --browser-mcp\" --scenario tall \"$@\"", "card-agent"],
+      "cwd": "<work>", "position": [80, 620], "size": [330, 400]}
+   ]
+   ```
+
+2. Start the fixture on a new private state and on a screen of 1600 by 900:
+
+   ```sh
+   python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --state <state-tall> --screen 1600x900 \
+     --panels <work>/tall-panels.json --saved-session
+   ```
+
+   Create its Device panel as in B25 step 3.
+
+   Result: The live view shows the card `Overflow check` beside the panel
+   `Scripted tall card`. The card stands at the ceiling of its height, the body
+   holds more than it shows, and the mark `More below` stands at the lower edge
+   of the view above the footer. The last button row of the card is under the
+   lower edge of the view.
+
+3. Press the mark `More below` again and again.
+
+   Result: Each press that finds more of the body under the lower edge of the
+   view takes one page of the scroll, and the mark stays. The press that finds
+   the end of the body moves the card up: the last button row (`OK`, `Close`),
+   the footer and the lower edge of the card stand in the view, 40 points above
+   its lower edge, and the heading row may leave the top of it. The zoom of the
+   canvas does not change. No mark stays.
+
+4. Press the place where the mark stood.
+
+   Result: The press reaches the canvas, which now shows the room under the foot
+   of the card. No mark appears and no part of the card changes.
+
 ## 6. With a real agent
 
 These steps check the same behaviour with a real AI agent. Do them in your own
@@ -1261,6 +1309,10 @@ Horizon, in a workspace of its own, with an agent panel that can call
   next press that opens the page or the next document removes. A URL with
   credentials and a ninth link are refused as `invalid_document`, and the message
   names the place without repeating the address.
+- B30: A press on the mark of a card that the view cuts takes one page of its
+  body, and the next press brings the foot of the card into the view at the zoom
+  of the moment, takes the top of a card that is taller than the view out of it,
+  and leaves no mark.
 
 ## 8. Cleanup
 
@@ -1274,17 +1326,18 @@ Horizon, in a workspace of its own, with an agent panel that can call
    Result: The panels leave your workspace. This closes the viewer only, not the
    fixture.
 
-3. Close the fixture Horizon of the protocol tasks, then the fixture of
-   `<state-agent>`, then the fixture of `<state-light>`.
+3. Close the fixture Horizon of the protocol tasks, then the fixtures of
+   `<state-agent>`, `<state-tall>` and `<state-light>`.
 
    Result: Each fixture stops its processes and the private display.
 
-> **CAUTION:** DELETE ONLY `<state>`, `<state-agent>`, `<state-light>` AND
-> `<work>` THAT YOU MADE FOR THIS PROCEDURE. Do not delete your own home folder
+> **CAUTION:** DELETE ONLY `<state>`, `<state-agent>`, `<state-tall>`,
+> `<state-light>` AND `<work>` THAT YOU MADE FOR THIS PROCEDURE. Do not delete your own home folder
 > or a folder that another test uses. A reused private home holds the sessions
 > and records of the earlier run.
 
-4. Delete `<state>`, `<state-agent>`, `<state-light>` and `<work>`.
+4. Delete `<state>`, `<state-agent>`, `<state-tall>`, `<state-light>` and
+   `<work>`.
 
    Result: No private state of this procedure remains.
 

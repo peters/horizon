@@ -506,7 +506,7 @@ impl HorizonApp {
                             self.press_host_card_button(ui.ctx(), panel_id, &id);
                         }
                         if card_reveal {
-                            self.reveal_panel_visible(ui.ctx(), panel_id);
+                            self.reveal_panel_foot(ui.ctx(), panel_id);
                         }
                         self.paint_speech_mark(&ui.painter_at(rect), panel_id, rect);
                     },
@@ -937,7 +937,7 @@ impl HorizonApp {
                             self.press_host_card_button(ctx, panel_id, &id);
                         }
                         if card_reveal {
-                            self.reveal_panel_visible(ctx, panel_id);
+                            self.reveal_panel_foot(ctx, panel_id);
                         }
                     },
                 );
