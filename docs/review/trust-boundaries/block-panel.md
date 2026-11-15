@@ -358,17 +358,23 @@ are written by Horizon and no document field can set them:
   drawn neutral, and every control of a card without its agent is drawn
   disabled.
 - **The panel size and title** of a new card come from the host: 420 wide and
-  as tall as the host measured its content needs, between 140 and 900 points,
-  and a title that the host trims to one line. A document that asks for the wide
-  card opens at half of the canvas view of that moment, between 1100 and 2400
-  points, and as tall as its content needs, up to 1200 points. Every update of a
-  document takes the width that it asks for, so a card of a board widens when the
-  board gains a wave and narrows again when the document is narrow, and its left
-  edge stays where the person put it. A card that the person resized by hand keeps
-  that size, and a card that is shorter than its content scrolls its body above
-  a footer that stays at the bottom. The form of every component follows the real
-  width of the card body, so the same document draws the wide form at 1000 points
-  or more and the narrow form under it.
+  as tall as the host measured its content needs, between 140 points and the
+  ceiling of the card, and a title that the host trims to one line. A document
+  that asks for the wide card opens at half of the canvas view of that moment,
+  between 1100 and 2400 points, and as tall as its content needs. The ceiling of
+  a narrow card is 900 points and the ceiling of a wide card is 1200 points,
+  and the room that the canvas view shows at the zoom of the moment beats the
+  ceiling while it is larger: the card of a window that shows 1150 points may
+  take 1150 points, so nothing of its content hides under its footer. Every
+  update of a document takes the width that it asks for, so a card of a board
+  widens when the board gains a wave and narrows again when the document is
+  narrow, and its left edge stays where the person put it. A card that the
+  person resized by hand keeps that size, a card of an arranged workspace keeps
+  the size of its preset, and a card that is taller than its ceiling and than
+  the room of the view scrolls its body above a footer that stays at the
+  bottom. The form of every component follows the real width of the card body,
+  so the same document draws the wide form at 1000 points or more and the narrow
+  form under it.
 
 A document may still choose its own words, its own ids, its tones, its order of
 components and which row of a list starts selected. None of those carry host

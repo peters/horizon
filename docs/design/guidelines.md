@@ -977,11 +977,17 @@ the rules from the modules beside it.
   evidence, and the list of the narrow form takes two; a longer evidence ends
   with an ellipsis and shows whole while the pointer rests on the item.
 - A new card opens 420 wide and, once the body has measured its content, as
-  tall as that content needs, between 140 and 900. A card that the person
-  resized by hand keeps that size, and a card shorter than its content scrolls
-  its body above a footer that stays at the bottom. The status frames are part
-  of what the content needs: the card fits again when one appears or goes, such
-  as the frame of an agent that left and the frame of a refused click.
+  tall as that content needs, between 140 points and the ceiling of the card.
+  The ceiling of a narrow card is 900 points and the ceiling of a wide card is
+  1200 points, and the room that the canvas view shows at the zoom of the moment
+  beats the ceiling while it is larger, so the card of a window that shows 1150
+  points may take 1150 points and no part of its content hides under its footer.
+  A card that the person resized by hand keeps that size, a card of an arranged
+  workspace keeps the size of its preset, and a card that is taller than its
+  ceiling and than the room of the view scrolls its body above a footer that
+  stays at the bottom. The status frames are part of what the content needs: the
+  card fits again when one appears or goes, such as the frame of an agent that
+  left and the frame of a refused click.
 - A new card stands beside its agent panel with the top edges level, or below it
   with the left edges level when the place beside is taken. When both places are
   taken it continues the same shape: below the column of the agent panel with
