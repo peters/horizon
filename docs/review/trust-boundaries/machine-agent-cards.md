@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/node_cards.rs,crates/horizon-core/src/node_cards/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-mcp/src/controller/block.rs"
+applyTo: "crates/horizon-core/src/node_cards.rs,crates/horizon-core/src/node_cards/**,crates/horizon-ui/src/app/block_requests.rs,crates/horizon-ui/src/app/block_requests/**,crates/horizon-ui/src/app/block_clicks.rs,crates/horizon-ui/src/app/block_clicks/**,crates/horizon-browser-mcp/src/node.rs,crates/horizon-browser-mcp/src/node/**,crates/horizon-browser-mcp/src/server.rs,crates/horizon-browser-mcp/src/controller/block.rs"
 ---
 
 # Trust boundary of a card of an agent on a machine

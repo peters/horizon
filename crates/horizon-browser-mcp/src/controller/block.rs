@@ -27,6 +27,12 @@ impl BrowserController {
                 "block_panel requires an agent launched inside Horizon with its host identity",
             ));
         }
+        if !operation.is_card() && self.cards_only {
+            return Ok(Outcome::failed(
+                block::CARDS_ONLY,
+                "A card socket of a machine session serves the card operations of block_panel and no other operation",
+            ));
+        }
         if let Some(refusal) = refused_document(&operation) {
             return Ok(refusal);
         }

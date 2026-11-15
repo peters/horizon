@@ -26,6 +26,9 @@ use crate::model::{
 };
 use crate::network_watch::NetworkWatchState;
 
+/// The one tool that a card socket of a machine session lists.
+const CARD_TOOL: &str = "block_panel";
+
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
 const DEFAULT_QUERY_RESULTS: u32 = 50;
 
@@ -50,6 +53,32 @@ impl HorizonBrowserMcp {
     #[must_use]
     pub fn for_host(actor: &str, host_instance: &str) -> Self {
         Self::new(BrowserController::for_host(actor, host_instance))
+    }
+
+    /// Build the service of one card socket of a machine session: it lists
+    /// `block_panel` alone and refuses every operation outside the card ones.
+    #[must_use]
+    pub fn for_cards(actor: &str, host_instance: &str) -> Self {
+        let mut server = Self::new(BrowserController::for_host(actor, host_instance).only_cards());
+        let mut router = Self::tool_router();
+        for tool in router.list_all() {
+            if tool.name != CARD_TOOL {
+                router.disable_route(tool.name.into_owned());
+            }
+        }
+        server.tool_router = router;
+        server
+    }
+
+    /// The names of the tools that this server lists, which a test of a card
+    /// socket holds to the one tool of the card contract.
+    #[cfg(test)]
+    pub(crate) fn tool_names(&self) -> Vec<String> {
+        self.tool_router
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.clone().into_owned())
+            .collect()
     }
 
     fn new(controller: BrowserController) -> Self {

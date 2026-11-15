@@ -42,6 +42,10 @@ use crate::{
     paths::{BrowserRuntimePaths, safe_local_id},
 };
 
+/// Refusal code of an operation that a card socket of a machine session does
+/// not serve, because it changes a machine, a key or a setting of the person.
+pub const CARDS_ONLY: &str = "cards_only";
+
 /// Most cards one agent may own in one workspace at a time.
 pub const MAX_CARDS_PER_OWNER: usize = 8;
 /// Most SSH terminals one agent panel may open through `open_terminal` in one
@@ -684,6 +688,22 @@ impl Outcome {
 }
 
 impl Operation {
+    /// Whether this operation belongs to a card alone, so the server of a card
+    /// socket of a machine session serves it.
+    #[must_use]
+    pub fn is_card(&self) -> bool {
+        matches!(
+            self,
+            Self::Create { .. }
+                | Self::Update { .. }
+                | Self::List
+                | Self::Inspect { .. }
+                | Self::NextClick { .. }
+                | Self::Visibility { .. }
+                | Self::Close { .. }
+        )
+    }
+
     /// The bounded wait a `next_click` asks for, if this operation waits.
     #[must_use]
     pub fn wait_timeout_millis(&self) -> Option<u64> {

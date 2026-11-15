@@ -25,7 +25,7 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-std", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "rt-multi-thread", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

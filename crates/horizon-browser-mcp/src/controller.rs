@@ -45,6 +45,9 @@ pub(crate) struct BrowserController {
     /// forwarded it. Workspace stamps only match identities from that host.
     host_instance: Option<String>,
     process_local_ownership: Option<Arc<ProcessLocalOwnership>>,
+    /// This server serves a card socket of a machine session, so it answers the
+    /// card operations of `block_panel` and nothing else.
+    pub(super) cards_only: bool,
 }
 
 #[derive(Debug)]
@@ -210,11 +213,13 @@ impl BrowserController {
                 actor: fallback.clone(),
                 host_instance: None,
                 process_local_ownership: Some(Arc::new(ProcessLocalOwnership::new(fallback))),
+                cards_only: false,
             },
             |actor| Self {
                 actor,
                 host_instance,
                 process_local_ownership: None,
+                cards_only: false,
             },
         )
     }
@@ -225,7 +230,15 @@ impl BrowserController {
             actor: actor.to_owned(),
             host_instance: Some(host_instance.to_owned()),
             process_local_ownership: None,
+            cards_only: false,
         }
+    }
+
+    /// The same identity, as the server of one card socket of a machine
+    /// session: it answers the card operations and refuses every other one.
+    pub(crate) fn only_cards(mut self) -> Self {
+        self.cards_only = true;
+        self
     }
 
     #[cfg(test)]
@@ -234,6 +247,7 @@ impl BrowserController {
             actor: actor.into(),
             host_instance: None,
             process_local_ownership: None,
+            cards_only: false,
         }
     }
 

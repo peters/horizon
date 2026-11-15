@@ -10,9 +10,11 @@ mod controller;
 mod download;
 mod model;
 mod network_watch;
+mod node;
 mod screenshot;
 mod server;
 
+pub use node::serve_stream;
 pub use server::HorizonBrowserMcp;
 
 /// Failure while serving MCP over the process standard streams.
