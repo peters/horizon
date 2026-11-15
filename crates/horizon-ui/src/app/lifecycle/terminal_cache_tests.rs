@@ -264,41 +264,50 @@ fn the_window_asks_for_its_own_frame_when_the_answer_of_a_key_press_arrives() {
     );
 }
 
-/// One painted text: the colour of it, and the picture of the font atlas that each glyph
-/// of it points into.
-type PaintedText = (egui::Color32, Vec<([u16; 2], [u16; 2])>);
-
-/// The shapes of one frame of the window that paint the text `wanted`.
-fn painted_text(ctx: &egui::Context, app: &mut HorizonApp, wanted: &str) -> Vec<PaintedText> {
-    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
-    let mut found = Vec::new();
-    for clipped in output.shapes {
-        collect_painted(&clipped.shape, wanted, &mut found);
-    }
-    found
+/// What one frame paints for the text `wanted`: the picture of the font atlas that each
+/// glyph of it points into, and the colour of the first shape of that text.
+#[derive(Debug)]
+struct PaintedText {
+    colour: Option<egui::Color32>,
+    pictures: Vec<([u16; 2], [u16; 2])>,
 }
 
-fn collect_painted(shape: &Shape, wanted: &str, found: &mut Vec<PaintedText>) {
+impl PartialEq for PaintedText {
+    fn eq(&self, other: &Self) -> bool {
+        self.colour == other.colour && self.pictures == other.pictures
+    }
+}
+
+/// The shapes of one frame of the window that paint the text `wanted`, in the order of
+/// the frame.
+fn painted_text(ctx: &egui::Context, app: &mut HorizonApp, wanted: &str) -> PaintedText {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+    let mut painted = PaintedText {
+        colour: None,
+        pictures: Vec::new(),
+    };
+    for clipped in output.shapes {
+        collect_painted(&clipped.shape, wanted, &mut painted);
+    }
+    painted
+}
+
+fn collect_painted(shape: &Shape, wanted: &str, painted: &mut PaintedText) {
     match shape {
         Shape::Text(text) if text.galley.job.text.contains(wanted) => {
-            let glyphs = text
-                .galley
-                .rows
-                .iter()
-                .flat_map(|row| {
-                    row.row
-                        .glyphs
-                        .iter()
-                        .map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max))
-                })
-                .collect();
             // The window fades a panel in, and the fade scales the alpha of its text
             // only: the colour of the theme is its hue with no alpha.
-            found.push((text.fallback_color.to_opaque(), glyphs));
+            painted.colour.get_or_insert(text.fallback_color.to_opaque());
+            painted.pictures.extend(text.galley.rows.iter().flat_map(|row| {
+                row.row
+                    .glyphs
+                    .iter()
+                    .map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max))
+            }));
         }
         Shape::Vec(shapes) => {
             for shape in shapes {
-                collect_painted(shape, wanted, found);
+                collect_painted(shape, wanted, painted);
             }
         }
         _ => {}
@@ -322,7 +331,7 @@ fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
     }
     let dark = painted_text(&ctx, &mut app, MARKER);
     assert!(
-        !dark.is_empty(),
+        !dark.pictures.is_empty(),
         "the idle terminal paints its text in the theme of the start"
     );
 
@@ -347,8 +356,8 @@ fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
          cached mesh of the theme before it"
     );
     assert_ne!(
-        dark, fresh,
-        "the light theme paints other colours and other atlas pictures"
+        dark.colour, fresh.colour,
+        "the light theme paints the text of the terminal in its own colour"
     );
 
     // The frames between changes keep the cache of the grid, which paints the panel:
