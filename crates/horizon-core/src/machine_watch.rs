@@ -59,10 +59,9 @@ pub const MAX_REPORT_BYTES: usize = 256 * 1024;
 /// The lines of one whole report of a machine.
 pub const MAX_REPORT_LINES: usize = 768;
 
-/// The panes that one report may hold: the `tmux` panes of the user.
+/// The panes that one report may hold: the `tmux` panes of the user, and the `tmux`
+/// sessions of that user, which each get one card socket.
 pub const MAX_PANES: usize = 64;
-
-/// The `tmux` sessions that one report may name: one card socket for each.
 pub const MAX_SESSIONS: usize = 64;
 
 /// The rows of its screen that one pane of a report may hold.

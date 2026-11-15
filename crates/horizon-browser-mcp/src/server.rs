@@ -29,8 +29,7 @@ use crate::network_watch::NetworkWatchState;
 /// The one tool that a card socket of a machine session lists.
 const CARD_TOOL: &str = "block_panel";
 
-/// What a card socket of a machine session says about itself: the one tool that it
-/// serves, and how an agent of a machine draws a card with it.
+/// What a card socket of a machine says: its one tool, and how an agent uses it.
 const CARDS_INSTRUCTIONS: &str = "This socket serves the cards of one session of one machine, and nothing else: block_panel draws a card in the Horizon workspace of that machine, and the press of the person comes back from next_click. Only the card operations are served: no terminal, no browser panel and no machine key. Keep next_click open, because a card of a machine has no wake line. A call that a lost link cut answers with an error: call again.";
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;

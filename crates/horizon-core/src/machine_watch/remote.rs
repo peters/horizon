@@ -89,8 +89,7 @@ report() {
     printf 'X\tno-tmux\n'; rc=1
   elif panes=$(tm list-panes -a -F '#{pane_id}' 2>/dev/null); then
     i=0
-    # The names of every session of this user, also a session whose program is no agent
-    # and whose pane reports no state: a card socket is made for each name.
+    # Every session of this user, also one whose program is no agent: each gets a socket.
     tm list-sessions -F '#{session_name}' 2>/dev/null | {
       while IFS= read -r s; do i=$((i + 1)); [ "$i" -le 64 ] || break; printf 'S\t%s\n' "$s"; done
     }

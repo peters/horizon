@@ -63,8 +63,7 @@ pub struct PaneReport {
 pub struct Report {
     /// The note of a machine with no `tmux` or no `tmux` server.
     pub note: Option<MachineNote>,
-    /// The names of every `tmux` session of the user of the machine, which the card
-    /// sockets of that machine are made for.
+    /// The names of every `tmux` session of the user, which get the card sockets.
     pub sessions: Vec<String>,
     /// The panes of the report, in the order that the machine named them.
     pub panes: Vec<PaneReport>,
