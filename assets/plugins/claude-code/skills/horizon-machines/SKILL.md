@@ -636,6 +636,136 @@ recipe asks for a clone with a credential that the person confirms. When the
 repository holds no such section, ask one question on a card and offer to write
 the section from what the repository says about its own machine.
 
+## The logins and the private files of a repository on a machine
+
+A machine that works on a repository needs the logins of the person and the files
+that Git does not hold. The person makes every login, and the person confirms
+every copy.
+
+### The logins
+
+The person signs in, in the terminal of the machine. Each command prints a code or
+an address for the browser of the person, and the login stays on the machine:
+
+| Program | The command on the machine | What the person does |
+|---|---|---|
+| Claude Code | `claude` | Press `/login` and open the address that it prints. |
+| Codex | `codex login` | Open the address that it prints, or type its code. |
+| GitHub | `gh auth login` | Type the code that it prints in the browser. |
+
+Tell the person the command of their program, and open the terminal of the
+machine with `open_terminal` and the machine key when the person wants it from
+Horizon. Run no login command yourself: it waits for the person.
+
+Do not copy a login file, a token, a keyring, a cookie or `~/.ssh` of this
+computer to a machine. A login of this computer is a credential of this computer,
+and its copy on a machine is a second credential that nobody watches. A key of a
+machine is its machine key from `machine_key`, and a repository that needs an SSH
+key of the machine gets a key that is made on the machine, in a step that says
+so.
+
+### The private files
+
+A folder of vendor files, a `.env` file and a package cache are not in Git. Ask
+the person for each source path, and read the size of each path first. Show one
+card before you copy anything:
+
+- One `kv` row for each file: the `label` is the source path, and the `value` is
+  the destination and the size.
+- One `text` line says that the copy leaves this computer and stays on the
+  machine.
+- One `text` line names each file that holds a secret, and says that the file gets
+  the mode 600 on the machine.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Files for the machine", "subtitle": "build-1"},
+  {"type": "kv", "rows": [
+    {"label": "vendor/", "value": "build-1:/srv/shop/vendor, 18 MiB"},
+    {"label": ".env", "value": "build-1:/srv/shop/.env, 4 KiB, secret, mode 600"}]},
+  {"type": "text", "text": "This copy leaves this computer and stays on the machine."},
+  {"type": "buttons", "items": [
+    {"id": "copy", "label": "Copy the files", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
+```
+
+> CAUTION: THIS STEP SENDS FILES OF THIS COMPUTER TO THE MACHINE. A file that holds
+> a secret is readable on the machine by the user of the login and by everybody who
+> takes the machine over.
+
+After the press, copy each path, and set the mode of each secret file:
+
+```sh
+rsync -a --info=progress2 \
+  -e "ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+      -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+      -o BatchMode=yes -o ConnectTimeout=10" \
+  <source path> <user>@<address>:<destination path>
+ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
+  -o UserKnownHostsFile=<known_hosts_path> -o StrictHostKeyChecking=accept-new \
+  -o BatchMode=yes -o ConnectTimeout=10 \
+  <user>@<address> 'chmod 600 <destination path of a secret>'
+```
+
+The two paths are the fields of the `machine_key` answer, and the options are the
+form of step 5 of this skill. Read the mode back with `ls -l`, and say on the card
+which files arrived, with the words of a command that failed. A path that is a
+folder of a package cache, such as `node_modules`, is rebuilt on the machine when
+the machine has the network, so ask the person before you copy one.
+
+## A command at a time
+
+A job that must start at a time of the night must not end with your session, and
+it needs no extra program: one `tmux` session on the machine waits and then runs
+the command. The session keeps running after the connection of the person ends and
+after your session ends.
+
+1. Read the time zone of the machine and the seconds until the start:
+
+   ```sh
+   ssh <options of the machine key> <user>@<address> \
+     'date +"%Z %z"; echo $(( $(date -d "2026-11-16 02:00" +%s) - $(date +%s) ))'
+   ```
+
+   A machine with a `date` that has no `-d`, such as the `date` of macOS, computes
+   the same seconds with its own option, or the person gives the time in seconds.
+
+2. Show one card with the command, the start, the seconds and the time zone of the
+   machine:
+
+   ```json
+   {"components": [
+     {"type": "heading", "text": "A command at a time", "subtitle": "build-1"},
+     {"type": "kv", "rows": [
+       {"label": "Start", "value": "2026-11-16 02:00 CET (+0100) on the machine"},
+       {"label": "Waits", "value": "26100 s"},
+       {"label": "Command", "value": "./upgrade-devices.sh", "mono": true},
+       {"label": "Session", "value": "night-0200", "mono": true}]},
+     {"type": "text", "text": "A restart of the machine ends the wait and the job, and nothing starts it again."},
+     {"type": "buttons", "items": [
+       {"id": "start", "label": "Start the wait", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
+   ```
+
+3. Start the session after the press. The body waits, reports its state in the
+   pane option, runs the command, reports the answer of the command, and keeps
+   the shell for the person:
+
+   ```sh
+   ssh <options of the machine key> <user>@<address> sh <<'SH'
+   body='sleep 26100; tmux set-option -p @horizon_state working; ./upgrade-devices.sh; if [ $? -eq 0 ]; then tmux set-option -p @horizon_state done; else tmux set-option -p @horizon_state blocked; fi; exec "$SHELL"'
+   tmux new-session -d -s night-0200 -c /srv/shop sh -c "$body"
+   SH
+   ```
+
+4. Read the row of the session in the sidebar of Horizon: the session is a row of
+   its machine, because its program reports a state in the pane option. It says
+   `Working` while the command runs, `Done` when it ended well and `Needs you`
+   when it failed, and a press on the row opens its terminal. `tmux ls` on the
+   machine names the same session.
+
+A restart of the machine ends the wait and the job. `tmux` is no service, so
+nothing starts the session again, and a job that must survive a restart is a
+systemd timer of the machine, which is another recipe.
+
 ## The exact state of an agent on a machine
 
 Horizon shows the state of an agent of a machine from two signals: the title rule
