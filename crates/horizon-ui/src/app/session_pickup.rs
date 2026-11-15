@@ -215,6 +215,9 @@ impl HorizonApp {
             return;
         }
         let id = egui::Id::unique("recent_agent_sessions");
+        // The modal reads the list and starts no write, so no frame copies a row.
+        let state = &self.session_pickup;
+        let folders = state.list.folders();
         let mut painted = None;
         let mut close = false;
         let shown = egui::Modal::new(id)
@@ -228,14 +231,13 @@ impl HorizonApp {
             .show(ctx, |ui| {
                 ui.set_width((ctx.content_rect().width() - 120.0).clamp(360.0, 620.0));
                 ui.label(RichText::new(WINDOW_TITLE).size(20.0).strong().color(theme::FG()));
-                let folders = self.session_pickup.list.folders().to_vec();
                 ui.label(
-                    RichText::new(summary_line(&self.session_pickup.list, &folders))
+                    RichText::new(summary_line(&state.list, folders))
                         .size(12.0)
                         .color(theme::FG_SOFT()),
                 );
                 ui.add_space(12.0);
-                if let Some(notice) = self.session_pickup.notice.clone() {
+                if let Some(notice) = state.notice.clone() {
                     ui.label(RichText::new(notice).size(12.0).color(theme::PALETTE_RED()));
                     ui.add_space(8.0);
                 }
@@ -246,13 +248,13 @@ impl HorizonApp {
                     }
                     return;
                 }
-                let height = window_body_height(&folders);
+                let height = window_body_height(folders);
                 egui::ScrollArea::vertical()
                     .id_salt("recent_agent_sessions_scroll")
                     .max_height(height.min((ctx.content_rect().height() - 220.0).max(120.0)))
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        painted = self.paint_pickup_groups(ui, &folders);
+                        painted = self.paint_pickup_groups(ui, folders);
                     });
                 ui.add_space(10.0);
                 ui.label(
