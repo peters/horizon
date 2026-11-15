@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use horizon_core::machine_watch::{MAX_REFUSAL_BYTES, WatchRefusal};
 use horizon_core::node_cards;
@@ -30,6 +30,10 @@ const MAX_CONNECTIONS: usize = 4;
 
 /// The program of the `ssh` child of the cards: the `ssh` of the `PATH`.
 const SSH_PROGRAM: &str = "ssh";
+
+/// How long the removal of the stale socket files of one machine may take before
+/// the child of its cards starts without it.
+const PRUNE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One machine that has its cards set up: the login of its `ssh` child, the sessions
 /// that the watch reports there and the card link of this window.
@@ -206,8 +210,15 @@ async fn apply_set(
         if let Some(child) = carried.remove(&machine.name) {
             stop(child).await;
         }
+        let remotes: Vec<String> = forwards.into_iter().map(|(remote, _local)| remote).collect();
         let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(carry(machine.clone(), program.to_owned(), args.clone(), stopped));
+        let task = tokio::spawn(carry(
+            machine.clone(),
+            program.to_owned(),
+            args.clone(),
+            remotes,
+            stopped,
+        ));
         carried.insert(machine.name.clone(), Carried { args, stop, task });
     }
     let left: Vec<String> = bound.keys().filter(|actor| !actors.contains(*actor)).cloned().collect();
@@ -234,13 +245,23 @@ async fn apply_set(
 /// Runs the `ssh` child of one machine until its stop: an end of the child waits
 /// the delay of [`reconnect_delay`] and starts the next attempt, and the words of
 /// `ssh` are read for the refusal that they name.
-async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut stop: oneshot::Receiver<()>) {
+async fn carry(
+    machine: CardMachine,
+    program: String,
+    args: Vec<String>,
+    remotes: Vec<String>,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let prune = node_cards::prune_args(&machine.login, &remotes);
     let mut attempts = 0u32;
     loop {
         {
             let mut lost = machine.links.lock().unwrap_or_else(PoisonError::into_inner);
             lost.remove(&machine.name);
         }
+        // The child before this one left one socket file for each of these paths, and
+        // the `sshd` of the machine binds no path that a file holds.
+        prune_stale(&program, &prune).await;
         let started = Instant::now();
         let mut child = match tokio::process::Command::new(&program)
             .args(&args)
@@ -302,6 +323,25 @@ async fn end(bound: Bound) {
     let _ = stop.send(());
     let _ = accepts.await;
     let _ = std::fs::remove_file(&socket);
+}
+
+/// Removes the socket files that the child of this machine is about to bind, in one
+/// bounded call of the login of that machine. A machine that answers nothing loses
+/// nothing that the bind of the child could not repair, so the child starts anyway.
+async fn prune_stale(program: &str, args: &[String]) {
+    let attempt = async {
+        let _ = tokio::process::Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status()
+            .await;
+    };
+    if tokio::time::timeout(PRUNE_TIMEOUT, attempt).await.is_err() {
+        tracing::warn!("the card sockets of a machine were not removed before its child");
+    }
 }
 
 /// Ends one `ssh` child, so no child outlives the stop of this window.

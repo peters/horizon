@@ -41,6 +41,22 @@ pub fn forward_args(connection: &SshConnection, sockets: &[(String, PathBuf)]) -
     args
 }
 
+/// The argv of the one call that removes the socket files of the sessions of a
+/// machine before the child of its cards binds them again.
+///
+/// `sshd` binds a streamlocal path only when no file holds it, and the unlink of a
+/// remote forward is the option `StreamLocalBindUnlink` of the `sshd` of the machine
+/// and not of this child. A child that ended leaves its socket file on the machine,
+/// so the next child of that machine asks its login for one `rm -f` of exactly the
+/// paths that it will bind. The paths are built from the machine name and the
+/// session name after their rules, so no word of them needs a quote.
+#[must_use]
+pub fn prune_args(connection: &SshConnection, remotes: &[String]) -> Vec<String> {
+    let mut args = connection.ssh_transport_args();
+    args.push(format!("rm -f -- {}", remotes.join(" ")));
+    args
+}
+
 /// The two names of one session of a machine, which every path and the actor of
 /// the session are built from.
 pub(crate) fn check_pair<'a>(machine: &'a str, session: &'a str) -> Result<(&'a str, &'a str), MachineRefusal> {

@@ -168,6 +168,41 @@ impl StandIn {
     }
 }
 
+/// The body of one stand-in `ssh` that binds the socket file of each `-R` in
+/// `folder`, as the `sshd` of a machine does, and that leaves each file behind when
+/// it ends. A bind over a file that is still there is the words and the status of a
+/// real `sshd` that refuses a path, and `log` holds one line for each call.
+fn binding_body(folder: &Path, log: &Path) -> String {
+    format!(
+        "D={folder}\nL={log}\nbind=\nlast=\n\
+while [ $# -gt 0 ]; do\n\
+\x20 case $1 in\n\
+\x20   -R) bind=\"$bind $2\"; shift 2; continue ;;\n\
+\x20   -o|-p|-i) shift 2; continue ;;\n\
+\x20   -*) shift; continue ;;\n\
+\x20 esac\n\
+\x20 last=$1; shift\ndone\n\
+case $last in\n\
+\x20 rm\\ -f\\ --*)\n\
+\x20   printf 'prune\\n' >> \"$L\"\n\
+\x20   set -f; set -- $last; shift 3; set +f\n\
+\x20   for p in \"$@\"; do rm -f \"$D/$(basename \"$p\")\"; done\n\
+\x20   exit 0 ;;\nesac\n\
+for pair in $bind; do\n\
+\x20 n=$(basename \"${{pair%%:*}}\")\n\
+\x20 if [ -e \"$D/$n\" ]; then printf 'stale %s\\n' \"$n\" >> \"$L\"; exit 255; fi\n\
+\x20 : > \"$D/$n\"\n\
+\x20 printf 'bind %s\\n' \"$n\" >> \"$L\"\ndone\nsleep 0.4\nexit 255\n",
+        folder = folder.display(),
+        log = log.display(),
+    )
+}
+
+/// The lines of the log of a stand-in `ssh`, once its program wrote them.
+fn recorded(log: &Path) -> String {
+    std::fs::read_to_string(log).unwrap_or_default()
+}
+
 /// How many `ssh` children of `cards` carry its sockets now: the socket folder of
 /// this process is in the argv of each of them.
 fn children_of(cards: &NodeCards) -> usize {
@@ -258,8 +293,15 @@ fn a_machine_carries_one_child_for_all_of_its_sessions() {
     let mut cards = cards_with(&directory, &stand_in);
     let machine = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
     cards.set_sessions(vec![machine], HOST);
-    wait_until("the child of the machine", || stand_in.calls() == 1);
-    let carried = stand_in.argv();
+    wait_until("the child of the machine", || stand_in.calls() >= 2);
+    let argv = stand_in.argv();
+    // The first call of the machine removes the socket files that its child is about
+    // to bind, and the second one is the child itself.
+    let carried: String = argv
+        .lines()
+        .find(|line| line.contains("-R"))
+        .unwrap_or_default()
+        .to_owned();
     assert_eq!(carried.matches("-R").count(), 2, "{carried}");
     assert!(carried.contains("-N") && carried.contains("-T"), "{carried}");
     assert!(carried.contains("StreamLocalBindUnlink=yes"), "{carried}");
@@ -295,6 +337,32 @@ fn a_machine_that_leaves_ends_its_child() {
     wait_until("the child of the machine", || children_of(&cards) == 1);
     cards.set_sessions(vec![], HOST);
     wait_until("no child of the machine", || children_of(&cards) == 0);
+    cards.stop_all();
+}
+
+#[test]
+fn a_restarted_child_removes_the_socket_file_that_the_one_before_it_left() {
+    let folder = scratch();
+    let machine = folder.path().join("machine");
+    std::fs::create_dir_all(&machine).expect("the folder of the sockets of a machine");
+    let log = folder.path().join("log");
+    let stand_in = StandIn::of(&binding_body(&machine, &log));
+    let directory = scratch();
+    let mut cards = cards_with(&directory, &stand_in);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["night"]);
+    cards.set_sessions(vec![machine], HOST);
+    wait_until("the second bind of the socket of the session", || {
+        recorded(&log).matches("bind night.sock").count() == 2
+    });
+    let held = recorded(&log);
+    assert!(
+        !held.contains("stale"),
+        "a bind found the file of the child before it: {held}"
+    );
+    assert!(
+        held.starts_with("prune\nbind night.sock\nprune\nbind night.sock\n"),
+        "each child removes the socket file of the one before it: {held}"
+    );
     cards.stop_all();
 }
 
