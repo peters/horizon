@@ -28,6 +28,7 @@
 use std::time::Duration;
 
 mod agents;
+mod open;
 mod reader;
 mod remote;
 mod report;
@@ -38,6 +39,7 @@ mod supervisor;
 mod tests;
 
 pub use agents::{AgentObservation, AgentPrograms, observations};
+pub use open::{can_open, open_command};
 pub use remote::{REMOTE_TEXT, WatchTarget};
 pub use report::{MachineNote, PaneReport, Report, ReportError, parse_report};
 pub use snapshot::{MachineWatchSnapshot, MachineWatchState, Shared, WatchLink, WatchRefusal, unix_millis};

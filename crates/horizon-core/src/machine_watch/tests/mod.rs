@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+mod open;
 mod remote;
 mod report;
 mod snapshot;
