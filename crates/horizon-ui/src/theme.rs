@@ -218,12 +218,6 @@ pub fn bg_for(theme: ResolvedTheme) -> Color32 {
     palette_for(theme).bg
 }
 
-#[cfg(test)]
-pub(crate) fn canvas_contrast_for_test(theme: ResolvedTheme, color: Color32) -> f32 {
-    let canvas = bg_for(theme);
-    contrast_ratio(composite_over(canvas, color), canvas)
-}
-
 #[must_use]
 pub fn BG() -> Color32 {
     active_palette().bg
@@ -405,6 +399,13 @@ pub fn agent_line_color(theme: ResolvedTheme, color_idx: usize, strength: u8) ->
 /// The contrast of a colour that a painter covers the canvas of `theme` with.
 fn canvas_contrast_for(theme: ResolvedTheme, color: Color32) -> f32 {
     contrast_ratio(composite_over(bg_for(theme), color), bg_for(theme))
+}
+
+/// The contrast of a colour that a painter covers the canvas of `theme` with, for
+/// a test that pins the floor of a line.
+#[cfg(test)]
+pub(crate) fn canvas_contrast_for_test(theme: ResolvedTheme, color: Color32) -> f32 {
+    canvas_contrast_for(theme, color)
 }
 
 #[must_use]
