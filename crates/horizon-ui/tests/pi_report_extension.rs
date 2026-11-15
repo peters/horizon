@@ -131,11 +131,17 @@ impl Fixture {
     }
 
     /// Waits for `count` calls, or fails with what arrived instead.
+    ///
+    /// The recorder creates the file of a call before it writes the document
+    /// into it, so a file that is there with no document yet is a call that the
+    /// recorder still writes. The wait is for the documents, and its bound is the
+    /// hang guard of the test.
     fn wait_for_calls(&self, count: usize) -> Vec<Call> {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
             let calls = self.calls();
-            if calls.len() >= count || Instant::now() >= deadline {
+            let written = calls.iter().all(|call| call.document.is_ok());
+            if (calls.len() >= count && written) || Instant::now() >= deadline {
                 return calls;
             }
             std::thread::sleep(Duration::from_millis(20));
