@@ -43,7 +43,8 @@ state.
   It runs in a loop, and it prints a report only when the report changed; a still
   machine prints one short heartbeat line instead. The text is no argument of a
   process, so no command line of this computer and no process list of the machine
-  holds it.- **No value of a record reaches that text, and no value of a report reaches a
+  holds it.
+- **No value of a record reaches that text, and no value of a report reaches a
   command line of this computer.** The route and the key are arguments of `ssh`,
   and they pass the rule of an SSH terminal first. The text reads no name, no
   path, no session and no key of the record.
@@ -92,12 +93,13 @@ state.
   true, or that the pane belongs to the person.
 - **The state of a pane is one of four words or no report.** The text reads the
   `tmux` pane option `@horizon_state` and sends it as one field of the pane line.
-  The parser accepts `working`, `blocked`, `done` and `idle`, with the exact case,
-  and it reads every other word, every empty field and a field above its bound as
-  no report. A report of a pane is therefore one of the four states of this build
-  or nothing, and no text of a program of a machine becomes a name, a word or a
-  state of this window. The option itself is a value that any program of that
-  user, and the machine, can set: it proves nothing.
+  The parser accepts `working`, `blocked`, `done` and `idle`, with the exact case.
+  Every other word and every empty field are no report, and a pane line with more or
+  fewer fields is no line of the format, which drops its whole report. A report of a
+  pane is therefore one of the four states of this build or nothing, and no text of
+  a program of a machine becomes a name, a word or a state of this window. The
+  option itself is a value that any program of that user, and the machine, can set:
+  it proves nothing.
 - **A pane that reports a state and runs no agent program is a row.** Its kind is
   the plain terminal mark of this build, its name is the session name of its pane,
   cut at [`MAX_NAME_CHARS`] characters, and its state is the report. A press on
