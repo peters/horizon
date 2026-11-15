@@ -43,7 +43,8 @@ use self::support::{ColorLookup, replay_terminal_bytes};
 pub use self::wake::OutputWake;
 use self::wake::OutputWakeState;
 
-type TerminalPty = tty::Pty;
+/// The PTY of a panel, whose reader reports the program status of its program.
+type TerminalPty = horizon_pty_tap::TapPty<tty::Pty>;
 
 type TerminalEventLoop = EventLoop<TerminalPty, TerminalEventProxy>;
 type TerminalEventLoopState = State;
@@ -243,6 +244,9 @@ pub struct Terminal {
     cell_height: u16,
     scrollback_limit: usize,
     title: RuntimeTitle,
+    /// The reports of the program status of this panel's program, written by the
+    /// reader of the PTY and read by the frame that shows the panel.
+    program_status: horizon_pty_tap::StatusInbox,
     pending_clipboard: PendingClipboard,
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,

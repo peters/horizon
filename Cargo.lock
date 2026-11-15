@@ -1861,6 +1861,7 @@ dependencies = [
  "horizon-browser-control",
  "horizon-browser-protocol",
  "horizon-browser-routines",
+ "horizon-pty-tap",
  "horizon-terminal",
  "jpeg-encoder",
  "libc",
@@ -1919,6 +1920,14 @@ dependencies = [
  "horizon-device",
  "tokio",
  "vnc-rs",
+]
+
+[[package]]
+name = "horizon-pty-tap"
+version = "0.2.7"
+dependencies = [
+ "alacritty_terminal",
+ "polling",
 ]
 
 [[package]]

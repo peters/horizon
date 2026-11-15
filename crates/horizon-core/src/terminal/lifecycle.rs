@@ -80,6 +80,8 @@ impl Terminal {
             tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
         let child_pid = Some(pty.child().id());
         let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
+        let (pty, program_status) = horizon_pty_tap::TapPty::new(pty)
+            .map_err(|error| Error::Pty(format!("failed to read the pty of the panel: {error}")))?;
         let pty_term = match output {
             PtyOutput::Shown => term.clone(),
             PtyOutput::Discarded => Arc::new(FairMutex::new(Term::new(
@@ -114,6 +116,7 @@ impl Terminal {
             cell_height,
             scrollback_limit,
             title: replay_restore.title,
+            program_status,
             pending_clipboard: PendingClipboard::default(),
             pending_pty_resize: None,
             pty_resized: false,
@@ -394,3 +397,7 @@ mod snapshot_tests;
 // The latency lines and the wake of a key press run against a real PTY.
 #[cfg(all(test, unix))]
 mod latency_tests;
+
+// The program status protocol and its feature detection query run against a PTY.
+#[cfg(all(test, unix))]
+mod tap_tests;

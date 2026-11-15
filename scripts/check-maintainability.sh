@@ -9,6 +9,7 @@ SOURCE_DIRS=(
   "$ROOT_DIR/crates/horizon-browser-protocol/src"
   "$ROOT_DIR/crates/horizon-browser/src"
   "$ROOT_DIR/crates/horizon-core/src"
+  "$ROOT_DIR/crates/horizon-pty-tap/src"
   "$ROOT_DIR/crates/horizon-sync/src"
   "$ROOT_DIR/crates/horizon-terminal/src"
   "$ROOT_DIR/crates/horizon-ui/src"

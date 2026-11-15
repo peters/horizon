@@ -1,0 +1,18 @@
+[package]
+name = "horizon-pty-tap"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A pass-through wrapper of a PTY whose reader reports the OSC 7501 program status of its program"
+
+[lints]
+workspace = true
+
+[dependencies]
+alacritty_terminal.workspace = true
+# The trait `EventedReadWrite` of `alacritty_terminal` names the `Poller`, `Event`
+# and `PollMode` types of this crate, so the wrapper of that trait names them too.
+polling.workspace = true

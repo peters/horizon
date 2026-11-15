@@ -57,6 +57,12 @@ impl Terminal {
             had_events = true;
         }
         self.flush_pending_pty_resize();
+        if self.program_status.take_query() {
+            // A program asked whether this terminal knows the program status
+            // protocol. The answer is one constant sequence and it holds nothing
+            // of any report, which is the only write that the protocol allows.
+            self.answer_query(crate::agent_work::DETECTION_REPLY);
+        }
         if had_events {
             // This frame took the output of the panel, which may be the echo of a
             // key press of a person, so the latency line of that press has its
@@ -71,6 +77,12 @@ impl Terminal {
     /// after it, so the caller should process events again soon.
     pub fn take_answered_query(&mut self) -> bool {
         std::mem::take(&mut self.answered_query)
+    }
+
+    /// The newest program status that the program of this panel reported, and no
+    /// older one: a report replaces the record of the protocol whole.
+    pub(crate) fn take_program_payload(&self) -> Option<horizon_pty_tap::Payload> {
+        self.program_status.take_report()
     }
 
     fn answer_query(&mut self, bytes: &[u8]) {

@@ -556,6 +556,7 @@ fn build_terminal_panel(
         had_recent_output: false,
         agent_status: AgentStatus::default(),
         title_state: TitleState::default(),
+        program_status: crate::agent_work::ProgramStatus::default(),
         last_output_at_millis: None,
         terminal_title: String::new(),
         launch_command,

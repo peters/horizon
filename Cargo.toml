@@ -12,6 +12,7 @@ members = [
     "crates/horizon-browser-routines",
     "crates/horizon-core",
     "crates/horizon-cursor",
+    "crates/horizon-pty-tap",
     "crates/horizon-sync",
     "crates/horizon-terminal",
     "crates/horizon-ui",
@@ -56,9 +57,14 @@ horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 horizon-browser-protocol = { path = "crates/horizon-browser-protocol", version = "0.2.7" }
 horizon-browser-routines = { path = "crates/horizon-browser-routines", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
+# The PTY reader that reports the program status of the program that writes it.
+horizon-pty-tap = { path = "crates/horizon-pty-tap", version = "0.2.7" }
 # The store and the link protocol of one Horizon server, usable by a UI or a server.
 horizon-sync = { path = "crates/horizon-sync", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
+# The types of the PTY trait that the tap's wrapper forwards. It reuses the
+# version that alacritty_terminal already asks for, so no new package arrives.
+polling = "3.11.0"
 horizon-wayland = { path = "crates/horizon-wayland", version = "0.2.7" }
 thiserror = "2.0.20"
 tracing = "0.1.44"

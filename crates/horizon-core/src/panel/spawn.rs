@@ -159,6 +159,7 @@ impl StaticPanelSeed {
             had_recent_output: false,
             agent_status: AgentStatus::default(),
             title_state: TitleState::default(),
+            program_status: crate::agent_work::ProgramStatus::default(),
             last_output_at_millis: None,
             launch_command,
             launch_args: Vec::new(),

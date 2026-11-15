@@ -33,6 +33,8 @@ ureq.workspace = true
 time.workspace = true
 alacritty_terminal.workspace = true
 horizon-terminal.workspace = true
+# The reader of a panel's PTY, which reports the program status of its program.
+horizon-pty-tap.workspace = true
 rusqlite.workspace = true
 libc.workspace = true
 uuid.workspace = true
