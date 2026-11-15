@@ -18,10 +18,25 @@ page states only what the machine adds.
 
 - **One second `ssh` child per machine that has cards set up.** The watch child
   of [`machine-watch.md`](machine-watch.md) is unchanged. The card child carries
-  one `-R <socket on the machine>:<socket on this computer>` for each session
-  that the watch reports for that machine, with `-o BatchMode=yes`,
-  `-o ExitOnForwardFailure=yes` and `-o StreamLocalBindUnlink=yes`, and the
-  login options of a terminal of that machine.
+  one `-R <socket on the machine>:<socket on this computer>` for each `tmux`
+  session of the user that the watch reports for that machine, with
+  `-o BatchMode=yes`, `-o ExitOnForwardFailure=yes` and
+  `-o StreamLocalBindUnlink=yes`, and the login options of a terminal of that
+  machine.
+- **One removal before each start of that child.** A child that ended leaves one
+  socket file for each session on the machine, and a machine binds no path that a
+  file holds. Before each start, the same login runs one `rm -f` whose paths are
+  exactly the socket paths of that machine's sessions, built here from the machine
+  name and the session names after their rules. It removes no other file, it takes
+  no value from the text of the machine, and a machine that does not answer costs
+  at most ten seconds of the start.
+- **A relay program that the person's own account holds.** The setup writes
+  `~/.horizon-cards/relay.py`, mode 700, and every agent program of that machine
+  starts it. It is one readable python program: it reads the session name from the
+  `tmux` server of the account, it opens one Unix socket of that machine and no
+  network connection, it forwards the standard input and output of its agent, and
+  it holds no secret, no key and no code of Horizon. The machine may change it,
+  and every byte that it sends arrives as untrusted.
 - **The link leaves this computer only because Horizon started it.** The machine
   reads no file and no port of this computer. It cannot open a connection here,
   because it is given no address and no port: it has one socket path on its own
@@ -68,6 +83,10 @@ panel:
 - **No wake line is typed for a machine agent.** There is no terminal of this
   computer to write into, so the owner of such a card is never present as a
   panel, and the click waits its five minutes for the `next_click` of the agent.
+- **The instructions of a card socket are text of this build.** A card socket
+  answers `initialize` with the words of the cards alone: the one tool, the press,
+  the card operations, the open `next_click`, and a call again after a lost link.
+  No word of them comes from the machine.
 
 ## What a taken-over machine can do, and what it cannot do
 
@@ -104,7 +123,12 @@ It cannot:
   file of a request never leaves this computer.
 - **Anything about the `sshd` of the machine beyond OpenSSH's own host key.** A
   machine that refuses a streamlocal forward is refused with the typed reason of
-  the words of `ssh`, and its cards do not exist.
+  the words of `ssh`, and its cards do not exist. The last line of those words
+  reaches the log and the hover of the quiet line as one line of visible text,
+  cut at 200 characters, because that text is the machine's.
+- **A relay program that a machine alters.** The program is the person's file on
+  the person's account, and the setup cannot prove what it runs later. Its bytes
+  cross this boundary as the bytes of any agent of that machine.
 - **The card while the watch setting is off.** The sessions of a machine come
   from the watch snapshot. With `machines.watch_agents` off, Horizon knows no
   session of a machine, so it forwards no card socket and a relay that connects

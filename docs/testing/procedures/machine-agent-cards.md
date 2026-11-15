@@ -14,9 +14,11 @@ owner: peters
 
 This procedure proves that an agent program in a session of a machine draws a
 card in the workspace of that machine, that the person reads and presses it, and
-that a lost link ends the call of the agent. No real machine is necessary: the
-fixture supplies one session that speaks the card protocol, and one stand-in
-`ssh` that does the work of the `sshd` of a machine.
+that the card link lives through what a real machine does: the agent program
+restarts, a new session joins, and a link ends. No real machine is necessary: the
+fixture supplies two sessions with a card, one that speaks the card protocol
+directly and one through the relay program that the machines skill ships, and one
+stand-in `ssh` that does the work of the `sshd` of a machine.
 
 ## 2. Applicability
 
@@ -27,6 +29,9 @@ fixture supplies one session that speaks the card protocol, and one stand-in
 - This procedure does not test: a real `sshd` with `AllowStreamLocalForwarding
   no`, a real agent program of a machine, and the setup section of the machines
   skill on a real machine. Those need a rented machine.
+- The relay program is the text of
+  `assets/plugins/claude-code/skills/horizon-machines/SKILL.md`, so a change of
+  that text is a change of what this procedure tests.
 
 ## 3. Safety
 
@@ -66,15 +71,18 @@ server, so it changes no setting of the person.
 
 1. Read the Machines section of the sidebar of the candidate.
 
-   Result: the machine `build-1` has three rows: **Needs you** for `hz-shop`,
-   **Working** for `hz-notes`, and `hz-night`.
+   Result: the machine `build-1` has four rows: **Needs you** for `hz-shop`,
+   **Working** for `hz-notes`, and the rows `hz-night` and `hz-relay`. The
+   sessions `hz-relay` and `hz-night` run no agent program that reports a state,
+   so their rows are the rows of a session with a card.
 
 2. Read the canvas.
 
-   Result: the workspace `build-1` holds a card with the heading `Night shift`
-   and the buttons `Continue` and `Stop`. No terminal panel of `hz-night` is
-   open. The card shows both buttons whole and it does not show `More below`.
-   The toolbar of that workspace shows `Default` selected.
+   Result: the workspace `build-1` holds two cards: `Night shift` and `Night
+   shift by relay`, each with the buttons `Continue` and `Stop`. No terminal
+   panel of `hz-night` or of `hz-relay` is open. Each card shows both buttons
+   whole and none shows `More below`. The toolbar of that workspace shows
+   `Default` selected.
 
 3. Read the footer of that card.
 
@@ -101,7 +109,109 @@ server, so it changes no setting of the person.
    Result: the pane holds one line `machine-card-agent: the person pressed
    Continue`.
 
-### 6.3 MC-3 — A lost link ends the call of the agent
+### 6.3 MC-3 — The card of the relay program
+
+1. Read the pane of the session `hz-relay` in the private server:
+
+   ```bash
+   tmux -L hz-watch attach -t hz-relay
+   ```
+
+   Detach with `Ctrl+b`, `d`.
+
+   Result: the pane holds the line `machine-card-agent: card <id> is drawn`. The
+   agent of that session speaks to the relay program, and the relay meets the
+   socket of the session.
+
+2. Press `Continue` on the card of `Night shift by relay`.
+
+   Result: the card says `The person pressed Continue.`, and the pane of
+   `hz-relay` holds the same line.
+
+3. Stop the relay program of that session, and start it again:
+
+   ```bash
+   tmux -L hz-watch send-keys -t hz-relay C-c
+   tmux -L hz-watch respawn-pane -k -t hz-relay
+   ```
+
+   The second command starts the same command line again, which is the restart
+   of an agent program that a person makes.
+
+   Result: the card of `Night shift by relay` stays in the workspace, and the
+   sidebar keeps its rows. The log of the candidate holds the words `rm -f --`
+   of the child that removes the socket files of the machine, and it holds no
+   `Address already in use`. After the next report of the watch, a press on that
+   card reaches the agent again, with a new card of the restarted program.
+
+4. Press the row of `hz-relay` once more, and read the card that it draws.
+
+   Result: the card `Night shift by relay` stands beside the first one, and a
+   press reaches the agent of the restarted program.
+
+### 6.4 MC-4 — A new session that needs no restart
+
+1. Make a new session in the private server, with no agent program and no state:
+
+   ```bash
+   tmux -L hz-watch new-session -d -s hz-new -x 100 -y 20 'sleep 600'
+   ```
+
+2. Wait two seconds, and read the state of the child of the machine:
+
+   ```bash
+   ps -A -o pid=,args= | grep -c 'horizon-cards'
+   ```
+
+   Result: the count is one more than before the command of step 1, because the
+   child of that machine now carries the socket of `hz-new` too. No agent
+   program restarted, and no session lost its card.
+
+3. Read the folder of the card sockets inside the fixture namespace:
+
+   ```bash
+   ls /var/tmp/machine-cards-1/private/tmp/horizon-cards/build-1/
+   ```
+
+   Result: the folder holds `hz-new.sock` beside the sockets of the other
+   sessions.
+
+4. Remove that session again:
+
+   ```bash
+   tmux -L hz-watch kill-session -t hz-new
+   ```
+
+   Result: `hz-new.sock` leaves the folder, and the sockets and cards of the
+   other sessions stay.
+
+### 6.5 MC-5 — A lost link answers the call of the agent
+
+CAUTION: this step stops the card link of the machine. A card that an agent draws
+while the link is down reaches nothing, and the agent reads an error.
+
+1. Stop the fixture, which ends the child of the cards of the machine, and start
+   it again with the same state folder:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/machine-cards-1 --native-view --machine-watch \
+     --vnc-port 5911
+   ```
+
+   Result: the cards of the workspace stay, and the rows of the sessions leave
+   the sidebar while the link is down.
+
+2. Read the pane of `hz-relay` again.
+
+   Result: the pane holds one line `machine-card-agent: the card socket ended:
+   The link to Horizon was lost. Call again.` The relay program answers the call
+   that the lost link cut, and the agent program ends it.
+
+Evidence that the relay itself answers: the test
+`scripts/device-smoke/tests/test_machine_card_relay.py` proves the error answers
+and the reconnect on a socket of its own, and it runs in the check of the
+fixture.
 
 1. Stop the fixture, which ends the child of the cards of the machine.
 
@@ -113,7 +223,7 @@ server, so it changes no setting of the person.
    Result: the card of `Night shift` is in the workspace again after the watch
    reports the session, and a press on it reaches the agent again.
 
-### 6.4 MC-4 — A machine without the watch reports no session
+### 6.6 MC-6 — A machine without the watch reports no session
 
 1. Turn the setting **Show the agents of each machine** off.
 
@@ -124,7 +234,7 @@ server, so it changes no setting of the person.
 
    Result: the row comes back and a press reaches the agent again.
 
-### 6.5 MC-5 — A terminal of the session joins the workspace of the cards
+### 6.7 MC-7 — A terminal of the session joins the workspace of the cards
 
 1. Press the row of `hz-night` in the Machines section.
 
@@ -141,12 +251,20 @@ server, so it changes no setting of the person.
 
 ## 7. Pass criteria
 
-- The card of `hz-night` appears in the workspace `build-1` while no panel of that
-  session is open.
-- A press on the card reaches the agent of the session, and the card changes to
-  the label of that press.
+- The cards of `hz-night` and of `hz-relay` appear in the workspace `build-1`
+  while no panel of those sessions is open.
+- A press on a card reaches the agent of the session, and the card changes to the
+  label of that press.
 - The footer names the machine and the session, and the chip names the machine.
-- The card and the row follow the sessions that the watch reports.
+- The rows follow the sessions that the watch reports, and a session with no agent
+  program keeps its socket.
+- A restart of the agent program keeps the card link, and the child of the machine
+  binds the socket files of the sessions again.
+- A new session of the machine gets its socket without a restart of the child and
+  without a lost card of another session.
+- A lost link answers the call of the agent with an error that the agent program
+  ends, and the relay program of the skill is the text that the card of
+  `hz-relay` came through.
 - The card shows its buttons whole and says no `More below`, also after a
   terminal of that session joins the workspace.
 
@@ -167,7 +285,8 @@ server, so it changes no setting of the person.
    rm -rf /var/tmp/machine-cards-1
    ```
 
-   Result: no file of the run stays.
+   Result: no file of the run stays, and no socket file of a session is left in
+   the folder that the fixture used for `/tmp`.
 
 ## 9. Record of results
 

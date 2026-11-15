@@ -26,7 +26,9 @@ or key operation of a machine agent.
 | The card contract over one stream, one tool, seven operations | `crates/horizon-browser-mcp/src/node.rs`, `server.rs` (`for_cards`), `controller/block.rs` |
 | The `ssh` child of one machine, and its `-R` of each session | `HorizonApp::reconcile_card_sockets`, `node_cards::forward_args` |
 | One listener for each card socket | `crates/horizon-ui/src/app/node_cards.rs` |
-| The sessions to serve, from the watch snapshot | `HorizonApp::reconcile_card_sockets` |
+| The sessions to serve: every `tmux` session of the user | `HorizonApp::reconcile_card_sockets`, the `S` line of the text of the watch |
+| The relay program of a machine, and the entry of the agent | the section of the machines skill; no Rust writes it |
+| The removal of a stale socket file before each start | `node_cards::prune_args`, and its call in the child loop |
 
 ## The identity, and the mark of a setup
 
@@ -41,10 +43,14 @@ or key operation of a machine agent.
   (`crates/horizon-core/src/machines/record.rs`), `false` by default, and
   `machine_set` writes it. A machine whose record does not say so gets no socket
   and no child.
-- **The sessions come from the watch.** A session that the watch reports for a
-  machine with the mark gets one socket here. With the setting
-  `machines.watch_agents` off, the watch reports no session, so Horizon serves no
-  card socket and an agent of that machine reaches nothing.
+- **The sessions are the `tmux` sessions of the user of the machine.** The text of
+  the watch names every one of them, also a session whose program is no agent and
+  whose pane reports no state, and a machine with the mark gets one socket for
+  each name. The rows of the sidebar are still the agents and the panes that
+  report a state: an agent program that ends leaves its session standing, so its
+  socket and its card link do not change. With the setting `machines.watch_agents`
+  off, the watch reports no session, so Horizon serves no card socket and an agent
+  of that machine reaches nothing.
 
 ## The workspace of the cards of a machine
 
@@ -76,10 +82,20 @@ reports there, with `-N -T -o ExitOnForwardFailure=yes
 machine. The machine opens no connection and is given no address of this
 computer.
 
+A child that ends leaves one socket file for each session on the machine, and the
+`sshd` of a machine binds no streamlocal path that a file still holds: its unlink
+option, `StreamLocalBindUnlink`, is the option of that `sshd` and not of this
+child. Before each start, the child therefore asks its own login for one `rm -f`
+of exactly the paths that it will bind, under the same route, key, batch mode and
+a ten-second bound. That is one extra connection of the machine for each start;
+the paths are built from the two names after their rules, so this call needs no
+quote.
+
 A child that ends waits the delay of `place::reconnect_delay` and starts again,
 and the words of `ssh` name the refusal in the log and in one quiet line under
 the row of the machine, `Cards: no link · trying again`, whose hover and spoken
-text is the sentence of that refusal. The line goes when the next child starts,
+text is the sentence of that refusal and the last line of those words, as one line
+of visible text of the machine, cut at 200 characters. The line goes when the next child starts,
 so a machine that refuses keeps saying so and the line of one that recovers
 goes. The child of a machine ends and starts again when the set of its sessions
 changes, because its argv changed with it. The stop of the window kills the
@@ -116,4 +132,6 @@ machine with the mark carries nothing.
 | The bytes of one socket path | `MAX_SOCKET_PATH_BYTES` 100, because macOS takes 104 |
 | The connections of one socket at a time | 4 |
 | The operations of the one tool on a socket | the seven card operations |
-| The tools on a socket | `block_panel` alone |
+| The tools on a socket | `block_panel` alone, with the instructions of a card socket |
+| The seconds that the relay waits for a link, once | 30 |
+| The characters of the words of `ssh` of a refused card link | 200 |

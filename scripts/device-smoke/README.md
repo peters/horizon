@@ -284,8 +284,9 @@ scripts/device-smoke/serve.py --horizon target/debug/horizon \
 
 `--machine-watch` writes the record of one machine, `build-1`, into the machine
 list of the private home, starts one private `tmux` server with two sessions of
-the Codex stand-in, and puts a stand-in `ssh` first on the `PATH` of the
-candidate. `tmux` places its socket in the folder that `TMUX_TMPDIR` names, so
+the Codex stand-in, one session whose agent speaks to the card socket directly and
+one session that runs the relay program of the machines skill, and puts a
+stand-in `ssh` first on the `PATH` of the candidate. `tmux` places its socket in the folder that `TMUX_TMPDIR` names, so
 the server starts in the folder that the sandbox sees as `/tmp`, and the run
 stops that server at its exit. The watch of the candidates asks the stand-in for
 the one word `sh` and writes the text of the watch to the input of that call, as
@@ -321,6 +322,19 @@ program of the bridge is `card-bridge.py` of the state folder. The card of
 `hz-night` therefore stands in the workspace of `build-1`, a press of the person
 reaches the agent through `next_click`, and the agent updates the card with the
 label of that press.
+
+The bridge binds like an `sshd` with its default `StreamLocalBindUnlink=no`: it
+binds no path that a file still holds, and the socket file of a child that ended
+stays on the "machine". Horizon removes the files that its child will bind before
+each start, and a restart of that child is the step that proves it. A run that
+sees `card-bridge: ... is taken` in its log has a candidate without that removal.
+
+The session `hz-relay` runs the stand-in agent with `--relay`, so the agent speaks
+to the standard input and output of the relay program in
+`assets/plugins/claude-code/skills/horizon-machines/SKILL.md`, the fixture writes
+that program to `<state>/machine-watch/bin/relay.py`, and its card `Night shift by
+relay` reaches the same workspace. The card of that session is the one that proves
+the program a person writes on their own machine.
 
 The procedure is
 [the machine agent cards procedure](../../docs/testing/procedures/machine-agent-cards.md).
