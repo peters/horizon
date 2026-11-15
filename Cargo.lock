@@ -1927,6 +1927,7 @@ name = "horizon-pty-tap"
 version = "0.2.7"
 dependencies = [
  "alacritty_terminal",
+ "memchr",
  "polling",
 ]
 

@@ -235,6 +235,11 @@ when it names one of those kinds.
   payload reaches a frame through a queue of eight reports that drops its oldest
   entry, so the event loop thread never waits for the UI thread, and a report
   that a newer one replaced before a frame ran is not replayed.
+- Almost every byte of a panel's output is text with no sequence in it, so the
+  bytes between two sequences are skipped by one `memchr` search of the next
+  escape byte and the state machine looks at nothing there. `memchr` is a direct
+  dependency for that search; the version is the one of the tree that `regex`
+  already asks for, so the workspace gains no package.
 - The crate depends on `alacritty_terminal` and on `polling` for the types that
   the forwarded method names. It holds no state of the product: the panel parses
   the payload and owns the claim, so this crate has no Horizon dependency.

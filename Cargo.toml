@@ -71,6 +71,9 @@ tracing = "0.1.44"
 # A safe stop flag for `horizon --server` on SIGTERM and SIGINT. It reuses the
 # version that alacritty_terminal already asks for, so no new package arrives.
 signal-hook = "0.4.4"
+# The byte search of the program status scanner. It reuses the version of the tree
+# that `regex` already asks for, so no new package arrives.
+memchr = "2.8.3"
 # Chrome DevTools Protocol transport for browser panels. Plain ws:// to
 # 127.0.0.1, so no TLS features are needed.
 tungstenite = "0.30.0"

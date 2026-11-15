@@ -13,6 +13,9 @@ workspace = true
 
 [dependencies]
 alacritty_terminal.workspace = true
+# The vectorised byte search that skips the text between two escape sequences of a
+# panel's output.
+memchr.workspace = true
 # The trait `EventedReadWrite` of `alacritty_terminal` names the `Poller`, `Event`
 # and `PollMode` types of this crate, so the wrapper of that trait names them too.
 polling.workspace = true

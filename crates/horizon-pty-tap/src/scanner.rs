@@ -132,9 +132,11 @@ impl Scanner {
             let byte = bytes[index];
             match self.state {
                 State::Ground => {
-                    // The common case of a stream of output: jump to the next
-                    // escape byte and look at nothing in between.
-                    let Some(offset) = bytes[index..].iter().position(|&byte| byte == ESC) else {
+                    // The common case of a stream of output: find the next escape
+                    // byte in one vectorised pass and look at nothing in between.
+                    // The machine has no other introducer: an OSC sequence of this
+                    // scanner begins with `ESC ]`, so one byte is the whole search.
+                    let Some(offset) = memchr::memchr(ESC, &bytes[index..]) else {
                         return;
                     };
                     index += offset;

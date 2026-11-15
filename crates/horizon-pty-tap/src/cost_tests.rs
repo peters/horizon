@@ -162,6 +162,20 @@ fn parse(with_escape: bool) -> Duration {
     started.elapsed()
 }
 
+/// The scan of the text of a panel is one search per read, and it must cost less
+/// than the read of the same bytes. Both bounds are measured on the same run, so
+/// they hold on a slower computer too: about 0.4 ms are added to a read of 3.8 ms
+/// and to a parse of 150 ms per 64 MiB of text.
+#[test]
+fn the_added_cost_of_plain_output_stays_far_below_its_read() {
+    let (plain, scanned, _percent) = cost_percent(false);
+    let parsed = parse(false);
+    let added = scanned.saturating_sub(plain);
+    eprintln!("64 MiB of text: added {added:?} to a read of {plain:?} and a parse of {parsed:?}");
+    assert!(added <= plain, "the tap adds {added:?} to a read of {plain:?}");
+    assert!(added <= parsed / 10, "the tap adds {added:?} to a parse of {parsed:?}");
+}
+
 #[test]
 fn the_scan_costs_a_small_part_of_the_parse_of_the_same_bytes() {
     for (label, with_escape) in [("text", false), ("one escape byte in 64", true)] {
