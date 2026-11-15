@@ -708,10 +708,10 @@ ssh -i <private_key_path> -o IdentitiesOnly=yes -o IdentityAgent=none \
 ```
 
 The two paths are the fields of the `machine_key` answer, and the options are the
-form of step 5 of this skill. Read the mode back with `ls -l`, and say on the card
-which files arrived, with the words of a command that failed. A path that is a
-folder of a package cache, such as `node_modules`, is rebuilt on the machine when
-the machine has the network, so ask the person before you copy one.
+form of step 5 of this skill. Read the mode back with `ls -l`. The card then names
+each file that arrived, and it holds the words of a command that failed. A path
+that is a folder of a package cache, such as `node_modules`, is rebuilt on the
+machine when the machine has the network, so ask the person before you copy one.
 
 ## A command at a time
 
@@ -727,8 +727,8 @@ after your session ends.
      'date +"%Z %z"; echo $(( $(date -d "2026-11-16 02:00" +%s) - $(date +%s) ))'
    ```
 
-   A machine with a `date` that has no `-d`, such as the `date` of macOS, computes
-   the same seconds with its own option, or the person gives the time in seconds.
+   The `date` of macOS has no `-d`, so on such a computer its own option computes
+   the seconds, or the person gives them.
 
 2. Show one card with the command, the start, the seconds and the time zone of the
    machine:
@@ -797,9 +797,8 @@ network` and before `Stop`, and it belongs to the work that prepares a machine.
 
 ### 1. Show the card of the change
 
-Read `~/.claude/settings.json` on the machine first, with the form of the SSH
-login of step 5 of this skill. The card says what the change does and what it
-keeps:
+Step 2 reads the file on the machine. The card says what the change does and
+what it keeps:
 
 - The heading is `Exact agent state` and the subtitle is the name of the machine.
 - One `text` line names the file: `~/.claude/settings.json` of the SSH user of the
@@ -847,8 +846,9 @@ ssh <options of the machine key> <user>@<address> \
   'ls -l ~/.claude/settings.json; command -v python3; command -v jq'
 ```
 
-A missing line for `python3` and for `jq` is the answer that the machine has that
-tool. The card keeps the account of what the machine answered.
+A line for `python3` or for `jq` is the answer that the machine has that tool, and
+no line is the answer that it has none. An `ls` that names no file is the answer
+that the file does not exist. The card keeps the account of those answers.
 
 ### 3. Write the entries
 
@@ -874,7 +874,7 @@ report back.
 }
 ```
 
-The command of every hook is one `sh` line. The first word of it keeps a program
+The command of every hook is one `sh` line. The test at its start keeps a command
 that runs outside `tmux` from failing: without `$TMUX_PANE` there is no pane to
 report. No entry names a path of this computer, an address, a token or a program
 of Horizon.
