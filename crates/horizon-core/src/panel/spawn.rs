@@ -887,15 +887,22 @@ pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: b
     env
 }
 
+/// The prefix of the private control identity of one Horizon agent panel.
+///
+/// A panel or a claim that names an agent panel of this board holds its
+/// `horizon:<local_id>` actor, so a reader of that actor finds the panel of this
+/// board that it names.
+pub const BROWSER_ACTOR_PREFIX: &str = "horizon:";
+
 /// Stable private control identity injected into one Horizon agent panel.
 #[must_use]
 pub fn browser_actor(local_id: &str) -> String {
     if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
-        return format!("horizon:{local_id}");
+        return format!("{BROWSER_ACTOR_PREFIX}{local_id}");
     }
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     local_id.hash(&mut hasher);
-    format!("horizon:{:016x}", hasher.finish())
+    format!("{BROWSER_ACTOR_PREFIX}{:016x}", hasher.finish())
 }
 
 /// The variables that name the panel of a Horizon to the tools that it starts.

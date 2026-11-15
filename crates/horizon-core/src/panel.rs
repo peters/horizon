@@ -23,12 +23,12 @@ pub(crate) fn watch_a_program_at_the_end(
 ) {
     termination::watch(child, name, completion);
 }
+pub use spawn::{
+    BROWSER_ACTOR_PREFIX, PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart,
+    prepare_panel_start, prepare_restart,
+};
 #[doc(hidden)]
 pub use spawn::{BrowserMachine, browser_machine, browser_panel_of_options};
-pub use spawn::{
-    PanelStart, PendingRestart, RestartPreflight, RestartRequest, StartRequest, finish_restart, prepare_panel_start,
-    prepare_restart,
-};
 pub(crate) use spawn::{shutdown_for_restart, spawn_waiting_panel};
 pub use ssh_state::SshConnectionEnd;
 

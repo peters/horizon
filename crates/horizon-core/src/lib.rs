@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent_links;
 pub mod agent_work;
 mod agents;
 mod atomic_file;
@@ -49,6 +50,7 @@ mod view;
 mod workspace;
 pub mod workspace_list;
 
+pub use agent_links::AgentLink;
 pub use agents::{
     AgentDefinition, AgentIntegrationKind, AgentResumeMode, AgentSessionValidationMode, AgentStatus, agent_definition,
     all_agent_kinds, is_agent_working_line,
@@ -84,10 +86,10 @@ pub use machines::{
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use panel::{
-    AFTER_HANGUP, AFTER_TERM, DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId,
-    PanelKind, PanelLayout, PanelOptions, PanelResume, PanelStart, PendingRestart, ProgramEnd, RestartPreflight,
-    RestartRequest, SshConnectionEnd, StartRequest, browser_actor, current_unix_millis, finish_restart,
-    prepare_panel_start, prepare_restart,
+    AFTER_HANGUP, AFTER_TERM, BROWSER_ACTOR_PREFIX, DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE,
+    PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, PanelStart,
+    PendingRestart, ProgramEnd, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
+    current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
 };
 #[doc(hidden)]
 pub use panel::{BrowserMachine, browser_machine, browser_panel_of_options};
