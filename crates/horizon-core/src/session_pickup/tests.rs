@@ -320,7 +320,8 @@ fn a_session_id_that_is_not_of_the_form_of_the_program_is_never_a_row() {
     .into_iter()
     .enumerate()
     {
-        fixture.claude_session(&folder, session_id, &format!("A session {index}"), NOW - index as i64);
+        let age = i64::try_from(index).expect("an index of a session");
+        fixture.claude_session(&folder, session_id, &format!("A session {index}"), NOW - age);
     }
     fixture.codex_session(&folder, "00000000-0000-0000-0000-00000000000z", "Codex one", NOW);
 
@@ -399,7 +400,7 @@ fn a_session_that_another_process_has_open_is_marked_and_asks_first() {
     fixture.claude_session(&folder, &uuid(2), "Ended", NOW - HOUR_MILLIS);
     std::fs::write(
         fixture.home().join(".claude/sessions").join("4294967.json"),
-        json!({"pid": 4294967, "sessionId": uuid(2)}).to_string(),
+        json!({"pid": 4_294_967, "sessionId": uuid(2)}).to_string(),
     )
     .expect("the registry entry of a process that ended");
 
@@ -420,13 +421,9 @@ fn a_program_that_is_not_installed_says_so_and_cannot_open() {
     fixture.claude_session(&folder, &uuid(1), "Claude one", NOW);
     fixture.codex_session(&folder, &uuid(2), "Codex one", NOW - HOUR_MILLIS);
 
-    let list = load_with(
-        &fixture.home().to_path_buf(),
-        &programs(),
-        &HashSet::new(),
-        NOW,
-        |program| program == "codex",
-    );
+    let list = load_with(fixture.home(), &programs(), &HashSet::new(), NOW, |program| {
+        program == "codex"
+    });
     let rows = &list.folders()[0].rows;
 
     let claude = rows
@@ -529,7 +526,7 @@ fn the_rows_answer_the_session_and_the_folder_of_one_row() {
         Some("repo")
     );
     assert_eq!(
-        list.row(PanelKind::Claude, &uuid(1)).map(|row| row.key()),
+        list.row(PanelKind::Claude, &uuid(1)).map(super::PickupRow::key),
         Some(AgentSessionKey::new(PanelKind::Claude, uuid(1)))
     );
 }
@@ -550,4 +547,78 @@ fn preset(name: &str, kind: PanelKind, command: Option<&str>) -> PresetConfig {
 /// programs use.
 fn uuid(value: u64) -> String {
     format!("00000000-0000-0000-0000-{value:012x}")
+}
+
+#[test]
+fn the_open_of_a_row_starts_the_program_of_the_row_with_exactly_its_session() {
+    let fixture = Fixture::new();
+    let folder = fixture.folder("repo");
+    fixture.claude_session(&folder, &uuid(1), "Fix the build", NOW);
+    let list = load(fixture.home(), &HashSet::new());
+    let folder_row = &list.folders()[0];
+    let row = &folder_row.rows[0];
+    let preset = preset("Claude Code", PanelKind::Claude, None);
+
+    let options = row.panel_options(&folder_row.path, &preset, &crate::browser::BrowserConfig::default());
+    let start = crate::panel::prepare_panel_start(crate::panel::StartRequest {
+        id: crate::panel::PanelId(7),
+        opts: options,
+        local_id: "pickup-panel".to_string(),
+    });
+
+    assert!(
+        start.working_directory_is_usable(),
+        "the folder of the session starts the panel"
+    );
+    let (program, args) = start.launch_command().expect("the launch of the program");
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    assert_eq!(
+        program, shell,
+        "an agent panel starts through the login shell of this computer"
+    );
+    assert_eq!(args.len(), 2, "{args:?}");
+    assert_eq!(args[0], "-ic", "the shell runs one command string");
+    // A panel resumes a conversation whose transcript is in the store of this
+    // computer, and starts the same program under the same id when the store has
+    // no transcript of it: the rule of `docs/session-recovery.md`. A test home is
+    // not the home that the launch reads, so both spellings are correct here.
+    let id = uuid(1);
+    let resume = format!("claude --resume {id}");
+    let fresh = format!("claude --session-id {id}");
+    assert!(
+        args[1] == resume || args[1] == fresh,
+        "the command string names the program and the one session, and nothing else: {:?}",
+        args[1]
+    );
+    assert_eq!(
+        args[1].matches(&id).count(),
+        1,
+        "the session id stands once: {:?}",
+        args[1]
+    );
+}
+
+#[test]
+fn a_codex_row_resumes_with_the_subcommand_of_its_program() {
+    let fixture = Fixture::new();
+    let folder = fixture.folder("repo");
+    fixture.codex_session(&folder, &uuid(2), "Write the test", NOW);
+    let list = load(fixture.home(), &HashSet::new());
+    let folder_row = &list.folders()[0];
+    let row = &folder_row.rows[0];
+    let preset = preset("Codex", PanelKind::Codex, None);
+
+    let options = row.panel_options(&folder_row.path, &preset, &crate::browser::BrowserConfig::default());
+    let start = crate::panel::prepare_panel_start(crate::panel::StartRequest {
+        id: crate::panel::PanelId(8),
+        opts: options,
+        local_id: "pickup-codex".to_string(),
+    });
+
+    let (_, args) = start.launch_command().expect("the launch of the program");
+    assert!(
+        args[1].contains(&format!("resume {}", uuid(2))),
+        "the command string resumes the one session: {:?}",
+        args[1]
+    );
 }

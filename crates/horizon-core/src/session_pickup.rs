@@ -32,7 +32,7 @@ pub use format::{MAX_FOLDER_CHARS, MAX_TITLE_CHARS, folder_name_and_parent, one_
 
 /// The agent programs whose session stores this module reads: Claude Code and
 /// Codex. Every other kind of agent panel has no reader here: Gemini and
-/// KiloCode keep no session store that Horizon reads, `OpenCode` and Pi keep one
+/// `KiloCode` keep no session store that Horizon reads, `OpenCode` and Pi keep one
 /// that another code path reads for the session picker of a panel, and the pickup
 /// leaves them out of this round.
 pub const READ_PROGRAMS: [PanelKind; 2] = [PanelKind::Claude, PanelKind::Codex];
@@ -120,6 +120,36 @@ impl PickupRow {
     pub fn key(&self) -> AgentSessionKey {
         AgentSessionKey::new(self.kind, self.session_id.clone())
     }
+
+    /// The options of the panel that opens this session of `folder`.
+    ///
+    /// The panel takes the working directory of the session and the resume of
+    /// exactly this session, which is the path that a restart of a panel takes
+    /// for its own session: the launch resolves the binding from the resume, so
+    /// the panel holds this session id from its first frame.
+    ///
+    /// The caller names the preset of the program of this row. A preset of
+    /// another kind still opens a panel of this row's kind, because the row is
+    /// the authority on what it resumes.
+    #[must_use]
+    pub fn panel_options(
+        &self,
+        folder: &Path,
+        preset: &PresetConfig,
+        browser_config: &crate::browser::BrowserConfig,
+    ) -> crate::panel::PanelOptions {
+        let mut options = preset.to_panel_options(browser_config);
+        options.kind = self.kind;
+        options.resume = crate::panel::PanelResume::Session {
+            session_id: self.session_id.clone(),
+        };
+        options.cwd = Some(folder.to_path_buf());
+        // The title of the conversation is what the person recognizes, and a
+        // later title of the program may still replace it.
+        options.name = Some(self.title.clone());
+        options.name_is_custom = Some(false);
+        options
+    }
 }
 
 /// The sessions of one folder.
@@ -163,6 +193,15 @@ pub struct PickupList {
 }
 
 impl PickupList {
+    /// The list of `folders`, in the order that the caller gives.
+    ///
+    /// [`load`] is the one reader of the stores. This constructor is for a caller
+    /// that already holds the folders of its own read.
+    #[must_use]
+    pub fn new(folders: Vec<PickupFolder>) -> Self {
+        Self { folders }
+    }
+
     /// The folders, the one with the newest activity first.
     #[must_use]
     pub fn folders(&self) -> &[PickupFolder] {
@@ -261,10 +300,10 @@ impl PickupProgram {
 /// has: such a session is not offered again. `now_millis` is the time of the
 /// clock of the window, which the words of the rows count from.
 #[must_use]
-pub fn load(
+pub fn load<H: std::hash::BuildHasher>(
     home: &Path,
     programs: &[PickupProgram],
-    open_panels: &HashSet<AgentSessionKey>,
+    open_panels: &HashSet<AgentSessionKey, H>,
     now_millis: i64,
 ) -> PickupList {
     load_with(home, programs, open_panels, now_millis, |program| {
@@ -275,10 +314,10 @@ pub fn load(
 /// As [`load`], with the answer of whether a program is installed given by the
 /// caller, so a test needs no program on this computer.
 #[must_use]
-pub fn load_with(
+pub fn load_with<H: std::hash::BuildHasher>(
     home: &Path,
     programs: &[PickupProgram],
-    open_panels: &HashSet<AgentSessionKey>,
+    open_panels: &HashSet<AgentSessionKey, H>,
     now_millis: i64,
     mut installed: impl FnMut(&str) -> bool,
 ) -> PickupList {
@@ -308,11 +347,11 @@ pub fn load_with(
 }
 
 /// The rows of `records`, filtered, bounded and grouped by folder.
-fn group_rows(
+fn group_rows<H: std::hash::BuildHasher>(
     records: Vec<crate::runtime_state::AgentSessionRecord>,
     home: &Path,
     installed: &HashMap<PanelKind, bool>,
-    open_panels: &HashSet<AgentSessionKey>,
+    open_panels: &HashSet<AgentSessionKey, H>,
     running: &HashSet<String>,
     now_millis: i64,
     programs: &[PickupProgram],
@@ -359,18 +398,17 @@ fn group_rows(
             last_active: relative_time(now_millis, record.updated_at),
             state,
         };
-        match index.get(&path) {
-            Some(position) => folders[*position].rows.push(row),
-            None => {
-                index.insert(path.clone(), folders.len());
-                folders.push(PickupFolder {
-                    path,
-                    name,
-                    parent,
-                    exists,
-                    rows: vec![row],
-                });
-            }
+        if let Some(position) = index.get(&path) {
+            folders[*position].rows.push(row);
+        } else {
+            index.insert(path.clone(), folders.len());
+            folders.push(PickupFolder {
+                path,
+                name,
+                parent,
+                exists,
+                rows: vec![row],
+            });
         }
     }
     // The rows arrive newest first, so a folder stands at the place of its newest
@@ -402,10 +440,7 @@ fn state_of(
 /// [`one_line`].
 fn title_of(record: &crate::runtime_state::AgentSessionRecord) -> String {
     let label = record.label.as_deref().map(str::trim).filter(|label| !label.is_empty());
-    let title = match label {
-        Some(label) => one_line(label, MAX_TITLE_CHARS),
-        None => String::new(),
-    };
+    let title = label.map_or_else(String::new, |label| one_line(label, MAX_TITLE_CHARS));
     if title.is_empty() {
         format!("{} session", record.kind.display_name())
     } else {

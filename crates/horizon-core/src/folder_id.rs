@@ -40,9 +40,7 @@ fn lexical_identity(path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()
-            .map(|folder| folder.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |folder| folder.join(path))
     };
     let mut folded = PathBuf::new();
     for component in absolute.components() {

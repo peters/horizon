@@ -26,16 +26,22 @@ The name of a file in a store, its size and its access time are untrusted too.
 
 ## What the code guarantees
 
-1. **Nothing of a session file is executed or interpreted.** Two values reach a
-   command line: the session id and the folder.
+1. **Nothing of a session file is executed or interpreted.** Two values of a
+   session reach the process: the session id and the folder.
    - A session id reaches the command line only after a check of its form. The
      form is the one that the program uses: a UUID for the two programs of this
-     round. A row whose id is not of that form is not shown and logs one line.
-   - The folder reaches the process only as its working directory, never as a
-     shell string. No shell stands between Horizon and the agent program: the
-     program and its arguments are one argument vector.
+     round, which is hexadecimal digits and dashes and nothing else. A row whose
+     id is not of that form is not shown and logs one line.
+   - An agent panel starts through the login shell of this computer, as every
+     agent panel of Horizon does, so the id stands in one command string of that
+     shell. The form of the id is what keeps it inert there: it holds no space,
+     quote, separator or other character that the shell treats specially.
+   - The folder reaches the process only as its working directory, and never as
+     text of that command string.
    - A folder that is not an existing directory ends with the row state that
      says it is gone, and the row cannot open.
+   - A test of the argument vector of the spawn pins the program, the one
+     command string and the one session id that it names.
 2. **A title or a message is only text.** Horizon shows it on one line, with
    the control characters removed, with at most `MAX_TITLE_CHARS` characters,
    and every run of white space made one space. Horizon draws it and never

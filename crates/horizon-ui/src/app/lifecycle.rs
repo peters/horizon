@@ -92,6 +92,7 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog(ctx);
+        self.poll_session_pickup(ctx);
         self.poll_remote_hosts_refresh(ctx);
         self.poll_ssh_upload_flow();
         self.poll_config_reload();
@@ -336,6 +337,7 @@ impl HorizonApp {
         }
         self.render_panels(ui);
         self.render_file_drop_highlight(ui);
+        self.render_recent_agent_sessions(ui.ctx());
         self.render_preset_picker(ui);
         self.render_minimap(ui, workspace_bounds);
         self.render_canvas_hud(ui);

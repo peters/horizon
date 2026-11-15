@@ -77,6 +77,7 @@ mod session;
 mod session_jobs;
 mod session_kill;
 mod session_manager;
+mod session_pickup;
 mod settings;
 mod settings_io;
 mod settings_request;
@@ -409,6 +410,9 @@ pub struct HorizonApp {
     pending_detached_reattach: BTreeSet<String>,
     pending_detached_window_position_restore: BTreeSet<String>,
     session_catalog: AgentSessionCatalog,
+    /// The sessions that the agent programs of this computer already keep, read
+    /// on a worker for the first start page and the Menu.
+    session_pickup: session_pickup::SessionPickup,
     startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
     pending_startup_runtime_state: Option<RuntimeState>,
     pending_startup_runtime_state_changed: bool,

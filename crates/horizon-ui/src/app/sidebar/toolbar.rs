@@ -151,11 +151,12 @@ impl HorizonApp {
         let _ = response.on_hover_text(tooltip);
     }
 
-    pub(super) fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
+    pub(in crate::app) fn perform_toolbar_action(&mut self, ctx: &Context, action: ToolbarAction) {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(ctx),
+            ToolbarAction::RecentSessions => self.show_recent_agent_sessions(),
             // The Menu starts Set up without a goal, so its agent asks which of
             // the four the person wants.
             ToolbarAction::SetUp => self.press_set_up(ctx, horizon_core::SetupGoal::Choose),
