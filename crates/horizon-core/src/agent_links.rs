@@ -112,6 +112,10 @@ fn owner_agent(panels: &[crate::Panel], target: &crate::Panel) -> Option<PanelId
     }
 }
 
+/// The prefix of the actor that `crate::browser_actor` writes for a panel. A test
+/// below keeps this value in step with that function.
+const ACTOR_PREFIX: &str = "horizon:";
+
 /// The agent panel that the `horizon:<local_id>` actor names, when it is an
 /// agent panel of this board.
 ///
@@ -119,7 +123,7 @@ fn owner_agent(panels: &[crate::Panel], target: &crate::Panel) -> Option<PanelId
 /// character, and Horizon makes no such id: it makes a UUID. A pair that such a
 /// value names is not drawn, because the id is not a field of any panel here.
 fn panel_of_actor(panels: &[crate::Panel], actor: &str) -> Option<PanelId> {
-    let local_id = actor.strip_prefix(crate::BROWSER_ACTOR_PREFIX)?;
+    let local_id = actor.strip_prefix(ACTOR_PREFIX)?;
     panels
         .iter()
         .find(|panel| panel.kind.is_agent() && panel.local_id == local_id)

@@ -272,6 +272,13 @@ when it names one of those kinds.
   Session activity date formatting lives in `runtime_state/session_display.rs`;
   the UI's `app/panels/session_rebind.rs` renders the recovery menu (with focused rendering and input tests in `session_rebind/tests/`) and collects
   resume/copy actions without changing provider bindings.
+- `agent_links.rs` answers, from the board alone, the pairs of an agent panel
+  and the panels that it controls: the owner of a card, the live claim of a
+  browser page, and the mark of a panel that an agent opened for the person. It
+  stores nothing and keeps no state for a pair. The mark holds the kind of the
+  opener, so it names one panel only when one agent panel of that kind stands in
+  the workspace; a Device viewer is left out, because its owner is a field of
+  the UI caches and not of the board.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
   `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded
@@ -411,6 +418,12 @@ when it names one of those kinds.
     the coordination worker, and the allocation each applied lease is recorded
     in until its release is established
   - `canvas`: canvas rendering and HUD
+  - `agent_lines`: the lines between an agent panel and the panels that it
+    controls. It holds the geometry of the curves, the strength and the colour
+    of a line, the agent in focus, and the cache of the shapes, keyed by the
+    pairs, the places of the panels, the view, the focus and the theme. The
+    pairs and the canvas setting are read elsewhere: `horizon_core::AgentLink`
+    answers the pairs and `CanvasConfig::agent_lines` turns the drawing off.
   - `canvas_scroll`: viewport-local scroll gesture ownership and canvas event consumption
   - `canvas_drag`: viewport-local ownership for primary drags starting on empty canvas
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit

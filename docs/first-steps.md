@@ -316,6 +316,12 @@ Cmd+Shift+Enter on macOS, because F11 alone shows the desktop on macOS.
 
    Result: The agent starts in a new panel.
 
+A thin line runs from an agent panel to each panel that its agent controls: a
+card that it drew, a page that it drives, and a terminal or a preset panel that
+it opened for you. The lines of the agent that you point at or that holds the
+keyboard are clear, and the lines of the other agents are faint. You can turn
+the lines off in Settings, General, Canvas.
+
 ## Read the state of an agent panel
 
 The sidebar says **Needs you**, **Done**, **Working** or **Background** for an

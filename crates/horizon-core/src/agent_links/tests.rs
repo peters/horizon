@@ -1,3 +1,4 @@
+use super::ACTOR_PREFIX;
 use crate::{
     AgentLink, BlockPanelState, Board, PanelId, PanelKind, PanelOptions, SshConnection, WorkspaceId, browser_actor,
 };
@@ -222,6 +223,17 @@ fn a_board_without_an_owner_fact_has_no_pair() {
     let terminal = opened_terminal(&mut board, workspace, "Claude");
     assert!(board.has_agent_links(), "the mark of an opened panel is an owner fact");
     assert_eq!(board.agent_links()[0].target, terminal);
+}
+
+/// The prefix of this module is the prefix of the actor of a panel.
+#[test]
+fn the_prefix_of_an_actor_is_the_prefix_that_horizon_writes() {
+    assert_eq!(browser_actor("panel-1"), format!("{ACTOR_PREFIX}panel-1"));
+    assert_eq!(browser_actor(""), browser_actor(""));
+    assert!(
+        browser_actor("").starts_with(ACTOR_PREFIX),
+        "even a hashed id takes the prefix"
+    );
 }
 
 /// A page names the agent that drives it through the live claim of that agent.

@@ -612,6 +612,7 @@ Fixed metrics:
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
 | Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. On a card panel the hit target stops above the footer: its height is the on-screen height of the footer and the panel padding under it, at most 32 and at least 10 screen points, so a button of the card never loses its press to a resize grab. |
+| Line between an agent and a panel it controls | 1.5 screen points wide at every canvas zoom, with a filled dot of radius 3 at the agent end and a ring of radius 3 with a 1.5 point stroke at the other end |
 | Canvas dot grid | 22 spacing and 2.3 dot diameter at 100% zoom. Both scale with zoom; the spacing doubles until it is at least 14 on screen (so zooming out shows a coarser grid, not none) and the dot diameter is clamped to 1-5 |
 | Text field in a dialog | 38 high, text margin (12, 10) |
 | Menu search field | 32 high, radius 8, text inset 28 left and 10 right |
@@ -650,6 +651,39 @@ There are four levels, from back to front:
    outline and a soft 2 px alpha-25 outer ring; large form dialogs use
    `BG_ELEVATED` with a 1 px `BORDER_STRONG` outline. Shadows come from the egui style
    ([Themes](#themes)).
+
+### Agent lines
+
+One thin curve runs from the edge of an agent panel to the edge of each panel
+that the agent controls: a card that it drew, a page that it drives, and a
+terminal or a preset panel that it opened for the person. The pairs come from
+the owner and the opener facts of the board, so a panel without one carries no
+line.
+
+- Colour: the workspace accent of the agent, so two agents of one workspace
+  differ. The agent takes the accent of its place among the agent panels of its
+  workspace, which keeps the colour while the board does not change.
+- Width: 1.5 screen points at every canvas zoom. The end marks are 3 screen
+  points: a filled dot at the agent end and a ring at the other end.
+- Geometry: the line leaves the side of the panel that faces the other panel, at
+  a right angle, as a cubic Bezier. The starts of the lines of one agent spread
+  along that side in the order of their ends, so those lines do not cross near
+  the panel. Two panels that overlap or almost touch carry no line.
+- Strength: the lines of the agent in focus are clear (alpha 230), the lines of
+  every other agent are faint (alpha 46), and at a canvas zoom of 0.6 or less
+  every line takes one middle strength (alpha 153). The agent in focus is the
+  agent panel under the pointer, else the agent of the panel under the pointer,
+  else the agent panel that holds the keyboard, else the agent that controls the
+  panel that holds the keyboard. With no agent in focus every line is faint.
+- Place: the lines sit above the canvas dot grid and the workspace frame and
+  below the panels, so a line that passes behind a panel is hidden by it. They
+  are drawn on the canvas of the root window only: a panel of a detached
+  workspace, a hidden panel, a minimized panel and a panel behind a fullscreen
+  panel carries no line.
+- Cost: the shapes are cached under the pairs, the places of the panels, the
+  view, the agent in focus and the theme. A frame where none of those changed
+  draws the cached shapes and builds none. The setting **Lines between an agent
+  and its panels** in Settings, General, Canvas turns the lines off.
 
 ## Components
 

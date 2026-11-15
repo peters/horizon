@@ -86,10 +86,10 @@ pub use machines::{
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
 pub use panel::{
-    AFTER_HANGUP, AFTER_TERM, BROWSER_ACTOR_PREFIX, DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE,
-    PANEL_SCROLLBACK_LIMIT, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, PanelStart,
-    PendingRestart, ProgramEnd, RestartPreflight, RestartRequest, SshConnectionEnd, StartRequest, browser_actor,
-    current_unix_millis, finish_restart, prepare_panel_start, prepare_restart,
+    AFTER_HANGUP, AFTER_TERM, DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId,
+    PanelKind, PanelLayout, PanelOptions, PanelResume, PanelStart, PendingRestart, ProgramEnd, RestartPreflight,
+    RestartRequest, SshConnectionEnd, StartRequest, browser_actor, current_unix_millis, finish_restart,
+    prepare_panel_start, prepare_restart,
 };
 #[doc(hidden)]
 pub use panel::{BrowserMachine, browser_machine, browser_panel_of_options};
