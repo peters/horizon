@@ -243,10 +243,17 @@ class AttentionAgentTests(unittest.TestCase):
             # candidate, where the stand-in is.
             self.assertIsNone(panel['command'])
             self.assertEqual(panel['kind'], 'codex', 'the agent kind that writes its state in its title')
-            self.assertEqual(panel['args'], [])
+            # Every codex panel of the fixture starts the launch of the real program,
+            # which the run shows before that program is ready for the person.
+            self.assertEqual(panel['args'], [serve.ATTENTION_STARTUP_ARGUMENT])
             self.assertFalse(panel['work_resume']['enabled'], 'a codex panel continues no work')
             shared = json.loads(serve.ATTENTION_CODEX_PANEL_ENTRY.read_text())
-            self.assertEqual({key: value for key, value in panel.items() if key != 'cwd'}, shared)
+            # The shared entry names no argument of a launch: no real program has
+            # the argument that starts the launch of the stand-in.
+            self.assertEqual(
+                {key: value for key, value in panel.items() if key not in ('cwd', 'args')},
+                {key: value for key, value in shared.items() if key != 'args'},
+            )
             program = bin_dir / serve.ATTENTION_CODEX_PROGRAM
             self.assertEqual(program.name, 'codex', 'the name that the codex preset resolves')
             self.assertEqual(
@@ -291,17 +298,21 @@ class AttentionAgentTests(unittest.TestCase):
             self.assertEqual(panels[0]['kind'], 'codex')
             self.assertEqual(
                 panels[0]['args'],
-                [serve.ATTENTION_PROTOCOL_ARGUMENT],
-                'the stand-in writes the reports of the program status protocol',
+                [serve.ATTENTION_STARTUP_ARGUMENT, serve.ATTENTION_PROTOCOL_ARGUMENT],
+                'the stand-in writes the launch of the real program and its reports',
             )
             self.assertIsNone(panels[0]['command'], 'the default command is the stand-in of the kind')
 
-    def test_a_panel_without_the_protocol_names_no_argument(self):
+    def test_a_panel_without_the_protocol_names_the_startup_argument_and_nothing_else(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / 'state'
             state.mkdir()
             panels, _bin_dir = serve.attention_agent(state, 0, kind='codex')
-            self.assertEqual(panels[0]['args'], [], 'the titles alone are the report of that panel')
+            self.assertEqual(
+                panels[0]['args'],
+                [serve.ATTENTION_STARTUP_ARGUMENT],
+                'the titles alone are the report of that panel',
+            )
 
     def test_an_unknown_agent_kind_is_refused(self):
         with tempfile.TemporaryDirectory() as folder:
