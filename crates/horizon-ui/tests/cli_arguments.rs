@@ -19,7 +19,7 @@ fn start(arguments: &[&str]) -> Outcome {
 }
 
 /// The first line of the usage, which `--help` writes and every refusal repeats.
-const USAGE_FIRST_LINE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]";
+const USAGE_FIRST_LINE: &str = "usage: horizon [<folder>] [--config <path>] [--ephemeral] [--new-session] [--blank]";
 
 /// One start of the binary and what it left in its private home.
 struct Outcome {
@@ -113,7 +113,6 @@ fn an_argument_that_this_build_does_not_know_ends_the_start() {
         (&["--list"][..], "--list"),
         (&["--nocapture"], "--nocapture"),
         (&["--definitely-unknown"], "--definitely-unknown"),
-        (&["stray"], "stray"),
     ] {
         let outcome = start(arguments);
         assert_eq!(outcome.code, 2, "`{arguments:?}`: {:?}", outcome.stdout);
@@ -133,6 +132,29 @@ fn an_argument_that_this_build_does_not_know_ends_the_start() {
     let server = start(&["--server", "stray"]);
     assert_eq!(server.code, 2);
     assert_eq!(server.entries_in_home, 0);
+}
+
+/// A folder that a start names is judged before the home is prepared, and its
+/// refusal is one sentence that names the path.
+#[test]
+fn a_folder_that_is_not_there_ends_the_start_with_one_sentence() {
+    let outcome = start(&["stray"]);
+
+    assert_eq!(outcome.code, 2, "{:?}", outcome.stdout);
+    assert_eq!(outcome.first_stderr_line(), "error: stray is not there");
+    assert_eq!(outcome.stderr.lines().count(), 1, "one sentence, not the usage");
+    assert_eq!(outcome.entries_in_home, 0, "the start prepared the home");
+
+    let file = tempfile::tempdir().expect("the folder of a file");
+    let path = file.path().join("a-file");
+    std::fs::write(&path, b"not a folder").expect("the file");
+    let outcome = start(&[path.to_str().expect("a path of text")]);
+    assert_eq!(outcome.code, 2);
+    assert_eq!(
+        outcome.first_stderr_line(),
+        format!("error: {} is not a folder", path.display())
+    );
+    assert_eq!(outcome.entries_in_home, 0);
 }
 
 /// The usage follows the error line of a refusal, which is the line that a
