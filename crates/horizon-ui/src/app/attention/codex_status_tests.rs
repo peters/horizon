@@ -385,3 +385,92 @@ fn a_denied_approval_is_an_interrupted_turn() {
     );
     stand_in.word("quit");
 }
+
+#[test]
+fn the_idle_of_a_denial_clears_the_wait_of_a_panel_that_the_person_watches() {
+    let Some(mut stand_in) = StandIn::start(true) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    // The real program wrote `blocked:kind=permission` when it asked for the
+    // approval, and one `idle` when the person denied it: no working and no done
+    // are between the two reports, so the idle alone must clear the wait.
+    stand_in.word("start");
+    assert!(stand_in.wait_for(Attention::Working));
+    stand_in.word("ask");
+    assert!(
+        stand_in.wait_for(Attention::NeedsYou),
+        "the approval that waits, which showed {:?}",
+        stand_in.shown()
+    );
+
+    // The person looks at the row while they deny the approval.
+    stand_in.app.board.focus(stand_in.id);
+    stand_in.word("deny");
+    let local_id = stand_in.local_id.clone();
+    assert!(
+        stand_in.wait_until(|app| app.panel_attention(&local_id) == Attention::Idle),
+        "the idle of a denial leaves the wait, which showed {:?}",
+        stand_in.shown()
+    );
+    assert_eq!(
+        stand_in.app.attention.states.turn_state(&local_id),
+        TurnState::Interrupted,
+        "the record of a denied approval keeps an interrupted turn"
+    );
+    assert!(
+        stand_in.app.attention.states.from_status(&local_id),
+        "the report of the program answered for the panel, not its title"
+    );
+    // No later word of the person is needed for the row to stay clear.
+    stand_in.run_for(Duration::from_millis(500), |app| {
+        assert_eq!(
+            app.panel_attention(&local_id),
+            Attention::Idle,
+            "the row of a denied approval stays clear with no word of the person"
+        );
+    });
+    stand_in.word("quit");
+}
+
+#[test]
+fn an_approval_that_the_person_answers_and_then_stops_is_an_interrupted_turn() {
+    let Some(mut stand_in) = StandIn::start(true) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    // The reports of the approval, of the answer to it and of a turn that an idle
+    // ends: `blocked`, then `working`, then `idle`, with no done between them.
+    stand_in.word("start");
+    assert!(stand_in.wait_for(Attention::Working));
+    stand_in.word("ask");
+    assert!(
+        stand_in.wait_for(Attention::NeedsYou),
+        "the approval that waits, which showed {:?}",
+        stand_in.shown()
+    );
+    stand_in.app.board.focus(stand_in.id);
+    stand_in.word("answer");
+    assert!(
+        stand_in.wait_for(Attention::Working),
+        "the working report of the answer leaves the wait, which showed {:?}",
+        stand_in.shown()
+    );
+    stand_in.word("esc");
+    let local_id = stand_in.local_id.clone();
+    assert!(
+        stand_in.wait_until(|app| app.panel_attention(&local_id) == Attention::Idle),
+        "the idle of a stopped turn leaves the wait of the answer, which showed {:?}",
+        stand_in.shown()
+    );
+    assert_eq!(
+        stand_in.app.attention.states.turn_state(&local_id),
+        TurnState::Interrupted,
+        "a turn that an idle report ends is an interrupted turn"
+    );
+    assert!(
+        stand_in.app.attention.states.from_status(&local_id),
+        "the reports of the program answered for the panel, not its titles"
+    );
+    stand_in.word("quit");
+}

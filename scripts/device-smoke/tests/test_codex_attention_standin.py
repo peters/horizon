@@ -232,6 +232,43 @@ class CodexAttentionStandInTests(unittest.TestCase):
             'a turn that an approval stopped reports idle and no done',
         )
 
+    def test_a_denial_reports_the_wait_and_then_one_idle_and_nothing_between(self):
+        stand_in = self.start(protocol=True)
+        for word in ('start', 'ask', 'deny'):
+            stand_in.word(word)
+        reports = reports_of(stand_in.reader.wait_for_reports(3))
+
+        self.assertEqual(
+            reports,
+            [
+                b'state=working:app=codex',
+                b'state=blocked:app=codex:kind=permission',
+                b'state=idle:app=codex',
+            ],
+            'a denial writes the wait and one idle, with no working and no done between them',
+        )
+        stand_in.word('quit')
+        self.assertEqual(stand_in.child.wait(timeout=30), 0)
+
+    def test_an_answered_approval_that_a_turn_ends_reports_idle_after_working(self):
+        stand_in = self.start(protocol=True)
+        for word in ('start', 'ask', 'answer', 'esc'):
+            stand_in.word(word)
+        reports = reports_of(stand_in.reader.wait_for_reports(4))
+
+        self.assertEqual(
+            reports,
+            [
+                b'state=working:app=codex',
+                b'state=blocked:app=codex:kind=permission',
+                b'state=working:app=codex',
+                b'state=idle:app=codex',
+            ],
+            'the answer takes the wait away and the interrupted turn reports idle and no done',
+        )
+        stand_in.word('quit')
+        self.assertEqual(stand_in.child.wait(timeout=30), 0)
+
     def test_a_working_turn_writes_the_frames_of_its_spinner(self):
         stand_in = self.start()
         stand_in.word('start')

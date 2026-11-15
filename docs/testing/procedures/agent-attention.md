@@ -479,7 +479,8 @@ answers before the title does.
    Result: while the approval waits the row says **Needs you**. After `deny` the
    row leaves **Needs you** within one second: it says **Done** while the panel
    does not have the focus, and no word while it has. The program reports
-   `state=idle` and no done, and the record of the turn keeps an interrupted turn,
+   `state=idle` and no done, with no working between the blocked report of the
+   approval and that idle, and the record of the turn keeps an interrupted turn,
    so Horizon offers no continuation for it.
 
 7. Click the row of the other panel, then type `after 3 stop`.
@@ -487,10 +488,21 @@ answers before the title does.
    Result: at the end of the three seconds the row of the codex panel says
    **Done**. The report `state=done` ended the turn, and the panel had no focus.
 
-8. Click the row of the codex panel, then type `start` and `after 3 esc`.
+8. Click the row of the other panel, then type `start` and `after 3 esc` into
+   the codex panel.
 
-   Result: the row says **Working**, and after three seconds it says **Done**. An
-   interrupted turn reports `state=idle` and no done.
+   Result: the row of the codex panel says **Working**, and after three seconds it
+   says **Done**. An interrupted turn reports `state=idle` and no done, and the
+   panel had no focus.
+
+   Then click the row of the codex panel, and type `start`, `ask`, `answer` and
+   `esc` into it.
+
+   Result: the row says **Working**, then **Needs you** while the approval waits,
+   then **Working** again when the answer arrives, and then no word while you
+   watch it. The reports are `state=blocked:kind=permission`, `state=working` and
+   `state=idle`, with no done. The answer took the wait away, and the stopped turn
+   is an interrupted one.
 
 9. Type `start`, then `fail`.
 
