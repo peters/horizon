@@ -35,6 +35,8 @@ fn sidebar_frame(ctx: &Context, app: &mut HorizonApp, events: Vec<egui::Event>) 
 /// Presses the widget of the sidebar whose accessibility label starts with `label`.
 fn press(ctx: &Context, app: &mut HorizonApp, label: &str) {
     ctx.enable_accesskit();
+    // The rows of the agents come from the snapshot that a frame of the window reads.
+    run_app_frame(ctx, app);
     let mut center = None;
     for _ in 0..2 {
         let input = raw_input([1200.0, 900.0], None);
