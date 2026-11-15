@@ -23,6 +23,7 @@ Prove these results:
 - The window **Recent agent sessions** of the Menu shows the full list.
 - `horizon <folder>` shows the workspace of that folder.
 - A path that is not a folder ends the start with one sentence.
+- `horizon <folder>` beside a running Horizon shows the folder in that window.
 
 ## 2. Applicability
 
@@ -30,8 +31,8 @@ Prove these results:
 - Platforms: Linux and macOS. The stores of the two agent programs are the same
   on both systems.
 - This procedure does not test: the deletion of saved conversations, the
-  conversations of other agent programs, and the start of a second window for one
-  home.
+  conversations of other agent programs, and two live windows of one home at the
+  same time.
 
 ## 3. Safety
 
@@ -160,13 +161,72 @@ Prove these results:
    Result: One sentence on the standard error says that the path is not there, the
    status is 2, and no window opens.
 
-5. Start Horizon with `HOME=$PRIVATE_HOME ./target/debug/horizon` and, while that
-   window runs, type `HOME=$PRIVATE_HOME ./target/debug/horizon
-   "$PRIVATE_HOME/work/repo-one"`.
+### 6.5 P5 — A folder start beside a running Horizon
 
-   Result: One line on the standard output says that Horizon already runs for this
-   home and that the folder was not opened there. The status is 0, and no second
-   window opens.
+1. Start Horizon with `HOME=$PRIVATE_HOME ./target/debug/horizon` and wait until
+   its window shows.
+
+2. In another terminal, type `HOME=$PRIVATE_HOME ./target/debug/horizon
+   "$PRIVATE_HOME/work/repo-two"`.
+
+   Result: The running window comes to the front within five seconds. It shows a
+   workspace with the name `repo-two` and one panel in it, in that folder. The
+   second start writes one line on the standard output, `Horizon made a workspace
+   for the folder <path>.`, and ends with status 0. No second window opens.
+
+3. Type the same command again.
+
+   Result: The running window shows the workspace `repo-two` again and adds no
+   panel. The second start writes the line `Horizon shows the folder <path>.`, and
+   ends with status 0.
+
+4. In the running window, close every panel of every workspace. Type
+   `HOME=$PRIVATE_HOME ./target/debug/horizon "$PRIVATE_HOME/work/repo-one"`.
+
+   Result: The window shows a workspace with the name `repo-one`, also while no
+   panel of it is open. The second start writes one line and ends with status 0.
+
+5. Pause the running window, so it answers nothing. The shell of step 1 gives its
+   process id:
+
+   ```bash
+   kill -STOP "$WINDOW_PID"
+   HOME=$PRIVATE_HOME ./target/debug/horizon "$PRIVATE_HOME/work/repo-two"
+   kill -CONT "$WINDOW_PID"
+   ```
+
+   Result: After about five seconds the second start writes one line on the
+   standard output, `Horizon runs for this home, but it did not answer, so the
+   folder <path> was not opened there.`. The status is 0, and it opens no window
+   of its own. The window shows the folder `repo-two` when the step resumes it,
+   because the request is younger than ten seconds.
+
+6. Name a folder that is gone when the window takes the request. Pause the window
+   again, start the second start in the background, and remove the folder before
+   the window runs:
+
+   ```bash
+   mkdir -p "$PRIVATE_HOME/work/repo-three"
+   kill -STOP "$WINDOW_PID"
+   HOME=$PRIVATE_HOME ./target/debug/horizon "$PRIVATE_HOME/work/repo-three" &
+   sleep 0.3
+   rmdir "$PRIVATE_HOME/work/repo-three"
+   kill -CONT "$WINDOW_PID"
+   wait
+   ```
+
+   Result: One line on the standard error says that Horizon did not show the folder
+   and names `folder_gone`. The status is 2, the window makes no workspace, and no
+   second window opens.
+
+7. In the home of the running window, examine the requests after each step:
+
+   ```bash
+   ls -l "$PRIVATE_HOME/.horizon/runtime/folder-requests"
+   ```
+
+   Result: The folder holds no file after a start that a window answered or that
+   ended its wait.
 
 ## 7. Pass criteria
 
@@ -175,9 +235,13 @@ Prove these results:
 - P2: the window shows every conversation, `Open all` opens the rows of one
   folder, and a conversation of another program asks once more before it opens.
 - P3: a row of a folder that is gone says so and opens nothing.
-- P4: the workspace of the folder shows with one panel, a second start makes no
-  second workspace, a path that is not a folder ends with one sentence and status
-  2, and a start beside a running window ends with one line and status 0.
+- P4: the workspace of the folder shows with one panel, and a second start makes
+  no second workspace. A path that is not a folder ends with one sentence and
+  status 2.
+- P5: a folder start beside a running window shows the folder in that window and
+  writes the one line of its answer, also when the window has no panel open. A
+  folder that is gone is answered `folder_gone` with status 2, and a window
+  without a session takes no request.
 - The page without a conversation in the private home shows no section.
 
 ## 8. Cleanup

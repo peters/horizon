@@ -85,6 +85,9 @@ of this computer cannot see or write the folder at all, and a file mode is
   looks at.** With two windows of one home, either one answers.
 - **It does not guarantee an answer.** A window that is minimized, suspended or
   busy answers nothing, and the caller prints the sentence that says so.
+- **It does not guarantee that every window of the home takes a request.** A
+  window that runs with `--ephemeral` keeps no lease, so a start does not see it
+  and such a window takes no request.
 - **It does not guarantee that the folder is the folder that a person meant.**
   The window checks that the folder exists. It checks nothing about its content.
 - **The panel that the request opens is the panel that a person could open.** It
