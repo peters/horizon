@@ -11,9 +11,10 @@ use horizon_core::{CardRuntime, PanelId};
 
 use super::{Owner, one_button};
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
-use crate::block_widget::metrics::{CARD_MIN_HEIGHT, FOOTER_HEIGHT};
+use crate::block_widget::metrics::{CARD_MIN_HEIGHT, FOOTER_HEIGHT, MORE_BELOW_HEIGHT};
 use crate::block_widget::{CARD_HEIGHT_LIMITS, CardView, fitted_card_height, show};
 use crate::test_egui::DiscardTextures;
+use crate::theme;
 
 /// A card panel of the smallest card size, at a known place on the screen.
 fn smallest_card() -> Rect {
@@ -88,6 +89,7 @@ fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (
     let mut opened_link = None;
     let mut pressed = None;
     let ctx = egui::Context::default();
+    ctx.enable_accesskit();
     let output = ctx
         .run_ui(
             egui::RawInput {
@@ -397,5 +399,92 @@ fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
     assert!(
         label_top.y < body.max.y - FOOTER_HEIGHT,
         "the button sits above the footer"
+    );
+}
+
+/// The fade of the mark at the lower edge of `body`, as the mesh that painted it.
+fn fade_of(output: &egui::FullOutput, body: Rect) -> Option<egui::epaint::Mesh> {
+    let bottom = body.max.y - FOOTER_HEIGHT;
+    output.shapes.iter().find_map(|clipped| match &clipped.shape {
+        Shape::Mesh(mesh) if mesh.vertices.len() == 4 => {
+            let top = mesh.vertices.iter().map(|vertex| vertex.pos.y).fold(f32::MAX, f32::min);
+            let low = mesh.vertices.iter().map(|vertex| vertex.pos.y).fold(f32::MIN, f32::max);
+            ((low - bottom).abs() < 0.01 && (top - (bottom - MORE_BELOW_HEIGHT)).abs() < 0.01).then(|| (**mesh).clone())
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn a_body_that_holds_more_fades_into_the_body_colour_and_marks_its_lower_edge() {
+    let body = card_body(smallest_card());
+    for resolved in [theme::ResolvedTheme::Dark, theme::ResolvedTheme::Light] {
+        let _theme = crate::test_egui::with_theme(resolved);
+        let mut card = CardRuntime::default();
+        let (output, content_height) = draw_card(smallest_card(), &tall_document(), &mut card);
+        assert!(
+            content_height > body.height() - FOOTER_HEIGHT,
+            "the content of the card needs a scroll in {resolved:?}"
+        );
+
+        let fade = fade_of(&output, body).unwrap_or_else(|| panic!("the pass paints no fade in {resolved:?}"));
+        assert!(
+            fade.vertices
+                .iter()
+                .all(|vertex| vertex.color == theme::PANEL_BG() || vertex.color == theme::alpha(theme::PANEL_BG(), 0)),
+            "the fade takes the body colour in {resolved:?}: {:?}",
+            fade.vertices.iter().map(|vertex| vertex.color).collect::<Vec<_>>()
+        );
+
+        let words = text_shape(&output, "More below");
+        let format = &words.galley.job.sections[0].format;
+        assert_eq!(
+            format.color,
+            theme::FG_SOFT(),
+            "the words take the soft colour in {resolved:?}"
+        );
+        assert!(
+            (format.font_id.size - 11.0).abs() < f32::EPSILON,
+            "the words are 11 point in {resolved:?}"
+        );
+        assert!(
+            words.pos.y > body.max.y - FOOTER_HEIGHT - MORE_BELOW_HEIGHT,
+            "the words stand at the lower edge of the body in {resolved:?}: {:?}",
+            words.pos
+        );
+
+        let nodes = output
+            .platform_output
+            .accesskit_update
+            .expect("the card builds an accessibility tree")
+            .nodes;
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("More below, press to scroll")),
+            "a screen reader hears the mark in {resolved:?}"
+        );
+    }
+}
+
+#[test]
+fn a_body_that_holds_all_of_its_content_paints_no_mark() {
+    let mut card = CardRuntime::default();
+    let empty = BlockDocument {
+        width: None,
+        components: Vec::new(),
+    };
+    let (output, _) = draw_card(smallest_card(), &empty, &mut card);
+
+    assert!(
+        fade_of(&output, card_body(smallest_card())).is_none(),
+        "no fade on a card that fits"
+    );
+    assert!(
+        !output
+            .shapes
+            .iter()
+            .any(|clipped| matches!(&clipped.shape, Shape::Text(shape) if shape.galley.text() == "More below")),
+        "no mark on a card that fits"
     );
 }

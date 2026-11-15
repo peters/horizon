@@ -8,8 +8,8 @@
 //! and the card says so.
 //!
 //! Horizon owns the parts a document cannot reach: the state chip in the
-//! titlebar, the footer with the owner and the time of the last change, and the
-//! status frames that explain a dead card or a full click queue.
+//! titlebar, the footer with the owner and the time of the last change, the
+//! status frames, and the mark of a body that holds more than it shows.
 
 mod badge;
 mod board;
@@ -44,7 +44,10 @@ pub(crate) use size::CARD_CHROME_HEIGHT;
 pub(crate) use size::CARD_HEIGHT_LIMITS;
 pub(crate) use size::{CARD_FOOT_SPAN, card_height_limits, card_width, default_card_size, fitted_card_height};
 
-use egui::{Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2};
+use egui::{
+    Align2, Direction, FontId, Frame, Margin, Pos2, Rect, RichText, Role, Sense, Shape, Stroke, Ui, UiBuilder, Vec2,
+    WidgetInfo,
+};
 use horizon_browser_control::block::{BlockDocument, Component, Tone};
 use horizon_core::{CardFrames, CardRuntime, PanelId};
 
@@ -53,7 +56,8 @@ use crate::theme;
 use form::{Answers, Form};
 
 use metrics::{
-    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
+    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, MORE_BELOW_FONT, MORE_BELOW_HEIGHT, TEXT_FONT,
+    TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
 };
 
 /// What a card with no components says.
@@ -66,6 +70,8 @@ pub(crate) const AGENT_GONE_LINE: &str = "Start an agent in this workspace to us
 pub(crate) const CLICKS_REFUSED_TITLE: &str = "Too many clicks are waiting";
 /// The second line of that frame.
 pub(crate) const CLICKS_REFUSED_LINE: &str = "The agent has not read the clicks yet. Press again after it has.";
+/// The words of the mark of a body that holds more than it shows.
+const MORE_BELOW: &str = "More below";
 
 /// One card as the person sees it this frame.
 pub(crate) struct CardView<'a> {
@@ -136,6 +142,7 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
     let output = egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
+        .animated(false)
         .show(ui, |ui| {
             Frame::NONE
                 .inner_margin(Margin {
@@ -145,10 +152,42 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
                     bottom: BODY_PAD_BOTTOM,
                 })
                 .show(ui, |ui| show_body(ui, view, enabled));
+            show_more_below(ui, view.interactive);
         });
     // The content size is what the body really needed, independent of the
     // room the card gave it: the host fits the card to it once per document.
     view.card.observe_content_height(output.content_size.y);
+}
+
+/// Marks the lower edge of a body that holds more than it shows, in the body
+/// colour and in the words that say so, and takes one page of its scroll when
+/// the person presses the mark. It changes with the content and the offset only.
+fn show_more_below(ui: &mut Ui, live: bool) {
+    // The content Ui is clipped to the room that the body shows: its lower edge
+    // is where the person reads the body.
+    let body = ui.clip_rect();
+    if ui.min_rect().max.y <= body.max.y + 0.5 {
+        return;
+    }
+    let top = body.max.y - MORE_BELOW_HEIGHT;
+    let painter = ui.painter_at(body);
+    let rect = Rect::from_min_max(Pos2::new(body.min.x, top), body.max);
+    let fade = [theme::alpha(theme::PANEL_BG(), 0), theme::PANEL_BG()];
+    painter.add(Shape::gradient_rect(rect, Direction::TopDown, fade));
+    let at = Pos2::new(body.center().x, top + MORE_BELOW_HEIGHT * 0.5);
+    let font = FontId::proportional(MORE_BELOW_FONT);
+    let text_color = theme::FG_SOFT();
+    let words = painter.text(at, Align2::CENTER_CENTER, MORE_BELOW, font.clone(), text_color);
+    let left = Pos2::new(words.min.x - MORE_BELOW_FONT * 0.8, at.y);
+    painter.text(left, Align2::CENTER_CENTER, "v", font, text_color);
+    let hit = words.expand2(Vec2::new(MORE_BELOW_FONT, 0.0));
+    let sense = if live { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(hit, ui.make_persistent_id("more_below"), sense);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, live, "More below, press to scroll"));
+    if response.clicked() {
+        // The scroll takes the page in this pass, so one repaint settles it.
+        ui.scroll_with_delta(Vec2::new(0.0, -body.height()));
+    }
 }
 
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {

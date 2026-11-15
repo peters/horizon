@@ -497,7 +497,7 @@ fn card_height(app: &HorizonApp, card: &str) -> f32 {
 
 /// Creates the card of a person's window from its first document and lets it
 /// settle. Returns the card and the height it took.
-fn card_of_first_document(ctx: &Context, app: &mut HorizonApp) -> (String, f32) {
+fn card_of_first_document(ctx: &Context, app: &mut HorizonApp, window: [f32; 2]) -> (String, f32) {
     let card = created_card(app.apply_block_request(
         &request(
             app,
@@ -509,7 +509,7 @@ fn card_of_first_document(ctx: &Context, app: &mut HorizonApp) -> (String, f32) 
         ctx,
     ));
     for _ in 0..2 {
-        let _ = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+        let _ = run_app_frame_with_input(ctx, app, raw_input(window, None));
     }
     let height = card_height(app, &card);
     (card, height)
@@ -518,7 +518,13 @@ fn card_of_first_document(ctx: &Context, app: &mut HorizonApp) -> (String, f32) 
 /// Updates the card `card` to `document` and runs the frames that the layout
 /// needs: one pass measures the body of the new document, and the host gives the
 /// card the room that fits it.
-fn grow_card(ctx: &Context, app: &mut HorizonApp, card: &str, document: serde_json::Value) -> egui::FullOutput {
+fn grow_card(
+    ctx: &Context,
+    app: &mut HorizonApp,
+    window: [f32; 2],
+    card: &str,
+    document: serde_json::Value,
+) -> egui::FullOutput {
     let _ = app.apply_block_request(
         &request(
             app,
@@ -529,9 +535,9 @@ fn grow_card(ctx: &Context, app: &mut HorizonApp, card: &str, document: serde_js
         ),
         ctx,
     );
-    let mut output = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+    let mut output = run_app_frame_with_input(ctx, app, raw_input(window, None));
     for _ in 0..2 {
-        output = run_app_frame_with_input(ctx, app, raw_input(VIEW, None));
+        output = run_app_frame_with_input(ctx, app, raw_input(window, None));
     }
     output
 }
@@ -539,9 +545,9 @@ fn grow_card(ctx: &Context, app: &mut HorizonApp, card: &str, document: serde_js
 #[test]
 fn a_card_that_grows_by_an_update_shows_its_last_button_without_a_scroll() {
     let (_temp, ctx, mut app) = agent_app();
-    let (card, opened) = card_of_first_document(&ctx, &mut app);
+    let (card, opened) = card_of_first_document(&ctx, &mut app, VIEW);
 
-    let output = grow_card(&ctx, &mut app, &card, setup_document());
+    let output = grow_card(&ctx, &mut app, VIEW, &card, setup_document());
 
     let panel = card_panel(&app, &ctx, &card);
     let body = card_body(panel, app.canvas_view.zoom);
@@ -560,7 +566,7 @@ fn a_card_that_grows_by_an_update_shows_its_last_button_without_a_scroll() {
 #[test]
 fn a_card_that_the_person_resized_by_hand_keeps_its_size_when_it_grows() {
     let (_temp, ctx, mut app) = agent_app();
-    let (card, _) = card_of_first_document(&ctx, &mut app);
+    let (card, _) = card_of_first_document(&ctx, &mut app, VIEW);
     let id = app.board.panel_id_by_local_id(&card).expect("the card");
     let card_of_a_person = app.panel_render_caches.card_runtime.entry(id).or_default();
     card_of_a_person.mark_hand_resized();
@@ -569,7 +575,7 @@ fn a_card_that_the_person_resized_by_hand_keeps_its_size_when_it_grows() {
         "the person resizes the card"
     );
 
-    let _ = grow_card(&ctx, &mut app, &card, setup_document());
+    let _ = grow_card(&ctx, &mut app, VIEW, &card, setup_document());
 
     assert!(
         (card_height(&app, &card) - 500.0).abs() < f32::EPSILON,
@@ -581,10 +587,10 @@ fn a_card_that_the_person_resized_by_hand_keeps_its_size_when_it_grows() {
 #[test]
 fn a_card_that_is_taller_than_the_room_of_the_view_scrolls_in_its_body() {
     let (_temp, ctx, mut app) = agent_app();
-    let (card, _) = card_of_first_document(&ctx, &mut app);
+    let (card, _) = card_of_first_document(&ctx, &mut app, VIEW);
     let room = room_of_the_view(&app, &ctx);
 
-    let output = grow_card(&ctx, &mut app, &card, taller_than_the_view_document());
+    let output = grow_card(&ctx, &mut app, VIEW, &card, taller_than_the_view_document());
 
     let height = card_height(&app, &card);
     assert!(
@@ -597,5 +603,118 @@ fn a_card_that_is_taller_than_the_room_of_the_view_scrolls_in_its_body() {
     assert!(
         ink.min.y > body.max.y,
         "the body scrolls the last button below the room that the card gives it: {ink:?} in {body:?}"
+    );
+}
+
+/// The window of the person who read a card that its ceiling cut: the canvas
+/// view shows about 854 points of it.
+const PERSON_WINDOW: [f32; 2] = [1480.0, 900.0];
+
+/// The setup document with two more step rows, so that its body needs more room
+/// than the 900-point bound of a narrow card.
+fn longer_than_the_bound_document() -> serde_json::Value {
+    let mut document = setup_document();
+    let steps = document["components"][2]["steps"]
+        .as_array_mut()
+        .expect("the steps of the setup document");
+    for label in ["Read the key of the machine", "Write the sample file"] {
+        steps.push(serde_json::json!({"label": label, "state": "done", "at": "1 s"}));
+    }
+    document
+}
+
+/// Whether the frame drew the words `text`.
+fn drew_text(output: &egui::FullOutput, text: &str) -> bool {
+    output
+        .shapes
+        .iter()
+        .any(|clipped| matches!(&clipped.shape, egui::epaint::Shape::Text(shape) if shape.galley.text() == text))
+}
+
+/// One frame of the person's window that carries `events`.
+fn window_input(window: [f32; 2], position: Pos2, events: Vec<egui::Event>) -> egui::RawInput {
+    let mut input = raw_input(window, None);
+    input.events.push(egui::Event::PointerMoved(position));
+    input.events.extend(events);
+    input
+}
+
+/// A primary press (`true`) or release (`false`) at `position`.
+fn primary_button(position: Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos: position,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// Presses the pointer at `position` of the person's window, in the frames that
+/// egui needs for a click.
+fn press_at(ctx: &Context, app: &mut HorizonApp, window: [f32; 2], position: Pos2) {
+    for events in [
+        Vec::new(),
+        vec![primary_button(position, true)],
+        vec![primary_button(position, false)],
+    ] {
+        let _ = run_app_frame_with_input(ctx, app, window_input(window, position, events));
+    }
+}
+
+#[test]
+fn a_card_that_holds_more_than_it_shows_marks_the_lower_edge_of_its_body() {
+    let (_temp, ctx, mut app) = agent_app();
+    let (card, _) = card_of_first_document(&ctx, &mut app, PERSON_WINDOW);
+    let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    let fitted = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    assert!(
+        !drew_text(&fitted, "More below"),
+        "a card whose body holds all of its content draws no mark"
+    );
+
+    let _ = grow_card(&ctx, &mut app, PERSON_WINDOW, &card, longer_than_the_bound_document());
+    // The card is taller than the view, so the person's view rests with its foot
+    // at the lower edge of the canvas.
+    let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    let canvas = app.canvas_rect(&ctx);
+    let foot = app.screen_to_canvas(canvas, canvas.max).y - card_height(&app, &card);
+    assert!(
+        app.board.move_panel(id, [20.0, foot]),
+        "the person moves the view to the foot of the card"
+    );
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+
+    let panel = card_panel(&app, &ctx, &card);
+    let body = card_body(panel, app.canvas_view.zoom);
+    let mark = drawn_text(&output, "More below");
+    assert!(
+        body.contains_rect(mark),
+        "the mark stands inside the lower edge of the body: {mark:?} in {body:?}"
+    );
+    assert!(
+        app.canvas_rect(&ctx).contains_rect(mark),
+        "the mark stands in the view of the person: {mark:?}"
+    );
+    assert!(
+        mark.min.y > body.center().y,
+        "the mark stands at the lower edge of the body, not in its middle: {mark:?} in {body:?}"
+    );
+    let last = drawn_text(&output, "Delete");
+    assert!(
+        last.min.y > body.max.y,
+        "the body holds the last button under its lower edge: {last:?} in {body:?}"
+    );
+
+    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+
+    assert!(
+        !drew_text(&output, "More below"),
+        "the mark is gone once the body shows its end"
+    );
+    let last = drawn_text(&output, "Delete");
+    assert!(
+        body.contains_rect(last),
+        "the press showed the last button of the card: {last:?} in {body:?}"
     );
 }
