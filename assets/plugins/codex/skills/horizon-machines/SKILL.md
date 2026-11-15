@@ -20,6 +20,11 @@ contract, and `open_terminal` gives the shell.
 - You run the provider CLI in your own shell, with the person's own login.
 - A card shows the machine and the state that you read from the CLI.
 - The person's clicks come back to you through `next_click`.
+- **Nothing costs money before a press.** A rent runs only after the person
+  presses the rent button of a card that states the type, the place and the
+  price. The words of the person that ask for a machine start that card. They
+  are no press, also when they name the size, the repository or a label, and
+  also when your approval mode asks you nothing.
 - Connect is `open_terminal` with a machine key that Horizon makes and keeps.
 - The same key lets you run your own `ssh` for the commands that prepare the
   machine, with the one form in step 5.
