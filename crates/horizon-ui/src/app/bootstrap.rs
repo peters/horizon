@@ -115,7 +115,8 @@ impl HorizonApp {
         let mut app = Self::initial_state(config, bootstrap);
         // The folder of a `horizon <folder>` start opens after the board of the
         // last run is back, so its workspace stands beside the restored ones.
-        app.startup_folder = startup_folder;
+        app.startup_folder =
+            startup_folder.map(|folder| super::startup_folder::StartupFolder { folder, request: None });
         // The hotkey of speech input comes with the settings of this start, so it
         // works before the first save of the window.
         app.speech.configure(config);
@@ -210,7 +211,8 @@ impl HorizonApp {
             pending_detached_window_position_restore: BTreeSet::new(),
             session_catalog: AgentSessionCatalog::default(),
             session_pickup: super::session_pickup::SessionPickup::default(), startup_folder: None,
-            startup_receiver: None, pending_startup_runtime_state: None,
+            folder_requests: super::folder_requests::FolderRequestPump::default(), startup_receiver: None,
+            pending_startup_runtime_state: None,
             pending_startup_runtime_state_changed: false,
             startup_bootstrap_failure: None, busy_claude_session_ids: std::collections::HashSet::new(),
             session_catalog_refresh: super::session::SessionCatalogRefreshState::default(),
@@ -239,8 +241,7 @@ impl HorizonApp {
             ssh_upload_flow: None,
             ssh_upload_destinations: HashMap::new(),
             canvas_view: CanvasViewState::default(),
-            pan_target: None,
-            is_panning: false,
+            pan_target: None, is_panning: false,
             middle_pan_active: false,
             canvas_pan_input_claimed: false, arranged_panel_drag: None,
             pending_space_pan_key: CanvasPanSpaceKeyState::Idle,

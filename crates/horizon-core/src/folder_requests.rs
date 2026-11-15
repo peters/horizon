@@ -350,7 +350,11 @@ fn answer_path(directory: &Path, id: &str) -> PathBuf {
 }
 
 fn remove_files(directory: &Path, id: &str) {
-    for path in [request_path(directory, id), claim_path(directory, id), answer_path(directory, id)] {
+    for path in [
+        request_path(directory, id),
+        claim_path(directory, id),
+        answer_path(directory, id),
+    ] {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -375,7 +379,10 @@ fn is_channel_name(path: &Path) -> bool {
 
 /// The form of a request id: the hexadecimal digits and dashes of a UUID.
 fn is_id(text: &str) -> bool {
-    text.len() == 36 && text.chars().all(|character| character.is_ascii_hexdigit() || character == '-')
+    text.len() == 36
+        && text
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-')
 }
 
 /// The request folder of the home, made private when it is not there yet.
@@ -671,7 +678,11 @@ mod tests {
             let read = caller.join().expect("the caller").expect("a caller of the channel");
             assert_eq!(read, Some(expected.clone()));
             window.join().expect("the window");
-            assert!(entries(&root).is_empty(), "the caller removes its files: {:?}", entries(&root));
+            assert!(
+                entries(&root).is_empty(),
+                "the caller removes its files: {:?}",
+                entries(&root)
+            );
         }
     }
 
@@ -704,11 +715,7 @@ mod tests {
         for (case, text, mode) in [
             ("malformed", "{ not json".to_string(), 0o600),
             ("another verb", record(&folder, "run", now), 0o600),
-            (
-                "a relative folder",
-                record(Path::new("repo"), VERB_SHOW, now),
-                0o600,
-            ),
+            ("a relative folder", record(Path::new("repo"), VERB_SHOW, now), 0o600),
             ("an old request", record(&folder, VERB_SHOW, now - 11_000), 0o600),
             (
                 "a request of the future",
@@ -717,7 +724,10 @@ mod tests {
             ),
             (
                 "more bytes than the record bound",
-                format!("{valid}{}", " ".repeat(usize::try_from(MAX_RECORD_BYTES).unwrap_or(4096))),
+                format!(
+                    "{valid}{}",
+                    " ".repeat(usize::try_from(MAX_RECORD_BYTES).unwrap_or(4096))
+                ),
                 0o600,
             ),
             ("a wider mode", valid.clone(), 0o644),
@@ -725,7 +735,11 @@ mod tests {
             write_at(&root, &id(1), &text, mode);
             let claimed = claim(&root, now).expect("a claim");
             assert!(claimed.is_empty(), "{case}: a window applies no such request");
-            assert!(entries(&root).is_empty(), "{case}: the file stays: {:?}", entries(&root));
+            assert!(
+                entries(&root).is_empty(),
+                "{case}: the file stays: {:?}",
+                entries(&root)
+            );
         }
 
         // A symbolic link is removed, and its target stays.
@@ -762,8 +776,14 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].id(), id(4));
         assert_eq!(claimed[0].folder(), crate::folder_identity(&folder));
-        assert!(entries(&root).contains(&format!("{}.claim", id(4))), "the claim stays for the answer");
-        assert!(!entries(&root).contains(&format!("{}.request", id(4))), "no second window claims it");
+        assert!(
+            entries(&root).contains(&format!("{}.claim", id(4))),
+            "the claim stays for the answer"
+        );
+        assert!(
+            !entries(&root).contains(&format!("{}.request", id(4))),
+            "no second window claims it"
+        );
     }
 
     /// Two windows that claim at the same time leave one winner for each

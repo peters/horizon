@@ -44,15 +44,27 @@ impl Outcome {
 /// Starts `binary` with `arguments`, a private home and no display.
 fn start_binary(binary: &Path, arguments: &[&str]) -> Outcome {
     let home = tempfile::tempdir().expect("the private home of the start");
+    start_with_home(binary, home.path(), None, arguments)
+}
+
+/// Starts `binary` with `arguments`, the given home of the person, an optional
+/// `HORIZON_HOME`, and no display.
+fn start_with_home(binary: &Path, home: &Path, horizon_home: Option<&Path>, arguments: &[&str]) -> Outcome {
     let output = tempfile::tempdir().expect("the folder of the output");
     let written = |name: &str| {
         std::fs::File::create(output.path().join(name)).unwrap_or_else(|error| panic!("create {name}: {error}"))
     };
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(arguments)
         .env_clear()
-        .env("HOME", home.path())
-        .env("HORIZON_AGENT_INTEGRATIONS", "off")
+        .env("HOME", home)
+        .env("HORIZON_AGENT_INTEGRATIONS", "off");
+    command.env_remove("DISPLAY");
+    if let Some(horizon_home) = horizon_home {
+        command.env("HORIZON_HOME", horizon_home);
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::from(written("stdout")))
         .stderr(Stdio::from(written("stderr")))
@@ -80,7 +92,7 @@ fn start_binary(binary: &Path, arguments: &[&str]) -> Outcome {
         code: status.code().expect("the exit code of the start"),
         stdout: read("stdout"),
         stderr: read("stderr"),
-        entries_in_home: std::fs::read_dir(home.path()).expect("read the private home").count(),
+        entries_in_home: std::fs::read_dir(home).expect("read the private home").count(),
     }
 }
 
@@ -193,4 +205,126 @@ fn the_application_refuses_to_start_from_a_build_folder() {
     let unknown = start_binary(&copied, &["--list"]);
     assert_eq!(unknown.code, 2);
     assert_eq!(unknown.first_stderr_line(), "error: unknown argument --list");
+}
+
+/// The requests of the folder channel of a home.
+fn request_folder(horizon_home: &Path) -> std::path::PathBuf {
+    horizon_core::folder_requests::directory(horizon_home)
+}
+
+/// Starts a window of this home that takes the request of a start and answers it
+/// with `answer`.
+fn answer_as_the_window(
+    horizon_home: &Path,
+    answer: horizon_core::folder_requests::Answer,
+) -> std::thread::JoinHandle<()> {
+    let root = horizon_home.to_path_buf();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + BOUND;
+        while Instant::now() < deadline {
+            let now = horizon_core::folder_requests::now_millis();
+            let claimed = horizon_core::folder_requests::claim(&root, now).unwrap_or_default();
+            if let Some(request) = claimed.first() {
+                horizon_core::folder_requests::answer(&root, request, &answer)
+                    .expect("the answer of the window of this test");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the start wrote no request into the home of this test");
+    })
+}
+
+/// One start of this home, with its session and its lease, as a window that runs
+/// leaves them.
+fn home_with_a_running_window(temp: &tempfile::TempDir) -> horizon_core::HorizonHome {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = temp.path().join(".horizon");
+    std::fs::create_dir_all(&root).expect("the home");
+    // A start of this home refuses a home that other users reach, so the test
+    // gives its home the mode that a start gives it.
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("a private home");
+    let horizon_home = horizon_core::HorizonHome::from_root(root);
+    let store = horizon_core::SessionStore::new(horizon_home.clone(), horizon_home.config_path());
+    let session = store
+        .create_session_from_runtime(horizon_core::RuntimeState::from_config(&horizon_core::Config::default()))
+        .expect("a session of this home");
+    store.acquire_lease(&session.session_id).expect("the lease of a window");
+    horizon_home
+}
+
+/// A second `horizon <folder>` of a home whose Horizon runs reaches that window
+/// instead of printing that the folder was not opened.
+#[test]
+fn a_folder_of_a_second_start_reaches_the_window_that_runs() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
+    let temp = tempfile::tempdir().expect("the home of the test");
+    let horizon_home = home_with_a_running_window(&temp);
+    let folder = temp.path().join("repo");
+    std::fs::create_dir(&folder).expect("the folder");
+    let folder = horizon_core::folder_identity(&folder);
+
+    let window = answer_as_the_window(
+        horizon_home.root(),
+        horizon_core::folder_requests::Answer::Made {
+            workspace: "repo".to_string(),
+        },
+    );
+    let outcome = start_with_home(
+        binary,
+        temp.path(),
+        Some(horizon_home.root()),
+        &[folder.to_str().expect("a path of text")],
+    );
+    window.join().expect("the window of this test");
+
+    assert_eq!(outcome.code, 0, "{:?}", outcome.stderr);
+    assert_eq!(
+        outcome.first_stdout_line(),
+        format!("Horizon made a workspace for the folder {}.", folder.display())
+    );
+    assert!(
+        !outcome.stderr.lines().any(|line| line.starts_with("error:")),
+        "a request that a window answered is no error: {:?}",
+        outcome.stderr
+    );
+    let left: Vec<std::ffi::OsString> = std::fs::read_dir(request_folder(horizon_home.root()))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "the start removes its files: {left:?}");
+}
+
+/// A home whose Horizon runs but answers nothing leaves one sentence and the
+/// status of a request that was served, because a busy window is no error.
+#[test]
+fn a_folder_of_a_second_start_that_no_window_answers_ends_with_one_sentence() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
+    let temp = tempfile::tempdir().expect("the home of the test");
+    let horizon_home = home_with_a_running_window(&temp);
+    let folder = temp.path().join("repo");
+    std::fs::create_dir(&folder).expect("the folder");
+    let folder = horizon_core::folder_identity(&folder);
+
+    let outcome = start_with_home(
+        binary,
+        temp.path(),
+        Some(horizon_home.root()),
+        &[folder.to_str().expect("a path of text")],
+    );
+
+    // The caller waits its own bound, which is why this start takes seconds.
+    assert_eq!(outcome.code, 0, "{:?}", outcome.stderr);
+    assert_eq!(
+        outcome.first_stdout_line(),
+        format!(
+            "Horizon runs for this home, but it did not answer, so the folder {} was not opened there.",
+            folder.display()
+        )
+    );
+    assert_eq!(outcome.stdout.lines().count(), 1, "{:?}", outcome.stdout);
+    let left: Vec<std::ffi::OsString> = std::fs::read_dir(request_folder(horizon_home.root()))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "the start removes its files: {left:?}");
 }

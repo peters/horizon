@@ -58,6 +58,10 @@ pub(crate) struct DeviceRequestBridge {
     /// Set while a `next_click` waits on a card. Its deadline must pass also
     /// when the host presents nothing, which has no frame to notice.
     click_wait_pending: Arc<AtomicBool>,
+    /// Set while the folder of this home holds a request of a second
+    /// `horizon <folder>`. The window takes it on the frame that this flag wakes,
+    /// so a window with no panel of its own answers one too.
+    folder_request_pending: Arc<AtomicBool>,
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -84,11 +88,17 @@ impl DeviceRequestBridge {
             reveals_pending: Arc::new(AtomicBool::new(false)),
             claim_pending: Arc::new(AtomicBool::new(false)),
             click_wait_pending: Arc::new(AtomicBool::new(false)),
+            folder_request_pending: Arc::new(AtomicBool::new(false)),
             watcher: Mutex::new(None),
         }
     }
 
     pub(crate) fn install(&self, app: HorizonApp, ctx: Context) {
+        // The watcher sets this flag when the folder of this home holds a request
+        // of a second `horizon <folder>`, and the app reads it on the frame that
+        // the watcher wakes.
+        let mut app = app;
+        app.folder_requests.waiting = Arc::clone(&self.folder_request_pending);
         *lock(&self.installed) = Some(InstalledHost { app, ctx });
     }
 
@@ -178,6 +188,7 @@ impl DeviceRequestBridge {
         let reveals_pending = Arc::clone(&self.reveals_pending);
         let claim_pending = Arc::clone(&self.claim_pending);
         let click_wait_pending = Arc::clone(&self.click_wait_pending);
+        let folder_request_pending = Arc::clone(&self.folder_request_pending);
         let root_override = self.root_override.clone();
         match thread::Builder::new()
             .name("horizon-host-requests".to_owned())
@@ -188,6 +199,7 @@ impl DeviceRequestBridge {
                     &reveals_pending,
                     &claim_pending,
                     &click_wait_pending,
+                    &folder_request_pending,
                     root_override.as_deref(),
                     &proxy,
                 );
@@ -270,12 +282,14 @@ pub(crate) fn is_device_queue_wake(event: &UserEvent) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn watch_device_requests(
     stop: &AtomicBool,
     persist_pending: &AtomicBool,
     reveals_pending: &AtomicBool,
     claim_pending: &AtomicBool,
     click_wait_pending: &AtomicBool,
+    folder_request_pending: &AtomicBool,
     root_override: Option<&Path>,
     proxy: &EventLoopProxy<UserEvent>,
 ) {
@@ -297,7 +311,11 @@ fn watch_device_requests(
                     false
                 }
             };
-        let pending = files_pending || claims;
+        // A folder request of a second `horizon <folder>` wakes the window the
+        // same way, so a window that presents no frame still takes one.
+        let folder_pending = folder_requests_pending(root_override);
+        folder_request_pending.store(folder_pending, Ordering::Relaxed);
+        let pending = files_pending || claims || folder_pending;
         let persist = persist_pending.load(Ordering::Relaxed);
         let click_wait = click_wait_pending.load(Ordering::Relaxed);
         if (pending || persist || click_wait)
@@ -334,6 +352,16 @@ fn next_pump_wait(
     } else {
         (IDLE_WAIT, PERSIST_WAIT_MIN)
     }
+}
+
+/// Whether the folder of this home holds a request of a second
+/// `horizon <folder>`.
+fn folder_requests_pending(root: Option<&Path>) -> bool {
+    let root = root.map_or_else(
+        || horizon_core::HorizonHome::resolve().root().to_path_buf(),
+        Path::to_path_buf,
+    );
+    horizon_core::folder_requests::has_pending(&root, horizon_core::folder_requests::now_millis())
 }
 
 /// Whether this host has a Device panel or card request waiting. Both queues

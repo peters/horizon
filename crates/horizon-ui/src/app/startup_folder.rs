@@ -14,10 +14,20 @@
 use std::path::PathBuf;
 
 use egui::Context;
+use horizon_core::folder_requests::{Answer, FolderRequest};
 use horizon_core::setup::{FolderPanel, SetupAgent, folder_panel, setup_agents};
 use horizon_core::{PanelKind, PanelOptions, PresetConfig, WorkspaceId};
 
 use super::HorizonApp;
+
+/// The folder that a frame shows, and the request of another process that named
+/// it when one did.
+pub(in crate::app) struct StartupFolder {
+    pub(in crate::app) folder: PathBuf,
+    /// The request that this start answers once the folder stands, or `None`
+    /// when the person typed the folder on the command line.
+    pub(in crate::app) request: Option<FolderRequest>,
+}
 
 impl HorizonApp {
     /// Shows the workspace of the folder of this start, with its one panel when the
@@ -26,15 +36,30 @@ impl HorizonApp {
     /// This runs once, on the first frame that can show a board, so a start without
     /// a folder does nothing here.
     pub(in crate::app) fn apply_startup_folder(&mut self, ctx: &Context) {
-        let Some(folder) = self.startup_folder.take() else {
+        let Some(startup) = self.startup_folder.take() else {
             return;
         };
+        let StartupFolder { folder, request } = startup;
         // A board that already holds the workspace of that folder shows it as it
         // stands: the folder adds no panel to a board that the person built.
         let made = self.workspace_of_folder(folder.as_path()).is_none();
         let workspace_id = self.ensure_workspace_of_folder(ctx, folder.as_path());
         if made {
             self.open_folder_panel(ctx, workspace_id, folder);
+        }
+        // The request of a second start names one folder and nothing else, and
+        // this is the same work that the folder of a start does.
+        if let Some(request) = request {
+            let workspace = self
+                .board
+                .workspace(workspace_id)
+                .map_or_else(String::new, |workspace| workspace.name.clone());
+            let answer = if made {
+                Answer::Made { workspace }
+            } else {
+                Answer::Shown { workspace }
+            };
+            self.answer_folder_request(request, answer);
         }
     }
 
@@ -228,7 +253,10 @@ mod start_tests {
         run_app_frame(&ctx, &mut app);
         let panels_before = app.board.panels.len();
 
-        app.startup_folder = Some(repo.clone());
+        app.startup_folder = Some(crate::app::startup_folder::StartupFolder {
+            folder: repo.clone(),
+            request: None,
+        });
         run_app_frame(&ctx, &mut app);
         // The worker of the coordination thread answers one frame later.
         for _ in 0..40 {
@@ -255,7 +283,10 @@ mod start_tests {
         run_app_frame(&ctx, &mut app);
         no_presets(&mut app);
 
-        app.startup_folder = Some(repo.clone());
+        app.startup_folder = Some(crate::app::startup_folder::StartupFolder {
+            folder: repo.clone(),
+            request: None,
+        });
         run_app_frame(&ctx, &mut app);
         for _ in 0..80 {
             run_app_frame(&ctx, &mut app);
