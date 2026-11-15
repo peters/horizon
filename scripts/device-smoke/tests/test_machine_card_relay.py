@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -279,6 +280,22 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(len(self.server.seen('initialize')), 2, 'the relay says hello again on the new stream')
         self.assertEqual(len([one for one in self.agent.answers if one.get('id') == 1]), 1,
                          'the agent saw one answer of its initialize')
+
+    def test_a_call_that_waits_on_a_live_link_is_not_cut(self):
+        """`next_click` waits for a person for minutes: the bound of a call is for a lost link only."""
+        self.start_server()
+        with unittest.mock.patch.dict(os.environ, {'HORIZON_CARDS_WAIT': '1'}):
+            agent = self.start_relay()
+        agent.say({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
+        agent.hear(lambda message: message.get('id') == 1)
+        self.server.silent = True
+        agent.say({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call'})
+        wait_for('the call that waits', lambda: self.server.seen('tools/call'))
+        # Three times the bound of a lost link, with the link up the whole time.
+        time.sleep(3.0)
+        self.assertEqual([one for one in agent.answers if one.get('id') == 2], [],
+                         'a call that waits on a live link gets no error')
+        self.assertEqual(self.server.streams, 1, 'the relay kept its one stream')
 
     def test_the_relay_ends_with_the_stdin_of_the_agent(self):
         self.start_server()

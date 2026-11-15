@@ -1089,7 +1089,7 @@ import json, os, select, socket, subprocess, sys, time
 
 DIR = os.environ.get('HORIZON_CARDS_DIR', '/tmp/horizon-cards')
 LOST = 'The link to Horizon was lost. Call again.'
-RETRY, WAIT = 0.5, 30.0
+RETRY, WAIT = 0.5, float(os.environ.get('HORIZON_CARDS_WAIT', '30'))
 try:
     SESSION = subprocess.run(['tmux', 'display-message', '-p', '#S'], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL).stdout.decode('utf-8', 'replace').strip()
@@ -1118,7 +1118,7 @@ class Relay:
         held = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try: held.connect(PATH)
         except OSError: held.close(); return
-        self.sock = held
+        self.sock, self.waiting = held, None
         if self.again and self.init: self.drop, self.out = True, self.out + self.init + b'\n' + (self.ready + b'\n' if self.ready else b'')
 
     def line(self, line):
@@ -1129,7 +1129,7 @@ class Relay:
         self.init = line if method == 'initialize' else self.init
         self.ready = line if method == 'notifications/initialized' else self.ready
         if method and ident is not None: self.pending.append(ident)
-        self.waiting = self.waiting or (time.monotonic() if self.pending else None)
+        self.waiting = self.waiting or (time.monotonic() if self.pending and self.sock is None else None)
     def answered(self, line):
         try: ident = json.loads(line).get('id')
         except (ValueError, AttributeError): ident = None
