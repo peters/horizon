@@ -93,12 +93,25 @@ fn cost_percent(with_escape: bool) -> (Duration, Duration, u128) {
     // A warm pass of each, so neither pays for the first touch of its pages.
     let _ = pass(with_escape, false);
     let _ = pass(with_escape, true);
-    let (plain, plain_bytes) = pass(with_escape, false);
-    let (scanned, scanned_bytes) = pass(with_escape, true);
+    let (plain, plain_bytes) = least_of_five(with_escape, false);
+    let (scanned, scanned_bytes) = least_of_five(with_escape, true);
     assert_eq!(plain_bytes, BYTES, "the plain pass read every byte");
     assert_eq!(scanned_bytes, BYTES, "the scanned pass read every byte");
     let percent = scanned.as_millis().saturating_mul(100) / plain.as_millis().max(1);
     (plain, scanned, percent)
+}
+
+/// The least of five passes over `with_escape` through the reader of `tap`.
+///
+/// The least time is the run that the rest of the computer disturbed least, so a
+/// single loaded sample cannot decide the comparison of the two sides.
+fn least_of_five(with_escape: bool, tap: bool) -> (Duration, usize) {
+    let mut least = pass(with_escape, tap);
+    for _ in 1..5 {
+        let run = pass(with_escape, tap);
+        least = (least.0.min(run.0), least.1);
+    }
+    least
 }
 
 #[test]
