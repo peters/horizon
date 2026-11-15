@@ -6,9 +6,27 @@ use super::{Change, ChangeKind, MAX_NAME_CHARS, NotificationSetting, TITLE, body
 fn change(panel: &str, workspace: Option<&str>, kind: ChangeKind) -> Change {
     Change {
         panel: panel.to_owned(),
+        machine: None,
         workspace: workspace.map(str::to_owned),
         kind,
     }
+}
+
+#[test]
+fn one_change_of_a_machine_names_the_machine_whatever_the_workspaces_are() {
+    let of_machine = Change {
+        machine: Some("build-1".to_owned()),
+        ..change("shop", Some("Lane"), ChangeKind::NeedsYou)
+    };
+    assert_eq!(
+        body(std::slice::from_ref(&of_machine), false),
+        "shop needs you \u{00b7} build-1",
+        "a person who is in another window reads where the agent is"
+    );
+    assert_eq!(
+        body(&[of_machine], true),
+        "shop needs you \u{00b7} build-1 \u{00b7} Lane"
+    );
 }
 
 #[test]

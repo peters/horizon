@@ -173,15 +173,31 @@ impl Ssh {
         std::fs::metadata(&self.calls).map_or(0, |held| usize::try_from(held.len()).unwrap_or(0))
     }
 
-    /// How many `sh` children of this stand-in run now.
+    /// How many `sh` children of this stand-in run now: the shells that run the text,
+    /// and not the subshells that a command substitution or a pipeline of that text
+    /// forks for a moment, which carry the same command line.
     pub(crate) fn children(&self) -> usize {
         let output = Command::new("ps")
-            .args(["-A", "-o", "args="])
+            .args(["-A", "-o", "pid=,ppid=,args="])
             .output()
             .expect("the process list of this computer");
-        String::from_utf8_lossy(&output.stdout)
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let rows: Vec<(u32, u32, &str)> = text
             .lines()
-            .filter(|line| line.contains(&self.marker))
+            .filter_map(|line| {
+                let mut words = line.splitn(3, char::is_whitespace);
+                let pid = words.next()?.trim().parse().ok()?;
+                let parent = words.next()?.trim().parse().ok()?;
+                Some((pid, parent, words.next().unwrap_or_default()))
+            })
+            .collect();
+        let marked: std::collections::BTreeSet<u32> = rows
+            .iter()
+            .filter(|(_, _, args)| args.contains(&self.marker))
+            .map(|(pid, _, _)| *pid)
+            .collect();
+        rows.iter()
+            .filter(|(pid, parent, _)| marked.contains(pid) && !marked.contains(parent))
             .count()
     }
 }
@@ -237,6 +253,27 @@ pub(crate) fn wait_for(ctx: &Context, app: &mut HorizonApp, what: &str, wanted: 
     let deadline = Instant::now() + DEADLINE;
     loop {
         run_app_frame(ctx, app);
+        if wanted(app) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the test waited for {what}");
+        std::thread::sleep(POLL);
+    }
+}
+
+/// Runs frames of a window that is not in front until `wanted` holds, so the notice of a
+/// change of an agent of a machine is queued.
+pub(crate) fn wait_for_unfocused(
+    ctx: &Context,
+    app: &mut HorizonApp,
+    what: &str,
+    wanted: impl Fn(&mut HorizonApp) -> bool,
+) {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let mut input = crate::app::test_support::raw_input([1400.0, 900.0], None);
+        input.focused = false;
+        crate::app::test_support::run_app_frame_with_input(ctx, app, input);
         if wanted(app) {
             return;
         }

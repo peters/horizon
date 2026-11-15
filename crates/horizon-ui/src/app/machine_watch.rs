@@ -14,8 +14,10 @@ use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use egui::Context;
 use horizon_core::MachineKeys;
-use horizon_core::machine_watch::{AgentPrograms, MachineWatch, MachineWatchSnapshot};
+use horizon_core::machine_watch::{AgentPrograms, MachineAgent, MachineWatch, MachineWatchSnapshot};
+use horizon_core::notify::Change;
 
 use super::HorizonApp;
 
@@ -75,11 +77,39 @@ impl HorizonApp {
     ///
     /// A frame costs two fingerprints, one lock of the shared snapshot and no wait: the
     /// worker starts and joins the readers.
-    pub(in crate::app) fn refresh_machine_watch(&mut self) {
+    pub(in crate::app) fn refresh_machine_watch(&mut self, ctx: &Context) {
         self.watch_programs();
         self.reconcile_watch();
-        self.machine_watch.snapshot = Some(self.machine_watch.watch.snapshot());
+        let next = self.machine_watch.watch.snapshot();
+        if let Some(previous) = self.machine_watch.snapshot.replace(std::sync::Arc::clone(&next))
+            && previous.version != next.version
+        {
+            self.note_machine_changes(&previous, &next, ctx);
+        }
         self.look_at_machine_session();
+    }
+
+    /// Queues one desktop notification for each agent of a machine that changed to a
+    /// state that waits for the person, while no window of Horizon has the focus: the
+    /// same text as a panel of this computer, with the name of its machine.
+    fn note_machine_changes(&mut self, previous: &MachineWatchSnapshot, next: &MachineWatchSnapshot, ctx: &Context) {
+        let setting = self.template_config.features.notifications;
+        if !setting.speaks() || super::notify::window_in_front(ctx) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        for agent in moved_agents(previous, next) {
+            let Some(kind) = super::notify::change_kind(agent.state.attention()) else {
+                continue;
+            };
+            let change = Change {
+                panel: agent.name.clone(),
+                workspace: None,
+                machine: Some(agent.machine.clone()),
+                kind,
+            };
+            self.notifications.note_change(change, setting, now);
+        }
     }
 
     /// Gives the watch the programs of the agent kinds of the presets, once for one
@@ -127,6 +157,31 @@ impl HorizonApp {
             .io
             .write(move || watch.reconcile(&machines, &keys, enabled));
     }
+}
+
+/// The agents that a report moved: every agent of `next` whose state differs from the
+/// one of the same agent in `previous`, or that `previous` did not name.
+///
+/// Both snapshots hold their machines in name order and the agents of a machine in
+/// session and pane order, so one walk reads the two of them.
+fn moved_agents<'a>(previous: &'a MachineWatchSnapshot, next: &'a MachineWatchSnapshot) -> Vec<&'a MachineAgent> {
+    let mut before = previous.machines.iter().flat_map(|machine| &machine.agents).peekable();
+    let mut moved = Vec::new();
+    for agent in next.machines.iter().flat_map(|machine| &machine.agents) {
+        while before.peek().is_some_and(|held| key(held) < key(agent)) {
+            before.next();
+        }
+        let held = before.peek().filter(|held| key(held) == key(agent));
+        if held.map(|held| held.state) != Some(agent.state) {
+            moved.push(agent);
+        }
+    }
+    moved
+}
+
+/// What tells one agent of a snapshot from another.
+fn key(agent: &MachineAgent) -> (&str, &str, &str) {
+    (agent.machine.as_str(), agent.session.as_str(), agent.pane.as_str())
 }
 
 #[cfg(test)]

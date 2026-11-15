@@ -8,6 +8,7 @@ use crate::notify::{Change, ChangeKind, Notice, SILENCE};
 fn change(panel: &str) -> Change {
     Change {
         panel: panel.to_owned(),
+        machine: None,
         workspace: None,
         kind: ChangeKind::NeedsYou,
     }

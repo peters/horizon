@@ -106,6 +106,9 @@ pub struct Change {
     pub panel: String,
     /// The name of the workspace, which the person typed. Untrusted text.
     pub workspace: Option<String>,
+    /// The name of the machine whose agent changed, which the person typed in the
+    /// machine list, or `None` for a panel of this computer. Untrusted text.
+    pub machine: Option<String>,
     pub kind: ChangeKind,
 }
 
@@ -154,20 +157,24 @@ pub fn clean_name(name: &str) -> String {
 
 /// The one line that the notification of `changes` shows.
 ///
-/// One change names its panel, and its workspace when the board holds more than
-/// one workspace. Several changes become one count, because a person who is in
-/// another window does not read three names at once.
+/// One change names its panel, then its machine when it runs on one, and its
+/// workspace when the board holds more than one workspace. Several changes become
+/// one count, because a person who is in another window does not read three names at
+/// once.
 #[must_use]
 pub fn body(changes: &[Change], several_workspaces: bool) -> String {
     match changes {
         [] => String::new(),
         [one] => {
             let mut line = format!("{} {}", clean_name(&one.panel), one.kind.words());
-            if several_workspaces && let Some(workspace) = &one.workspace {
-                let workspace = clean_name(workspace);
-                if !workspace.is_empty() {
+            // The machine comes first: it says where the agent is, and a name that a
+            // person typed in the machine list is shorter than most workspace names.
+            let workspace = several_workspaces.then_some(one.workspace.as_deref()).flatten();
+            for name in [one.machine.as_deref(), workspace] {
+                let name = name.map_or_else(String::new, clean_name);
+                if !name.is_empty() {
                     line.push_str(" \u{00B7} ");
-                    line.push_str(&workspace);
+                    line.push_str(&name);
                 }
             }
             line

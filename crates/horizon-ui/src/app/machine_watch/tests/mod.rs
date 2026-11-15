@@ -2,6 +2,7 @@
 //! the setting, and a quit leaves no child behind.
 
 mod click;
+mod notice;
 mod rows;
 mod support;
 mod totals;

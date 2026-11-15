@@ -116,6 +116,7 @@ impl HorizonApp {
             let change = Change {
                 panel: panel.title.clone(),
                 workspace: self.workspace_name(panel.id),
+                machine: None,
                 kind,
             };
             self.notifications.note_change(change, setting, now);
@@ -130,7 +131,7 @@ impl HorizonApp {
 }
 
 /// The change that a state of an agent panel tells, if it tells one.
-const fn change_kind(attention: Attention) -> Option<ChangeKind> {
+pub(in crate::app) const fn change_kind(attention: Attention) -> Option<ChangeKind> {
     match attention {
         Attention::NeedsYou => Some(ChangeKind::NeedsYou),
         Attention::Done => Some(ChangeKind::Done),

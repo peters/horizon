@@ -567,7 +567,7 @@ impl HorizonApp {
         self.poll_ssh_hosts(ctx);
         // The machine list and the setting are the value of this frame, so the
         // readers of the watch follow them on the frame that changed them.
-        self.refresh_machine_watch();
+        self.refresh_machine_watch(ctx);
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
