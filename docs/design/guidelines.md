@@ -1020,6 +1020,9 @@ The page that shows while the board is empty answers the size of the window.
   session at the start of its detail and the time and the state at its end. A
   folder that does not fit is cut in its middle with an ellipsis. The press of a
   row keeps 74 points of width, and the detail keeps a gap of 8 points to it.
+  The title of a row uses the width that the row has: a wide row shows the whole
+  stored title, and a narrow row cuts it at the end of its room with an ellipsis.
+  The store keeps 160 characters of a title, which is what the widest row shows.
 
 ### Panels and workspaces
 

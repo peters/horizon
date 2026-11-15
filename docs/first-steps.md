@@ -227,6 +227,8 @@ conversations at most, of the last 14 days, grouped by folder.
 
 Each row shows the title of the conversation, its program, its folder, the time
 of its last activity and the state of the conversation. The home folder is `~`.
+A title that is longer than the row is cut at the end of the row, with an
+ellipsis; a wide window shows the whole title.
 
 1. Click `Open` on a row, or push Tab until the row has the focus ring and then
    push Enter.

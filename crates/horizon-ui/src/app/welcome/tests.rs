@@ -81,6 +81,90 @@ pub(super) fn key_press(key: egui::Key, pressed: bool) -> egui::Event {
     }
 }
 
+/// A window of one size that shows the whole application, with the clock of its
+/// frames.
+///
+/// Every frame of this window paints the canvas and the page, in the order of a
+/// frame of a person, so the canvas takes the input of the frame before the page
+/// does. egui refuses a frame whose time is before the time of the frame before
+/// it, so the window keeps the clock.
+pub(super) struct AppWindow {
+    ctx: Context,
+    app: crate::app::HorizonApp,
+    size: [f32; 2],
+    time: f64,
+    /// The private home of the window, which its frames write to.
+    _temp: tempfile::TempDir,
+}
+
+impl AppWindow {
+    /// A first start with no workspace and no panel, on the frames that settle it.
+    pub(super) fn new(size: [f32; 2]) -> Self {
+        Self::with_state(size, |_| {})
+    }
+
+    /// The same window, with the state that a test needs before its first frame.
+    pub(super) fn with_state(size: [f32; 2], setup: impl FnOnce(&mut crate::app::HorizonApp)) -> Self {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::new(horizon_core::RuntimeState::default()),
+            });
+        app.theme_applied = true;
+        app.initial_pan_done = true;
+        app.root_viewport_stabilizer = None;
+        app.pan_target = None;
+        setup(&mut app);
+        let mut window = Self {
+            ctx,
+            app,
+            size,
+            time: 1.0,
+            _temp: temp,
+        };
+        for _ in 0..3 {
+            let _ = window.frame(Vec::new());
+        }
+        window
+    }
+
+    pub(super) fn app(&self) -> &crate::app::HorizonApp {
+        &self.app
+    }
+
+    pub(super) fn ctx(&self) -> &Context {
+        &self.ctx
+    }
+
+    /// One frame of the window, with the pointer over the middle of the canvas and
+    /// with `events` fed to it, and the shapes that it painted.
+    pub(super) fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+        self.time += 0.016;
+        let pointer = self.app.canvas_rect(&self.ctx).center();
+        let mut input = crate::app::test_support::raw_input(self.size, None);
+        input.time = Some(self.time);
+        input.events = std::iter::once(egui::Event::PointerMoved(pointer))
+            .chain(events)
+            .collect();
+        let output = crate::app::test_support::run_app_frame_with_input(&self.ctx, &mut self.app, input);
+        let output: egui::FullOutput = output.discard_textures();
+        output.shapes
+    }
+
+    /// Frames until `ready` answers true for the window, or the deadline ends the
+    /// test with `what`.
+    pub(super) fn frames_until(&mut self, what: &str, mut ready: impl FnMut(&crate::app::HorizonApp) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let _ = self.frame(Vec::new());
+            if ready(&self.app) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
 /// The box of the text `text` that this frame painted.
 pub(super) fn text_box(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Rect> {
     text_shape(shapes, text).map(|(shape, _)| egui::Rect::from_min_size(shape.pos, shape.galley.size()))

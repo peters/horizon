@@ -273,6 +273,15 @@ Horizon before they write anything.
     ellipsis, and the start and the end of the path stay. The press of the row
     keeps its width.
 
+16. Read the first line of that row, the title of the session, in a session whose
+    prompt is longer than about 70 characters. Then make the window 5120 x 1348
+    and read it again.
+
+    Result: At 1000 x 700 the title ends with an ellipsis at the end of the room
+    that the row has, and no word of it stands outside the row. At 5120 x 1348
+    the row shows the whole prompt: no ellipsis stands at its end, and the row is
+    filled from the left pad to its press.
+
 ### 6.2 F02 — The three entry points of Set up
 
 1. Examine the machine section of the sidebar before the first machine.
@@ -848,6 +857,8 @@ price card and stops.
 - The notice without an agent program names the programs that Horizon looked
   for and the state of the integrations, and its two buttons work.
 - The integrations off stop Set up and name the exact switch.
+- A row of the pickup shows the whole stored title at the widest block of the
+  page, and cuts it at the end of its own room at a narrow one.
 - A second press shows the panel of Set up and starts no second panel.
 - The four cards of task 6.7 draw the value, the badge, the row that cannot be
   chosen, the caption, the pills and the steps, and a press on a row that cannot
