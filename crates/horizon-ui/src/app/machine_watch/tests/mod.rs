@@ -4,6 +4,7 @@
 mod click;
 mod rows;
 mod support;
+mod totals;
 
 use std::sync::Arc;
 

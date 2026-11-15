@@ -490,12 +490,35 @@ impl HorizonApp {
 
     /// Goes to the agent panel that waits longest for the person: it switches
     /// the workspace, reveals the panel and gives it the focus, in the path of a
-    /// click on its row. With no panel waiting it says so in one line.
+    /// click on its row. With no panel of this window waiting, it does what a press on
+    /// the row of an agent of a machine does, and with no agent waiting it says so in
+    /// one line.
     pub(in crate::app) fn go_to_next_attention(&mut self, ctx: &egui::Context) {
         match horizon_core::next_attention_target(&self.attention_targets(), self.board.focused) {
             Some(panel) => self.reveal_selected_panel(ctx, panel),
-            None => self.set_sidebar_plain_notice(NOBODY_WAITS.to_owned()),
+            None => match self.waiting_machine_agent() {
+                Some(agent) => self.open_machine_agent(&agent, ctx),
+                None => self.set_sidebar_plain_notice(NOBODY_WAITS.to_owned()),
+            },
         }
+    }
+
+    /// The agent of a machine that the shortcut reaches: the first one that needs an
+    /// answer, then the first one that finished unseen, in the order of the snapshot,
+    /// which is the name of its machine and then its session and its pane.
+    ///
+    /// The panels of this window come first: they stand in front of the person, and the
+    /// agents of a machine are the rows that no window shows.
+    fn waiting_machine_agent(&self) -> Option<horizon_core::machine_watch::MachineAgent> {
+        let snapshot = self.machine_watch.watch.snapshot();
+        let mut waiting: Vec<&horizon_core::machine_watch::MachineAgent> = snapshot
+            .machines
+            .iter()
+            .flat_map(|machine| &machine.agents)
+            .filter(|agent| agent.state.attention().waits() && agent.can_open())
+            .collect();
+        waiting.sort_by_key(|agent| std::cmp::Reverse(agent.state.attention().rank()));
+        waiting.first().map(|agent| (*agent).clone())
     }
 }
 
