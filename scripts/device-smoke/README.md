@@ -287,10 +287,13 @@ list of the private home, starts one private `tmux` server with two sessions of
 the Codex stand-in, and puts a stand-in `ssh` first on the `PATH` of the
 candidate. `tmux` places its socket in the folder that `TMUX_TMPDIR` names, so
 the server starts in the folder that the sandbox sees as `/tmp`, and the run
-stops that server at its exit. The stand-in `ssh` runs every command that the
-candidate sends with a `tmux` that names that server, so a panel of an agent
-opens the real session. It answers no other call: a run with it reads no machine
-of the person.
+stops that server at its exit. The watch of the candidates asks the stand-in for
+the one word `sh` and writes the text of the watch to the input of that call, as
+`sshd` runs a remote command with the login shell of the user; the stand-in runs
+that word with its own input. It runs the several words of the command of a
+panel of an agent with `sh -c`, and it gives each of them a `tmux` that names
+that server, so a panel of an agent opens the real session. It answers no other
+call: a run with it reads no machine of the person.
 
 The fixture types `start` and then `ask` into the session `hz-shop`, so that
 stand-in starts a turn and asks for an approval, which waits for the person. It

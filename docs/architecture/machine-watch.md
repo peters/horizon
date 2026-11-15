@@ -22,9 +22,12 @@ states the same rules for a reader of the code.
    `MAX_WATCHED_MACHINES` (8), the watch builds the `ssh` command line of that
    machine (`WatchTarget::of`). The record passes the rule of an SSH terminal
    again, as it does for a terminal of that machine.
-3. One worker thread per machine starts that `ssh` child. The child runs one
-   constant text of POSIX shell on the machine
-   (`crates/horizon-core/src/machine_watch/remote.rs`).
+3. One worker thread per machine starts that `ssh` child. The remote command of
+   that child is the one word `sh`, because `sshd` runs a remote command with the
+   login shell of the user of the machine and a login shell that is not POSIX
+   reads no POSIX text. The reader writes one constant text of POSIX shell
+   (`crates/horizon-core/src/machine_watch/remote.rs`) to the standard input of
+   the child and closes that pipe, so `sh` runs the text there.
 4. The reader of the thread reads the standard output of the child line by line
    with the bound of one line, and collects one report until its terminator line.
 5. The parser turns the report into a typed value with the bounds, and the model
@@ -45,7 +48,8 @@ says `OverTheLimit`.
 The text is one constant of this build, and it is 60 statements of POSIX shell.
 It runs under `dash`, under `bash` and under the shell of `BusyBox`, and its tests
 run it under each shell that this computer has. It uses `tmux`, `ps` and the
-built-ins of the shell.
+built-ins of the shell. It is no argument of `ssh`: the command of the child is
+the one word `sh`, and the text arrives on its standard input.
 
 The loop prints one report, waits `WATCH_INTERVAL_SECS` (2) seconds, and builds
 the next report. It prints that report only when it differs from the report

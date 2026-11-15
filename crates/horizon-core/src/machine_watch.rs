@@ -2,11 +2,13 @@
 //!
 //! Horizon keeps one watch per machine of its list: one `ssh` process of this computer
 //! that runs one constant text of POSIX `sh` on the machine, and that prints a report
-//! only when the report changed. The report names the panes of the `tmux` sessions of
-//! that user, the program of a pane, its folder, its title, the command line of its
-//! program when an interpreter runs there, and the last rows of its screen. The watch
-//! turns it into one row for each pane whose program is one of the agent kinds of
-//! [`crate::agents`], with the state that a local panel of that kind would show.
+//! only when the report changed. The command of that child is the one word `sh`, which
+//! no login shell of a machine has to read, and the text arrives on its input. The
+//! report names the panes of the `tmux` sessions of that user, the program of a pane,
+//! its folder, its title, the command line of its program when an interpreter runs
+//! there, and the last rows of its screen. The watch turns it into one row for each
+//! pane whose program is one of the agent kinds of [`crate::agents`], with the state
+//! that a local panel of that kind would show.
 //!
 //! Every byte that a machine returns is untrusted, and the page
 //! `docs/review/trust-boundaries/machine-watch.md` states that boundary: the report
@@ -31,7 +33,7 @@ mod supervisor;
 mod tests;
 
 pub use agents::{AgentObservation, AgentPrograms, observations};
-pub use remote::{REMOTE_TEXT, WatchTarget};
+pub use remote::{REMOTE_PROGRAM, REMOTE_TEXT, WatchTarget};
 pub use report::{MachineNote, PaneReport, Report, ReportError, parse_report};
 pub use snapshot::{MachineWatchSnapshot, MachineWatchState, Shared, WatchLink, WatchRefusal, unix_millis};
 pub use state::{AgentState, MachineAgent, MachineModel};

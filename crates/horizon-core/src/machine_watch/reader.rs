@@ -2,17 +2,18 @@
 //! a lost link.
 //!
 //! The reader runs on its own worker thread. It starts the `ssh` child with the
-//! command line of [`super::WatchTarget`], reads its standard output line by line with
-//! the bound of one line, and hands each whole report to [`Shared::apply_report`]. The
-//! words of `ssh` on its standard error are read to their bound for one classification
-//! and then dropped.
+//! command line of [`super::WatchTarget`], writes [`super::REMOTE_TEXT`] to its standard
+//! input and closes that pipe, reads its standard output line by line with the bound of
+//! one line, and hands each whole report to [`Shared::apply_report`]. The words of `ssh`
+//! on its standard error are read to their bound for one classification and then
+//! dropped.
 //!
 //! An end of the child is a lost link, whatever its status: the text of the watch
 //! never ends by itself, so only a stop of the supervisor ends the loop. The reader
 //! waits the delay of [`crate::place::reconnect_delay`] and starts the next attempt. A
 //! stop of the supervisor kills the child, so the reader ends within its bound.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -55,7 +56,7 @@ pub(super) fn run(
         let started = Instant::now();
         let mut child = match Command::new(program)
             .args(&target.args)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -73,6 +74,13 @@ pub(super) fn run(
                 return;
             }
         };
+        // The text of the watch reaches `sh` here. The pipe closes at once, because the
+        // text ends in a loop that reads nothing, and its programs read no script text.
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(super::REMOTE_TEXT.as_bytes())
+        {
+            tracing::warn!(machine, %error, "the text of the watch did not reach ssh");
+        }
         let stdout = child.stdout.take();
         let refusal = child.stderr.take().map(read_stderr);
         *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(child);

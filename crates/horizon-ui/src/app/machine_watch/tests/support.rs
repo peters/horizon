@@ -127,19 +127,20 @@ pub(crate) struct Ssh {
 }
 
 impl Ssh {
-    /// The stand-in that runs the text of the watch on `server`.
+    /// The stand-in that runs the text of the watch on `server`: the one word of the
+    /// remote command reads that text on the input of the stand-in, and `-s` keeps the
+    /// marker of this test in the process list.
     pub(crate) fn new(server: &Server) -> Option<Self> {
-        Self::of(server, "exec sh -c \"$last\" \"$marker\"")
+        Self::of(server, "exec $last -s \"$marker\"")
     }
 
     /// The stand-in whose link ends `seconds` after each start, as the link of a
-    /// machine that goes away does, and whose next attempt comes back.
+    /// machine that goes away does, and whose next attempt comes back: a killer of the
+    /// stand-in's own process ends the shell that runs the text.
     pub(crate) fn unsteady(server: &Server, seconds: u32) -> Option<Self> {
         Self::of(
             server,
-            &format!(
-                "sh -c \"$last\" \"$marker\" &\nchild=$!\nsleep {seconds}\nkill $child\nwait $child 2>/dev/null\nexit 255"
-            ),
+            &format!("{{ sleep {seconds}; kill $$; }} &\nexec $last -s \"$marker\""),
         )
     }
 

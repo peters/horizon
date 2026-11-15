@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::MachineKeys;
-use crate::machine_watch::{MachineWatch, REMOTE_TEXT, WatchLink, WatchRefusal};
+use crate::machine_watch::{MachineWatch, REMOTE_PROGRAM, WatchLink, WatchRefusal};
 use crate::machines::{Machine, MachineRegistry, Machines};
 use crate::util::stand_in_program_in;
 
@@ -65,14 +65,15 @@ struct StandIn {
 
 impl StandIn {
     /// The stand-in that runs the text of the watch on the private server of
-    /// `server`.
+    /// `server`: the one word of the remote command reads that text on the input of
+    /// the stand-in, and `-s` keeps the marker of this test in the process list.
     fn watch(server: &Server) -> Option<Self> {
-        Self::of(server, "exec sh -c \"$last\" \"$marker\"")
+        Self::of(server, "exec $last -s \"$marker\"")
     }
 
     /// The stand-in that runs `body` after it counted its call. The last argument of
-    /// the call is the remote text, in `$last`; the marker of its child is in
-    /// `$marker`.
+    /// the call is in `$last`, which a one-word command of a login shell names; the
+    /// marker of its child is in `$marker`.
     fn of(server: &Server, body: &str) -> Option<Self> {
         if !has("sh") {
             return None;
@@ -170,7 +171,11 @@ fn the_command_line_of_a_watch_holds_the_options_of_a_machine_terminal() {
     let (machines, keys) = machines_of(folder.path(), &["build-1"]);
     let target = crate::machine_watch::WatchTarget::of(&machines, &keys, "build-1").expect("the watch of the machine");
     assert_eq!(target.machine, "build-1");
-    assert_eq!(target.args.last().map(String::as_str), Some(REMOTE_TEXT));
+    assert_eq!(
+        target.args.last().map(String::as_str),
+        Some(REMOTE_PROGRAM),
+        "the machine runs the one word that no login shell has to read"
+    );
     for option in [
         "BatchMode=yes",
         "ConnectTimeout=10",
@@ -275,6 +280,51 @@ fn a_watch_reports_the_agents_of_its_machine_and_marks_one_seen() {
 }
 
 #[test]
+fn a_login_shell_that_is_not_posix_runs_the_watch_through_its_input() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    let Some(stand_in) = non_posix_login_shell(&server) else {
+        return;
+    };
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let (machines, keys) = machines_of(folder.path(), &["build-1"]);
+    let Some((_program_folder, agent)) = agent_program() else {
+        return;
+    };
+    server.session("hz-codex-1", &agent.display().to_string());
+    let watch = MachineWatch::with_program(stand_in.program());
+    watch.reconcile(&machines, &keys, true);
+    let link = wait_for(&watch, "build-1", WatchLink::watching);
+    assert_eq!(
+        link,
+        WatchLink::Watching,
+        "a login shell that is not POSIX runs the watch through its input"
+    );
+    let snapshot = watch.snapshot();
+    assert_eq!(
+        snapshot
+            .machine("build-1")
+            .expect("the machine of the report")
+            .agents
+            .len(),
+        1,
+        "the report arrives, and it names the agent pane of the server"
+    );
+    watch.stop_all();
+}
+
+/// One stand-in `ssh` whose last argument a login shell that is not POSIX reads: it
+/// refuses a word that is not one plain word, as such a shell cannot run a POSIX text,
+/// and it runs one plain word with its own input.
+fn non_posix_login_shell(server: &Server) -> Option<StandIn> {
+    StandIn::of(
+        server,
+        "case $last in ''|*[!A-Za-z0-9_./-]*)\n  printf 'this login shell runs one word\\n' >&2\n  exit 1\n  ;;\nesac\nexec \"$last\"",
+    )
+}
+
+#[test]
 fn a_link_that_drops_comes_back_by_the_rule_of_a_lost_link() {
     let Some(server) = Server::new() else {
         return;
@@ -284,7 +334,7 @@ fn a_link_that_drops_comes_back_by_the_rule_of_a_lost_link() {
     let Some(stand_in) = StandIn::of(
         &server,
         &format!(
-            "if [ -f {counter} ]; then exec sh -c \"$last\" \"$marker\"; fi\n\
+            "if [ -f {counter} ]; then exec $last -s \"$marker\"; fi\n\
              printf 'x' > {counter}\nprintf 'HZ\\t1\\nZ\\n'\nexit 255",
             counter = quoted(&counter.to_string_lossy()),
         ),
@@ -316,7 +366,7 @@ fn stand_in_that_ends(server: &Server, end: &str) -> Option<(StandIn, tempfile::
     let stand_in = StandIn::of(
         server,
         &format!(
-            "if [ -f {counter} ]; then exec sh -c \"$last\" \"$marker\"; fi\n\
+            "if [ -f {counter} ]; then exec $last -s \"$marker\"; fi\n\
              printf 'x' > {counter}\nprintf 'HZ\\t1\\nZ\\n'\n{end}",
             counter = quoted(&counter.to_string_lossy()),
         ),

@@ -900,13 +900,15 @@ def machine_watch_server(state, private_tmp, python):
 def machine_watch_standin(state):
     """The stand-in `ssh` of the watch, and the folder to find it in.
 
-    The candidate starts `ssh` for each machine of its list and the text of the
-    watch arrives as the last argument of that call, as does the command of a panel
-    that opens an agent. This stand-in runs that text with a `tmux` that names the
-    private server of the fixture, as the `tmux` of a machine names the server of
-    its user, so a procedure sees and opens the agents of a machine without a
-    machine. It answers no other call: a run with this stand-in first on the `PATH`
-    reads no machine of the person.
+    The candidate starts `ssh` for each machine of its list. The watch of the agents
+    asks for the one word `sh` and writes its text to the input of that call, because
+    `sshd` runs a remote command with the login shell of the user and a login shell
+    that is not POSIX reads no POSIX text. A panel that opens an agent asks for a
+    command of several words. This stand-in runs the word or the command with a
+    `tmux` that names the private server of the fixture, as the `tmux` of a machine
+    names the server of its user, so a procedure sees and opens the agents of a
+    machine without a machine. It answers no other call: a run with this stand-in
+    first on the `PATH` reads no machine of the person.
     """
     work = Path(state) / MACHINE_WATCH_FOLDER
     tmux = shutil.which('tmux')
@@ -920,7 +922,10 @@ def machine_watch_standin(state):
             f'PATH={shlex.quote(str(remote.parent))}:$PATH\n'
             'export PATH\n'
             'for a in "$@"; do last=$a; done\n'
-            'exec sh -c "$last"\n')
+            'case $last in\n'
+            '  *[!A-Za-z0-9_./-]*) exec sh -c "$last" ;;\n'
+            '  *) exec "$last" ;;\n'
+            'esac\n')
     program = body_in_state(work / 'bin' / MACHINE_WATCH_PROGRAM, body, state)
     return program.parent
 

@@ -5,6 +5,10 @@
 //! `bash` and on the shell of `BusyBox`, and that uses `tmux`, `ps` and the built-ins
 //! of that shell. No value of a record and no value of a report takes part in it.
 //!
+//! `sshd` runs the remote command with the login shell of the user of that machine, so
+//! the command of the watch is the one word `sh` and [`super::reader`] writes the text to
+//! the standard input of the child: a login shell that is not POSIX runs it all the same.
+//!
 //! The text prints one report and then one line per interval: a still machine prints
 //! one short heartbeat line instead of its report. Each field of a report is one line
 //! of words, so no value that a program or a person put into a session name, a folder
@@ -101,6 +105,9 @@ while :; do
 done
 "#;
 
+/// The one word of the remote command: `sh` reads [`REMOTE_TEXT`] on its standard input.
+pub const REMOTE_PROGRAM: &str = "sh";
+
 /// One machine that the watch reaches: its name and the whole `ssh` command line of
 /// the watch of that machine.
 ///
@@ -109,7 +116,8 @@ done
 /// and, when the record binds a machine key, that key and its known-hosts file. It
 /// adds `BatchMode=yes`, so a machine that asks for a password fails the attempt
 /// instead, and it asks for no terminal, so it holds no `-t`. The last argument is
-/// [`REMOTE_TEXT`].
+/// [`REMOTE_PROGRAM`], and [`REMOTE_TEXT`] reaches that shell on the input of the
+/// child.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WatchTarget {
     /// The name of the machine in the machine list.
@@ -142,9 +150,10 @@ impl WatchTarget {
         // The login of a machine terminal, in the form that a child with its own
         // bounds takes: `BatchMode=yes`, so a machine that asks for a password or a
         // passphrase fails an attempt instead of waiting for a person who is not
-        // there. The text of the watch is one argument of the remote command.
+        // there. The login shell of the machine runs one word, and the text of the
+        // watch arrives on the input of the child.
         let mut args = connection.ssh_transport_args();
-        args.push(REMOTE_TEXT.to_owned());
+        args.push(REMOTE_PROGRAM.to_owned());
         Ok(Self {
             machine: record.name.clone(),
             args,

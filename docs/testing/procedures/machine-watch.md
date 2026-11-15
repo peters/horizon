@@ -148,11 +148,12 @@ starts and stops one `ssh` child per machine of the list.
 
    Result: `ssh <machine> "tmux list-sessions"` names `hz-mw-1`.
 
-2. Read the report of the watch by hand, with the text of the watch:
+2. Read the report of the watch by hand, with the text of the watch. The remote
+   command is the one word `sh`, and the text arrives on the input of `ssh`:
 
    ```bash
-   ssh <machine> "$(sed -n '/^pub const REMOTE_TEXT/,/^"#;/p' \
-     crates/horizon-core/src/machine_watch/remote.rs | sed '1d;$d')"
+   sed -n '/^pub const REMOTE_TEXT/,/^"#;/p' \
+     crates/horizon-core/src/machine_watch/remote.rs | sed '1d;$d' | ssh <machine> sh
    ```
 
    Result: the first line is `HZ	1`, one `P` line names `hz-mw-1`, and the last

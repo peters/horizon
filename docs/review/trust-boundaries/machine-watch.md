@@ -31,11 +31,17 @@ state.
   bound and the keepalives of a machine terminal, and, when the record binds a
   machine key, that key file, `IdentitiesOnly`, `IdentityAgent=none` and the
   known-hosts file of that key. It allocates no terminal (`-t`), so the machine
-  runs the text on a pipe.
+  runs the command on a pipe.
+- **The remote command is one word.** It is `sh`, and no value of a record takes
+  part in it. `sshd` runs a remote command with the login shell of the user of the
+  machine, so a text with spaces would be a text that a login shell which is not
+  POSIX cannot run. The reader writes the text of the watch to the standard input
+  of the `ssh` child and closes that pipe at once, so `sh` reads it there.
 - **The remote text is one constant of this build.** It is POSIX `sh` and it uses
   `tmux`, `ps`, `cksum` and the built-ins of `sh`. It runs in a loop, and it
   prints a report only when the report changed; a still machine prints one short
-  heartbeat line instead.
+  heartbeat line instead. The text is no argument of a process, so no command
+  line of this computer and no process list of the machine holds it.
 - **No value of a record reaches that text, and no value of a report reaches a
   command line of this computer.** The route and the key are arguments of `ssh`,
   and they pass the rule of an SSH terminal first. The text reads no name, no
