@@ -451,8 +451,13 @@ fn a_picture_that_is_not_there_shows_its_path_as_the_note_writes_it() {
 fn a_pipe_a_device_a_folder_and_a_text_file_are_refused() {
     let note = Note::build(|folder| {
         let pipe = folder.join("pipe.png");
-        rustix::fs::mkfifoat(rustix::fs::CWD, &pipe, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
-            .expect("the test makes a pipe");
+        // `mkfifo` is not in the safe API of `rustix` on every platform, and the
+        // repository makes a pipe of a test with the command that POSIX gives.
+        let made = std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(made, "the test makes a pipe");
         std::fs::create_dir(folder.join("folder.png")).expect("the test makes a folder");
         std::fs::write(folder.join("text.png"), "this is not a picture\n").expect("the test writes a text file");
         "![pipe](pipe.png)\n\n![zero](/dev/zero)\n\n![folder](folder.png)\n\n![text](text.png)\n".to_owned()
