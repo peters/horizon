@@ -17,7 +17,7 @@ use horizon_core::machine_watch::{AgentPrograms, MachineAgent, MachineWatch, Mac
 use horizon_core::notify::Change;
 
 use super::HorizonApp;
-use super::node_cards::CardMachine;
+use super::node_cards::{CardMachine, Links};
 
 /// The watch of the machines of one window, and what a frame holds of it.
 #[derive(Default)]
@@ -115,6 +115,7 @@ impl HorizonApp {
                     name: record.name.clone(),
                     login,
                     sessions,
+                    links: Links::clone(&self.node_cards.links),
                 }),
                 Err(error) => tracing::warn!(machine = %record.name, %error, "no card link for a machine"),
             }

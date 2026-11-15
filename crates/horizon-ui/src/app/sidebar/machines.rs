@@ -190,6 +190,7 @@ impl HorizonApp {
                 let watch = MachineWatchRow::of(
                     snapshot.as_ref().and_then(|snapshot| snapshot.machine(&machine.name)),
                     now_millis,
+                    machine.cards.then(|| self.node_cards.refusal(&machine.name)).flatten(),
                 );
                 MachineRow {
                     name: machine.name.clone(),
@@ -678,6 +679,7 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         machine.provider.hash(&mut hasher);
         machine.repository.hash(&mut hasher);
         pending.contains(machine.name.as_str()).hash(&mut hasher);
+        app.node_cards.refusal(&machine.name).hash(&mut hasher);
     }
     if let Some(sync) = app.server_sync.as_ref() {
         // One snapshot of the link for the whole fingerprint: the worker of the

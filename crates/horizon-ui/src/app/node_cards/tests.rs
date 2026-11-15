@@ -112,11 +112,12 @@ fn login(folder: &Path, name: &str) -> SshConnection {
 }
 
 /// The machine of a test with its sessions, and the login of a machine terminal.
-fn machine_of(folder: &Path, name: &str, sessions: &[&str]) -> CardMachine {
+fn machine_of(cards: &NodeCards, folder: &Path, name: &str, sessions: &[&str]) -> CardMachine {
     CardMachine {
         name: name.to_owned(),
         login: login(folder, name),
         sessions: sessions.iter().map(|session| (*session).to_owned()).collect(),
+        links: super::Links::clone(&cards.links),
     }
 }
 
@@ -193,7 +194,7 @@ fn a_session_gets_one_socket_that_serves_the_card_contract() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let machine = machine_of(directory.path(), "build-1", &["fix-71"]);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
     cards.set_sessions(vec![machine], HOST);
     assert!(cards.wanted.is_some());
     let answer = initialize(&cards, "build-1", "fix-71");
@@ -206,10 +207,10 @@ fn a_session_that_leaves_loses_its_socket_and_the_others_stay() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let both = machine_of(directory.path(), "build-1", &["fix-71", "night"]);
+    let both = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
     cards.set_sessions(vec![both], HOST);
     initialize(&cards, "build-1", "night");
-    let other = machine_of(directory.path(), "build-2", &["night"]);
+    let other = machine_of(&cards, directory.path(), "build-2", &["night"]);
     cards.set_sessions(vec![other], HOST);
     wait_gone(&socket_file(&cards, "build-1", "night"));
     let answer = initialize(&cards, "build-2", "night");
@@ -222,7 +223,7 @@ fn a_stop_leaves_no_thread_and_no_socket() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let machine = machine_of(directory.path(), "build-1", &["fix-71"]);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
     cards.set_sessions(vec![machine], HOST);
     let socket = socket_file(&cards, "build-1", "fix-71");
     initialize(&cards, "build-1", "fix-71");
@@ -241,7 +242,7 @@ fn a_machine_name_outside_the_rule_opens_no_socket() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let mut machine = machine_of(directory.path(), "build-1", &["fix-71"]);
+    let mut machine = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
     machine.name = "../build".to_owned();
     cards.set_sessions(vec![machine], HOST);
     // The supervisor names every skipped session in the log and opens nothing.
@@ -255,7 +256,7 @@ fn a_machine_carries_one_child_for_all_of_its_sessions() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let machine = machine_of(directory.path(), "build-1", &["fix-71", "night"]);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
     cards.set_sessions(vec![machine], HOST);
     wait_until("the child of the machine", || stand_in.calls() == 1);
     let carried = stand_in.argv();
@@ -273,10 +274,10 @@ fn a_session_that_joins_ends_the_child_and_starts_the_next() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let one = machine_of(directory.path(), "build-1", &["fix-71"]);
+    let one = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
     cards.set_sessions(vec![one], HOST);
     wait_until("the child of one session", || stand_in.calls() == 1);
-    let two = machine_of(directory.path(), "build-1", &["fix-71", "night"]);
+    let two = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
     cards.set_sessions(vec![two], HOST);
     wait_until("the child of two sessions", || stand_in.calls() == 2);
     wait_until("one process for the machine", || children_of(&cards) == 1);
@@ -289,7 +290,7 @@ fn a_machine_that_leaves_ends_its_child() {
     let stand_in = StandIn::holding();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let machine = machine_of(directory.path(), "build-1", &["night"]);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["night"]);
     cards.set_sessions(vec![machine], HOST);
     wait_until("the child of the machine", || children_of(&cards) == 1);
     cards.set_sessions(vec![], HOST);
@@ -302,8 +303,11 @@ fn a_refused_forward_waits_the_delay_and_tries_again() {
     let stand_in = StandIn::refusing();
     let directory = scratch();
     let mut cards = cards_with(&directory, &stand_in);
-    let machine = machine_of(directory.path(), "build-1", &["night"]);
+    let machine = machine_of(&cards, directory.path(), "build-1", &["night"]);
     cards.set_sessions(vec![machine], HOST);
     wait_until("the second attempt of a refused forward", || stand_in.calls() >= 2);
+    wait_until("the refusal of the card link of the machine", || {
+        cards.refusal("build-1").is_some()
+    });
     cards.stop_all();
 }

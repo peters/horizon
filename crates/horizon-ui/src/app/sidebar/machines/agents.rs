@@ -1,6 +1,6 @@
 //! The agents of a machine under its row, in the form of the panel rows of a workspace.
-//! The rows come from the snapshot of the watch, and a machine whose link is down says
-//! in one quiet line what happened to them.
+//! The rows come from the snapshot of the watch, and a machine whose link is down, or
+//! whose card link is not up, says in one quiet line what happened to them.
 
 use egui::{Rect, Sense, Vec2, pos2};
 use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchState, WatchLink};
@@ -17,6 +17,8 @@ use super::{MachineRow, card, dot_center};
 pub(super) const NO_TMUX: &str = "No tmux on this machine.";
 
 const QUIET_HEIGHT: f32 = 24.0;
+/// The line of a machine whose card link is not up: its `ssh` child is gone.
+pub(super) const CARDS_DOWN: &str = "Cards: no link · trying again";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(in crate::app) struct MachineWatchRow {
@@ -40,19 +42,23 @@ pub(in crate::app) struct Quiet {
 }
 
 impl Quiet {
-    /// One line whose words are its own sentence.
-    fn of(sentence: &str) -> Self {
+    /// One line of `line`, with the whole sentence that a reader hears.
+    fn of(line: &str, sentence: &str) -> Self {
         Self {
-            line: sentence.to_owned(),
+            line: line.to_owned(),
             sentence: sentence.to_owned(),
         }
     }
 }
 
 impl MachineWatchRow {
-    pub(in crate::app) fn of(state: Option<&MachineWatchState>, now_millis: i64) -> Self {
+    pub(in crate::app) fn of(state: Option<&MachineWatchState>, now_millis: i64, cards: Option<&str>) -> Self {
+        let cards = cards.map(|sentence| Quiet::of(CARDS_DOWN, sentence));
         let Some(state) = state else {
-            return Self::default();
+            return Self {
+                quiet: cards,
+                ..Self::default()
+            };
         };
         let (lost, quiet) = match state.link {
             WatchLink::Lost {
@@ -64,15 +70,15 @@ impl MachineWatchRow {
                 )),
                 Some(last_seen(agents)),
             ),
-            WatchLink::NoTmux => (None, Some(Quiet::of(NO_TMUX))),
-            WatchLink::Refused { reason, .. } => (None, Some(Quiet::of(reason.sentence()))),
+            WatchLink::NoTmux => (None, Some(Quiet::of(NO_TMUX, NO_TMUX))),
+            WatchLink::Refused { reason, .. } => (None, Some(Quiet::of(reason.sentence(), reason.sentence()))),
             // A link that connects or that is up says nothing in these two lines, and so
             // does the watch of a machine that is off.
             _ => (None, None),
         };
         Self {
             lost,
-            quiet,
+            quiet: quiet.filter(|_| state.agents.is_empty()).or(cards),
             summary: summary_of(&state.agents),
             agents: state.agents.clone(),
         }
@@ -84,9 +90,7 @@ impl MachineWatchRow {
         for (index, agent) in self.agents.iter().enumerate() {
             paint_agent(ui, row, agent, index == last, actions);
         }
-        if self.agents.is_empty()
-            && let Some(line) = &self.quiet
-        {
+        if let Some(line) = &self.quiet {
             paint_quiet_line(ui, line);
         }
     }

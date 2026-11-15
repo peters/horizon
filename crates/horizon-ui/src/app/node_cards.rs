@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -21,8 +21,8 @@ use horizon_core::machine_watch::{MAX_REFUSAL_BYTES, WatchRefusal};
 use horizon_core::node_cards;
 use horizon_core::{RECONNECT_RESET_AFTER, SshConnection, reconnect_delay};
 use tokio::io::AsyncReadExt;
-use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{Semaphore, oneshot};
 
 /// Most card connections that one socket serves at the same time. A machine that
 /// opens more drops them, so one agent cannot fill this window.
@@ -31,13 +31,18 @@ const MAX_CONNECTIONS: usize = 4;
 /// The program of the `ssh` child of the cards: the `ssh` of the `PATH`.
 const SSH_PROGRAM: &str = "ssh";
 
-/// One machine that has its cards set up: the login of its `ssh` child and the
-/// sessions that the watch reports there.
+/// One machine that has its cards set up: the login of its `ssh` child, the sessions
+/// that the watch reports there and the card link of this window.
+#[derive(Clone)]
 pub(in crate::app) struct CardMachine {
     pub(in crate::app) name: String,
     pub(in crate::app) login: SshConnection,
     pub(in crate::app) sessions: Vec<String>,
+    pub(in crate::app) links: Links,
 }
+
+/// The refusal that ended the card link of each machine whose `ssh` child is gone.
+pub(in crate::app) type Links = Arc<Mutex<BTreeMap<String, WatchRefusal>>>;
 
 /// One set of machines to serve, with the identity of the host that serves their
 /// sockets.
@@ -52,6 +57,8 @@ pub(in crate::app) struct NodeCards {
     pub(in crate::app) program: String,
     wanted: Option<UnboundedSender<Wanted>>,
     supervisor: Option<JoinHandle<()>>,
+    /// The card link of each machine whose child is gone, for the line of the sidebar.
+    pub(in crate::app) links: Links,
 }
 
 impl Default for NodeCards {
@@ -61,6 +68,7 @@ impl Default for NodeCards {
             program: SSH_PROGRAM.to_owned(),
             wanted: None,
             supervisor: None,
+            links: Links::default(),
         }
     }
 }
@@ -98,6 +106,12 @@ impl NodeCards {
         }
     }
 
+    /// The words of the refusal that ended the card link of `machine`, while it waits.
+    pub(in crate::app) fn refusal(&self, machine: &str) -> Option<&'static str> {
+        let links = self.links.lock().unwrap_or_else(PoisonError::into_inner);
+        links.get(machine).map(|refusal| refusal.sentence())
+    }
+
     /// Ends every socket, stops every child, removes every socket file and joins
     /// the supervisor.
     pub(in crate::app) fn stop_all(&mut self) {
@@ -111,7 +125,7 @@ impl NodeCards {
 /// One bound socket of one session: the loop that accepts on it, and its stop.
 struct Bound {
     socket: PathBuf,
-    stop: tokio::sync::oneshot::Sender<()>,
+    stop: oneshot::Sender<()>,
     accepts: tokio::task::JoinHandle<()>,
 }
 
@@ -119,7 +133,7 @@ struct Bound {
 /// and its stop.
 struct Carried {
     args: Vec<String>,
-    stop: tokio::sync::oneshot::Sender<()>,
+    stop: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -192,8 +206,8 @@ async fn apply_set(
         if let Some(child) = carried.remove(&machine.name) {
             stop(child).await;
         }
-        let (stop, stopped) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(carry(program.to_owned(), machine.name.clone(), args.clone(), stopped));
+        let (stop, stopped) = oneshot::channel();
+        let task = tokio::spawn(carry(machine.clone(), program.to_owned(), args.clone(), stopped));
         carried.insert(machine.name.clone(), Carried { args, stop, task });
     }
     let left: Vec<String> = bound.keys().filter(|actor| !actors.contains(*actor)).cloned().collect();
@@ -220,9 +234,13 @@ async fn apply_set(
 /// Runs the `ssh` child of one machine until its stop: an end of the child waits
 /// the delay of [`reconnect_delay`] and starts the next attempt, and the words of
 /// `ssh` are read for the refusal that they name.
-async fn carry(program: String, machine: String, args: Vec<String>, mut stop: tokio::sync::oneshot::Receiver<()>) {
+async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut stop: oneshot::Receiver<()>) {
     let mut attempts = 0u32;
     loop {
+        {
+            let mut lost = machine.links.lock().unwrap_or_else(PoisonError::into_inner);
+            lost.remove(&machine.name);
+        }
         let started = Instant::now();
         let mut child = match tokio::process::Command::new(&program)
             .args(&args)
@@ -234,7 +252,7 @@ async fn carry(program: String, machine: String, args: Vec<String>, mut stop: to
         {
             Ok(child) => child,
             Err(error) => {
-                tracing::warn!(machine, %error, "no ssh child for the card sockets of a machine");
+                tracing::warn!(machine = %machine.name, %error, "no ssh child for the card sockets of a machine");
                 return;
             }
         };
@@ -261,7 +279,11 @@ async fn carry(program: String, machine: String, args: Vec<String>, mut stop: to
                 .map_or(WatchRefusal::Other, |words| WatchRefusal::of_ssh(&words)),
             None => WatchRefusal::Other,
         };
-        tracing::warn!(machine, refusal = ?refused, "the card link of a machine ended");
+        {
+            let mut lost = machine.links.lock().unwrap_or_else(PoisonError::into_inner);
+            lost.insert(machine.name.clone(), refused);
+        }
+        tracing::warn!(machine = %machine.name, refusal = ?refused, "the card link of a machine ended");
         if started.elapsed() >= RECONNECT_RESET_AFTER {
             attempts = 0;
         }
@@ -297,7 +319,7 @@ fn bind(folder: &Path, machine: &str, session: &str, actor: &str, host_instance:
     }
     let _ = std::fs::remove_file(&socket);
     let listener = tokio::net::UnixListener::bind(&socket).map_err(|error| format!("{}: {error}", socket.display()))?;
-    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let (stop, stopped) = oneshot::channel();
     let accepts = tokio::spawn(accept(
         listener,
         (actor.to_owned(), host_instance.to_owned()),

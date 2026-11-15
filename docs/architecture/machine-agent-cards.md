@@ -65,10 +65,13 @@ machine. The machine opens no connection and is given no address of this
 computer.
 
 A child that ends waits the delay of `place::reconnect_delay` and starts again,
-and the words of `ssh` name the refusal in the log. The child of a machine ends
-and starts again when the set of its sessions changes, because its argv changed
-with it. The stop of the window kills the child of every machine and joins its
-loop, so no child outlives Horizon.
+and the words of `ssh` name the refusal in the log and in one quiet line under
+the row of the machine, `Cards: no link · trying again`, whose hover and spoken
+text is the sentence of that refusal. The line goes when the next child starts,
+so a machine that refuses keeps saying so and the line of one that recovers
+goes. The child of a machine ends and starts again when the set of its sessions
+changes, because its argv changed with it. The stop of the window kills the
+child of every machine and joins its loop, so no child outlives Horizon.
 
 A machine with no known session gets no socket and no child: the watch is the
 only source of the sessions of a machine, so with `machines.watch_agents` off a

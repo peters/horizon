@@ -239,3 +239,152 @@ fn the_second_line_of_a_row_names_the_repository_beside_the_provider_words() {
         "the row follows the repository of its record"
     );
 }
+
+/// The window that the frames of these tests paint.
+const WINDOW: [f32; 2] = [1480.0, 1200.0];
+
+/// The words that `ssh` prints when the server refuses the forward of a card.
+const REFUSED_FORWARD: &str = "remote port forwarding failed for listen path /tmp/horizon-cards/build-1/night.sock";
+
+/// How long a test of the card link waits for the work of the supervisor.
+const CARD_LINK_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Keeps `build-1` in the list of the app, with the mark of its card setup.
+fn with_cards(app: &mut crate::app::HorizonApp) {
+    with_machines(
+        app,
+        vec![Machine {
+            name: "build-1".to_owned(),
+            host: "127.0.0.1".to_owned(),
+            port: Some(2222),
+            cards: true,
+            ..Machine::default()
+        }],
+    );
+}
+
+/// The machine that the card link of the app serves: one session of `build-1`.
+fn card_machine(app: &crate::app::HorizonApp) -> crate::app::node_cards::CardMachine {
+    crate::app::node_cards::CardMachine {
+        name: "build-1".to_owned(),
+        login: horizon_core::machine_watch::connection(
+            &app.machine_list,
+            &horizon_core::MachineKeys::from_home(app.session_store.home()),
+            "build-1",
+        )
+        .expect("the login of the machine"),
+        sessions: vec!["night".to_owned()],
+        links: crate::app::node_cards::Links::clone(&app.node_cards.links),
+    }
+}
+
+/// The one text of this pass that starts with `start`, if the pass drew it.
+fn drawn_starting_with(output: &egui::FullOutput, start: &str) -> Option<String> {
+    output.shapes.iter().find_map(|clipped| match &clipped.shape {
+        egui::Shape::Text(shape) if shape.galley.text().starts_with(start) => Some(shape.galley.text().to_owned()),
+        _ => None,
+    })
+}
+
+/// Whether a screen reader hears `label` in this pass.
+fn screen_reader_hears(output: &egui::FullOutput, label: &str) -> bool {
+    output.platform_output.accesskit_update.as_ref().is_some_and(|update| {
+        update
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label().or_else(|| node.value()).is_some_and(|text| text == label))
+    })
+}
+
+/// Runs frames of `window` until `wanted` holds, and answers the last pass.
+fn frame_until(
+    ctx: &egui::Context,
+    app: &mut crate::app::HorizonApp,
+    window: [f32; 2],
+    what: &str,
+    wanted: impl Fn(&crate::app::HorizonApp) -> bool,
+) -> egui::FullOutput {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+    let deadline = std::time::Instant::now() + CARD_LINK_DEADLINE;
+    loop {
+        let output = run_app_frame_with_input(ctx, app, raw_input(window, None));
+        if wanted(app) {
+            return output;
+        }
+        assert!(std::time::Instant::now() < deadline, "the test waited for {what}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn a_card_link_that_is_not_up_says_so_under_its_machine() {
+    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+    use horizon_core::browser::manifest;
+    use horizon_core::stand_in_program_in;
+    use horizon_core::{RuntimeState, StartupDecision};
+
+    for (words, down) in [
+        (format!("printf '{REFUSED_FORWARD}\\n' >&2\nexit 255\n"), true),
+        ("sleep 30\n".to_owned(), false),
+    ] {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        ctx.enable_accesskit();
+        // No watch of the agents of the machine: this test judges the card link, and
+        // the quiet line of the watch would take the line of the card link away.
+        app.template_config.machines.watch_agents = false;
+        crate::app::block_machines::settle_machine_load(&mut app);
+        let folder = tempfile::tempdir().expect("a folder of the stand-in");
+        let ssh = stand_in_program_in(folder.path(), "ssh", &words).expect("the stand-in ssh");
+        app.node_cards.program = ssh.to_string_lossy().into_owned();
+        with_cards(&mut app);
+        let _ = frame_until(&ctx, &mut app, WINDOW, "the machine of the watch", |app| {
+            app.machine_watch
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.machine("build-1").is_some())
+        });
+
+        // The app serves one session of the machine, and the supervisor starts its child.
+        app.node_cards
+            .set_sessions(vec![card_machine(&app)], manifest::host_instance());
+        let deadline = std::time::Instant::now() + CARD_LINK_DEADLINE;
+        while down && app.node_cards.refusal("build-1").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the test waited for the end of the card link"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !down {
+            // A child that holds its link has no end to name.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                app.node_cards.refusal("build-1").is_none(),
+                "no line of a link that is up"
+            );
+        }
+
+        let mut output = run_app_frame_with_input(&ctx, &mut app, raw_input(WINDOW, None));
+        for _ in 0..2 {
+            output = run_app_frame_with_input(&ctx, &mut app, raw_input(WINDOW, None));
+        }
+
+        let line = drawn_starting_with(&output, super::agents::CARDS_DOWN);
+        if down {
+            assert_eq!(
+                line.as_deref(),
+                Some(super::agents::CARDS_DOWN),
+                "the line of the card link"
+            );
+            assert!(
+                screen_reader_hears(&output, horizon_core::machine_watch::WatchRefusal::Other.sentence()),
+                "a screen reader hears why the card link is not up"
+            );
+        } else {
+            assert!(line.is_none(), "a child that holds its link draws no line: {line:?}");
+        }
+    }
+}
