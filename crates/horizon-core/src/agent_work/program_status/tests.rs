@@ -1,5 +1,6 @@
-use super::{MAX_REPORT_BYTES, ProgramClaim, ProgramStatus, program_status, program_status_reports_state};
+use super::{MAX_REPORT_BYTES, ProgramStatus, program_status, program_status_reports_state};
 use crate::PanelKind;
+use crate::agent_work::ProgramClaim;
 use crate::agent_work::TurnState;
 
 /// The state that the payload of a codex panel claims.

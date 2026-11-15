@@ -1,6 +1,7 @@
 //! Conservative evidence for continuing work after a host restart.
 //! Reading a conversation is not permission to start another turn.
 
+mod claim;
 mod command;
 mod discovery;
 mod ledger;
@@ -18,15 +19,14 @@ pub(crate) use startup::{RestoreBudget, WorkContinuation, append_seed, configure
 
 pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 
+pub use claim::{Claim, ClaimSource, ProgramClaim, Step, TitleClaim};
 pub use ledger::{HookEvent, TurnLedger};
 pub use policy::{AskReason, RestartDecision, RestartEvidence, ResumePolicy, SuspendRecord};
 pub use program_status::{
-    DETECTION_REPLY, MAX_REPORT_BYTES, ProgramClaim, ProgramStatus, program_status, program_status_reports_state,
+    DETECTION_REPLY, MAX_REPORT_BYTES, ProgramStatus, program_status, program_status_reports_state,
 };
 pub use store::{HookInput, StoredWork, WorkStore};
-pub use title::{
-    MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_name, title_reports_state, title_state,
-};
+pub use title::{MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleState, title_name, title_reports_state, title_state};
 pub use transcript::{TranscriptSnapshot, TurnState};
 
 use crate::horizon_home::HorizonHome;

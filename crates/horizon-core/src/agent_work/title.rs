@@ -8,16 +8,12 @@
 //! rule for a turn that the person did not see. A title and a hook differ only in
 //! how the event arrives at Horizon.
 //!
-//! The claim of a launch answers from the first working or waiting title that
-//! follows the ready title of the launch. A program whose titles never take one of
-//! the forms of its kind keeps the signal of its screen, and a spinner frame that
-//! repeats the state that the claim already holds does no work: the title of a
-//! working program changes about ten times a second, and only a change of the
-//! state is an event.
+//! The claim of these titles is the one in [`super::Claim`]. A program whose
+//! titles never take one of the forms of its kind keeps the signal of its screen.
 
 use crate::PanelKind;
 
-use super::{HookEvent, TurnLedger, TurnState};
+use super::{ClaimSource, Step, TurnLedger};
 
 /// The state that the title of a panel claims.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -149,180 +145,33 @@ pub fn title_name(kind: PanelKind, title: &str) -> Option<&str> {
     }
 }
 
-/// The titles of one launch of a program, and the turn that they claim.
+/// The title of a program, translated into the steps of the claim of its launch.
 ///
-/// The claim holds a [`TurnLedger`], so a title reaches the four words of the
-/// panel through the same fields that a lifecycle event of a hook writes. A turn
-/// is numbered from a counter of the launch: a plain title closes the turn that a
-/// working or waiting title opened, and a late or repeated title cannot close a
-/// turn that a later one opened.
-///
-/// The first plain title of a launch is the moment its program is ready for the
-/// person: a program loads with frames of the spinner, and those frames claim no
-/// turn. A wait before that title is the program's own question, which the person
-/// must answer, so it claims **Needs you** like any other wait.
-#[derive(Clone, Debug, Default)]
-pub struct TitleClaim {
-    ledger: TurnLedger,
-    /// The number of the turn that the titles of this launch opened.
-    turn: u32,
-    /// The last state that the title claimed, so a repeated frame does no work.
-    heard: Option<TitleState>,
-    /// When a plain title started to stand while a turn was open.
-    plain_since_millis: Option<i64>,
-    /// Whether the plain title that says the program is ready for the person has
-    /// arrived. The titles of a launch before it are its start-up.
-    ready: bool,
-}
+/// A title differs from a report of the protocol in one rule: the plain title of a
+/// launch is its ready state, and it ends the open turn only once it stands for
+/// [`TITLE_SETTLE_MILLIS`], because a program may write a plain title between two
+/// parts of one turn.
+impl ClaimSource for TitleState {
+    const SESSION: &'static str = "title";
+    const TURN_TAG: &'static str = "title";
+    const SETTLE_MILLIS: Option<i64> = Some(TITLE_SETTLE_MILLIS);
 
-impl TitleClaim {
-    /// Whether the titles of this launch answer for the panel. The claim answers
-    /// from the first working or waiting title of the launch that follows its
-    /// ready title.
-    #[must_use]
-    pub fn answers(&self) -> bool {
-        self.ledger.heard_an_event()
-    }
-
-    /// Whether a plain title of this launch has arrived, which is the moment the
-    /// program is ready for the person.
-    #[must_use]
-    pub fn ready(&self) -> bool {
-        self.ready
-    }
-
-    /// The ledger of the claim, read the way the record of a launch with hooks is
-    /// read.
-    #[must_use]
-    pub fn ledger(&self) -> &TurnLedger {
-        &self.ledger
-    }
-
-    /// Records one state of the title. A state that the claim already holds
-    /// changes nothing.
-    pub fn hear(&mut self, state: TitleState, now_millis: i64) {
-        if self.heard == Some(state) {
-            return;
-        }
-        match state {
-            TitleState::Plain => self.become_ready(now_millis),
+    fn steps(self, ready: bool) -> &'static [Step] {
+        match self {
             // A frame of the spinner before the ready title is the program
-            // loading, and it claims no turn of the person.
-            TitleState::Working if !self.ready => return,
-            TitleState::Working | TitleState::NeedsYou => {}
-        }
-        self.heard = Some(state);
-        match state {
-            TitleState::Working => {
-                self.plain_since_millis = None;
-                let prompt = self.next_prompt();
-                self.ledger
-                    .apply(&Self::event("UserPromptSubmit", Some(prompt), None), now_millis);
-            }
-            TitleState::NeedsYou => {
-                self.plain_since_millis = None;
-                let prompt = self.next_prompt();
-                // The wait of the first title of a launch opens the turn that it
-                // waits in, because a question belongs to a turn.
-                if !self.open() {
-                    self.ledger
-                        .apply(&Self::event("UserPromptSubmit", Some(prompt.clone()), None), now_millis);
-                }
-                let wait = format!("title-wait-{}", self.turn);
-                self.ledger
-                    .apply(&Self::event("PermissionRequest", Some(prompt), Some(wait)), now_millis);
-            }
-            TitleState::Plain => {
-                if self.open() {
-                    self.plain_since_millis = Some(now_millis);
-                }
-            }
+            // loading, and it claims no turn of the person. The claim does not
+            // hold it either, so every frame of the start-up does the same work.
+            TitleState::Working if !ready => &[],
+            TitleState::Working => &[Step::Open],
+            TitleState::NeedsYou => &[Step::Wait],
+            TitleState::Plain => &[Step::Ready, Step::Settle],
         }
     }
 
-    /// Ends the open turn when a plain title has stood for the settle time.
-    /// Answers whether an open turn ended.
-    ///
-    /// A turn that the plain title ends while an approval waited is a turn that the
-    /// person stopped: the program writes no title for a denial, and the request
-    /// that no answer closed is removed before the turn closes. The ledger keeps a
-    /// turn whose question is still open blocked, so the wait must go first, and
-    /// the end of such a turn is an interruption and not a finish.
-    pub fn settle(&mut self, now_millis: i64) -> bool {
-        let Some(since) = self.plain_since_millis else {
-            return false;
-        };
-        if now_millis.saturating_sub(since) < TITLE_SETTLE_MILLIS {
-            return false;
-        }
-        self.plain_since_millis = None;
-        if !self.open() {
-            return false;
-        }
-        let prompt = self.ledger.prompt_id.clone();
-        let end = if self.ledger.state == TurnState::Blocked {
-            let wait = format!("title-wait-{}", self.turn);
-            self.ledger
-                .apply(&Self::event("PostToolUse", prompt.clone(), Some(wait)), now_millis);
-            "Interrupt"
-        } else {
-            "Stop"
-        };
-        self.ledger.apply(&Self::event(end, prompt, None), now_millis);
-        true
-    }
-
-    /// Records the ready title of a launch: from here the titles of the launch
-    /// claim the turns of the person.
-    ///
-    /// A wait before that title was the program's own question while it loaded.
-    /// The person answered it, so the launch forgets the turn that the wait opened
-    /// instead of ending it: no turn of the person ran in it, and its end would say
-    /// **Done** for a launch that has not started to work yet.
-    fn become_ready(&mut self, now_millis: i64) {
-        if self.ready {
-            return;
-        }
-        self.ready = true;
-        if self.open() {
-            self.ledger.apply(&Self::event("SessionStart", None, None), now_millis);
-        }
-    }
-
-    /// The id of the turn that the claim holds open, or the id of a new turn.
-    fn next_prompt(&mut self) -> String {
-        if self.open()
-            && let Some(prompt) = self.ledger.prompt_id.clone()
-        {
-            return prompt;
-        }
-        self.turn = self.turn.saturating_add(1);
-        format!("title-{}", self.turn)
-    }
-
-    /// Whether the claim holds a turn that has not ended.
-    fn open(&self) -> bool {
-        matches!(self.ledger.state, TurnState::Working | TurnState::Blocked) && !self.ledger.turn_closed
-    }
-
-    /// One event of the ledger of the claim. The session is the launch that these
-    /// titles belong to, and no text of the title takes part.
-    fn event(name: &str, prompt: Option<String>, tool: Option<String>) -> HookEvent {
-        HookEvent {
-            session_id: TITLE_SESSION.to_owned(),
-            prompt_id: prompt,
-            hook_event_name: name.to_owned(),
-            reason: None,
-            source: None,
-            tool_name: None,
-            tool_use_id: tool,
-            background_tasks: None,
-        }
+    fn answers(self, ledger: &TurnLedger) -> bool {
+        ledger.heard_an_event()
     }
 }
-
-/// The session that the ledger of a claim names: the titles of one launch.
-const TITLE_SESSION: &str = "title";
 
 #[cfg(test)]
 mod tests;

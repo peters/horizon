@@ -1,8 +1,7 @@
 //! The matcher of a state title, and the claim that its states make.
-use super::{
-    MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_name, title_reports_state, title_state,
-};
+use super::{MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleState, title_name, title_reports_state, title_state};
 use crate::PanelKind;
+use crate::agent_work::TitleClaim;
 use crate::agent_work::TurnState;
 
 /// A Codex title with the spinner frame of the first moment of the day.
