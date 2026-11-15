@@ -35,11 +35,15 @@ class StandInRecorderTests(unittest.TestCase):
                 [sys.executable, '-B', str(Path(speech_standin_recorder.__file__)),
                  str(take), '--source', str(source), '--seconds', '30'])
             try:
-                for _ in range(400):
-                    if take.is_file():
-                        break
-                    process.poll()
+                # The recorder creates the take before it copies the bytes of the
+                # recording, so a file that exists holds no recording yet. The
+                # test waits for the bytes that it asserts, and the bound is its
+                # hang guard.
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
                     self.assertIsNone(process.poll(), 'the recorder ended before its signal')
+                    if take.is_file() and take.read_bytes() == PREPARED_WAV:
+                        break
                     time.sleep(0.01)
                 self.assertEqual(take.read_bytes(), PREPARED_WAV, 'the take holds the recording of the stand-in')
                 # The exact child of this test, and no group: the signal goes to its own pid.

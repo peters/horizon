@@ -123,14 +123,24 @@ class StandInTests(unittest.TestCase):
             self.assertEqual(finished.returncode, 0, finished.stderr)
             wait_for_calls(directory, 7)
             events = documents(directory)
-            self.assertEqual([event['hook_event_name'] for event in events],
-                             ['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
-                              'UserPromptSubmit', 'Interrupt', 'SessionEnd'])
-            ids = [event['prompt_id'] for event in events]
-            self.assertEqual(ids[0], ids[3], 'the stop closes the turn of the prompt')
-            self.assertEqual(ids[4], ids[5], 'the interrupt closes the second turn')
-            self.assertNotEqual(ids[0], ids[4], 'each busy span opens a turn of its own')
-            self.assertIsNone(ids[6], 'the end of the session names no turn')
+            # Each word fires its own call, and the report starts the entry as a
+            # detached process that it never joins, so the order of two calls of
+            # neighbouring words is not the order of the words. The events and the
+            # turn of each of them are the rule.
+            self.assertEqual(sorted(event['hook_event_name'] for event in events),
+                             sorted(['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
+                                     'UserPromptSubmit', 'Interrupt', 'SessionEnd']))
+            names = {}
+            for event in events:
+                names.setdefault(event['hook_event_name'], []).append(event['prompt_id'])
+            submits = names['UserPromptSubmit']
+            self.assertEqual(len(submits), 2, 'each busy span opens a turn of its own')
+            self.assertNotEqual(submits[0], submits[1], 'the two turns have their own ids')
+            self.assertEqual(names['Stop'], [submits[0]], 'the stop closes the turn that it opened')
+            self.assertEqual(names['Interrupt'], [submits[1]], 'the interrupt closes the second turn')
+            for name in ('PermissionRequest', 'PostToolUse'):
+                self.assertIn(names[name][0], submits, f'the {name} names the turn of its word')
+            self.assertEqual(names['SessionEnd'], [None], 'the end of the session names no turn')
             for call in calls(directory):
                 self.assertEqual(call['arguments'], ['--agent-work-hook'])
             for event in events:
@@ -204,9 +214,12 @@ class StandInTests(unittest.TestCase):
             self.assertEqual(finished.returncode, 0, finished.stderr)
             self.assertIn('no node on PATH', finished.stdout)
             wait_for_calls(directory, 5)
-            self.assertEqual([event['hook_event_name'] for event in documents(directory)],
-                             ['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
-                              'SessionEnd'])
+            # The report starts the entry of each event as a detached process, so
+            # the events of two words can arrive in the order of the processes and
+            # not in the order of the words.
+            self.assertEqual(sorted(event['hook_event_name'] for event in documents(directory)),
+                             sorted(['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
+                                     'SessionEnd']))
             for event in documents(directory):
                 self.assertNotIn('prompt', event)
                 self.assertTrue(os.path.isabs(event['cwd']))
@@ -230,9 +243,15 @@ class StandInTests(unittest.TestCase):
             self.assertEqual(finished.returncode, 0, finished.stderr)
             self.assertIn('the report runs under node', finished.stdout)
             wait_for_calls(directory, 5)
-            self.assertEqual([event['hook_event_name'] for event in documents(directory)],
-                             ['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
-                              'SessionEnd'])
+            events = documents(directory)
+            self.assertEqual(sorted(event['hook_event_name'] for event in events),
+                             sorted(['UserPromptSubmit', 'PermissionRequest', 'PostToolUse', 'Stop',
+                                     'SessionEnd']))
+            submits = [event['prompt_id'] for event in events
+                       if event['hook_event_name'] == 'UserPromptSubmit']
+            stops = [event['prompt_id'] for event in events if event['hook_event_name'] == 'Stop']
+            self.assertEqual(len(submits), 1, 'one busy span of this run')
+            self.assertEqual(stops, submits, 'the stop closes the turn that it opened')
             self.assertTrue(HARNESS.is_file(), 'the harness of the report is beside the stand-in')
 
 
