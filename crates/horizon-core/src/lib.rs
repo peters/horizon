@@ -21,6 +21,7 @@ pub mod folder_requests;
 mod horizon_home;
 mod layout;
 mod local_store;
+pub mod machine_watch;
 pub mod machines;
 pub mod named_secrets;
 pub mod notify;
