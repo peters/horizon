@@ -2,15 +2,15 @@
 //!
 //! The person's click is a second way into the panel that an agent's
 //! `open_terminal { machine }` opens, so it re-validates the record and checks
-//! the key on the coordination worker exactly as the agent path does. It differs
-//! in three ways: it lands in the active workspace, it takes keyboard focus, and
-//! its titlebar carries the Horizon mark of the machine section.
+//! the key on the coordination worker exactly as the agent path does, with
+//! [`HorizonApp::open_machine_terminal`]. It differs in one way before that call:
+//! a machine that this computer cannot open yet says why in the sidebar, instead
+//! of a login that could only reach a host that this computer never agreed to.
 
 use egui::Context;
-use horizon_core::{MachineError, MachineKeys};
+use horizon_core::MachineError;
 
 use super::HorizonApp;
-use super::machine_open::{connection_for, machine_panel_options, required_key};
 
 /// The titlebar mark of a terminal that the person opened from the machine row.
 pub(in crate::app) const OPENED_FROM_MACHINES: &str = "Machines";
@@ -20,83 +20,21 @@ impl HorizonApp {
     /// click on the machine row asks for it. A caller focuses the panel of a
     /// machine that is already open instead of calling this.
     pub(in crate::app) fn connect_machine(&mut self, name: &str, ctx: &Context) {
-        let Some(record) = self.machine_list.find(name).cloned() else {
-            self.machine_refused(
-                name,
-                &MachineError::Unavailable {
-                    reason: format!("This Horizon has no machine {name} anymore"),
-                },
-            );
-            return;
-        };
-        let terminal = match record.checked_terminal() {
-            Ok(terminal) => terminal,
-            Err(error) => {
-                self.machine_refused(name, &error);
-                return;
-            }
-        };
-        let Some(workspace) = self.board.active_workspace else {
-            self.set_sidebar_notice(format!("{name}: there is no workspace to open a terminal in"));
-            return;
-        };
-        let keys = MachineKeys::from_home(self.session_store.home());
-        let (name, title) = (name.to_owned(), record.title());
-        let key = self.machine_list.key(name.as_str()).map(str::to_owned);
+        let key = self.machine_list.key(name).map(str::to_owned);
         // A machine that only the server gave has no key on this computer, and a
         // login with the keys of the person would reach a host that this computer
-        // never agreed to. The server keeps the public lines in a later slice.
-        // The snapshot of the link is the one the worker published, so the click
-        // of a person waits for no disk.
+        // never agreed to. The snapshot of the link is the one the worker published,
+        // so the click of a person waits for no disk.
         let link = self.server_sync.as_ref().map(super::server_sync::ServerSync::snapshot);
-        let foreign = link.as_ref().is_some_and(|link| link.is_foreign(&name));
+        let foreign = link.as_ref().is_some_and(|link| link.is_foreign(name));
         let link_has_key = link
             .as_ref()
             .map(|link| key.as_deref().is_some_and(|key| link.has_machine_key(key)));
-        if let Some(notice) = missing_key_notice(&name, foreign, key.as_deref(), link_has_key) {
+        if let Some(notice) = missing_key_notice(name, foreign, key.as_deref(), link_has_key) {
             self.set_sidebar_notice(notice);
             return;
         }
-        let opening = ctx.clone();
-        let bound = key.clone();
-        self.browser_create_host.io.then(
-            move || required_key(&keys, key.as_deref()),
-            move |app, required| {
-                let key = match required {
-                    Some(Ok(key)) => key,
-                    Some(Err(error)) => {
-                        // A record that binds a key which this computer no longer
-                        // holds is a key that a person deleted here or on another
-                        // computer, and the only login left is the one of the
-                        // person's own keys.
-                        if error.code() == horizon_browser_control::manifest::block_keys::KEY_UNAVAILABLE
-                            && bound.is_some()
-                        {
-                            app.set_sidebar_notice(deleted_key_notice(&name));
-                        } else {
-                            app.machine_refused(&name, &error);
-                        }
-                        opening.request_repaint();
-                        return;
-                    }
-                    None => return,
-                };
-                let options = machine_panel_options(
-                    &name,
-                    &title,
-                    connection_for(&terminal, key.as_ref()),
-                    Some(OPENED_FROM_MACHINES.to_owned()),
-                    // A person pressed the row, so no agent panel opened it.
-                    None,
-                );
-                // The person pressed the row, so the reason of a terminal that
-                // did not start is theirs to read, not the log's only.
-                if let Err(error) = app.create_machine_panel(workspace, options, None) {
-                    app.set_sidebar_notice(format!("{name}: {error}"));
-                }
-                opening.request_repaint();
-            },
-        );
+        self.open_machine_terminal(name, None, ctx);
     }
 
     /// Says why a click on a machine opened nothing, in the sidebar.

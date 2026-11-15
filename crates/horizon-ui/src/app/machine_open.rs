@@ -5,22 +5,26 @@
 //! ([`horizon_core::Machine::checked_terminal`]), and it re-derives the key path
 //! from the key name with [`horizon_core::MachineKeys::require`]. The key check
 //! reads the file system, so it runs on the coordination worker and the panel
-//! opens on the frame that applies its answer. A click and an agent's
-//! `open_terminal { machine }` build the same panel, so a second click focuses
-//! the panel of the first instead of opening a second one.
+//! opens on the frame that applies its answer. A click, a press at the row of an
+//! agent and an agent's `open_terminal { machine }` build the same panel from
+//! [`HorizonApp::open_machine_terminal`] and [`HorizonApp::create_machine_panel`],
+//! so a second click focuses the panel of the first instead of opening a second
+//! one.
 
 use std::path::Path;
 
 use egui::Context;
 use horizon_browser_control::manifest::block;
+use horizon_core::machine_watch::MachineAgent;
 use horizon_core::{
     BlockPanelState, MachineError, MachineKeyRef, MachineKeys, PanelId, PanelKind, PanelOptions, SshConnection,
-    WorkspaceId,
+    WorkspaceId, WorkspacePlace,
 };
 
 use super::HorizonApp;
 use super::block_requests::BlockAnswer;
 use super::browser_requests::ActorPanel;
+use super::machine_click::{OPENED_FROM_MACHINES, deleted_key_notice};
 
 impl HorizonApp {
     /// Answers `open_terminal { machine }`: opens the terminal of the record in
@@ -118,6 +122,120 @@ impl HorizonApp {
                 writing.request_repaint();
             },
         );
+    }
+
+    /// Opens the terminal of the machine `name`: the terminal of its record in the
+    /// workspace that is active or, when `agent` names a session of that machine, the
+    /// terminal of that session in the workspace of the machine.
+    ///
+    /// The route passes the rule of an SSH terminal again and the key of the record is
+    /// read on the coordination worker. The panel takes the keyboard, and a press at the
+    /// row of an agent is the look of the person at that agent.
+    pub(in crate::app) fn open_machine_terminal(&mut self, name: &str, agent: Option<&MachineAgent>, ctx: &Context) {
+        let Some(record) = self.machine_list.find(name).cloned() else {
+            self.machine_refused(
+                name,
+                &MachineError::Unavailable {
+                    reason: format!("This Horizon has no machine {name} anymore"),
+                },
+            );
+            return;
+        };
+        let terminal = match record.checked_terminal() {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                self.machine_refused(name, &error);
+                return;
+            }
+        };
+        // A session name outside the rule of this build is no word of a command line, so
+        // its row says why it opens nothing and this call is never asked for it.
+        let command = match agent.map(MachineAgent::open_command) {
+            Some(Ok(command)) => Some(command),
+            Some(Err(_)) => return,
+            None => None,
+        };
+        let workspace = match (agent, self.board.active_workspace) {
+            (Some(_), _) => None,
+            (None, Some(workspace)) => Some(workspace),
+            (None, None) => {
+                self.set_sidebar_notice(format!("{name}: there is no workspace to open a terminal in"));
+                return;
+            }
+        };
+        let keys = MachineKeys::from_home(self.session_store.home());
+        let (name, title) = (
+            name.to_owned(),
+            agent.map_or_else(|| record.title(), |agent| agent.name.clone()),
+        );
+        let key = self.machine_list.key(&name).map(str::to_owned);
+        let bound = key.is_some();
+        let session = agent.cloned();
+        let opening = ctx.clone();
+        self.browser_create_host.io.then(
+            move || required_key(&keys, key.as_deref()),
+            move |app, required| {
+                let key = match required {
+                    Some(Ok(key)) => key,
+                    Some(Err(error))
+                        if bound && error.code() == horizon_browser_control::manifest::block_keys::KEY_UNAVAILABLE =>
+                    {
+                        // A record that binds a key which this computer no longer holds is
+                        // a key that a person deleted here or on another computer, and the
+                        // only login left is the one of the person's own keys.
+                        app.set_sidebar_notice(deleted_key_notice(&name));
+                        opening.request_repaint();
+                        return;
+                    }
+                    Some(Err(error)) => {
+                        app.machine_refused(&name, &error);
+                        opening.request_repaint();
+                        return;
+                    }
+                    None => return,
+                };
+                let workspace = workspace.unwrap_or_else(|| app.machine_workspace(&name, &opening));
+                let mut terminal = terminal;
+                // The session of the agent replaces the one of the record.
+                if let Some(command) = command {
+                    terminal.remote_command = Some(command);
+                }
+                let mut options = machine_panel_options(
+                    &name,
+                    &title,
+                    connection_for(&terminal, key.as_ref()),
+                    Some(OPENED_FROM_MACHINES.to_owned()),
+                    // A person pressed the row, so no agent panel opened it.
+                    None,
+                );
+                options.machine_session = session.as_ref().map(|agent| agent.session.clone());
+                // The person pressed the row, so the reason of a terminal that did not
+                // start is theirs to read, not the log's only.
+                if let Err(error) = app.create_machine_panel(workspace, options, None) {
+                    app.set_sidebar_notice(format!("{title}: {error}"));
+                }
+                if let Some(agent) = &session {
+                    app.mark_machine_agent_seen(agent);
+                }
+                opening.request_repaint();
+            },
+        );
+    }
+
+    /// The workspace of `machine`: the one that carries its name, or a new one whose
+    /// terminals run on that machine.
+    fn machine_workspace(&mut self, machine: &str, ctx: &Context) -> WorkspaceId {
+        let existing = self
+            .board
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.name == machine)
+            .map(|workspace| workspace.id);
+        let workspace = existing.unwrap_or_else(|| self.create_workspace_visible(ctx, machine));
+        self.board
+            .set_workspace_place(workspace, WorkspacePlace::Machine(machine.to_owned()));
+        self.mark_runtime_dirty();
+        workspace
     }
 
     /// Creates one terminal of a machine in `workspace` and returns its local id.
