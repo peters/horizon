@@ -104,6 +104,8 @@ pub(crate) struct CardView<'a> {
     /// The id of the button the person pressed in a card that Horizon owns. The
     /// host reads it after the pass and does what that button says.
     pub(crate) pressed: &'a mut Option<String>,
+    /// The person pressed the mark of a card that the view cuts.
+    pub(crate) reveal: &'a mut bool,
 }
 
 impl CardView<'_> {
@@ -141,6 +143,7 @@ pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
 }
 
 fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: bool) {
+    let end = ui.max_rect().max.y;
     let output = egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
@@ -154,22 +157,24 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
                     bottom: BODY_PAD_BOTTOM,
                 })
                 .show(ui, |ui| show_body(ui, view, enabled));
-            show_more_below(ui, view.interactive);
+            show_more_below(ui, view.interactive, end)
         });
     // The content size is what the body really needed, independent of the
     // room the card gave it: the host fits the card to it once per document.
     view.card.observe_content_height(output.content_size.y);
+    // A body that already showed its end asks for the cut foot of the card.
+    *view.reveal = output.inner;
 }
 
 /// Marks the lower edge of a body that holds more than it shows, in the body
-/// colour and in the words that say so, and takes one page of its scroll when
-/// the person presses the mark. It changes with the content and the offset only.
-fn show_more_below(ui: &mut Ui, live: bool) {
-    // The content Ui is clipped to the room that the body shows: its lower edge
-    // is where the person reads the body.
+/// colour and in the words that say so: a press takes one page of its scroll, and
+/// a body whose end `end` already shows asks for its cut card to come into view.
+fn show_more_below(ui: &mut Ui, live: bool, end: f32) -> bool {
+    // The content Ui is clipped to the room that the body shows: a card that the
+    // view cuts keeps the end of its body under the lower edge of the view.
     let body = ui.clip_rect();
-    if ui.min_rect().max.y <= body.max.y + 0.5 {
-        return;
+    if ui.min_rect().max.y.max(end) <= body.max.y + 0.5 {
+        return false;
     }
     let top = body.max.y - MORE_BELOW_HEIGHT;
     let painter = ui.painter_at(body);
@@ -194,6 +199,7 @@ fn show_more_below(ui: &mut Ui, live: bool) {
         // The scroll takes the page in this pass, so one repaint settles it.
         ui.scroll_with_delta(Vec2::new(0.0, -body.height()));
     }
+    response.clicked() && ui.min_rect().max.y <= end + 0.5
 }
 
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {

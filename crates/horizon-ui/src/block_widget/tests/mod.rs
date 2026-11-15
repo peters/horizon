@@ -105,6 +105,7 @@ impl CardFrames {
     ) -> egui::FullOutput {
         let mut opened_link = None;
         let mut pressed = None;
+        let mut reveal = false;
         let transform = egui::emath::TSTransform::from_scaling(zoom);
         self.ctx
             .run_ui(card_input(), |ui| {
@@ -125,6 +126,7 @@ impl CardFrames {
                         updated_at_millis: 1_790_883_960_000,
                         opened_link: &mut opened_link,
                         pressed: &mut pressed,
+                        reveal: &mut reveal,
                     },
                 );
             })
@@ -243,6 +245,7 @@ impl CardFrames {
     ) -> Pass {
         let mut opened_link = None;
         let mut pressed = None;
+        let mut reveal = false;
         let output = self
             .ctx
             .run_ui(input, |ui| {
@@ -262,6 +265,7 @@ impl CardFrames {
                         updated_at_millis: 1_790_883_960_000,
                         opened_link: &mut opened_link,
                         pressed: &mut pressed,
+                        reveal: &mut reveal,
                     },
                 );
             })

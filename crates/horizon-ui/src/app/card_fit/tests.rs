@@ -718,3 +718,73 @@ fn a_card_that_holds_more_than_it_shows_marks_the_lower_edge_of_its_body() {
         "the press showed the last button of the card: {last:?} in {body:?}"
     );
 }
+
+/// The top of the card of the person's picture: it rests 40 points under the top
+/// of the view, so its footer stays out of sight under the lower edge.
+const CARD_REST: f32 = 40.0;
+
+#[test]
+fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
+    let (_temp, ctx, mut app) = agent_app();
+    let (card, _) = card_of_first_document(&ctx, &mut app, PERSON_WINDOW);
+    let _ = grow_card(&ctx, &mut app, PERSON_WINDOW, &card, longer_than_the_bound_document());
+    let id = app.board.panel_id_by_local_id(&card).expect("the card");
+    let canvas = app.canvas_rect(&ctx);
+    let top = app.screen_to_canvas(canvas, canvas.min).y;
+    assert!(
+        app.board.move_panel(id, [20.0, top + CARD_REST]),
+        "the person leaves the foot of the card under the lower edge of the view"
+    );
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    let mark = drawn_text(&output, "More below");
+    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+    assert!(
+        app.canvas_rect(&ctx).contains_rect(mark),
+        "the mark stands in the view of the person: {mark:?}"
+    );
+    assert!(
+        body.contains_rect(mark),
+        "the mark stands at the lower edge of the body: {mark:?} in {body:?}"
+    );
+
+    // One press takes one page of the body. The mark stays, because the end of the
+    // body is still under the lower edge of the view, and the page is not nothing.
+    let before = drawn_text(&output, "Rented at");
+    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+    assert!(
+        drew_text(&output, "More below"),
+        "a page of the body is not the end of it"
+    );
+    let last = drawn_text(&output, "Delete");
+    assert!(
+        !app.canvas_rect(&ctx).contains_rect(last),
+        "the last button of the card stays under the lower edge of the view: {last:?} in {body:?}"
+    );
+    let after = drawn_text(&output, "Rented at");
+    assert!(
+        after.min.y < before.min.y - 100.0,
+        "the press scrolled the body: {after:?} from {before:?}"
+    );
+
+    // The next press finds the end of the body and brings the foot of the card into
+    // the view, which is where the last button of the card is.
+    let mark = drawn_text(&output, "More below");
+    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
+    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+    assert!(
+        !drew_text(&output, "More below"),
+        "nothing of the card hides under the lower edge of the view"
+    );
+    let last = drawn_text(&output, "Delete");
+    assert!(
+        app.canvas_rect(&ctx).contains_rect(last),
+        "the last button of the card stands in the view: {last:?}"
+    );
+    assert!(
+        body.contains_rect(last),
+        "the last button of the card stands in the body: {last:?} in {body:?}"
+    );
+}

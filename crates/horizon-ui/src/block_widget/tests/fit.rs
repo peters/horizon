@@ -88,6 +88,7 @@ fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (
     let body = card_body(panel);
     let mut opened_link = None;
     let mut pressed = None;
+    let mut reveal = false;
     let ctx = egui::Context::default();
     ctx.enable_accesskit();
     let output = ctx
@@ -114,6 +115,7 @@ fn draw_card(panel: Rect, document: &BlockDocument, card: &mut CardRuntime) -> (
                             updated_at_millis: 1_790_883_960_000,
                             opened_link: &mut opened_link,
                             pressed: &mut pressed,
+                            reveal: &mut reveal,
                         },
                     );
                 });

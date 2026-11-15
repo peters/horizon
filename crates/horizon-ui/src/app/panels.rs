@@ -176,6 +176,8 @@ struct PanelBodyContext<'a> {
     card_opened_link: &'a mut Option<String>,
     /// The id of the button a person pressed in a card that Horizon owns.
     card_pressed: &'a mut Option<String>,
+    /// The person pressed the mark of a card that the view cuts.
+    card_reveal: &'a mut bool,
     /// An agent panel of the card's owner is in its workspace.
     card_agent_present: bool,
     /// Horizon wrote the document of this card, so no agent reads its presses.
@@ -233,6 +235,7 @@ fn show_panel_body_contents(
                     updated_at_millis: block.updated_at_millis,
                     opened_link,
                     pressed: body_context.card_pressed,
+                    reveal: body_context.card_reveal,
                 },
             );
             false
@@ -430,6 +433,7 @@ impl HorizonApp {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let mut card_pressed = None;
+                        let mut card_reveal = false;
                         let claim_editor_focus = true;
                         let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let interactive = !self.host_dialog_open() && session_picker_panel(ui.ctx()).is_none();
@@ -478,6 +482,7 @@ impl HorizonApp {
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
                                     card_pressed: &mut card_pressed,
+                                    card_reveal: &mut card_reveal,
                                     card_agent_present,
                                     card_host_owned,
                                     card_owner_name,
@@ -499,6 +504,9 @@ impl HorizonApp {
                         }
                         if let Some(id) = card_pressed {
                             self.press_host_card_button(ui.ctx(), panel_id, &id);
+                        }
+                        if card_reveal {
+                            self.reveal_panel_visible(ui.ctx(), panel_id);
                         }
                         self.paint_speech_mark(&ui.painter_at(rect), panel_id, rect);
                     },
@@ -844,6 +852,7 @@ impl HorizonApp {
                         let mut notice_action = PanelNoticeAction::None;
                         let mut card_opened_link = None;
                         let mut card_pressed = None;
+                        let mut card_reveal = false;
                         let claim_editor_focus = snapshot.is_focused;
                         let take_keyboard_focus = self.keyboard_focus_requested(panel_id);
                         let card_agent_present = self.card_agent_present(panel_id);
@@ -898,6 +907,7 @@ impl HorizonApp {
                                     card_runtime,
                                     card_opened_link: &mut card_opened_link,
                                     card_pressed: &mut card_pressed,
+                                    card_reveal: &mut card_reveal,
                                     card_agent_present,
                                     card_host_owned,
                                     card_owner_name,
@@ -925,6 +935,9 @@ impl HorizonApp {
                         }
                         if let Some(id) = card_pressed {
                             self.press_host_card_button(ctx, panel_id, &id);
+                        }
+                        if card_reveal {
+                            self.reveal_panel_visible(ctx, panel_id);
                         }
                     },
                 );
