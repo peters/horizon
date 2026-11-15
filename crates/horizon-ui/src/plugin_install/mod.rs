@@ -13,6 +13,7 @@ mod grok_mcp;
 mod owned_skills;
 mod skill_files;
 mod user_skills;
+mod work_extension;
 mod work_hooks;
 use skill_files::{
     BLOCK_SKILL_FILES, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
@@ -454,6 +455,11 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     };
     if let Err(error) = work_hooks::install(&horizon_home.agent_work_plugin_dir_for_host(manifest::host_instance())) {
         tracing::warn!(%error, "work resume hooks unavailable");
+    }
+    if let Err(error) =
+        work_extension::install(&horizon_home.agent_work_extension_path_for_host(manifest::host_instance()))
+    {
+        tracing::warn!(%error, "the state report of a pi panel is unavailable");
     }
     let user_skill_dirs = user_skill_lease_dirs(user_home.as_deref(), codex_home.as_deref());
     let extra_cleanup = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());

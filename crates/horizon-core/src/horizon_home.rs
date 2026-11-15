@@ -73,6 +73,16 @@ impl HorizonHome {
         self.agent_plugin_host_dir(host_instance).join("work-resume")
     }
 
+    /// The state report that Horizon gives a pi panel at its launch, beside the
+    /// plugin folder of the work hooks. A launch appends it to the command line
+    /// only while it is a file, because pi does not start without the file.
+    #[must_use]
+    pub fn agent_work_extension_path_for_host(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_host_dir(host_instance)
+            .join("work-report")
+            .join("pi-report.mjs")
+    }
+
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
         self.root.join("config.json")

@@ -76,6 +76,7 @@ const ASSETS: &[&str] = &[
     "plugins/codex/skills/horizon-setup/references/workshop.md",
     "plugins/codex/skills/horizon-speech/SKILL.md",
     "plugins/codex/skills/horizon-worktree/SKILL.md",
+    "plugins/pi/horizon-report.mjs",
 ];
 
 fn main() -> io::Result<()> {

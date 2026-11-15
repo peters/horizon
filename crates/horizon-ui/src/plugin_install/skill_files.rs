@@ -453,3 +453,8 @@ pub(super) const SERVER_MOVE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
         "/assets/plugins/codex/skills/horizon-server-move/SKILL.md"
     )),
 }];
+
+/// The state report that Horizon gives a pi panel at its launch: one JavaScript
+/// module that pi loads with `-e` beside the extensions of the person.
+pub(super) const PI_REPORT_EXTENSION: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/assets/plugins/pi/horizon-report.mjs"));
