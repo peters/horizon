@@ -39,6 +39,7 @@ function, update this document in the same PR.
 | Board, workspaces, sessions | Yes | Yes |
 | Shell panels | Yes | Yes |
 | Agent panels | Yes | Yes |
+| Agent state from the program (note 10) | Yes | Yes |
 | Continue work after restart (note 6) | Yes | Yes |
 | Browser panels: Chromium and Firefox | Yes | Yes |
 | Browser panels: Safari | No (note 1) | Yes |
@@ -108,6 +109,19 @@ function, update this document in the same PR.
    release asset is a bare binary, so a downloaded copy shows a generic icon in
    the Dock until the person makes the bundle (note 3 under "Install and
    update").
+
+10. Claude Code and pi report the state of their turns to the sidebar on both
+    systems. Horizon gives a Claude launch the plugin folder of the work hooks
+    with `--plugin-dir`, and a pi launch one extension file of its own home with
+    `-e` (`crates/horizon-core/src/agent_work/lifecycle.rs`,
+    `crates/horizon-ui/src/plugin_install/work_extension.rs`). The pi file is
+    written at the start of Horizon, and a launch adds it to the command line
+    only while it is a file, because pi does not start at a path that names no
+    file. The file must be on the computer that runs pi: Horizon writes it into
+    the home of its own computer, so a pi panel of another computer would need its
+    own copy there, and Horizon does not place one today. Codex and the other
+    agents keep the rule of their screen on both systems: Horizon does not read
+    the private state sequence of Codex, because the terminal parser drops it.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux

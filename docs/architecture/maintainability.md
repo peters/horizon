@@ -286,8 +286,11 @@ when it names one of those kinds.
   restart decisions from explicit evidence. `store.rs` owns bounded, private,
   atomic metadata writes and one-shot handoff claims. The UI's internal
   `--agent-work-hook` command records events before initializing plugins or the
-  GUI; the dedicated opt-in plugin is leased with the owning host. These
-  primitives do not launch turns. `lifecycle.rs` attaches opted-in launch
+  GUI; the dedicated opt-in plugin is leased with the owning host, and the state
+  report that a pi launch loads with `-e` is written beside it by
+  `plugin_install::work_extension` from the module under `assets/plugins/pi`. A
+  launch names that file only while it is a file. These primitives do not launch
+  turns. `lifecycle.rs` attaches opted-in launch
   identities and prepares/seals handoffs; `repository.rs` fingerprints repository
   contents. Terminal shutdown workers own cancellation and PTY exit, keeping
   filesystem work outside the UI shutdown path.

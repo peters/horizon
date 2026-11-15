@@ -1,22 +1,37 @@
 ---
-applyTo: "crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
+applyTo: "crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
 ---
 
 # Trust boundary of the agent work ledger and of the attention state
 
-Horizon installs lifecycle hooks in the Claude panel that it launches on Linux or
-on macOS, with the default command of the preset or with a command of its own.
-Each hook event reaches Horizon as one line of JSON on the standard input of
-`<candidate> --agent-work-hook`, with the panel identity in the environment of
-the launch. The hook writes one **work ledger** per panel in the Horizon home.
-The sidebar reads that ledger to say which agent panel needs the person, which
-one finished while the person looked elsewhere, and which one works.
+Horizon gives an agent panel a way to report its state at the launch, on Linux
+and on macOS, with the default command of the preset or with a command of its
+own. Two programs use it:
+
+- A **Claude Code** launch receives the plugin folder of the work hooks with
+  `--plugin-dir`. Each hook event reaches Horizon as one line of JSON on the
+  standard input of `<candidate> --agent-work-hook`.
+- A **pi** launch receives one JavaScript module with `-e`, from the Horizon
+  home. The module sends the lifecycle events of its process to the same entry,
+  with one call for each event. It sends no text of the person and no text of the
+  model, it waits for no answer, and it does nothing at all when the five
+  `HORIZON_WORK_*` variables of the launch are absent.
+
+Each event writes one **work ledger** per panel in the Horizon home. The sidebar
+reads that ledger to say which agent panel needs the person, which one finished
+while the person looked elsewhere, and which one works.
+
+The module of a pi launch is a file that Horizon owns and writes
+(`crates/horizon-ui/src/plugin_install/work_extension.rs`), and a launch adds it
+to the command line only while it is a file: pi does not start at a path that
+names no file. A launch whose report is missing therefore keeps its command line
+and the rule of its screen.
 
 The **report** of a panel is separate from the **continuation** of its work. The
-report covers every Claude launch on Linux and macOS. The continuation covers
-Linux, the default command of the preset, and the per-panel policy `Continue work
-after restart`; only that path offers a resume, writes a handoff and seeds a
-prompt.
+report covers every Claude launch and every pi launch on Linux and macOS. The
+continuation covers Linux, a Claude panel, the default command of the preset, and
+the per-panel policy `Continue work after restart`; only that path offers a
+resume, writes a handoff and seeds a prompt.
 
 The module comment of
 [`agent_work/lifecycle.rs`](../../../crates/horizon-core/src/agent_work/lifecycle.rs),
@@ -38,7 +53,13 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   evidence instead of writing it.
 - **The session must match.** An event carries a session identity. A ledger
   accepts it only when the ledger holds that session or no session yet, so a
-  delayed event of an older session cannot reopen or close a later turn.
+  delayed event of an older session cannot reopen or close a later turn. A
+  Claude launch names its conversation to Horizon. A pi launch names none, so the
+  module of the launch names its own process, and that identity stays the same
+  while the process runs.
+- **The turn closes only its own turn.** An event that ends a turn names the turn
+  that opened it. A repeated end or a late end of an older turn cannot close a
+  turn that a later event opened, and it cannot open one either.
 - **An event of another panel changes nothing.** The panel and the launch token
   come from the environment that Horizon set at the launch, not from the event.
   One panel therefore cannot write the state of another panel.
@@ -71,15 +92,25 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   the arguments of a tool and the text of the transcript are not part of it. The
   attention state reads the record and nothing else. The wider set of panels
   stores no field that a continuing panel does not store.
+- **The module of a pi launch sends no text.** The module translates the events
+  of pi and sends the launch identity, a turn identity, an event name and, for a
+  dialog, its identity. It reads the environment of its own process and it
+  writes no file of pi. A test runs the module that the build embeds and refuses
+  any call that carries a text of the person or of the model.
+- **A report waits for nothing.** The module starts the entry of Horizon as a
+  detached process that it never joins, and it swallows every error of that
+  start. A missing entry, a missing variable and a refused event therefore
+  neither slow, print nor stop the agent.
 - **The owner is the launch, while the panel lives.** No process table is read to
   decide the report on either system. The token that Horizon registered at the
   launch is the owner: a new launch of the panel replaces it, and a closed panel
   removes its record from the home. The liveness probe of the session registry
   stays with the continuation of work, and it remains Linux.
-- **The state is not a claim about the work.** `Needs you` says that a hook
-  reported an open question or a failed turn. It does not say that the question is
-  still open in the agent, and it is not a permission. A permission that the
-  person grants in the agent panel is not granted to any other panel.
+- **The state is not a claim about the work.** `Needs you` says that an event
+  reported an open question, a failed turn or a dialog of an extension that waits
+  for the person. It does not say that the question is still open in the agent,
+  and it is not a permission. A permission that the person grants in the agent
+  panel is not granted to any other panel, and pi asks no permission at all.
 - **The screen is the rule until the first event, and the only rule after it.**
   An agent panel whose launch registered no ledger, or whose ledger has heard no
   event, takes its state from the working indicator of its own terminal. Two
@@ -109,9 +140,22 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   that arrives after that read shows on the next one.
 - **A failed turn and an open question look alike in the sidebar.** Both say
   `Needs you`. The record separates them, and the hover text does not.
-- **The statement of an adapter.** Only the Claude plugin ships with Horizon.
-  The stand-in of the fixture and an adapter that a person adds send their own
-  events, and Horizon cannot tell how such an adapter counted its work.
+- **The statement of an adapter.** The Claude plugin and the pi module are the
+  two adapters that ship with Horizon. The stand-in of the fixture and an adapter
+  that a person adds send their own events, and Horizon cannot tell how such an
+  adapter counted its work.
+- **A private sequence of a program in a terminal is not read.** A program in a
+  panel can write a sequence of its own into its terminal stream, such as the
+  state sequence that Codex writes. Horizon does not read it: the VT parser of
+  the terminal drops a private OSC sequence, and the terminal wrapper of this
+  workspace forbids the `unsafe` code that a read of those bytes would need. Such
+  a panel keeps the rule of its screen. A hostile program in a panel can claim a
+  state for its own panel through the report of its launch, and it cannot claim
+  one for another panel.
+- **A program that a person starts by hand reports nothing.** A shell panel in
+  which a person starts Claude Code, pi or another agent receives no argument and
+  no variable of a launch, so its panel keeps the rule of its screen. Horizon
+  cannot tell that the program of such a panel is an agent.
 - **A panel with no event keeps the weaker signal.** A wrapper that drops the
   arguments of Horizon gives its panel the state of the screen, which is the same
   state as a panel without hooks. Horizon cannot tell that the wrapper dropped

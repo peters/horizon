@@ -20,15 +20,17 @@ clears a finished turn, and that the states come back after a restart.
 ## 2. Applicability
 
 - Candidate: a Linux build that has the attention state of the agent panels, the
-  jump shortcut `Ctrl+Shift+G` and the fixture options `--attention-agent` and
-  `--attention-agent-command`.
+  jump shortcut `Ctrl+Shift+G` and the fixture options `--attention-agent`,
+  `--attention-agent-command` and `--attention-agent-kind`.
 - Platforms: Linux, because the fixture needs an isolated X11 desktop. The report
   of a panel runs on Linux and on macOS, and the automated tests of the candidate
   prove the macOS lane; a live macOS run needs a real agent and is not part of
   this procedure.
 - This procedure does not test: a real coding agent. The fixture runs a stand-in
   program that sends the lifecycle events itself, and a stand-in panel whose
-  preset has a command of its own.
+  preset has a command of its own. It does not test Codex: Horizon does not read
+  the private state sequence of Codex, so a Codex panel keeps the rule of its
+  screen like any other panel.
 
 ## 3. Safety
 
@@ -41,8 +43,9 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   [the fixture guide](../../../scripts/device-smoke/README.md).
 - A debug build of the candidate: `cargo build`.
 - A free TCP port for the loopback VNC server, which the fixture chooses itself.
-- Three new evidence folders below `/var/tmp`: `/var/tmp/attention-timer`,
-  `/var/tmp/attention-typed` and `/var/tmp/attention-command`.
+- Four new evidence folders below `/var/tmp`: `/var/tmp/attention-timer`,
+  `/var/tmp/attention-typed`, `/var/tmp/attention-pi` and
+  `/var/tmp/attention-command`.
 
 ## 5. Setup
 
@@ -109,7 +112,36 @@ the sidebar reads them.
    Result: the stand-in prints its line and sends nothing. Its row shows no state
    until the person types a word.
 
-5. For the tasks that use a command of its own, stop the fixture with `Ctrl-C`,
+5. For the tasks of the pi panel, stop the fixture with `Ctrl-C`, then start it
+   with the pi agent kind:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/attention-pi --native-view --attention-agent 0 \
+     --attention-agent-kind pi
+   ```
+
+   Result: the board shows one panel, **Pi attention stand-in**. Horizon gives
+   its launch the state report extension of this candidate with `-e`, and the
+   report runs under `node` when this computer has it. The stand-in prints:
+
+   ```
+   pi-attention-stand-in: the report runs under node; harness: 8 events of the report are subscribed; type start, ask, answer, stop, esc, quit
+   ```
+
+   A computer without `node` prints the line `no node on PATH, so this stand-in
+   sends the documents of the report` instead. The states of section 6.9 appear
+   in both cases, and only the line of the stand-in differs. A computer without
+   `node` does not prove the extension file itself; the test
+   `cargo test -p horizon-ui --test pi_report_extension` proves it where `node`
+   exists.
+
+   Result: the row of the panel shows no state until the person types a word,
+   because the screen of the stand-in prints no working indicator and the report
+   of its launch has sent no event yet. The panel shows no card of a
+   continuation, because a pi panel continues no work after a restart.
+
+6. For the tasks that use a command of its own, stop the fixture with `Ctrl-C`,
    then start it with the second shape of the panel entry:
 
    ```bash
@@ -129,7 +161,8 @@ the sidebar reads them.
 ## 6. Tasks
 
 Each task names the command that it uses: **timer** is the command of step 1 of
-section 5, and **typed** is the command of step 4.
+section 5, **typed** is the command of step 4, **command** is the command of
+step 6, and **pi** is the command of step 5.
 
 ### 6.1 A1 — The panel works, finishes and is done (timer)
 
@@ -251,6 +284,63 @@ section 5, and **typed** is the command of step 4.
 
    Result: the row is gone, and the state of the closed panel does not come back.
 
+### 6.9 A9 — A pi panel reports its turn (pi)
+
+1. Type `start` in the panel and press Enter.
+
+   Result: the panel row says **Working** within one second.
+
+2. Wait three seconds without a word.
+
+   Result: the row still says **Working**. The screen of the stand-in prints no
+   spinner, and the report of the launch holds the turn open. The pause is the
+   stale timer of a working indicator of a screen, and it does not end a turn
+   that the report holds.
+
+3. Type `ask`.
+
+   Result: the row says **Needs you**. It comes from a dialog of an extension,
+   which is the only exact wait that a pi panel has.
+
+4. Type `answer`.
+
+   Result: the row says **Working**.
+
+5. Type `after 3 stop`, then click the row of the other panel within three
+   seconds.
+
+   Result: at the end of the three seconds the row of the pi panel says
+   **Done**, and the workspace row counts it in its second line. The panel has no
+   focus at that moment, so the finished turn is unread. A look at the pi panel
+   clears the word.
+
+6. Type `start` in the pi panel, then `after 3 esc`, then click the row of the
+   other panel within three seconds.
+
+   Result: after `start` the row says **Working** again. At the end of the three
+   seconds it says **Done**, and it is the state of an interrupted turn: the
+   report names the aborted run of pi.
+
+7. Type `quit`.
+
+   Result: the stand-in ends, the panel shows that its program ended, and its row
+   shows no **Working** and no **Needs you**.
+
+### 6.10 A10 — A pi panel of a command of its own reports its state (pi)
+
+1. Stop the fixture with `Ctrl-C`, then start it again with `--attention-agent 0
+   --attention-agent-kind pi --attention-agent-command`.
+
+   Result: the board shows two pi panels. The second one is **Pi attention
+   stand-in with its own command**, and its row menu shows **Continue work after
+   restart** unticked. Both panels show no state until a word.
+
+2. Type `start` in the second panel, then `stop`.
+
+   Result: the row of that panel says **Working** and then **Done**. The state of
+   a pi panel that runs a command of its own therefore comes from the report, as
+   it does for a Claude panel.
+
 ## 7. Pass criteria
 
 - Each of the four states appears in the panel row and in the workspace badge as
@@ -264,6 +354,9 @@ section 5, and **typed** is the command of step 4.
 - A panel whose preset has a command of its own and whose continuation is off
   shows its state, shows no card of a continuation, and keeps the screen rule
   until its first event.
+- A pi panel reaches **Working**, **Needs you** and **Done** from the report of
+  its launch, keeps **Working** while its screen is still, shows **Done** after an
+  aborted run, and shows no claim after its program ended.
 - No step needs a login of an agent.
 
 ## 8. Cleanup

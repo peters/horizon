@@ -383,13 +383,33 @@ the lines off in Settings, General, Canvas.
 ## Read the state of an agent panel
 
 The sidebar says **Needs you**, **Done**, **Working** or **Background** for an
-agent panel. A Claude Code panel tells Horizon that state itself, on Linux and
-on macOS, with the default command or with a command of its own, and whether
-**Continue work after restart** is on or off. That setting works on both
-systems for a Claude panel: a clean suspension continues after the restart, and
-every other case asks first. Every other agent panel takes the state from the
-text on its screen, and it keeps that signal until its agent reports its first
-event.
+agent panel. Two agent programs tell Horizon that state themselves, on Linux and
+on macOS, with the default command or with a command of its own:
+
+- **Claude Code** reports its turns through the plugin folder that Horizon gives
+  it at the launch. **Continue work after restart** works on both systems for
+  such a panel: a clean suspension continues after the restart, and every other
+  case asks first.
+- **pi** reports its turns through one extension file that Horizon gives it at
+  the launch. The file is Horizon's own, it goes beside the extensions of the
+  person instead of replacing them, and it sends no text.
+
+Every other agent panel takes the state from the text on its screen, and it
+keeps that signal until its agent reports its first event. Codex is one of those
+panels: Horizon does not read the private state sequence that Codex writes to its
+terminal, because the terminal parser of Horizon drops it (see
+[the boundary of the work ledger](review/trust-boundaries/agent-work-ledger.md)).
+A panel in which you start an agent by hand in a shell keeps the screen rule too.
+
+The two reports have limits that their programs set:
+
+- A Claude turn can name the work that continues in the background, so
+  **Background** comes from a Claude panel. pi reports no such count.
+- pi asks you for no permission. Its **Needs you** means that a dialog of an
+  extension waits for you, or that the message ended with a question in its
+  text, which the screen still guesses.
+- A turn of pi that fails ends as a finished turn. Codex and the other agents
+  keep the rule of the screen.
 
 ## Open a browser panel
 
