@@ -33,6 +33,8 @@ pub(in crate::app) struct MachinesWatch {
     folded: BTreeSet<String>,
     /// The panel that had the keyboard focus at the last look at a machine terminal.
     pub(in crate::app) looked_at: Option<horizon_core::PanelId>,
+    /// The version of the snapshot of the watch at that look.
+    pub(in crate::app) looked_version: Option<u64>,
 }
 
 impl MachinesWatch {
@@ -56,13 +58,17 @@ impl HorizonApp {
     pub(in crate::app) fn refresh_machine_watch(&mut self, ctx: &Context) {
         self.watch_programs();
         self.reconcile_watch();
-        let next = self.machine_watch.watch.snapshot();
+        let mut next = self.machine_watch.watch.snapshot();
+        // The look of the person comes before a row or a notice of this frame reads the
+        // snapshot, so an end of a turn in the focused panel is never a `Done`.
+        if self.look_at_machine_session(&next) {
+            next = self.machine_watch.watch.snapshot();
+        }
         if let Some(previous) = self.machine_watch.snapshot.replace(std::sync::Arc::clone(&next))
             && previous.version != next.version
         {
             self.note_machine_changes(&previous, &next, ctx);
         }
-        self.look_at_machine_session();
     }
 
     /// Queues one desktop notification for each agent of a machine that changed to a state

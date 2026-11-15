@@ -8,7 +8,7 @@
 
 use egui::Context;
 use horizon_core::PanelId;
-use horizon_core::machine_watch::MachineAgent;
+use horizon_core::machine_watch::{MachineAgent, MachineWatchSnapshot};
 
 use super::HorizonApp;
 
@@ -34,35 +34,36 @@ impl HorizonApp {
             .map(|panel| panel.id)
     }
 
-    /// Records the person's look at one agent of a machine.
-    pub(in crate::app) fn mark_machine_agent_seen(&self, agent: &MachineAgent) {
+    /// Records the person's look at one agent of a machine. Answers whether a row of
+    /// the agent changed.
+    pub(in crate::app) fn mark_machine_agent_seen(&self, agent: &MachineAgent) -> bool {
         self.machine_watch
             .watch
-            .mark_seen(&agent.machine, &agent.session, &agent.pane);
+            .mark_seen(&agent.machine, &agent.session, &agent.pane)
     }
 
     /// Records the look of the person at the agents whose session the panel with the
-    /// keyboard focus shows, on the frame that the focus moves.
-    pub(in crate::app) fn look_at_machine_session(&mut self) {
+    /// keyboard focus shows, on the frame that the focus moves or that the snapshot of
+    /// the watch changes: a turn that ends in the panel that the person works in is no
+    /// `Done`. The rule is the one of a local panel, which is the focus of the board
+    /// alone. Answers whether a row changed.
+    pub(in crate::app) fn look_at_machine_session(&mut self, snapshot: &MachineWatchSnapshot) -> bool {
         let focused = self.board.focused;
-        if focused == self.machine_watch.looked_at {
-            return;
+        if focused == self.machine_watch.looked_at && Some(snapshot.version) == self.machine_watch.looked_version {
+            return false;
         }
         self.machine_watch.looked_at = focused;
+        self.machine_watch.looked_version = Some(snapshot.version);
         let Some(panel) = focused.and_then(|panel| self.board.panel(panel)) else {
-            return;
+            return false;
         };
         let (Some(machine), Some(session)) = (panel.machine(), panel.machine_session()) else {
-            return;
+            return false;
         };
-        let (machine, session) = (machine.to_owned(), session.to_owned());
-        let snapshot = self.machine_watch.watch.snapshot();
-        for agent in snapshot
-            .agents(&machine)
+        snapshot
+            .agents(machine)
             .iter()
             .filter(|agent| agent.session == session)
-        {
-            self.mark_machine_agent_seen(agent);
-        }
+            .fold(false, |changed, agent| changed | self.mark_machine_agent_seen(agent))
     }
 }

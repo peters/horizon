@@ -127,6 +127,66 @@ fn the_agents_of_a_machine_are_rows_under_its_row_through_a_turn_and_an_approval
 }
 
 #[test]
+fn a_turn_that_ends_in_the_panel_of_the_session_that_has_the_focus_is_no_done() {
+    let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
+        return;
+    };
+    server.send("hz-shop-1", "start");
+    wait_for(&ctx, &mut app, "the working turn of the agent", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::Working)
+    });
+    // No panel shows the session, so the person did not look at its turn.
+    server.send("hz-shop-1", "stop");
+    wait_for(&ctx, &mut app, "the finished turn that the person did not see", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::Done)
+    });
+    assert!(
+        sidebar_texts(&ctx, &mut app).iter().any(|text| text == "Done"),
+        "a turn that ends while no panel of its session has the focus is Done"
+    );
+
+    // The press of the row opens the terminal of the session and gives it the keyboard.
+    let agent = app
+        .machine_watch
+        .watch
+        .snapshot()
+        .agents("build-1")
+        .first()
+        .cloned()
+        .expect("the row of the agent");
+    app.open_machine_agent(&agent, &ctx);
+    wait_for(&ctx, &mut app, "the terminal of the agent", |app| {
+        app.board
+            .panels
+            .iter()
+            .any(|panel| panel.machine_session() == Some("hz-shop-1"))
+    });
+    wait_for(&ctx, &mut app, "the row of the agent that the person saw", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::Idle)
+    });
+
+    // The turn of the panel that has the focus ends while the focus stays there.
+    server.send("hz-shop-1", "start");
+    wait_for(&ctx, &mut app, "the second working turn", |app| {
+        agent_state(app, "hz-shop-1") == Some(AgentState::Working)
+    });
+    server.send("hz-shop-1", "stop");
+    wait_for(&ctx, &mut app, "the end of the turn of the focused panel", |app| {
+        agent_state(app, "hz-shop-1") != Some(AgentState::Working)
+    });
+    assert_ne!(
+        agent_state(&mut app, "hz-shop-1"),
+        Some(AgentState::Done),
+        "a turn that ends in the panel of the session that has the focus is no Done"
+    );
+    let texts = sidebar_texts(&ctx, &mut app);
+    assert!(
+        !texts.iter().any(|text| text == "Done"),
+        "the row of the agent shows no Done while its panel has the focus: {texts:?}"
+    );
+}
+
+#[test]
 fn a_frame_whose_snapshot_did_not_change_builds_no_row_again() {
     let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
         return;
