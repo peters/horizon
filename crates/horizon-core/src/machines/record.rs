@@ -213,10 +213,12 @@ pub fn machine_key_name(key: &str) -> Result<String, MachineError> {
 ///
 /// One builder serves a terminal of a machine and a terminal of a workspace that
 /// is placed on a machine, so no person sees the status line in one kind of
-/// panel and not in the other.
+/// panel and not in the other. The `-u` flag keeps the text of the session as it
+/// is: an `ssh` command of a machine often has no UTF-8 locale, and such a client
+/// of `tmux` prints `_` in the place of every character outside ASCII.
 #[must_use]
 pub fn session_command(session: &str) -> String {
-    format!("tmux new-session -A -s {session} \\; set-option status off")
+    format!("tmux -u new-session -A -s {session} \\; set-option status off")
 }
 
 /// Check one tmux session name.

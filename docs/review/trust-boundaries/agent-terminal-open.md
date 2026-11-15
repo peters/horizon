@@ -166,7 +166,7 @@ without the field.
   `open_terminal` apply and a violation is `invalid_ssh_route`.
 - **The tmux session is one word.** `session` is 1 to 40 characters of `A-Z`,
   `a-z`, `0-9`, `_` and `-`, and it cannot start with `-`. Horizon builds
-  `tmux new-session -A -s <session> \; set-option status off` itself from that
+  `tmux -u new-session -A -s <session> \; set-option status off` itself from that
   name, with the one builder that a terminal of a workspace on a machine also
   runs, so a space, a quote, a `;` or a leading `-` never reaches the command. A
   violation is `invalid_session_name`.
@@ -192,7 +192,7 @@ without the field.
   to the record, the three bounds of a machine terminal (`ConnectTimeout=10`,
   `ServerAliveInterval=5`, `ServerAliveCountMax=3`), `-p` when the record has a
   port, `-t` when it has a session, `user@host` as one argument and `tmux
-  new-session -A -s <session> \; set-option status off` last. A hand-edited
+  -u new-session -A -s <session> \; set-option status off` last. A hand-edited
   registry cannot add an ssh option, a proxy, an identity file or a second
   command.
 - **The list is private to the person.** It is one file of the Horizon home, in a
@@ -249,7 +249,7 @@ holds the only code that decides which command a panel of a place runs.
   session rule, so the name reaches `tmux` as one word. `n` is read from the
   sessions that the panels of the workspace saved, never from panel text.
 - **The remote command is Horizon's text, and it is not agent input.** A place
-  panel runs `tmux new-session -A -s <session> \; set-option status off`. That
+  panel runs `tmux -u new-session -A -s <session> \; set-option status off`. That
   line holds a backslash and a `;`, which the `remote_command` rule of
   `open_terminal` refuses on purpose, because an agent could then send a second
   command. The place builds the line in `place.rs` from its own pieces and never

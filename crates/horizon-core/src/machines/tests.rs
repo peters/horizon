@@ -375,7 +375,7 @@ fn the_argv_of_a_machine_with_a_session_attaches_that_tmux_session() {
     assert_eq!(args[args.len() - 2], "root@203.0.113.10");
     assert_eq!(
         args[args.len() - 1],
-        "tmux new-session -A -s work \\; set-option status off",
+        "tmux -u new-session -A -s work \\; set-option status off",
         "a click on a machine hides the tmux status line"
     );
     assert_eq!(machine.ssh_args(&key("build-1")).expect("argv"), args);
@@ -433,8 +433,8 @@ fn a_click_on_a_machine_and_a_terminal_of_a_place_build_one_command() {
     );
     let suffix = "\\; set-option status off";
     assert!(
-        placed.starts_with("tmux new-session -A -s hz-c8dfe3af-1 ")
-            && clicked.starts_with("tmux new-session -A -s work "),
+        placed.starts_with("tmux -u new-session -A -s hz-c8dfe3af-1 ")
+            && clicked.starts_with("tmux -u new-session -A -s work "),
         "both attach a session of their own: {placed} and {clicked}"
     );
     assert!(

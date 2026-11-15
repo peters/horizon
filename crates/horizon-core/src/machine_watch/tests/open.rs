@@ -26,7 +26,7 @@ fn an_agent_of_a_session_of_this_build_opens_that_session() {
         crate::machines::session_command("hz-abc123-1"),
         "the command is the one that a terminal of a machine builds"
     );
-    assert_eq!(command, "tmux new-session -A -s hz-abc123-1 \\; set-option status off");
+    assert_eq!(command, "tmux -u new-session -A -s hz-abc123-1 \\; set-option status off");
     assert!(agent("hz-abc123-1").can_open());
 }
 

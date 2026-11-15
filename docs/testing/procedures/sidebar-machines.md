@@ -112,7 +112,7 @@ a forgotten record leaves its key.
    `-o UserKnownHostsFile=<state>/data/home/.horizon/machine-keys/build-1.known_hosts`,
    `-o StrictHostKeyChecking=accept-new`, `-t`, `root@127.0.0.1` or the user of
    the record, the port `-p 2222` when the record has it, and
-   `tmux new-session -A -s build-1 \; set-option status off` last. That is the
+   `tmux -u new-session -A -s build-1 \; set-option status off` last. That is the
    same command that a terminal of a workspace on the machine runs.
 
 3. Click the row `build-1` again.

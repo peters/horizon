@@ -52,10 +52,16 @@ pub fn attaches_a_tmux_session(remote_command: Option<&str>) -> bool {
     let Some(command) = remote_command else {
         return false;
     };
-    let words: Vec<&str> = command.split_whitespace().collect();
+    // The flags of `tmux` come before its command, as `-u` does in the command that
+    // this build builds, and a flag names no command.
+    let words: Vec<&str> = command
+        .split_whitespace()
+        .skip(1)
+        .skip_while(|word| word.starts_with('-'))
+        .collect();
     match words.as_slice() {
-        ["tmux", "new" | "new-session", rest @ ..] => rest.contains(&"-A"),
-        ["tmux", "attach" | "attach-session" | "a", rest @ ..] => !rest.is_empty(),
+        ["new" | "new-session", rest @ ..] => rest.contains(&"-A"),
+        ["attach" | "attach-session" | "a", rest @ ..] => !rest.is_empty(),
         _ => false,
     }
 }
