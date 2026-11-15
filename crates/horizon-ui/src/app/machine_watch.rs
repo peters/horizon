@@ -3,12 +3,8 @@
 //! the machines whose agents the person folded.
 //!
 //! `MachineWatch::reconcile` starts and joins threads, so it runs on the coordination
-//! worker and never on a frame. A frame reads the snapshot, which is one `Arc` of the
-//! watch, and the rows of the machine section are built from it only when its version
-//! changed.
-//!
-//! The setting `machines.watch_agents` is part of what the readers are set up from, so
-//! the row of the Settings window stops every watch on the frame that applies it.
+//! worker and never on a frame. The setting `machines.watch_agents` is one of the values
+//! that the readers are set up from, so a row of the Settings window stops every watch.
 
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
@@ -22,6 +18,7 @@ use horizon_core::notify::Change;
 use super::HorizonApp;
 
 /// The watch of the machines of one window, and what a frame holds of it.
+#[derive(Default)]
 pub(in crate::app) struct MachinesWatch {
     /// The watch of this computer. A test sets a watch with a stand-in `ssh`, so a
     /// unit test starts no real connection.
@@ -39,19 +36,6 @@ pub(in crate::app) struct MachinesWatch {
 }
 
 impl MachinesWatch {
-    /// The watch of this window, before its first frame.
-    #[must_use]
-    pub(in crate::app) fn new() -> Self {
-        Self {
-            watch: Arc::new(MachineWatch::new()),
-            snapshot: None,
-            reconciled: None,
-            programs: None,
-            folded: BTreeSet::new(),
-            looked_at: None,
-        }
-    }
-
     /// Whether the person folded the agents of `machine`.
     pub(in crate::app) fn folded(&self, machine: &str) -> bool {
         self.folded.contains(machine)
@@ -65,18 +49,10 @@ impl MachinesWatch {
     }
 }
 
-impl Default for MachinesWatch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HorizonApp {
-    /// Sets the readers of the watch up when the machine list, a machine key, the
-    /// setting or the presets changed, and reads the snapshot of this frame.
-    ///
-    /// A frame costs two fingerprints, one lock of the shared snapshot and no wait: the
-    /// worker starts and joins the readers.
+    /// Sets the readers of the watch up when the machine list, a machine key, the setting
+    /// or the presets changed, and reads the snapshot of this frame: two fingerprints, one
+    /// lock of the shared snapshot and no wait.
     pub(in crate::app) fn refresh_machine_watch(&mut self, ctx: &Context) {
         self.watch_programs();
         self.reconcile_watch();
@@ -89,9 +65,9 @@ impl HorizonApp {
         self.look_at_machine_session();
     }
 
-    /// Queues one desktop notification for each agent of a machine that changed to a
-    /// state that waits for the person, while no window of Horizon has the focus: the
-    /// same text as a panel of this computer, with the name of its machine.
+    /// Queues one desktop notification for each agent of a machine that changed to a state
+    /// that waits for the person, while no window of Horizon has the focus: the text of a
+    /// panel of this computer, with the name of its machine.
     fn note_machine_changes(&mut self, previous: &MachineWatchSnapshot, next: &MachineWatchSnapshot, ctx: &Context) {
         let setting = self.template_config.features.notifications;
         if !setting.speaks() || super::notify::window_in_front(ctx) {
@@ -112,8 +88,7 @@ impl HorizonApp {
         }
     }
 
-    /// Gives the watch the programs of the agent kinds of the presets, once for one
-    /// set of presets.
+    /// Gives the watch the programs of the agent kinds of the presets, once for one set.
     fn watch_programs(&mut self) {
         let presets = &self.template_config.presets;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -122,17 +97,15 @@ impl HorizonApp {
             preset.command.hash(&mut hasher);
         }
         let fingerprint = hasher.finish();
-        if self.machine_watch.programs == Some(fingerprint) {
-            return;
+        if self.machine_watch.programs.replace(fingerprint) != Some(fingerprint) {
+            self.machine_watch
+                .watch
+                .set_programs(AgentPrograms::builtin().with_presets(presets));
         }
-        self.machine_watch.programs = Some(fingerprint);
-        self.machine_watch
-            .watch
-            .set_programs(AgentPrograms::builtin().with_presets(presets));
     }
 
-    /// Starts and stops the readers of the watch, on the coordination worker, once for
-    /// one machine list, one set of keys and one value of the setting.
+    /// Starts and stops the readers on the coordination worker, once for one machine list,
+    /// one set of keys and one value of the setting.
     fn reconcile_watch(&mut self) {
         let enabled = self.template_config.machines.watch_agents;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -146,10 +119,9 @@ impl HorizonApp {
             self.machine_list.key(&machine.name).hash(&mut hasher);
         }
         let fingerprint = hasher.finish();
-        if self.machine_watch.reconciled == Some(fingerprint) {
+        if self.machine_watch.reconciled.replace(fingerprint) == Some(fingerprint) {
             return;
         }
-        self.machine_watch.reconciled = Some(fingerprint);
         let watch = Arc::clone(&self.machine_watch.watch);
         let machines = self.machine_list.clone();
         let keys = MachineKeys::from_home(self.session_store.home());
@@ -159,29 +131,22 @@ impl HorizonApp {
     }
 }
 
-/// The agents that a report moved: every agent of `next` whose state differs from the
-/// one of the same agent in `previous`, or that `previous` did not name.
-///
-/// Both snapshots hold their machines in name order and the agents of a machine in
-/// session and pane order, so one walk reads the two of them.
-fn moved_agents<'a>(previous: &'a MachineWatchSnapshot, next: &'a MachineWatchSnapshot) -> Vec<&'a MachineAgent> {
-    let mut before = previous.machines.iter().flat_map(|machine| &machine.agents).peekable();
-    let mut moved = Vec::new();
-    for agent in next.machines.iter().flat_map(|machine| &machine.agents) {
-        while before.peek().is_some_and(|held| key(held) < key(agent)) {
-            before.next();
-        }
-        let held = before.peek().filter(|held| key(held) == key(agent));
-        if held.map(|held| held.state) != Some(agent.state) {
-            moved.push(agent);
-        }
-    }
-    moved
-}
-
-/// What tells one agent of a snapshot from another.
-fn key(agent: &MachineAgent) -> (&str, &str, &str) {
-    (agent.machine.as_str(), agent.session.as_str(), agent.pane.as_str())
+/// The agents of `next` whose state is not the one that `previous` gave the same agent,
+/// or that `previous` did not hold at all.
+fn moved_agents<'a>(
+    previous: &'a MachineWatchSnapshot,
+    next: &'a MachineWatchSnapshot,
+) -> impl Iterator<Item = &'a MachineAgent> + 'a {
+    next.machines
+        .iter()
+        .flat_map(|machine| &machine.agents)
+        .filter(|agent| {
+            previous
+                .agents(&agent.machine)
+                .iter()
+                .find(|held| held.session == agent.session && held.pane == agent.pane)
+                .is_none_or(|held| held.state != agent.state)
+        })
 }
 
 #[cfg(test)]
