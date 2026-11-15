@@ -126,6 +126,12 @@ The title rule of the kind answers first, and the working line of the last rows
 of the screen answers after it. Only the Codex kind has a title rule in this
 build, so only a Codex pane reports **Needs you** in this round.
 
+The `tmux` of a machine decides whether the title of a pane keeps a character
+outside ASCII. `tmux` 3.6 keeps the braille frame of a Codex title and `tmux` 3.8
+replaces it by `_`, as the macOS test computer of this project does. A Codex pane
+of such a machine reports **Working** from its screen and never **Needs you**,
+because a title that names no state is no claim.
+
 The identity of a row is its session and its pane id, which `tmux` keeps for the
 life of the pane. A pane that a report does not name drops its row.
 

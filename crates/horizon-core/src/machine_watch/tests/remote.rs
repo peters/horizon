@@ -165,6 +165,10 @@ fn a_still_machine_sends_one_report_and_a_few_heartbeat_lines() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the tmux of this system replaces a character outside ASCII in the title of a pane by               '_', so the title of the stand-in holds no spinner frame; the screen rule answers there"
+)]
 fn a_codex_stand_in_is_a_pane_whose_title_names_its_state() {
     let Some(server) = Server::new() else {
         return;

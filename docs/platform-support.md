@@ -164,7 +164,14 @@ POSIX shell on the machine.
    A small appliance with a `BusyBox` `ps` has no `-t`, so such a machine names
    the interpreter alone and an agent behind one keeps no row. The text of the
    watch still runs there.
-3. The text is POSIX shell and its tests run it under each shell that the test
+3. The `tmux` of the machine decides whether the title of a pane keeps a
+   character outside ASCII. On this project's Linux test computer, `tmux` 3.6
+   keeps the braille frame of a Codex title, and the title rule answers. On the
+   project's macOS test computer, `tmux` 3.8 replaces that frame by `_`, so a
+   Codex pane of such a machine reports Working and no Needs you: its screen
+   keeps the working line, and a title that holds no state is no claim. The
+   version of `tmux` decides, not the system.
+4. The text is POSIX shell and its tests run it under each shell that the test
    computer has. macOS has `sh` and `bash` by default and no `dash` and no
    `BusyBox`, so those two lanes run on Linux only. This computer needs the
    OpenSSH client `ssh` in its `PATH`.
