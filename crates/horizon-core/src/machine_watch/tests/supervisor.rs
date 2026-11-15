@@ -224,7 +224,6 @@ fn a_record_that_breaks_the_rule_of_a_terminal_is_refused_and_starts_no_child() 
         panic!("the refusal of the record: {link:?}");
     };
     assert_eq!(reason, WatchRefusal::Record, "the record is no route of a terminal");
-    assert_eq!(reason.code(), "machine_watch_record");
 }
 
 #[test]
@@ -317,7 +316,6 @@ fn a_refused_host_key_is_a_typed_refusal_of_the_snapshot() {
         panic!("the refusal of the host key: {link:?}");
     };
     assert_eq!(reason, WatchRefusal::HostKey);
-    assert_eq!(reason.code(), "machine_watch_host_key");
 }
 
 #[test]

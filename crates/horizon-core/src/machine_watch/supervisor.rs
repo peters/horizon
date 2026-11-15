@@ -1,18 +1,15 @@
-//! The supervisor of the watch: one reader per machine of the list, started when
-//! the machine is in the list and stopped when it leaves it or when the setting
-//! goes off.
+//! The supervisor of the watch: one reader per machine of the list, started when the
+//! machine is in the list and stopped when it leaves it or when the setting goes off.
 //!
-//! The supervisor holds the `ssh` child of every reader, so a stop kills the child
-//! by the process id that it holds and joins the reader within its bound. Nothing of
-//! a stopped watch stays: the machine leaves the snapshot with its rows.
+//! The supervisor holds the `ssh` child of every reader, so a stop kills the child by
+//! the process id that it holds and joins the reader within its bound. A stopped
+//! watch leaves nothing: the machine leaves the snapshot with its rows. This computer
+//! watches at most [`MAX_WATCHED_MACHINES`] machines, and a machine that it stops for
+//! the setting keeps its row with the link [`WatchLink::Off`].
 //!
-//! This computer watches at most [`MAX_WATCHED_MACHINES`] machines at one time. A
-//! later machine of the list is not watched, and its link says that this computer
-//! watches no more machines. A watch that this computer stops for the setting keeps
-//! its machine in the snapshot with the link [`WatchLink::Off`].
-//!
-//! The supervisor starts and joins threads, so its calls [`crate::ui_thread::blocking`]
-//! mark them: a frame reads [`MachineWatch::snapshot`] and never reconciles.
+//! The supervisor starts and joins threads, so its calls mark them with
+//! [`crate::ui_thread::blocking`]: a frame reads [`MachineWatch::snapshot`] and never
+//! reconciles.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Child;
@@ -92,14 +89,11 @@ impl MachineWatch {
         self.shared.mark_seen(machine, session, pane)
     }
 
-    /// Makes the readers of the watch match the machine list of this computer.
-    ///
-    /// A machine that the list holds and the limit of this watch allows gets one
-    /// reader, a machine whose record changed gets a new one, and every other reader
-    /// stops. A machine that the list no longer holds leaves the snapshot, and a
-    /// machine beyond the limit of this watch says so. `enabled` is the setting
-    /// `machines.watch_agents`: with it off, every reader stops and every machine of
-    /// the list says that the watch of this computer is off.
+    /// Makes the readers of the watch match the machine list of this computer: a machine
+    /// that the list holds and the limit allows gets one reader, a machine whose record
+    /// changed gets a new one, and every other reader stops. `enabled` is the setting
+    /// `machines.watch_agents`: with it off, every reader stops and every machine of the
+    /// list says that the watch of this computer is off.
     pub fn reconcile(&self, machines: &Machines, keys: &MachineKeys, enabled: bool) {
         crate::ui_thread::blocking("the watch of the machines starts and stops its readers");
         let mut readers = self.lock();
@@ -120,13 +114,11 @@ impl MachineWatch {
                 Ok(target) => wanted.push(target),
                 Err(error) => {
                     unwanted.push(record.name.clone());
-                    self.shared.set_link(
-                        &record.name,
-                        WatchLink::Refused {
-                            reason: WatchRefusal::Record,
-                            since_millis: unix_millis(),
-                        },
-                    );
+                    let link = WatchLink::Refused {
+                        reason: WatchRefusal::Record,
+                        since_millis: unix_millis(),
+                    };
+                    self.shared.set_link(&record.name, link);
                     tracing::warn!(machine = %record.name, %error, "the record of a machine cannot be watched");
                 }
             }
@@ -149,10 +141,9 @@ impl MachineWatch {
             if restart && let Some(watch) = readers.remove(&target.machine) {
                 stop_watch(&target.machine, watch);
             }
-            if readers.contains_key(&target.machine) {
-                continue;
+            if !readers.contains_key(&target.machine) {
+                self.start(&mut readers, target);
             }
-            self.start(&mut readers, target);
         }
     }
 
@@ -227,8 +218,8 @@ impl Drop for MachineWatch {
     }
 }
 
-/// Stops one reader: it asks the reader to end, kills its `ssh` child when the
-/// reader does not end in [`STOP_GRACE`], and joins it within [`STOP_TIMEOUT`].
+/// Stops one reader: it asks the reader to end, kills its `ssh` child when the reader
+/// does not end in [`STOP_GRACE`], and joins it within [`STOP_TIMEOUT`].
 fn stop_watch(machine: &str, watch: Watch) {
     let _ = watch.stop.send(());
     if !wait_for_reader(&watch.reader, STOP_GRACE)

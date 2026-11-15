@@ -1,16 +1,13 @@
 //! The snapshot of the watch that a frame reads, and the shared state that the
 //! readers of the machines write.
 //!
-//! A frame reads [`Shared::snapshot`], which hands out one [`std::sync::Arc`] of a
-//! value that holds every machine, its link and its agents. The value changes only
-//! when a row changed, so a frame that sees the same version does nothing and asks
-//! for no repaint. The lock of the shared state is held for the microseconds of a
-//! copy of that value and never across a read of a file, a wait or a process, so a
-//! frame may take it.
+//! [`Shared::snapshot`] hands out one [`std::sync::Arc`] of a value that holds every
+//! machine, its link and its agents, and that value changes only when a row changed.
+//! The lock is held for the microseconds of a copy and never across a read of a file,
+//! a wait or a process, so a frame may take it.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::agents::{AgentPrograms, observations};
 use super::report::Report;
@@ -20,9 +17,7 @@ use super::state::{AgentState, MachineAgent, MachineModel};
 /// reports as the moment that it was lost.
 #[must_use]
 pub fn unix_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+    u64::try_from(crate::current_unix_millis()).unwrap_or(0)
 }
 
 /// Why `ssh` refused a machine.
@@ -39,48 +34,32 @@ pub enum WatchRefusal {
 }
 
 impl WatchRefusal {
-    /// The stable code of this refusal, for a log line and for a later field.
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::HostKey => "machine_watch_host_key",
-            Self::Key => "machine_watch_key",
-            Self::Record => "machine_watch_record",
-            Self::Other => "machine_watch_other",
-        }
-    }
-
-    /// The words of the words that this refusal names, as `ssh` writes them.
-    #[must_use]
-    pub const fn words(self) -> &'static str {
-        match self {
-            Self::HostKey => "host key",
-            Self::Key => "key",
-            Self::Record => "record",
-            Self::Other => "refused",
-        }
-    }
-
     /// The refusal that the words of `ssh` name, or [`Self::Other`].
     #[must_use]
     pub fn of_ssh(stderr: &str) -> Self {
         let lower = stderr.to_ascii_lowercase();
-        if lower.contains("host key verification failed")
-            || lower.contains("host key is known")
-            || lower.contains("remote host identification has changed")
-        {
+        if HOST_KEY_WORDS.iter().any(|words| lower.contains(words)) {
             return Self::HostKey;
         }
-        if lower.contains("permission denied")
-            || lower.contains("no such identity")
-            || lower.contains("load key")
-            || lower.contains("too many authentication failures")
-        {
+        if KEY_WORDS.iter().any(|words| lower.contains(words)) {
             return Self::Key;
         }
         Self::Other
     }
 }
+
+/// The words of `ssh` that name a refused host key, and a refused key.
+const HOST_KEY_WORDS: [&str; 3] = [
+    "host key verification failed",
+    "host key is known",
+    "remote host identification has changed",
+];
+const KEY_WORDS: [&str; 4] = [
+    "permission denied",
+    "no such identity",
+    "load key",
+    "too many authentication failures",
+];
 
 /// What this computer knows about its link to one machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,7 +93,7 @@ pub enum WatchLink {
 }
 
 impl WatchLink {
-    /// Whether the link of this machine is up.
+    /// Whether the link of this machine is up, so its rows are of the last report.
     #[must_use]
     pub const fn watching(self) -> bool {
         matches!(self, Self::Watching | Self::NoTmux | Self::NoServer)
@@ -132,20 +111,10 @@ pub struct MachineWatchState {
     pub agents: Vec<MachineAgent>,
 }
 
-impl MachineWatchState {
-    /// The heaviest state of the agents of this machine, or [`AgentState::Idle`]
-    /// when no agent is there.
-    #[must_use]
-    pub fn heaviest(&self) -> AgentState {
-        self.agents.iter().map(|agent| agent.state).max().unwrap_or_default()
-    }
-}
-
 /// The agents of every watched machine at one moment.
 ///
-/// The version changes only when a row, a link or a machine changed, so a frame
-/// compares the version that it holds with [`Self::version`] and does nothing when
-/// they are equal.
+/// The version rises only when a row, a link or a machine changed, so a frame
+/// compares it with [`Self::version`] and does nothing when they are equal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MachineWatchSnapshot {
     /// The version of this snapshot, which rises with every change.
@@ -173,17 +142,14 @@ impl MachineWatchSnapshot {
 
     /// The totals of the snapshot, from its machines.
     fn totals(machines: &[MachineWatchState]) -> (usize, usize) {
-        let agents = machines.iter().flat_map(|machine| &machine.agents);
-        let mut needs_you = 0;
-        let mut done = 0;
-        for agent in agents {
-            match agent.state {
-                AgentState::NeedsYou => needs_you += 1,
-                AgentState::Done => done += 1,
-                AgentState::Idle | AgentState::Working => {}
-            }
-        }
-        (needs_you, done)
+        machines
+            .iter()
+            .flat_map(|machine| &machine.agents)
+            .fold((0, 0), |(needs_you, done), agent| match agent.state {
+                AgentState::NeedsYou => (needs_you + 1, done),
+                AgentState::Done => (needs_you, done + 1),
+                AgentState::Idle | AgentState::Working => (needs_you, done),
+            })
     }
 }
 
@@ -208,42 +174,33 @@ impl Shared {
         }
     }
 
-    /// The snapshot of this moment. A frame holds the [`std::sync::Arc`] and reads
-    /// it without the lock.
+    /// The snapshot of this moment, held and read without the lock.
     #[must_use]
     pub fn snapshot(&self) -> Arc<MachineWatchSnapshot> {
         Arc::clone(&self.lock().snapshot)
     }
 
-    /// This watch with the programs of the agent kinds of `programs`, which a
-    /// preset of the settings may add to.
+    /// The programs of the agent kinds of this watch, with the presets of `programs`.
     pub fn set_programs(&self, programs: AgentPrograms) {
         let mut inner = self.lock();
-        if inner.programs == programs {
-            return;
+        if inner.programs != programs {
+            inner.programs = programs;
+            inner.publish();
         }
-        inner.programs = programs;
-        inner.publish();
-    }
-
-    /// the programs of the agent kinds of this watch.
-    fn programs(&self) -> AgentPrograms {
-        self.lock().programs.clone()
     }
 
     /// Records that the link of `machine` is `link`.
     pub fn set_link(&self, machine: &str, link: WatchLink) {
         let mut inner = self.lock();
-        if inner.links.get(machine) == Some(&link) {
-            return;
+        if inner.links.get(machine) != Some(&link) {
+            inner.link(machine, link);
+            inner.publish();
         }
-        inner.link(machine, link);
-        inner.publish();
     }
 
     /// Applies one report of `machine`: its link and its agents.
     pub fn apply_report(&self, machine: &str, report: &Report) {
-        let programs = self.programs();
+        let programs = self.lock().programs.clone();
         let observations = observations(report, &programs);
         let link = match report.note {
             Some(super::MachineNote::NoTmux) => WatchLink::NoTmux,
@@ -261,7 +218,7 @@ impl Shared {
     }
 
     /// Records that the person looked at the agent of `session` and `pane` of
-    /// `machine`. Answers whether any row changed.
+    /// `machine`.
     pub fn mark_seen(&self, machine: &str, session: &str, pane: &str) -> bool {
         let mut inner = self.lock();
         let changed = inner
@@ -277,15 +234,13 @@ impl Shared {
     /// Forgets `machine`: its link and its rows leave the snapshot.
     pub fn remove(&self, machine: &str) {
         let mut inner = self.lock();
-        let removed = inner.links.remove(machine).is_some();
-        let cleared = inner.models.remove(machine).is_some();
-        if removed || cleared {
+        if inner.links.remove(machine).is_some() | inner.models.remove(machine).is_some() {
             inner.publish();
         }
     }
 
-    /// Records that the machine answered with its heartbeat, which a link that has
-    /// not reported yet reads as watching.
+    /// Records that the machine answered with its heartbeat, which a link with no
+    /// report yet reads as watching.
     pub fn answered(&self, machine: &str) {
         let mut inner = self.lock();
         if inner.links.get(machine) != Some(&WatchLink::Connecting) {
@@ -317,13 +272,13 @@ struct Inner {
 }
 
 impl Inner {
+    /// Records the link of `machine`, and drops its rows when the link is down: a
+    /// machine that reports nothing would show a claim of an older report.
     fn link(&mut self, machine: &str, link: WatchLink) {
         self.links.insert(machine.to_owned(), link);
         if !link.watching()
             && let Some(model) = self.models.get_mut(machine)
         {
-            // A machine whose link is down reports nothing, so its rows would be a
-            // claim of an older report. They leave with the link.
             model.clear();
         }
     }

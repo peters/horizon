@@ -1,23 +1,18 @@
-//! The text that one watch runs on its machine, and the whole `ssh` command line
-//! of that watch.
+//! The text that one watch runs on its machine, and the whole `ssh` command line of
+//! that watch.
 //!
-//! [`REMOTE_TEXT`] is one constant of this build. It is POSIX shell that runs on
-//! `dash`, on `bash` and on the shell of `BusyBox`, and it uses `tmux`, `ps` and the
-//! built-ins of that shell. No value of a machine record and no value of a report takes
-//! part in it: the route and the key are arguments of `ssh`, and the text itself
-//! names the two programs that it runs.
+//! [`REMOTE_TEXT`] is one constant of this build: POSIX shell that runs on `dash`, on
+//! `bash` and on the shell of `BusyBox`, and that uses `tmux`, `ps` and the built-ins
+//! of that shell. No value of a record and no value of a report takes part in it.
 //!
-//! The text prints one report and then one line per interval: a still machine
-//! prints one short heartbeat line instead of its report, so a machine that runs
-//! no agent costs a few bytes per interval. Each field of a report is one line of
-//! words: the text replaces every run of spaces, tabs and newlines of a field by
-//! one space, so no value that a program or a person put into a session name, a
-//! folder name, a title or a program name can break a line. The format and its
-//! bounds are in [`super::report`].
+//! The text prints one report and then one line per interval: a still machine prints
+//! one short heartbeat line instead of its report. Each field of a report is one line
+//! of words, so no value that a program or a person put into a session name, a folder
+//! name, a title or a program name can break a line. The format and its bounds are in
+//! [`super::report`].
 //!
-//! The variable `HORIZON_MACHINE_WATCH_TMUX_SOCKET` is unset in real use. A test
-//! of this module sets it, so the same text talks to a private `tmux` server on
-//! its own socket instead of the server of the person.
+//! `HORIZON_MACHINE_WATCH_TMUX_SOCKET` is unset in real use; a test sets it, so the
+//! same text talks to a private `tmux` server instead of the server of the person.
 
 use crate::machines::{MachineError, Machines};
 use crate::ssh::{MachineKeys, SshConnection};
@@ -98,14 +93,13 @@ while :; do
 done
 "#;
 
-/// One machine that the watch reaches: its name and the whole `ssh` command line
-/// of the watch of that machine.
+/// One machine that the watch reaches: its name and the whole `ssh` command line of
+/// the watch of that machine.
 ///
 /// The command line holds what the login of a terminal of that machine holds: the
 /// route of the record, the connect bound and the keepalives of a machine terminal,
-/// and, when the record binds a machine key, that key file, `IdentitiesOnly`,
-/// `IdentityAgent=none` and the known-hosts file of that key. It adds
-/// `BatchMode=yes`, so an attempt that the machine would answer with a prompt fails
+/// and, when the record binds a machine key, that key and its known-hosts file. It
+/// adds `BatchMode=yes`, so a machine that asks for a password fails the attempt
 /// instead, and it asks for no terminal, so it holds no `-t`. The last argument is
 /// [`REMOTE_TEXT`].
 #[derive(Clone, Debug, PartialEq, Eq)]

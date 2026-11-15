@@ -68,10 +68,9 @@ fn the_totals_of_the_snapshot_count_the_agents_that_wait_for_the_person() {
     assert_eq!(snapshot.done, 1, "a turn that ended unseen is Done");
     assert_eq!(snapshot.needs_you, 0);
     assert_eq!(
-        snapshot
-            .machine("build-1")
-            .map(crate::machine_watch::MachineWatchState::heaviest),
-        Some(AgentState::Done)
+        snapshot.agents("build-1").iter().map(|agent| agent.state).max(),
+        Some(AgentState::Done),
+        "the heaviest state of the machine is Done"
     );
     assert!(shared.mark_seen("build-1", "hz-1", "%0"), "the look clears the row");
     let snapshot = shared.snapshot();
@@ -173,10 +172,9 @@ fn a_machine_that_leaves_and_the_limit_of_the_watch_are_links_of_the_snapshot() 
 }
 
 #[test]
-fn a_refusal_names_its_reason_and_its_code() {
+fn a_refusal_names_its_reason() {
     let refused = WatchRefusal::of_ssh("Warning: Permanently added 'x' to the list.\nHost key verification failed.\n");
     assert_eq!(refused, WatchRefusal::HostKey);
-    assert_eq!(refused.code(), "machine_watch_host_key");
     assert_eq!(
         WatchRefusal::of_ssh("person@machine: Permission denied (publickey)."),
         WatchRefusal::Key
@@ -190,8 +188,6 @@ fn a_refusal_names_its_reason_and_its_code() {
         WatchRefusal::Other
     );
     assert_eq!(WatchRefusal::of_ssh(""), WatchRefusal::Other);
-    assert_eq!(WatchRefusal::Record.code(), "machine_watch_record");
-    assert_eq!(WatchRefusal::Other.code(), "machine_watch_other");
 }
 
 #[test]

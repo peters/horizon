@@ -1,16 +1,15 @@
-//! The reader of one watch: one `ssh` child, the lines of its report, and the rule
-//! of a lost link.
+//! The reader of one watch: one `ssh` child, the lines of its report, and the rule of
+//! a lost link.
 //!
 //! The reader runs on its own worker thread. It starts the `ssh` child with the
-//! command line of [`super::WatchTarget`], reads its standard output line by line
-//! with the bound of one line, and hands each whole report to
-//! [`Shared::apply_report`]. The words of `ssh` on its standard error are read to
-//! their bound for one classification and then dropped.
+//! command line of [`super::WatchTarget`], reads its standard output line by line with
+//! the bound of one line, and hands each whole report to [`Shared::apply_report`]. The
+//! words of `ssh` on its standard error are read to their bound for one classification
+//! and then dropped.
 //!
-//! An end of the child is a lost link: the reader reports it with the moment, waits
-//! the delay of [`crate::place::after_connection_loss`], and starts the next
-//! attempt. A stop of the supervisor kills the child, so the reader ends within its
-//! bound and nothing is left behind.
+//! An end of the child is a lost link: the reader waits the delay of
+//! [`crate::place::after_connection_loss`] and starts the next attempt. A stop of the
+//! supervisor kills the child, so the reader ends within its bound.
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, ChildStderr, Command, Stdio};
@@ -31,8 +30,7 @@ const HEARTBEAT: &[u8] = b"B";
 /// The terminator line of one report.
 const TERMINATOR: &[u8] = b"Z";
 
-/// The bytes of one chunk that the reader takes when it drops the rest of a line
-/// above its bound, and of one chunk of the standard error of `ssh`.
+/// The bytes of one chunk that the reader drops of a line above its bound.
 const READ_CHUNK: usize = 512;
 
 /// Runs the watch of one machine until its supervisor stops it.
@@ -87,7 +85,9 @@ pub(super) fn run(
             return;
         };
         let status = child.wait();
-        let refused = refusal.map_or(WatchRefusal::Other, classify);
+        let refused = refusal
+            .and_then(|words| words.join().ok())
+            .map_or(WatchRefusal::Other, |words| WatchRefusal::of_ssh(&words));
         if stopped(stop) {
             return;
         }
@@ -175,10 +175,9 @@ fn read_reports(reader: &mut impl BufRead, machine: &str, shared: &Shared) -> st
     }
 }
 
-/// One line of `reader` without its newline, with the bound of `limit` bytes.
-///
-/// `Some(true)` is a whole line, `Some(false)` is a line above the limit whose rest
-/// is read and dropped, and `None` is the end of the stream.
+/// One line of `reader` without its newline, with the bound of `limit` bytes:
+/// `Some(true)` is a whole line, `Some(false)` is a line above the limit whose rest is
+/// read and dropped, and `None` is the end of the stream.
 fn read_line_bounded(reader: &mut impl BufRead, line: &mut Vec<u8>, limit: usize) -> std::io::Result<Option<bool>> {
     line.clear();
     let read = {
@@ -195,9 +194,8 @@ fn read_line_bounded(reader: &mut impl BufRead, line: &mut Vec<u8>, limit: usize
         }
         return Ok(Some(line.len() <= limit));
     }
-    // The line is longer than its bound, or it is the last line of the stream and it
-    // has no newline. The rest is read in chunks of a fixed size and dropped, so no
-    // report of a machine grows a buffer of this computer.
+    // The line is longer than its bound, or it is the last line of the stream without a
+    // newline. The rest is dropped in fixed chunks, so no report grows a buffer here.
     let mut chunk = [0u8; READ_CHUNK];
     loop {
         let read = reader.read(&mut chunk)?;
@@ -238,15 +236,4 @@ fn read_stderr(mut pipe: ChildStderr) -> std::thread::JoinHandle<String> {
         }
         tail
     })
-}
-
-/// The refusal that the words of one `ssh` child name.
-fn classify(words: std::thread::JoinHandle<String>) -> WatchRefusal {
-    let Ok(words) = words.join() else {
-        return WatchRefusal::Other;
-    };
-    if words.is_empty() {
-        return WatchRefusal::Other;
-    }
-    WatchRefusal::of_ssh(&words)
 }

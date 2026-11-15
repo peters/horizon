@@ -36,7 +36,7 @@ fn a_report_of_one_pane_is_one_pane_with_its_fields() {
     let report = parse_report(&lines).expect("the report of the test parses");
     assert_eq!(report.note, None);
     assert_eq!(report.panes.len(), 1);
-    let pane = report.pane("%3").expect("the pane of the report");
+    let pane = report.panes.first().expect("the pane of the report");
     assert_eq!(pane.session, "hz-1");
     assert_eq!(pane.command, "codex");
     assert_eq!(pane.cwd, "/home/person/shop");
@@ -151,7 +151,10 @@ fn the_bounds_of_a_report_drop_it_whole() {
     let too_long = vec![line("HZ\t1"), vec![b'P'; MAX_LINE_BYTES + 1], line("Z")];
     assert_eq!(
         parse_report(&too_long),
-        Err(ReportError::LineTooLong { limit: MAX_LINE_BYTES })
+        Err(ReportError::Bound {
+            what: "one line in bytes",
+            limit: MAX_LINE_BYTES
+        })
     );
 
     let many_lines: Vec<Vec<u8>> = std::iter::once(line("HZ\t1"))
@@ -160,7 +163,8 @@ fn the_bounds_of_a_report_drop_it_whole() {
         .collect();
     assert_eq!(
         parse_report(&many_lines),
-        Err(ReportError::TooManyLines {
+        Err(ReportError::Bound {
+            what: "the count of lines",
             limit: MAX_REPORT_LINES,
         })
     );
@@ -172,7 +176,10 @@ fn the_bounds_of_a_report_drop_it_whole() {
     many_panes.push(line("Z"));
     assert_eq!(
         parse_report(&many_panes),
-        Err(ReportError::TooManyPanes { limit: MAX_PANES })
+        Err(ReportError::Bound {
+            what: "the count of panes",
+            limit: MAX_PANES
+        })
     );
 
     let mut many_rows = vec![line("HZ\t1"), line(&pane_line("%0", "hz", "codex", "/w", "t"))];
@@ -182,7 +189,10 @@ fn the_bounds_of_a_report_drop_it_whole() {
     many_rows.push(line("Z"));
     assert_eq!(
         parse_report(&many_rows),
-        Err(ReportError::TooManyRows { limit: MAX_ROWS })
+        Err(ReportError::Bound {
+            what: "the rows of one pane",
+            limit: MAX_ROWS
+        })
     );
 
     let mut many_commands = vec![line("HZ\t1"), line(&pane_line("%0", "hz", "node", "/w", "t"))];
@@ -192,7 +202,8 @@ fn the_bounds_of_a_report_drop_it_whole() {
     many_commands.push(line("Z"));
     assert_eq!(
         parse_report(&many_commands),
-        Err(ReportError::TooManyCommandLines {
+        Err(ReportError::Bound {
+            what: "the command lines of one pane",
             limit: MAX_COMMAND_LINES,
         })
     );

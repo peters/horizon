@@ -157,16 +157,14 @@ fn a_pane_that_leaves_drops_its_row_and_comes_back_as_a_first_sight() {
 }
 
 #[test]
-fn the_state_of_a_row_names_its_weight_and_its_word() {
+fn the_state_of_a_row_names_its_word_and_its_weight() {
     assert_eq!(AgentState::default(), AgentState::Idle);
     assert_eq!(AgentState::Idle.word(), None);
     assert_eq!(AgentState::Working.word(), Some("Working"));
     assert_eq!(AgentState::Done.word(), Some("Done"));
-    assert!(AgentState::NeedsYou.rank() > AgentState::Done.rank());
-    assert!(AgentState::Done.rank() > AgentState::Working.rank());
-    assert!(AgentState::Working.rank() > AgentState::Idle.rank());
-    assert!(AgentState::Done.waits());
-    assert!(!AgentState::Working.waits());
+    assert!(AgentState::NeedsYou > AgentState::Done);
+    assert!(AgentState::Done > AgentState::Working);
+    assert!(AgentState::Working > AgentState::Idle);
 }
 
 #[test]

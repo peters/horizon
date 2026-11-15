@@ -1,12 +1,11 @@
-//! The parser of one report of a machine: its lines to a typed report, with the
-//! bounds of [`super`].
+//! The parser of one report of a machine: its lines to a typed report, with the bounds
+//! of [`super`].
 //!
-//! Every byte here comes from another computer. The parser therefore reads one
-//! fixed format: a header that names the version of the format, one block for each
-//! pane, and a terminator line. A report that breaks one rule of the format or one
-//! bound is dropped whole with a typed reason, and the watch goes on with the
-//! report before it. No value of a report is interpreted as a path, a command or a
-//! name of anything of this computer.
+//! Every byte here comes from another computer, so the parser reads one fixed format:
+//! a header that names the version, one block for each pane, and a terminator line. A
+//! report that breaks one rule or one bound is dropped whole with a typed reason, and
+//! the watch goes on with the report before it. No value of a report is interpreted as
+//! a path, a command or a name of anything of this computer.
 
 use super::{
     MAX_COMMAND_LINES, MAX_LINE_BYTES, MAX_PANES, MAX_REPORT_BYTES, MAX_REPORT_LINES, MAX_ROWS, WATCH_FORMAT_VERSION,
@@ -22,15 +21,6 @@ pub enum MachineNote {
 }
 
 impl MachineNote {
-    /// The word of the note in a line of a report.
-    #[must_use]
-    pub const fn word(self) -> &'static str {
-        match self {
-            Self::NoTmux => "no-tmux",
-            Self::NoServer => "no-server",
-        }
-    }
-
     /// The note that `word` names, or `None` for another word.
     #[must_use]
     pub fn parse(word: &str) -> Option<Self> {
@@ -42,25 +32,21 @@ impl MachineNote {
     }
 }
 
-/// One pane of a machine, as its report names it.
-///
-/// Every field is one line of words: the text of the watch replaces each run of
-/// spaces, tabs and newlines by one space, so the parser reads a field and never a
-/// screen. `rows` are the last rows of the pane's screen, for one state.
+/// One pane of a machine, as its report names it. Every field is one line of words:
+/// the text of the watch replaces each run of spaces, tabs and newlines by one space,
+/// so the parser reads a field and never a screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaneReport {
-    /// The pane id of `tmux`, such as `%3`.
+    /// The pane id of `tmux`, such as `%3`, and its session.
     pub pane: String,
-    /// The `tmux` session of the pane.
     pub session: String,
-    /// The foreground program of the pane.
+    /// The foreground program of the pane, its current folder and its title, which
+    /// `tmux` keeps for every pane.
     pub command: String,
-    /// The current folder of the pane.
     pub cwd: String,
-    /// The title of the pane, which `tmux` keeps for every pane.
     pub title: String,
-    /// The command lines of the processes of the pane's terminal, newest first. The
-    /// text reports them only when an interpreter runs in the pane.
+    /// The command lines of the processes of the pane's terminal, newest first, which
+    /// the text reports only when an interpreter runs in the pane.
     pub command_lines: Vec<String>,
     /// The last rows of the pane's screen, oldest first.
     pub rows: Vec<String>,
@@ -75,51 +61,16 @@ pub struct Report {
     pub panes: Vec<PaneReport>,
 }
 
-impl Report {
-    /// The pane with this id, when the report holds it.
-    #[must_use]
-    pub fn pane(&self, pane: &str) -> Option<&PaneReport> {
-        self.panes.iter().find(|held| held.pane == pane)
-    }
-}
-
 /// Why one report of a machine is not a report of this build.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ReportError {
-    /// One line is longer than the bound of a line.
-    #[error("one line of the report is longer than {limit} bytes")]
-    LineTooLong {
-        /// The bound of one line, in bytes.
-        limit: usize,
-    },
-    /// The report holds more lines than the bound.
-    #[error("the report holds more than {limit} lines")]
-    TooManyLines {
-        /// The bound of the lines of one report.
-        limit: usize,
-    },
-    /// The report holds more bytes than the bound.
-    #[error("the report holds more than {limit} bytes")]
-    TooLong {
-        /// The bound of the bytes of one report.
-        limit: usize,
-    },
-    /// The report holds more panes than the bound.
-    #[error("the report holds more than {limit} panes")]
-    TooManyPanes {
-        /// The bound of the panes of one machine.
-        limit: usize,
-    },
-    /// One pane holds more rows than the bound.
-    #[error("one pane of the report holds more than {limit} rows")]
-    TooManyRows {
-        /// The bound of the rows of one pane.
-        limit: usize,
-    },
-    /// One pane holds more command lines than the bound.
-    #[error("one pane of the report holds more than {limit} command lines")]
-    TooManyCommandLines {
-        /// The bound of the command lines of one pane.
+    /// One bound of [`super`] is broken and the report is dropped whole: `what` is
+    /// above `limit`, or holds more than it.
+    #[error("{what} of the report is above its bound of {limit}")]
+    Bound {
+        /// The part of the report that is above its bound.
+        what: &'static str,
+        /// The bound that it passed.
         limit: usize,
     },
     /// The report names another version of the format.
@@ -146,67 +97,55 @@ pub enum ReportError {
     },
 }
 
-/// The report of the lines of one machine, or why these lines are no report.
-///
-/// The lines are one report without their newlines: the header first and the
-/// terminator last.
+/// The error of a part of a report that is above its bound.
+fn bound(what: &'static str, limit: usize) -> ReportError {
+    ReportError::Bound { what, limit }
+}
+
+/// The error of a line that is not one line of the format.
+fn shape(line: usize, reason: &'static str) -> ReportError {
+    ReportError::Shape { line, reason }
+}
+
+/// The report of the lines of one machine, or why these lines are no report. The lines
+/// are one report without their newlines: the header first and the terminator last.
 ///
 /// # Errors
 /// [`ReportError`] names the bound or the rule of the format that the lines break.
 pub fn parse_report(lines: &[Vec<u8>]) -> Result<Report, ReportError> {
     if lines.len() > MAX_REPORT_LINES {
-        return Err(ReportError::TooManyLines {
-            limit: MAX_REPORT_LINES,
-        });
+        return Err(bound("the count of lines", MAX_REPORT_LINES));
     }
     let bytes: usize = lines.iter().map(Vec::len).sum();
     if bytes > MAX_REPORT_BYTES {
-        return Err(ReportError::TooLong {
-            limit: MAX_REPORT_BYTES,
-        });
+        return Err(bound("the bytes", MAX_REPORT_BYTES));
     }
     let mut text = Vec::with_capacity(lines.len());
     for (index, line) in lines.iter().enumerate() {
         if line.len() > MAX_LINE_BYTES {
-            return Err(ReportError::LineTooLong { limit: MAX_LINE_BYTES });
+            return Err(bound("one line in bytes", MAX_LINE_BYTES));
         }
         text.push(std::str::from_utf8(line).map_err(|_| ReportError::NotUtf8 { line: index + 1 })?);
     }
-    let mut parsed = Parsed::default();
+    let mut report = Report::default();
     let (Some(first), Some(last)) = (text.first(), text.last()) else {
-        return Err(ReportError::Shape {
-            line: 1,
-            reason: "the report is empty",
-        });
+        return Err(shape(1, "the report is empty"));
     };
     header(first)?;
     if *last != "Z" {
-        return Err(ReportError::Shape {
-            line: text.len(),
-            reason: "the report does not end with its terminator",
-        });
+        return Err(shape(text.len(), "the report does not end with its terminator"));
     }
     for (index, line) in text.iter().enumerate().take(text.len() - 1).skip(1) {
-        parsed.line(line, index + 1)?;
+        report.line(line, index + 1)?;
     }
-    Ok(parsed.done())
-}
-
-/// The report that the lines built so far name.
-#[derive(Default)]
-struct Parsed {
-    note: Option<MachineNote>,
-    panes: Vec<PaneReport>,
+    Ok(report)
 }
 
 /// Reads the header of a report, which names the version of its format.
 fn header(line: &str) -> Result<(), ReportError> {
     let fields: Vec<&str> = line.split('\t').collect();
     let ["HZ", version] = fields.as_slice() else {
-        return Err(ReportError::Shape {
-            line: 1,
-            reason: "the report does not start with its header",
-        });
+        return Err(shape(1, "the report does not start with its header"));
     };
     if version.parse::<u32>().ok() != Some(WATCH_FORMAT_VERSION) {
         return Err(ReportError::Version {
@@ -217,9 +156,10 @@ fn header(line: &str) -> Result<(), ReportError> {
     Ok(())
 }
 
-impl Parsed {
+impl Report {
+    /// Reads one line of the report into the fields of the report so far.
     fn line(&mut self, line: &str, number: usize) -> Result<(), ReportError> {
-        let shape = |reason: &'static str| ReportError::Shape { line: number, reason };
+        let shape = |reason: &'static str| shape(number, reason);
         let Some((kind, rest)) = line.split_once('\t') else {
             return Err(shape("the line names no kind and no field"));
         };
@@ -233,7 +173,7 @@ impl Parsed {
                     return Err(shape("a pane id is '%' and digits"));
                 }
                 if self.panes.len() >= MAX_PANES {
-                    return Err(ReportError::TooManyPanes { limit: MAX_PANES });
+                    return Err(bound("the count of panes", MAX_PANES));
                 }
                 self.panes.push(PaneReport {
                     pane: (*pane).to_owned(),
@@ -252,9 +192,7 @@ impl Parsed {
                     .mutable(pane)
                     .ok_or_else(|| shape("a command line names a pane that is no pane of the report"))?;
                 if held.command_lines.len() >= MAX_COMMAND_LINES {
-                    return Err(ReportError::TooManyCommandLines {
-                        limit: MAX_COMMAND_LINES,
-                    });
+                    return Err(bound("the command lines of one pane", MAX_COMMAND_LINES));
                 }
                 held.command_lines.push(command.to_owned());
                 Ok(())
@@ -265,7 +203,7 @@ impl Parsed {
                     .mutable(pane)
                     .ok_or_else(|| shape("a row names a pane that is no pane of the report"))?;
                 if held.rows.len() >= MAX_ROWS {
-                    return Err(ReportError::TooManyRows { limit: MAX_ROWS });
+                    return Err(bound("the rows of one pane", MAX_ROWS));
                 }
                 held.rows.push(row.to_owned());
                 Ok(())
@@ -284,13 +222,6 @@ impl Parsed {
     fn mutable(&mut self, pane: &str) -> Option<&mut PaneReport> {
         self.panes.iter_mut().find(|held| held.pane == pane)
     }
-
-    fn done(self) -> Report {
-        Report {
-            note: self.note,
-            panes: self.panes,
-        }
-    }
 }
 
 /// The pane id and the value of a line of a pane, or `None` for a line that holds
@@ -301,8 +232,7 @@ fn pane_and_value(rest: &str) -> Option<(&str, &str)> {
 }
 
 /// Whether `pane` is one pane id of `tmux`: `%` and its digits.
-#[must_use]
-pub fn is_pane_id(pane: &str) -> bool {
+fn is_pane_id(pane: &str) -> bool {
     pane.strip_prefix('%').is_some_and(|digits| {
         !digits.is_empty() && digits.len() <= 9 && digits.bytes().all(|byte| byte.is_ascii_digit())
     })

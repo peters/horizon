@@ -1,22 +1,22 @@
 //! The agents of one machine: the panes of its report whose program is one of the
 //! agent kinds, with the name, the kind and the two signals of each.
 //!
-//! A machine names the program of a pane by the name that the system gave its
-//! foreground process. That name is the program itself for a program that runs
-//! itself, and it is the interpreter for a program that runs through one: `node`
-//! for pi, `python3` for a stand-in. The text of the watch therefore reports the
-//! command lines of the processes of a pane's terminal when an interpreter runs
-//! there, and this module finds the kind in the first words of those lines.
+//! A machine names the program of a pane by the name of its foreground process, which
+//! is the interpreter for a program that runs through one: `node` for pi, `python3`
+//! for a stand-in. The text of the watch therefore reports the command lines of a
+//! pane's terminal when an interpreter runs there, and this module finds the kind in
+//! the first words of those lines.
 //!
-//! Every other pane is ignored and not kept: a shell, an editor and a plain command
-//! are no agent, and a machine cannot make Horizon keep a row by naming a program
-//! that no kind of this build uses.
+//! Every other pane is ignored: a shell, an editor and a plain command are no agent,
+//! and a machine cannot make Horizon keep a row by naming a program that no kind of
+//! this build uses.
 
 use crate::PanelKind;
 use crate::agent_work::TitleState;
 use crate::agent_work::title_state;
 use crate::agents::{agent_definition, all_agent_kinds};
 use crate::config::PresetConfig;
+use crate::setup::preset_program;
 
 use crate::is_agent_working_line;
 
@@ -27,11 +27,9 @@ use super::report::{PaneReport, Report};
 /// word: an interpreter and the program that it runs.
 const COMMAND_WORDS: usize = 3;
 
-/// The programs that name an agent kind of this build, with the kind of each.
-///
-/// The table holds the default command of every kind of [`crate::agents`] and the
-/// command line of every preset of the settings whose kind is an agent, so a person
-/// who starts a shape of their own in a `tmux` session of a machine is seen too.
+/// The programs that name an agent kind of this build, with the kind of each: the
+/// default command of every kind of [`crate::agents`] and the program of every preset
+/// of the settings whose kind is an agent.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentPrograms {
     programs: Vec<(String, PanelKind)>,
@@ -48,22 +46,18 @@ impl AgentPrograms {
         Self { programs }
     }
 
-    /// This table with the command line of every preset of an agent kind.
+    /// This table with the program of every preset of an agent kind: the file name of
+    /// the command of the preset, which is what a `tmux` pane shows ([`preset_program`]).
     #[must_use]
     pub fn with_presets(mut self, presets: &[PresetConfig]) -> Self {
-        for preset in presets {
+        for preset in presets.iter().filter(|preset| preset.command.is_some()) {
             if agent_definition(preset.kind).is_none() {
                 continue;
             }
-            let Some(command) = preset.command.as_deref() else {
-                continue;
-            };
-            let Some(word) = command.split_whitespace().next() else {
-                continue;
-            };
-            let program = file_name(word).to_owned();
-            if !program.is_empty() && !self.programs.iter().any(|(held, _)| *held == program) {
-                self.programs.push((program, preset.kind));
+            let program = preset_program(preset);
+            let program = file_name(&program);
+            if !program.is_empty() && self.kind_of(program).is_none() {
+                self.programs.push((program.to_owned(), preset.kind));
             }
         }
         self
@@ -79,11 +73,9 @@ impl AgentPrograms {
             .map(|(_, kind)| *kind)
     }
 
-    /// The kind of the agent of one pane, or `None` for a pane that runs none.
-    ///
-    /// The foreground program answers first. When it is an interpreter, the first
-    /// words of the command lines of the pane's terminal answer: the interpreter,
-    /// then the program that it runs, such as `/home/person/.local/bin/pi`.
+    /// The kind of the agent of one pane, or `None` for a pane that runs none. The
+    /// foreground program answers first; when it is an interpreter, the first words of
+    /// the command lines of the pane's terminal answer.
     fn kind_of_pane(&self, pane: &PaneReport) -> Option<PanelKind> {
         if let Some(kind) = self.kind_of(&pane.command) {
             return Some(kind);
@@ -96,11 +88,8 @@ impl AgentPrograms {
     }
 }
 
-/// The one thing that a report says about the agent of one pane.
-///
-/// It holds the two signals that a state needs and nothing of the text of the
-/// machine: the title of the pane gives one state of the kind, and the rows of the
-/// screen give the other.
+/// The one thing that a report says about the agent of one pane: the two signals that
+/// a state needs, and nothing of the text of the machine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentObservation {
     /// The pane id of `tmux`.
