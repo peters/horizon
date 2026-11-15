@@ -1179,8 +1179,8 @@ fn the_card_documents_of_the_set_up_skills_are_valid() {
     );
     assert_eq!(
         machines.len(),
-        11,
-        "the machine cards, the step list of a rent, the card of a rent that found no SSH, the card of the exact state of an agent, the card of the files of a machine and the card of a command at a time keep their documents"
+        12,
+        "the machine cards, the step list of a rent, the card of a rent that found no SSH, the card of the exact state of an agent, the card of the cards of an agent on a machine, the card of the files of a machine and the card of a command at a time keep their documents"
     );
     assert!(
         server.is_empty(),
