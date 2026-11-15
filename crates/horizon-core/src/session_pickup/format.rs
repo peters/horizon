@@ -10,7 +10,13 @@ use std::path::Path;
 use crate::util::truncate_chars;
 
 /// The most characters of a title that a row shows.
-pub const MAX_TITLE_CHARS: usize = 80;
+///
+/// The bound is what a row of the widest block of the page holds on one line: the
+/// block stops at 1 480 points, and a title of this many characters fills the room
+/// that the row keeps beside its press without reaching it. The row cuts a title
+/// that is longer than its own room with an ellipsis, so this bound is the one of
+/// the stored text, not of the width of a row.
+pub const MAX_TITLE_CHARS: usize = 160;
 /// The most characters of a folder name or of a parent path that a row shows.
 pub const MAX_FOLDER_CHARS: usize = 48;
 
@@ -140,6 +146,32 @@ mod tests {
             10,
             "a character outside the Basic Latin block counts once"
         );
+    }
+
+    /// The bound of the stored title is the number that the boundary page states,
+    /// and a title at that bound stays whole.
+    #[test]
+    fn a_title_at_the_bound_of_the_row_is_kept_whole() {
+        assert_eq!(
+            MAX_TITLE_CHARS, 160,
+            "the boundary page `agent-session-pickup.md` states the bound of a title"
+        );
+
+        let at_the_bound = "é".repeat(MAX_TITLE_CHARS);
+        assert_eq!(
+            one_line(&at_the_bound, MAX_TITLE_CHARS),
+            at_the_bound,
+            "a title of {MAX_TITLE_CHARS} characters is stored whole"
+        );
+
+        let over = "x".repeat(MAX_TITLE_CHARS + 1);
+        let shown = one_line(&over, MAX_TITLE_CHARS);
+        assert_eq!(
+            shown.chars().count(),
+            MAX_TITLE_CHARS,
+            "the bound holds one character more"
+        );
+        assert!(shown.ends_with('…'), "the reader sees that the title is cut");
     }
 
     #[test]

@@ -205,6 +205,18 @@ or push Tab until it has the focus ring and then push Enter or Space.
 Under the tiles is the row of shortcuts of this computer: New terminal,
 Quick Nav and Machines you have. On macOS, the primary key is Cmd.
 
+### The page at any window size
+
+The page follows the size of the window. On a wide screen the block of the page
+keeps a width that is easy to read, and it stands in the middle of the canvas.
+
+A window that is too short for the whole page first draws the small picture of a
+tile smaller, and then removes the picture. A page that is still taller than the
+canvas moves:
+
+- Use the wheel, the trackpad, or Page Down and Page Up to move the page.
+- Push Tab to move to a tile below the canvas. The page moves to that tile.
+
 ### Pick up where you left off
 
 A row of the section is a conversation of Claude Code or Codex that an agent
@@ -215,6 +227,8 @@ conversations at most, of the last 14 days, grouped by folder.
 
 Each row shows the title of the conversation, its program, its folder, the time
 of its last activity and the state of the conversation. The home folder is `~`.
+A title that is longer than the row is cut at the end of the row, with an
+ellipsis; a wide window shows the whole title.
 
 1. Click `Open` on a row, or push Tab until the row has the focus ring and then
    push Enter.

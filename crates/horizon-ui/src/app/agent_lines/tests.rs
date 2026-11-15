@@ -6,7 +6,7 @@ use horizon_core::{
 
 use super::{
     AgentLines, CLEAR_ALPHA, FAINT_ALPHA, LINE_WIDTH, OVERVIEW_ALPHA, OVERVIEW_ZOOM, Side, focus_agent, line_alpha,
-    line_paths,
+    line_color, line_paths,
 };
 use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_config_and_startup};
 use crate::theme::ResolvedTheme;
@@ -517,4 +517,394 @@ fn the_frame_draws_the_lines_and_the_setting_turns_them_off() {
 /// A window of the test, large enough that the panels of the board do not overlap.
 fn canvas_input() -> egui::RawInput {
     raw_input([1_600.0, 900.0], None)
+}
+
+/// The size of a panel that the grid layout arranges, in points.
+const GRID: Vec2 = Vec2::new(520.0, 340.0);
+/// The gap that the grid leaves between two panels of a workspace, in points.
+const GRID_GAP: f32 = 14.0;
+
+/// The shapes that one frame of the test window painted for one line.
+#[derive(Clone, Debug, PartialEq)]
+struct Marks {
+    /// The points of the curve of one pair.
+    curve: Vec<Pos2>,
+    /// The centre of the filled dot at the agent end.
+    dot: Pos2,
+    /// The centre of the ring at the other end.
+    ring: Pos2,
+}
+
+/// A board of the test window: one agent panel, the cards that the agent drew,
+/// and the frames that the window paints for them.
+struct TestBoard {
+    /// The folder of the settings and of the session of this window.
+    _temp: tempfile::TempDir,
+    ctx: egui::Context,
+    app: crate::app::HorizonApp,
+    agent: PanelId,
+    cards: Vec<PanelId>,
+}
+
+impl TestBoard {
+    /// A board whose agent panel stands at `agent` and whose cards stand at
+    /// `cards`, in points of the canvas.
+    ///
+    /// The workspace keeps the layout of the Columns preset, so the frames of the
+    /// test leave every card at the size that its place names, as a workspace that
+    /// a person arranged keeps the size of its panels. A drag returns the workspace
+    /// to free placement, and from that frame on a card takes the size of its
+    /// content.
+    fn new(agent: Rect, cards: &[Rect]) -> Self {
+        let (temp, ctx, mut app) = test_app_with_config_and_startup(
+            &Config::default(),
+            StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState::default()),
+            },
+        );
+        let workspace = app.board.create_workspace("Work");
+        let agent_id = app
+            .board
+            .create_panel_waiting(
+                PanelOptions {
+                    kind: PanelKind::Claude,
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("an agent panel");
+        let actor = horizon_core::browser_actor(&app.board.panel(agent_id).expect("the agent panel").local_id);
+        let mut card_ids = Vec::new();
+        for _ in cards {
+            let state = BlockPanelState {
+                owner_actor: Some(actor.clone()),
+                ..BlockPanelState::new(BlockPanelState::empty_document())
+            };
+            card_ids.push(
+                app.board
+                    .create_panel_waiting(
+                        PanelOptions {
+                            kind: PanelKind::Block,
+                            block: Some(state),
+                            ..PanelOptions::default()
+                        },
+                        workspace,
+                    )
+                    .expect("a card that the agent drew"),
+            );
+        }
+        // No process of this test starts: the panels wait for a preparation that no
+        // worker of the test reads.
+        app.board.take_pending_starts();
+        app.board
+            .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Columns);
+        for (id, place) in std::iter::once((agent_id, agent)).chain(card_ids.iter().copied().zip(cards.iter().copied()))
+        {
+            let panel = app.board.panel_mut(id).expect("a panel of the board");
+            panel.layout.position = [place.min.x, place.min.y];
+            panel.layout.size = [place.width(), place.height()];
+        }
+        Self {
+            _temp: temp,
+            ctx,
+            app,
+            agent: agent_id,
+            cards: card_ids,
+        }
+    }
+
+    /// The marks that the next frame of the window paints, after the frames that
+    /// a new panel takes to show.
+    fn marks(&mut self) -> Vec<Marks> {
+        for _ in 0..3 {
+            run_app_frame_with_input(&self.ctx, &mut self.app, canvas_input());
+        }
+        let built = self
+            .app
+            .agent_lines
+            .built
+            .as_ref()
+            .expect("a frame of a board with pairs");
+        built
+            .shapes
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|shapes| {
+                let [Shape::Path(curve), Shape::Circle(dot), Shape::Circle(ring)] = shapes else {
+                    panic!("a pair paints a curve, a dot and a ring: {shapes:?}");
+                };
+                assert_eq!(
+                    dot.fill, ring.stroke.color,
+                    "the dot and the ring of one pair share the colour of its line"
+                );
+                Marks {
+                    curve: curve.points.clone(),
+                    dot: dot.center,
+                    ring: ring.center,
+                }
+            })
+            .collect()
+    }
+
+    /// The place of `panel_id` on the screen of the frames of this test.
+    fn place(&self, panel_id: PanelId) -> Rect {
+        let panel = self.app.board.panel(panel_id).expect("a panel of the frame");
+        self.app.panel_screen_place(panel, self.app.canvas_rect(&self.ctx))
+    }
+
+    /// The places of the agent panel and of the cards, on the screen.
+    fn places(&self) -> (Rect, Vec<Rect>) {
+        let agent = self.place(self.agent);
+        let cards = self.cards.iter().map(|id| self.place(*id)).collect();
+        (agent, cards)
+    }
+
+    /// Moves the card at `index` to `place` of the canvas, as a drag does: the
+    /// workspace returns to free placement and the card takes its new place.
+    fn drag(&mut self, index: usize, place: Rect) {
+        self.app.board.clear_workspace_layout(self.app.board.workspaces[0].id);
+        let panel = self
+            .app
+            .board
+            .panel_mut(self.cards[index])
+            .expect("a card of the board");
+        panel.layout.position = [place.min.x, place.min.y];
+    }
+}
+
+/// Every card of `cards` carries a ring at the middle of the side that faces the
+/// agent, and each line starts with a dot on the agent panel.
+fn assert_rings(marks: &[Marks], agent: Rect, cards: &[Rect]) {
+    assert_eq!(
+        marks.len(),
+        cards.len(),
+        "one curve, one dot and one ring for each of the {} pairs",
+        cards.len()
+    );
+    for card in cards {
+        let expected = Side::facing(agent, *card).opposite().middle(*card);
+        assert!(
+            marks.iter().any(|marks| (marks.ring - expected).length() < 0.01),
+            "a ring stands at {expected:?}, on the side of the card that faces the agent: {:?}",
+            marks.iter().map(|marks| marks.ring).collect::<Vec<_>>()
+        );
+        assert!(
+            marks.iter().any(|marks| agent.expand(0.01).contains(marks.dot)),
+            "a dot stands on the edge of the agent panel: {:?}",
+            marks.iter().map(|marks| marks.dot).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The board that the person reported: an agent panel, a card A beside it at the
+/// gap of the grid, and a card B right of A.
+///
+/// Both lines are painted. Then the person drags B to a free place below and to
+/// the right of A. The drag returns the workspace to free placement, so the cards
+/// take the size of their content from that frame on, and the card A is no longer
+/// as tall as the agent panel. The line to A keeps its ring at the edge of A: the
+/// two panels of a pair decide whether it carries a line, not the places of the
+/// two starts, which follow the number of lines that leave one side of the agent.
+#[test]
+fn the_line_to_a_card_beside_its_agent_survives_the_drag_that_shrinks_the_cards() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let beside = rect(GRID.x + GRID_GAP, 0.0, GRID.x, GRID.y);
+    let right_of_that = rect(beside.min.x + GRID.x + 20.0, 0.0, GRID.x, GRID.y);
+    let below = rect(beside.min.x + 40.0, 300.0, GRID.x, GRID.y);
+
+    let mut board = TestBoard::new(agent, &[beside, right_of_that]);
+    let before = board.marks();
+    let (agent_place, cards) = board.places();
+    assert_rings(&before, agent_place, &cards);
+
+    board.drag(1, below);
+    let after = board.marks();
+    let (agent_place, cards) = board.places();
+    assert_rings(&after, agent_place, &cards);
+}
+
+/// A card that the grid put beside its agent draws its line at every gap that a
+/// drag can leave, and two panels that stand closer than their two marks carry no
+/// line at all.
+///
+/// The line is the same whether or not another line leaves the same side of the
+/// agent, because the two panels of the pair decide it.
+#[test]
+fn a_card_beside_its_agent_draws_its_line_at_every_grid_gap() {
+    for gap in [0.0, 4.0, GRID_GAP, 40.0] {
+        let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+        let card = rect(GRID.x + gap, 0.0, GRID.x, GRID.y);
+        let mut board = TestBoard::new(agent, &[card]);
+        let marks = board.marks();
+        if gap < 8.0 {
+            assert!(
+                marks.is_empty(),
+                "two panels {gap} points apart carry no line, because their two marks would merge: {marks:?}"
+            );
+            continue;
+        }
+        let (agent_place, cards) = board.places();
+        assert_rings(&marks, agent_place, &cards);
+    }
+}
+
+/// A card that stands above its agent at the gap of the grid draws its line from
+/// the top side of the agent panel.
+#[test]
+fn a_card_above_its_agent_draws_its_line_from_the_top_side() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let above = rect(0.0, -GRID_GAP - GRID.y, GRID.x, GRID.y);
+    let mut board = TestBoard::new(agent, &[above]);
+    let marks = board.marks();
+    let (agent_place, cards) = board.places();
+    assert_rings(&marks, agent_place, &cards);
+    assert!(
+        (marks[0].dot.y - agent_place.min.y).abs() < 0.01,
+        "the dot of the pair stands on the top edge of the agent panel: {:?}",
+        marks[0].dot
+    );
+}
+
+/// Three cards on one side of the agent all draw their line, at three places of
+/// that side.
+#[test]
+fn three_cards_on_one_side_all_draw_their_line() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let cards = [
+        rect(GRID.x + GRID_GAP, -150.0, 200.0, 120.0),
+        rect(GRID.x + GRID_GAP, 0.0, 200.0, 120.0),
+        rect(GRID.x + GRID_GAP, 150.0, 200.0, 120.0),
+    ];
+    let mut board = TestBoard::new(agent, &cards);
+    let marks = board.marks();
+    let (agent_place, places) = board.places();
+    assert_rings(&marks, agent_place, &places);
+    let mut dots: Vec<f32> = marks.iter().map(|marks| marks.dot.y).collect();
+    dots.sort_by(f32::total_cmp);
+    assert!(
+        dots.windows(2).all(|pair| pair[1] - pair[0] > 1.0),
+        "the three lines leave the agent panel at three places: {dots:?}"
+    );
+}
+
+/// A line between two panels that stand close stays a short, plain link in the
+/// gap: every point of its curve lies between the two facing edges, and the curve
+/// never turns back along the axis of those edges.
+///
+/// The two cases are a card in the band of the agent panel and a card that stands
+/// higher than the agent panel. The distance along the axis is 14 points in both,
+/// and the second case is the one where a control point that does not follow the
+/// gap would draw the line into the card.
+#[test]
+fn a_line_between_two_panels_that_stand_close_stays_in_the_gap() {
+    for card_y in [0.0, -150.0] {
+        let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+        let card = rect(GRID.x + GRID_GAP, card_y, GRID.x, GRID.y);
+        let mut board = TestBoard::new(agent, &[card]);
+        let marks = board.marks();
+        let (agent_place, cards) = board.places();
+        assert_eq!(marks.len(), 1, "the card beside the agent panel draws its line");
+
+        let gap = cards[0].min.x - agent_place.max.x;
+        assert!(
+            (gap - GRID_GAP).abs() < 0.01,
+            "the two panels stand {GRID_GAP} points apart: {gap}"
+        );
+        let band = Rect::from_min_max(
+            Pos2::new(agent_place.max.x, agent_place.min.y.min(cards[0].min.y)),
+            Pos2::new(cards[0].min.x, agent_place.max.y.max(cards[0].max.y)),
+        )
+        .expand(2.0);
+        for point in &marks[0].curve {
+            assert!(
+                band.contains(*point),
+                "every point of the curve lies between the two facing edges, and {point:?} does not: {band:?}"
+            );
+        }
+        for pair in marks[0].curve.windows(2) {
+            assert!(
+                pair[1].x >= pair[0].x - 0.01,
+                "the curve never turns back along the axis of the two facing edges: {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            (marks[0].curve.last().expect("a last point").x - marks[0].ring.x).abs() < 0.01,
+            "the curve reaches the ring at the edge of the card"
+        );
+    }
+}
+
+/// A line is a graphic that a person must see: every line of the light theme holds
+/// 3 to 1 against the light canvas at the clear strength, and every line of the
+/// dark theme keeps the colour and the contrast that it has today.
+///
+/// The floor darkens the colour of the line only. The accent of the workspace
+/// keeps the colour that its fills and outlines take, which this test reads on the
+/// three accents whose line stood under the floor.
+#[test]
+fn every_line_of_the_light_theme_holds_three_to_one_against_the_canvas() {
+    /// The contrast of every line of the dark theme today, in the order of the
+    /// workspace accents.
+    const DARK_TODAY: [f32; 8] = [7.7308, 10.8938, 12.6750, 7.0703, 10.6108, 10.8581, 8.0581, 9.1097];
+    /// The accents whose line stood under the floor of 3 to 1 in the light theme,
+    /// with the colour that the accent of the workspace keeps: the yellow, the
+    /// teal and the peach.
+    const DARKENED: [(usize, (u8, u8, u8)); 3] = [
+        (2, (0xBC, 0x80, 0x00)),
+        (5, (0x00, 0x92, 0xA8)),
+        (7, (0xDB, 0x6F, 0x28)),
+    ];
+
+    let agent = PanelId(1);
+    for (accent, today) in DARK_TODAY.iter().enumerate() {
+        let light = line_color(accent, agent, Some(agent), 1.0, ResolvedTheme::Light);
+        let contrast = crate::theme::canvas_contrast_for_test(ResolvedTheme::Light, light);
+        assert!(
+            contrast >= 3.0,
+            "the line of accent {accent} holds 3 to 1 on the light canvas, and it reads {contrast}"
+        );
+        let accent_color = crate::theme::workspace_accent_for(ResolvedTheme::Light, accent);
+        let at_clear_strength = crate::theme::alpha(accent_color, CLEAR_ALPHA);
+        if let Some((_, accent_rgb)) = DARKENED.iter().find(|(index, _)| *index == accent) {
+            assert_eq!(
+                (accent_color.r(), accent_color.g(), accent_color.b()),
+                *accent_rgb,
+                "the accent of the workspace keeps the colour that it has"
+            );
+            let before = crate::theme::canvas_contrast_for_test(ResolvedTheme::Light, at_clear_strength);
+            assert!(
+                before < 3.0,
+                "the line of accent {accent} stood under the floor before the rule: {before}"
+            );
+            assert_ne!(
+                (light.r(), light.g(), light.b()),
+                (accent_color.r(), accent_color.g(), accent_color.b()),
+                "the line of accent {accent} takes a darker colour than the accent of the workspace"
+            );
+        } else {
+            assert_eq!(
+                light, at_clear_strength,
+                "the line of accent {accent} keeps the colour of the accent, which already holds the floor"
+            );
+        }
+
+        let dark = line_color(accent, agent, Some(agent), 1.0, DARK);
+        assert_eq!(
+            dark,
+            crate::theme::alpha(crate::theme::workspace_accent_for(DARK, accent), CLEAR_ALPHA),
+            "the dark theme keeps the colour of the line of accent {accent}"
+        );
+        let dark_contrast = crate::theme::canvas_contrast_for_test(DARK, dark);
+        assert!(
+            (dark_contrast - today).abs() < 0.01,
+            "the line of accent {accent} reads {dark_contrast} on the dark canvas, and it read {today}"
+        );
+        assert!(
+            dark_contrast >= 3.0,
+            "the dark theme already holds the floor on the dark canvas: {dark_contrast}"
+        );
+    }
 }

@@ -197,15 +197,90 @@ Horizon before they write anything.
    rows. Under about 520 points they stand in one column. No tile cuts its
    title or its sentence.
 
-8. Change the theme to the light theme in the settings.
+8. Make the window wide enough for four tiles, and then narrow it step by step
+   to about 1 200 points of window width, where a title takes two rows.
+
+   Result: The four tiles of a row have one height, which follows the tallest
+   title and the tallest sentence of the row. The sentence of every tile keeps
+   a gap of 14 points above the line of its press, so a sentence never ends on
+   that line, also when its title takes two rows. The presses of the tiles of
+   one row stand on one line.
+
+9. Change the theme to the light theme in the settings.
 
    Result: The page, the drawings and the keys are in the light palette, and no
    text touches an edge.
 
-9. Leave the page still for one minute without a pointer move.
+10. Leave the page still for one minute without a pointer move.
 
    Result: The process uses no central processor time for the page. The
    `fps` counter of the titlebar says that no frame was drawn.
+
+11. Resize the window through these sizes, in this order. Wait for one second at
+    each size. At each size, count the columns of tiles, look at the picture of a
+    tile, look for a scroll bar at the right edge of the page, and measure the
+    width of the block: the distance from the left edge of the first tile of a
+    row to the right edge of the last tile of that row.
+
+    | Window size | Tiles | Picture of a tile | Scroll bar | Block width |
+    |---|---|---|---|---|
+    | 1600 x 1000 | Four in one row | 92 points high | No | 1270 points |
+    | 5120 x 1348 | Four in one row | 92 points high | No | 1480 points |
+    | 2560 x 1300 | Four in one row | 92 points high | No | 1480 points |
+    | 1280 x 800 | Four in one row | 92 points high | No | 950 points |
+    | 1000 x 700 | Two in two rows | 30 points high | No | 700 points |
+    | 800 x 600 | One in one column | None | Yes | 512 points |
+
+    Result: The page answers each size as the table says. The size of a row of
+    the section **Pick up where you left off** follows the block. After each
+    resize, every picture of a tile stands inside the band of its own tile: no
+    picture stands on the heading, on another tile or under the sidebar. On a
+    canvas that is wider than 1 480 points, the distance from the left edge of
+    the canvas to the block is the same as the distance from the block to the
+    right edge.
+
+12. At the window size 800 x 600, push Page Down two times, then Page Up two
+    times. Then put the pointer on the middle of the page and roll the wheel of
+    the mouse three notches down, three notches up, and two notches to the side
+    while you hold Ctrl.
+
+    Result: The page moves down and up for the keys, and it moves down and up for
+    the wheel of the mouse and for a scroll of a touchpad. The two side notches
+    and the Ctrl notches move no pixel of the window, and the board behind the
+    page never moves sideways or changes its zoom. At the largest scroll, the
+    last row of the page, which starts with `You know Horizon already?`, is whole
+    inside the canvas. At the top of the page, the heading is whole and no part
+    of it stands under the titlebar.
+
+13. Make the window 1600 x 1000, where the page is whole inside the canvas.
+    Put the pointer on the middle of the page and roll the wheel down three
+    notches.
+
+    Result: No pixel of the window changes: a page that the window holds has
+    nothing to scroll, and the board behind it does not move either.
+
+14. At the window size 800 x 600, push Page Up until the page stops. Then push
+    Tab four times.
+
+    Result: Each press moves the focus ring to the next tile. The fourth tile
+    comes whole into the canvas, and the page moves to it.
+
+15. Make the window 1000 x 700. Look at a row of the section **Pick up where you
+    left off** whose folder path is longer than the row.
+
+    Result: The detail line of the row starts with the program of the session and
+    ends with its time and its state. The middle of the path is cut with an
+    ellipsis, and the start and the end of the path stay. The press of the row
+    keeps its width.
+
+16. Read the first line of that row, the title of the session, in a session whose
+    prompt is longer than about 70 characters. Then make the window 5120 x 1348
+    and read it again.
+
+    Result: At 1000 x 700 the title ends with an ellipsis at the end of the room
+    that the row has, and no word of it stands outside the row. At 5120 x 1348
+    the row shows the whole prompt: no ellipsis stands at its end, and the row is
+    filled from the left pad to its press.
 
 ### 6.2 F02 — The three entry points of Set up
 
@@ -782,6 +857,8 @@ price card and stops.
 - The notice without an agent program names the programs that Horizon looked
   for and the state of the integrations, and its two buttons work.
 - The integrations off stop Set up and name the exact switch.
+- A row of the pickup shows the whole stored title at the widest block of the
+  page, and cuts it at the end of its own room at a narrow one.
 - A second press shows the panel of Set up and starts no second panel.
 - The four cards of task 6.7 draw the value, the badge, the row that cannot be
   chosen, the caption, the pills and the steps, and a press on a row that cannot

@@ -278,6 +278,14 @@ fn extend_best_effort(sessions: &mut Vec<AgentSessionRecord>, provider: &str, lo
     }
 }
 
+/// The most characters of a session label that a store reader keeps.
+///
+/// The label is the title that a row of the pickup shows. It is as long as a row of
+/// the widest block of the first start page holds on one line
+/// (`session_pickup::MAX_TITLE_CHARS`), so a title of a normal length reaches the
+/// row whole and is cut once, by the room of the row.
+pub(crate) const MAX_SESSION_LABEL_CHARS: usize = 160;
+
 #[derive(Clone, Debug)]
 pub struct AgentSessionRecord {
     pub kind: PanelKind,
@@ -523,9 +531,7 @@ fn scan_claude_session_tail(file: &mut std::fs::File, summary: &mut ClaudeSessio
 }
 
 fn truncate_session_label(value: &str) -> String {
-    const MAX_CHARS: usize = 64;
-
-    truncate_chars(value.trim(), MAX_CHARS).into_owned()
+    truncate_chars(value.trim(), MAX_SESSION_LABEL_CHARS).into_owned()
 }
 
 fn file_updated_at_millis(path: &Path) -> Result<i64> {

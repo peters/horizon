@@ -355,6 +355,59 @@ pub fn composite_over(background: Color32, foreground: Color32) -> Color32 {
     )
 }
 
+/// The floor of the contrast of one line of an agent against the canvas, in the
+/// light theme.
+///
+/// A line is a graphic that a person must see, so it holds the 3 to 1 that a
+/// non-text element needs to stand on its own. The accents of the workspace were
+/// chosen for fills and outlines, and the weakest of them reads at 2.63 to 1 as a
+/// line on the light canvas.
+const MIN_LINE_CONTRAST: f32 = 3.0;
+
+/// How much of black one step of [`agent_line_color`] mixes into an accent that
+/// stands under the floor.
+const LINE_DARKEN_STEP: f32 = 0.05;
+
+/// The colour of the line of the agent that takes the workspace accent
+/// `color_idx`, at `alpha`.
+///
+/// The light theme keeps [`MIN_LINE_CONTRAST`] against the light canvas: the
+/// accent of a line that reads weaker than that is darkened until the line
+/// reaches the floor. Only the colour of the line moves. The accent of the
+/// workspace keeps the value that its fills, outlines and tabs take, and the dark
+/// theme keeps every line as it is, because each of its accents already stands
+/// above the floor on the dark canvas.
+#[must_use]
+pub fn agent_line_color(theme: ResolvedTheme, color_idx: usize, strength: u8) -> Color32 {
+    let accent = workspace_accent_for(theme, color_idx);
+    let line = alpha(accent, strength);
+    if theme == ResolvedTheme::Dark || canvas_contrast_for(theme, line) >= MIN_LINE_CONTRAST {
+        return line;
+    }
+    let canvas = bg_for(theme);
+    let mut darkened = line;
+    for step in 1..=20_u8 {
+        let amount = f32::from(step) * LINE_DARKEN_STEP;
+        darkened = alpha(blend(accent, Color32::BLACK, amount), strength);
+        if contrast_ratio(composite_over(canvas, darkened), canvas) >= MIN_LINE_CONTRAST {
+            break;
+        }
+    }
+    darkened
+}
+
+/// The contrast of a colour that a painter covers the canvas of `theme` with.
+fn canvas_contrast_for(theme: ResolvedTheme, color: Color32) -> f32 {
+    contrast_ratio(composite_over(bg_for(theme), color), bg_for(theme))
+}
+
+/// The contrast of a colour that a painter covers the canvas of `theme` with, for
+/// a test that pins the floor of a line.
+#[cfg(test)]
+pub(crate) fn canvas_contrast_for_test(theme: ResolvedTheme, color: Color32) -> f32 {
+    canvas_contrast_for(theme, color)
+}
+
 #[must_use]
 pub fn panel_border(accent: Color32, focused: bool) -> Color32 {
     if focused {

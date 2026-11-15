@@ -13,8 +13,15 @@ use super::tiles::WelcomeTile;
 
 /// The height of the band of a drawing.
 pub(in crate::app) const ART_HEIGHT: f32 = 92.0;
+/// The height of the drawing band of the compact form of the page: the tallest
+/// band that keeps the four choices of a window of 1000 by 700 points whole. A
+/// smaller window gives the drawing no band at all.
+pub(in crate::app) const ART_COMPACT_HEIGHT: f32 = 30.0;
+/// The width that the drawings are drawn for: the widest of them reaches 101
+/// points from the middle of its band, and four points of air stay on each side.
+pub(in crate::app) const ART_WIDTH: f32 = 210.0;
 /// The corner radius of the band of a drawing.
-const BAND_RADIUS: u8 = 10;
+pub(in crate::app) const BAND_RADIUS: u8 = 10;
 /// The corner radius of a shape inside a drawing.
 const SHAPE_RADIUS: u8 = 5;
 
@@ -222,12 +229,31 @@ pub(in crate::app) fn band(rect: Rect) -> Vec<Shape> {
     ]
 }
 
-/// The band of a drawing and its shapes, moved to `rect`.
-pub(in crate::app) fn art(tile: WelcomeTile, rect: Rect) -> Vec<Shape> {
-    let mut shapes = band(rect);
-    let mut drawing = drawing(tile, rect.size());
-    for shape in &mut drawing {
-        shape.translate(rect.min.to_vec2());
+/// The band of a drawing and its shapes, in the coordinates of the band: its top
+/// left corner is the origin and it is `size` large.
+///
+/// A band that is narrower than [`ART_WIDTH`] or shorter than [`ART_HEIGHT`] is a
+/// compact form of the page, and the drawing is drawn smaller to stand in it, so
+/// the four choices of a small window keep their drawings and no shape of a
+/// drawing reaches outside its band. A band that holds the drawing whole keeps it
+/// in the size of the mockup, in the middle of the band.
+pub(in crate::app) fn local(tile: WelcomeTile, size: Vec2) -> Vec<Shape> {
+    let mut shapes = band(Rect::from_min_size(Pos2::ZERO, size));
+    let mut drawing = drawing(tile, Vec2::new(ART_WIDTH, ART_HEIGHT));
+    let scale = (size.x / ART_WIDTH).min(size.y / ART_HEIGHT).clamp(0.0, 1.0);
+    if (scale - 1.0).abs() > f32::EPSILON {
+        // The drawing is centred on the band that it was drawn for, so it keeps
+        // its middle when it is drawn smaller.
+        let middle = Vec2::new((size.x - ART_WIDTH * scale) * 0.5, (size.y - ART_HEIGHT * scale) * 0.5);
+        for shape in &mut drawing {
+            shape.scale(scale);
+            shape.translate(middle);
+        }
+    } else {
+        let middle = Vec2::new((size.x - ART_WIDTH) * 0.5, 0.0);
+        for shape in &mut drawing {
+            shape.translate(middle);
+        }
     }
     shapes.extend(drawing);
     shapes
@@ -237,7 +263,7 @@ pub(in crate::app) fn art(tile: WelcomeTile, rect: Rect) -> Vec<Shape> {
 mod tests {
     use egui::{Vec2, vec2};
 
-    use super::{ART_HEIGHT, WelcomeTile, art, drawing};
+    use super::{ART_HEIGHT, ART_WIDTH, WelcomeTile, drawing, local};
 
     #[test]
     fn every_tile_draws_shapes_inside_its_band() {
@@ -262,7 +288,10 @@ mod tests {
     #[test]
     fn the_band_moves_the_drawing_to_its_place() {
         let rect = egui::Rect::from_min_size(egui::pos2(30.0, 40.0), vec2(240.0, ART_HEIGHT));
-        let shapes = art(WelcomeTile::Browser, rect);
+        let mut shapes = local(WelcomeTile::Browser, rect.size());
+        for shape in &mut shapes {
+            shape.translate(rect.min.to_vec2());
+        }
         assert!(!shapes.is_empty());
         let moved = shapes
             .iter()
@@ -273,5 +302,24 @@ mod tests {
             moved.min.x >= rect.min.x - 1.0 && moved.max.x <= rect.max.x + 1.0,
             "the drawing is inside its band: {moved:?}"
         );
+    }
+
+    #[test]
+    fn a_band_that_is_too_small_draws_the_drawing_smaller() {
+        for (width, height) in [(ART_WIDTH, ART_HEIGHT), (150.0, ART_HEIGHT), (240.0, 46.0)] {
+            let size = vec2(width, height);
+            let shapes = local(WelcomeTile::Server, size);
+            for shape in &shapes {
+                let bounds = shape.visual_bounding_rect();
+                assert!(
+                    bounds.min.x >= -1.0 && bounds.max.x <= size.x + 1.0,
+                    "a drawing of a band of {size:?} stays inside it: {bounds:?}"
+                );
+                assert!(
+                    bounds.min.y >= -1.0 && bounds.max.y <= size.y + 1.0,
+                    "a drawing of a band of {size:?} stays inside it: {bounds:?}"
+                );
+            }
+        }
     }
 }

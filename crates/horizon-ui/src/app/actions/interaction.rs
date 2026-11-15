@@ -204,6 +204,10 @@ impl HorizonApp {
                 )
             });
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
+        // The first start page is the only thing on the canvas while it shows, and
+        // a person who points at it scrolls the page: the wheel belongs to the page
+        // area, and the canvas under it neither pans nor zooms.
+        let page_owns_scroll = visible_workspace.is_none() && self.welcome_page_visible();
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
                 && !(visible_workspace.is_none()
@@ -211,7 +215,7 @@ impl HorizonApp {
                         .work_resume_overlay_rect(ctx)
                         .is_some_and(|rect| rect.contains(position)))
         });
-        let zoom_delta = canvas_zoom_delta(ctx, pointer_in_canvas);
+        let zoom_delta = canvas_zoom_delta(ctx, pointer_in_canvas && !page_owns_scroll);
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
         let ctrl_or_cmd = modifiers.ctrl || modifiers.command;
@@ -296,8 +300,11 @@ impl HorizonApp {
         });
         let cell_size = crate::terminal_widget::wheel_cell_size(ctx);
         let mut pending_scrollback = None;
-        let mut scroll_routing =
-            route_canvas_scroll(ctx, scroll_target, pointer_in_canvas && !drag_panning, |panel, step| {
+        let mut scroll_routing = route_canvas_scroll(
+            ctx,
+            scroll_target,
+            pointer_in_canvas && !drag_panning && !page_owns_scroll,
+            |panel, step| {
                 // A latched owner outside the pointer's terminal body will
                 // not receive this event, so earlier events cannot move its
                 // predicted scrollback either.
@@ -305,7 +312,8 @@ impl HorizonApp {
                     pending_scrollback = None;
                 }
                 self.panel_scroll_exhausted(panel, step, cell_size, &mut pending_scrollback)
-            });
+            },
+        );
         scroll_routing.discard_displaced_wheels(scroll_target);
         scroll_routing.defer_for_panel_delivery(ctx);
         let pan_delta = if drag_panning {

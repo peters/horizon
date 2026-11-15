@@ -15,6 +15,7 @@
 //! paints them again.
 
 mod art;
+mod cache;
 mod layout;
 mod pickup;
 mod tiles;
@@ -22,14 +23,16 @@ mod tiles;
 pub(in crate::app) use tiles::WelcomeTile;
 
 use egui::{
-    Color32, Context, CornerRadius, CursorIcon, FontId, Id, Order, Painter, Pos2, Rect, Role, Sense, Shape, Stroke,
+    Color32, Context, CornerRadius, CursorIcon, FontId, Id, Order, Painter, Pos2, Rect, Role, Sense, Stroke,
     StrokeKind, Ui, Vec2, WidgetInfo,
 };
 
 use crate::theme;
 use crate::typeface::{self, Weight};
 
-use self::layout::{ROW_GAP, TILE_GAP, tile_width, welcome_columns};
+pub(in crate::app) use self::cache::WelcomeCache;
+use self::cache::WelcomeMetrics;
+use self::layout::{ROW_GAP, TILE_GAP, page_width};
 use self::pickup as pickup_section;
 use super::HorizonApp;
 use super::session_pickup::SessionPickup;
@@ -99,133 +102,6 @@ pub(in crate::app) const LEAD: &str = "Horizon is one canvas for your terminals,
 /// The line that starts the row of shortcuts.
 pub(in crate::app) const SHORTCUTS_LEAD: &str = "You know Horizon already?";
 
-/// What the page remembers, so a still page lays nothing out again.
-#[derive(Default)]
-pub(in crate::app) struct WelcomeCache {
-    /// The width, the theme and the rows of the section that the metrics and the
-    /// drawings belong to.
-    key: Option<WelcomeKey>,
-    metrics: Option<WelcomeMetrics>,
-    drawings: [Option<Shape>; WelcomeTile::ALL.len()],
-}
-
-impl WelcomeCache {
-    /// The metrics of the page for `width` and `pickup_rows` rows of the section,
-    /// measured with `painter`.
-    fn metrics(&mut self, painter: &Painter, width: f32, pickup_rows: usize) -> WelcomeMetrics {
-        let key = WelcomeKey {
-            width: width.to_bits(),
-            theme: theme::current_theme(),
-            pickup_rows,
-        };
-        if self.key != Some(key) {
-            let metrics = WelcomeMetrics::measure(painter, width, pickup_rows);
-            self.key = Some(key);
-            self.metrics = Some(metrics);
-            self.drawings = Default::default();
-        }
-        self.metrics
-            .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct WelcomeKey {
-    width: u32,
-    theme: theme::ResolvedTheme,
-    /// The rows of the section **Pick up where you left off**, which add their
-    /// height to the block of the page.
-    pickup_rows: usize,
-}
-
-/// Where every part of the page stands, for one width and one theme.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct WelcomeMetrics {
-    columns: usize,
-    tile_width: f32,
-    tile_height: f32,
-    heading_height: f32,
-    lead_height: f32,
-    /// The height of the section **Pick up where you left off**, or zero when the
-    /// page shows no row.
-    pickup_height: f32,
-    /// The height of everything the page draws, its pads excluded.
-    block_height: f32,
-}
-
-impl WelcomeMetrics {
-    /// Measures the page that `width` and `pickup_rows` rows of the section give,
-    /// with the wrapped texts laid out once.
-    fn measure(painter: &Painter, width: f32, pickup_rows: usize) -> Self {
-        let columns = welcome_columns(width);
-        let tile = tile_width(width, columns);
-        let sentence_width = (tile - 2.0 * TILE_PAD).max(1.0);
-        let sentences: f32 = WelcomeTile::ALL
-            .iter()
-            .map(|entry| {
-                let galley = painter.layout(
-                    entry.sentence().to_owned(),
-                    FontId::proportional(SENTENCE_FONT),
-                    theme::FG_SOFT(),
-                    sentence_width,
-                );
-                galley.size().y
-            })
-            .fold(0.0, f32::max);
-        #[allow(clippy::cast_precision_loss)]
-        let rows = WelcomeTile::ALL.len().div_ceil(columns.max(1)) as f32;
-        let tile_height = TILE_PAD
-            + art::ART_HEIGHT
-            + TILE_INNER_GAP
-            + TITLE_FONT * TITLE_LINE_HEIGHT
-            + TILE_INNER_GAP
-            + sentences.max(SENTENCE_FONT * SENTENCE_LINE_HEIGHT)
-            + TILE_INNER_GAP
-            + ACTION_FONT * ACTION_LINE_HEIGHT
-            + TILE_PAD;
-        let heading_height = HEADING_FONT * HEADING_LINE_HEIGHT;
-        let lead = painter.layout(
-            LEAD.to_owned(),
-            FontId::proportional(LEAD_FONT),
-            theme::FG_SOFT(),
-            HEADING_MAX_WIDTH.min(width.max(1.0)),
-        );
-        let lead_height = lead.size().y;
-        let shortcuts_height = SHORTCUTS_FONT * 1.45;
-        let pickup_height = if pickup_rows == 0 {
-            0.0
-        } else {
-            pickup::SECTION_GAP + pickup::section_height(pickup_rows)
-        };
-        let block_height = HEADING_GAP
-            + heading_height
-            + HEADING_GAP
-            + lead_height
-            + HEADING_BLOCK_GAP
-            + rows * tile_height
-            + (rows - 1.0).max(0.0) * ROW_GAP
-            + pickup_height
-            + SHORTCUTS_GAP
-            + shortcuts_height;
-        Self {
-            columns,
-            tile_width: tile,
-            tile_height,
-            heading_height,
-            lead_height,
-            pickup_height,
-            block_height,
-        }
-    }
-
-    /// The row and the column of the tile at `index`.
-    #[allow(clippy::cast_precision_loss)]
-    fn cell(&self, index: usize) -> (usize, usize) {
-        let columns = self.columns.max(1);
-        (index / columns, index % columns)
-    }
-}
-
 impl HorizonApp {
     /// Draws the first start page, while the board holds no workspace and no
     /// panel.
@@ -234,8 +110,7 @@ impl HorizonApp {
             return;
         }
         let canvas = self.canvas_rect(ctx);
-        let pad_side = f32::from(PAGE_PAD_SIDE);
-        let width = (canvas.width() - 2.0 * pad_side).max(1.0);
+        let width = page_width(canvas.width());
         // The rows of the section are read before the block is measured, because
         // they are part of its height.
         let pickup = self.session_pickup.first_page();
@@ -245,12 +120,12 @@ impl HorizonApp {
             Order::Background,
             Id::unique("welcome_page_measure"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len());
+        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
         let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
-        let inner = Rect::from_min_max(
-            Pos2::new(canvas.min.x + pad_side, top),
-            Pos2::new((canvas.max.x - pad_side).max(canvas.min.x), canvas.max.y),
-        );
+        // A canvas that is wider than the reading width of the page keeps the same
+        // air on both sides of the block.
+        let left = canvas.min.x + (canvas.width() - width) * 0.5;
+        let inner = Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, canvas.max.y));
         let shortcut_lines = self.shortcut_lines();
         let mut pressed = None;
         let mut pickup_press = None;
@@ -258,11 +133,24 @@ impl HorizonApp {
         egui::Area::new(Id::unique("welcome_page"))
             .fixed_pos(inner.min)
             .order(Order::Foreground)
+            // The page stands where the canvas puts it. egui keeps the area of the
+            // frame before inside the screen, and the size of that area belongs to
+            // the window of the frame before, so a window that becomes smaller
+            // would move the whole page to the corner of the screen for one frame.
+            .constrain(false)
             .show(ctx, |ui| {
                 // The page owns the rect that the canvas gives it, so a tall
                 // block scrolls inside the canvas and a block that fits is drawn
                 // whole, whatever room the layer around the page has.
                 ui.set_max_size(inner.size());
+                // A page that is taller than the canvas moves one canvas for Page
+                // Up and Page Down, in the sign of the scroll of the page.
+                if metrics.block_height + PAGE_PAD_BOTTOM > inner.height() {
+                    let step = page_step(ui, inner.height());
+                    if step != 0.0 {
+                        ui.scroll_with_delta(Vec2::new(0.0, step));
+                    }
+                }
                 egui::ScrollArea::vertical()
                     .id_salt("welcome_page_scroll")
                     .max_height(inner.height())
@@ -337,7 +225,7 @@ impl HorizonApp {
 
     /// Whether the first page shows: no workspace, no panel, and no dialog over
     /// the canvas.
-    fn welcome_page_visible(&self) -> bool {
+    pub(in crate::app) fn welcome_page_visible(&self) -> bool {
         welcome_page_shows(
             self.board.workspaces.len(),
             self.board.panels.len(),
@@ -358,6 +246,26 @@ fn page_top(canvas_height: f32, block_height: f32) -> f32 {
     } else {
         top
     }
+}
+
+/// How far Page Up and Page Down move a page of a canvas `page` high, in the sign
+/// that the scroll of the page takes: Page Down moves to the rows below the
+/// canvas, Page Up back to the rows above it.
+fn page_step(ui: &Ui, page: f32) -> f32 {
+    let (down, up) = ui.input(|input| {
+        (
+            input.key_pressed(egui::Key::PageDown),
+            input.key_pressed(egui::Key::PageUp),
+        )
+    });
+    let mut step = 0.0;
+    if down {
+        step -= page;
+    }
+    if up {
+        step += page;
+    }
+    step
 }
 
 /// Whether the first page shows, from the counts of the board.
@@ -395,7 +303,7 @@ fn paint_page(
         #[allow(clippy::cast_precision_loss)]
         let top = y + row as f32 * (metrics.tile_height + ROW_GAP);
         let rect = Rect::from_min_size(Pos2::new(x, top), Vec2::new(metrics.tile_width, metrics.tile_height));
-        if paint_tile(ui, cache, *tile, rect, index) {
+        if paint_tile(ui, cache, *tile, rect, index, metrics) {
             pressed = Some(*tile);
         }
     }
@@ -476,11 +384,23 @@ fn tile_title_job(text: &str, font: &FontId, color: Color32, max_width: f32, wei
 }
 
 /// Paints one tile, and answers whether the person pressed it.
-fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Rect, index: usize) -> bool {
+fn paint_tile(
+    ui: &mut Ui,
+    cache: &mut WelcomeCache,
+    tile: WelcomeTile,
+    rect: Rect,
+    index: usize,
+    metrics: WelcomeMetrics,
+) -> bool {
     let response = ui.interact(rect, ui.make_persistent_id(("welcome_tile", index)), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, tile.spoken()));
     let hovered = response.hovered();
     let focused = response.has_focus();
+    // Tab may reach a tile that stands below the canvas of a small window, and the
+    // page moves to the tile that the keyboard reached.
+    if response.gained_focus() {
+        response.scroll_to_me(Some(egui::Align::Center));
+    }
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -512,11 +432,16 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
         Pos2::new(rect.min.x + TILE_PAD, rect.min.y + TILE_PAD),
         Pos2::new(rect.max.x - TILE_PAD, rect.max.y - TILE_PAD),
     );
-    // The drawing of a tile is static, so it is built once per width and theme
-    // and painted again on every frame that asks for one.
-    let band = Rect::from_min_size(inner.min, Vec2::new(inner.width(), art::ART_HEIGHT));
-    let drawing = cache.drawings[index].get_or_insert_with(|| Shape::Vec(art::art(tile, band)));
-    painter.add(drawing.clone());
+    // The drawing of a tile is static, so it is built once per size of its band
+    // and theme and painted in the place of the band on every frame. The compact
+    // form of the page gives the band no height, and then the tile keeps no
+    // drawing at all.
+    let band = Rect::from_min_size(inner.min, Vec2::new(inner.width(), metrics.art_height));
+    if band.height() > 0.0 {
+        let mut drawing = cache.drawing(tile, index, band.size());
+        drawing.translate(band.min.to_vec2());
+        painter.add(drawing);
+    }
 
     let mut y = band.max.y + TILE_INNER_GAP;
     let headline = painter.layout_job(tile_title_job(
@@ -526,8 +451,11 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
         inner.width(),
         Weight::Bold,
     ));
-    painter.galley(Pos2::new(inner.min.x, y), headline.clone(), theme::FG());
-    y += headline.size().y + TILE_INNER_GAP;
+    painter.galley(Pos2::new(inner.min.x, y), headline, theme::FG());
+    // The band of the tallest title keeps the sentence of every tile on one line,
+    // and the band of the tallest sentence keeps the press of the tile at the
+    // inner gap under it.
+    y += metrics.title_band + TILE_INNER_GAP;
     let sentence = painter.layout(
         tile.sentence().to_owned(),
         FontId::proportional(SENTENCE_FONT),
@@ -601,17 +529,23 @@ fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String,
 
 #[cfg(test)]
 impl HorizonApp {
+    /// How many drawings of tiles the page built, for a test that asks whether a
+    /// frame of a page that changed nothing built one again.
+    pub(in crate::app) fn welcome_drawing_builds_for_test(&self) -> usize {
+        self.welcome.builds()
+    }
+
     /// The height of the block of the first start page and of its section, for a
     /// test that pins the layout of the page.
     pub(in crate::app) fn welcome_block_heights_for_test(&mut self, ctx: &Context) -> (f32, f32) {
         let canvas = self.canvas_rect(ctx);
-        let width = (canvas.width() - 2.0 * f32::from(PAGE_PAD_SIDE)).max(1.0);
+        let width = page_width(canvas.width());
         let pickup = self.session_pickup.first_page();
         let measure = ctx.layer_painter(egui::LayerId::new(
             Order::Background,
             Id::unique("welcome_page_measure_test"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len());
+        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
         (metrics.block_height, metrics.pickup_height)
     }
 }

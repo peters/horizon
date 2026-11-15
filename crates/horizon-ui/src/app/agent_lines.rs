@@ -48,9 +48,22 @@ const OVERVIEW_ZOOM: f32 = 0.6;
 const CURVE_PULL_SHARE: f32 = 0.45;
 const MIN_CURVE_PULL: f32 = 40.0;
 const MAX_CURVE_PULL: f32 = 260.0;
-/// Below this distance between the ends the curve is a hidden sliver, and two
-/// panels that touch already show that one belongs to the other.
-const MIN_ANCHOR_GAP: f32 = 48.0;
+/// The share of the gap between the two facing edges that one control point may
+/// cross.
+///
+/// A control point that pulls further than half of that gap passes the other
+/// panel, and the curve then folds back under the two panels and draws a curl
+/// beside the agent. A short link stays a plain curve in the gap instead.
+const CURVE_PULL_GAP_SHARE: f32 = 0.5;
+/// The closest that the two facing edges of a pair may stand, in points.
+///
+/// The dot and the ring of a shorter line would merge into one mark, and two
+/// panels that stand that close already say that one belongs to the other.
+/// The rule reads the two panels of the pair, never the two starts: a start
+/// follows the number of lines that leave one side and the place of the other
+/// card, so a card beside its agent would draw its line in one frame and lose it
+/// in the next.
+const MIN_LINK_GAP: f32 = 8.0;
 /// How many points a curve is drawn with.
 const CURVE_SAMPLES: usize = 24;
 
@@ -186,9 +199,9 @@ fn cubic_bezier_point(path: LinePath, step: usize) -> Pos2 {
 
 /// The paths of this frame, from the places of the panels that the pairs name.
 ///
-/// A pair that this canvas does not draw, or two panels that overlap, draws no
-/// path: a start must lie on the edge of the agent panel and outside the other
-/// one.
+/// A pair that this canvas does not draw, two panels that overlap, and two panels
+/// whose facing edges stand closer than [`MIN_LINK_GAP`] draw no path: a start
+/// must lie on the edge of the agent panel and outside the other one.
 pub(super) fn line_paths(
     links: &[AgentLink],
     places: &[(PanelId, Option<Rect>)],
@@ -213,7 +226,8 @@ pub(super) fn line_paths(
     paths
 }
 
-/// The colour of the lines of one agent.
+/// The colour of the lines of one agent, at the strength that this frame gives
+/// them.
 fn line_color(
     accent: usize,
     agent: PanelId,
@@ -221,10 +235,7 @@ fn line_color(
     zoom: f32,
     theme: theme::ResolvedTheme,
 ) -> Color32 {
-    theme::alpha(
-        theme::workspace_accent_for(theme, accent),
-        line_alpha(agent, focus, zoom),
-    )
+    theme::agent_line_color(theme, accent, line_alpha(agent, focus, zoom))
 }
 
 /// The strength of the line of one pair, in alpha.
@@ -275,7 +286,7 @@ fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], canvas: 
         for (slot, (agent, target)) in group.into_iter().enumerate() {
             let start = side.spread(agent, slot, count);
             let end = side.opposite().middle(target);
-            if let Some(path) = curve(start, end, side, color)
+            if let Some(path) = curve(start, end, side, agent, target, color)
                 && path.touches(canvas)
             {
                 paths.push(path);
@@ -285,14 +296,16 @@ fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], canvas: 
     paths
 }
 
-/// The curve from `start` on `side` to `end`, or `None` when the two ends are too
-/// close for a curve that a person can see.
-fn curve(start: Pos2, end: Pos2, side: Side, color: Color32) -> Option<LinePath> {
-    let distance = (end - start).length();
-    if distance < MIN_ANCHOR_GAP {
+/// The curve from `start` on `side` to `end`, or `None` when the two panels of the
+/// pair stand closer than [`MIN_LINK_GAP`].
+fn curve(start: Pos2, end: Pos2, side: Side, agent: Rect, target: Rect, color: Color32) -> Option<LinePath> {
+    if separation(agent, target) < MIN_LINK_GAP {
         return None;
     }
-    let pull = (distance * CURVE_PULL_SHARE).clamp(MIN_CURVE_PULL, MAX_CURVE_PULL);
+    let distance = (end - start).length();
+    let pull = (distance * CURVE_PULL_SHARE)
+        .clamp(MIN_CURVE_PULL, MAX_CURVE_PULL)
+        .min(facing_gap(agent, target, side).max(0.0) * CURVE_PULL_GAP_SHARE);
     let outward = side.outward();
     Some(LinePath {
         start,
@@ -315,6 +328,31 @@ fn place_of(places: &[(PanelId, Option<Rect>)], panel_id: PanelId) -> Option<Rec
 fn overlaps(first: Rect, second: Rect) -> bool {
     let overlap = Rect::from_min_max(first.min.max(second.min), first.max.min(second.max));
     overlap.width() > 0.0 && overlap.height() > 0.0
+}
+
+/// The distance between the two facing edges of a pair, along the axis of those
+/// sides, in points. A negative value says that the two panels overlap on that
+/// axis, so the side that faces the other panel is the other axis.
+fn facing_gap(agent: Rect, target: Rect, side: Side) -> f32 {
+    match side {
+        Side::Left => agent.min.x - target.max.x,
+        Side::Right => target.min.x - agent.max.x,
+        Side::Top => agent.min.y - target.max.y,
+        Side::Bottom => target.min.y - agent.max.y,
+    }
+}
+
+/// The distance between the edges of two panels, in points: zero when the two
+/// touch or cover a common area.
+///
+/// A pair is measured on the two panels and not on the two ends of its line, so a
+/// line does not come and go with the places that the starts take along one side.
+fn separation(first: Rect, second: Rect) -> f32 {
+    let apart = Vec2::new(
+        (second.min.x - first.max.x).max(first.min.x - second.max.x).max(0.0),
+        (second.min.y - first.max.y).max(first.min.y - second.max.y).max(0.0),
+    );
+    apart.length()
 }
 
 /// The agent that a frame shows in focus.
