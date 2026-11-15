@@ -337,24 +337,35 @@ impl HorizonApp {
             .collect()
     }
 
-    pub(super) fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
-        let canvas_position = self.arranged_panel_position(
+    /// The rectangle that a panel takes on the canvas, before the canvas clips it.
+    fn panel_canvas_rect(&self, panel: &Panel) -> Rect {
+        let position = self.arranged_panel_position(
             panel.id,
             panel.workspace_id,
             Pos2::new(panel.layout.position[0], panel.layout.position[1]),
         );
-        let canvas_size = Vec2::new(panel.layout.size[0], panel.layout.size[1]);
-        let screen_rect = clip_screen_rect_to_canvas(
-            Rect::from_min_size(
-                self.canvas_to_screen(canvas_rect, canvas_position),
-                self.canvas_size_to_screen(canvas_size),
-            ),
-            canvas_rect,
-        )?;
+        Rect::from_min_size(position, Vec2::new(panel.layout.size[0], panel.layout.size[1]))
+    }
+
+    /// Where a panel stands on the screen, whether or not the canvas shows it.
+    ///
+    /// A line that an agent draws to a panel keeps the edge of that panel, and not
+    /// the edge of the canvas, when the panel is only partly on the screen. The
+    /// painter of the line clips the line to the canvas.
+    pub(in crate::app) fn panel_screen_place(&self, panel: &Panel, canvas_rect: Rect) -> Rect {
+        let place = self.panel_canvas_rect(panel);
+        Rect::from_min_size(
+            self.canvas_to_screen(canvas_rect, place.min),
+            self.canvas_size_to_screen(place.size()),
+        )
+    }
+
+    pub(super) fn panel_screen_geometry(&self, panel: &Panel, canvas_rect: Rect) -> Option<PanelScreenGeometry> {
+        let canvas_rect_of_panel = self.panel_canvas_rect(panel);
+        let screen_rect = clip_screen_rect_to_canvas(self.panel_screen_place(panel, canvas_rect), canvas_rect)?;
         let has_body = panel.terminal().is_some();
         let terminal_body_screen_rect = has_body.then_some(()).and_then(|()| {
-            let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
-            let body_rect = PanelFrame::new(panel_rect).body;
+            let body_rect = PanelFrame::new(canvas_rect_of_panel).body;
             clip_screen_rect_to_canvas(
                 Rect::from_min_size(
                     self.canvas_to_screen(canvas_rect, body_rect.min),

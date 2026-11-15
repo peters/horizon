@@ -149,6 +149,14 @@ pub(super) struct LinePath {
 }
 
 impl LinePath {
+    /// Whether this line can show on a canvas of `canvas`.
+    ///
+    /// A cubic Bezier stays inside the box of its four points, so this box decides
+    /// that a line which runs off the canvas builds no shape at all.
+    fn touches(self, canvas: Rect) -> bool {
+        Rect::from_points(&[self.start, self.control_start, self.control_end, self.end]).intersects(canvas)
+    }
+
     /// The points of the curve of this line.
     fn points(self) -> Vec<Pos2> {
         let mut points = Vec::with_capacity(CURVE_SAMPLES + 1);
@@ -184,6 +192,7 @@ fn cubic_bezier_point(path: LinePath, step: usize) -> Pos2 {
 pub(super) fn line_paths(
     links: &[AgentLink],
     places: &[(PanelId, Option<Rect>)],
+    canvas: Rect,
     focus: Option<PanelId>,
     zoom: f32,
     theme: theme::ResolvedTheme,
@@ -196,6 +205,7 @@ pub(super) fn line_paths(
         paths.extend(agent_paths(
             &links[index..index + count],
             places,
+            canvas,
             line_color(links[index].accent, agent, focus, zoom, theme),
         ));
         index += count;
@@ -231,7 +241,7 @@ pub(super) fn line_alpha(agent: PanelId, focus: Option<PanelId>, zoom: f32) -> u
 
 /// The paths of the pairs of one agent, with the starts spread along the side
 /// that the lines leave in the order of their ends.
-fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], color: Color32) -> Vec<LinePath> {
+fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], canvas: Rect, color: Color32) -> Vec<LinePath> {
     let mut paths = Vec::new();
     let mut by_side: [Vec<(Rect, Rect)>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for link in links {
@@ -265,7 +275,9 @@ fn agent_paths(links: &[AgentLink], places: &[(PanelId, Option<Rect>)], color: C
         for (slot, (agent, target)) in group.into_iter().enumerate() {
             let start = side.spread(agent, slot, count);
             let end = side.opposite().middle(target);
-            if let Some(path) = curve(start, end, side, color) {
+            if let Some(path) = curve(start, end, side, color)
+                && path.touches(canvas)
+            {
                 paths.push(path);
             }
         }
@@ -350,6 +362,7 @@ impl PlaceKey {
 struct Built {
     links: Vec<AgentLink>,
     places: Vec<(PanelId, Option<PlaceKey>)>,
+    canvas: Option<PlaceKey>,
     zoom: u32,
     pan: [u32; 2],
     focus: Option<PanelId>,
@@ -378,6 +391,7 @@ impl AgentLines {
     /// The shapes of this frame, built only when the key of the shapes changed.
     pub(super) fn shapes(
         &mut self,
+        canvas: Rect,
         view: CanvasViewState,
         focus: Option<PanelId>,
         theme: theme::ResolvedTheme,
@@ -386,15 +400,16 @@ impl AgentLines {
         let unchanged = self
             .built
             .as_ref()
-            .is_some_and(|built| built.matches(&self.links, view, focus, theme, places));
+            .is_some_and(|built| built.matches(&self.links, canvas, view, focus, theme, places));
         if unchanged {
             return self.built.as_ref().map_or(&[], |built| &built.shapes);
         }
-        let paths = line_paths(&self.links, places, focus, view.zoom, theme);
+        let paths = line_paths(&self.links, places, canvas, focus, view.zoom, theme);
         self.builds = self.builds.saturating_add(1);
         let built = self.built.get_or_insert_with(|| Built {
             links: Vec::new(),
             places: Vec::new(),
+            canvas: None,
             zoom: 0,
             pan: [0, 0],
             focus: None,
@@ -407,6 +422,7 @@ impl AgentLines {
         built
             .places
             .extend(places.iter().map(|(id, place)| (*id, PlaceKey::of(*place))));
+        built.canvas = PlaceKey::of(Some(canvas));
         built.zoom = view.zoom.to_bits();
         built.pan = [view.pan_offset[0].to_bits(), view.pan_offset[1].to_bits()];
         built.focus = focus;
@@ -441,12 +457,14 @@ impl Built {
     fn matches(
         &self,
         links: &[AgentLink],
+        canvas: Rect,
         view: CanvasViewState,
         focus: Option<PanelId>,
         theme: theme::ResolvedTheme,
         places: &[(PanelId, Option<Rect>)],
     ) -> bool {
         self.links == links
+            && self.canvas == PlaceKey::of(Some(canvas))
             && self.zoom == view.zoom.to_bits()
             && self.pan == [view.pan_offset[0].to_bits(), view.pan_offset[1].to_bits()]
             && self.focus == focus
@@ -481,8 +499,7 @@ impl HorizonApp {
                     .board
                     .panel(panel_id)
                     .filter(|panel| panel.visible && !self.workspace_is_detached(panel.workspace_id))
-                    .and_then(|panel| self.panel_screen_geometry(panel, canvas_rect))
-                    .map(|geometry| geometry.screen_rect);
+                    .map(|panel| self.panel_screen_place(panel, canvas_rect));
                 places.push((panel_id, place));
             }
         }
@@ -492,7 +509,7 @@ impl HorizonApp {
         let painter = ctx
             .layer_painter(LayerId::new(Order::Background, Id::unique("agent_lines")))
             .with_clip_rect(canvas_rect);
-        for shape in self.agent_lines.shapes(view, focus, theme, &places) {
+        for shape in self.agent_lines.shapes(canvas_rect, view, focus, theme, &places) {
             paint(&painter, shape);
         }
         self.agent_lines.places = places;

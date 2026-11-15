@@ -17,6 +17,11 @@ fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h))
 }
 
+/// A canvas that holds the places of the tests below.
+fn canvas() -> Rect {
+    rect(0.0, 0.0, 1_600.0, 900.0)
+}
+
 fn view(zoom: f32) -> CanvasViewState {
     CanvasViewState::new([0.0, 0.0], zoom)
 }
@@ -37,7 +42,7 @@ fn inside(rect: Rect, point: Pos2) -> bool {
 /// The paths of one pair of panels.
 fn path_of(agent_rect: Rect, target_rect: Rect) -> super::LinePath {
     let places = vec![(PanelId(1), Some(agent_rect)), (PanelId(2), Some(target_rect))];
-    let paths = line_paths(&[link(1, 2, 0)], &places, None, 1.0, DARK);
+    let paths = line_paths(&[link(1, 2, 0)], &places, canvas(), None, 1.0, DARK);
     assert_eq!(paths.len(), 1, "one pair draws one path");
     paths[0]
 }
@@ -110,7 +115,7 @@ fn the_starts_of_three_lines_keep_the_order_of_their_ends() {
         )
         .collect();
 
-    let paths = line_paths(&links, &places, None, 1.0, DARK);
+    let paths = line_paths(&links, &places, canvas(), None, 1.0, DARK);
     assert_eq!(paths.len(), 3, "three pairs draw three paths");
 
     // The ends of the lines, in the order that the lines left the agent panel.
@@ -152,7 +157,7 @@ fn a_line_is_the_same_width_at_every_zoom() {
     for zoom in [0.5, 1.0, 2.0] {
         let mut cache = AgentLines::default();
         cache.links.extend_from_slice(&links);
-        let shapes = cache.shapes(view(zoom), None, DARK, &places).to_vec();
+        let shapes = cache.shapes(canvas(), view(zoom), None, DARK, &places).to_vec();
         assert_eq!(shapes.len(), 3, "one curve, one dot and one ring at zoom {zoom}");
         let Shape::Path(curve) = &shapes[0] else {
             panic!("the curve of zoom {zoom} is a path");
@@ -346,16 +351,14 @@ fn a_second_frame_with_no_change_builds_no_shape() {
     for (index, link) in links.iter().enumerate() {
         let column = index / 20;
         let row = index % 20;
-        places.push((link.agent, Some(rect(0.0, row as f32 * 120.0, 100.0, 80.0))));
-        places.push((
-            link.target,
-            Some(rect(500.0 + column as f32 * 200.0, row as f32 * 120.0, 160.0, 80.0)),
-        ));
+        let y = row as f32 * 40.0;
+        places.push((link.agent, Some(rect(0.0, y, 100.0, 30.0))));
+        places.push((link.target, Some(rect(300.0 + column as f32 * 400.0, y, 160.0, 30.0))));
     }
 
     let mut cache = AgentLines::default();
     cache.links.extend_from_slice(&links);
-    let first = cache.shapes(view(1.0), None, DARK, &places).len();
+    let first = cache.shapes(canvas(), view(1.0), None, DARK, &places).len();
     assert_eq!(
         first,
         3 * 60,
@@ -364,7 +367,7 @@ fn a_second_frame_with_no_change_builds_no_shape() {
     assert_eq!(cache.builds, 1);
     let builds_after_first = cache.builds;
 
-    let second = cache.shapes(view(1.0), None, DARK, &places).len();
+    let second = cache.shapes(canvas(), view(1.0), None, DARK, &places).len();
     assert_eq!(second, first);
     assert_eq!(
         cache.builds, builds_after_first,
@@ -375,7 +378,7 @@ fn a_second_frame_with_no_change_builds_no_shape() {
         .iter()
         .map(|(id, place)| (*id, place.map(|rect| rect.translate(Vec2::new(12.0, 0.0)))))
         .collect();
-    cache.shapes(view(1.0), None, DARK, &moved);
+    cache.shapes(canvas(), view(1.0), None, DARK, &moved);
     assert_eq!(
         cache.builds,
         builds_after_first + 1,
@@ -388,11 +391,32 @@ fn a_second_frame_with_no_change_builds_no_shape() {
 #[test]
 fn a_pair_outside_the_canvas_and_a_board_without_a_pair_draw_nothing() {
     let places = vec![(PanelId(1), Some(rect(0.0, 0.0, 100.0, 80.0))), (PanelId(2), None)];
-    assert!(line_paths(&[link(1, 2, 0)], &places, None, 1.0, DARK).is_empty());
+    assert!(line_paths(&[link(1, 2, 0)], &places, canvas(), None, 1.0, DARK).is_empty());
+
+    // Both ends and the curve of this pair are off the canvas, to the right of it.
+    let off_canvas = vec![
+        (PanelId(1), Some(rect(2_000.0, 200.0, 100.0, 80.0))),
+        (PanelId(2), Some(rect(2_600.0, 200.0, 100.0, 80.0))),
+    ];
+    assert!(
+        line_paths(&[link(1, 2, 0)], &off_canvas, canvas(), None, 1.0, DARK).is_empty(),
+        "a pair that the view does not hold builds no shape"
+    );
+
+    // A line between two panels off the canvas is drawn while it crosses the canvas.
+    let across_the_canvas = vec![
+        (PanelId(1), Some(rect(-300.0, 200.0, 100.0, 80.0))),
+        (PanelId(2), Some(rect(2_000.0, 200.0, 100.0, 80.0))),
+    ];
+    assert_eq!(
+        line_paths(&[link(1, 2, 0)], &across_the_canvas, canvas(), None, 1.0, DARK).len(),
+        1,
+        "the part of a line that crosses the canvas is drawn"
+    );
 
     let mut cache = AgentLines::default();
     cache.links.extend_from_slice(&[link(1, 2, 0)]);
-    assert!(cache.shapes(view(1.0), None, DARK, &places).is_empty());
+    assert!(cache.shapes(canvas(), view(1.0), None, DARK, &places).is_empty());
     assert_eq!(cache.builds, 1, "the frame built the empty set of shapes");
 
     cache.forget();
@@ -403,7 +427,7 @@ fn a_pair_outside_the_canvas_and_a_board_without_a_pair_draw_nothing() {
         (PanelId(2), Some(rect(50.0, 20.0, 100.0, 80.0))),
     ];
     assert!(
-        line_paths(&[link(1, 2, 0)], &overlapping, None, 1.0, DARK).is_empty(),
+        line_paths(&[link(1, 2, 0)], &overlapping, canvas(), None, 1.0, DARK).is_empty(),
         "two panels that cover a common area leave no room for a curve"
     );
 }
