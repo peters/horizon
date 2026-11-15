@@ -27,11 +27,15 @@
 
 use std::time::Duration;
 
+mod agents;
 mod remote;
+mod report;
 #[cfg(test)]
 mod tests;
 
+pub use agents::{AgentObservation, AgentPrograms, observations};
 pub use remote::{REMOTE_TEXT, WatchTarget};
+pub use report::{MachineNote, PaneReport, Report, ReportError, parse_report};
 
 /// The version of the format of one report of a machine. A report of another
 /// version is dropped whole.

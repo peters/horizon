@@ -4,4 +4,5 @@
 #![allow(dead_code)]
 
 mod remote;
+mod report;
 mod support;
