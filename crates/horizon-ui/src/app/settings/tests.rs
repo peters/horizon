@@ -540,8 +540,7 @@ fn app_with_a_terminal_under_the_pane() -> (
                 command: Some("/bin/sh".to_owned()),
                 args: vec![
                     "-c".to_owned(),
-                    "i=0; while [ $i -lt 200 ]; do printf 'LINE-%s\\n' \"$i\"; i=$((i + 1)); done; sleep 60"
-                        .to_owned(),
+                    "i=0; while [ $i -lt 200 ]; do printf 'LINE-%s\\n' \"$i\"; i=$((i + 1)); done; sleep 60".to_owned(),
                 ],
                 position: Some([560.0, 60.0]),
                 size: Some([560.0, 360.0]),
@@ -562,7 +561,10 @@ fn app_with_a_terminal_under_the_pane() -> (
         if text.contains("LINE-199") {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "the terminal of the test prints its lines");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the terminal of the test prints its lines"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     app.toggle_settings();

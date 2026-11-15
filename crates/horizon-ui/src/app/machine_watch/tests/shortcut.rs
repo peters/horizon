@@ -7,8 +7,8 @@ use egui::Context;
 use horizon_core::machine_watch::{AgentState, MachineWatch};
 
 use crate::app::HorizonApp;
-use crate::app::test_support::test_app;
 use crate::app::block_machines::settle_machine_load;
+use crate::app::test_support::test_app;
 
 use super::support::{Server, Ssh, codex_command, record, wait_for, with_machines};
 

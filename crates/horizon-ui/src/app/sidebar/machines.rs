@@ -479,7 +479,10 @@ impl HorizonApp {
 
         // The press of the fold control is no press on the machine, so the row starts
         // after it.
-        let click_rect = Rect::from_min_max(pos2(if foldable { fold.max.x } else { rect.min.x }, rect.min.y), rect.max);
+        let click_rect = Rect::from_min_max(
+            pos2(if foldable { fold.max.x } else { rect.min.x }, rect.min.y),
+            rect.max,
+        );
         let response = ui.interact(
             click_rect,
             ui.make_persistent_id(("sidebar_machine", row.name.as_str())),

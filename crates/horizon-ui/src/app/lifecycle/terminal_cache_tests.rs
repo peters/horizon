@@ -285,7 +285,12 @@ fn collect_painted(shape: &Shape, wanted: &str, found: &mut Vec<PaintedText>) {
                 .galley
                 .rows
                 .iter()
-                .flat_map(|row| row.row.glyphs.iter().map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max)))
+                .flat_map(|row| {
+                    row.row
+                        .glyphs
+                        .iter()
+                        .map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max))
+                })
                 .collect();
             // The window fades a panel in, and the fade scales the alpha of its text
             // only: the colour of the theme is its hue with no alpha.
@@ -316,7 +321,10 @@ fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
         run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     }
     let dark = painted_text(&ctx, &mut app, MARKER);
-    assert!(!dark.is_empty(), "the idle terminal paints its text in the theme of the start");
+    assert!(
+        !dark.is_empty(),
+        "the idle terminal paints its text in the theme of the start"
+    );
 
     // The person picks the light theme in Settings, Appearance: the live preview of the
     // tab applies the draft, as `apply_live_preview` does.
@@ -338,7 +346,10 @@ fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
         "an idle terminal paints the shapes that the theme of this frame builds, and not a \
          cached mesh of the theme before it"
     );
-    assert_ne!(dark, fresh, "the light theme paints other colours and other atlas pictures");
+    assert_ne!(
+        dark, fresh,
+        "the light theme paints other colours and other atlas pictures"
+    );
 
     // The frames between changes keep the cache of the grid, which paints the panel:
     // `terminal_widget::cache_tests::mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid`

@@ -66,12 +66,7 @@ fn window_text_pos(ctx: &Context, app: &mut HorizonApp, wanted: &str) -> Option<
 
 /// The texts that one frame of the window draws at `seconds`, with the pointer moved to
 /// `pointer` when one is given.
-fn window_texts_at(
-    ctx: &Context,
-    app: &mut HorizonApp,
-    pointer: Option<egui::Pos2>,
-    seconds: f64,
-) -> Vec<String> {
+fn window_texts_at(ctx: &Context, app: &mut HorizonApp, pointer: Option<egui::Pos2>, seconds: f64) -> Vec<String> {
     let mut input = raw_input([1200.0, 900.0], None);
     input.time = Some(seconds);
     input.events = pointer.map(egui::Event::PointerMoved).into_iter().collect();

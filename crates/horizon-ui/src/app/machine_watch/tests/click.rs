@@ -10,8 +10,8 @@ use horizon_core::machine_watch::{AgentState, MachineWatch};
 use crate::app::HorizonApp;
 use crate::app::block_machines::settle_machine_load;
 use crate::app::test_support::{raw_input, run_app_frame, test_app};
-use horizon_core::StartupDecision;
 use crate::test_egui::DiscardTextures;
+use horizon_core::StartupDecision;
 
 use super::support::{Server, Ssh, codex_command, record, wait_for, with_machines};
 

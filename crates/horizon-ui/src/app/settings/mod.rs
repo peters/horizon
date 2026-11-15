@@ -639,7 +639,9 @@ fn render_settings_panel(
                                 .inner_margin(Margin::symmetric(SETTINGS_PANEL_MARGIN_X, 16))
                                 .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
                         )
-                        .show(ui, |ui| render_settings_content(ui, panel_state, editor, workbenches, view, general_view))
+                        .show(ui, |ui| {
+                            render_settings_content(ui, panel_state, editor, workbenches, view, general_view)
+                        })
                         .inner,
                 );
             });
