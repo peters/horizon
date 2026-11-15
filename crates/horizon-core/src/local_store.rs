@@ -52,7 +52,7 @@ pub(crate) fn grok_sessions_db_path() -> Option<PathBuf> {
     grok_home_dir().map(|home| home.join("sessions").join("session_search.sqlite"))
 }
 
-fn codex_db_path_in(codex_home: &Path) -> Option<PathBuf> {
+pub(crate) fn codex_db_path_in(codex_home: &Path) -> Option<PathBuf> {
     let supported = codex_home.join("state_5.sqlite");
     supported.is_file().then_some(supported)
 }

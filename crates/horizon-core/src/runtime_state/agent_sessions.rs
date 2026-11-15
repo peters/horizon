@@ -304,6 +304,20 @@ fn load_claude_sessions() -> Result<Vec<AgentSessionRecord>> {
     load_claude_sessions_from_dir(&projects_dir)
 }
 
+/// The sessions that the Claude Code and Codex stores of `home` hold, newest
+/// first, read from the stores of that folder alone.
+///
+/// The pickup list of the first start page reads this, so a store that another
+/// program keeps outside `home` is not part of it: the caller names the folder
+/// that is read, and no variable of the environment moves the read.
+pub(crate) fn load_sessions_of_home(home: &Path) -> Result<Vec<AgentSessionRecord>> {
+    crate::ui_thread::blocking("the Claude Code and Codex session stores are read");
+    let mut sessions = load_claude_sessions_from_dir(&home.join(".claude/projects"))?;
+    sessions.extend(codex::load_sessions_of_home(home)?);
+    sessions.sort_by_key(|session| Reverse(session.updated_at));
+    Ok(sessions)
+}
+
 fn load_claude_sessions_from_dir(projects_dir: &Path) -> Result<Vec<AgentSessionRecord>> {
     if !projects_dir.exists() {
         return Ok(Vec::new());

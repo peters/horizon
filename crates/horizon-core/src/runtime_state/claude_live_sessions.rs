@@ -23,6 +23,18 @@ pub fn live_claude_session_ids() -> HashSet<String> {
         return HashSet::new();
     };
     horizon_browser_control::paths::refuse_real_home(&home);
+    live_claude_session_ids_in(&home, process_is_alive)
+}
+
+/// The session ids that a running Claude Code process of `home` owns.
+///
+/// The live registry is `<home>/.claude/sessions`, and `process_is_alive`
+/// answers whether one process id still runs. The pickup list of the first start
+/// page reads the registry of a named home, and a test gives its own home and
+/// its own answer, so a test never reads the home of a person.
+#[must_use]
+pub(crate) fn live_claude_session_ids_in(home: &Path, process_is_alive: impl Fn(u64) -> bool) -> HashSet<String> {
+    crate::ui_thread::blocking("the live registry of Claude Code is read");
     collect_live_session_ids(&home.join(".claude/sessions"), process_is_alive)
 }
 

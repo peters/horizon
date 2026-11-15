@@ -15,6 +15,10 @@ const MAX_PARENT_CANDIDATE_STEPS: usize = 64;
 const MAX_PARENT_TRAVERSAL_STEPS_PER_BINDING: usize = MAX_PARENT_CANDIDATE_STEPS * 2;
 const MAX_MALFORMED_ROW_WARNINGS: usize = 3;
 const MAX_ROLLOUT_METADATA_BYTES: u64 = 1024 * 1024;
+/// The most rows that the session catalog reads from the store, newest first.
+/// The list that a person reads holds fewer rows than this, so the bound only
+/// keeps a large store from answering everything.
+const MAX_CODEX_SESSION_ROWS: usize = 200;
 
 #[derive(Clone)]
 enum RootResolution {
@@ -273,6 +277,17 @@ pub(super) fn load_sessions(binding_ids: &HashSet<String>, include_session_catal
     load_sessions_from_path_with_catalog(&sqlite_path, binding_ids, include_session_catalog)
 }
 
+/// The active sessions of the Codex store of `home`, newest first.
+///
+/// A store that is not there answers no session: a person who never ran Codex
+/// has no row to pick up.
+pub(super) fn load_sessions_of_home(home: &Path) -> Result<Vec<AgentSessionRecord>> {
+    let Some(sqlite_path) = crate::local_store::codex_db_path_in(&home.join(".codex")) else {
+        return Ok(Vec::new());
+    };
+    Ok(load_sessions_from_path_with_catalog(&sqlite_path, &HashSet::new(), true)?.sessions)
+}
+
 fn load_sessions_from_path_with_catalog(
     sqlite_path: &Path,
     binding_ids: &HashSet<String>,
@@ -321,7 +336,8 @@ fn load_active_sessions(connection: &Connection) -> Vec<AgentSessionRecord> {
         "SELECT id, rollout_path, source, substr(title, 1, 256), cwd, updated_at, archived
          FROM threads
          WHERE archived = 0
-         ORDER BY updated_at DESC",
+         ORDER BY updated_at DESC
+         LIMIT ?1",
     ) {
         Ok(statement) => statement,
         Err(error) => {
@@ -329,7 +345,8 @@ fn load_active_sessions(connection: &Connection) -> Vec<AgentSessionRecord> {
             return Vec::new();
         }
     };
-    let mut rows = match statement.query([]) {
+    let limit = i64::try_from(MAX_CODEX_SESSION_ROWS).unwrap_or(i64::MAX);
+    let mut rows = match statement.query(params![limit]) {
         Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%error, "failed querying optional Codex session catalog");

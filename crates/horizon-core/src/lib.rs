@@ -15,6 +15,7 @@ mod device;
 pub mod dir_search;
 mod editor;
 mod error;
+mod folder_id;
 mod horizon_home;
 mod layout;
 mod local_store;
@@ -35,6 +36,7 @@ pub mod search;
 pub mod secret;
 pub mod secret_store;
 pub mod server_link;
+pub mod session_pickup;
 mod session_store;
 pub mod settings_sync;
 pub mod setup;
@@ -76,6 +78,7 @@ pub use config::{
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
+pub use folder_id::{folder_identity, same_folder};
 pub use horizon_home::{HorizonHome, HorizonHomeError, browser_mcp_executable};
 pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use machines::{
@@ -112,6 +115,7 @@ pub use runtime_state::{
 pub use search::{PanelSearchResult, SearchMatch, SearchOptions, SearchResults, search_board};
 pub use secret::{MachineKeyFiles, SecretError, SecretId, SecretKind, SecretTarget, SecretVault};
 pub use server_link::{JoinLink, LinkError, ServerAddress, allows_address, check_address, check_code, normalize_code};
+pub use session_pickup::{PickupFolder, PickupList, PickupProgram, PickupRow, PickupState, READ_PROGRAMS};
 pub use session_store::{
     ResolvedSession, SessionDeletionNotice, SessionLease, SessionOpenDisposition, SessionStore, SessionSummary,
     StartupChooser, StartupDecision, StartupPromptReason,
