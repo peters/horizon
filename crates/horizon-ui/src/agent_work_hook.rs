@@ -47,11 +47,10 @@ struct HookContext {
 
 impl HookContext {
     fn from_environment() -> Option<Self> {
-        let kind = match std::env::var(WORK_KIND_ENV).ok()?.as_str() {
-            "claude" => PanelKind::Claude,
-            "codex" => PanelKind::Codex,
-            _ => return None,
-        };
+        let name = std::env::var(WORK_KIND_ENV).ok()?;
+        // Only the kinds whose program Horizon gives a report to can record an
+        // event; a value that names another kind of panel is refused here.
+        let kind = horizon_core::agent_work::work_kind_of(&name)?;
         let root = PathBuf::from(std::env::var_os(WORK_ROOT_ENV)?);
         if !root.is_absolute() {
             return None;

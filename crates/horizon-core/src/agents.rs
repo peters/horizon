@@ -84,6 +84,10 @@ pub enum AgentIntegrationKind {
     None,
     CodexMcp,
     ClaudePluginDir,
+    /// The state report that Horizon gives a pi panel with `-e`. The extension
+    /// sends the lifecycle events of pi to the work entry of this Horizon, so
+    /// the panel reports its state like a Claude panel does.
+    PiExtension,
     GrokMcp,
 }
 
@@ -118,16 +122,25 @@ impl AgentDefinition {
     /// Whether Horizon gives this kind its own arguments at every launch, with
     /// the default command or with a command of the preset: the plugin folder
     /// of its tools, and the session identity of the conversation.
+    ///
+    /// Claude hands Horizon the identity of its conversation with
+    /// `--session-id`, so a Claude launch reports its state only when Horizon
+    /// names that conversation. A pi launch names no conversation: Horizon adds
+    /// the report extension with `-e`, and the extension reports the events of
+    /// the process it runs in.
     #[must_use]
     pub const fn receives_horizon_arguments(self) -> bool {
-        matches!(self.integration, AgentIntegrationKind::ClaudePluginDir)
-            && matches!(
+        match self.integration {
+            AgentIntegrationKind::ClaudePluginDir => matches!(
                 self.resume_mode,
                 AgentResumeMode::ExactFlag {
                     fresh_session_flag: Some(_),
                     ..
                 }
-            )
+            ),
+            AgentIntegrationKind::PiExtension => true,
+            AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp | AgentIntegrationKind::GrokMcp => false,
+        }
     }
 
     #[must_use]
@@ -213,7 +226,7 @@ const PI: AgentDefinition = AgentDefinition {
         fresh_session_flag: None,
     },
     session_validation: AgentSessionValidationMode::None,
-    integration: AgentIntegrationKind::None,
+    integration: AgentIntegrationKind::PiExtension,
     kitty_keyboard: true,
 };
 

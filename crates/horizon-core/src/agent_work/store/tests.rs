@@ -612,3 +612,73 @@ fn a_lock_that_another_description_holds_for_a_moment_is_waited_for() {
         .expect("a short holder is waited for, not reported as a busy ledger");
     release.join().expect("release the lock");
 }
+
+/// A pi launch registers a record like a Claude launch, and the kind of the
+/// record guards it: an event that names another program is refused, so a
+/// payload of one agent can never move the state of a panel of another.
+#[test]
+fn a_pi_launch_keeps_its_record_and_refuses_the_event_of_another_program() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let transcript = directory.path().join("session.jsonl");
+    let store = WorkStore::new(directory.path());
+    store
+        .register_owner("pi-panel", PanelKind::Pi, "pi-owner", None, directory.path())
+        .expect("a pi launch registers its record");
+    let input: HookInput = serde_json::from_value(serde_json::json!({
+        "session_id": "pi-process-1", "prompt_id": "turn-1", "hook_event_name": "UserPromptSubmit",
+        "cwd": directory.path(), "transcript_path": transcript
+    }))
+    .expect("input");
+    // The launch named no conversation, so the report names its own.
+    store
+        .apply_hook("pi-panel", PanelKind::Pi, "pi-owner", &input, 1)
+        .expect("the report of the launch moves the record");
+    let record = store.read("pi-panel").expect("read").expect("record");
+    assert_eq!(record.kind, PanelKind::Pi);
+    assert_eq!(record.ledger.session_id, "pi-process-1");
+    assert_eq!(record.ledger.state, TurnState::Working);
+    // The same event with the kind of another program, and with another token,
+    // is refused: neither can move the state of this panel.
+    for (kind, owner) in [(PanelKind::Claude, "pi-owner"), (PanelKind::Pi, "another-launch")] {
+        assert!(
+            store.apply_hook("pi-panel", kind, owner, &input, 2).is_err(),
+            "the record of a pi launch accepts only the report of its own launch"
+        );
+    }
+    // A kind that Horizon gives no report to is no launch identity at all.
+    for kind in [PanelKind::Shell, PanelKind::Gemini, PanelKind::Browser] {
+        assert!(
+            store
+                .register_owner("unreported", kind, "owner", None, directory.path())
+                .is_err(),
+            "{kind:?} has no report that a record could hold"
+        );
+    }
+}
+
+/// The names of the programs that report their state: one home for the value of
+/// the launch variable, in the launcher and in the entry that reads it back.
+#[test]
+fn the_kind_names_of_the_report_round_trip() {
+    let mut named = Vec::new();
+    for kind in crate::agents::all_agent_kinds() {
+        if let Some(name) = super::super::work_kind_name(*kind) {
+            assert_eq!(
+                super::super::work_kind_of(name),
+                Some(*kind),
+                "the name of {kind:?} names that kind"
+            );
+            named.push(name);
+        }
+    }
+    assert_eq!(
+        named,
+        vec!["codex", "claude", "pi"],
+        "the programs that report a state, in the order of the agent list"
+    );
+    assert_eq!(
+        super::super::work_kind_of("gemini"),
+        None,
+        "an unknown name names nothing"
+    );
+}

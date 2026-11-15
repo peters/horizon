@@ -77,8 +77,10 @@ impl WorkLaunch<'_> {
     ///
     /// A launch that continues the work of its panel needs the owned provider
     /// command, because only a joined provider proves its exit. A launch that is
-    /// only observed needs nothing more than the hooks: the record, the plugin
-    /// folder and the five variables.
+    /// only observed needs nothing more than the report of its agent: the
+    /// record, the folder or the file that the program loads, and the five
+    /// variables. A kind whose report is not on disk attaches nothing, because
+    /// the program would not start without it.
     pub(crate) fn attach(
         &self,
         owned_command: Option<&str>,
@@ -98,14 +100,13 @@ impl WorkLaunch<'_> {
             .canonicalize()
             .ok()?;
         let home = HorizonHome::resolve();
-        let plugin = home.agent_work_plugin_dir_for_host(crate::browser::manifest::host_instance());
-        if !plugin.join("hooks/hooks.json").is_file() {
+        let report = self.report_argument(&home)?;
+        let Some(kind) = super::work_kind_name(self.kind) else {
             return None;
-        }
+        };
         let executable = std::env::current_exe().ok()?;
         let executable = executable.to_str()?;
         let root = home.root().to_str()?;
-        let plugin = plugin.to_str()?;
         let token = uuid::Uuid::new_v4().to_string();
         let store = WorkStore::new(home.root());
         if store
@@ -120,13 +121,12 @@ impl WorkLaunch<'_> {
         if let Some(owned_command) = owned_command {
             owned_command.clone_into(&mut args[1]);
         }
-        args[1].push_str(" --plugin-dir ");
-        args[1].push_str(&quote_argument(plugin));
+        args[1].push_str(&report);
         for (key, value) in [
             (WORK_ROOT_ENV, root),
             (WORK_PANEL_ENV, self.panel),
             (WORK_OWNER_ENV, &token),
-            (WORK_KIND_ENV, "claude"),
+            (WORK_KIND_ENV, kind),
             (WORK_EXECUTABLE_ENV, executable),
         ] {
             env.insert(key.to_owned(), value.to_owned());
@@ -138,6 +138,34 @@ impl WorkLaunch<'_> {
             interrupted: AtomicBool::new(false),
             continues: self.continues_work(),
         }))
+    }
+
+    /// The argument that makes the agent of this panel report its state, with
+    /// the file that the argument names, or `None` when that file is not on disk.
+    ///
+    /// A Claude launch loads the plugin folder of the work hooks with
+    /// `--plugin-dir`; a pi launch loads the report extension with `-e`. Both are
+    /// shell-quoted, so a path stays data, and both are appended to the command
+    /// of the panel whatever command its preset names, as Claude's own command
+    /// does today.
+    fn report_argument(&self, home: &HorizonHome) -> Option<String> {
+        let host = crate::browser::manifest::host_instance();
+        let (flag, path, present) = match self.kind {
+            PanelKind::Claude => {
+                let path = home.agent_work_plugin_dir_for_host(host);
+                let present = path.join("hooks/hooks.json").is_file();
+                ("--plugin-dir", path, present)
+            }
+            PanelKind::Pi => {
+                let path = home.agent_work_extension_path_for_host(host);
+                let present = path.is_file();
+                ("-e", path, present)
+            }
+            _ => return None,
+        };
+        let path = path.to_str()?;
+        let report = format!(" {flag} {}", quote_argument(path));
+        present.then_some(report)
     }
 }
 

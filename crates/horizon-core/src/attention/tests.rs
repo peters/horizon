@@ -353,3 +353,32 @@ fn a_relaunch_begins_again_with_the_screen_rule() {
     assert!(board.observe_working("panel", true, false, 30));
     assert_eq!(board.state("panel"), Attention::Working);
 }
+
+/// The rule of the owner beside the screen: an exact source decides, and the
+/// working indicator is a guess. The stale timer of a spinner therefore cannot
+/// end a turn that the record holds open, and a spinner cannot reopen a turn
+/// that the record closed. A Claude launch and a pi launch share this path.
+#[test]
+fn the_screen_of_a_panel_with_a_report_cannot_end_or_reopen_its_turn() {
+    let mut board = board();
+    board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+    assert_eq!(board.state("panel"), Attention::Working);
+    // The agent worked for two seconds without a repaint of its spinner, which
+    // is the stale timer of the working indicator.
+    assert!(!board.observe_working("panel", false, false, 12));
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "a turn that the report holds open needs no spinner"
+    );
+    board.observe_ledger("panel", &ledger(TurnState::Finished, 20), 20);
+    assert_eq!(board.state("panel"), Attention::Done);
+    // A line of the screen that looks like a working indicator is the guess of
+    // the fallback, and the record is exact.
+    assert!(!board.observe_working("panel", true, false, 30));
+    assert_eq!(
+        board.state("panel"),
+        Attention::Done,
+        "a spinner cannot reopen a turn that the report closed"
+    );
+}

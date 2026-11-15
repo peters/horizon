@@ -105,7 +105,7 @@ impl WorkStore {
         session_id: Option<&str>,
         cwd: &Path,
     ) -> io::Result<()> {
-        if !matches!(kind, PanelKind::Claude | PanelKind::Codex) || !cwd.is_absolute() {
+        if !matches!(kind, PanelKind::Claude | PanelKind::Codex | PanelKind::Pi) || !cwd.is_absolute() {
             return Err(invalid("invalid launch identity"));
         }
         let health_path = self.health_path(panel, owner)?;

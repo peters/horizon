@@ -30,6 +30,35 @@ pub const WORK_KIND_ENV: &str = "HORIZON_WORK_KIND";
 pub const WORK_EXECUTABLE_ENV: &str = "HORIZON_WORK_EXECUTABLE";
 pub const HOOK_COMMAND: &str = "\"${HORIZON_WORK_EXECUTABLE}\" --agent-work-hook";
 pub const HOOK_SHELL: &str = "bash";
+/// The argument of this binary that records one lifecycle event. A hook command
+/// names it after the executable, and the report extension of a pi panel starts
+/// the executable with it.
+pub const HOOK_ARGUMENT: &str = "--agent-work-hook";
+/// The values of [`WORK_KIND_ENV`]: the program whose events the record holds.
+pub const WORK_KIND_CLAUDE: &str = "claude";
+pub const WORK_KIND_CODEX: &str = "codex";
+pub const WORK_KIND_PI: &str = "pi";
+
+/// The name of a program that a launch of `kind` reports its state with.
+#[must_use]
+pub const fn work_kind_name(kind: crate::PanelKind) -> Option<&'static str> {
+    match kind {
+        crate::PanelKind::Claude => Some(WORK_KIND_CLAUDE),
+        crate::PanelKind::Codex => Some(WORK_KIND_CODEX),
+        crate::PanelKind::Pi => Some(WORK_KIND_PI),
+        _ => None,
+    }
+}
+
+/// The panel kind that a value of [`WORK_KIND_ENV`] names.
+#[must_use]
+pub fn work_kind_of(name: &str) -> Option<crate::PanelKind> {
+    crate::agents::all_agent_kinds()
+        .iter()
+        .copied()
+        .find(|kind| work_kind_name(*kind) == Some(name))
+}
+
 pub(crate) const WORK_ENV_KEYS: [&str; 5] = [
     WORK_ROOT_ENV,
     WORK_PANEL_ENV,

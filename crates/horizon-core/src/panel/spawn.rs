@@ -3,6 +3,8 @@ mod attention_standin_tests;
 mod block;
 mod browser;
 mod device;
+#[cfg(test)]
+mod pi_attention_tests;
 mod start;
 mod terminal;
 
@@ -633,7 +635,10 @@ fn resolve_agent_launch_command(
         {
             vec!["--no-leader".to_string()]
         }
-        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp | AgentIntegrationKind::GrokMcp => Vec::new(),
+        AgentIntegrationKind::None
+        | AgentIntegrationKind::CodexMcp
+        | AgentIntegrationKind::GrokMcp
+        | AgentIntegrationKind::PiExtension => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
     match definition.resume_mode {
