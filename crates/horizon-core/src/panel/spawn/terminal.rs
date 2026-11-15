@@ -36,9 +36,26 @@ struct TerminalPanelBuildArgs {
     launch_args: Vec<String>,
     launch_cwd: Option<PathBuf>,
     ssh_connection: Option<SshConnection>,
-    opened_by: Option<String>,
+    opener: Opener,
     machine: Option<String>,
     machine_session: Option<String>,
+}
+
+/// The mark that the titlebar of a panel shows and the actor of the agent panel
+/// that opened it, as one value of the panel that a build makes.
+#[derive(Clone, Debug, Default)]
+struct Opener {
+    /// The display name of the kind of the opener, which is the text of the chip.
+    mark: Option<String>,
+    /// The `horizon:<local id>` actor of the opener, which names one panel of
+    /// the board.
+    actor: Option<String>,
+}
+
+impl Opener {
+    fn of(mark: Option<String>, actor: Option<String>) -> Self {
+        Self { mark, actor }
+    }
 }
 
 /// What a placeholder panel says instead of running its process.
@@ -131,7 +148,7 @@ pub(in crate::panel) fn placeholder_panel(
             launch_args: args,
             launch_cwd: cwd,
             ssh_connection: saved_ssh_connection,
-            opened_by: None,
+            opener: Opener::default(),
             machine: None,
             machine_session: None,
         },
@@ -216,6 +233,7 @@ fn terminal_panel_args(
         session_binding,
         ssh_connection,
         opened_by,
+        opened_by_actor,
         machine,
         machine_session,
         ..
@@ -238,7 +256,7 @@ fn terminal_panel_args(
         launch_args: args,
         launch_cwd: cwd,
         ssh_connection,
-        opened_by,
+        opener: Opener::of(opened_by, opened_by_actor),
         machine,
         machine_session,
     }
@@ -286,11 +304,11 @@ pub(super) fn spawn_started_terminal(
         is_restore: _,
         launch_wrapper,
         opened_by,
+        opened_by_actor,
         machine,
         machine_session,
         ..
     } = opts;
-    let (saved_cwd, saved_ssh_connection) = (cwd.clone(), ssh_connection.clone());
     let PreparedLaunch {
         session_binding,
         program,
@@ -300,7 +318,7 @@ pub(super) fn spawn_started_terminal(
         named_secrets_late,
     } = launch;
     let replay_bytes = replay_bytes_with_notice(replay_bytes, named_secrets_late);
-    let (has_custom_name, title) = panel_title(name, name_is_custom, id, saved_ssh_connection.as_ref());
+    let (has_custom_name, title) = panel_title(name, name_is_custom, id, ssh_connection.as_ref());
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
     let panel_args = TerminalPanelBuildArgs {
         id,
@@ -317,9 +335,9 @@ pub(super) fn spawn_started_terminal(
         has_custom_name,
         launch_command: command,
         launch_args: args,
-        launch_cwd: saved_cwd,
-        ssh_connection: saved_ssh_connection,
-        opened_by,
+        launch_cwd: cwd.clone(),
+        ssh_connection,
+        opener: Opener::of(opened_by, opened_by_actor),
         machine,
         machine_session,
     };
@@ -510,7 +528,7 @@ fn build_terminal_panel(
         launch_args,
         launch_cwd,
         ssh_connection,
-        opened_by,
+        opener,
         machine,
         machine_session,
     } = panel_args;
@@ -543,7 +561,8 @@ fn build_terminal_panel(
         launch_cwd,
         cwd_read: None,
         ssh_connection,
-        opened_by,
+        opened_by: opener.mark,
+        opened_by_actor: opener.actor,
         machine,
         machine_session,
         ssh_status,

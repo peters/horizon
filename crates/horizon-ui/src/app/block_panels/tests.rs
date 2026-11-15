@@ -546,12 +546,22 @@ fn the_mark_and_the_directory_are_saved_with_the_panel() {
 
     let panel = saved(&app, &panel_id);
     assert_eq!(panel.opened_by.as_deref(), Some("Claude"));
+    assert_eq!(
+        panel.opened_by_actor.as_deref(),
+        Some(horizon_core::browser_actor(&app.board.panels[0].local_id).as_str()),
+        "the actor of the agent panel that asked is saved with the mark"
+    );
     assert_eq!(panel.cwd.as_deref(), Some(work.to_str().expect("a path")));
     let restored = panel.to_panel_options(&horizon_core::browser::BrowserConfig::default());
     assert_eq!(
         restored.opened_by,
         Some("Claude".to_string()),
         "a restored panel keeps its mark"
+    );
+    assert_eq!(
+        restored.opened_by_actor,
+        panel.opened_by_actor.clone(),
+        "a restored panel keeps the actor of its opener"
     );
     assert_eq!(
         restored.cwd.as_deref(),

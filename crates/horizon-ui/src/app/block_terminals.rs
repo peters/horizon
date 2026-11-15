@@ -73,11 +73,13 @@ impl HorizonApp {
         );
         let name = title.map_or_else(|| connection.display_label(), BlockPanelState::normalize_title);
         let agent_name = self.opener_mark(actor);
+        let agent_actor = self.opener_actor(actor);
         let options = PanelOptions {
             kind: PanelKind::Ssh,
             name: Some(name),
             ssh_connection: Some(connection),
             opened_by: Some(agent_name),
+            opened_by_actor: agent_actor,
             ..PanelOptions::default()
         };
         let focused = self.board.focused;

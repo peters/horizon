@@ -97,6 +97,7 @@ impl HorizonApp {
 
         self.animate_pan(ctx);
         self.maybe_refresh_session_catalog(ctx);
+        self.poll_folder_requests(ctx);
         self.poll_session_pickup(ctx);
         self.poll_remote_hosts_refresh(ctx);
         self.poll_ssh_upload_flow();

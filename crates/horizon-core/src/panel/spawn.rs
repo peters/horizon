@@ -206,6 +206,7 @@ impl StaticPanelSeed {
             cwd_read: None,
             ssh_connection: None,
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
             ssh_status: None,

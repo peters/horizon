@@ -86,6 +86,8 @@ impl HorizonApp {
                     &title,
                     connection_for(&terminal, key.as_ref()),
                     Some(OPENED_FROM_MACHINES.to_owned()),
+                    // A person pressed the row, so no agent panel opened it.
+                    None,
                 );
                 // The person pressed the row, so the reason of a terminal that
                 // did not start is theirs to read, not the log's only.

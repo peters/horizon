@@ -67,6 +67,10 @@ impl HorizonApp {
             .panel(actor.panel_id)
             .map_or("Agent", |panel| panel.kind.display_name())
             .to_owned();
+        let agent_actor = self
+            .board
+            .panel(actor.panel_id)
+            .map(|panel| horizon_core::browser_actor(&panel.local_id));
         let (name, title) = (name.to_owned(), title.map_or_else(|| record.title(), str::to_owned));
         let (root, request) = (root.map(Path::to_path_buf), request.clone());
         let (writing, owner, workspace) = (ctx.clone(), request.actor.clone(), actor.workspace_id);
@@ -85,6 +89,7 @@ impl HorizonApp {
                             &title,
                             connection_for(&terminal, key.as_ref()),
                             Some(agent_name),
+                            agent_actor,
                         );
                         let focused = app.board.focused;
                         match app.create_machine_panel(workspace, options, Some(actor.panel_id)) {
@@ -202,12 +207,14 @@ pub(super) fn machine_panel_options(
     title: &str,
     connection: SshConnection,
     opened_by: Option<String>,
+    opened_by_actor: Option<String>,
 ) -> PanelOptions {
     PanelOptions {
         kind: PanelKind::Ssh,
         name: Some(BlockPanelState::normalize_title(title)),
         ssh_connection: Some(connection),
         opened_by,
+        opened_by_actor,
         machine: Some(name.to_owned()),
         local_id: Some(horizon_core::new_local_id()),
         ..PanelOptions::default()

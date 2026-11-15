@@ -658,7 +658,12 @@ One thin curve runs from the edge of an agent panel to the edge of each panel
 that the agent controls: a card that it drew, a page that it drives, and a
 terminal or a preset panel that it opened for the person. The pairs come from
 the owner and the opener facts of the board, so a panel without one carries no
-line.
+line. The owner of a card, the owner of a page and the opener of a panel are the
+`horizon:<local id>` actor of the agent panel, so two agent panels of one kind
+each keep the lines of the panels that they control. A panel that a session of an
+older build saved holds no actor, and its mark says only the kind of its opener:
+the mark names one panel when one agent panel of that kind stands in the
+workspace, and no panel when two do.
 
 - Colour: the workspace accent of the agent, so two agents of one workspace
   differ. The agent takes the accent of its place among the agent panels of its

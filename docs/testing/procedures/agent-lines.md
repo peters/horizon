@@ -24,9 +24,13 @@ the lines off.
 - Platforms: Linux, because the fixture needs an isolated X11 desktop.
 - This procedure does not test: a line to a Device viewer or to a card that
   Horizon wrote itself, because those panels carry no owner fact.
-- This procedure does not test: a line from two agents of one kind in one
-  workspace, because such a mark names neither agent. Section 6.3 gives the
-  behaviour.
+- This procedure also tests two agents of one kind in one workspace, because an
+  opened panel saves the actor of the panel that opened it beside the mark of its
+  kind. Section 6.2 names that case.
+- This procedure does not test: a panel that a session of an older build saved
+  without the actor of its opener. Such a panel keeps the older rule: its mark
+  names one panel only when one agent panel of that kind stands in its
+  workspace.
 
 ## 3. Safety
 
@@ -39,8 +43,7 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   [the device smoke fixture](../../../scripts/device-smoke/README.md).
 - A Horizon native VNC Device panel in the current workspace, for the live view.
 - Two agent presets of different kinds in the settings, for example Claude Code
-  and Codex. Two agents of one kind cannot share one workspace in this
-  procedure, because the mark of an opened panel holds the kind of its opener.
+  and Codex. Two panels of one preset also work, for section 6.2.
 - The value of the setting **Lines between an agent and its panels** is on, which
   is its default.
 
@@ -100,6 +103,27 @@ fixture keeps its state in its own folder and touches no real Horizon home.
    runs from the Claude panel to it. The three lines of the Claude panel leave
    its side at three different places, and they do not cross each other near
    the panel.
+
+### 6.2b AL-2b — Two agents of one kind
+
+1. Open a second Claude Code panel in the same workspace, in a free place.
+
+   Result: the board shows three agent panels and no new line.
+
+2. In the first Claude panel, write: `Draw a card with the title First`. In the
+   second Claude panel, write: `Draw a card with the title Second`.
+
+   Result: two cards appear. Two lines run, and each one starts at the panel that
+   asked for its card: the line of `First` starts at the first Claude panel and
+   the line of `Second` starts at the second one. Both lines carry the accent of
+   their own agent.
+
+3. In each Claude panel, write: `Open an SSH terminal on build@192.0.2.11` and
+   `Open an SSH terminal on build@192.0.2.12`.
+
+   Result: two SSH terminals appear, and each line starts at the Claude panel that
+   asked for its terminal, also though both terminals carry the mark
+   `Opened by Claude`.
 
 ### 6.3 AL-3 — The agent in focus
 
@@ -179,7 +203,8 @@ fixture keeps its state in its own folder and touches no real Horizon home.
 ## 7. Pass criteria
 
 - A line runs from an agent panel to each card, page and terminal panel that the
-  agent controls, and to no other panel.
+  agent controls, and to no other panel. Each line starts at the panel that
+  asked, also when two agent panels of one kind stand in one workspace.
 - The line leaves the side of the panel that faces the other panel, with a dot at
   the agent end and a ring at the other end, at 1.5 points wide.
 - Two agents of one workspace have two colours, and the lines of the agent in

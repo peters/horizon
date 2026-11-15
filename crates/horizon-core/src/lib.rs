@@ -17,6 +17,7 @@ pub mod dir_search;
 mod editor;
 mod error;
 mod folder_id;
+pub mod folder_requests;
 mod horizon_home;
 mod layout;
 mod local_store;

@@ -52,6 +52,7 @@ pub(crate) use device_video::queue_recording_directory_delete;
 mod editor_saves;
 mod file_drop;
 mod file_drop_highlight;
+mod folder_requests;
 mod frame_stats;
 mod keyboard_focus;
 mod lifecycle;
@@ -418,8 +419,10 @@ pub struct HorizonApp {
     /// on a worker for the first start page and the Menu.
     session_pickup: session_pickup::SessionPickup,
     /// The folder of a `horizon <folder>` start, until the first frame that can
-    /// show its workspace.
-    startup_folder: Option<std::path::PathBuf>,
+    /// show its workspace, and the request of a second start that named it.
+    startup_folder: Option<startup_folder::StartupFolder>,
+    /// The folder requests of a second `horizon <folder>` of this home.
+    folder_requests: folder_requests::FolderRequestPump,
     startup_receiver: Option<Receiver<StartupBootstrapOutcome>>,
     pending_startup_runtime_state: Option<RuntimeState>,
     pending_startup_runtime_state_changed: bool,

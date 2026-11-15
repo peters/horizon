@@ -201,7 +201,7 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
     let config = load_config_or_exit(&resolved_config_path, cli_args.config_path.is_some());
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     sweep_private_browser_profiles(&session_store, &config, horizon_home);
-    refuse_folder_when_horizon_runs(&session_store, cli_args);
+    show_folder_in_running_horizon(&session_store, cli_args, horizon_home);
     let startup = prepare_startup(&session_store, &config, cli_args);
 
     let window = startup_window_config(&startup, &config.window);
@@ -524,23 +524,57 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
     }
 }
 
-/// Ends the start of `horizon <folder>` with one line when a Horizon of this home
-/// already runs.
+/// Shows the folder of `horizon <folder>` in a Horizon of this home that already
+/// runs, and ends this start with one line.
 ///
 /// A running Horizon keeps a lease with a heartbeat for each session that it
-/// holds, so this start can see it. This build has no channel that asks the
-/// running window to open a folder, and this round builds none: the sentence says
-/// that the folder was not opened there, and the status is zero because the
-/// person asked for a board that is already there.
-fn refuse_folder_when_horizon_runs(session_store: &SessionStore, cli_args: &CliArgs) {
+/// holds, so this start can see it. It then sends one request into the home and
+/// waits a bounded time for the answer of that window. This start never opens a
+/// second window in that case, and it writes one line whatever the answer is.
+fn show_folder_in_running_horizon(
+    session_store: &SessionStore,
+    cli_args: &CliArgs,
+    horizon_home: &horizon_core::HorizonHome,
+) {
     let Some(folder) = cli_args.folder.as_deref() else {
         return;
     };
     if !a_horizon_already_runs(session_store) {
         return;
     }
-    println!("{}", folder_already_open_sentence(folder));
-    plugin_install::exit_after_releasing_plugins(0);
+    let (line, status) = match horizon_core::folder_requests::ask(horizon_home.root(), folder) {
+        Ok(Some(answer)) => folder_answer_line(folder, &answer),
+        Ok(None) => (folder_no_answer_sentence(folder), 0),
+        Err(error) => (
+            format!(
+                "Horizon runs for this home, but the folder {} was not sent to it: {error}",
+                folder.display()
+            ),
+            2,
+        ),
+    };
+    match status {
+        0 => println!("{line}"),
+        _ => eprintln!("error: {line}"),
+    }
+    plugin_install::exit_after_releasing_plugins(status);
+}
+
+/// The one line of a window that answered the request of `folder`, and the status
+/// of the start.
+fn folder_answer_line(folder: &std::path::Path, answer: &horizon_core::folder_requests::Answer) -> (String, i32) {
+    use horizon_core::folder_requests::Answer;
+    match answer {
+        Answer::Shown { .. } => (format!("Horizon shows the folder {}.", folder.display()), 0),
+        Answer::Made { .. } => (
+            format!("Horizon made a workspace for the folder {}.", folder.display()),
+            0,
+        ),
+        Answer::Refused { reason } => (
+            format!("Horizon did not show the folder {}: {reason}", folder.display()),
+            2,
+        ),
+    }
 }
 
 /// Whether a Horizon of this home holds a session now.
@@ -554,10 +588,11 @@ fn a_horizon_already_runs(session_store: &SessionStore) -> bool {
         .is_ok_and(|sessions| sessions.iter().any(|session| session.is_live))
 }
 
-/// The one line of `horizon <folder>` when a Horizon of this home already runs.
-fn folder_already_open_sentence(folder: &std::path::Path) -> String {
+/// The one line of `horizon <folder>` when a Horizon of this home runs and
+/// answers nothing in time.
+fn folder_no_answer_sentence(folder: &std::path::Path) -> String {
     format!(
-        "Horizon already runs for this home, so the folder {} was not opened there.",
+        "Horizon runs for this home, but it did not answer, so the folder {} was not opened there.",
         folder.display()
     )
 }
@@ -887,7 +922,8 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_of_a_start_sees_the_horizon_that_runs_and_says_so_in_one_line() {
+    fn a_folder_of_a_start_sees_the_horizon_that_runs_and_names_its_answer() {
+        use horizon_core::folder_requests::Answer;
         use horizon_core::{Config, HorizonHome, SessionStore};
 
         let temp = tempfile::tempdir().expect("temp dir");
@@ -908,13 +944,48 @@ mod tests {
             "a saved session is not a running one"
         );
         store.acquire_lease(&session.session_id).expect("the lease of a window");
-
-        let sentence = super::folder_already_open_sentence(&folder);
         assert!(super::a_horizon_already_runs(&store), "the lease of a window that runs");
+
+        // One sentence for each answer of a window, and each one names the folder.
+        for (answer, status, expected) in [
+            (
+                Answer::Shown {
+                    workspace: "repo".to_string(),
+                },
+                0,
+                format!("Horizon shows the folder {}.", folder.display()),
+            ),
+            (
+                Answer::Made {
+                    workspace: "repo".to_string(),
+                },
+                0,
+                format!("Horizon made a workspace for the folder {}.", folder.display()),
+            ),
+            (
+                Answer::Refused {
+                    reason: horizon_core::folder_requests::FOLDER_GONE.to_string(),
+                },
+                2,
+                format!(
+                    "Horizon did not show the folder {}: {}",
+                    folder.display(),
+                    horizon_core::folder_requests::FOLDER_GONE
+                ),
+            ),
+        ] {
+            let (line, code) = super::folder_answer_line(&folder, &answer);
+            assert_eq!((line.as_str(), code), (expected.as_str(), status));
+            assert_eq!(line.lines().count(), 1, "one line, not a usage: {line}");
+        }
+
+        // A window that answers nothing says so in one line too, and the start
+        // is no error: the window may be busy.
+        let sentence = super::folder_no_answer_sentence(&folder);
         assert_eq!(
             sentence,
             format!(
-                "Horizon already runs for this home, so the folder {} was not opened there.",
+                "Horizon runs for this home, but it did not answer, so the folder {} was not opened there.",
                 folder.display()
             )
         );

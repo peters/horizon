@@ -234,6 +234,10 @@ pub struct PanelOptions {
     /// The agent that opened this panel for the person, as Horizon names that
     /// agent; `None` for a panel the person made.
     pub opened_by: Option<String>,
+    /// The agent panel that opened this panel, as the `horizon:<local id>` actor
+    /// of the owner of a card and of a browser panel. It names one panel of the
+    /// board, also when two agent panels of one kind stand in a workspace.
+    pub opened_by_actor: Option<String>,
     /// The name of the machine in Horizon's machine list that this panel
     /// connects to, when it was opened from one. A click on the machine row
     /// focuses this panel instead of opening a second one, and the saved panel
@@ -283,6 +287,7 @@ impl Default for PanelOptions {
             is_restore: false,
             launch_wrapper: Vec::new(),
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
         }
@@ -362,6 +367,11 @@ pub struct Panel {
     /// `open_terminal`, as Horizon names that agent. The titlebar marks such a
     /// panel so a person can tell it from one they opened themselves.
     pub(crate) opened_by: Option<String>,
+    /// The agent panel that opened this panel, as the `horizon:<local id>`
+    /// actor that a card owner and a browser panel owner also carry. The mark of
+    /// `opened_by` names a kind, so two agent panels of one kind leave it
+    /// ambiguous; this actor names the one panel.
+    pub(crate) opened_by_actor: Option<String>,
     /// The machine of Horizon's machine list that this terminal connects to.
     pub(crate) machine: Option<String>,
     /// The tmux session that this terminal runs on its machine, when it is a
@@ -419,6 +429,14 @@ impl Panel {
     #[must_use]
     pub fn opened_by(&self) -> Option<&str> {
         self.opened_by.as_deref()
+    }
+
+    /// The agent panel that opened this panel, as a `horizon:<local id>` actor.
+    /// `None` for a panel the person made, and for a panel that a session of an
+    /// older build saved without the actor.
+    #[must_use]
+    pub fn opened_by_actor(&self) -> Option<&str> {
+        self.opened_by_actor.as_deref()
     }
 
     /// The machine that this panel connects to, when it was opened from one.
@@ -576,6 +594,7 @@ impl Panel {
             cwd_read: None,
             ssh_connection: None,
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
             ssh_status: None,
@@ -1008,6 +1027,7 @@ mod tests {
             cwd_read: None,
             ssh_connection: None,
             opened_by: None,
+            opened_by_actor: None,
             machine: None,
             machine_session: None,
             ssh_status: None,

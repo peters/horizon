@@ -188,7 +188,8 @@ pub(crate) const CLI_USAGE: &str = "usage: horizon [<folder>] [--config <path>] 
 
 A folder argument opens the board of that folder: Horizon shows the workspace of
 the folder, or makes it with one panel of the first agent preset of the settings
-whose program this computer has, or a terminal in that folder.";
+whose program this computer has, or a terminal in that folder. A Horizon of this
+home that already runs shows that folder in its own window.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RemoteProfileCommand {

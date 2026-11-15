@@ -507,3 +507,67 @@ block:
     assert_eq!(block.revision, 1);
     assert_eq!(block.document.components.len(), 1);
 }
+
+#[test]
+fn a_saved_panel_keeps_the_actor_of_the_agent_panel_that_opened_it() {
+    let mut board = Board::new();
+    let workspace = board.create_workspace("agents");
+    let agent = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Claude,
+                name: Some("Claude".to_string()),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("an agent panel waits for its process");
+    let actor = crate::browser_actor(&board.panel(agent).expect("the agent panel").local_id);
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Ssh,
+                name: Some("a terminal".to_string()),
+                opened_by: Some("Claude".to_string()),
+                opened_by_actor: Some(actor.clone()),
+                ssh_connection: Some(crate::SshConnection {
+                    host: "192.0.2.10".to_string(),
+                    ..crate::SshConnection::default()
+                }),
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("a terminal of an agent");
+
+    let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    let yaml = state.to_yaml().expect("serialize runtime state");
+    let restored: RuntimeState = serde_yaml::from_str(&yaml).expect("deserialize runtime state");
+    let options = restored.workspaces[0].panels[1].to_panel_options(&crate::browser::BrowserConfig::default());
+
+    assert_eq!(
+        options.opened_by.as_deref(),
+        Some("Claude"),
+        "the chip keeps the name of the kind"
+    );
+    assert_eq!(
+        options.opened_by_actor.as_deref(),
+        Some(actor.as_str()),
+        "the actor comes back"
+    );
+    board.shutdown_terminal_panels();
+}
+
+#[test]
+fn a_saved_panel_without_an_opener_actor_loads_as_a_panel_of_an_older_build() {
+    let yaml = "\
+name: a terminal
+kind: ssh
+opened_by: Claude
+";
+    let panel: PanelState = serde_yaml::from_str(yaml).expect("an older snapshot loads");
+    let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+
+    assert_eq!(options.opened_by.as_deref(), Some("Claude"));
+    assert_eq!(options.opened_by_actor, None, "an older build saved no actor");
+}

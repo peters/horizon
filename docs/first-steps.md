@@ -317,11 +317,22 @@ appears on a card or in the panel of the agent.
 4. Type `horizon <path> --ephemeral` to start a board that keeps nothing.
 
 A path that is not a folder, or a path that is not there, ends the start with one
-sentence and status 2, and no window opens. When a Horizon of this home already
-runs, `horizon <path>` writes one line that says that the folder was not opened
-there, and ends with status 0: this build has no channel that asks a running
-window to open a folder. Open the folder in the running window, or close that
-window and start again.
+sentence and status 2, and no window opens.
+
+When a Horizon of this home already runs, `horizon <path>` shows the folder in
+that window, and no second window opens. The running window brings itself to the
+front and shows the workspace of the folder, or makes it, as a start on an empty
+window does. The start writes one line on the standard output and ends with
+status 0:
+
+- `Horizon shows the folder <path>.` for a workspace that the window already had.
+- `Horizon made a workspace for the folder <path>.` for a workspace that it made.
+- `Horizon runs for this home, but it did not answer, so the folder <path> was not
+  opened there.` when the window answers nothing in five seconds. The window may be
+  minimized, busy or gone. Start again, or open the folder in the window.
+A window that runs with `--ephemeral` keeps no session of this home. A folder
+start does not see such a window, so it starts its own window, and the ephemeral
+window takes no folder.
 
 ## Use the board
 
