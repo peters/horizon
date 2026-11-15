@@ -1,6 +1,6 @@
 use super::{Attention, AttentionBoard, AttentionTarget, next_attention_target};
-use crate::PanelId;
-use crate::agent_work::{TurnLedger, TurnState};
+use crate::agent_work::{TITLE_SETTLE_MILLIS, TitleState, TurnLedger, TurnState, title_reports_state, title_state};
+use crate::{PanelId, PanelKind};
 
 fn ledger(state: TurnState, updated_at_millis: i64) -> TurnLedger {
     let mut ledger = TurnLedger::default();
@@ -381,4 +381,147 @@ fn the_screen_of_a_panel_with_a_report_cannot_end_or_reopen_its_turn() {
         Attention::Done,
         "a spinner cannot reopen a turn that the report closed"
     );
+}
+
+/// The launch of the titles of one panel of these tests: the moment that a
+/// program of the panel started.
+const LAUNCH: i64 = 1_000;
+
+fn title(board: &mut AttentionBoard, state: TitleState, now_millis: i64) -> bool {
+    board.observe_title("panel", LAUNCH, state, now_millis)
+}
+
+#[test]
+fn the_titles_of_a_panel_take_the_four_words_of_its_turn() {
+    let mut board = board();
+    // Before the first working or waiting title the screen decides, as it does
+    // for every agent panel.
+    title(&mut board, TitleState::Plain, LAUNCH);
+    assert!(!board.from_title("panel"));
+    board.observe_working("panel", true, true, LAUNCH + 1);
+    assert_eq!(board.state("panel"), Attention::Working);
+    board.observe_working("panel", false, false, LAUNCH + 2);
+    assert_eq!(board.state("panel"), Attention::Done);
+
+    assert!(title(&mut board, TitleState::Working, LAUNCH + 10));
+    assert_eq!(board.state("panel"), Attention::Working);
+    assert!(board.from_title("panel"));
+
+    title(&mut board, TitleState::NeedsYou, LAUNCH + 20);
+    assert_eq!(board.state("panel"), Attention::NeedsYou);
+    title(&mut board, TitleState::Working, LAUNCH + 30);
+    assert_eq!(board.state("panel"), Attention::Working);
+
+    // A turn that ends while the person is elsewhere is Done, and a look at the
+    // panel after it ended is the state that keeps its row quiet.
+    title(&mut board, TitleState::Plain, LAUNCH + 50);
+    let settled = LAUNCH + 50 + TITLE_SETTLE_MILLIS;
+    board.observe_title("panel", LAUNCH, TitleState::Plain, settled);
+    assert_eq!(board.state("panel"), Attention::Done, "the end of the turn is unseen");
+    assert!(board.note_look("panel", settled + 1));
+    assert_eq!(board.state("panel"), Attention::Idle);
+
+    title(&mut board, TitleState::Working, 2_000);
+    assert_eq!(board.state("panel"), Attention::Working);
+    title(&mut board, TitleState::Plain, 2_010);
+    board.observe_title("panel", LAUNCH, TitleState::Plain, 2_010 + TITLE_SETTLE_MILLIS);
+    assert_eq!(board.state("panel"), Attention::Done, "another turn ended unseen");
+}
+
+#[test]
+fn a_thousand_spinner_frames_change_no_state_and_wake_no_caller() {
+    let mut board = board();
+    assert!(title(&mut board, TitleState::Working, LAUNCH));
+    for frame in 0..1_000_i64 {
+        assert!(
+            !board.observe_title("panel", LAUNCH, TitleState::Working, LAUNCH + 1 + frame),
+            "a repeated frame of one state changes nothing"
+        );
+        assert_eq!(board.state("panel"), Attention::Working);
+    }
+}
+
+#[test]
+fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
+    let mut board = board();
+    title(&mut board, TitleState::Working, LAUNCH);
+    // The program writes a plain title for about a tenth of a second and then
+    // the spinner of the same turn again.
+    title(&mut board, TitleState::Plain, LAUNCH + 100);
+    assert!(!board.observe_title("panel", LAUNCH, TitleState::Plain, LAUNCH + 200));
+    assert_eq!(board.state("panel"), Attention::Working, "the turn stands");
+    title(&mut board, TitleState::Working, LAUNCH + 220);
+    assert!(!board.observe_title("panel", LAUNCH, TitleState::Plain, LAUNCH + 700));
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "the settle time of the plain title ended"
+    );
+}
+
+#[test]
+fn the_screen_cannot_end_or_reopen_a_turn_of_a_titles_claim() {
+    let mut board = board();
+    title(&mut board, TitleState::Working, LAUNCH);
+    board.observe_working("panel", true, true, LAUNCH + 1);
+    board.observe_working("panel", false, false, LAUNCH + 2);
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "a screen without a spinner cannot end the turn of a title"
+    );
+    title(&mut board, TitleState::Plain, LAUNCH + 10);
+    board.observe_title("panel", LAUNCH, TitleState::Plain, LAUNCH + 10 + TITLE_SETTLE_MILLIS);
+    assert_eq!(board.state("panel"), Attention::Done);
+    board.observe_working("panel", true, false, LAUNCH + 900);
+    assert_eq!(board.state("panel"), Attention::Done, "an ended turn stays ended");
+}
+
+#[test]
+fn a_program_that_horizon_starts_again_is_a_new_launch() {
+    let mut board = board();
+    title(&mut board, TitleState::Working, LAUNCH);
+    assert!(board.from_title("panel"));
+
+    // The same panel runs the program again: the titles of the launch before it
+    // claim no turn of this one, and the screen decides until a title does.
+    let relaunched = LAUNCH + 5_000;
+    board.observe_title("panel", relaunched, TitleState::Plain, relaunched);
+    assert!(!board.from_title("panel"), "the claim of the launch before it is gone");
+    assert_eq!(
+        board.state("panel"),
+        Attention::Idle,
+        "the new launch starts on its screen"
+    );
+    board.observe_working("panel", true, true, relaunched + 1);
+    assert_eq!(board.state("panel"), Attention::Working);
+    board.observe_title("panel", relaunched, TitleState::Working, relaunched + 2);
+    assert!(board.from_title("panel"));
+    assert_eq!(board.state("panel"), Attention::Working);
+    // The screen no longer answers, so the end of the turn of the new launch is
+    // the word of its own titles.
+    board.observe_working("panel", false, false, relaunched + 3);
+    assert_eq!(board.state("panel"), Attention::Working);
+}
+
+#[test]
+fn a_title_of_a_launch_that_hooks_report_on_is_not_read() {
+    let mut board = board();
+    board.observe_ledger("panel", &ledger(TurnState::Working, 10), 10);
+    assert!(!title(&mut board, TitleState::NeedsYou, LAUNCH));
+    assert_eq!(
+        board.state("panel"),
+        Attention::Working,
+        "the record of the hooks answers"
+    );
+    assert!(!board.from_title("panel"));
+}
+
+#[test]
+fn a_kind_without_a_state_title_keeps_the_signal_of_its_screen() {
+    for kind in [PanelKind::Claude, PanelKind::Pi, PanelKind::Shell] {
+        assert!(!title_reports_state(kind), "{kind:?}");
+        assert_eq!(title_state(kind, "\u{280b} work"), TitleState::Plain, "{kind:?}");
+    }
+    assert!(title_reports_state(PanelKind::Codex));
 }

@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
-use horizon_core::agent_work::{TurnLedger, WorkStore};
+use horizon_core::agent_work::{TurnLedger, WorkStore, title_reports_state};
 use horizon_core::{Attention, AttentionBoard, AttentionTarget, PanelId, current_unix_millis};
 
 use super::HorizonApp;
@@ -161,6 +161,15 @@ impl HorizonApp {
             self.attention.wake = Some(ctx.clone());
         }
         self.apply_attention_reads(ctx);
+        // The title of an agent that reports its state there changes about ten
+        // times a second, and only a change of the state is work: the claim of a
+        // panel that holds its state wakes no frame.
+        let titled = self.observe_agent_titles(current_unix_millis());
+        if !titled.is_empty() {
+            self.attention.count_change();
+            ctx.request_repaint();
+            self.note_changed_panels(titled, ctx);
+        }
         let now = Instant::now();
         let focus_changed = self.attention.focused != self.board.focused;
         if focus_changed {
@@ -277,6 +286,32 @@ impl HorizonApp {
             })
             .collect();
         self.note_attention_changes(panels, ctx);
+    }
+
+    /// Records the state that the title of each agent panel claims, for the kinds
+    /// that write their state into the title of their terminal.
+    ///
+    /// The read is a value that the frame already holds: the panel compares the
+    /// title of its terminal when that title changes, and the claim of the state
+    /// does no work for a spinner frame of the state that it already holds. Only a
+    /// panel of a kind with a state title is asked, so a board of other panels
+    /// pays one comparison for each of them.
+    fn observe_agent_titles(&mut self, now_millis: i64) -> Vec<String> {
+        let mut moved = Vec::new();
+        for panel in &self.board.panels {
+            if !title_reports_state(panel.kind) {
+                continue;
+            }
+            if self.attention.states.observe_title(
+                &panel.local_id,
+                panel.launched_at_millis,
+                panel.title_state(),
+                now_millis,
+            ) {
+                moved.push(panel.local_id.clone());
+            }
+        }
+        moved
     }
 
     /// Records the working indicator of each agent panel whose launch has no

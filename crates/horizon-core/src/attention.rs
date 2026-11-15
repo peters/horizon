@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use crate::PanelId;
-use crate::agent_work::{TurnLedger, TurnState};
+use crate::agent_work::{TitleClaim, TitleState, TurnLedger, TurnState};
 
 /// The state of one agent panel, in the order of weight that a workspace row
 /// compares its panels by.
@@ -133,6 +133,13 @@ struct Panel {
     ended_at_millis: Option<i64>,
     /// The background work that the agent reported when its turn ended.
     background_tasks: u32,
+    /// The titles of this launch, for an agent that writes its state into the
+    /// title of its own terminal.
+    title: TitleClaim,
+    /// The launch whose titles the claim holds. A program that Horizon starts
+    /// again in the same panel is a launch of its own, and its titles claim the
+    /// turns of that launch.
+    title_launch_millis: Option<i64>,
     /// The working indicator of a panel without lifecycle hooks.
     working: bool,
     /// The last moment the person looked at the panel.
@@ -152,6 +159,8 @@ impl Panel {
             state: TurnState::Unknown,
             ended_at_millis: None,
             background_tasks: 0,
+            title: TitleClaim::default(),
+            title_launch_millis: None,
             working: false,
             seen_at_millis: now_millis,
             marked_unread: false,
@@ -162,10 +171,16 @@ impl Panel {
         self.marked_unread || self.ended_at_millis.is_some_and(|ended| self.seen_at_millis < ended)
     }
 
+    /// Whether a source of this launch answers for the panel: the record that a
+    /// hook keeps, or the titles of the program itself.
+    fn answers(&self) -> bool {
+        self.hooked || self.title.answers()
+    }
+
     fn attention(&self) -> Attention {
         // A panel that has heard no event of its launch has no ledger to read:
         // the working indicator and the end of a turn on the screen decide.
-        if !self.hooked {
+        if !self.answers() {
             return self.screen_attention();
         }
         let mut state = match self.state {
@@ -247,6 +262,41 @@ impl AttentionBoard {
         after != before
     }
 
+    /// Records the state that the title of `panel` claims, for a launch that
+    /// `launch_millis` started. Answers whether the state of the panel changed.
+    ///
+    /// The claim answers for the panel from the first working or waiting title of
+    /// its launch, and it holds a turn of that launch: a repeated spinner frame
+    /// of the state that the claim already holds changes nothing. A record of a
+    /// launch with hooks answers for the panel, and the weaker claim of its title
+    /// stays unread.
+    pub fn observe_title(&mut self, panel: &str, launch_millis: i64, state: TitleState, now_millis: i64) -> bool {
+        let before = self.state(panel);
+        let held = self
+            .panels
+            .entry(panel.to_owned())
+            .or_insert_with(|| Panel::new(now_millis));
+        if held.hooked {
+            return false;
+        }
+        // A launch that the panel replaced starts on the signal of its screen, as
+        // a start of Horizon does.
+        if held.title_launch_millis != Some(launch_millis) {
+            held.title_launch_millis = Some(launch_millis);
+            held.title = TitleClaim::default();
+            held.seen_at_millis = now_millis;
+            held.apply(TurnState::Unknown, None, 0);
+        }
+        held.title.hear(state, now_millis);
+        held.title.settle(now_millis);
+        if held.title.answers() {
+            let (state, ended_at) = ledger_outcome(held.title.ledger());
+            let background_tasks = held.title.ledger().background_tasks;
+            held.apply(state, ended_at, background_tasks);
+        }
+        self.state(panel) != before
+    }
+
     /// Records the working indicator of a panel whose agent kind has no
     /// lifecycle hooks, or whose launch has heard no event. A panel whose
     /// ledger answers for it keeps the ledger's answer.
@@ -256,7 +306,7 @@ impl AttentionBoard {
             .panels
             .entry(panel.to_owned())
             .or_insert_with(|| Panel::new(now_millis));
-        if !held.hooked {
+        if !held.answers() {
             let was_working = held.working;
             held.working = working;
             if was_working && !working && !focused {
@@ -318,6 +368,13 @@ impl AttentionBoard {
     #[must_use]
     pub fn state(&self, panel: &str) -> Attention {
         self.panels.get(panel).map_or(Attention::Idle, Panel::attention)
+    }
+
+    /// Whether the state of `panel` comes from the titles of its own program now,
+    /// because a working or waiting title of its launch has arrived.
+    #[must_use]
+    pub fn from_title(&self, panel: &str) -> bool {
+        self.panels.get(panel).is_some_and(|held| held.title.answers())
     }
 
     /// Whether the state of `panel` comes from its lifecycle hooks now, because

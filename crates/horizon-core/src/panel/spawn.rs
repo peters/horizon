@@ -37,6 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
+use crate::agent_work::TitleState;
 use crate::agents::AgentStatus;
 use crate::editor::PanelContent;
 use crate::error::Result;
@@ -157,6 +158,7 @@ impl StaticPanelSeed {
             has_custom_name,
             had_recent_output: false,
             agent_status: AgentStatus::default(),
+            title_state: TitleState::default(),
             last_output_at_millis: None,
             launch_command,
             launch_args: Vec::new(),

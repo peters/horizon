@@ -40,6 +40,7 @@ use serde::Deserialize;
 
 use crate::agent_definition;
 use crate::agent_work::ResumePolicy;
+use crate::agent_work::TitleState;
 use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
 use crate::browser::{BrowserPanelRequest, BrowserPlace};
 use crate::editor::{MarkdownEditor, PanelContent};
@@ -349,6 +350,10 @@ pub struct Panel {
     /// Working/idle state of the agent TUI, refreshed by
     /// `Board::update_agent_status` from the terminal's working indicator.
     pub(crate) agent_status: AgentStatus,
+    /// The state that the program writes into the title of this terminal, for an
+    /// agent kind that reports its state there. Set by `process_output` when the
+    /// title of the terminal changes.
+    title_state: TitleState,
     last_output_at_millis: Option<i64>,
     /// Original launch command (for persistence).
     pub launch_command: Option<String>,
@@ -486,6 +491,13 @@ impl Panel {
         self.agent_status
     }
 
+    /// The state that this panel's own title claims, for an agent kind that
+    /// writes its state into the title of its terminal.
+    #[must_use]
+    pub const fn title_state(&self) -> TitleState {
+        self.title_state
+    }
+
     /// Convenience accessor for the editor content (if this panel holds one).
     #[must_use]
     pub fn editor(&self) -> Option<&MarkdownEditor> {
@@ -587,6 +599,7 @@ impl Panel {
             has_custom_name: false,
             had_recent_output: false,
             agent_status: AgentStatus::default(),
+            title_state: TitleState::default(),
             last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),
@@ -743,6 +756,7 @@ impl Panel {
         let title_changed = self.terminal_title != terminal.title();
         if title_changed {
             self.terminal_title = terminal.title().to_string();
+            self.title_state = crate::agent_work::title_state(self.kind, &self.terminal_title);
         }
         let child_pid = if had_output && should_track_live_cwd {
             terminal.child_pid()
@@ -997,6 +1011,7 @@ mod tests {
         SshConnectionStatus, WorkspaceId, kitty_keyboard_for_kind, platform_default_shell, resolve_launch_command,
         scrollback_limit_for_kind,
     };
+    use crate::agent_work::TitleState;
     use crate::ssh::SshConnection;
 
     fn test_panel(title: &str, terminal_title: &str, has_custom_name: bool) -> Panel {
@@ -1020,6 +1035,7 @@ mod tests {
             has_custom_name,
             had_recent_output: false,
             agent_status: AgentStatus::default(),
+            title_state: TitleState::default(),
             last_output_at_millis: None,
             launch_command: None,
             launch_args: Vec::new(),

@@ -9,6 +9,7 @@ mod policy;
 mod repository;
 mod startup;
 mod store;
+mod title;
 mod transcript;
 
 pub use startup::resume_brief;
@@ -19,6 +20,7 @@ pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 pub use ledger::{HookEvent, TurnLedger};
 pub use policy::{AskReason, RestartDecision, RestartEvidence, ResumePolicy, SuspendRecord};
 pub use store::{HookInput, StoredWork, WorkStore};
+pub use title::{MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_reports_state, title_state};
 pub use transcript::{TranscriptSnapshot, TurnState};
 
 use crate::horizon_home::HorizonHome;
