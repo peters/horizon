@@ -2,13 +2,9 @@
 //! the panel that already shows the session of that agent.
 //!
 //! The panel is the one that a click on the machine row opens, with the session of the
-//! agent in the place of the record's: [`HorizonApp::open_machine_terminal`] passes the
-//! route and the key of the record again, and the session name reaches the command line
-//! only through Horizon's own text for it.
-//!
-//! The panel opens in the workspace of the machine, which carries its name, and its new
-//! terminals run on that machine. The person's click is a look at the agent, so the
-//! agent is seen.
+//! agent in the place of the record's, in the workspace of its machine. A session name
+//! reaches that command line only through Horizon's own text for it, and the press is
+//! the look of the person at that agent.
 
 use egui::Context;
 use horizon_core::PanelId;

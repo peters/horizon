@@ -174,7 +174,7 @@ fn the_section_takes_no_room_without_a_machine() {
     let rows: MachineRows = MachineRows::default();
     assert!(rows.rows().is_empty(), "an empty cache has no row to draw");
     assert!(
-        rows.server_line().is_none(),
+        rows.server_line.is_none(),
         "a list of one computer shows no line of a server"
     );
 }
@@ -199,7 +199,7 @@ fn the_line_of_the_server_draws_before_the_first_machine() {
     run_app_frame(&ctx, &mut app);
 
     assert_eq!(
-        app.machine_rows.server_line(),
+        app.machine_rows.server_line.as_deref(),
         Some("Server: in step"),
         "the section keeps the line of its server without a machine"
     );
