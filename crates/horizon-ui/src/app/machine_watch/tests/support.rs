@@ -48,7 +48,18 @@ impl Server {
         let server = Self {
             socket: format!("hzw-ui-{}-{number}", std::process::id()),
         };
-        server.run(&["new-session", "-d", "-s", "warm-up", "-x", "100", "-y", "20", "sleep", "300"]);
+        server.run(&[
+            "new-session",
+            "-d",
+            "-s",
+            "warm-up",
+            "-x",
+            "100",
+            "-y",
+            "20",
+            "sleep",
+            "300",
+        ]);
         Some(server)
     }
 
@@ -76,20 +87,28 @@ impl Server {
         );
     }
 
-    /// One session of the server, which runs `command` in its only pane.
-    pub(crate) fn session(&self, name: &str, command: &str) {
-        self.run(&["new-session", "-d", "-s", name, "-x", "100", "-y", "20", command]);
+    /// One session of the server in the folder `folder`, which runs `command` in its
+    /// only pane. The name of the agent of the pane is the last part of that folder.
+    pub(crate) fn session_in(&self, name: &str, folder: &Path, command: &str) {
+        let folder = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
+        self.run(&[
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            folder.to_str().expect("a folder of this computer"),
+            "-x",
+            "100",
+            "-y",
+            "20",
+            command,
+        ]);
     }
 
     /// One word for the program of `session`, as a person at its keyboard types it.
     pub(crate) fn send(&self, session: &str, word: &str) {
         self.run(&["send-keys", "-t", session, word, "Enter"]);
-    }
-
-    /// The title of the pane of `session` now.
-    pub(crate) fn title(&self, session: &str) -> String {
-        let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_title}"]);
-        String::from_utf8_lossy(&output.stdout).trim_end().to_owned()
     }
 }
 
@@ -110,6 +129,22 @@ pub(crate) struct Ssh {
 impl Ssh {
     /// The stand-in that runs the text of the watch on `server`.
     pub(crate) fn new(server: &Server) -> Option<Self> {
+        Self::of(server, "exec sh -c \"$last\" \"$marker\"")
+    }
+
+    /// The stand-in whose link ends `seconds` after each start, as the link of a
+    /// machine that goes away does, and whose next attempt comes back.
+    pub(crate) fn unsteady(server: &Server, seconds: u32) -> Option<Self> {
+        Self::of(
+            server,
+            &format!(
+                "sh -c \"$last\" \"$marker\" &\nchild=$!\nsleep {seconds}\nkill $child\nwait $child 2>/dev/null\nexit 255"
+            ),
+        )
+    }
+
+    /// The stand-in that runs `body` after it counted its call.
+    fn of(server: &Server, body: &str) -> Option<Self> {
         if !has("sh") {
             return None;
         }
@@ -120,16 +155,12 @@ impl Ssh {
             "#!/bin/sh\nprintf 'c' >> {calls}\nmarker={marker}\n\
              for a in \"$@\"; do last=$a; done\n\
              HORIZON_MACHINE_WATCH_TMUX_SOCKET={socket}\nexport HORIZON_MACHINE_WATCH_TMUX_SOCKET\n\
-             exec sh -c \"$last\" \"$marker\"\n",
+             {body}\n",
             calls = quoted(&calls.to_string_lossy()),
             socket = quoted(server.socket()),
         );
         horizon_core::stand_in_program_in(folder.path(), "ssh", &body).ok()?;
-        Some(Self {
-            folder,
-            calls,
-            marker,
-        })
+        Some(Self { folder, calls, marker })
     }
 
     /// The program of the stand-in.
@@ -199,20 +230,6 @@ pub(crate) fn with_machines(app: &mut HorizonApp, records: Vec<horizon_core::Mac
         horizon_core::MachineRegistry::from_home(app.session_store.home()),
         records,
     );
-}
-
-/// Runs frames until the startup read of the machine list of the home answered, so a
-/// list that the test sets is not replaced by that read.
-pub(crate) fn settle_machine_load(ctx: &Context, app: &mut HorizonApp) {
-    let deadline = Instant::now() + DEADLINE;
-    while app.machine_load_rx.is_some() {
-        assert!(
-            Instant::now() < deadline,
-            "the machine list of the home did not load"
-        );
-        run_app_frame(ctx, app);
-        std::thread::sleep(POLL);
-    }
 }
 
 /// Runs frames of the window until `wanted` holds, and names what it waited for.

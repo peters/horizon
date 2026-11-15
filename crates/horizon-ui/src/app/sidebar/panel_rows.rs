@@ -1,15 +1,15 @@
-//! The panel rows under a workspace: a tree guide from the workspace tile, the
-//! kind label, the panel's title, the one word of its attention state and, at
-//! the right, a working dot or the close button while the row is hovered or
-//! focused.
-use egui::{Rect, Stroke, Vec2, pos2};
+//! The panel rows under a workspace, and the rows of the agents under a machine: a
+//! tree guide from the tile or the dot above them, the kind label, the name, the one
+//! word of its attention state and, at the right, a working dot or the close button
+//! while the row is hovered or focused.
+use egui::{Color32, Rect, Stroke, Vec2, pos2};
+use horizon_core::{Attention, PanelKind};
 
 use crate::app::panels::panel_kind_icon;
 use crate::theme;
 
 use super::rows::{self, TILE_INSET, TILE_SIDE};
 use super::text;
-use super::{SidebarPanelEntry, WorkspaceSidebarEntry};
 
 pub(super) const PANEL_ROW_HEIGHT: f32 = 30.0;
 const CLOSE_SIDE: f32 = 20.0;
@@ -19,7 +19,7 @@ pub(super) const STATE_WIDTH: f32 = 120.0;
 pub(super) const STATE_GAP: f32 = 6.0;
 /// The font of the word of a state, the size of the kind icon beside it. The
 /// longest word of a state fits half of a default row at this size.
-const STATE_SIZE: f32 = 9.5;
+pub(super) const STATE_SIZE: f32 = 9.5;
 /// The largest share of a row that the word of a state takes. The name of the
 /// panel keeps the other share, so the two texts never cover each other.
 const STATE_SHARE: f32 = 0.5;
@@ -40,6 +40,26 @@ pub(super) struct PanelRowState {
     pub last: bool,
 }
 
+/// What a row shows: the tree guide that it hangs from, the kind label, the name and
+/// the one word and colour of its state. A row of an agent of a machine shows the
+/// same, with the dot of its machine above it.
+pub(super) struct PanelRowLook<'a> {
+    /// The x of the tree guide, which is the middle of the tile of a workspace or of
+    /// the dot of a machine.
+    pub guide_x: f32,
+    /// The accent of the fill of the focused row.
+    pub accent: Color32,
+    pub kind: PanelKind,
+    pub focused: bool,
+    pub label: &'a str,
+    pub attention: Attention,
+}
+
+/// The x of the tree guide under the tile of a workspace.
+pub(super) fn guide_x(card: Rect) -> f32 {
+    card.min.x + TILE_INSET + TILE_SIDE / 2.0
+}
+
 /// Where the title of a panel row ends, where the word of its state starts and
 /// how wide that word may be, from the right edge that the row's text may use.
 ///
@@ -57,20 +77,20 @@ pub(super) fn title_and_state(right: f32, title_left: f32, state_width: f32) -> 
 }
 
 /// Paints a panel row. Returns whether the title was cut to fit.
-pub(super) fn paint_panel_row(
-    ui: &egui::Ui,
-    row: Rect,
-    workspace: &WorkspaceSidebarEntry,
-    panel: &SidebarPanelEntry,
-    label: &str,
-    state: PanelRowState,
-) -> bool {
+pub(super) fn paint_panel_row(ui: &egui::Ui, row: Rect, look: &PanelRowLook<'_>, state: PanelRowState) -> bool {
     let PanelRowState { hovered, close, last } = state;
+    let PanelRowLook {
+        guide_x,
+        accent,
+        kind,
+        focused,
+        label,
+        attention,
+    } = *look;
     let painter = ui.painter();
     let card = rows::card(row);
     let center_y = row.center().y;
 
-    let guide_x = card.min.x + TILE_INSET + TILE_SIDE / 2.0;
     let guide = Stroke::new(1.0_f32, theme::alpha(theme::BORDER_STRONG(), 200));
     let bottom = if last { center_y } else { row.max.y };
     painter.line_segment([pos2(guide_x, row.min.y), pos2(guide_x, bottom)], guide);
@@ -78,24 +98,20 @@ pub(super) fn paint_panel_row(
     let left = guide_x + 13.0;
 
     let highlight = Rect::from_min_max(pos2(left - 6.0, row.min.y + 1.0), pos2(card.max.x, row.max.y - 1.0));
-    if panel.is_focused {
-        painter.rect_filled(highlight, 8, theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.20));
+    if focused {
+        painter.rect_filled(highlight, 8, theme::blend(theme::PANEL_BG_ALT(), accent, 0.20));
     } else if hovered {
         painter.rect_filled(highlight, 8, theme::alpha(theme::PANEL_BG_ALT(), 170));
     }
 
-    let (icon, icon_color) = panel_kind_icon(panel.kind, workspace.color, true);
+    let (icon, icon_color) = panel_kind_icon(kind, accent, true);
     let icon = text::mono(ui, icon, 9.5, icon_color);
     let title_left = left + icon.size().x.max(18.0) + 6.0;
     painter.galley(pos2(left, center_y - icon.size().y / 2.0), icon, icon_color);
 
-    let color = if panel.is_focused {
-        theme::FG()
-    } else {
-        theme::FG_SOFT()
-    };
+    let color = if focused { theme::FG() } else { theme::FG_SOFT() };
     let mark = close_rect(row).center();
-    let state = panel.attention.word();
+    let state = attention.word();
     // The word of a state, when the row keeps the room for it, ends the title.
     let state_width = state.map_or(0.0, |word| {
         let galley = text::line(ui, word, STATE_SIZE, text::REGULAR, theme::FG_DIM(), STATE_WIDTH);
@@ -108,7 +124,7 @@ pub(super) fn paint_panel_row(
     painter.galley(pos2(title_left, center_y - title.size().y / 2.0), title, color);
 
     if let (Some(word), Some((_, state_left, room))) = (state, state_room) {
-        let color = match panel.attention {
+        let color = match attention {
             horizon_core::Attention::NeedsYou => theme::PALETTE_YELLOW(),
             horizon_core::Attention::Done => theme::ACCENT(),
             _ => theme::FG_DIM(),
@@ -125,7 +141,7 @@ pub(super) fn paint_panel_row(
             let cross = text::line(ui, "\u{00D7}", 15.0, text::REGULAR, color, CLOSE_SIDE);
             painter.galley(mark - cross.size() / 2.0, cross, color);
         }
-        None if panel.attention.rank() == horizon_core::Attention::Working.rank() => {
+        None if attention.rank() == Attention::Working.rank() => {
             painter.circle_filled(mark, 3.0, theme::PALETTE_GREEN());
         }
         None => {}

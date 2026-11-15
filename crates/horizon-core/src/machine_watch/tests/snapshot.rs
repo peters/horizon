@@ -116,6 +116,7 @@ fn a_link_that_goes_down_leaves_no_row_of_an_older_report() {
         WatchLink::Lost {
             since_millis: 1_000,
             attempt: 1,
+            agents: 1,
         },
     );
     let snapshot = shared.snapshot();
@@ -163,7 +164,8 @@ fn a_machine_that_leaves_and_the_limit_of_the_watch_are_links_of_the_snapshot() 
     assert!(
         !WatchLink::Lost {
             since_millis: 0,
-            attempt: 1
+            attempt: 1,
+            agents: 0,
         }
         .watching()
     );
@@ -212,4 +214,41 @@ fn a_preset_of_the_settings_names_an_agent_of_a_machine() {
     let snapshot: std::sync::Arc<MachineWatchSnapshot> = shared.snapshot();
     assert_eq!(snapshot.agents("build-1").len(), 1);
     assert_eq!(snapshot.agents("build-1")[0].kind, PanelKind::Gemini);
+}
+
+#[test]
+fn a_lost_link_keeps_the_count_of_the_agents_of_its_last_report() {
+    let shared = Shared::new();
+    shared.apply_report(
+        "build-1",
+        &report(&[
+            ("%0", "codex", "shop"),
+            ("%1", "claude", "notes"),
+            ("%2", "bash", "shop"),
+        ]),
+    );
+    assert_eq!(shared.snapshot().agents("build-1").len(), 2);
+    shared.set_link(
+        "build-1",
+        WatchLink::Lost {
+            since_millis: 7,
+            attempt: 2,
+            agents: 0,
+        },
+    );
+    let snapshot = shared.snapshot();
+    let state = snapshot.machine("build-1").expect("the machine of the lost link");
+    assert_eq!(
+        state.link,
+        WatchLink::Lost {
+            since_millis: 7,
+            attempt: 2,
+            agents: 2
+        },
+        "the loss keeps the count of the last report"
+    );
+    assert!(
+        state.agents.is_empty(),
+        "the rows of a machine whose link is down are gone"
+    );
 }

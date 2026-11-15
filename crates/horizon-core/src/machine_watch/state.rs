@@ -43,6 +43,19 @@ impl AgentState {
             Self::NeedsYou => Some("Needs you"),
         }
     }
+
+    /// The state of a panel that this agent is: the word, the colour and the dot of
+    /// a row of a machine come from the type of a local panel, so one agent looks the
+    /// same on a machine and on this computer.
+    #[must_use]
+    pub const fn attention(self) -> crate::Attention {
+        match self {
+            Self::Idle => crate::Attention::Idle,
+            Self::Working => crate::Attention::Working,
+            Self::Done => crate::Attention::Done,
+            Self::NeedsYou => crate::Attention::NeedsYou,
+        }
+    }
 }
 
 /// One agent of a machine: the pane that runs it, its kind, the name that the person
@@ -105,6 +118,18 @@ impl MachineModel {
                 state: held.state,
             })
             .collect()
+    }
+
+    /// How many agents this machine reported in its last report.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.panes.len()
+    }
+
+    /// Whether this machine reported no agent.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.panes.is_empty()
     }
 
     /// Applies one report of the machine, and answers whether any row changed. A

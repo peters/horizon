@@ -1,6 +1,7 @@
 //! The watch of the machines of the window: the readers follow the machine list and
 //! the setting, and a quit leaves no child behind.
 
+mod rows;
 mod support;
 
 use std::sync::Arc;
@@ -11,7 +12,8 @@ use horizon_core::machine_watch::{MachineWatch, MachineWatchSnapshot, WatchLink}
 use crate::app::HorizonApp;
 use crate::app::test_support::{run_app_frame, test_app};
 
-use support::{Server, Ssh, record, settle_machine_load, wait_for, wait_until, with_machines};
+use crate::app::block_machines::settle_machine_load;
+use support::{Server, Ssh, record, wait_for, wait_until, with_machines};
 
 /// The snapshot of the watch of `app`.
 fn snapshot(app: &HorizonApp) -> Arc<MachineWatchSnapshot> {
@@ -33,7 +35,7 @@ fn the_readers_follow_the_machine_list_and_start_no_child_twice() {
     };
     let (_temp, mut app) = test_app();
     let ctx = Context::default();
-    settle_machine_load(&ctx, &mut app);
+    settle_machine_load(&mut app);
     app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
     with_machines(&mut app, vec![record("build-1"), record("build-2")]);
     wait_for(&ctx, &mut app, "the link of build-1", |app| {
@@ -71,7 +73,7 @@ fn a_quit_stops_every_reader_and_leaves_no_ssh_child() {
     };
     let (_temp, mut app) = test_app();
     let ctx = Context::default();
-    settle_machine_load(&ctx, &mut app);
+    settle_machine_load(&mut app);
     app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
     with_machines(&mut app, vec![record("build-1")]);
     wait_for(&ctx, &mut app, "the link of build-1", |app| {
@@ -93,7 +95,7 @@ fn the_setting_off_stops_every_reader() {
     };
     let (_temp, mut app) = test_app();
     let ctx = Context::default();
-    settle_machine_load(&ctx, &mut app);
+    settle_machine_load(&mut app);
     app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
     with_machines(&mut app, vec![record("build-1")]);
     wait_for(&ctx, &mut app, "the link of build-1", |app| {

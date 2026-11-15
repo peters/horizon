@@ -147,10 +147,14 @@ impl MachineWatch {
         }
     }
 
-    /// Stops every reader of this watch and forgets every machine of its snapshot.
+    /// Stops every reader of this watch and forgets every machine of its snapshot. A
+    /// watch without a reader waits for nothing, so the drop of one inside a frame is
+    /// no call that can wait.
     pub fn stop_all(&self) {
-        crate::ui_thread::blocking("the watch of the machines stops its readers");
         let mut readers = self.lock();
+        if !readers.is_empty() {
+            crate::ui_thread::blocking("the watch of the machines stops its readers");
+        }
         let names: Vec<String> = readers.keys().cloned().collect();
         for name in names {
             if let Some(watch) = readers.remove(&name) {

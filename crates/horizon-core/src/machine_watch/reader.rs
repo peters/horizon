@@ -125,7 +125,11 @@ fn lost_link(refused: WatchRefusal, attempt: u32) -> WatchLink {
             reason: refused,
             since_millis,
         },
-        WatchRefusal::Record | WatchRefusal::Other => WatchLink::Lost { since_millis, attempt },
+        WatchRefusal::Record | WatchRefusal::Other => WatchLink::Lost {
+            since_millis,
+            attempt,
+            agents: 0,
+        },
     }
 }
 

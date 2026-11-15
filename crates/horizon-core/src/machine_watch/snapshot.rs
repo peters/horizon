@@ -34,6 +34,22 @@ pub enum WatchRefusal {
 }
 
 impl WatchRefusal {
+    /// The one line that the sidebar says in the place of the agents of a machine
+    /// that `ssh` refused.
+    #[must_use]
+    pub const fn sentence(self) -> &'static str {
+        match self {
+            Self::HostKey => {
+                "The host key of this machine is not the one this computer knows. Horizon does not connect."
+            }
+            Self::Key => "This machine refused the key of this computer. Horizon tries again.",
+            Self::Record => "The record of this machine is no route that Horizon connects. Fix it in the machine list.",
+            Self::Other => "Horizon cannot connect to this machine. It tries again.",
+        }
+    }
+}
+
+impl WatchRefusal {
     /// The refusal that the words of `ssh` name, or [`Self::Other`].
     #[must_use]
     pub fn of_ssh(stderr: &str) -> Self {
@@ -78,6 +94,8 @@ pub enum WatchLink {
         since_millis: u64,
         /// The number of the attempt that comes next, counted from 1.
         attempt: u32,
+        /// The agents of the last report of the machine, whose rows are gone.
+        agents: usize,
     },
     /// `ssh` refused this machine.
     Refused {
@@ -275,6 +293,18 @@ impl Inner {
     /// Records the link of `machine`, and drops its rows when the link is down: a
     /// machine that reports nothing would show a claim of an older report.
     fn link(&mut self, machine: &str, link: WatchLink) {
+        // A lost link keeps the count of the last report, which the sidebar says
+        // in the place of the rows that it drops.
+        let link = match link {
+            WatchLink::Lost {
+                since_millis, attempt, ..
+            } => WatchLink::Lost {
+                since_millis,
+                attempt,
+                agents: self.models.get(machine).map_or(0, MachineModel::len),
+            },
+            link => link,
+        };
         self.links.insert(machine.to_owned(), link);
         if !link.watching()
             && let Some(model) = self.models.get_mut(machine)

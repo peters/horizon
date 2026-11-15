@@ -105,6 +105,7 @@ fn a_machine_that_waits_for_the_server_says_so() {
         pending: true,
         panel: None,
         workspace: None,
+        watch: super::MachineWatchRow::default(),
     };
     let line = spoken(&row);
     assert!(line.contains("build-1"), "{line}");
@@ -123,6 +124,7 @@ fn a_press_on_a_closed_machine_opens_one_and_a_press_on_an_open_machine_focuses_
         pending: false,
         panel: None,
         workspace: None,
+        watch: super::MachineWatchRow::default(),
     };
     let mut actions = SidebarActions::default();
     machine_click(&closed, &mut actions);
@@ -190,6 +192,7 @@ fn the_line_of_the_server_draws_before_the_first_machine() {
         rows: Vec::new(),
         server_line: Some("Server: in step".to_owned()),
         server_reason: None,
+        totals: None,
         read_from: Some(super::machine_fingerprint(&app)),
     };
 
