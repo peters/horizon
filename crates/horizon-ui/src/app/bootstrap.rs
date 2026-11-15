@@ -181,6 +181,7 @@ impl HorizonApp {
             sidebar_sticky_notice: None,
             settings_lost: None, person_browser_creates: super::creation_notice::PersonBrowserCreates::default(),
             machine_rows: super::sidebar::machines::MachineRows::default(), notice_clock: NoticeClock::default(),
+            machine_watch: super::machine_watch::MachinesWatch::default(),
             reconnects: super::reconnect::ReconnectWaits::default(),
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None,
             machine_epoch: 0, machine_load_rx: None, server_sync: None, link_child: None,

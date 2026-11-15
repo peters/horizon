@@ -58,6 +58,7 @@ mod keyboard_focus;
 mod lifecycle;
 mod machine_click;
 mod machine_open;
+mod machine_watch;
 mod minimap;
 mod navigation_input;
 mod notify;
@@ -340,9 +341,12 @@ pub struct HorizonApp {
     /// The clock of the short notice, so a test moves it forward instead of
     /// waiting for the ten seconds of a notice.
     pub(in crate::app) notice_clock: sidebar::machines::NoticeClock,
-    /// The rows of the sidebar's machine section, read when the list or a
-    /// terminal of a machine changes.
+    /// The rows of the sidebar's machine section, read when the list, a terminal
+    /// of a machine or the agents of a machine change.
     machine_rows: sidebar::machines::MachineRows,
+    /// The watch of the agents of the machines, its snapshot and the machines
+    /// whose agents the person folded.
+    pub(in crate::app) machine_watch: machine_watch::MachinesWatch,
     /// The machine terminals that wait for their next attempt after a lost
     /// link, with one wake at the due time and no thread of their own.
     reconnects: reconnect::ReconnectWaits,
@@ -560,6 +564,9 @@ impl HorizonApp {
         self.poll_machine_load();
         self.poll_server_sync();
         self.poll_ssh_hosts(ctx);
+        // The machine list and the setting are the value of this frame, so the
+        // readers of the watch follow them on the frame that changed them.
+        self.refresh_machine_watch();
 
         if self.shutdown_progress.is_some() {
             self.render_shutdown_overlay(ui);
