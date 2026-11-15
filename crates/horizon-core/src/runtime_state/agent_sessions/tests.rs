@@ -902,3 +902,15 @@ INSERT INTO session (id, title, directory, parent_id, time_updated, time_archive
     assert_eq!(sessions[1].session_id, "session-root");
     assert_eq!(sessions[1].cwd, stored_cwd("/repo"));
 }
+
+/// A store reader keeps as much of a session label as a row of the first start
+/// page holds: the label is the title of that row, and a bound of the reader that
+/// was lower cut a title of a normal length before the row could show it.
+#[test]
+fn the_label_of_a_session_is_as_long_as_the_title_of_a_row() {
+    assert_eq!(
+        super::MAX_SESSION_LABEL_CHARS,
+        crate::session_pickup::MAX_TITLE_CHARS,
+        "the bound of a label names the bound of the title of a row"
+    );
+}

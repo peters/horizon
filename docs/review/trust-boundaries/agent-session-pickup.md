@@ -46,6 +46,15 @@ The name of a file in a store, its size and its access time are untrusted too.
    the control characters removed, with at most `MAX_TITLE_CHARS` characters,
    and every run of white space made one space. Horizon draws it and never
    passes it to another program.
+   - `MAX_TITLE_CHARS` is 160. It is the number of characters that a row of the
+     widest block of the page holds on one line, so a title of a normal length is
+     not cut at the store.
+   - A store reader keeps at most `MAX_SESSION_LABEL_CHARS` characters of the
+     label of a session, which is also 160. The pickup cuts the title again at
+     `MAX_TITLE_CHARS`, so a row never receives more than its widest form holds.
+   - The row cuts a title that is longer than its own room with an ellipsis at the
+     end of that room. The bound of the stored text is not the width of a row: a
+     narrow row cuts the whole stored title where its room ends.
 3. **The read is bounded.**
    - At most `MAX_SESSION_ROWS` rows are shown, the newest first.
    - At most `MAX_SESSION_AGE_DAYS` days of a session are read; an older session

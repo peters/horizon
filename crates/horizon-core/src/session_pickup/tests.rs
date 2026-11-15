@@ -229,6 +229,27 @@ fn both_stores_answer_rows_grouped_by_their_folder() {
 }
 
 #[test]
+fn a_title_of_a_normal_length_is_kept_whole() {
+    // One sentence of a page: the words that an agent writes as the prompt of a
+    // session, and that the row of a wide window holds whole.
+    let prompt = "Write the page about the first start and keep every sentence short enough for the \
+                  row that shows it, then read the page again";
+    let fixture = Fixture::new();
+    let folder = fixture.folder("repo");
+    fixture.claude_session(&folder, &uuid(1), prompt, NOW);
+
+    let list = load(fixture.home(), &HashSet::new());
+    let title = &list.folders()[0].rows[0].title;
+
+    assert_eq!(
+        title,
+        prompt,
+        "the title of a row of a normal length is kept whole, with {} characters",
+        prompt.chars().count()
+    );
+}
+
+#[test]
 fn a_row_shows_the_title_of_the_program_and_never_more_than_one_line() {
     let fixture = Fixture::new();
     let folder = fixture.folder("repo");

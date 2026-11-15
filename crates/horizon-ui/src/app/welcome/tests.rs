@@ -2,29 +2,320 @@
 
 use egui::Context;
 
-use super::{HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, WelcomeTile, page_top, welcome_page_shows};
+use super::{
+    HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_PAD, TILE_RADIUS, WelcomeTile, page_top,
+    welcome_page_shows,
+};
 use crate::app::test_support::{run_app_frame, test_app};
 use crate::test_egui::DiscardTextures;
 use crate::typeface::Weight;
 
+mod wheel;
+
 /// The shapes of the last frame of the page, with the rectangle each is
 /// clipped to.
-fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
-    let _ = frame_texts(ctx, app);
-    let output = ctx.run_ui(crate::app::test_support::raw_input([1200.0, 900.0], None), |ui| {
+pub(super) fn frame_shapes(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<egui::epaint::ClippedShape> {
+    frame_shapes_at(ctx, app, [1200.0, 900.0])
+}
+
+/// The shapes of the last frame of the page on a window of `size` points.
+pub(super) fn frame_shapes_at(
+    ctx: &Context,
+    app: &mut crate::app::HorizonApp,
+    size: [f32; 2],
+) -> Vec<egui::epaint::ClippedShape> {
+    let _ = frame_texts_at(ctx, app, size);
+    let output = ctx.run_ui(crate::app::test_support::raw_input(size, None), |ui| {
         app.render_welcome_page(ui.ctx());
     });
     let output: egui::FullOutput = output.discard_textures();
     output.shapes
 }
 
+/// The rectangles of the four tiles that this frame painted.
+pub(super) fn tile_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.corner_radius == egui::CornerRadius::same(TILE_RADIUS) => {
+                if !out.contains(&rect.rect) {
+                    out.push(rect.rect);
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The shapes of one frame of the page of `size`, with `events` fed to it.
+pub(super) fn frame_with(
+    ctx: &Context,
+    app: &mut crate::app::HorizonApp,
+    size: [f32; 2],
+    events: Vec<egui::Event>,
+) -> Vec<egui::epaint::ClippedShape> {
+    let mut input = crate::app::test_support::raw_input(size, None);
+    input.events = events;
+    let output = ctx.run_ui(input, |ui| app.render_welcome_page(ui.ctx()));
+    let output: egui::FullOutput = output.discard_textures();
+    output.shapes
+}
+
+/// One press of `key`, as the person makes it.
+pub(super) fn key_press(key: egui::Key, pressed: bool) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// A window of one size that shows the whole application, with the clock of its
+/// frames.
+///
+/// Every frame of this window paints the canvas and the page, in the order of a
+/// frame of a person, so the canvas takes the input of the frame before the page
+/// does. egui refuses a frame whose time is before the time of the frame before
+/// it, so the window keeps the clock.
+pub(super) struct AppWindow {
+    ctx: Context,
+    app: crate::app::HorizonApp,
+    size: [f32; 2],
+    time: f64,
+    /// The private home of the window, which its frames write to.
+    _temp: tempfile::TempDir,
+}
+
+impl AppWindow {
+    /// A first start with no workspace and no panel, on the frames that settle it.
+    pub(super) fn new(size: [f32; 2]) -> Self {
+        Self::with_state(size, |_| {})
+    }
+
+    /// The same window, with the state that a test needs before its first frame.
+    pub(super) fn with_state(size: [f32; 2], setup: impl FnOnce(&mut crate::app::HorizonApp)) -> Self {
+        let (temp, ctx, mut app) =
+            crate::app::test_support::test_app_with_startup(horizon_core::StartupDecision::Ephemeral {
+                runtime_state: Box::new(horizon_core::RuntimeState::default()),
+            });
+        app.theme_applied = true;
+        app.initial_pan_done = true;
+        app.root_viewport_stabilizer = None;
+        app.pan_target = None;
+        setup(&mut app);
+        let mut window = Self {
+            ctx,
+            app,
+            size,
+            time: 1.0,
+            _temp: temp,
+        };
+        for _ in 0..3 {
+            let _ = window.frame(Vec::new());
+        }
+        window
+    }
+
+    pub(super) fn app(&self) -> &crate::app::HorizonApp {
+        &self.app
+    }
+
+    pub(super) fn ctx(&self) -> &Context {
+        &self.ctx
+    }
+
+    /// One frame of the window, with the pointer over the middle of the canvas and
+    /// with `events` fed to it, and the shapes that it painted.
+    pub(super) fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+        self.time += 0.016;
+        let pointer = self.app.canvas_rect(&self.ctx).center();
+        let mut input = crate::app::test_support::raw_input(self.size, None);
+        input.time = Some(self.time);
+        input.events = std::iter::once(egui::Event::PointerMoved(pointer))
+            .chain(events)
+            .collect();
+        let output = crate::app::test_support::run_app_frame_with_input(&self.ctx, &mut self.app, input);
+        let output: egui::FullOutput = output.discard_textures();
+        output.shapes
+    }
+
+    /// Frames until `ready` answers true for the window, or the deadline ends the
+    /// test with `what`.
+    pub(super) fn frames_until(&mut self, what: &str, mut ready: impl FnMut(&crate::app::HorizonApp) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let _ = self.frame(Vec::new());
+            if ready(&self.app) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "{what}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+/// The box of the text `text` that this frame painted.
+pub(super) fn text_box(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Rect> {
+    text_shape(shapes, text).map(|(shape, _)| egui::Rect::from_min_size(shape.pos, shape.galley.size()))
+}
+
+/// The first text that this frame painted whose text starts with `starts`, and
+/// the box that it covers.
+pub(super) fn painted_text_starting_with<'a>(
+    shapes: &'a [egui::epaint::ClippedShape],
+    starts: &str,
+) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
+    fn walk<'a>(shape: &'a egui::Shape, starts: &str, out: &mut Option<(&'a egui::epaint::TextShape, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) if out.is_none() && text.galley.text().starts_with(starts) => {
+                *out = Some((text, egui::Rect::from_min_size(text.pos, text.galley.size())));
+            }
+            egui::Shape::Vec(inner) => {
+                for shape in inner {
+                    walk(shape, starts, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = None;
+    for clipped in shapes {
+        walk(&clipped.shape, starts, &mut out);
+        if out.is_some() {
+            break;
+        }
+    }
+    out
+}
+
+/// The block of the page, from the tiles that this frame painted.
+pub(super) fn block_rect(shapes: &[egui::epaint::ClippedShape]) -> egui::Rect {
+    tile_rects(shapes)
+        .into_iter()
+        .reduce(egui::Rect::union)
+        .expect("the page paints its tiles")
+}
+
+/// One drawing that a frame painted: the band that it stands on, and the box of
+/// every shape of it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PaintedDrawing {
+    /// The plate of the drawing, as the frame painted it.
+    pub band: egui::Rect,
+    /// The box of every shape of the drawing, its band included.
+    pub bounds: egui::Rect,
+}
+
+/// The drawings that this frame painted, in the order of the four tiles.
+///
+/// A drawing is the group of shapes that `art::art` builds: one shape of the
+/// frame holds the band of the drawing and the shapes on it.
+pub(super) fn painted_drawings(shapes: &[egui::epaint::ClippedShape]) -> Vec<PaintedDrawing> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<PaintedDrawing>) {
+        if let egui::Shape::Vec(inner) = shape {
+            let band = inner.iter().find_map(|shape| match shape {
+                egui::Shape::Rect(rect) if rect.corner_radius == egui::CornerRadius::same(super::art::BAND_RADIUS) => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            });
+            if let Some(band) = band {
+                let bounds = inner
+                    .iter()
+                    .map(egui::Shape::visual_bounding_rect)
+                    .filter(|rect| rect.is_finite() && rect.is_positive())
+                    .reduce(egui::Rect::union)
+                    .unwrap_or(band);
+                out.push(PaintedDrawing { band, bounds });
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// Every tile keeps the gap of the page between its title, its sentence and its
+/// action, also when a title or a sentence takes one row more: the four tiles
+/// have one height, which follows the tallest content, and the four presses stand
+/// on one line.
+#[test]
+fn the_four_tiles_keep_their_gaps_and_one_height() {
+    for width in [1_240.0, 1_300.0, 1_400.0] {
+        let (_temp, mut app) = test_app();
+        let ctx = Context::default();
+        let shapes = frame_shapes_at(&ctx, &mut app, [width, 900.0]);
+
+        let mut action_tops = Vec::new();
+        for tile in WelcomeTile::ALL {
+            let (title, _) = text_shape(&shapes, tile.title()).expect("the title of a tile is drawn");
+            let (sentence, _) = text_shape(&shapes, tile.sentence()).expect("the sentence of a tile is drawn");
+            let (action, _) = text_shape(&shapes, tile.action()).expect("the press of a tile is drawn");
+            let title_bottom = title.pos.y + title.galley.size().y;
+            let sentence_bottom = sentence.pos.y + sentence.galley.size().y;
+            assert!(
+                sentence.pos.y - title_bottom >= TILE_INNER_GAP - 0.5,
+                "the title of {:?} keeps the inner gap above its sentence at {width}: {}",
+                tile.title(),
+                sentence.pos.y - title_bottom
+            );
+            assert!(
+                action.pos.y - sentence_bottom >= TILE_INNER_GAP - 0.5,
+                "the sentence of {:?} ends at {sentence_bottom} and keeps the inner gap {TILE_INNER_GAP} above its \
+                 press at {} (a width of {width})",
+                tile.title(),
+                action.pos.y
+            );
+            action_tops.push(action.pos.y);
+        }
+
+        let rects = tile_rects(&shapes);
+        assert_eq!(
+            rects.len(),
+            WelcomeTile::ALL.len(),
+            "the page paints four tiles: {rects:?}"
+        );
+        let height = rects[0].height();
+        for rect in &rects {
+            assert!(
+                (rect.height() - height).abs() < 0.01,
+                "the four tiles have one height at {width}: {rects:?}"
+            );
+        }
+        for top in &action_tops {
+            assert!(
+                (top - action_tops[0]).abs() < 0.01,
+                "the presses of the four tiles stand on one line at {width}: {action_tops:?}"
+            );
+        }
+    }
+}
+
 /// Every text that a frame of the window painted.
 fn frame_texts(ctx: &Context, app: &mut crate::app::HorizonApp) -> Vec<String> {
+    frame_texts_at(ctx, app, [1200.0, 900.0])
+}
+
+/// Every text that a frame of the window of `size` painted.
+fn frame_texts_at(ctx: &Context, app: &mut crate::app::HorizonApp, size: [f32; 2]) -> Vec<String> {
     let mut texts = Vec::new();
     // A panel shows from its second frame on.
     for _ in 0..2 {
         texts.clear();
-        let output = ctx.run_ui(crate::app::test_support::raw_input([1200.0, 900.0], None), |ui| {
+        let output = ctx.run_ui(crate::app::test_support::raw_input(size, None), |ui| {
             app.render_welcome_page(ui.ctx());
         });
         let output: egui::FullOutput = output.discard_textures();
@@ -63,7 +354,7 @@ fn walk_text<'a>(shape: &'a egui::Shape, text: &str, out: &mut Option<&'a egui::
 }
 
 /// The text shape that painted `text`, with the rectangle it was clipped to.
-fn text_shape<'a>(
+pub(super) fn text_shape<'a>(
     shapes: &'a [egui::epaint::ClippedShape],
     text: &str,
 ) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
@@ -377,3 +668,8 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
     run_app_frame(ctx, app);
     true
 }
+
+mod block;
+mod drawings;
+mod rows;
+mod scroll;

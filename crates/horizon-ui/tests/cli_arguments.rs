@@ -50,16 +50,33 @@ fn start_binary(binary: &Path, arguments: &[&str]) -> Outcome {
 /// Starts `binary` with `arguments`, the given home of the person, an optional
 /// `HORIZON_HOME`, and no display.
 fn start_with_home(binary: &Path, home: &Path, horizon_home: Option<&Path>, arguments: &[&str]) -> Outcome {
+    start_with_integrations(binary, home, horizon_home, arguments, false)
+}
+
+/// Starts `binary` as a person starts it, with the agent integrations of the home
+/// of that person on, so a test sees every file that a start of this home writes.
+fn start_like_a_person(binary: &Path, home: &Path, horizon_home: Option<&Path>, arguments: &[&str]) -> Outcome {
+    start_with_integrations(binary, home, horizon_home, arguments, true)
+}
+
+/// Starts `binary` with `arguments`, the given home of the person, an optional
+/// `HORIZON_HOME`, no display, and the agent integrations that `integrations` says.
+fn start_with_integrations(
+    binary: &Path,
+    home: &Path,
+    horizon_home: Option<&Path>,
+    arguments: &[&str],
+    integrations: bool,
+) -> Outcome {
     let output = tempfile::tempdir().expect("the folder of the output");
     let written = |name: &str| {
         std::fs::File::create(output.path().join(name)).unwrap_or_else(|error| panic!("create {name}: {error}"))
     };
     let mut command = Command::new(binary);
-    command
-        .args(arguments)
-        .env_clear()
-        .env("HOME", home)
-        .env("HORIZON_AGENT_INTEGRATIONS", "off");
+    command.args(arguments).env_clear().env("HOME", home);
+    if !integrations {
+        command.env("HORIZON_AGENT_INTEGRATIONS", "off");
+    }
     command.env_remove("DISPLAY");
     if let Some(horizon_home) = horizon_home {
         command.env("HORIZON_HOME", horizon_home);
@@ -327,4 +344,117 @@ fn a_folder_of_a_second_start_that_no_window_answers_ends_with_one_sentence() {
         .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name()).collect())
         .unwrap_or_default();
     assert!(left.is_empty(), "the start removes its files: {left:?}");
+}
+
+/// Every file under `root`, with its size and the time that it changed, and every
+/// folder by its name.
+///
+/// `skip` is the folder of the requests of a second start: that is the one folder
+/// that a start which only asks a window writes.
+fn home_listing(root: &Path, skip: &Path) -> Vec<String> {
+    fn walk(root: &Path, skip: &Path, folder: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            if path.starts_with(skip) {
+                continue;
+            }
+            if metadata.is_dir() {
+                out.push(format!("{} is a folder", relative.display()));
+                walk(root, skip, &path, out);
+            } else {
+                let changed = metadata
+                    .modified()
+                    .map_or_else(|_| "no time".to_string(), |time| format!("{time:?}"));
+                out.push(format!(
+                    "{} holds {} bytes, changed {changed}",
+                    relative.display(),
+                    metadata.len()
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, skip, root, &mut out);
+    out.sort();
+    out
+}
+
+/// The listing of a home once the writes of this test have settled: the store of
+/// the window of this test writes on its own worker, so the test waits until two
+/// listings a moment apart are the same.
+fn settled_home_listing(root: &Path, skip: &Path) -> Vec<String> {
+    let mut last = home_listing(root, skip);
+    for _ in 0..50 {
+        std::thread::sleep(Duration::from_millis(40));
+        let next = home_listing(root, skip);
+        if next == last {
+            return next;
+        }
+        last = next;
+    }
+    last
+}
+
+/// A start that names a folder while a window of this home runs is a client of
+/// that window: it writes its request, prints one sentence, and changes no file of
+/// the home of the person.
+#[test]
+fn a_folder_of_a_second_start_writes_nothing_but_its_request() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
+    let temp = tempfile::tempdir().expect("the home of the test");
+    let horizon_home = home_with_a_running_window(&temp);
+    let folder = temp.path().join("repo");
+    std::fs::create_dir(&folder).expect("the folder");
+    let folder = horizon_core::folder_identity(&folder);
+
+    let window = answer_as_the_window(
+        horizon_home.root(),
+        horizon_core::folder_requests::Answer::Shown {
+            workspace: "repo".to_string(),
+        },
+    );
+    let requests = horizon_core::folder_requests::directory(horizon_home.root());
+    let requests = requests
+        .parent()
+        .expect("the folder of the requests of a home")
+        .to_path_buf();
+    let before = settled_home_listing(temp.path(), &requests);
+    let outcome = start_like_a_person(
+        binary,
+        temp.path(),
+        Some(horizon_home.root()),
+        &[folder.to_str().expect("a path of text")],
+    );
+    window.join().expect("the window of this test");
+
+    assert_eq!(outcome.code, 0, "{:?}", outcome.stderr);
+    assert_eq!(
+        outcome.first_stdout_line(),
+        format!("Horizon shows the folder {}.", folder.display())
+    );
+    assert_eq!(
+        outcome.stdout.lines().count(),
+        1,
+        "a client of a running window prints one sentence: {:?}",
+        outcome.stdout
+    );
+    assert!(
+        outcome.stderr.is_empty(),
+        "a client of a running window writes no line of the log: {:?}",
+        outcome.stderr
+    );
+    assert_eq!(
+        settled_home_listing(temp.path(), &requests),
+        before,
+        "a start that only asks a window changes no file of the home of the person"
+    );
 }

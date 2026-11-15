@@ -306,9 +306,14 @@ Rules that follow:
 | `BORDER_SUBTLE` | 1.39 | 1.42 |
 | `BORDER_STRONG` | 2.41 | 2.27 |
 | `GRID_DOT` on `BG` | 1.26 | 1.36 |
+| Weakest agent line on `BG` (clear) | 7.73 | 3.13 |
 | `ACCENT` outline / focus | 6.18 | 5.86 |
 | `FG` focus ring | 15.13 | 16.13 |
 | Primary button outline on `BG_ELEVATED` | 4.99 | 4.47 |
+
+A line of an agent is a graphic and not a separator, so the light theme lifts the
+weakest of its accents to 3:1 at the clear strength (see
+[Agent lines](#agent-lines)).
 
 `BORDER_SUBTLE` and `BORDER_STRONG` are separators and grouping cues, below the
 3:1 needed to identify a control on their own. Controls are therefore
@@ -667,13 +672,28 @@ workspace, and no panel when two do.
 
 - Colour: the workspace accent of the agent, so two agents of one workspace
   differ. The agent takes the accent of its place among the agent panels of its
-  workspace, which keeps the colour while the board does not change.
+  workspace, which keeps the colour while the board does not change. A line is a
+  graphic that a person must see, so the light theme keeps a floor of 3 to 1
+  against the light canvas at the clear strength: the accent of a line that reads
+  weaker there, the deep yellow, the teal and the peach, is darkened in the
+  colour of the line alone. The accent of the workspace keeps the colour of its
+  fills, outlines and tabs, and the dark theme keeps every line, because each of
+  its accents already stands at 7.7 to 1 or above on the dark canvas.
 - Width: 1.5 screen points at every canvas zoom. The end marks are 3 screen
   points: a filled dot at the agent end and a ring at the other end.
 - Geometry: the line leaves the side of the panel that faces the other panel, at
   a right angle, as a cubic Bezier. The starts of the lines of one agent spread
   along that side in the order of their ends, so those lines do not cross near
-  the panel. Two panels that overlap or almost touch carry no line.
+  the panel. Two panels that overlap, and two whose facing edges stand closer
+  than 8 points, carry no line: the dot and the ring of a shorter line would
+  merge into one mark. The two panels of a pair decide that, never the two
+  places that the starts take: a start follows the number of lines of one side
+  and the height of its panel, so a card beside its agent would draw its line in
+  one frame and lose it in the next. Each control point pulls at most half of
+  the way along the axis between the two facing edges, so a short line is a
+  plain curve in the gap: it never passes the other panel and never folds back
+  under the two panels as a curl beside the agent. A long line pulls 0.45 of
+  the distance between its two ends, between 40 and 260 points.
 - Strength: the lines of the agent in focus are clear (alpha 230), the lines of
   every other agent are faint (alpha 46), and at a canvas zoom of 0.6 or less
   every line takes one middle strength (alpha 153). The agent in focus is the
@@ -967,6 +987,42 @@ the rules from the modules beside it.
   taken it continues the same shape: below the column of the agent panel with
   the left edges level, or beside its row with the top edges level. It covers no
   panel of its workspace in any of these places.
+
+### First start page
+
+The page that shows while the board is empty answers the size of the window.
+
+- The block of the page takes the canvas width less 60 points on each side, and
+  1 480 points at most. It stands in the middle of a wider canvas, so a large
+  screen does not stretch a sentence or a row over 4 000 points. The pads of the
+  page are 60 on both sides, 44 above the heading and 28 under the row of
+  shortcuts.
+- The line under the heading wraps at 720 points, and each of its rows is
+  centred in the block.
+- The block is centred in the height of the canvas when the canvas holds it with
+  the top pad above and the same pad under it. A block that needs more room keeps
+  the top pad, so the page never stands under the titlebar.
+- The drawing band of a tile is 92 points high and holds a drawing that is drawn
+  for 210 points of width. A band that is narrower or shorter draws the drawing
+  smaller, and no shape of a drawing leaves its band.
+- A canvas that does not hold the whole block first gives the band the compact
+  height of 30 points, then no band, so the four choices stay reachable without
+  a scroll for as long as the numbers allow. A canvas that holds none of the
+  three forms gives no band and scrolls: the wheel, the trackpad, Page Down and
+  Page Up move the page, and a tile that Tab reaches below the canvas comes into
+  view.
+- While the page shows, the wheel belongs to the page: a vertical wheel or
+  trackpad scroll moves the page, a horizontal scroll moves nothing, and a
+  Ctrl/Cmd wheel moves nothing, because the page has nothing to zoom. The canvas
+  under the page neither pans nor zooms for these wheels, and a page that the
+  window holds does not move at all.
+- A row of the section **Pick up where you left off** keeps the program of the
+  session at the start of its detail and the time and the state at its end. A
+  folder that does not fit is cut in its middle with an ellipsis. The press of a
+  row keeps 74 points of width, and the detail keeps a gap of 8 points to it.
+  The title of a row uses the width that the row has: a wide row shows the whole
+  stored title, and a narrow row cuts it at the end of its room with an ellipsis.
+  The store keeps 160 characters of a title, which is what the widest row shows.
 
 ### Panels and workspaces
 
