@@ -84,6 +84,35 @@ pub(super) fn text_box(shapes: &[egui::epaint::ClippedShape], text: &str) -> Opt
     text_shape(shapes, text).map(|(shape, _)| egui::Rect::from_min_size(shape.pos, shape.galley.size()))
 }
 
+/// The first text that this frame painted whose text starts with `starts`, and
+/// the box that it covers.
+pub(super) fn painted_text_starting_with<'a>(
+    shapes: &'a [egui::epaint::ClippedShape],
+    starts: &str,
+) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
+    fn walk<'a>(shape: &'a egui::Shape, starts: &str, out: &mut Option<(&'a egui::epaint::TextShape, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) if out.is_none() && text.galley.text().starts_with(starts) => {
+                *out = Some((text, egui::Rect::from_min_size(text.pos, text.galley.size())));
+            }
+            egui::Shape::Vec(inner) => {
+                for shape in inner {
+                    walk(shape, starts, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = None;
+    for clipped in shapes {
+        walk(&clipped.shape, starts, &mut out);
+        if out.is_some() {
+            break;
+        }
+    }
+    out
+}
+
 /// The block of the page, from the tiles that this frame painted.
 pub(super) fn block_rect(shapes: &[egui::epaint::ClippedShape]) -> egui::Rect {
     tile_rects(shapes)
@@ -556,4 +585,5 @@ fn press_tile(ctx: &mut Context, app: &mut crate::app::HorizonApp, tile: Welcome
 
 mod block;
 mod drawings;
+mod rows;
 mod scroll;

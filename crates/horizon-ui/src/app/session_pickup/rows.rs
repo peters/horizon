@@ -7,7 +7,8 @@
 //! well: Tab reaches it and Enter opens it.
 
 use egui::{
-    Button, Color32, CornerRadius, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, text::LayoutJob,
+    Button, Color32, CornerRadius, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
+    text::LayoutJob,
 };
 
 use horizon_core::{PickupFolder, PickupRow};
@@ -57,15 +58,28 @@ const SEPARATOR: &str = " · ";
 /// waits for the second confirmation names that in the same line.
 #[must_use]
 pub(in crate::app) fn row_lines(row: &PickupRow, folder: Option<&PickupFolder>) -> (String, String) {
-    let mut parts = vec![row_text(row)];
-    if let Some(folder) = folder {
-        parts.push(folder_text(folder));
+    let (program, folder, tail) = detail_parts(row, folder);
+    let mut parts = vec![program];
+    if !folder.is_empty() {
+        parts.push(folder);
     }
-    parts.push(row.last_active.clone());
-    if let Some(says) = row.state.says() {
-        parts.push(says.to_string());
-    }
+    parts.push(tail);
     (row.title.clone(), parts.join(SEPARATOR))
+}
+
+/// The three parts of the line under the title of a row: the program, the folder
+/// of the session and the time with the state.
+///
+/// The parts are kept apart because a row that cannot hold the whole line cuts the
+/// folder in its middle and keeps the program and the end of the line, which are
+/// what a person reads first.
+fn detail_parts(row: &PickupRow, folder: Option<&PickupFolder>) -> (String, String, String) {
+    let mut tail = row.last_active.clone();
+    if let Some(says) = row.state.says() {
+        tail = format!("{tail}{SEPARATOR}{says}");
+    }
+    let folder = folder.map(folder_text).unwrap_or_default();
+    (row_text(row), folder, tail)
 }
 
 /// The program of a row.
@@ -124,6 +138,9 @@ pub(in crate::app) fn paint_row(
     paint_row_frame(ui, rect, whole.hovered(), whole.has_focus());
 
     let (title, detail) = row_lines(row, folder);
+    // The whole line, and the two parts of it that a row keeps when it has to cut
+    // the folder in its middle.
+    let (_, folder_text, tail) = detail_parts(row, folder);
     let button_width = if confirming { OPEN_WIDTH + 34.0 } else { OPEN_WIDTH };
     let text_width = (rect.width() - 2.0 * ROW_PAD - button_width - 8.0).max(1.0);
     let painter = ui.painter();
@@ -136,13 +153,7 @@ pub(in crate::app) fn paint_row(
         text_width,
     ));
     painter.galley(Pos2::new(rect.min.x + ROW_PAD, title_top), title, theme::FG());
-    let detail = painter.layout_job(one_line_job(
-        &detail,
-        DETAIL_FONT,
-        theme::FG_SOFT(),
-        Weight::Regular,
-        text_width,
-    ));
+    let detail = painter.layout_job(detail_job(painter, &detail, &folder_text, &tail, text_width));
     painter.galley(
         Pos2::new(rect.min.x + ROW_PAD, title_top + TITLE_LINE_HEIGHT),
         detail,
@@ -308,6 +319,67 @@ fn paint_row_frame(ui: &Ui, rect: Rect, hovered: bool, focused: bool) {
 /// A press of Enter on the widget that holds the keyboard.
 fn press_enter(ui: &mut Ui) -> bool {
     ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+}
+
+/// The line under the title of a row: the program at its start, the time and the
+/// state at its end, and the folder between them cut in its middle when the row
+/// cannot hold it whole.
+fn detail_job(painter: &Painter, detail: &str, folder: &str, tail: &str, max_width: f32) -> LayoutJob {
+    let width_of = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), FontId::proportional(DETAIL_FONT), theme::FG_SOFT())
+            .size()
+            .x
+    };
+    // A row that holds no folder has nothing to cut in its middle: the program and
+    // the time are what a person needs of it.
+    let text = if folder.is_empty() || width_of(detail) <= max_width {
+        detail.to_owned()
+    } else {
+        // The head of the line is what stands before the folder, separators and
+        // all, and the end is the separator and the time with the state.
+        let contains = format!("{folder}{SEPARATOR}{tail}");
+        let head = detail.strip_suffix(contains.as_str()).unwrap_or(detail);
+        let end = format!("{SEPARATOR}{tail}");
+        let room = max_width - width_of(head) - width_of(&end);
+        format!("{head}{}{end}", cut_in_the_middle(folder, room, width_of))
+    };
+    one_line_job(&text, DETAIL_FONT, theme::FG_SOFT(), Weight::Regular, max_width)
+}
+
+/// `text` with as much of its start and of its end as fit in `room` points, and
+/// an ellipsis between them.
+///
+/// A folder is a path that a person recognizes by its start and by its end, so the
+/// line keeps both and loses the middle. `width_of` measures a line in the font of
+/// the row, and the loop removes the characters that the estimate says are too
+/// many, so a row costs a few measurements and never a scan of the whole text.
+fn cut_in_the_middle(text: &str, room: f32, width_of: impl Fn(&str) -> f32) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let join = |keep: usize| {
+        let front = keep.div_ceil(2);
+        let back = keep - front;
+        let mut cut: String = chars[..front].iter().collect();
+        cut.push('…');
+        cut.extend(chars[chars.len() - back..].iter());
+        cut
+    };
+    let mut keep = chars.len();
+    while keep > 2 {
+        let cut = join(keep);
+        let width = width_of(&cut);
+        if width <= room {
+            return cut;
+        }
+        // The characters of this line are about as wide as the line is long, so the
+        // part over the room names the count of characters that the middle loses.
+        #[allow(clippy::cast_precision_loss)]
+        let per_char = (width / (keep + 1) as f32).max(0.5);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let over = ((width - room) / per_char).ceil().max(1.0) as usize;
+        keep = keep.saturating_sub(over).max(2);
+    }
+    join(keep)
 }
 
 /// One line of `text` at `size` and `weight`, cut to `max_width` with an ellipsis.
