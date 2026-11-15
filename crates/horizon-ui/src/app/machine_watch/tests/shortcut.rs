@@ -1,6 +1,5 @@
-//! The totals of the agents of the machines in the sidebar, and the shortcut that goes
-//! to the next agent that waits for the person, which also reaches the agents of a
-//! machine.
+//! The shortcut that goes to the next agent that waits for the person, which also
+//! reaches the agents of a machine.
 
 use std::sync::Arc;
 
@@ -25,22 +24,6 @@ fn agent_state(app: &mut HorizonApp, session: &str) -> Option<AgentState> {
         .map(|agent| agent.state)
 }
 
-/// The texts that one frame of the sidebar draws, after a frame of the window took the
-/// snapshot of the watch that its rows come from.
-fn sidebar_texts(ctx: &Context, app: &mut HorizonApp) -> Vec<String> {
-    run_app_frame(ctx, app);
-    let input = raw_input([1200.0, 900.0], None);
-    let output = ctx.run_ui(input, |ui| app.render_sidebar(ui.ctx())).discard_textures();
-    output
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
 /// One app with a stand-in `ssh`, the machine `build-1` and one Codex stand-in in a
 /// `tmux` pane of the folder `shop`.
 fn app_with_one_agent() -> Option<(tempfile::TempDir, Server, Ssh, Context, HorizonApp)> {
@@ -57,32 +40,6 @@ fn app_with_one_agent() -> Option<(tempfile::TempDir, Server, Ssh, Context, Hori
     app.machine_watch.watch = Arc::new(MachineWatch::with_program(ssh.program()));
     with_machines(&mut app, vec![record("build-1")]);
     Some((folder, server, ssh, ctx, app))
-}
-
-#[test]
-fn the_section_of_the_machines_says_how_many_of_their_agents_wait_for_the_person() {
-    let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
-        return;
-    };
-    server.send("hz-shop-1", "ask");
-    wait_for(&ctx, &mut app, "the approval of the agent", |app| {
-        agent_state(app, "hz-shop-1") == Some(AgentState::NeedsYou)
-    });
-    let texts = sidebar_texts(&ctx, &mut app);
-    assert!(
-        texts.iter().any(|text| text == "1 needs you"),
-        "the numbers of the agents of the machines use the words of a workspace row: {texts:?}"
-    );
-
-    server.send("hz-shop-1", "start");
-    wait_for(&ctx, &mut app, "the answer of the person", |app| {
-        agent_state(app, "hz-shop-1") == Some(AgentState::Working)
-    });
-    let texts = sidebar_texts(&ctx, &mut app);
-    assert!(
-        !texts.iter().any(|text| text == "1 needs you"),
-        "a working agent waits for no answer: {texts:?}"
-    );
 }
 
 #[test]

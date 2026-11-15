@@ -192,7 +192,6 @@ fn the_line_of_the_server_draws_before_the_first_machine() {
         rows: Vec::new(),
         server_line: Some("Server: in step".to_owned()),
         server_reason: None,
-        totals: None,
         read_from: Some(super::machine_fingerprint(&app)),
     };
 

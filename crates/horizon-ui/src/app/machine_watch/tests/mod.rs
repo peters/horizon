@@ -4,8 +4,8 @@
 mod click;
 mod notice;
 mod rows;
+mod shortcut;
 mod support;
-mod totals;
 
 use std::sync::Arc;
 

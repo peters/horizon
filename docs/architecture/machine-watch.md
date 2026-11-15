@@ -176,8 +176,8 @@ refuses, or a record that no longer passes the rule of an SSH terminal.
 | `MachineAgent::can_open` | Whether the session name of the agent passes the rule of this build. |
 
 The snapshot holds the machines in name order, the agents of each machine in
-session and pane order, and the totals `needs_you` and `done`, which the heading
-of the machine section shows and the attention summary adds to its own.
+session and pane order, and the totals `needs_you` and `done`, which the
+attention summary adds to its own.
 
 ## The window
 

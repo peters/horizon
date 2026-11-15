@@ -15,7 +15,6 @@ use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 use egui::{CursorIcon, Rect, Sense, Stroke, Vec2, pos2, vec2};
-use horizon_core::workspace_list::Waiting;
 use horizon_core::{PanelId, SshConnectionStatus, WorkspaceId};
 
 use crate::theme;
@@ -147,9 +146,6 @@ pub(in crate::app) struct MachineRows {
     /// line. It is a fixed sentence of `horizon-sync`, so it carries no address
     /// and no secret.
     server_reason: Option<&'static str>,
-    /// The agents of every machine that wait for the person, in the words of a
-    /// workspace row.
-    totals: Option<String>,
     read_from: Option<u64>,
 }
 
@@ -210,13 +206,6 @@ impl HorizonApp {
                 }
             })
             .collect();
-        let totals = snapshot.as_ref().and_then(|snapshot| {
-            Waiting {
-                needs_you: snapshot.needs_you,
-                done: snapshot.done,
-            }
-            .line()
-        });
         // The line is built on the frame that the state changes and on no other.
         let (server_line, server_reason) = self.server_sync.as_ref().map_or((None, None), |sync| {
             let line = sync.line();
@@ -226,7 +215,6 @@ impl HorizonApp {
             rows,
             server_line,
             server_reason,
-            totals,
             read_from: Some(read_from),
         };
     }
@@ -346,9 +334,8 @@ impl HorizonApp {
         ui.add_space(6.0);
     }
 
-    /// The title of the machine section, its Set up control, the agents that wait for the
-    /// person, the state of the link to a server and, while the list is empty, where a
-    /// machine comes from.
+    /// The title of the machine section, its Set up control, the state of the link to a
+    /// server and, while the list is empty, where a machine comes from.
     ///
     /// It is here while this Horizon has no machine at all: a person who starts
     /// with an empty window has to be able to get one.
@@ -372,17 +359,6 @@ impl HorizonApp {
                     .on_hover_text(SET_UP_HOVER);
                 if control.clicked() {
                     actions.press_set_up = true;
-                }
-                if let Some(totals) = rows.totals.as_deref() {
-                    ui.add_space(8.0);
-                    ui.label(text::line(
-                        ui,
-                        totals,
-                        STATE_SIZE,
-                        text::REGULAR,
-                        text::secondary(),
-                        160.0,
-                    ));
                 }
             });
         });

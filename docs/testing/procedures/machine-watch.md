@@ -12,8 +12,8 @@ owner: peters
 
 This procedure tests the part of the watch of the agents of a machine that has no
 user interface, and the rows that the sidebar shows for those agents: the fold,
-the line of a lost link, the press that opens a session, the jump, the totals,
-the shortcut and the notification.
+the line of a lost link, the press that opens a session, the jump, the shortcut
+and the notification.
 
 ## 1. Purpose
 
@@ -209,8 +209,8 @@ starts and stops one `ssh` child per machine of the list.
 
 7. Begin a turn in one agent, focus another panel, and wait for the turn to end.
 
-   Result: the row of the agent says `Done`. The heading of the machine section
-   says `1 done`. Press the shortcut for the next agent that waits for the person.
+   Result: the row of the agent says `Done`. Press the shortcut for the next agent
+   that waits for the person.
 
    Result: the window opens the terminal of that agent, and its row says no state.
 
