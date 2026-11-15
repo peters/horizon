@@ -50,7 +50,16 @@ impl StandIn {
     /// The window and its one codex panel, or `None` when this computer has no
     /// Python, which the stand-in is written in.
     fn start() -> Option<Self> {
+        Self::start_with(&[])
+    }
+
+    /// The window and its one codex panel whose program starts with `arguments`.
+    ///
+    /// Every launch of this stand-in writes the start-up phase of the real
+    /// program, so a test types its words to a program that is ready for them.
+    fn start_with(arguments: &[&str]) -> Option<Self> {
         let python = python3()?;
+        let arguments: Vec<&str> = std::iter::once("--startup").chain(arguments.iter().copied()).collect();
         let temp = tempfile::tempdir().expect("isolated state of the test");
         let folder = temp.path().join(FOLDER);
         std::fs::create_dir(&folder).expect("the folder of the panel");
@@ -68,7 +77,9 @@ impl StandIn {
                     name: Some("Codex stand-in".to_owned()),
                     kind: PanelKind::Codex,
                     command: Some(python.display().to_string()),
-                    args: vec![STAND_IN.to_owned()],
+                    args: std::iter::once(STAND_IN.to_owned())
+                        .chain(arguments.iter().map(|argument| (*argument).to_owned()))
+                        .collect(),
                     cwd: Some(folder),
                     ..PanelOptions::default()
                 },
@@ -255,6 +266,31 @@ fn a_thousand_spinner_frames_of_one_state_do_no_work() {
 }
 
 #[test]
+fn the_titles_of_a_launch_before_its_first_plain_title_claim_nothing() {
+    let Some(mut stand_in) = StandIn::start() else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    // The launch of the real program: frames of the spinner while it loads, and
+    // then a plain title that says the program is ready for the person. No turn
+    // of the person is in these titles.
+    let version = stand_in.app.attention.version();
+    let local_id = stand_in.local_id.clone();
+    stand_in.run_for(Duration::from_millis(3_000), |app| {
+        assert_eq!(
+            app.panel_attention(&local_id),
+            Attention::Idle,
+            "the titles of a launch claim nothing before its ready title"
+        );
+    });
+    assert_eq!(
+        version,
+        stand_in.app.attention.version(),
+        "the launch of a program changes no row"
+    );
+}
+
+#[test]
 fn a_codex_panel_whose_titles_claim_nothing_keeps_the_signal_of_its_screen() {
     let temp = tempfile::tempdir().expect("isolated state of the test");
     let folder = temp.path().join(FOLDER);
@@ -300,4 +336,36 @@ fn a_codex_panel_whose_titles_claim_nothing_keeps_the_signal_of_its_screen() {
     );
     assert_eq!(app.panel_attention(&local_id), Attention::Idle);
     app.board.shutdown_terminal_panels();
+}
+
+#[test]
+fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
+    let Some(mut stand_in) = StandIn::start_with(&["--startup-question"]) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    assert!(
+        stand_in.wait_for(Attention::NeedsYou),
+        "the trust question of a launch, which showed {:?} with the title {:?}",
+        stand_in.shown(),
+        stand_in.title()
+    );
+    // The question stands while the launch blinks its two frames, and the frames of
+    // the spinner that follow it claim nothing.
+    let local_id = stand_in.local_id.clone();
+    stand_in.run_for(Duration::from_millis(1_000), |app| {
+        assert_eq!(
+            app.panel_attention(&local_id),
+            Attention::NeedsYou,
+            "the question of a launch stands until the program is ready"
+        );
+    });
+    // The ready title ends the launch. No turn of the person ran in the question,
+    // so the row shows no state that waits for them.
+    assert!(
+        stand_in.wait_for(Attention::Idle),
+        "the ready title of a launch clears its own question, which showed {:?}",
+        stand_in.shown()
+    );
+    stand_in.word("quit");
 }

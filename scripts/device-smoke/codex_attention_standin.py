@@ -20,11 +20,20 @@ This script is the program of such a panel without codex. It reads one word for
 each line of its input and writes the real title sequences to its own terminal,
 so a run of Horizon reads them through the reader of a panel. With `--protocol` it
 writes the reports of the program status protocol too, as the real program does
-with no configuration of its own:
+with no configuration of its own. With `--startup` it writes the launch of the
+real program before it reads a word: eight frames of the spinner a tenth of a
+second apart, and then the plain title that says it is ready for the person
+(with `--protocol`, one `state=working` report with each frame and one
+`state=idle` at the moment it is ready). With `--startup-question` the launch
+blinks a trust question and reports a blocked turn before it is ready, as the
+real program asks before it shows its prompt:
 
   start   the spinner of a working turn               -> Working
   ask     the two frames of an approval               -> Needs you
   answer  the spinner of the same turn again          -> Working
+  deny    a plain title and `state=idle`              -> the turn of an approval
+                                                         that was denied is an
+                                                         interrupted turn
   stop    a plain title                               -> Done while unseen
   esc     a plain title, as an interrupted turn       -> Done while unseen
   quit    a plain title, then the end of the program  -> no claim
@@ -59,7 +68,24 @@ FRAME_SECONDS = 0.1
 WAITING_FRAMES = ('[ . ] Action Required', '[ ! ] Action Required')
 WAITING_SECONDS = 0.25
 # The words that a person types, and the longest delay of `after`.
-WORDS = ('start', 'ask', 'answer', 'stop', 'esc', 'quit', 'fail', 'foreign')
+WORDS = ('start', 'ask', 'answer', 'deny', 'stop', 'esc', 'quit', 'fail', 'foreign')
+# The argument that makes this program write the launch of the real program
+# before it reads a word: frames of the spinner while it loads, and then the plain
+# title that says it is ready for the person.
+STARTUP_ARGUMENT = '--startup'
+# The argument that makes the launch of this program ask a question of the person
+# before the program is ready, as a trust question of the real program does.
+STARTUP_QUESTION_ARGUMENT = '--startup-question'
+# The frames of the spinner of a launch, and the pause between two of them.
+STARTUP_FRAMES = 8
+STARTUP_SECONDS = 0.1
+# How long the ready title of a launch stands before the program reads a word.
+# The ready title of the real program stands while the program waits for the
+# person, and a panel reads the title of its program once per frame: a title that a
+# later one replaces within one frame is not read at all.
+READY_SECONDS = 0.3
+# How long a question of a launch blinks its two frames, in rounds of the two.
+STARTUP_QUESTION_ROUNDS = 4
 # The reports of the program status protocol that a word writes, in the bytes of
 # the real program. `state=clear` carries no `app`, as the real program writes it.
 REPORTS = {
@@ -68,6 +94,9 @@ REPORTS = {
     'ask': ('state=blocked:app=codex:kind=permission',),
     'stop': ('state=done:app=codex', 'state=idle:app=codex'),
     'esc': ('state=idle:app=codex',),
+    # A denial ends a turn that was stopped, so the program reports the state of
+    # an interrupted turn and no done.
+    'deny': ('state=idle:app=codex',),
     'fail': ('state=error:app=codex',),
     'foreign': ('state=working:app=other',),
     'quit': ('state=clear',),
@@ -134,6 +163,12 @@ class Titles:
     def frame_title(self):
         """The title of one frame of the spinner of a working turn."""
         return f'{SPINNER_FRAMES[self.frame % len(SPINNER_FRAMES)]} {self.folder}'
+
+    def step(self):
+        """Writes the next frame of the spinner, as a loading program does."""
+        self._stop_spinning()
+        self.frame += 1
+        self.write(self.frame_title())
 
     def frames(self, count):
         """Writes `count` spinner frames of the turn at once."""
@@ -231,6 +266,7 @@ def apply_word(titles, status, word):
     elif word in ('foreign', 'quit'):
         pass
     else:
+        # `stop`, `esc` and `deny`: the program writes a plain title and no frame.
         titles.plain()
     for payload in reports:
         status.report(payload)
@@ -247,6 +283,29 @@ def writes_protocol(argv):
     return any(argument == PROTOCOL_ARGUMENT for argument in argv)
 
 
+def start_up(titles, status, question=False):
+    """Writes the launch of the real program, before it reads a word.
+
+    The real program writes a frame of its spinner about ten times a second while
+    it loads, and then the plain title that says it is ready for the person. A
+    launch that reports the program status protocol writes `state=working` with
+    every frame and `state=idle` at the moment it is ready. A `question` is the
+    trust question of the real program before it is ready: the two frames of the
+    approval line, and one report of a blocked turn.
+    """
+    for _ in range(STARTUP_FRAMES):
+        titles.step()
+        status.report('state=working:app=codex')
+        time.sleep(STARTUP_SECONDS)
+    if question:
+        for _ in range(STARTUP_QUESTION_ROUNDS):
+            titles.waiting('Do you trust the files in this folder?')
+        status.report('state=blocked:app=codex:kind=permission')
+    status.report('state=idle:app=codex')
+    titles.plain()
+    time.sleep(READY_SECONDS)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     folder = os.path.basename(os.getcwd()) or 'work'
@@ -256,6 +315,8 @@ def main(argv=None):
         f'{PROGRAM}: type one of {", ".join(WORDS)}; the title of this panel shows the state',
         flush=True,
     )
+    if any(argument == STARTUP_ARGUMENT for argument in argv):
+        start_up(titles, status, question=any(argument == STARTUP_QUESTION_ARGUMENT for argument in argv))
     pending = []
     for line in sys.stdin:
         text = line.strip().lower()

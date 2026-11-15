@@ -394,6 +394,19 @@ fn title(board: &mut AttentionBoard, state: TitleState, now_millis: i64) -> bool
     board.observe_title("panel", LAUNCH, state, now_millis)
 }
 
+/// The ready title of a launch: the first plain title of a program, which is the
+/// moment it is ready for the person. No title of a launch claims a turn before
+/// it, and no report does either.
+fn ready_title(board: &mut AttentionBoard) {
+    board.observe_title("panel", LAUNCH, TitleState::Plain, LAUNCH);
+}
+
+/// The ready report of a launch: the first `idle` report of a program, which is the
+/// moment it is ready for the person.
+fn ready_report(board: &mut AttentionBoard) {
+    board.observe_program("panel", LAUNCH, ProgramStatus::Idle, LAUNCH);
+}
+
 #[test]
 fn the_titles_of_a_panel_take_the_four_words_of_its_turn() {
     let mut board = board();
@@ -434,6 +447,7 @@ fn the_titles_of_a_panel_take_the_four_words_of_its_turn() {
 #[test]
 fn a_thousand_spinner_frames_change_no_state_and_wake_no_caller() {
     let mut board = board();
+    ready_title(&mut board);
     assert!(title(&mut board, TitleState::Working, LAUNCH));
     for frame in 0..1_000_i64 {
         assert!(
@@ -447,6 +461,7 @@ fn a_thousand_spinner_frames_change_no_state_and_wake_no_caller() {
 #[test]
 fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
     let mut board = board();
+    ready_title(&mut board);
     title(&mut board, TitleState::Working, LAUNCH);
     // The program writes a plain title for about a tenth of a second and then
     // the spinner of the same turn again.
@@ -465,6 +480,7 @@ fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
 #[test]
 fn the_screen_cannot_end_or_reopen_a_turn_of_a_titles_claim() {
     let mut board = board();
+    ready_title(&mut board);
     title(&mut board, TitleState::Working, LAUNCH);
     board.observe_working("panel", true, true, LAUNCH + 1);
     board.observe_working("panel", false, false, LAUNCH + 2);
@@ -483,6 +499,7 @@ fn the_screen_cannot_end_or_reopen_a_turn_of_a_titles_claim() {
 #[test]
 fn a_program_that_horizon_starts_again_is_a_new_launch() {
     let mut board = board();
+    ready_title(&mut board);
     title(&mut board, TitleState::Working, LAUNCH);
     assert!(board.from_title("panel"));
 
@@ -578,6 +595,7 @@ fn the_reports_of_a_panel_take_the_four_words_of_its_turn() {
 #[test]
 fn a_failed_report_waits_for_the_person() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     program(&mut board, ProgramStatus::Failed, LAUNCH + 10);
     assert_eq!(board.state("panel"), Attention::NeedsYou);
@@ -602,6 +620,7 @@ fn a_report_of_no_turn_leaves_the_screen_to_answer() {
 #[test]
 fn a_thousand_repeated_reports_change_no_state_and_wake_no_caller() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     for report in 0..1_000_i64 {
         assert!(
@@ -615,6 +634,7 @@ fn a_thousand_repeated_reports_change_no_state_and_wake_no_caller() {
 #[test]
 fn a_late_report_cannot_open_or_close_a_turn_of_another_one() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     program(&mut board, ProgramStatus::Done, LAUNCH + 10);
     assert_eq!(board.state("panel"), Attention::Done);
@@ -644,6 +664,7 @@ fn a_report_of_another_program_claims_nothing() {
 #[test]
 fn a_clear_of_the_program_forgets_the_launch() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     assert!(board.from_status("panel"));
     assert!(program(&mut board, ProgramStatus::Clear, LAUNCH + 10));
@@ -671,10 +692,12 @@ fn the_record_of_a_hook_wins_over_a_report_of_the_program() {
 #[test]
 fn a_report_of_the_program_wins_over_the_title_of_the_program() {
     let mut board = board();
+    ready_title(&mut board);
     assert!(title(&mut board, TitleState::Working, LAUNCH));
     assert_eq!(board.state("panel"), Attention::Working);
     // The program speaks the protocol, so its title is no longer a source: its
     // reports answer, and the settle time of a plain title does not apply to it.
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH + 5);
     assert!(board.from_status("panel"));
     program(&mut board, ProgramStatus::Done, LAUNCH + 10);
@@ -690,6 +713,7 @@ fn a_report_of_the_program_wins_over_the_title_of_the_program() {
 #[test]
 fn a_program_that_horizon_starts_again_is_a_new_launch_for_its_reports() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     assert!(board.from_status("panel"));
     let relaunched = LAUNCH + 5_000;
@@ -701,6 +725,7 @@ fn a_program_that_horizon_starts_again_is_a_new_launch_for_its_reports() {
         Attention::Working,
         "the new launch starts on its screen"
     );
+    board.observe_program("panel", relaunched, ProgramStatus::Idle, relaunched + 1);
     board.observe_program("panel", relaunched, ProgramStatus::Blocked, relaunched + 2);
     assert!(board.from_status("panel"));
     assert_eq!(board.state("panel"), Attention::NeedsYou);
@@ -709,6 +734,7 @@ fn a_program_that_horizon_starts_again_is_a_new_launch_for_its_reports() {
 #[test]
 fn the_screen_cannot_end_or_reopen_a_turn_of_a_report() {
     let mut board = board();
+    ready_report(&mut board);
     program(&mut board, ProgramStatus::Working, LAUNCH);
     board.observe_working("panel", false, false, LAUNCH + 1);
     assert_eq!(board.state("panel"), Attention::Working);

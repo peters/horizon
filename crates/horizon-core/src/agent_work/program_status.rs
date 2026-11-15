@@ -148,6 +148,11 @@ fn is_value(value: &str) -> bool {
 /// closes only the turn that is open, and a report of a turn that already ended
 /// changes nothing. A `clear` forgets the launch, and the claim answers again from
 /// the next `working` or `blocked` that arrives.
+///
+/// The first `idle` of a launch is the moment its program is ready for the person.
+/// A program that reports `working` while it loads claims no turn, and a `blocked`
+/// report before that moment is the program's own question, which the person must
+/// answer, so it claims **Needs you** like any other wait.
 #[derive(Clone, Debug, Default)]
 pub struct ProgramClaim {
     ledger: TurnLedger,
@@ -155,6 +160,9 @@ pub struct ProgramClaim {
     turn: u32,
     /// The last state that a report named, so a repeated report does no work.
     heard: Option<ProgramStatus>,
+    /// Whether the `idle` report that says the program is ready for the person has
+    /// arrived. The reports of a launch before it are its start-up.
+    ready: bool,
 }
 
 impl ProgramClaim {
@@ -164,6 +172,13 @@ impl ProgramClaim {
     #[must_use]
     pub fn answers(&self) -> bool {
         matches!(self.heard, Some(status) if status != ProgramStatus::Clear)
+    }
+
+    /// Whether an `idle` report of this launch has arrived, which is the moment
+    /// the program is ready for the person.
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.ready
     }
 
     /// The ledger of the claim, read the way the record of a launch with hooks is.
@@ -180,12 +195,28 @@ impl ProgramClaim {
         if status == ProgramStatus::Clear {
             // The program removes its record: the panel answers from the screen
             // again, as a panel that started now does. The report stays the state
-            // that this claim heard, so a repeated `clear` does no work.
+            // that this claim heard, so a repeated `clear` does no work. It
+            // removes a record and not the launch, so the program that reports
+            // again is the ready program that it was.
+            let ready = self.ready;
             *self = Self {
                 heard: Some(ProgramStatus::Clear),
+                ready,
                 ..Self::default()
             };
             return;
+        }
+        match status {
+            ProgramStatus::Idle => self.become_ready(now_millis),
+            // A report that the program works before its first idle is the
+            // program loading, and no turn of the person runs in it.
+            ProgramStatus::Working if !self.ready => return,
+            ProgramStatus::Unknown
+            | ProgramStatus::Working
+            | ProgramStatus::Blocked
+            | ProgramStatus::Done
+            | ProgramStatus::Failed
+            | ProgramStatus::Clear => {}
         }
         self.heard = Some(status);
         match status {
@@ -210,6 +241,23 @@ impl ProgramClaim {
             ProgramStatus::Done => self.end(TurnState::Finished, now_millis),
             ProgramStatus::Failed => self.end(TurnState::Failed, now_millis),
             ProgramStatus::Idle => self.end(TurnState::Interrupted, now_millis),
+        }
+    }
+
+    /// Records the `idle` report of a launch: from here the reports of the launch
+    /// claim the turns of the person.
+    ///
+    /// A wait before that report was the program's own question while it loaded.
+    /// The person answered it, so the launch forgets the turn that the wait opened
+    /// instead of ending it: no turn of the person ran in it, and its end would say
+    /// **Done** for a launch that has not started to work yet.
+    fn become_ready(&mut self, now_millis: i64) {
+        if self.ready {
+            return;
+        }
+        self.ready = true;
+        if self.open() {
+            self.ledger.apply(&Self::event("SessionStart", None, None), now_millis);
         }
     }
 

@@ -8,11 +8,12 @@
 //! rule for a turn that the person did not see. A title and a hook differ only in
 //! how the event arrives at Horizon.
 //!
-//! The claim of a launch answers from the first working or waiting title of that
-//! launch. A program whose titles never take one of the forms of its kind keeps
-//! the signal of its screen, and a spinner frame that repeats the state that the
-//! claim already holds does no work: the title of a working program changes about
-//! ten times a second, and only a change of the state is an event.
+//! The claim of a launch answers from the first working or waiting title that
+//! follows the ready title of the launch. A program whose titles never take one of
+//! the forms of its kind keeps the signal of its screen, and a spinner frame that
+//! repeats the state that the claim already holds does no work: the title of a
+//! working program changes about ten times a second, and only a change of the
+//! state is an event.
 
 use crate::PanelKind;
 
@@ -120,6 +121,11 @@ pub fn title_state(kind: PanelKind, title: &str) -> TitleState {
 /// is numbered from a counter of the launch: a plain title closes the turn that a
 /// working or waiting title opened, and a late or repeated title cannot close a
 /// turn that a later one opened.
+///
+/// The first plain title of a launch is the moment its program is ready for the
+/// person: a program loads with frames of the spinner, and those frames claim no
+/// turn. A wait before that title is the program's own question, which the person
+/// must answer, so it claims **Needs you** like any other wait.
 #[derive(Clone, Debug, Default)]
 pub struct TitleClaim {
     ledger: TurnLedger,
@@ -129,14 +135,25 @@ pub struct TitleClaim {
     heard: Option<TitleState>,
     /// When a plain title started to stand while a turn was open.
     plain_since_millis: Option<i64>,
+    /// Whether the plain title that says the program is ready for the person has
+    /// arrived. The titles of a launch before it are its start-up.
+    ready: bool,
 }
 
 impl TitleClaim {
     /// Whether the titles of this launch answer for the panel. The claim answers
-    /// from the first working or waiting title of the launch.
+    /// from the first working or waiting title of the launch that follows its
+    /// ready title.
     #[must_use]
     pub fn answers(&self) -> bool {
         self.ledger.heard_an_event()
+    }
+
+    /// Whether a plain title of this launch has arrived, which is the moment the
+    /// program is ready for the person.
+    #[must_use]
+    pub fn ready(&self) -> bool {
+        self.ready
     }
 
     /// The ledger of the claim, read the way the record of a launch with hooks is
@@ -151,6 +168,13 @@ impl TitleClaim {
     pub fn hear(&mut self, state: TitleState, now_millis: i64) {
         if self.heard == Some(state) {
             return;
+        }
+        match state {
+            TitleState::Plain => self.become_ready(now_millis),
+            // A frame of the spinner before the ready title is the program
+            // loading, and it claims no turn of the person.
+            TitleState::Working if !self.ready => return,
+            TitleState::Working | TitleState::NeedsYou => {}
         }
         self.heard = Some(state);
         match state {
@@ -197,6 +221,23 @@ impl TitleClaim {
         let prompt = self.ledger.prompt_id.clone();
         self.ledger.apply(&Self::event("Stop", prompt, None), now_millis);
         true
+    }
+
+    /// Records the ready title of a launch: from here the titles of the launch
+    /// claim the turns of the person.
+    ///
+    /// A wait before that title was the program's own question while it loaded.
+    /// The person answered it, so the launch forgets the turn that the wait opened
+    /// instead of ending it: no turn of the person ran in it, and its end would say
+    /// **Done** for a launch that has not started to work yet.
+    fn become_ready(&mut self, now_millis: i64) {
+        if self.ready {
+            return;
+        }
+        self.ready = true;
+        if self.open() {
+            self.ledger.apply(&Self::event("SessionStart", None, None), now_millis);
+        }
     }
 
     /// The id of the turn that the claim holds open, or the id of a new turn.

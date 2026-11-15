@@ -56,7 +56,16 @@ impl StandIn {
     /// protocol, as the real program does; without it the stand-in writes only the
     /// titles of its turn.
     fn start(protocol: bool) -> Option<Self> {
+        Self::start_with(if protocol { &["--protocol"] } else { &[] })
+    }
+
+    /// The window and its one codex panel whose program starts with `arguments`.
+    ///
+    /// Every launch of this stand-in writes the start-up phase of the real
+    /// program, so a test types its words to a program that is ready for them.
+    fn start_with(arguments: &[&str]) -> Option<Self> {
         let python = python3()?;
+        let arguments: Vec<&str> = std::iter::once("--startup").chain(arguments.iter().copied()).collect();
         let temp = tempfile::tempdir().expect("isolated state of the test");
         let folder = temp.path().join(FOLDER);
         std::fs::create_dir(&folder).expect("the folder of the panel");
@@ -67,10 +76,9 @@ impl StandIn {
             },
         );
         let workspace = app.board.create_workspace("status");
-        let mut args = vec![STAND_IN.to_owned()];
-        if protocol {
-            args.push("--protocol".to_owned());
-        }
+        let args = std::iter::once(STAND_IN.to_owned())
+            .chain(arguments.iter().map(|argument| (*argument).to_owned()))
+            .collect();
         let id = app
             .board
             .create_panel(
@@ -262,6 +270,31 @@ fn a_thousand_repeated_reports_of_one_state_do_no_work() {
 }
 
 #[test]
+fn the_reports_of_a_launch_before_its_first_idle_claim_nothing() {
+    let Some(mut stand_in) = StandIn::start(true) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    // The launch of the real program: it reports that it works while it loads,
+    // and then reports that it is idle, which is the moment it is ready for the
+    // person. No turn of the person is among these reports.
+    let version = stand_in.app.attention.version();
+    let local_id = stand_in.local_id.clone();
+    stand_in.run_for(Duration::from_millis(3_000), |app| {
+        assert_eq!(
+            app.panel_attention(&local_id),
+            Attention::Idle,
+            "the reports of a launch claim nothing before its first idle"
+        );
+    });
+    assert_eq!(
+        version,
+        stand_in.app.attention.version(),
+        "the launch of a program changes no row"
+    );
+}
+
+#[test]
 fn a_codex_panel_without_the_protocol_keeps_the_path_of_its_titles() {
     let Some(mut stand_in) = StandIn::start(false) else {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
@@ -280,6 +313,37 @@ fn a_codex_panel_without_the_protocol_keeps_the_path_of_its_titles() {
     assert!(
         stand_in.app.attention.states.from_title(&stand_in.local_id),
         "the title of the launch answers for the panel"
+    );
+    stand_in.word("quit");
+}
+
+#[test]
+fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
+    let Some(mut stand_in) = StandIn::start_with(&["--protocol", "--startup-question"]) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    assert!(
+        stand_in.wait_for(Attention::NeedsYou),
+        "the trust question of a launch, which showed {:?}",
+        stand_in.shown()
+    );
+    // The question stands while the launch blinks it, and the loading reports that
+    // follow it claim nothing.
+    let local_id = stand_in.local_id.clone();
+    stand_in.run_for(Duration::from_millis(1_000), |app| {
+        assert_eq!(
+            app.panel_attention(&local_id),
+            Attention::NeedsYou,
+            "the question of a launch stands until the program is ready"
+        );
+    });
+    // The ready report ends the launch. No turn of the person ran in the question,
+    // so the row shows no state that waits for them.
+    assert!(
+        stand_in.wait_for(Attention::Idle),
+        "the ready report of a launch clears its own question, which showed {:?}",
+        stand_in.shown()
     );
     stand_in.word("quit");
 }

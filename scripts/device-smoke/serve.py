@@ -120,6 +120,11 @@ ATTENTION_STANDIN_PROGRAM = 'agent_attention_standin.py'
 # The argument that makes the stand-in of a codex panel report the program status
 # protocol beside the titles of its turn.
 ATTENTION_PROTOCOL_ARGUMENT = '--protocol'
+# The argument that makes the same stand-in write the launch of the real program
+# first: frames of the spinner while it loads, and then the plain title that says
+# it is ready for the person. Every codex panel of this fixture starts with it, so
+# a procedure sees that a launch claims no state before that title.
+ATTENTION_STARTUP_ARGUMENT = '--startup'
 ATTENTION_CODEX_STANDIN_PROGRAM = 'codex_attention_standin.py'
 # The script that the panel of each agent kind of the stand-in runs. A pi launch
 # receives the same five variables of a work launch, and the stand-in of the
@@ -716,7 +721,9 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
 
     `protocol` starts the stand-in of a codex panel with `--protocol`, so it writes
     the reports of the program status protocol beside the titles of its turn, as
-    the real program does with no configuration.
+    the real program does with no configuration. Every codex panel starts with
+    `--startup`, so the run shows the launch of the real program: it claims no state
+    of the sidebar until the launch is ready for the person.
 
     Answers the panel entries of the fixture config and the folder to put first on
     the `PATH` of the candidate.
@@ -751,8 +758,10 @@ def attention_agent(state, timer=6.0, program_folder=None, count=1, command=Fals
         folder = work if total == 1 else work / f'panel-{index + 1}'
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         panel['cwd'] = str(folder)
-        if protocol:
-            panel['args'] = [ATTENTION_PROTOCOL_ARGUMENT]
+        if kind == 'codex':
+            panel['args'] = [ATTENTION_STARTUP_ARGUMENT]
+            if protocol:
+                panel['args'].append(ATTENTION_PROTOCOL_ARGUMENT)
         if own_command:
             # The preset runs the stand-in itself, so Horizon gives it no name to
             # resolve on the `PATH`; the copy in the state folder is the program.

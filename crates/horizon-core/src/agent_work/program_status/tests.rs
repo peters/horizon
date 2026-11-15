@@ -108,9 +108,14 @@ fn bytes_that_are_not_utf8_or_beyond_the_bound_claim_nothing() {
     assert_eq!(codex(&payload), ProgramStatus::Unknown);
 }
 
-/// The claim of a launch, after the reports of `states`.
+/// The claim of a launch that is ready, after the reports of `states`.
+///
+/// The program of a launch reports `idle` when it is ready for the person, and the
+/// reports before that one are its start-up. Every test of a turn therefore starts
+/// from that report.
 fn claimed(states: &[ProgramStatus]) -> ProgramClaim {
     let mut claim = ProgramClaim::default();
+    claim.hear(ProgramStatus::Idle, 900);
     for (index, state) in states.iter().enumerate() {
         claim.hear(*state, 1_000 + i64::try_from(index).unwrap_or(0));
     }
@@ -218,6 +223,46 @@ fn a_repeated_clear_does_no_work() {
     assert_eq!(claim.ledger().state, before.ledger().state);
     assert_eq!(claim.ledger().updated_at_millis, before.ledger().updated_at_millis);
     assert!(!claim.answers());
+}
+
+#[test]
+fn the_start_up_of_a_launch_claims_no_turn() {
+    let mut claim = ProgramClaim::default();
+    for index in 0..8 {
+        claim.hear(ProgramStatus::Working, 100 + index);
+        assert!(!claim.ready(), "the program is loading");
+        assert!(!claim.answers(), "the launch claims nothing before its idle report");
+        assert_eq!(claim.ledger().state, TurnState::Unknown);
+    }
+    // The idle report is the moment the program is ready, and no turn of the
+    // person ran before it.
+    claim.hear(ProgramStatus::Idle, 900);
+    assert!(claim.ready());
+    assert_eq!(claim.ledger().state, TurnState::Unknown);
+    assert!(claim.answers(), "the launch speaks the protocol");
+
+    claim.hear(ProgramStatus::Working, 1_000);
+    claim.hear(ProgramStatus::Done, 1_100);
+    assert_eq!(
+        claim.ledger().state,
+        TurnState::Finished,
+        "a turn after the ready report"
+    );
+}
+
+#[test]
+fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
+    let mut claim = ProgramClaim::default();
+    claim.hear(ProgramStatus::Working, 100);
+    claim.hear(ProgramStatus::Blocked, 200);
+    assert_eq!(claim.ledger().state, TurnState::Blocked, "the person must answer it");
+    assert!(claim.ledger().prompt_id.is_some(), "the question belongs to a turn");
+
+    // The program is ready after the person answered: no turn of theirs ran in the
+    // question, so its end is no **Done**.
+    claim.hear(ProgramStatus::Idle, 300);
+    assert_eq!(claim.ledger().state, TurnState::Unknown);
+    assert!(claim.answers());
 }
 
 #[test]

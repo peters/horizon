@@ -178,6 +178,13 @@ private OSC number.
   that stands does no work, a `done`, an `error` or an `idle` ends only the turn
   that the claim holds open, and a `clear` forgets the launch. A launch that
   Horizon started again is a launch of its own.
+- **A launch claims nothing while it starts.** A program that is not ready for the
+  person has run no turn of theirs. The first `idle` report of a launch is the
+  moment the program is ready, and a `working` report before it claims no turn. A
+  `blocked` report before it claims **Needs you**, because the person must answer
+  the question of the program, and the ready report forgets the turn that the
+  question opened: no turn of the person ran in it. A program that never reports
+  `idle` keeps the rule of the screen.
 - **One source answers, in one order.** A record of a hook answers first, then
   the reports of the protocol, then the title, then the screen. A launch that has
   given one recognized report no longer reads its title, so a person who changes
@@ -208,6 +215,13 @@ second pass over the output of the terminal.
   waiting title blocks that turn, and a plain title ends only the turn that the
   claim holds open. A program that Horizon starts again in the same panel is a
   launch of its own: the claim of the launch before it answers nothing.
+- **A launch claims nothing while it starts.** The first plain title of a launch
+  is the moment the program is ready for the person, and a frame of the spinner
+  before it claims no turn. A waiting title before it claims **Needs you**, because
+  the person must answer the question of the program, and the ready title forgets
+  the turn that the question opened: no turn of the person ran in it. A title that
+  a later one replaces within one frame is not read, so a launch whose ready title
+  stands for less than one frame keeps the rule of the screen.
 - **A plain title must stand.** A program may write a plain title between two
   parts of one turn, so the end of a turn waits 400 ms of plain title. A working
   or waiting title in that window cancels the end, and the frame that asks for

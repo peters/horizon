@@ -93,9 +93,17 @@ fn only_the_kind_of_an_agent_with_a_state_title_has_the_rule() {
     }
 }
 
+/// The claim of a launch that is ready, which its first plain title made so.
+fn ready_claim() -> TitleClaim {
+    let mut claim = TitleClaim::default();
+    claim.hear(TitleState::Plain, 0);
+    assert!(claim.ready(), "the plain title of a launch is its ready title");
+    claim
+}
+
 #[test]
 fn a_thousand_spinner_frames_of_one_state_do_no_work() {
-    let mut claim = TitleClaim::default();
+    let mut claim = ready_claim();
     assert!(!claim.answers(), "no title of this launch has claimed a state");
     claim.hear(TitleState::Working, 1_000);
     let first = claim.ledger().clone();
@@ -109,7 +117,7 @@ fn a_thousand_spinner_frames_of_one_state_do_no_work() {
 
 #[test]
 fn a_wait_and_the_work_after_it_stay_in_the_turn_that_opened_them() {
-    let mut claim = TitleClaim::default();
+    let mut claim = ready_claim();
     claim.hear(TitleState::Working, 10);
     let opened = claim.ledger().prompt_id.clone();
     assert_eq!(claim.ledger().state, TurnState::Working);
@@ -135,7 +143,7 @@ fn a_wait_that_opens_a_launch_holds_a_turn_of_its_own() {
 
 #[test]
 fn a_plain_title_ends_the_turn_only_after_the_settle_time() {
-    let mut claim = TitleClaim::default();
+    let mut claim = ready_claim();
     claim.hear(TitleState::Working, 10);
     claim.hear(TitleState::Plain, 20);
 
@@ -151,7 +159,7 @@ fn a_plain_title_ends_the_turn_only_after_the_settle_time() {
 
 #[test]
 fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
-    let mut claim = TitleClaim::default();
+    let mut claim = ready_claim();
     claim.hear(TitleState::Working, 10);
     let opened = claim.ledger().prompt_id.clone();
     claim.hear(TitleState::Plain, 20);
@@ -164,7 +172,7 @@ fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
 
 #[test]
 fn a_plain_title_of_an_earlier_turn_cannot_close_the_turn_of_a_newer_one() {
-    let mut claim = TitleClaim::default();
+    let mut claim = ready_claim();
     claim.hear(TitleState::Working, 10);
     claim.hear(TitleState::Plain, 20);
     assert!(claim.settle(20 + TITLE_SETTLE_MILLIS));
@@ -190,10 +198,38 @@ fn a_plain_title_of_an_earlier_turn_cannot_close_the_turn_of_a_newer_one() {
 }
 
 #[test]
-fn a_wait_that_a_plain_title_follows_ends_the_turn_too() {
+fn the_start_up_of_a_launch_claims_no_turn() {
     let mut claim = TitleClaim::default();
-    claim.hear(TitleState::NeedsYou, 10);
-    claim.hear(TitleState::Plain, 20);
-    assert!(claim.settle(20 + TITLE_SETTLE_MILLIS));
-    assert_eq!(claim.ledger().state, TurnState::Finished);
+    assert!(!claim.answers(), "no title of this launch has claimed a state");
+    for frame in 0..8 {
+        claim.hear(TitleState::Working, 100 + frame);
+        assert!(!claim.ready(), "the program is loading");
+        assert!(!claim.answers(), "the frames of the start-up claim nothing");
+        assert_eq!(claim.ledger().state, TurnState::Unknown);
+    }
+    // The plain title is the moment the program is ready for the person, and the
+    // spinner of a turn after it opens the first turn of the launch.
+    claim.hear(TitleState::Plain, 900);
+    assert!(claim.ready());
+    assert!(!claim.answers(), "the ready title claims no turn");
+    claim.hear(TitleState::Working, 1_000);
+    assert!(claim.answers());
+    assert_eq!(claim.ledger().state, TurnState::Working);
+}
+
+#[test]
+fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
+    let mut claim = TitleClaim::default();
+    claim.hear(TitleState::Working, 100);
+    claim.hear(TitleState::NeedsYou, 200);
+    assert_eq!(claim.ledger().state, TurnState::Blocked, "the person must answer it");
+
+    // The program is ready after the person answered, and the loading frames of
+    // the launch after it claim nothing: no turn of theirs ran in the question, so
+    // its end is no **Done**.
+    claim.hear(TitleState::Working, 300);
+    claim.hear(TitleState::Plain, 400);
+    assert!(claim.ready());
+    assert_eq!(claim.ledger().state, TurnState::Unknown);
+    assert!(!claim.settle(400 + TITLE_SETTLE_MILLIS), "no turn of the person ran");
 }

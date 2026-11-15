@@ -324,7 +324,10 @@ impl HorizonApp {
                     now_millis,
                 );
             }
-            if title_reports_state(panel.kind) {
+            // A panel whose program has written no title has made no statement
+            // about itself. An empty title is not the ready title of a launch, so
+            // it is not read at all.
+            if title_reports_state(panel.kind) && !panel.terminal_title.is_empty() {
                 answered |= self.attention.states.observe_title(
                     &panel.local_id,
                     panel.launched_at_millis,

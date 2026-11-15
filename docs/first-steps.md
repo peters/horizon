@@ -416,6 +416,15 @@ Every other agent panel takes the state from the text on its screen, and it
 keeps that signal until its agent reports its first event. A panel in which you
 start an agent by hand in a shell keeps the screen rule too.
 
+A program starts before it is ready for you, and Horizon says nothing about its
+panel while it starts. Codex writes frames of its spinner, and it can report that
+it works, while it loads: no turn of yours runs in that time, so the row shows no
+state and the workspace line counts no finished turn. The first plain title of
+the program, or its first idle report, is the moment it is ready. A question that
+Codex asks before it is ready, such as a trust question, still says **Needs
+you**, because you must answer it; after your answer the row returns to no state
+until your first turn.
+
 The three reports have limits that their programs set:
 
 - A Claude turn can name the work that continues in the background, so

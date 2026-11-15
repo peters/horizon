@@ -37,6 +37,8 @@ SCRIPT = HERE.parent / 'codex_attention_standin.py'
 PROGRAM = 'codex-attention-stand-in: '
 FOLDER = 'work'
 SPINNER = '\u280b'
+# The frames of the braille spinner of a working turn.
+BRAILLE_FRAMES = tuple(chr(code) for code in range(0x2800, 0x2900))
 # The bounded wait of a test: a title is written at once, and the delay of the
 # spinner of a working turn is a tenth of a second.
 PATIENCE = 10.0
@@ -134,18 +136,31 @@ def reports_of(raw):
         rest = rest[end + 2:]
 
 
+# The frames of the spinner of a launch of the real program, and the plain title
+# that says it is ready, which follows them.
+STARTUP_FRAMES = 8
+STARTUP_TITLES = STARTUP_FRAMES + 1
+# The reports of such a launch: one `state=working` with each frame and one
+# `state=idle` at the moment the program is ready. A run without `--protocol`
+# writes none of them.
+STARTUP_REPORTS = STARTUP_FRAMES + 1
+
+
 class StandIn:
     """The program of one panel, with the words of a person at its input."""
 
-    def __init__(self, folder=FOLDER, protocol=False):
+    def __init__(self, folder=FOLDER, protocol=False, arguments=(), ready=False):
         self.root = tempfile.TemporaryDirectory(prefix='codex-standin-')
         self.cwd = Path(self.root.name) / folder
         self.cwd.mkdir()
-        arguments = [sys.executable, '-B', str(SCRIPT)]
+        self.arguments = [sys.executable, '-B', str(SCRIPT)]
         if protocol:
-            arguments.append('--protocol')
+            self.arguments.append('--protocol')
+        self.arguments.extend(arguments)
+        if ready:
+            self.arguments.append('--startup')
         self.child = subprocess.Popen(
-            arguments,
+            self.arguments,
             cwd=self.cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -167,10 +182,55 @@ class StandIn:
 
 
 class CodexAttentionStandInTests(unittest.TestCase):
-    def start(self, folder=FOLDER, protocol=False):
-        stand_in = StandIn(folder, protocol)
+    def start(self, folder=FOLDER, protocol=False, arguments=(), ready=False):
+        stand_in = StandIn(folder, protocol, arguments, ready)
         self.addCleanup(stand_in.close)
         return stand_in
+
+    def test_the_launch_writes_the_frames_of_the_spinner_and_then_the_ready_title(self):
+        stand_in = self.start(ready=True)
+        titles = stand_in.reader.wait_for(STARTUP_TITLES, timeout=PATIENCE)
+
+        for title in titles[:STARTUP_FRAMES]:
+            self.assertIn(title[0], BRAILLE_FRAMES, title)
+            self.assertTrue(title.endswith(f' {FOLDER}'), title)
+        # The title of the moment the program is ready names no state at all.
+        self.assertEqual(titles[STARTUP_TITLES - 1], FOLDER)
+
+    def test_the_launch_reports_that_it_works_and_then_that_it_is_idle(self):
+        stand_in = self.start(protocol=True, ready=True)
+        raw = stand_in.reader.wait_for_reports(STARTUP_REPORTS)
+        reports = reports_of(raw)
+
+        self.assertEqual(reports[:STARTUP_FRAMES], [b'state=working:app=codex'] * STARTUP_FRAMES)
+        self.assertEqual(reports[STARTUP_FRAMES], b'state=idle:app=codex')
+
+    def test_a_launch_that_asks_a_question_blinks_it_before_it_is_ready(self):
+        stand_in = self.start(protocol=True, ready=True, arguments=('--startup-question',))
+        reports = reports_of(stand_in.reader.wait_for_reports(STARTUP_REPORTS + 1))
+        self.assertEqual(reports[STARTUP_FRAMES], b'state=blocked:app=codex:kind=permission')
+        self.assertEqual(reports[STARTUP_REPORTS], b'state=idle:app=codex')
+        titles = stand_in.reader.wait_for(STARTUP_TITLES, timeout=PATIENCE)
+        self.assertTrue(
+            any(title.startswith('[ . ] Action Required | Do you trust') for title in titles),
+            titles,
+        )
+        self.assertEqual(titles[-1], FOLDER)
+
+    def test_a_denial_writes_a_plain_title_and_the_idle_report_of_a_stopped_turn(self):
+        stand_in = self.start(protocol=True)
+        stand_in.word('start')
+        stand_in.reader.wait_for(1)
+        stand_in.word('deny')
+        titles = stand_in.reader.wait_for(2)
+        raw = stand_in.reader.wait_for_reports(2)
+
+        self.assertEqual(titles[1], FOLDER, 'no title of a turn that was denied')
+        self.assertEqual(
+            reports_of(raw)[-1],
+            b'state=idle:app=codex',
+            'a turn that an approval stopped reports idle and no done',
+        )
 
     def test_a_working_turn_writes_the_frames_of_its_spinner(self):
         stand_in = self.start()

@@ -354,55 +354,62 @@ step 6, and **pi** is the command of step 5.
    prints one line. The row of the panel shows no state, because no title of the
    launch has claimed one.
 
-2. Type `start` and press Enter.
+2. Watch the row of the panel while the program starts.
+
+   Result: the row shows no state during the launch, and the workspace line
+   counts no finished turn. The stand-in writes eight frames of its spinner, a
+   tenth of a second apart, and then the plain title of the folder. The frames
+   before that title name no turn of yours, so they claim nothing.
+
+3. Type `start` and press Enter.
 
    Result: the row says **Working** within one second. The launch of this panel
    receives no file and no argument for this state: the stand-in writes a braille
    spinner frame and the name of its folder into the title of the panel.
 
-3. Wait three seconds without a word.
+4. Wait three seconds without a word.
 
    Result: the row still says **Working**. The screen of the stand-in prints no
    working indicator, so this state comes from the title alone.
 
-4. Type `spin 1000`.
+5. Type `spin 1000`.
 
    Result: the row stays **Working**. One thousand frames of the same state
    change nothing, and the window shows no other word.
 
-5. Type `ask`.
+6. Type `ask`.
 
    Result: the row says **Needs you**. The stand-in writes the two frames of
    `Action Required | Create a file | work`.
 
-6. Type `answer`.
+7. Type `answer`.
 
    Result: the row says **Working** again, in the same turn.
 
-7. Type `plain 0.1`.
+8. Type `plain 0.1`.
 
    Result: the row stays **Working**. The stand-in writes a plain title for
    0.1 seconds in the middle of the turn, and the settle time of 0.4 seconds
    keeps the turn open.
 
-8. Click the row of the other panel, then type `after 3 stop` in the codex panel.
+9. Click the row of the other panel, then type `after 3 stop` in the codex panel.
 
    Result: at the end of the three seconds the row of the codex panel says
    **Done**. The plain title of the stand-in ended the turn, and the panel had no
    focus at that moment. A click on the row of the codex panel clears the word.
 
-9. Type `start`, click the row of the other panel, then type `after 3 esc`.
+10. Type `start`, click the row of the other panel, then type `after 3 esc`.
 
    Result: after `start` the row says **Working**. At the end of the three
    seconds it says **Done**. An interrupted turn ends as a finished turn, because
    the title of Codex names no interruption.
 
-10. Type `quit`.
+11. Type `quit`.
 
     Result: the stand-in ends, the panel shows that its program ended, and its row
     shows no **Working** and no **Needs you**.
 
-11. Press `Ctrl-C` in the terminal of the fixture, then start the same command
+12. Press `Ctrl-C` in the terminal of the fixture, then start the same command
     again.
 
     Result: the codex panel of the new run starts on the rule of its screen. No
@@ -427,52 +434,59 @@ answers before the title does.
    writes `ESC ] 7501 ; state=working:app=codex ST` beside the titles of a turn.
    Watch the isolated desktop in a native VNC Device panel of your own Horizon.
 
-2. Type `start` and press Enter.
+2. Watch the row of the panel while the program starts.
+
+   Result: the row shows no state. The launch reports `state=working` while it
+   loads, and it reports `state=idle` when it is ready for you. A report before
+   that idle names no turn of yours, so the row and the workspace line claim
+   nothing.
+
+3. Type `start` and press Enter.
 
    Result: the row says **Working** within one second. The report of the program
    claims the turn, and no title is needed for it.
 
-3. Type `ask`.
+4. Type `ask`.
 
    Result: the row says **Needs you**. The report is
    `state=blocked:app=codex:kind=permission`.
 
-4. Type `answer`.
+5. Type `answer`.
 
    Result: the row says **Working** again, in the same turn.
 
-5. Click the row of the other panel, then type `after 3 stop`.
+6. Click the row of the other panel, then type `after 3 stop`.
 
    Result: at the end of the three seconds the row of the codex panel says
    **Done**. The report `state=done` ended the turn, and the panel had no focus.
 
-6. Click the row of the codex panel, then type `start` and `after 3 esc`.
+7. Click the row of the codex panel, then type `start` and `after 3 esc`.
 
    Result: the row says **Working**, and after three seconds it says **Done**. An
    interrupted turn reports `state=idle` and no done.
 
-7. Type `start`, then `fail`.
+8. Type `start`, then `fail`.
 
    Result: the row says **Needs you**. A failed turn reports `state=error`, and
    the title of the program cannot report a failure. This is the step that a
    titles-only panel cannot pass.
 
-8. Type `foreign`.
+9. Type `foreign`.
 
    Result: the row does not change. The report names another program in its `app`
    value, so it claims nothing for this panel.
 
-9. Type `work 1000`.
+10. Type `work 1000`.
 
    Result: the row stays as it is, and the window shows no other word. One
    thousand reports of the state that stands change nothing.
 
-10. Type `quit`.
+11. Type `quit`.
 
     Result: the stand-in ends, the panel shows that its program ended, and its row
     shows no **Working** and no **Needs you**.
 
-11. Stop the fixture with `Ctrl-C`, start it again without
+12. Stop the fixture with `Ctrl-C`, start it again without
     `--attention-agent-protocol`, and type `start` and then `ask`.
 
     Result: the row says **Working** and then **Needs you**, from the title alone.
