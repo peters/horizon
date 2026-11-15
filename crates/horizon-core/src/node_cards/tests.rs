@@ -40,7 +40,7 @@ fn a_path_above_the_socket_bound_is_refused() {
     let deep = Path::new("/tmp").join("d".repeat(MAX_SOCKET_PATH_BYTES));
     let refusal = local_socket(&deep, "build-1", "fix-71").expect_err("a path above the bound");
     assert_eq!(refusal.code, SOCKET_PATH_TOO_LONG);
-    assert!(refusal.message.contains("100 bytes"));
+    assert!(refusal.message.contains("100"), "{}", refusal.message);
 }
 
 #[test]

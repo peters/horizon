@@ -1,16 +1,11 @@
 //! The cards of an agent that runs on a machine of the machine list.
 //!
-//! An agent program runs in a `tmux` session of a machine. Horizon gives that
-//! session one socket on the machine, and the `ssh` child of this computer
-//! carries it to one Unix socket here. The agent's MCP entry is one relay
-//! command: it reads the `tmux` session that the agent runs in, finds that
-//! session's socket and copies the byte stream of the agent through it.
-//!
-//! This module holds what both sides of that link agree on: the socket path of
-//! one session, the identity that Horizon mints for it, the relay command and the
-//! entry texts of the agent programs. The machine states no identity: this
-//! computer builds it from the two names after [`block_machines`] checked both.
-//! The boundary is `docs/review/trust-boundaries/machine-agent-cards.md`.
+//! The agent's MCP entry is one relay command on the machine: it reads the `tmux`
+//! session that the agent runs in and copies the stream through that session's
+//! socket, which one `ssh` child of this window carries here. This module holds
+//! what both sides agree on: the socket path, the identity that this computer
+//! mints, the relay command and the entry texts of the agent programs. The design
+//! is `docs/architecture/machine-agent-cards.md`.
 
 mod entry;
 mod paths;

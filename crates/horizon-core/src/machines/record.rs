@@ -44,6 +44,11 @@ pub struct Machine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
     pub added_at_millis: u64,
+    /// Whether the setup of the cards of the agents of this machine ran, so this
+    /// window serves a card socket for each of its sessions. `machine_set` writes
+    /// it, and the setup writes nothing on the machine without it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cards: bool,
 }
 
 /// A machine whose name, route, session, repository and provider line passed
@@ -57,6 +62,7 @@ pub struct CheckedMachine {
     pub session: Option<String>,
     pub provider: Option<String>,
     pub repository: Option<String>,
+    pub cards: bool,
 }
 
 impl CheckedMachine {
@@ -72,6 +78,7 @@ impl CheckedMachine {
             provider: self.provider.clone(),
             repository: self.repository.clone(),
             added_at_millis,
+            cards: self.cards,
         }
     }
 }
@@ -89,6 +96,7 @@ impl Machine {
             && self.session == other.session
             && self.provider == other.provider
             && self.repository == other.repository
+            && self.cards == other.cards
     }
 
     /// The terminal that this machine's connection asks for, re-built from the
@@ -145,6 +153,7 @@ pub fn check(
     session: Option<&str>,
     provider: Option<&str>,
     repository: Option<&str>,
+    cards: bool,
 ) -> Result<CheckedMachine, MachineError> {
     let name = machine_name(name)?;
     let terminal = block_terminal::check(route, None)?;
@@ -159,6 +168,7 @@ pub fn check(
         session,
         provider,
         repository,
+        cards,
     })
 }
 
@@ -180,6 +190,7 @@ pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
         record.session.as_deref(),
         record.provider.as_deref(),
         record.repository.as_deref(),
+        record.cards,
     )?;
     Ok(checked.record(record.added_at_millis))
 }

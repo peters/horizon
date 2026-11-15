@@ -1,11 +1,9 @@
 //! The path of the card socket of one session, on the machine and here.
 //!
-//! Both paths end in `<machine>/<session>.sock`, and both names pass the rules of
-//! [`block_machines`](horizon_browser_control::manifest::block_machines) first, so
-//! neither path can leave its folder. The folder here is under the temporary
-//! folder of this computer, inside the 104 bytes that a Unix socket path takes on
-//! macOS; the folder on the machine is `/tmp/horizon-cards`, which a reboot
-//! empties and the relay of the agent makes again.
+//! Both paths end in `<machine>/<session>.sock` and both names pass the rules of
+//! [`block_machines`](horizon_browser_control::manifest::block_machines), so no
+//! path leaves its folder. The folder here is under the temporary folder of this
+//! computer, inside the 104 bytes that a Unix socket path takes on macOS.
 
 use std::path::{Path, PathBuf};
 

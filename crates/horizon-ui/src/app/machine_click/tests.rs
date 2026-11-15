@@ -43,6 +43,7 @@ fn record(name: &str, session: Option<&str>) -> Machine {
         provider: Some("Hetzner, hel1".to_owned()),
         repository: None,
         added_at_millis: 1,
+        cards: false,
     }
 }
 

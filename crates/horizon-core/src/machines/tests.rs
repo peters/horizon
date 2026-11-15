@@ -27,6 +27,7 @@ fn checked(name: &str, host: &str, session: Option<&str>) -> CheckedMachine {
         session,
         Some("Hetzner, hel1"),
         Some("example-org/shop"),
+        false,
     )
     .expect("the machine is accepted")
 }
@@ -193,7 +194,7 @@ fn the_limit_counts_new_names_only_and_is_reported_with_its_own_code() {
 #[test]
 fn every_refusal_names_its_field_and_its_code() {
     let refused = |name: &str, route: TerminalRoute, session: Option<&str>| {
-        let error = check(name, &route, session, None, None).expect_err("the record is refused");
+        let error = check(name, &route, session, None, None, false).expect_err("the record is refused");
         (code(&error).to_owned(), error.to_string())
     };
 
@@ -236,9 +237,10 @@ fn every_refusal_names_its_field_and_its_code() {
     }
     let longest = "a".repeat(MAX_SESSION_CHARS);
     let accepted =
-        check("build-1", &route("203.0.113.10"), Some(&longest), None, None).expect("a session at the bound");
+        check("build-1", &route("203.0.113.10"), Some(&longest), None, None, false).expect("a session at the bound");
     assert_eq!(accepted.session.as_deref(), Some(longest.as_str()));
-    let named = check("build-1", &route("203.0.113.10"), Some("Build_1-x"), None, None).expect("a plain session");
+    let named =
+        check("build-1", &route("203.0.113.10"), Some("Build_1-x"), None, None, false).expect("a plain session");
     assert_eq!(named.session.as_deref(), Some("Build_1-x"));
 }
 
@@ -250,18 +252,19 @@ fn a_provider_line_is_one_short_line_that_the_record_cuts_to_the_bound() {
         None,
         Some("  Hetzner,\n hel1   running  "),
         None,
+        false,
     )
     .expect("a record");
     assert_eq!(record.provider.as_deref(), Some("Hetzner, hel1 running"));
     let long = "a".repeat(MAX_PROVIDER_CHARS + 20);
-    let record = check("build-1", &route("203.0.113.10"), None, Some(&long), None).expect("a record");
+    let record = check("build-1", &route("203.0.113.10"), None, Some(&long), None, false).expect("a record");
     assert_eq!(
         record.provider.as_deref().map(str::len),
         Some(MAX_PROVIDER_CHARS),
         "a long provider line is cut"
     );
     assert_eq!(
-        check("build-1", &route("203.0.113.10"), None, None, None)
+        check("build-1", &route("203.0.113.10"), None, None, None, false)
             .expect("a record")
             .provider,
         None,
@@ -465,7 +468,7 @@ fn a_machine_name_is_the_key_name_rule() {
     for name in ["build-1", "a", "0", "rented-machine-17"] {
         assert_eq!(machine_name(name).expect("a plain name"), name);
         assert_eq!(
-            check(name, &route("203.0.113.10"), None, None, None)
+            check(name, &route("203.0.113.10"), None, None, None, false)
                 .expect("a record")
                 .name,
             name,

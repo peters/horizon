@@ -1,11 +1,9 @@
 //! The one relay command that Horizon writes on a machine.
 //!
-//! An agent starts its MCP server as a child of one command, and that command
-//! serves every session of the user: it learns the `tmux` session that it runs in,
-//! finds the socket of that session and copies its input and output to it.
-//! `socat` relays, `nc -U` next, and a script of the standard library of `python3`
-//! last. The setup finds the program with [`PROBE_COMMAND`]; a machine with none
-//! of them gets no entry and the answer [`super::RELAY_MISSING`].
+//! One command serves every session of the user: it learns the `tmux` session
+//! that it runs in, finds that session's socket and copies its input and output
+//! to it. `socat` relays, `nc -U` next, and a script of `python3` last; a machine
+//! with none of them gets no entry and the answer [`super::RELAY_MISSING`].
 
 use horizon_browser_control::manifest::block_machines;
 

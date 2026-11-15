@@ -37,6 +37,9 @@ impl HorizonApp {
         self.abandon_device_reveals("Horizon is exiting");
         self.panel_render_caches.device_ui_state.clear();
         self.retire_browser_requests();
+        // A card socket of a machine session serves no frame and no worker: a
+        // stop ends its loop, removes its socket and joins its thread.
+        self.node_cards.stop_all();
         let mut progress = self
             .pending_session_switch
             .take()
@@ -145,6 +148,9 @@ impl HorizonApp {
         #[cfg(target_os = "linux")]
         self.observed_keyboard_inputs.clear_native_transfer_files();
         self.retire_browser_requests();
+        // A card socket of a machine session serves no frame and no worker: a
+        // stop ends its loop, removes its socket and joins its thread.
+        self.node_cards.stop_all();
         self.exit_cleanup_complete = true;
         // Outcomes that the flush applies can still change the board, so they
         // land before the saves below.

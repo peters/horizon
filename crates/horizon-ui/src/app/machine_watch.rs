@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use egui::Context;
 use horizon_core::MachineKeys;
+use horizon_core::browser::manifest;
 use horizon_core::machine_watch::{AgentPrograms, MachineAgent, MachineWatch, MachineWatchSnapshot};
 use horizon_core::notify::Change;
 
@@ -35,6 +36,9 @@ pub(in crate::app) struct MachinesWatch {
     pub(in crate::app) looked_at: Option<horizon_core::PanelId>,
     /// The version of the snapshot of the watch at that look.
     pub(in crate::app) looked_version: Option<u64>,
+    /// The snapshot version and the machines with a card setup of the last frame
+    /// that set the card sockets up, so a frame compares one number.
+    pub(in crate::app) card_fingerprint: Option<u64>,
 }
 
 impl MachinesWatch {
@@ -69,6 +73,33 @@ impl HorizonApp {
         {
             self.note_machine_changes(&previous, &next, ctx);
         }
+        self.reconcile_card_sockets(&next);
+    }
+
+    /// Gives the card sockets of the machines that have their setup the sessions
+    /// that the watch reports. The set is the whole input of that work, so a
+    /// snapshot that names the same sessions sends nothing: a frame reads the
+    /// snapshot, compares it and returns.
+    fn reconcile_card_sockets(&mut self, snapshot: &MachineWatchSnapshot) {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        snapshot.version.hash(&mut hasher);
+        for record in self.machine_list.records().iter().filter(|record| record.cards) {
+            record.name.hash(&mut hasher);
+        }
+        let fingerprint = hasher.finish();
+        if self.machine_watch.card_fingerprint.replace(fingerprint) == Some(fingerprint) {
+            return;
+        }
+        let mut sessions: Vec<(String, String)> = Vec::new();
+        for machine in self.machine_list.records().iter().filter(|record| record.cards) {
+            for agent in snapshot.agents(&machine.name) {
+                sessions.push((machine.name.clone(), agent.session.clone()));
+            }
+        }
+        sessions.sort();
+        sessions.dedup();
+        let host_instance = manifest::host_instance();
+        self.node_cards.set_sessions(&sessions, host_instance);
     }
 
     /// Queues one desktop notification for each agent of a machine that changed to a state

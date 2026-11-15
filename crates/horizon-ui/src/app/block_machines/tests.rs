@@ -75,6 +75,7 @@ fn set(name: &str, host: &str, key: Option<&str>, session: Option<&str>) -> bloc
         session: session.map(str::to_string),
         provider: Some("Hetzner, hel1".into()),
         repository: None,
+        cards: false,
     }
 }
 
@@ -98,6 +99,7 @@ fn set_ready_for(name: &str, repository: Option<&str>) -> block::Operation {
         session,
         provider,
         repository: repository.map(str::to_string),
+        cards: false,
     }
 }
 

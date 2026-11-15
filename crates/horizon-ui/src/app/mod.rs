@@ -62,6 +62,7 @@ mod machine_open;
 mod machine_watch;
 mod minimap;
 mod navigation_input;
+mod node_cards;
 mod notify;
 mod panel_chrome;
 mod panel_restarts;
@@ -351,6 +352,9 @@ pub struct HorizonApp {
     /// The watch of the agents of the machines, its snapshot and the machines
     /// whose agents the person folded.
     pub(in crate::app) machine_watch: machine_watch::MachinesWatch,
+    /// The card sockets of the sessions of the machines of the list, and the
+    /// listener of each. A closed window leaves no thread and no socket.
+    pub(in crate::app) node_cards: node_cards::NodeCards,
     /// The machine terminals that wait for their next attempt after a lost
     /// link, with one wake at the due time and no thread of their own.
     reconnects: reconnect::ReconnectWaits,

@@ -33,6 +33,7 @@ fn record(name: &str) -> Machine {
         provider: None,
         repository: None,
         added_at_millis: 0,
+        cards: false,
     }
 }
 

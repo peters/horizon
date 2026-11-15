@@ -1,10 +1,9 @@
 //! The MCP entry of a card relay, in the shape of each agent program.
 //!
-//! The setup prefers the writer of the agent program itself, so Horizon merges no
-//! file and writes no backup: `claude mcp add --scope user`, `codex mcp add` and
-//! `pi mcp add` own the file of that program. Without the program the setup merges
-//! one key of the user-scope file ([`entry_json`], [`entry_toml`]), keeps one
-//! backup, and its `Remove` direction deletes that key again.
+//! The setup prefers the writer of the agent program itself (`claude mcp add
+//! --scope user`, `codex mcp add`, `pi mcp add`), so Horizon merges no file and
+//! writes no backup. Without the program the setup merges one key of the
+//! user-scope file ([`entry_json`], [`entry_toml`]) beside one backup.
 
 use serde_json::{Map, Value, json};
 

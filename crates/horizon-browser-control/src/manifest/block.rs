@@ -193,6 +193,10 @@ pub enum Operation {
         /// caller's claim and Horizon draws it in a low-emphasis style.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<String>,
+        /// Whether the setup of the cards of the agents of this machine ran, so
+        /// this window serves a card socket for each session of the machine.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cards: bool,
         /// The repository that this machine is ready for, such as
         /// `example-org/shop`: one line of at most 60 characters. Horizon draws
         /// it under the name of the machine in the sidebar, it reads no folder
@@ -1266,7 +1270,8 @@ mod tests {
             "key": "build-1",
             "session": "build-1",
             "provider": "Hetzner, hel1",
-            "repository": "example-org/shop"
+            "repository": "example-org/shop",
+            "cards": true
         }))
         .expect("machine_set parses");
         let Operation::MachineSet {
@@ -1276,6 +1281,7 @@ mod tests {
             session,
             provider,
             repository,
+            cards,
         } = set
         else {
             panic!("machine_set did not parse as MachineSet");
@@ -1287,6 +1293,7 @@ mod tests {
         assert_eq!(session.as_deref(), Some("build-1"));
         assert_eq!(provider.as_deref(), Some("Hetzner, hel1"));
         assert_eq!(repository.as_deref(), Some("example-org/shop"));
+        assert!(cards, "machine_set carries the mark of the card setup");
         assert!(
             serde_json::from_value::<Operation>(serde_json::json!({
                 "operation": "machine_set",
