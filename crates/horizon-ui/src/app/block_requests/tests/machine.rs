@@ -2,8 +2,9 @@
 //! judged on a test board.
 
 use super::*;
+use crate::app::test_support::{card_body, card_panel, drawn_text, drew_text, raw_input, run_app_frame_with_input};
 use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchSnapshot, MachineWatchState, WatchLink};
-use horizon_core::{Machine, MachineRegistry, Machines};
+use horizon_core::{Machine, MachineRegistry, Machines, WorkspaceLayout};
 
 /// Keeps the machine `build-1` in the list of the app, with the mark of its cards.
 fn keep_machine(app: &mut HorizonApp) {
@@ -56,6 +57,35 @@ fn session_request(_app: &HorizonApp, session: &str, operation: Operation) -> Re
     }
 }
 
+/// The window of the person who reads the card.
+const WINDOW: [f32; 2] = [1480.0, 900.0];
+
+/// The document of the card that the stand-in agent of the machine draws
+/// (`scripts/device-smoke/machine_card_agent.py`): a heading with a subtitle, one
+/// text of two lines and one row of two buttons.
+fn fixture_card_document() -> serde_json::Value {
+    serde_json::json!({
+        "components": [
+            {"type": "heading", "text": "Night shift", "subtitle": "an agent on the machine"},
+            {"type": "text", "text": "This card came through the socket of the session, not from a panel of Horizon."},
+            {"type": "buttons", "items": [
+                {"id": "continue", "label": "Continue", "tone": "primary"},
+                {"id": "stop", "label": "Stop", "tone": "danger"}]}
+        ]
+    })
+}
+
+/// Runs the frames that the layout of a new card needs: one pass measures the body,
+/// the host sizes the card, and the next pass draws the sized card. Returns the last
+/// frame, which is the one that the person sees.
+fn settle_frames(ctx: &Context, app: &mut HorizonApp) -> egui::FullOutput {
+    let mut output = run_app_frame_with_input(ctx, app, raw_input(WINDOW, None));
+    for _ in 0..2 {
+        output = run_app_frame_with_input(ctx, app, raw_input(WINDOW, None));
+    }
+    output
+}
+
 #[test]
 fn a_request_of_a_machine_session_opens_a_card_in_the_workspace_of_its_machine() {
     let (_temp, ctx, mut app) = app();
@@ -89,6 +119,103 @@ fn a_request_of_a_machine_session_opens_a_card_in_the_workspace_of_its_machine()
     assert!(
         !app.board.panels.iter().any(|panel| panel.kind == PanelKind::Ssh),
         "no terminal of that session had to be open"
+    );
+}
+
+#[test]
+fn a_card_of_a_machine_session_that_fits_shows_its_last_button_without_a_mark() {
+    let (_temp, ctx, mut app) = app();
+    // The watch of these frames reads this computer's `ssh`, so it stays off; the card
+    // then keeps the frame of an owner that is not there, and the fit counts that frame
+    // as it counts the document.
+    app.template_config.machines.watch_agents = false;
+    keep_machine(&mut app);
+    watch_reports(&mut app, Some("night"));
+    let (card, _) = created(app.apply_block_request(
+        &session_request(
+            &app,
+            "night",
+            Operation::Create {
+                title: Some("Night shift".into()),
+                document: fixture_card_document(),
+            },
+        ),
+        &ctx,
+    ));
+    assert!(
+        !app.board.panels.iter().any(|panel| panel.kind == PanelKind::Ssh),
+        "no terminal of that session had to be open"
+    );
+    let workspace = app
+        .board
+        .panel_id_by_local_id(&card)
+        .and_then(|id| app.board.panel(id))
+        .expect("the card")
+        .workspace_id;
+    assert!(
+        app.board
+            .workspace(workspace)
+            .is_some_and(|workspace| workspace.layout.is_none()),
+        "the workspace of the cards of a machine starts free, so its cards fit themselves"
+    );
+    // The person looks at the workspace of the machine, so the frames draw the card. The
+    // first frame applies the view of the startup state, and the next ones measure the
+    // card and draw it at the size that the host gave it.
+    let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(WINDOW, None));
+    let canvas = app.canvas_rect(&ctx);
+    assert!(app.center_workspace_in_rect(workspace, canvas));
+
+    let output = settle_frames(&ctx, &mut app);
+    let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
+    let last = drawn_text(&output, "Stop");
+    assert!(
+        body.contains_rect(last),
+        "the last button of the card lies inside the room that the card gives its body: {last:?} in {body:?}"
+    );
+    assert!(!drew_text(&output, "More below"), "a card that fits draws no mark");
+}
+
+#[test]
+fn a_layout_that_the_person_chose_keeps_the_cards_of_a_machine_in_its_cells() {
+    let (_temp, ctx, mut app) = app();
+    keep_machine(&mut app);
+    watch_reports(&mut app, Some("night"));
+    let (card, _) = created(app.apply_block_request(
+        &session_request(
+            &app,
+            "night",
+            Operation::Create {
+                title: Some("Night shift".into()),
+                document: fixture_card_document(),
+            },
+        ),
+        &ctx,
+    ));
+    let workspace = app
+        .board
+        .panel_id_by_local_id(&card)
+        .and_then(|id| app.board.panel(id))
+        .expect("the card")
+        .workspace_id;
+    app.board.arrange_workspace(workspace, WorkspaceLayout::Rows);
+
+    // A second card of that machine joins the arrangement that the person chose.
+    let _ = created(app.apply_block_request(
+        &session_request(
+            &app,
+            "night",
+            Operation::Create {
+                title: Some("Night notes".into()),
+                document: fixture_card_document(),
+            },
+        ),
+        &ctx,
+    ));
+
+    assert_eq!(
+        app.board.workspace(workspace).and_then(|workspace| workspace.layout),
+        Some(WorkspaceLayout::Rows),
+        "the preset that the person chose stays theirs"
     );
 }
 

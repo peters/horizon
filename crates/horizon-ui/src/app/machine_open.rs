@@ -230,8 +230,19 @@ impl HorizonApp {
 
     /// The workspace of `machine`: the one that carries its name, or a new one whose
     /// terminals and cards run on that machine.
+    ///
+    /// A workspace that holds no panel has no arrangement of the person's yet, so it
+    /// starts free: the cards of a machine fit themselves there, as the card of a panel's
+    /// workspace does, and a preset that the person picks later stays theirs.
     pub(in crate::app) fn machine_workspace(&mut self, machine: &str, ctx: &Context) -> WorkspaceId {
         let workspace = self.ensure_workspace_of_name(ctx, machine);
+        if self
+            .board
+            .workspace(workspace)
+            .is_some_and(|workspace| workspace.panels.is_empty())
+        {
+            self.board.clear_workspace_layout(workspace);
+        }
         self.board
             .set_workspace_place(workspace, WorkspacePlace::Machine(machine.to_owned()));
         self.mark_runtime_dirty();

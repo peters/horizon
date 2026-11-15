@@ -46,6 +46,18 @@ or key operation of a machine agent.
   `machines.watch_agents` off, the watch reports no session, so Horizon serves no
   card socket and an agent of that machine reaches nothing.
 
+## The workspace of the cards of a machine
+
+The first card of a machine makes the workspace of that machine. That workspace
+starts free, and a card takes the height that its content needs, as the card of
+a panel's workspace does: a preset of this build owns the size of every panel in
+it (`crates/horizon-ui/src/app/card_fit.rs`), so a card in a preset keeps the
+cell of that preset and its content can pass the lower edge of the cell. A
+workspace that holds no panel has no arrangement of the person's yet, so nothing
+of the person is dropped there. A layout that the person picks in the toolbar of
+that workspace stays theirs, and the cards that arrive after it keep the cells of
+that layout.
+
 ## What a frame does
 
 A frame reads the watch snapshot, compares one number (the snapshot version and

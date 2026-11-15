@@ -73,7 +73,8 @@ server, so it changes no setting of the person.
 
    Result: the workspace `build-1` holds a card with the heading `Night shift`
    and the buttons `Continue` and `Stop`. No terminal panel of `hz-night` is
-   open.
+   open. The card shows both buttons whole and it does not show `More below`.
+   The toolbar of that workspace shows `Default` selected.
 
 3. Read the footer of that card.
 
@@ -123,6 +124,21 @@ server, so it changes no setting of the person.
 
    Result: the row comes back and a press reaches the agent again.
 
+### 6.5 MC-5 — A terminal of the session joins the workspace of the cards
+
+1. Press the row of `hz-night` in the Machines section.
+
+   Result: the terminal of that session opens in the workspace `build-1` beside
+   the card, at the size of a new terminal.
+
+2. Read the toolbar of the workspace `build-1`.
+
+   Result: `Default` is selected, and the card keeps the size of its content.
+
+3. Close the terminal.
+
+   Result: the card alone remains in the workspace.
+
 ## 7. Pass criteria
 
 - The card of `hz-night` appears in the workspace `build-1` while no panel of that
@@ -131,6 +147,8 @@ server, so it changes no setting of the person.
   the label of that press.
 - The footer names the machine and the session, and the chip names the machine.
 - The card and the row follow the sessions that the watch reports.
+- The card shows its buttons whole and says no `More below`, also after a
+  terminal of that session joins the workspace.
 
 ## 8. Cleanup
 

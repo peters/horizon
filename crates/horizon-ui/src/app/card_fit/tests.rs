@@ -1,7 +1,7 @@
 //! A card takes the size its content needs, once per document and per set of
 //! Horizon-owned frames.
 
-use egui::{Pos2, Rect, Vec2};
+use egui::Pos2;
 use horizon_browser_control::block::{BlockDocument, BoardColumn, BoardItem, BoardRow, BoardState, Component, Width};
 use horizon_core::browser::manifest::{
     self,
@@ -10,8 +10,11 @@ use horizon_core::browser::manifest::{
 use horizon_core::{BlockPanelState, CardFrames, Panel, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 
 use super::*;
-use crate::app::test_support::{editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup};
-use crate::block_widget::{CARD_CHROME_HEIGHT, CARD_FOOT_SPAN, CARD_HEIGHT_LIMITS};
+use crate::app::test_support::{
+    card_body, card_panel, drawn_text, drew_text, editor_workspace_state, raw_input, run_app_frame_with_input,
+    test_app_with_startup,
+};
+use crate::block_widget::{CARD_CHROME_HEIGHT, CARD_HEIGHT_LIMITS};
 
 /// A board with one card panel that measured `measured_content_height`.
 fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, HorizonApp, PanelId) {
@@ -445,45 +448,9 @@ fn taller_than_the_view_document() -> serde_json::Value {
     })
 }
 
-/// The ink of the text `text` that a frame drew.
-fn drawn_text(output: &egui::FullOutput, text: &str) -> Rect {
-    output
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::epaint::Shape::Text(shape) if shape.galley.text() == text => {
-                Some(Rect::from_min_size(shape.pos, shape.galley.size()))
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("the frame drew no {text}"))
-}
-
 /// The room that the canvas view of this moment shows, in canvas points.
 fn room_of_the_view(app: &HorizonApp, ctx: &Context) -> f32 {
     app.canvas_rect(ctx).height() / app.canvas_view.zoom
-}
-
-/// The card panel that `card` names, as the canvas draws it this frame.
-fn card_panel(app: &HorizonApp, ctx: &Context, card: &str) -> Rect {
-    let panel = app
-        .board
-        .panel(app.board.panel_id_by_local_id(card).expect("the card"))
-        .expect("the card");
-    let min = app.canvas_to_screen(
-        app.canvas_rect(ctx),
-        Pos2::new(panel.layout.position[0], panel.layout.position[1]),
-    );
-    Rect::from_min_size(min, app.canvas_size_to_screen(Vec2::from(panel.layout.size)))
-}
-
-/// The room that the body of a card panel draws in: below its titlebar and above
-/// the footer that stays at its bottom.
-fn card_body(panel: Rect, zoom: f32) -> Rect {
-    Rect::from_min_max(
-        Pos2::new(panel.min.x, panel.min.y + (CARD_CHROME_HEIGHT - CARD_FOOT_SPAN) * zoom),
-        Pos2::new(panel.max.x, panel.max.y - CARD_FOOT_SPAN * zoom),
-    )
 }
 
 /// The height of the card panel that `card` names.
@@ -621,14 +588,6 @@ fn longer_than_the_bound_document() -> serde_json::Value {
         steps.push(serde_json::json!({"label": label, "state": "done", "at": "1 s"}));
     }
     document
-}
-
-/// Whether the frame drew the words `text`.
-fn drew_text(output: &egui::FullOutput, text: &str) -> bool {
-    output
-        .shapes
-        .iter()
-        .any(|clipped| matches!(&clipped.shape, egui::epaint::Shape::Text(shape) if shape.galley.text() == text))
 }
 
 /// One frame of the person's window that carries `events`.

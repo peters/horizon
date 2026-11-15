@@ -1,11 +1,12 @@
 use crate::test_egui::DiscardTextures;
-use egui::{Context, Pos2, RawInput, Rect, ViewportId};
+use egui::{Context, Pos2, RawInput, Rect, Vec2, ViewportId};
 use horizon_core::{
     Config, HorizonHome, PanelKind, PanelState, RuntimeState, SessionStore, StartupDecision, WorkspaceState,
 };
 use tempfile::TempDir;
 
 use super::HorizonApp;
+use crate::block_widget::{CARD_CHROME_HEIGHT, CARD_FOOT_SPAN};
 use crate::input;
 
 pub(super) fn test_app() -> (TempDir, HorizonApp) {
@@ -199,4 +200,48 @@ pub(super) fn wait_for_session_saves(app: &HorizonApp) {
             .flush_runtime_states(std::time::Duration::from_secs(30)),
         "the session writer did not save the board"
     );
+}
+
+/// The ink of the text `text` that a frame drew.
+pub(super) fn drawn_text(output: &egui::FullOutput, text: &str) -> Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::epaint::Shape::Text(shape) if shape.galley.text() == text => {
+                Some(Rect::from_min_size(shape.pos, shape.galley.size()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the frame drew no {text}"))
+}
+
+/// Whether the frame drew the words `text`.
+pub(super) fn drew_text(output: &egui::FullOutput, text: &str) -> bool {
+    output
+        .shapes
+        .iter()
+        .any(|clipped| matches!(&clipped.shape, egui::epaint::Shape::Text(shape) if shape.galley.text() == text))
+}
+
+/// The card panel that `card` names, as the canvas draws it this frame.
+pub(super) fn card_panel(app: &HorizonApp, ctx: &Context, card: &str) -> Rect {
+    let panel = app
+        .board
+        .panel(app.board.panel_id_by_local_id(card).expect("the card"))
+        .expect("the card");
+    let min = app.canvas_to_screen(
+        app.canvas_rect(ctx),
+        Pos2::new(panel.layout.position[0], panel.layout.position[1]),
+    );
+    Rect::from_min_size(min, app.canvas_size_to_screen(Vec2::from(panel.layout.size)))
+}
+
+/// The room that the body of a card panel draws in: below its titlebar and above
+/// the footer that stays at its bottom.
+pub(super) fn card_body(panel: Rect, zoom: f32) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(panel.min.x, panel.min.y + (CARD_CHROME_HEIGHT - CARD_FOOT_SPAN) * zoom),
+        Pos2::new(panel.max.x, panel.max.y - CARD_FOOT_SPAN * zoom),
+    )
 }
