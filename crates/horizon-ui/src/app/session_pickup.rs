@@ -72,6 +72,18 @@ pub(in crate::app) struct SessionPickup {
     confirm: Option<AgentSessionKey>,
     /// Why a press opened nothing, in the words of the window.
     notice: Option<String>,
+    /// A folder that stands in for the home of the person. A test names one; a
+    /// window of a person has none.
+    stores_home: Option<std::path::PathBuf>,
+}
+
+impl SessionPickup {
+    /// The home folder of the person: the agent programs keep their stores
+    /// there (`.claude`, `.codex`). It is NOT the home of Horizon, which holds
+    /// the state of Horizon alone and no store of another program.
+    fn stores_home(&self) -> Option<std::path::PathBuf> {
+        self.stores_home.clone().or_else(horizon_core::user_home_dir)
+    }
 }
 
 #[cfg(test)]
@@ -82,6 +94,15 @@ impl SessionPickup {
         Self {
             list,
             asked: true,
+            ..Self::default()
+        }
+    }
+
+    /// A pickup that has asked for nothing yet and reads the stores of `home` in
+    /// the place of the home of the person.
+    pub(super) fn reading(home: std::path::PathBuf) -> Self {
+        Self {
+            stores_home: Some(home),
             ..Self::default()
         }
     }
@@ -180,8 +201,11 @@ impl HorizonApp {
     /// A read runs alone: a press that asks again while one runs keeps the
     /// answer of the read that is already there.
     fn request_session_pickup(&mut self) -> bool {
+        let Some(home) = self.session_pickup.stores_home() else {
+            return false;
+        };
         let request = PickupRequest {
-            home: self.session_store.home().root().to_path_buf(),
+            home,
             programs: PickupProgram::from_presets(&self.presets),
             open_panels: self
                 .board

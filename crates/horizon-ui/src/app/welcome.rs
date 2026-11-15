@@ -464,6 +464,17 @@ fn centred_job(text: &str, font: &FontId, color: Color32, max_width: f32, weight
     job
 }
 
+/// The title of a tile wrapped to `max_width`, with every row at the left edge
+/// of the tile, where its sentence and its action start.
+///
+/// A job with centred rows stands around its own origin, so a centred title
+/// that is painted at the left edge of a tile hangs half outside the tile.
+fn tile_title_job(text: &str, font: &FontId, color: Color32, max_width: f32, weight: Weight) -> egui::text::LayoutJob {
+    let mut job = centred_job(text, font, color, max_width, weight);
+    job.halign = egui::Align::LEFT;
+    job
+}
+
 /// Paints one tile, and answers whether the person pressed it.
 fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Rect, index: usize) -> bool {
     let response = ui.interact(rect, ui.make_persistent_id(("welcome_tile", index)), Sense::click());
@@ -508,7 +519,7 @@ fn paint_tile(ui: &mut Ui, cache: &mut WelcomeCache, tile: WelcomeTile, rect: Re
     painter.add(drawing.clone());
 
     let mut y = band.max.y + TILE_INNER_GAP;
-    let headline = painter.layout_job(centred_job(
+    let headline = painter.layout_job(tile_title_job(
         tile.title(),
         &FontId::proportional(TITLE_FONT),
         theme::FG(),
