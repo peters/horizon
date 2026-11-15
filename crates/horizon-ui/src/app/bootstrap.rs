@@ -166,6 +166,7 @@ impl HorizonApp {
             appearance_theme: config.appearance.theme,
             resolved_theme,
             theme_applied: false,
+            theme_settling: false,
             panel_screen_rects: HashMap::new(),
             panel_screen_order: Vec::new(),
             panel_render_order: Vec::new(),

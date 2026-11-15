@@ -263,3 +263,90 @@ fn the_window_asks_for_its_own_frame_when_the_answer_of_a_key_press_arrives() {
         "the frame that the wake asked for paints the answer of the key press:\n{text}"
     );
 }
+
+/// The shapes of one frame of the window that paint the text `wanted`: the colour of the
+/// text, and the pictures of the font atlas that each glyph of it points into.
+fn painted_text(
+    ctx: &egui::Context,
+    app: &mut HorizonApp,
+    wanted: &str,
+) -> Vec<(egui::Color32, Vec<([u16; 2], [u16; 2])>)> {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+    let mut found = Vec::new();
+    for clipped in output.shapes {
+        collect_painted(&clipped.shape, wanted, &mut found);
+    }
+    found
+}
+
+fn collect_painted(shape: &Shape, wanted: &str, found: &mut Vec<(egui::Color32, Vec<([u16; 2], [u16; 2])>)>) {
+    match shape {
+        Shape::Text(text) if text.galley.job.text.contains(wanted) => {
+            let glyphs = text
+                .galley
+                .rows
+                .iter()
+                .flat_map(|row| row.row.glyphs.iter().map(|glyph| (glyph.uv_rect.min, glyph.uv_rect.max)))
+                .collect();
+            // The window fades a panel in, and the fade scales the alpha of its text
+            // only: the colour of the theme is its hue with no alpha.
+            found.push((text.fallback_color.to_opaque(), glyphs));
+        }
+        Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_painted(shape, wanted, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A panel that prints nothing keeps its text through a change of the theme: the next
+/// frames paint it with the colours and the font atlas of the new theme, and not with the
+/// shapes that the cache of the grid built while the atlas of the old theme was current.
+#[test]
+fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
+    const MARKER: &str = "IDLE-THEME-TEXT";
+    let (temp, ctx, mut app) = offscreen_test_app();
+    let panel_id = spawn_script(&mut app, &temp, "stty -echo; printf 'IDLE-THEME-TEXT'; sleep 60");
+    drain_until_text(&mut app, panel_id, MARKER);
+    app.board.panel_mut(panel_id).expect("panel").layout.position = [40.0, 60.0];
+    app.board.focused = Some(panel_id);
+    app.canvas_view = horizon_core::CanvasViewState::default();
+    for _ in 0..3 {
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    }
+    let dark = painted_text(&ctx, &mut app, MARKER);
+    assert!(!dark.is_empty(), "the idle terminal paints its text in the theme of the start");
+
+    // The person picks the light theme in Settings, Appearance: the live preview of the
+    // tab applies the draft, as `apply_live_preview` does.
+    let mut config = app.template_config.clone();
+    config.appearance.theme = horizon_core::AppearanceTheme::Light;
+    app.apply_runtime_config(&config);
+    // The frame that applies the theme, and the frame that builds the font atlas of it.
+    run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
+    // A panel fades in, and the fade scales the colour of its text: this lane judges the
+    // colour itself.
+    ctx.global_style_mut(|style| style.animation_time = 0.0);
+    let painted = painted_text(&ctx, &mut app, MARKER);
+
+    // The same panel painted fresh in this theme, without the cache of its grid.
+    app.panel_render_caches.terminal_grid_cache.remove(&panel_id);
+    let fresh = painted_text(&ctx, &mut app, MARKER);
+    assert_eq!(
+        painted, fresh,
+        "an idle terminal paints the shapes that the theme of this frame builds, and not a \
+         cached mesh of the theme before it"
+    );
+    assert_ne!(dark, fresh, "the light theme paints other colours and other atlas pictures");
+
+    // The frames between changes keep the cache of the grid, which paints the panel:
+    // `terminal_widget::cache_tests::mouse_reporting_hover_and_canvas_pan_reuse_unchanged_grid`
+    // holds the count of the rebuilds that those frames do not make.
+    let again = painted_text(&ctx, &mut app, MARKER);
+    assert_eq!(
+        again, fresh,
+        "a frame between changes paints the same terminal, from the cache of its grid"
+    );
+}

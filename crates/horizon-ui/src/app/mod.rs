@@ -280,6 +280,9 @@ pub struct HorizonApp {
     appearance_theme: AppearanceTheme,
     resolved_theme: theme::ResolvedTheme,
     theme_applied: bool,
+    /// Whether the pass that follows a change of the theme still holds shapes that point
+    /// into the font atlas of the theme before it.
+    theme_settling: bool,
     canvas_view: CanvasViewState,
     pan_target: Option<Vec2>,
     is_panning: bool,
