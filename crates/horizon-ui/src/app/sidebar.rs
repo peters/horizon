@@ -527,7 +527,7 @@ impl HorizonApp {
     }
 
     /// What the row of `panel` says: an agent's task, or `display_title`.
-    fn sidebar_panel_label(&self, panel: &horizon_core::Panel, display_title: &str) -> String {
+    pub(in crate::app) fn sidebar_panel_label(&self, panel: &horizon_core::Panel, display_title: &str) -> String {
         let own_name = (!text::name_labels_agent(
             panel.kind,
             &panel.title,

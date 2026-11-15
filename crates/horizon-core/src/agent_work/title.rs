@@ -56,7 +56,8 @@ const TITLE_FIELD_SEPARATOR: &str = " | ";
 /// Codex writes a braille spinner frame and the name of the folder while it
 /// works, and one of two frames of `Action Required` with the request and the
 /// folder while an approval waits. The words of the request and the folder are
-/// the text of the program: no store keeps them and nothing shows them.
+/// the text of the program: no store keeps them, and the name of the panel is the
+/// folder alone, which [`title_name`] reads without the state around it.
 fn codex_title_state(title: &str) -> TitleState {
     let mut characters = title.chars();
     if let Some(first) = characters.next()
@@ -65,15 +66,20 @@ fn codex_title_state(title: &str) -> TitleState {
     {
         return TitleState::Working;
     }
-    for frame in CODEX_APPROVAL {
-        if title
-            .strip_prefix(frame)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(TITLE_FIELD_SEPARATOR))
-        {
-            return TitleState::NeedsYou;
-        }
+    if approval_line(title).is_some() {
+        return TitleState::NeedsYou;
     }
     TitleState::Plain
+}
+
+/// The line of a wait without the frame before it, or `None` for a title that is
+/// no wait of that form.
+fn approval_line(title: &str) -> Option<&str> {
+    CODEX_APPROVAL.iter().find_map(|frame| {
+        title
+            .strip_prefix(frame)
+            .filter(|rest| rest.is_empty() || rest.starts_with(TITLE_FIELD_SEPARATOR))
+    })
 }
 
 /// Whether `character` is one frame of the braille spinner of a program.
@@ -112,6 +118,35 @@ pub fn title_state(kind: PanelKind, title: &str) -> TitleState {
         return TitleState::Plain;
     }
     rule(title)
+}
+
+/// The name that the state title `title` gives a panel of `kind`: the title
+/// without the part of it that names the state.
+///
+/// A working title gives the words after its spinner frame, and a waiting title
+/// gives the last part of its line after its last ` | `, which is the folder of
+/// the program. The name of a panel stands still while the state of its program
+/// changes, so the row of a panel does not blink and its text is laid out once.
+///
+/// Answers `None` for a title that names no state of this kind, and `Some("")` for
+/// a state title that leaves no name: the panel keeps the name that it had before.
+#[must_use]
+pub fn title_name(kind: PanelKind, title: &str) -> Option<&str> {
+    match title_state(kind, title) {
+        TitleState::Plain => None,
+        TitleState::Working => {
+            // One braille glyph and the space that follows it name no panel.
+            let rest = title.char_indices().nth(1).map_or("", |(index, _)| &title[index..]);
+            Some(rest.strip_prefix(' ').unwrap_or(rest))
+        }
+        TitleState::NeedsYou => Some(
+            approval_line(title)
+                .unwrap_or_default()
+                .rsplit(TITLE_FIELD_SEPARATOR)
+                .next()
+                .unwrap_or_default(),
+        ),
+    }
 }
 
 /// The titles of one launch of a program, and the turn that they claim.

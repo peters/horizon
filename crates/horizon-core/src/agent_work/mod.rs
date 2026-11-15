@@ -24,7 +24,9 @@ pub use program_status::{
     DETECTION_REPLY, MAX_REPORT_BYTES, ProgramClaim, ProgramStatus, program_status, program_status_reports_state,
 };
 pub use store::{HookInput, StoredWork, WorkStore};
-pub use title::{MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_reports_state, title_state};
+pub use title::{
+    MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_name, title_reports_state, title_state,
+};
 pub use transcript::{TranscriptSnapshot, TurnState};
 
 use crate::horizon_home::HorizonHome;

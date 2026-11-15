@@ -41,7 +41,7 @@ use serde::Deserialize;
 
 use crate::agent_definition;
 use crate::agent_work::ResumePolicy;
-use crate::agent_work::{ProgramStatus, TitleState};
+use crate::agent_work::{ProgramStatus, TitleState, title_name};
 use crate::agents::AgentStatus;
 use crate::browser::{BrowserPanelRequest, BrowserPlace};
 use crate::editor::{MarkdownEditor, PanelContent};
@@ -802,8 +802,16 @@ impl Panel {
             })
     }
 
+    /// The title of this panel as a person reads it: its own name, and the title
+    /// that its program wrote beside it.
+    ///
+    /// A title that names the state of an agent of this kind is a statement about
+    /// the turn of that program and not a name, so the name of the panel is its
+    /// folder alone and the word of the row says the state. A state title that
+    /// leaves no name keeps the name that the panel had before.
     #[must_use]
     pub fn display_title(&self) -> Cow<'_, str> {
+        let terminal_title = self.shown_terminal_title();
         if self.kind == PanelKind::Ssh {
             let base_title = if self.has_custom_name {
                 self.ssh_connection
@@ -818,25 +826,29 @@ impl Panel {
                 self.title.clone()
             };
 
-            if self.terminal_title.is_empty() || self.terminal_title == self.title || self.terminal_title == base_title
-            {
+            if terminal_title.is_empty() || terminal_title == self.title || terminal_title == base_title {
                 return Cow::Owned(base_title);
             }
 
-            return Cow::Owned(format!("{base_title} — {}", self.terminal_title));
+            return Cow::Owned(format!("{base_title} — {terminal_title}"));
         }
 
         if self.has_custom_name {
-            if self.terminal_title.is_empty() || self.terminal_title == self.title {
+            if terminal_title.is_empty() || terminal_title == self.title {
                 Cow::Borrowed(&self.title)
             } else {
-                Cow::Owned(format!("{} — {}", self.title, self.terminal_title))
+                Cow::Owned(format!("{} — {terminal_title}", self.title))
             }
-        } else if self.terminal_title.is_empty() {
+        } else if terminal_title.is_empty() {
             Cow::Borrowed(&self.title)
         } else {
-            Cow::Borrowed(&self.terminal_title)
+            Cow::Borrowed(terminal_title)
         }
+    }
+
+    /// The title of the terminal of this panel, as the name of the panel shows it.
+    fn shown_terminal_title(&self) -> &str {
+        title_name(self.kind, &self.terminal_title).unwrap_or(&self.terminal_title)
     }
 
     #[must_use]
@@ -1234,6 +1246,53 @@ mod tests {
         let panel = test_panel("Backend", "Backend", true);
 
         assert_eq!(panel.display_title(), "Backend");
+    }
+
+    #[test]
+    fn the_state_title_of_an_agent_names_the_panel_by_its_folder() {
+        let mut panel = test_panel("Codex", "\u{280b} work", false);
+        panel.kind = PanelKind::Codex;
+
+        // The spinner frame of a working turn turns ten times a second, and the
+        // name of the panel never changes.
+        for frame in ['\u{280b}', '\u{2819}', '\u{2839}', '\u{280f}'] {
+            panel.terminal_title = format!("{frame} work");
+            assert_eq!(panel.display_title(), "work", "the name of the folder alone");
+        }
+        // The two frames of an approval line and the request in the middle of it
+        // change no name either.
+        for title in [
+            "[ . ] Action Required | work",
+            "[ ! ] Action Required | work",
+            "[ . ] Action Required | Create a file | work",
+            "[ ! ] Action Required | Create a file | work",
+        ] {
+            panel.terminal_title = title.to_string();
+            assert_eq!(panel.display_title(), "work", "{title:?}");
+        }
+        // A state title that leaves no name keeps the name that the panel had.
+        panel.terminal_title = "[ ! ] Action Required".to_string();
+        assert_eq!(panel.display_title(), "Codex");
+        panel.terminal_title = "\u{280b}".to_string();
+        assert_eq!(panel.display_title(), "Codex");
+        // The title of a program of another kind is its name, as it was.
+        panel.kind = PanelKind::Shell;
+        panel.terminal_title = "[ ! ] Action Required | Create a file | work".to_string();
+        assert_eq!(
+            panel.display_title(),
+            "[ ! ] Action Required | Create a file | work",
+            "a shell panel has no state title"
+        );
+    }
+
+    #[test]
+    fn a_state_title_of_a_named_agent_panel_keeps_the_name_of_the_person() {
+        let mut panel = test_panel("Backend", "\u{280b} work", true);
+        panel.kind = PanelKind::Codex;
+
+        assert_eq!(panel.display_title(), "Backend — work");
+        panel.terminal_title = "[ ! ] Action Required | Create a file | work".to_string();
+        assert_eq!(panel.display_title(), "Backend — work");
     }
 
     #[test]

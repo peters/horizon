@@ -1,5 +1,7 @@
 //! The matcher of a state title, and the claim that its states make.
-use super::{MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_reports_state, title_state};
+use super::{
+    MAX_STATE_TITLE_BYTES, TITLE_SETTLE_MILLIS, TitleClaim, TitleState, title_name, title_reports_state, title_state,
+};
 use crate::PanelKind;
 use crate::agent_work::TurnState;
 
@@ -52,6 +54,35 @@ fn both_frames_of_an_approval_claim_the_person_and_their_text_is_not_read() {
     ] {
         assert_eq!(title_state(PanelKind::Codex, &title), TitleState::NeedsYou, "{title:?}");
     }
+}
+
+#[test]
+fn a_state_title_names_the_panel_by_its_folder_without_the_state() {
+    for (title, name) in [
+        ("\u{280b} work", "work"),
+        ("\u{280b} a folder with spaces", "a folder with spaces"),
+        ("\u{280b} [a folder in brackets]", "[a folder in brackets]"),
+        ("\u{280b}", ""),
+        ("[ . ] Action Required | work", "work"),
+        ("[ ! ] Action Required | work", "work"),
+        ("[ . ] Action Required | Create a file | work", "work"),
+        ("[ . ] Action Required | a request | a folder | with bars", "with bars"),
+        ("[ ! ] Action Required", ""),
+        ("[ . ] Action Required | ", ""),
+    ] {
+        assert_eq!(title_name(PanelKind::Codex, title), Some(name), "{title:?}");
+    }
+    // A title that names no state is a name of its own, and so is the title of a
+    // program that has no state title at all.
+    for title in ["work", "\u{2733} work", "[x] Action Required | work", ""] {
+        assert_eq!(title_name(PanelKind::Codex, title), None, "{title:?}");
+    }
+    assert_eq!(title_name(PanelKind::Shell, &spinner_title("work")), None);
+    assert_eq!(title_name(PanelKind::Claude, &spinner_title("work")), None);
+    // The longest working title still names its folder.
+    let longest = format!("{SPINNER} {}", "x".repeat(MAX_STATE_TITLE_BYTES - 4));
+    let expected = "x".repeat(MAX_STATE_TITLE_BYTES - 4);
+    assert_eq!(title_name(PanelKind::Codex, &longest), Some(expected.as_str()));
 }
 
 #[test]

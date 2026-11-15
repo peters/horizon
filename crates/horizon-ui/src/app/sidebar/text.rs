@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::epaint::text::VariationCoords;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, FontId, Galley, TextFormat};
-use horizon_core::{Attention, PanelKind, PresetConfig, agent_definition};
+use horizon_core::{Attention, PanelKind, PresetConfig, agent_definition, agent_work::title_name};
 
 use crate::theme;
 use crate::typeface::Weight;
@@ -106,6 +106,10 @@ fn is_title_symbol(character: char) -> bool {
 /// person gave the panel; it stays in front of the task. A name that only labels
 /// the agent (`None`) is left out, because the kind label already names the agent.
 /// Other panels, and agents without a title, show `display_title`.
+///
+/// A title that names the state of the agent is a statement about its turn and not
+/// a name: the row shows the name of the panel of that title, which stands still
+/// while the state of the program changes.
 pub(super) fn panel_label(
     kind: PanelKind,
     own_name: Option<&str>,
@@ -113,7 +117,10 @@ pub(super) fn panel_label(
     terminal_title: &str,
 ) -> String {
     if kind.is_agent() {
-        let task = fold_whitespace(terminal_title.trim_start_matches(is_title_symbol));
+        let task = match title_name(kind, terminal_title) {
+            Some(name) => fold_whitespace(name),
+            None => fold_whitespace(terminal_title.trim_start_matches(is_title_symbol)),
+        };
         if !task.is_empty() {
             return match own_name {
                 Some(name) if name != terminal_title => format!("{} \u{00B7} {task}", fold_whitespace(name)),
@@ -164,6 +171,8 @@ mod tests {
     use horizon_core::Attention;
     use horizon_core::PresetConfig;
 
+    use crate::test_egui::DiscardTextures;
+
     use super::{fold_whitespace, initials, name_labels_agent, panel_label, panel_spoken, workspace_spoken};
 
     #[test]
@@ -195,6 +204,80 @@ mod tests {
         // Without a title the row keeps the panel's own title.
         assert_eq!(label(""), "Claude Code — title");
         assert_eq!(label("\u{25D0} "), "Claude Code — title");
+    }
+
+    #[test]
+    fn a_state_title_of_a_codex_row_shows_the_folder_alone() {
+        let label = |terminal_title| panel_label(PanelKind::Codex, None, "Codex \u{2014} title", terminal_title);
+        for title in [
+            "\u{280b} work",
+            "\u{2819} work",
+            "\u{2839} work",
+            "[ . ] Action Required | work",
+            "[ ! ] Action Required | work",
+            "[ . ] Action Required | Create a file | work",
+            "[ ! ] Action Required | Create a file | work",
+        ] {
+            assert_eq!(label(title), "work", "{title:?}");
+        }
+        // A state title that leaves no name keeps the name of the panel.
+        for title in ["\u{280b}", "[ ! ] Action Required"] {
+            assert_eq!(label(title), "Codex \u{2014} title", "{title:?}");
+        }
+        // The name of a person stays in front of the folder of the program.
+        assert_eq!(
+            panel_label(
+                PanelKind::Codex,
+                Some("Backend"),
+                "Backend \u{2014} work",
+                "[ ! ] Action Required | Create a file | work"
+            ),
+            "Backend \u{00B7} work"
+        );
+    }
+
+    #[test]
+    fn a_thousand_frames_of_a_state_title_show_one_name_and_lay_out_no_text() {
+        const FRAMES: [char; 8] = [
+            '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}', '\u{2827}',
+        ];
+        // The titles of a thousand frames of one turn: the spinner of a working
+        // program, and then the two frames of an approval that blink twice a
+        // second.
+        let titles: Vec<String> = (0..1_000)
+            .map(|frame| {
+                if frame < 500 {
+                    format!("{} work", FRAMES[frame % FRAMES.len()])
+                } else {
+                    let frame_of_wait = if frame % 2 == 0 { "[ . ]" } else { "[ ! ]" };
+                    format!("{frame_of_wait} Action Required | Create a file | work")
+                }
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let mut names = std::collections::BTreeSet::new();
+        let mut first = None;
+        let _frame = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                for title in &titles {
+                    let label = panel_label(PanelKind::Codex, None, "Codex \u{2014} title", title);
+                    // The row lays its name out at the width of the sidebar. The
+                    // layout is memoized, so a name that stands still is the galley
+                    // of the frame before it, and a name that moves is a new one.
+                    let galley = super::line(ui, &label, 12.0, super::REGULAR, egui::Color32::WHITE, 160.0);
+                    assert_eq!(galley.text(), "work", "the name of the row is the folder");
+                    match &first {
+                        None => first = Some(galley),
+                        Some(first) => assert!(
+                            std::sync::Arc::ptr_eq(first, &galley),
+                            "a frame of the state of a title lays out no text of the row"
+                        ),
+                    }
+                    names.insert(label);
+                }
+            })
+            .discard_textures();
+        assert_eq!(names.len(), 1, "the name of the row stands still: {names:?}");
     }
 
     #[test]

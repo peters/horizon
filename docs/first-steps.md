@@ -412,6 +412,12 @@ and on macOS, with the default command or with a command of its own:
   sequence. Codex writes a spinner and the name of the folder into the title
   while it works, and a line with `Action Required` while an approval waits.
 
+The name of such a panel is the folder, and the word of the row is the state: the
+spinner of a working turn and the two frames of an approval line change the title
+about ten times a second, and the name of the row, of the titlebar and of the
+minimap stays one name. A name that you gave a panel stays in front of it, and a
+title that leaves no name keeps the name that the panel had before.
+
 Every other agent panel takes the state from the text on its screen, and it
 keeps that signal until its agent reports its first event. A panel in which you
 start an agent by hand in a shell keeps the screen rule too.

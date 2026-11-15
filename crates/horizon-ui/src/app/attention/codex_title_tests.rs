@@ -369,3 +369,55 @@ fn a_question_of_a_launch_before_it_is_ready_claims_the_person() {
     );
     stand_in.word("quit");
 }
+
+#[test]
+fn the_name_of_a_codex_panel_stands_still_while_its_state_changes() {
+    let Some(mut stand_in) = StandIn::start() else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    let id = stand_in.id;
+    let local_id = stand_in.local_id.clone();
+    // The names of the row and of the title bar of the panel, over the frames that
+    // the run takes.
+    let name_of = |app: &HorizonApp, names: &mut std::collections::BTreeSet<String>| {
+        let panel = app.board.panel(id).expect("the panel of the test");
+        let title = panel.display_title();
+        names.insert(title.clone().into_owned());
+        names.insert(app.sidebar_panel_label(panel, &title));
+    };
+
+    stand_in.word("start");
+    assert!(stand_in.wait_for(Attention::Working));
+    // The spinner of a working turn is a new title ten times a second, and the name
+    // of the panel is one name.
+    let mut names = std::collections::BTreeSet::new();
+    stand_in.run_for(Duration::from_millis(1_200), |app| name_of(app, &mut names));
+    // The title bar names the panel and the folder, and the row prepends the name
+    // of the person to the folder. Both stand still, and neither carries the state.
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "Codex stand-in \u{2014} work".to_owned(),
+            "Codex stand-in \u{00B7} work".to_owned(),
+        ]),
+        "the name of the folder of a working program"
+    );
+
+    // The two frames of an approval line blink twice a second, and the name of the
+    // panel still does not move.
+    stand_in.word("ask");
+    assert!(stand_in.wait_for(Attention::NeedsYou));
+    let mut names = std::collections::BTreeSet::new();
+    stand_in.run_for(Duration::from_millis(1_200), |app| name_of(app, &mut names));
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from([
+            "Codex stand-in \u{2014} work".to_owned(),
+            "Codex stand-in \u{00B7} work".to_owned(),
+        ]),
+        "the name of the folder of a program that waits"
+    );
+    assert!(!local_id.is_empty(), "the panel of this test");
+    stand_in.word("quit");
+}

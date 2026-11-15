@@ -208,8 +208,16 @@ second pass over the output of the terminal.
   or continues with ` | `. Every other title, an empty title and a title beyond
   512 bytes claim nothing.
 - **No text of the title is stored.** The words of the request and the name of
-  the folder are the text of the program: no record holds them, and no view of
-  this round shows them.
+  the folder are the text of the program: no record holds them. The folder is the
+  name that the row shows while the title names a state, and the words of the
+  request never reach a view.
+- **The name of a state title is not the title.** For a panel whose title is a
+  state title of its kind, the name that Horizon shows is the title without its
+  state part: no spinner frame, and for a waiting title the last part of its line
+  after its last ` | `. A state title that leaves no name keeps the name that the
+  panel had before, and a name that the person gave the panel is never changed by
+  a title. The name therefore stands still while the state of the program changes,
+  and the row lays its text out once.
 - **The turn belongs to the launch.** A title claim carries a turn number from a
   counter of its launch. A working title opens a turn when none is open, a
   waiting title blocks that turn, and a plain title ends only the turn that the

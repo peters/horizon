@@ -377,14 +377,18 @@ step 6, and **pi** is the command of step 5.
    Result: the row stays **Working**. One thousand frames of the same state
    change nothing, and the window shows no other word.
 
-6. Type `ask`.
+6. Type `ask`, and watch the name of the row of that panel and the name in the
+   titlebar of the panel.
 
    Result: the row says **Needs you**. The stand-in writes the two frames of
-   `Action Required | Create a file | work`.
+   `Action Required | Create a file | work`, twice a second, and the names do not
+   change while they blink: both names end with `work`, the folder of the panel,
+   and no name holds `Action Required` or the words of the request.
 
 7. Type `answer`.
 
-   Result: the row says **Working** again, in the same turn.
+   Result: the row says **Working** again, in the same turn, and the names are the
+   same names.
 
 8. Type `plain 0.1`.
 
@@ -446,10 +450,13 @@ answers before the title does.
    Result: the row says **Working** within one second. The report of the program
    claims the turn, and no title is needed for it.
 
-4. Type `ask`.
+4. Type `ask`, and watch the name of the row of that panel and the name in the
+   titlebar of the panel.
 
    Result: the row says **Needs you**. The report is
-   `state=blocked:app=codex:kind=permission`.
+   `state=blocked:app=codex:kind=permission`, and the two frames of the title blink
+   beside it. The names of the row and of the titlebar stay the same while they
+   blink, and both end with `work`, the folder of the panel.
 
 5. Type `answer`.
 
