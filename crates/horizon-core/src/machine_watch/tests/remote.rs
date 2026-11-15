@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::machine_watch::{MAX_PANES, REMOTE_TEXT, SLOW_INTERVAL_SECS, WATCH_FORMAT_VERSION, WATCH_INTERVAL_SECS};
 use crate::util::stand_in_program_in;
 
-use super::support::{self, Server, Shell, field, has, pane_of, run_text, run_text_with};
+use super::support::{self, Server, Shell, field, has, pane_of, run_text, run_text_with, wait_until};
 
 /// The shell of a test that needs one shell and not every shell of this computer.
 const SH: Shell = Shell {
@@ -93,12 +93,18 @@ fn a_pane_names_its_session_its_program_and_its_folder() {
     let Some(server) = Server::new() else {
         return;
     };
-    server.session_in("hz-fields-1", "/var/tmp", "sleep 120");
+    let folder = std::env::temp_dir();
+    server.session_in("hz-fields-1", &folder, "sleep 120");
     let report = run_text(&server, &SH);
     let pane = pane_of(&report, "hz-fields-1");
     assert!(field(pane, 1).starts_with('%'), "the pane id of the pane: {pane:?}");
     assert_eq!(field(pane, 3), "sleep", "the program of the pane");
-    assert_eq!(field(pane, 4), "/var/tmp", "the folder of the pane");
+    let named = folder.canonicalize().unwrap_or(folder);
+    assert_eq!(
+        field(pane, 4),
+        named.to_str().expect("a folder of this computer"),
+        "the folder of the pane, in the form that this system gives it"
+    );
     assert_eq!(
         pane.split('\t').count(),
         6,
@@ -113,11 +119,7 @@ fn a_folder_and_a_session_with_a_tab_and_a_newline_stay_one_field() {
     };
     let folder = std::env::temp_dir().join("hz watch\tmany\nlines");
     std::fs::create_dir_all(&folder).expect("the folder of the test");
-    server.session_in(
-        "hz flat",
-        folder.to_str().expect("a folder of this computer"),
-        "sleep 120",
-    );
+    server.session_in("hz flat", &folder, "sleep 120");
     let report = run_text(&server, &SH);
     let pane = pane_of(&report, "hz flat");
     assert_eq!(field(pane, 2), "hz flat", "the session is one field of words");
@@ -127,8 +129,11 @@ fn a_folder_and_a_session_with_a_tab_and_a_newline_stay_one_field() {
         !current.contains('\n'),
         "no newline of a folder breaks a line: {current:?}"
     );
+    // `tmux` 3.6 on Linux hands a control character of a path on, and another
+    // version replaces it by `_`: both are one field of one line.
+    let name = current.rsplit('/').next().unwrap_or_default();
     assert!(
-        current.ends_with("hz watch many lines"),
+        name.starts_with("hz watch") && name.contains("many") && name.ends_with("lines"),
         "the words of the folder stay in the field: {current:?}"
     );
 }
@@ -167,7 +172,17 @@ fn a_codex_stand_in_is_a_pane_whose_title_names_its_state() {
     let Some((_folder, stand_in)) = codex_stand_in() else {
         return;
     };
-    server.session("hz-codex-1", &format!("{} --startup", stand_in.display()));
+    server.session("hz-codex-1", &stand_in.display().to_string());
+    // The stand-in writes the titles of a turn when its person starts one, and it
+    // reports the state of that turn until the turn ends.
+    server.run(&["send-keys", "-t", "hz-codex-1", "start", "Enter"]);
+    wait_until("a frame of the spinner in the title of the stand-in", || {
+        server
+            .title("hz-codex-1")
+            .chars()
+            .next()
+            .is_some_and(|first| ('\u{2800}'..='\u{28ff}').contains(&first))
+    });
     let report = run_text(&server, &SH);
     let pane = pane_of(&report, "hz-codex-1");
     assert_eq!(
@@ -203,6 +218,9 @@ fn a_working_line_that_a_pane_prints_is_one_of_its_last_rows() {
         return;
     };
     server.session("hz-work-1", &script.display().to_string());
+    wait_until("a working line on the screen of the pane", || {
+        server.screen("hz-work-1").lines().any(crate::is_agent_working_line)
+    });
     let report = run_text(&server, &SH);
     let pane_id = field(pane_of(&report, "hz-work-1"), 1).to_owned();
     let rows: Vec<&str> = report.of_kind("R").filter(|line| field(line, 1) == pane_id).collect();

@@ -2,6 +2,7 @@
 //! the watch, for the tests of this module.
 
 use std::io::{BufRead, BufReader, Read};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
@@ -98,15 +99,18 @@ impl Server {
         self.settle(name);
     }
 
-    /// One session of the server in the folder `folder`.
-    pub(crate) fn session_in(&self, name: &str, folder: &str, command: &str) {
+    /// One session of the server in the folder `folder`, which this computer names
+    /// in its own form: macOS resolves `/var` through `/private/var`, and the pane
+    /// reports the folder that the system gave it.
+    pub(crate) fn session_in(&self, name: &str, folder: &Path, command: &str) {
+        let folder = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
         self.run(&[
             "new-session",
             "-d",
             "-s",
             name,
             "-c",
-            folder,
+            folder.to_str().expect("a folder of this computer"),
             "-x",
             "100",
             "-y",
@@ -117,20 +121,52 @@ impl Server {
     }
 
     /// Waits until `tmux` reports the program and the folder of the new pane of
-    /// `session`. A pane reports `tmux` and the folder of the client for the first
-    /// moment of its life, because `tmux` reads both from the pane once and then
-    /// keeps them for a moment.
+    /// `session`, and until it reports the same pair three times in a row.
+    ///
+    /// A pane reports `tmux` and the folder of the client for the first moment of
+    /// its life, and a program that a script starts replaces the shell of the script
+    /// a moment later. `tmux` refreshes both values about once a second, so a reading
+    /// that stands is the settled pane.
     pub(crate) fn settle(&self, session: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut last = String::new();
+        let mut stable = 0;
         while Instant::now() < deadline {
-            let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_current_command}"]);
-            let command = String::from_utf8_lossy(&output.stdout);
-            let command = command.trim();
-            if !command.is_empty() && command != "tmux" {
-                return;
+            let output = self.tmux(&[
+                "display-message",
+                "-p",
+                "-t",
+                session,
+                "#{pane_current_command}\t#{pane_current_path}",
+            ]);
+            let reading = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !reading.is_empty() && !reading.starts_with("tmux\t") {
+                if reading == last {
+                    stable += 1;
+                    if stable >= 2 {
+                        return;
+                    }
+                } else {
+                    stable = 0;
+                }
+                last = reading;
+            } else {
+                stable = 0;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// The lines of the pane of `session` on its screen now.
+    pub(crate) fn screen(&self, session: &str) -> String {
+        let output = self.tmux(&["capture-pane", "-p", "-t", session]);
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// The title of the pane of `session` now.
+    pub(crate) fn title(&self, session: &str) -> String {
+        let output = self.tmux(&["display-message", "-p", "-t", session, "#{pane_title}"]);
+        String::from_utf8_lossy(&output.stdout).trim_end().to_owned()
     }
 }
 
@@ -213,6 +249,15 @@ impl RunOutput {
     /// How many bytes the run printed, with the newline of each line.
     pub(crate) fn bytes(&self) -> usize {
         self.lines.iter().map(|line| line.len() + 1).sum()
+    }
+}
+
+/// Waits until `wanted` holds, and names what the test waited for.
+pub(crate) fn wait_until(what: &str, wanted: impl Fn() -> bool) {
+    let deadline = Instant::now() + REPORT_DEADLINE;
+    while !wanted() {
+        assert!(Instant::now() < deadline, "the test waited for {what}");
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
