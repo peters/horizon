@@ -753,9 +753,14 @@ after your session ends.
    ```sh
    ssh <options of the machine key> <user>@<address> sh <<'SH'
    body='sleep 26100; tmux set-option -p @horizon_state working; ./upgrade-devices.sh; if [ $? -eq 0 ]; then tmux set-option -p @horizon_state done; else tmux set-option -p @horizon_state blocked; fi; exec "$SHELL"'
-   tmux new-session -d -s night-0200 -c /srv/shop sh -c "$body"
+   tmux new-session -d -s night-0200 -c /srv/shop "$body"
    SH
    ```
+
+   `tmux` runs the command of a new session with the shell of the machine itself,
+   so the body is one argument and no `sh -c` is needed around it. A body with
+   `sh -c` in front of it would run every word of the body after the first one in
+   a second shell, and the wait and the command would come apart.
 
 4. Read the row of the session in the sidebar of Horizon: the session is a row of
    its machine, because its program reports a state in the pane option. It says
