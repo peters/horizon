@@ -223,6 +223,60 @@ fn a_pane_that_reports_a_state_says_needs_you_before_the_title_of_its_agent() {
 }
 
 #[test]
+fn a_job_that_a_session_reports_is_a_row_of_its_machine() {
+    let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
+        return;
+    };
+    server.run(&[
+        "new-session",
+        "-d",
+        "-s",
+        "hz-night-1",
+        "-x",
+        "100",
+        "-y",
+        "20",
+        "sleep",
+        "300",
+    ]);
+    // The pane of the job runs no agent program, and its report says that it works.
+    server.report("hz-night-1", Some("working"));
+    wait_for(&ctx, &mut app, "the job of the machine", |app| {
+        agent_state(app, "hz-night-1") == Some(AgentState::Working)
+    });
+    let texts = sidebar_texts(&ctx, &mut app);
+    for word in ["hz-night-1", ">_", "Working"] {
+        assert!(
+            texts.iter().any(|text| text == word),
+            "the row of the job says {word}: {texts:?}"
+        );
+    }
+    let job = app
+        .machine_watch
+        .watch
+        .snapshot()
+        .agents("build-1")
+        .iter()
+        .find(|agent| agent.session == "hz-night-1")
+        .cloned()
+        .expect("the row of the job");
+    assert!(job.can_open(), "a press on the row of the job opens its session");
+    server.report("hz-night-1", Some("blocked"));
+    wait_for(&ctx, &mut app, "the job that waits for the person", |app| {
+        agent_state(app, "hz-night-1") == Some(AgentState::NeedsYou)
+    });
+    assert!(
+        sidebar_texts(&ctx, &mut app).iter().any(|text| text == "Needs you"),
+        "the row of the job says that it waits for the person"
+    );
+    // The report leaves with the job, and the row leaves with the report.
+    server.report("hz-night-1", None);
+    wait_for(&ctx, &mut app, "the row of the job to leave", |app| {
+        agent_state(app, "hz-night-1").is_none()
+    });
+}
+
+#[test]
 fn a_frame_whose_snapshot_did_not_change_builds_no_row_again() {
     let Some((_folder, server, _ssh, ctx, mut app)) = app_with_one_agent() else {
         return;

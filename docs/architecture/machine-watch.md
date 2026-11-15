@@ -156,6 +156,14 @@ because a title that names no state is no claim.
 The identity of a row is its session and its pane id, which `tmux` keeps for the
 life of the pane. A pane that a report does not name drops its row.
 
+A pane whose program is no agent program is no row, unless it reports a state in
+its pane option: then it is a row of its machine, with the kind `Shell`, the name
+of its session and the state of its report. A job that a person or a timer started
+in `tmux` therefore appears in the sidebar, says **Working** while it runs and
+**Needs you** when it stops for the person, and a press on its row opens its
+session as a press on the row of an agent does. A pane with no report and no agent
+program stays out of the model.
+
 The first sight of one pane claims nothing while it is idle, and it is
 **Working** when the pane already works, because the watch may start in the
 middle of a turn of another person. A local launch differs: Horizon starts it and

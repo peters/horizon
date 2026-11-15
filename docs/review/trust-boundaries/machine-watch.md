@@ -98,6 +98,13 @@ state.
   or nothing, and no text of a program of a machine becomes a name, a word or a
   state of this window. The option itself is a value that any program of that
   user, and the machine, can set: it proves nothing.
+- **A pane that reports a state and runs no agent program is a row.** Its kind is
+  the plain terminal mark of this build, its name is the session name of its pane,
+  cut at [`MAX_NAME_CHARS`] characters, and its state is the report. A press on
+  that row asks the record for the route and opens the session, as a press on the
+  row of an agent does. A pane with no report and no agent program stays out, so
+  the machine chooses that a row appears and when it leaves, and it chooses no
+  other value of that row.
 
 ## What a taken-over machine can do, and what it cannot do
 

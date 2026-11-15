@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::PanelKind;
 use crate::machine_watch::{
     AgentPrograms, AgentState, MAX_PANES, MachineAgent, MachineModel, REMOTE_TEXT, SLOW_INTERVAL_SECS,
     WATCH_FORMAT_VERSION, WATCH_INTERVAL_SECS, observations, parse_report,
@@ -306,6 +307,38 @@ fn a_state_that_a_pane_reports_answers_before_the_title_of_its_program() {
         state_of(&rows_of(&run_text(&server, &SH)), "hz-claim-1"),
         Some(AgentState::Working),
         "a word outside the four of the contract is no state, and the title answers"
+    );
+}
+
+#[test]
+fn a_pane_that_reports_a_state_and_runs_no_agent_program_is_a_row_of_its_machine() {
+    let Some(server) = Server::new() else {
+        return;
+    };
+    server.session("hz-night-1", "sleep 120");
+    assert!(
+        rows_of(&run_text(&server, &SH)).is_empty(),
+        "a pane with no report and no agent program is no row"
+    );
+    server.report("hz-night-1", Some("working"));
+    let rows = rows_of(&run_text(&server, &SH));
+    assert_eq!(rows.len(), 1, "one row of the one pane that reports a state: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(row.session, "hz-night-1");
+    assert_eq!(row.name, "hz-night-1", "the name of the job is the name of its session");
+    assert_eq!(
+        row.kind,
+        PanelKind::Shell,
+        "the row carries the mark of a plain terminal"
+    );
+    assert_eq!(row.state, AgentState::Working);
+    server.report("hz-night-1", Some("blocked"));
+    let rows = rows_of(&run_text(&server, &SH));
+    assert_eq!(state_of(&rows, "hz-night-1"), Some(AgentState::NeedsYou));
+    server.report("hz-night-1", None);
+    assert!(
+        rows_of(&run_text(&server, &SH)).is_empty(),
+        "the row leaves with the report of its pane"
     );
 }
 

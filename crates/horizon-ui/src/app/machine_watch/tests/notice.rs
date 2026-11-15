@@ -113,6 +113,16 @@ fn a_state_that_the_pane_reports_sends_the_notice_of_today() {
         return;
     };
     frame_with_focus(&ctx, &mut app, false);
+    // The row of the agent is the one of its program before the report of its pane arrives:
+    // a pane whose program the text does not name yet is the row of a job.
+    wait_for_unfocused(&ctx, &mut app, "the agent of the folder of its pane", |app| {
+        app.machine_watch
+            .watch
+            .snapshot()
+            .agents("build-1")
+            .iter()
+            .any(|agent| agent.name == "shop")
+    });
     // The title of the stand-in names no wait, and the program of its pane reports one.
     server.report("hz-shop-1", Some("blocked"));
     wait_for_unfocused(&ctx, &mut app, "the state that the pane reports", |app| {

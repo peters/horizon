@@ -7,9 +7,11 @@
 //! pane's terminal when an interpreter runs there, and this module finds the kind in
 //! the first words of those lines.
 //!
-//! Every other pane is ignored: a shell, an editor and a plain command are no agent, and
-//! a machine cannot make Horizon keep a row by naming a program that no kind of this
-//! build uses.
+//! Every other pane is ignored, unless its program reports a state in the pane option
+//! `@horizon_state`: a job that a person or a timer started in `tmux` is a row of its
+//! machine, with the mark of a plain terminal and the name of its session. A machine
+//! cannot make Horizon keep a row by naming a program that no kind of this build uses, or
+//! by reporting a word outside the four of the contract.
 
 use crate::PanelKind;
 use crate::agent_work::TitleState;
@@ -117,12 +119,18 @@ pub fn observations(report: &Report, programs: &AgentPrograms) -> Vec<AgentObser
         .panes
         .iter()
         .filter_map(|pane| {
-            let kind = programs.kind_of_pane(pane)?;
+            // A pane whose program is no agent program is a row only while it reports a
+            // state: a job that a person or a timer started in `tmux` says `Working`.
+            let (kind, name) = match (programs.kind_of_pane(pane), pane.claim) {
+                (Some(kind), _) => (kind, name_of(pane, kind)),
+                (None, Some(_)) => (PanelKind::Shell, pane.session.chars().take(MAX_NAME_CHARS).collect()),
+                (None, None) => return None,
+            };
             Some(AgentObservation {
                 pane: pane.pane.clone(),
                 session: pane.session.clone(),
                 kind,
-                name: name_of(pane, kind),
+                name,
                 title: title_state(kind, &pane.title),
                 working: pane.rows.iter().any(|row| is_agent_working_line(row)),
                 claim: pane.claim,
