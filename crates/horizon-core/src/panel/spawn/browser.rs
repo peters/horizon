@@ -9,11 +9,14 @@
 //! machine list takes the login of that machine and never the SSH configuration
 //! of the person.
 
+use horizon_browser_control::ssh_forward::Ssh;
+
 use crate::browser::BrowserPlace;
+use crate::editor::PanelContent;
 use crate::error::Result;
 use crate::ssh::SshConnection;
 
-use super::BrowserSpawnMode;
+use super::{Panel, PanelKind, StaticPanelSeed};
 
 /// The mode of a browser panel that a previous run saved: the browser host and
 /// profile that served it, when the saved panel carries them, and otherwise the
@@ -165,4 +168,152 @@ pub(super) fn browser_spawn_mode(
         None => host,
     };
     Ok(BrowserSpawnMode::AttachedHost(host))
+}
+
+/// Where a browser panel's session runs.
+pub(super) enum BrowserSpawnMode {
+    Local(Option<String>),
+    /// A prepared remote request: allocate at the grid instead of launching.
+    Remote(Box<horizon_browser::RemoteSessionRequest>),
+    /// A remote panel from a previous run; it comes back stopped.
+    RestoredRemote(String),
+    /// The browser host of another machine that the settings name.
+    AttachedHost(crate::browser::AttachedHost),
+    /// The browser host and profile that served a panel in a previous run. It
+    /// comes back on that host, as a page cannot move between machines.
+    RestoredHost(crate::browser::AttachedHost),
+}
+
+/// Spawn a browser panel. The generic `command` field carries the optional
+/// initial URL (same convention as the editor's file path); `browser_config`
+/// is the active `browser` config section (honors `--config`).
+pub(super) fn spawn_browser(
+    mut seed: StaticPanelSeed,
+    initial_url: Option<String>,
+    browser_config: Option<crate::browser::BrowserConfig>,
+    mode: BrowserSpawnMode,
+) -> Result<Panel> {
+    let initial_url = initial_url.filter(|url| !url.trim().is_empty());
+    let (title, has_custom_name) = seed.take_title(|| {
+        initial_url
+            .as_deref()
+            .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
+    });
+    let browser = browser_state(
+        &seed.local_id,
+        &browser_config.unwrap_or_default(),
+        initial_url.clone(),
+        seed.browser_private,
+        mode,
+        Ssh::default(),
+    )?;
+    tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
+
+    Ok(seed.into_panel(
+        title,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(browser)),
+        initial_url,
+        None,
+        has_custom_name,
+    ))
+}
+
+/// The state of the browser panel of one spawn: the machine, the engine and the
+/// profile that the rule of this computer answered, and the `ssh` that carries a
+/// panel of a browser host.
+///
+/// `ssh` is the `ssh` of this computer in the production path, and the stand-in
+/// program of a test, so a test walks from the options of a create to the
+/// commands that the browser of that host receives.
+#[doc(hidden)]
+pub fn browser_panel_of_options(opts: &mut crate::PanelOptions, ssh: Ssh) -> Result<crate::browser::BrowserPanelState> {
+    let browser_config = opts.browser_config.clone().unwrap_or_default();
+    let private = opts.browser_private;
+    let local_id = opts
+        .local_id
+        .clone()
+        .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string());
+    let initial_url = opts.command.clone();
+    let mode = browser_spawn_for(opts)?;
+    browser_state(&local_id, &browser_config, initial_url, private, mode, ssh)
+}
+
+fn browser_state(
+    local_id: &str,
+    browser_config: &crate::browser::BrowserConfig,
+    initial_url: Option<String>,
+    private: bool,
+    mode: BrowserSpawnMode,
+    ssh: Ssh,
+) -> Result<crate::browser::BrowserPanelState> {
+    let mut browser_config = browser_config.clone();
+    Ok(match mode {
+        BrowserSpawnMode::Local(session_id) => crate::browser::BrowserPanelState::start_with_session(
+            local_id.to_string(),
+            &browser_config,
+            initial_url,
+            session_id.as_deref(),
+        )?,
+        BrowserSpawnMode::Remote(request) => crate::browser::BrowserPanelState::start_remote(
+            local_id.to_string(),
+            &browser_config,
+            initial_url,
+            *request,
+        )?,
+        BrowserSpawnMode::RestoredRemote(target) => crate::browser::BrowserPanelState::restored_remote(
+            local_id.to_string(),
+            &browser_config,
+            target,
+            initial_url,
+        ),
+        // A panel that follows the browser host of the settings takes the engine of
+        // that host, because the host serves the browser of its profile: a person
+        // who names a Firefox host gets Firefox pages, whatever the backend of the
+        // browser preset said. A saved panel keeps the engine that it saved, and a
+        // mismatch there is a page that this computer cannot open.
+        BrowserSpawnMode::AttachedHost(host) => {
+            browser_config.backend = host.engine().backend();
+            browser_config.profile = Some(profile_of_host(&host, private).to_string());
+            browser_of_host(local_id.to_string(), &browser_config, initial_url, &host, ssh)
+        }
+        BrowserSpawnMode::RestoredHost(host) => {
+            if let Some(reason) = crate::browser::attached_host_backend_refusal(host.engine(), browser_config.backend) {
+                return Err(crate::error::Error::Config(reason.to_string()));
+            }
+            browser_config.profile = Some(profile_of_host(&host, private).to_string());
+            browser_of_host(local_id.to_string(), &browser_config, initial_url, &host, ssh)
+        }
+    })
+}
+
+/// The profile that a page of `host` keeps: the profile of that host, or the
+/// reserved word of a private page, whose context keeps none of it.
+fn profile_of_host(host: &crate::browser::AttachedHost, private: bool) -> &str {
+    if private {
+        horizon_browser::PRIVATE_PROFILE
+    } else {
+        host.profile()
+    }
+}
+
+/// The browser of a panel whose pages the browser of `host` carries.
+///
+/// Both calls return at once: the link to that machine opens on a worker thread
+/// of the panel, and a host that never answers is a state of the panel.
+fn browser_of_host(
+    local_id: String,
+    browser_config: &crate::browser::BrowserConfig,
+    initial_url: Option<String>,
+    host: &crate::browser::AttachedHost,
+    ssh: Ssh,
+) -> crate::browser::BrowserPanelState {
+    if host.engine() == crate::config::BrowserHostEngine::Firefox {
+        // The Firefox of that machine runs behind the driver of Horizon that this
+        // computer starts there, so its page is a page of a driver and not one of a
+        // `DevTools` port.
+        crate::browser::BrowserPanelState::start_host_driver_with(ssh, local_id, browser_config, initial_url, host)
+    } else {
+        crate::browser::BrowserPanelState::start_attached_host_with(ssh, local_id, browser_config, initial_url, host)
+    }
 }

@@ -3,13 +3,22 @@ mod attention_standin_tests;
 mod block;
 mod browser;
 mod device;
+mod editor;
+mod environment;
+mod launch_arguments;
 #[cfg(test)]
 mod pi_attention_tests;
 mod start;
 mod terminal;
 
-use browser::browser_spawn_for;
-pub use browser::{BrowserMachine, browser_machine};
+pub use browser::{BrowserMachine, browser_machine, browser_panel_of_options};
+use browser::{browser_spawn_for, spawn_browser};
+use editor::{spawn_editor, waiting_editor_panel};
+pub use environment::{agent_env, browser_actor, replay_bytes_with_notice, wait_for_named_secrets};
+pub use launch_arguments::{AgentLaunchContext, default_shell, resolve_launch_command};
+// The platform shell name is read by the tests of this repository only.
+#[cfg(test)]
+pub use launch_arguments::platform_default_shell;
 pub use start::{
     PanelStart, PendingRestart, PreparedLaunch, RestartPreflight, StartRequest, finish_restart, prepare_panel_start,
 };
@@ -23,29 +32,24 @@ pub(crate) use super::work_resume::shutdown_for_restart;
 use terminal::disconnected_snapshot_launch_command;
 pub(crate) use terminal::{prepare_transcript_restore, resolve_spawn_launch};
 
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
 use crate::agents::AgentStatus;
-use crate::editor::{MarkdownEditor, PanelContent};
+use crate::editor::PanelContent;
 use crate::error::Result;
-use crate::horizon_home::HorizonHome;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, claude_session_transcript_exists, new_local_id};
 use crate::ssh::SshConnection;
 use crate::transcript::PanelTranscript;
 use crate::workspace::WorkspaceId;
-use crate::{AgentIntegrationKind, AgentResumeMode, BlockPanelState, agent_definition};
-use horizon_browser_control::ssh_forward::Ssh;
+use crate::{BlockPanelState, agent_definition};
 
 use super::{
     AGENT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SCROLLBACK_LIMIT, DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind,
     PanelLayout, PanelOptions, PanelResume,
 };
-
 /// Starts a panel whose process waits for the preparation of a worker. A panel
 /// that runs no local process starts at once, as it has nothing to prepare.
 pub(crate) fn spawn_waiting_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
@@ -60,40 +64,6 @@ pub(crate) fn spawn_waiting_panel(id: PanelId, workspace_id: WorkspaceId, mut op
     }
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
     waiting_terminal_panel(id, workspace_id, local_id, opts)
-}
-
-/// The panel of a file whose text a worker reads. The panel opens at once with
-/// an empty buffer and shows the text when the answer arrives.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a waiting panel answers the same result as the panel it stands for"
-)]
-fn waiting_editor_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
-    let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
-    let command = opts.command.take();
-    let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
-    let mut seed = seed;
-    let (title, has_custom_name) = seed.take_title(|| {
-        command
-            .as_deref()
-            .and_then(|path| {
-                PathBuf::from(path)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Markdown".to_string())
-    });
-    let editor = command.as_deref().map_or_else(MarkdownEditor::scratch, |path| {
-        MarkdownEditor::waiting_for(PathBuf::from(path))
-    });
-    Ok(seed.into_panel(
-        title,
-        PanelKind::Editor,
-        crate::editor::PanelContent::Editor(editor),
-        command,
-        None,
-        has_custom_name,
-    ))
 }
 
 /// Starts a panel with the preparation that a worker read.
@@ -133,18 +103,6 @@ pub(crate) struct ResolvedTerminalLaunch {
     session_binding: Option<AgentSessionBinding>,
     program: String,
     launch_args: Vec<String>,
-}
-
-/// Session-related inputs for building an agent launch command.
-#[derive(Clone, Copy)]
-pub(super) struct AgentLaunchContext<'a> {
-    pub(super) resume: &'a PanelResume,
-    pub(super) session_binding: Option<&'a AgentSessionBinding>,
-    pub(super) should_resume_binding: bool,
-    /// True when reconnecting an existing panel (restore or restart) rather
-    /// than launching a newly added one; continue-style agents only pass
-    /// their continue flag when reconnecting.
-    pub(super) is_restore: bool,
 }
 
 impl StaticPanelSeed {
@@ -395,295 +353,6 @@ fn log_terminal_launch(id: PanelId, trace: &TerminalLaunchTrace<'_>) {
     );
 }
 
-fn spawn_editor(mut seed: StaticPanelSeed, command: Option<String>) -> Result<Panel> {
-    let editor = if let Some(ref path_str) = command {
-        let path = PathBuf::from(path_str);
-        if path.exists() {
-            MarkdownEditor::open(path)?
-        } else {
-            let mut editor = MarkdownEditor::scratch();
-            editor.file_path = Some(path);
-            editor
-        }
-    } else {
-        MarkdownEditor::scratch()
-    };
-
-    let (title, has_custom_name) = seed.take_title(|| {
-        command
-            .as_deref()
-            .and_then(|path| {
-                PathBuf::from(path)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Markdown".to_string())
-    });
-
-    tracing::info!("created editor panel '{}' (id={})", title, seed.id.0);
-
-    Ok(seed.into_panel(
-        title,
-        PanelKind::Editor,
-        PanelContent::Editor(editor),
-        command,
-        None,
-        has_custom_name,
-    ))
-}
-
-/// Where a browser panel's session runs.
-enum BrowserSpawnMode {
-    Local(Option<String>),
-    /// A prepared remote request: allocate at the grid instead of launching.
-    Remote(Box<horizon_browser::RemoteSessionRequest>),
-    /// A remote panel from a previous run; it comes back stopped.
-    RestoredRemote(String),
-    /// The browser host of another machine that the settings name.
-    AttachedHost(crate::browser::AttachedHost),
-    /// The browser host and profile that served a panel in a previous run. It
-    /// comes back on that host, as a page cannot move between machines.
-    RestoredHost(crate::browser::AttachedHost),
-}
-
-/// Spawn a browser panel. The generic `command` field carries the optional
-/// initial URL (same convention as the editor's file path); `browser_config`
-/// is the active `browser` config section (honors `--config`).
-fn spawn_browser(
-    mut seed: StaticPanelSeed,
-    initial_url: Option<String>,
-    browser_config: Option<crate::browser::BrowserConfig>,
-    mode: BrowserSpawnMode,
-) -> Result<Panel> {
-    let initial_url = initial_url.filter(|url| !url.trim().is_empty());
-    let (title, has_custom_name) = seed.take_title(|| {
-        initial_url
-            .as_deref()
-            .map_or_else(|| "Browser".to_string(), crate::browser::panel_title_for_url)
-    });
-    let browser = browser_state(
-        &seed.local_id,
-        &browser_config.unwrap_or_default(),
-        initial_url.clone(),
-        seed.browser_private,
-        mode,
-        Ssh::default(),
-    )?;
-    tracing::info!("created browser panel '{}' (id={})", title, seed.id.0);
-
-    Ok(seed.into_panel(
-        title,
-        PanelKind::Browser,
-        PanelContent::Browser(Box::new(browser)),
-        initial_url,
-        None,
-        has_custom_name,
-    ))
-}
-
-/// The state of the browser panel of one spawn: the machine, the engine and the
-/// profile that the rule of this computer answered, and the `ssh` that carries a
-/// panel of a browser host.
-///
-/// `ssh` is the `ssh` of this computer in the production path, and the stand-in
-/// program of a test, so a test walks from the options of a create to the
-/// commands that the browser of that host receives.
-#[doc(hidden)]
-pub fn browser_panel_of_options(opts: &mut crate::PanelOptions, ssh: Ssh) -> Result<crate::browser::BrowserPanelState> {
-    let browser_config = opts.browser_config.clone().unwrap_or_default();
-    let private = opts.browser_private;
-    let local_id = opts
-        .local_id
-        .clone()
-        .unwrap_or_else(|| horizon_browser::DEFAULT_PROFILE.to_string());
-    let initial_url = opts.command.clone();
-    let mode = browser_spawn_for(opts)?;
-    browser_state(&local_id, &browser_config, initial_url, private, mode, ssh)
-}
-
-fn browser_state(
-    local_id: &str,
-    browser_config: &crate::browser::BrowserConfig,
-    initial_url: Option<String>,
-    private: bool,
-    mode: BrowserSpawnMode,
-    ssh: Ssh,
-) -> Result<crate::browser::BrowserPanelState> {
-    let mut browser_config = browser_config.clone();
-    Ok(match mode {
-        BrowserSpawnMode::Local(session_id) => crate::browser::BrowserPanelState::start_with_session(
-            local_id.to_string(),
-            &browser_config,
-            initial_url,
-            session_id.as_deref(),
-        )?,
-        BrowserSpawnMode::Remote(request) => crate::browser::BrowserPanelState::start_remote(
-            local_id.to_string(),
-            &browser_config,
-            initial_url,
-            *request,
-        )?,
-        BrowserSpawnMode::RestoredRemote(target) => crate::browser::BrowserPanelState::restored_remote(
-            local_id.to_string(),
-            &browser_config,
-            target,
-            initial_url,
-        ),
-        // A panel that follows the browser host of the settings takes the engine of
-        // that host, because the host serves the browser of its profile: a person
-        // who names a Firefox host gets Firefox pages, whatever the backend of the
-        // browser preset said. A saved panel keeps the engine that it saved, and a
-        // mismatch there is a page that this computer cannot open.
-        BrowserSpawnMode::AttachedHost(host) => {
-            browser_config.backend = host.engine().backend();
-            browser_config.profile = Some(profile_of_host(&host, private).to_string());
-            browser_of_host(local_id.to_string(), &browser_config, initial_url, &host, ssh)
-        }
-        BrowserSpawnMode::RestoredHost(host) => {
-            if let Some(reason) = crate::browser::attached_host_backend_refusal(host.engine(), browser_config.backend) {
-                return Err(crate::error::Error::Config(reason.to_string()));
-            }
-            browser_config.profile = Some(profile_of_host(&host, private).to_string());
-            browser_of_host(local_id.to_string(), &browser_config, initial_url, &host, ssh)
-        }
-    })
-}
-
-/// The profile that a page of `host` keeps: the profile of that host, or the
-/// reserved word of a private page, whose context keeps none of it.
-fn profile_of_host(host: &crate::browser::AttachedHost, private: bool) -> &str {
-    if private {
-        horizon_browser::PRIVATE_PROFILE
-    } else {
-        host.profile()
-    }
-}
-
-/// The browser of a panel whose pages the browser of `host` carries.
-///
-/// Both calls return at once: the link to that machine opens on a worker thread
-/// of the panel, and a host that never answers is a state of the panel.
-fn browser_of_host(
-    local_id: String,
-    browser_config: &crate::browser::BrowserConfig,
-    initial_url: Option<String>,
-    host: &crate::browser::AttachedHost,
-    ssh: Ssh,
-) -> crate::browser::BrowserPanelState {
-    if host.engine() == crate::config::BrowserHostEngine::Firefox {
-        // The Firefox of that machine runs behind the driver of Horizon that this
-        // computer starts there, so its page is a page of a driver and not one of a
-        // `DevTools` port.
-        crate::browser::BrowserPanelState::start_host_driver_with(ssh, local_id, browser_config, initial_url, host)
-    } else {
-        crate::browser::BrowserPanelState::start_attached_host_with(ssh, local_id, browser_config, initial_url, host)
-    }
-}
-
-pub(super) fn resolve_launch_command(
-    command: Option<String>,
-    args: Vec<String>,
-    ssh_connection: Option<SshConnection>,
-    kind: PanelKind,
-    launch: AgentLaunchContext<'_>,
-) -> (String, Vec<String>) {
-    match kind {
-        PanelKind::Editor | PanelKind::Browser | PanelKind::Device | PanelKind::Block => (String::new(), Vec::new()),
-        PanelKind::Shell => {
-            let use_login_shell = command.is_none() && PLATFORM_USES_LOGIN_SHELL;
-            let program = command.unwrap_or_else(default_shell);
-            (program, shell_launch_args(args, use_login_shell))
-        }
-        PanelKind::Ssh => ssh_connection.map_or_else(
-            || (command.unwrap_or_else(|| "ssh".to_string()), args),
-            |connection| ("ssh".to_string(), connection.to_command_args()),
-        ),
-        PanelKind::Command => {
-            if let Some(program) = command {
-                (program, args)
-            } else {
-                (default_shell(), args)
-            }
-        }
-        PanelKind::Codex
-        | PanelKind::Claude
-        | PanelKind::OpenCode
-        | PanelKind::Gemini
-        | PanelKind::KiloCode
-        | PanelKind::Pi
-        | PanelKind::Grok => resolve_agent_launch_command(command, args, kind, launch),
-    }
-}
-
-fn resolve_agent_launch_command(
-    command: Option<String>,
-    args: Vec<String>,
-    kind: PanelKind,
-    launch: AgentLaunchContext<'_>,
-) -> (String, Vec<String>) {
-    let Some(definition) = agent_definition(kind) else {
-        unreachable!("agent launch requested for non-agent panel: {kind:?}");
-    };
-    let uses_default_command = command.is_none();
-    let program = command.unwrap_or_else(|| definition.default_command.to_string());
-    let mut launch_args = match definition.integration {
-        AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
-        AgentIntegrationKind::GrokMcp
-            if uses_default_command
-                && !args
-                    .iter()
-                    .any(|arg| matches!(arg.as_str(), "--no-leader" | "--leader")) =>
-        {
-            vec!["--no-leader".to_string()]
-        }
-        AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
-        _ => Vec::new(),
-    };
-    match definition.resume_mode {
-        AgentResumeMode::ExactSubcommand { subcommand } => {
-            launch_args.extend(args);
-            if launch.should_resume_binding {
-                if let Some(binding) = launch.session_binding {
-                    launch_args.extend([subcommand.to_string(), binding.session_id.clone()]);
-                }
-            } else if let PanelResume::Session { session_id } = launch.resume {
-                launch_args.extend([subcommand.to_string(), session_id.clone()]);
-            }
-        }
-        AgentResumeMode::ExactFlag {
-            flag,
-            fresh_session_flag,
-        } => {
-            if launch.should_resume_binding {
-                if let Some(binding) = launch.session_binding {
-                    launch_args.extend([flag.to_string(), binding.session_id.clone()]);
-                }
-            } else if let (Some(fresh_session_flag), Some(binding)) = (fresh_session_flag, launch.session_binding) {
-                // Fresh launch under the panel's pre-assigned session id so
-                // the binding matches the session the CLI will create.
-                launch_args.extend([fresh_session_flag.to_string(), binding.session_id.clone()]);
-            } else if let PanelResume::Session { session_id } = launch.resume {
-                launch_args.extend([flag.to_string(), session_id.clone()]);
-            } else if let Some(fresh_session_flag) = fresh_session_flag {
-                launch_args.extend([fresh_session_flag.to_string(), Uuid::new_v4().to_string()]);
-            }
-            launch_args.extend(args);
-        }
-        AgentResumeMode::ContinueFlag { flag } => {
-            launch_args.extend(args);
-            // Continue-style agents have no per-session ids, so `resume:
-            // last` maps to the continue flag, and only when reconnecting an
-            // existing panel; a newly added panel always starts fresh.
-            if launch.is_restore && matches!(launch.resume, PanelResume::Last) {
-                launch_args.push(flag.to_string());
-            }
-        }
-        AgentResumeMode::None => launch_args.extend(args),
-    }
-
-    wrap_in_login_shell(program, launch_args)
-}
-
 #[must_use]
 pub fn current_unix_millis() -> i64 {
     let now = SystemTime::now()
@@ -749,233 +418,6 @@ fn resolve_session_binding(
     (session_binding, should_resume_binding)
 }
 
-fn wrap_in_login_shell(program: String, args: Vec<String>) -> (String, Vec<String>) {
-    let shell = default_shell();
-    let mut command = vec![program];
-    command.extend(args);
-    let joined = command
-        .iter()
-        .map(|argument| shell_escape(argument))
-        .collect::<Vec<_>>()
-        .join(" ");
-    (shell, vec!["-ic".to_string(), joined])
-}
-
-fn shell_escape(argument: &str) -> String {
-    if argument.is_empty()
-        || argument.contains(|character: char| {
-            character.is_whitespace() || character == '\'' || character == '"' || character == '\\' || character == '$'
-        })
-    {
-        format!("'{}'", argument.replace('\'', "'\\''"))
-    } else {
-        argument.to_string()
-    }
-}
-
-fn shell_launch_args(args: Vec<String>, use_login_shell: bool) -> Vec<String> {
-    if use_login_shell && args.is_empty() {
-        vec!["-l".to_string()]
-    } else {
-        args
-    }
-}
-
-const PLATFORM_USES_LOGIN_SHELL: bool = cfg!(any(
-    target_os = "macos",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-));
-
-pub(super) const fn platform_default_shell() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "/bin/zsh"
-    } else {
-        "/bin/bash"
-    }
-}
-
-fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
-}
-
-/// The line that a panel says when the named secrets of this start were not read
-/// before its launch. One line, and the panel runs: an agent without its keys is
-/// better than a panel that never starts.
-pub(crate) const NAMED_SECRETS_LATE_LINE: &str =
-    "The named secrets of this computer were not read in time, so this panel has none of them.\r\n";
-
-/// Waits for the read of the named secrets that this start announced, so an agent
-/// panel that starts in the first frames of a start still gets the values of the
-/// store. Answers `true` when the values stand, and `false` when the bound ended
-/// first, which the panel then says in one line.
-///
-/// The wait runs on the worker thread of a panel start. A plain terminal reads no
-/// named secret, so it never waits.
-pub(crate) fn wait_for_named_secrets(kind: PanelKind) -> bool {
-    if !kind.is_agent() {
-        return true;
-    }
-    crate::named_secrets::wait_until_published(crate::named_secrets::PUBLISH_BOUND)
-}
-
-/// The bytes that a terminal replays before the output of its process: the saved
-/// screen of the panel, and the one line of a launch whose named secrets were not
-/// read in time.
-pub(crate) fn replay_bytes_with_notice(mut replay_bytes: Vec<u8>, named_secrets_late: bool) -> Vec<u8> {
-    if named_secrets_late {
-        replay_bytes.extend_from_slice(NAMED_SECRETS_LATE_LINE.as_bytes());
-    }
-    replay_bytes
-}
-
-pub(crate) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    // The process of a panel inherits the environment of this Horizon, so it also
-    // inherits the identity of a panel of another board when this Horizon was
-    // started from one. An empty value overrides that inherited value and reads as
-    // "no panel" to the tools, so a nested launch never speaks as another panel.
-    // The values of an agent panel are set below, over these two.
-    for key in crate::agent_work::WORK_ENV_KEYS
-        .into_iter()
-        .chain(PANEL_IDENTITY_ENV_KEYS)
-    {
-        env.insert(key.to_owned(), String::new());
-    }
-    if kind.is_agent() {
-        env.insert("HORIZON".to_string(), "1".to_string());
-        env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
-        env.insert(
-            crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
-            crate::browser::manifest::host_instance().to_string(),
-        );
-        // The full path of the program that runs this panel's Horizon, so a skill
-        // copies the binary of this computer instead of looking for it on a `PATH`
-        // that holds no `horizon` when the person starts it from a folder.
-        let executable = crate::browser_mcp_executable()
-            .and_then(|path| path.into_os_string().into_string().ok())
-            .unwrap_or_default();
-        env.insert(EXECUTABLE_ENV.to_string(), executable);
-        // Every named secret whose value this computer holds, as one environment
-        // variable each, so a tool that the agent starts reads its key without an
-        // export in the shell of this computer. A terminal panel, and a terminal on
-        // a machine over ssh, gets none: a value never reaches a command line and
-        // never leaves this computer with a login. The names that Horizon or an
-        // agent own are refused when a person adds them, so this never replaces a
-        // variable that the lines above set.
-        crate::named_secrets::apply(&mut env);
-    }
-    if kind == PanelKind::Grok {
-        let command = uses_default_command
-            .then(crate::browser_mcp_executable)
-            .flatten()
-            .and_then(|path| path.into_os_string().into_string().ok())
-            .unwrap_or_default();
-        env.insert("HORIZON_BROWSER_MCP_EXECUTABLE".to_string(), command);
-    }
-    if kind == PanelKind::Claude {
-        // Keep the conversation in Horizon's terminal history so its scrollbar
-        // and history meter remain usable instead of hiding it in a fullscreen buffer.
-        //
-        // This costs something and overrides the user's own `tui` setting: Claude
-        // Code's inline renderer leaves a copy of the old frame in the scrollback
-        // after a width change, so drag-resizing a panel duplicates bands of a long
-        // answer. Idle panels stay clean. See
-        // `docs/architecture/claude-panel-rendering.md` for the measurements and for
-        // the two repairs that were tried and discarded.
-        env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
-    }
-    env
-}
-
-/// Stable private control identity injected into one Horizon agent panel.
-#[must_use]
-pub fn browser_actor(local_id: &str) -> String {
-    if !local_id.is_empty() && local_id.len() <= 120 && !local_id.chars().any(char::is_control) {
-        return format!("horizon:{local_id}");
-    }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    local_id.hash(&mut hasher);
-    format!("horizon:{:016x}", hasher.finish())
-}
-
-/// The variables that name the panel of a Horizon to the tools that it starts.
-///
-/// A panel sets the values of its own panel, and a process without one of these
-/// variables reads no actor at all. A value of the Horizon that started this one
-/// names another panel, or a panel of a board that does not stand any more, so no
-/// panel may keep it.
-pub(crate) const PANEL_IDENTITY_ENV_KEYS: [&str; 2] =
-    ["HORIZON_BROWSER_ACTOR", crate::browser::manifest::HOST_INSTANCE_ENV];
-
-/// The environment variable that holds the full path of the program that runs
-/// Horizon, in every agent panel.
-///
-/// A person who starts Horizon from a folder has no `horizon` on `PATH`, so a
-/// skill that copies the binary of this computer to another machine reads this
-/// variable and never `command -v horizon`.
-///
-/// The value is the running program itself, not the path that a newer build may
-/// have taken over: on Linux it is `/proc/<pid>/exe`, which follows the live
-/// inode after the file at the original path was replaced or removed, and it is
-/// the only name that a copy of a replaced build would get wrong. On macOS it is
-/// [`std::env::current_exe`], the path that this Horizon started from, and a file
-/// that the person deleted is not there for the copy. A build that cannot resolve
-/// its own path sets the variable to the empty string, as the Grok panel already
-/// handles `HORIZON_BROWSER_MCP_EXECUTABLE`.
-pub const EXECUTABLE_ENV: &str = "HORIZON_EXECUTABLE";
-
-/// The variables of this Horizon that a Codex panel passes to the Horizon browser
-/// MCP server: the identity of the panel, the home of this Horizon and the program
-/// that runs it.
-fn codex_mcp_env_vars() -> String {
-    let names = [
-        "HORIZON_BROWSER_ACTOR",
-        crate::browser::manifest::HOST_INSTANCE_ENV,
-        horizon_browser_control::paths::HOME_ENV,
-        EXECUTABLE_ENV,
-    ];
-    serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_owned())
-}
-
-/// The browser MCP entry of a Codex panel, as the `-c` arguments of `codex`.
-fn horizon_codex_mcp_args() -> Vec<String> {
-    let Some(command) = crate::browser_mcp_executable()
-        .and_then(|path| path.into_os_string().into_string().ok())
-        .and_then(|path| serde_json::to_string(&path).ok())
-    else {
-        tracing::warn!("could not resolve Horizon executable for browser MCP integration");
-        return Vec::new();
-    };
-    let server_args =
-        serde_json::to_string(&crate::browser_mcp_args()).unwrap_or_else(|_| "[\"--browser-mcp\"]".to_string());
-    vec![
-        "-c".to_string(),
-        format!("mcp_servers.horizon-browser.command={command}"),
-        "-c".to_string(),
-        format!("mcp_servers.horizon-browser.args={server_args}"),
-        "-c".to_string(),
-        format!("mcp_servers.horizon-browser.env_vars={}", codex_mcp_env_vars()),
-        "-c".to_string(),
-        "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
-        "-c".to_string(),
-        // Codex defaults to a 60s MCP tool timeout. `browser_handoff` waits for a
-        // human for up to an hour; 3660s is that bound plus transport headroom.
-        "mcp_servers.horizon-browser.tool_timeout_sec=3660".to_string(),
-    ]
-}
-
-fn horizon_claude_plugin_args() -> Vec<String> {
-    let path = HorizonHome::resolve().claude_plugin_dir_for_host(crate::browser::manifest::host_instance());
-    if path.is_dir() {
-        vec!["--plugin-dir".to_string(), path.display().to_string()]
-    } else {
-        Vec::new()
-    }
-}
-
 pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     if kind.is_agent() {
         AGENT_PANEL_SCROLLBACK_LIMIT
@@ -1000,7 +442,11 @@ pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::browser::{browser_spawn_mode, restored_browser_mode};
+    use super::browser::{BrowserSpawnMode, browser_spawn_mode, restored_browser_mode};
+    use super::environment::{EXECUTABLE_ENV, PANEL_IDENTITY_ENV_KEYS};
+    use super::launch_arguments::{
+        PLATFORM_USES_LOGIN_SHELL, codex_mcp_env_vars, horizon_codex_mcp_args, shell_launch_args,
+    };
     use super::*;
 
     #[test]
