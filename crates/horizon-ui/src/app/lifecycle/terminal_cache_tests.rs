@@ -264,13 +264,12 @@ fn the_window_asks_for_its_own_frame_when_the_answer_of_a_key_press_arrives() {
     );
 }
 
-/// The shapes of one frame of the window that paint the text `wanted`: the colour of the
-/// text, and the pictures of the font atlas that each glyph of it points into.
-fn painted_text(
-    ctx: &egui::Context,
-    app: &mut HorizonApp,
-    wanted: &str,
-) -> Vec<(egui::Color32, Vec<([u16; 2], [u16; 2])>)> {
+/// One painted text: the colour of it, and the picture of the font atlas that each glyph
+/// of it points into.
+type PaintedText = (egui::Color32, Vec<([u16; 2], [u16; 2])>);
+
+/// The shapes of one frame of the window that paint the text `wanted`.
+fn painted_text(ctx: &egui::Context, app: &mut HorizonApp, wanted: &str) -> Vec<PaintedText> {
     let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
     let mut found = Vec::new();
     for clipped in output.shapes {
@@ -279,7 +278,7 @@ fn painted_text(
     found
 }
 
-fn collect_painted(shape: &Shape, wanted: &str, found: &mut Vec<(egui::Color32, Vec<([u16; 2], [u16; 2])>)>) {
+fn collect_painted(shape: &Shape, wanted: &str, found: &mut Vec<PaintedText>) {
     match shape {
         Shape::Text(text) if text.galley.job.text.contains(wanted) => {
             let glyphs = text

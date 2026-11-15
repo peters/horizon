@@ -1,7 +1,9 @@
 use horizon_core::{Config, RuntimeState, StartupDecision};
 
 use super::{SettingsAction, SettingsStatus};
-use crate::app::test_support::{browser_panel_options, run_app_frame, test_app_with_startup};
+use crate::app::test_support::{
+    browser_panel_options, raw_input, run_app_frame, run_app_frame_with_input, test_app_with_startup,
+};
 
 #[test]
 fn a_changed_store_reaches_the_window_through_the_settings_worker() {
@@ -516,4 +518,115 @@ fn a_save_of_the_browser_host_serves_the_next_browser_panel() {
         "the panel that the person opened after the save uses the host of the save"
     );
     assert_eq!(browser.attached_host_profile(), Some("work"));
+}
+
+/// One terminal panel of a shell that printed many lines, under the Settings pane.
+fn app_with_a_terminal_under_the_pane() -> (
+    tempfile::TempDir,
+    egui::Context,
+    crate::app::HorizonApp,
+    horizon_core::PanelId,
+) {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.initial_pan_done = true;
+    app.root_viewport_stabilizer = None;
+    let workspace = app.board.ensure_workspace();
+    let panel = app
+        .create_panel_with_options(
+            horizon_core::PanelOptions {
+                kind: horizon_core::PanelKind::Command,
+                command: Some("/bin/sh".to_owned()),
+                args: vec![
+                    "-c".to_owned(),
+                    "i=0; while [ $i -lt 200 ]; do printf 'LINE-%s\\n' \"$i\"; i=$((i + 1)); done; sleep 60"
+                        .to_owned(),
+                ],
+                position: Some([560.0, 60.0]),
+                size: Some([560.0, 360.0]),
+                ..horizon_core::PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("the terminal of the test");
+    app.settle_panel_starts();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        app.drain_panel_output();
+        let text = app
+            .board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .map_or_else(String::new, |terminal| terminal.last_lines_text(20));
+        if text.contains("LINE-199") {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the terminal of the test prints its lines");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    app.toggle_settings();
+    for _ in 0..3 {
+        let _ = run_app_frame_with_input(&ctx, &mut app, raw_input([1200.0, 600.0], None));
+    }
+    (temp, ctx, app, panel)
+}
+
+/// The y of the text `wanted` in one frame of the window.
+fn window_text_y(ctx: &egui::Context, app: &mut crate::app::HorizonApp, wanted: &str) -> Option<f32> {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1200.0, 600.0], None));
+    output.shapes.iter().find_map(|clipped| match &clipped.shape {
+        egui::epaint::Shape::Text(text) if text.galley.job.text == wanted => Some(text.pos.y),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_wheel_over_the_settings_pane_scrolls_the_settings_and_not_the_terminal_behind() {
+    let (_temp, ctx, mut app, panel) = app_with_a_terminal_under_the_pane();
+    let pane = app
+        .settings
+        .as_ref()
+        .and_then(|editor| editor.panel_rect)
+        .expect("the rectangle of the pane");
+    let pointer = pane.center();
+    let scrollback = app
+        .board
+        .panel(panel)
+        .and_then(horizon_core::Panel::terminal)
+        .expect("the terminal of the test")
+        .scrollback();
+    let heading = window_text_y(&ctx, &mut app, "Appearance").expect("the first section of the tab");
+
+    let mut clicked = raw_input([1200.0, 600.0], None);
+    clicked.events = vec![
+        egui::Event::PointerMoved(pointer),
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::vec2(0.0, -3.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = run_app_frame_with_input(&ctx, &mut app, clicked);
+    let mut moved = None;
+    for _ in 0..6 {
+        moved = window_text_y(&ctx, &mut app, "Appearance");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    assert_eq!(
+        app.board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .expect("the terminal of the test")
+            .scrollback(),
+        scrollback,
+        "the terminal behind the pane receives no wheel"
+    );
+    assert!(
+        moved.is_some_and(|moved| moved < heading),
+        "the pane scrolls: the section was at {heading} and is at {moved:?}"
+    );
 }

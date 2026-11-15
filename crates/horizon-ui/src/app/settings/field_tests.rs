@@ -57,6 +57,10 @@ fn input_with(events: Vec<Event>) -> egui::RawInput {
 
 /// Opens the Settings panel on the tab named by `tab` and answers the frame that
 /// drew it.
+///
+/// The pane is an area of its own, and egui draws an area that appears for the first
+/// time only as its sizing pass: the frame that follows it is the one that holds the
+/// pane.
 fn open_tab(
     ctx: &egui::Context,
     app: &mut crate::app::HorizonApp,
@@ -65,6 +69,7 @@ fn open_tab(
     app.toggle_settings();
     let editor = app.settings.as_mut().expect("the panel opened");
     editor.active_tab = tab;
+    let _ = run_app_frame_with_input(ctx, app, input_with(Vec::new()));
     run_app_frame_with_input(ctx, app, input_with(Vec::new())).shapes
 }
 

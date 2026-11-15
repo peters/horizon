@@ -612,49 +612,77 @@ fn render_settings_panel(
     general_view: general::GeneralView<'_>,
 ) -> (SettingsAction, bool, speech::SpeechRequest) {
     let rect = panel_rect(ui);
-    egui::Panel::right(SETTINGS_PANEL_ID)
-        // One width for every tab, and the same width that the panel opens with.
-        // The rectangle comes from `panel_rect`, which the canvas reads as well,
-        // so a tab with a long path or a long secret name cannot move the edge
-        // between the panel and the canvas. The content wraps, scrolls or is cut
-        // inside this width instead.
-        .exact_size(rect.width())
-        .frame(
-            egui::Frame::default()
-                .fill(theme::BG_ELEVATED())
-                .inner_margin(Margin::symmetric(SETTINGS_PANEL_MARGIN_X, 16))
-                .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
-        )
-        .show(ui, |ui| {
-            // The panel is a fraction of the viewport, so its content draws
-            // inside its own rect: a wide child scrolls or clips instead of
-            // painting over the canvas beside it.
-            ui.shrink_clip_rect(ui.max_rect());
-            // The bar belongs to this panel, so the status line and its buttons
-            // sit with the settings instead of under the canvas.
-            let action = bar::render(
-                ui,
-                panel_state.status_text,
-                panel_state.status_color,
-                panel_state.has_changes,
-                panel_state.conflict.as_deref(),
-            );
-            ui.label(crate::typeface::rich(
-                "Settings",
-                18.0,
-                theme::FG(),
-                crate::typeface::Weight::Semibold,
-            ));
-            ui.add_space(16.0);
+    // The pane is its own area on the top layer: every panel of the canvas is an area
+    // of its own, and the area of a panel covers the pane for the pointer, so a wheel
+    // over the pane would reach the terminal behind it and not the settings.
+    let mut pane = None;
+    egui::Area::new(egui::Id::unique("settings_pane"))
+        .fixed_pos(rect.min)
+        .default_size(rect.size())
+        .order(egui::Order::Tooltip)
+        // The pane is no overlay that appears over the work: it takes its edge of the
+        // window at once, as the panel did before it had a layer of its own.
+        .fade_in(false)
+        .show(ui.ctx(), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                pane = Some(
+                    egui::Panel::right(SETTINGS_PANEL_ID)
+                        // One width for every tab, and the same width that the panel
+                        // opens with. The rectangle comes from `panel_rect`, which the
+                        // canvas reads as well, so a tab with a long path or a long
+                        // secret name cannot move the edge between the panel and the
+                        // canvas. The content wraps, scrolls or is cut inside this
+                        // width instead.
+                        .exact_size(rect.width())
+                        .frame(
+                            egui::Frame::default()
+                                .fill(theme::BG_ELEVATED())
+                                .inner_margin(Margin::symmetric(SETTINGS_PANEL_MARGIN_X, 16))
+                                .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE())),
+                        )
+                        .show(ui, |ui| render_settings_content(ui, panel_state, editor, workbenches, view, general_view))
+                        .inner,
+                );
+            });
+        });
+    pane.unwrap_or_else(|| (SettingsAction::None, false, speech::SpeechRequest::default()))
+}
 
-            render_tab_bar(ui, editor);
-            ui.add_space(16.0);
+/// The content of the pane: its bar, its title, its tabs and the active tab.
+fn render_settings_content(
+    ui: &mut egui::Ui,
+    panel_state: &PanelState<'_>,
+    editor: &mut SettingsEditor,
+    workbenches: &mut TabWorkbenches<'_>,
+    view: &server::ServerView,
+    general_view: general::GeneralView<'_>,
+) -> (SettingsAction, bool, speech::SpeechRequest) {
+    // The panel is a fraction of the viewport, so its content draws inside its own
+    // rect: a wide child scrolls or clips instead of painting over the canvas beside it.
+    ui.shrink_clip_rect(ui.max_rect());
+    // The bar belongs to this panel, so the status line and its buttons sit with the
+    // settings instead of under the canvas.
+    let action = bar::render(
+        ui,
+        panel_state.status_text,
+        panel_state.status_color,
+        panel_state.has_changes,
+        panel_state.conflict.as_deref(),
+    );
+    ui.label(crate::typeface::rich(
+        "Settings",
+        18.0,
+        theme::FG(),
+        crate::typeface::Weight::Semibold,
+    ));
+    ui.add_space(16.0);
 
-            let available = ui.available_size() - Vec2::new(0.0, 8.0);
-            let (changed, speech_request) = render_tab(ui, editor, workbenches, available, view, general_view);
-            (action, changed, speech_request)
-        })
-        .inner
+    render_tab_bar(ui, editor);
+    ui.add_space(16.0);
+
+    let available = ui.available_size() - Vec2::new(0.0, 8.0);
+    let (changed, speech_request) = render_tab(ui, editor, workbenches, available, view, general_view);
+    (action, changed, speech_request)
 }
 
 /// Draw the active tab. Returns whether it changed the draft.

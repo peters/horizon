@@ -322,8 +322,8 @@ impl HorizonApp {
             return;
         }
 
-        // Settings side panel renders first so egui reserves the space
-        // before the canvas `CentralPanel` claims the remainder.
+        // The Settings pane renders first: it is an area above the canvas, and it
+        // answers the rectangle that the canvas leaves beside it.
         if self.settings.is_some() {
             self.render_settings(ui);
         }
