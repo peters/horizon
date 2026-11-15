@@ -1,11 +1,11 @@
 //! The card sockets of the sessions of the machines of the machine list.
 //!
-//! One Unix socket here carries each session through the `ssh` child of C5, and
-//! this module serves the card contract of [`horizon_browser_mcp::serve_stream`]
-//! on it, under the identity that this computer minted for the session. A frame
-//! only sends the set of sessions to one supervisor thread, which binds, joins
-//! and removes the sockets; dropping it ends every socket and the thread. The
-//! design is `docs/architecture/machine-agent-cards.md`.
+//! One Unix socket here carries each session, and this module serves the card
+//! contract of [`horizon_browser_mcp::serve_stream`] on it, under the identity
+//! that this computer minted for the session. A frame only sends the set of
+//! sessions to one supervisor thread, which binds, joins and removes the sockets;
+//! dropping it ends every socket and the thread. The design is
+//! `docs/architecture/machine-agent-cards.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

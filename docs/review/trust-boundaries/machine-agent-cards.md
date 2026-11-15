@@ -108,5 +108,6 @@ It cannot:
 - **The card while the watch setting is off.** The sessions of a machine come
   from the watch snapshot. With `machines.watch_agents` off, Horizon knows no
   session of a machine, so it forwards no card socket and a relay that connects
-  gets nothing. The relay answers `relay_missing` on its own side only when it
-  finds no program to run.
+  gets nothing. A machine with no program to relay its stream gets no entry at
+  all: that refusal is the text of the skill, which writes nothing, and this
+  build holds no code for it.

@@ -22,8 +22,7 @@ or key operation of a machine agent.
 |---|---|
 | The socket path of one session on the machine, and here | `crates/horizon-core/src/node_cards/paths.rs` |
 | The identity `horizon:machine/<machine>/<session>` | `paths::actor`, `paths::actor_parts` |
-| The one relay command of the agent's entry | `node_cards/relay.rs` |
-| The entry text of Claude Code, Codex and pi | `node_cards/entry.rs` |
+| The relay command, the MCP entry and the words of the agent | the text of the machines skill, which the setup runs on the machine; no Rust of this build writes them |
 | The card contract over one stream, one tool, seven operations | `crates/horizon-browser-mcp/src/node.rs`, `server.rs` (`for_cards`), `controller/block.rs` |
 | One listener for each card socket | `crates/horizon-ui/src/app/node_cards.rs` |
 | The sessions to serve, from the watch snapshot | `HorizonApp::reconcile_card_sockets` |

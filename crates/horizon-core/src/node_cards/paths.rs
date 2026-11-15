@@ -10,18 +10,15 @@ use std::path::{Path, PathBuf};
 use super::{check_pair, check_socket_path};
 
 /// The folder on a machine that holds one folder of sockets for each machine.
-pub const REMOTE_DIR: &str = "/tmp/horizon-cards";
+pub(crate) const REMOTE_DIR: &str = "/tmp/horizon-cards";
 
 /// The prefix of the actor of one session of one machine. The machine states no
 /// identity: this computer builds it from the two names of the session.
-pub const ACTOR_PREFIX: &str = "horizon:machine/";
-
-/// The name of the MCP entry that the setup writes on a machine.
-pub const ENTRY_NAME: &str = "horizon-cards";
+const ACTOR_PREFIX: &str = "horizon:machine/";
 
 /// Longest socket path that a Unix listener takes on every platform of this
 /// build. The kernel limit is 104 bytes on macOS and 108 on Linux.
-pub const MAX_SOCKET_PATH_BYTES: usize = 100;
+pub(crate) const MAX_SOCKET_PATH_BYTES: usize = 100;
 
 /// The path on `machine` of the socket of `session`.
 ///
