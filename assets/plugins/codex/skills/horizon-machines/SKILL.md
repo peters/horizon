@@ -389,7 +389,8 @@ The row `SSH from` says which rule is in force: `any address, machine key only`
 for the default, or `<address of this computer>/32, machine key only` for a rule
 that the person asked for. Then give
 `Connect` with tone `primary`, `Put the Horizon server here`, `Add a browser`,
-`Join a network`, `Exact agent state`, `Stop`, and `Delete` in `danger`. When the
+`Join a network`, `Exact agent state`, `Horizon cards for agents here`, `Stop`, and
+`Delete` in `danger`. When the
 machine is stopped, draw `Start` instead of `Stop`.
 
 `Join a network` draws the network card of
@@ -401,6 +402,11 @@ on the machine card and the same button says which network it joined.
 [the exact state](#the-exact-state-of-an-agent-on-a-machine): it writes the hook
 entries of Claude Code into the settings of the machine, so the row of an agent
 says its exact state.
+
+`Horizon cards for agents here` opens the card of
+[the cards of an agent](#the-cards-of-an-agent-on-a-machine): it writes one MCP
+entry in the settings of the agent program of the machine, so an agent that runs
+there draws a card in the workspace of that machine.
 
 The two buttons that name Horizon hand the work to the skill `horizon-setup`,
 with that goal and this machine as its place:
@@ -979,6 +985,176 @@ It takes out exactly the entries of this section and keeps every other key and
 hook. It keeps the backup, and it says on the card that the backup stays. A file
 that held no other hook loses its `hooks` key.
 
+## The cards of an agent on a machine
+
+An agent program that runs in a `tmux` session of a machine can draw a card in the
+Horizon of the person. The card stands in the workspace of that machine, also when
+no terminal of the session is open. The person presses a button, and the agent
+reads the press where it runs.
+
+Nothing of Horizon is installed on the machine. The machine opens no connection,
+and it cannot state an identity: Horizon mints the identity of a session from the
+name of the machine and the name of the session, and it accepts the bytes of that
+session on the socket whose path it chose.
+
+Horizon carries the stream of each session through one `ssh` child of its own,
+which forwards one socket for each session that its watch reports. So a machine
+whose agents the watch does not report carries no card: with the setting
+`machines.watch_agents` off there is no socket, and the agent reads a transport
+error when it calls.
+
+The person asks for this with the button `Horizon cards for agents here` on the
+machine card, or with the words "cards for the agents of my machine". The button
+stands after `Exact agent state` and before `Stop`, and it belongs to the work that
+prepares a machine.
+
+### 1. Show the card of the change
+
+The card says what the change does and what it keeps:
+
+- The heading is `Horizon cards for agents here` and the subtitle is the name of
+  the machine.
+- One `text` line names what the change writes: one MCP entry in the settings of
+  the agent program of that machine, under the name `horizon-cards`.
+- One `text` line says what the change does not do: it puts no program of Horizon
+  on the machine, it opens no connection from the machine, and it changes no other
+  file.
+- One `text` line says what the change keeps: every other MCP entry of the file,
+  and one backup of the file with the name `<file>.horizon-bak` beside it.
+- One `text` line names the limit of the change: the agent keeps its `next_click`
+  call open, because a card has no wake line on that machine.
+- The buttons are `Set it up` with tone `primary` and `Cancel` when Horizon holds
+  no card setup for this machine, and `Remove` with tone `primary` and `Cancel`
+  when it does.
+
+```json
+{"components": [
+  {"type": "heading", "text": "Horizon cards for agents here", "subtitle": "build-1"},
+  {"type": "kv", "rows": [
+    {"label": "Entry", "value": "horizon-cards", "mono": true},
+    {"label": "File", "value": "the settings of the agent program", "mono": true},
+    {"label": "Backup", "value": "<file>.horizon-bak", "mono": true}]},
+  {"type": "text", "text": "Each MCP entry runs one shell line that relays the stream of its tmux session to the socket that Horizon forwards. The agent then draws a card in the workspace of this machine."},
+  {"type": "text", "text": "This puts no program of Horizon on the machine and the machine opens no connection. The setup reads the file first and keeps every other entry."},
+  {"type": "text", "text": "The agent keeps its next_click call open: a card of a machine has no wake line."},
+  {"type": "buttons", "items": [
+    {"id": "set_up", "label": "Set it up", "tone": "primary"}, {"id": "cancel", "label": "Cancel"}]}]}
+```
+
+Wait for a press. `Cancel` ends the step, and `Set it up` continues with step 2.
+
+### 2. Find the relay program of the machine
+
+Use the form of step 5 of this skill with the options of the machine key, and ask
+the machine once:
+
+```sh
+ssh <options of the machine key> <user>@<address> \
+  'command -v socat || command -v nc || command -v python3'
+```
+
+The first line of the answer is the program of the relay, in this order: `socat`,
+`nc`, `python3`. A machine with none of the three gets no entry: answer the
+refusal `relay_missing`, write nothing on the machine, and say on the card that a
+person can install `socat` or `netcat-openbsd` there and ask again.
+
+### 3. Write the entry of the agent
+
+The entry is one command for every session of the user: it learns the `tmux`
+session that the agent runs in, and it relays the stream of the agent to the socket
+of that session. The folder of the sockets is `/tmp/horizon-cards/<machine>/`, and
+the relay makes it again on every start, so a reboot of the machine takes nothing
+with it.
+
+The line, with `socat`:
+
+```sh
+d=/tmp/horizon-cards/<machine>; s=$(tmux display-message -p '#S') || exit 1; mkdir -p "$d" && chmod 700 "$d" || exit 1; exec socat - UNIX-CONNECT:"$d/$s.sock"
+```
+
+With `nc`, replace the last word with `exec nc -U "$d/$s.sock"`. With `python3`,
+replace it with `exec python3 -c "<script>" "$d/$s.sock"`, where the script holds
+no single quote, so a shell passes it in double quotes:
+
+```sh
+import socket,sys,threading
+s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1])
+def r():
+ while 1:
+  b=s.recv(65536)
+  if not b:break
+  sys.stdout.buffer.write(b);sys.stdout.buffer.flush()
+threading.Thread(target=r,daemon=True).start()
+while 1:
+ b=sys.stdin.buffer.read1(65536)
+ if not b:break
+ s.sendall(b)
+```
+
+Prefer the writer of the agent program itself, so Horizon merges no file and keeps
+no backup. Ask the machine for the program, then write the entry with it:
+
+```sh
+claude mcp add --scope user horizon-cards -- sh -c '<the line>'
+codex mcp add horizon-cards -- sh -c '<the line>'
+pi mcp add horizon-cards -- sh -c '<the line>'
+```
+
+A machine with no such program gets a merge, and the merge keeps one backup with
+the name `<file>.horizon-bak` beside it:
+
+- Claude Code and pi hold `mcpServers.horizon-cards` in their user-scope file,
+  which is `~/.claude.json` and `~/.pi/agent/mcp.json`. The value is
+  `{"command": "sh", "args": ["-c", "<the line>"]}`.
+- Codex holds `[mcp_servers.horizon-cards]` in `~/.codex/config.toml`, with
+  `command = "sh"` and `args = ["-c", "<the line>"]`.
+
+Merge with the program of step 2 of
+[the exact state](#the-exact-state-of-an-agent-on-a-machine): copy the file first,
+prefer `python3`, and change no other key.
+
+### 4. Mark the machine
+
+Write the record of this Horizon with the field of the cards:
+
+```
+operation:  machine_set
+name:       "build-1"
+cards:      true
+```
+
+The field is `cards`, and it is false for a machine that has no card setup. Horizon
+starts the `ssh` child of a machine that says true and has at least one session
+that its watch reports, and the machine carries no socket before that. `Remove`
+writes `cards: false` again.
+
+### 5. Say what happened
+
+Update the card; do not close it until the person reads it.
+
+- One `text` line names the entry and the file that holds it, for example
+  `Wrote mcpServers.horizon-cards in ~/.claude.json.`
+- One `text` line says when a card can appear: after the next report of the watch,
+  and after the agent starts again in its session.
+- One `text` line says what the agent on the machine must know, and it is the text
+  that the person can paste into the session of the agent:
+
+  > The tool is `block_panel`, and it draws cards only: no terminal, no browser
+  > panel and no machine key. Keep `next_click` open: a card of a machine has no
+  > wake line. A lost link ends the call, and the agent calls again.
+
+- The button is `Close`.
+
+Do not claim a card that you did not see.
+
+### 6. Remove the entry
+
+`Remove` takes the entry out with the writer of the program when the machine has
+it (`claude mcp remove --scope user horizon-cards`, `codex mcp remove
+horizon-cards`, `pi mcp remove horizon-cards`), and otherwise with the merge
+program in its second direction. It keeps the backup, it writes `cards: false`
+with `machine_set`, and it says on the card that the backup stays.
+
 ## Card documents
 
 These are the values of `document` for `create` and `update`: the overview card,
@@ -1051,6 +1227,7 @@ The machine runs. The person may connect, stop or delete it:
     {"id": "browser_here", "label": "Add a browser"},
     {"id": "join_network", "label": "Join a network"},
     {"id": "exact_state", "label": "Exact agent state"},
+    {"id": "cards_here", "label": "Horizon cards for agents here"},
     {"id": "stop", "label": "Stop"}, {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
 
