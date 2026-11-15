@@ -23,7 +23,7 @@ mod tiles;
 pub(in crate::app) use tiles::WelcomeTile;
 
 use egui::{
-    Color32, Context, CornerRadius, CursorIcon, FontId, Id, Order, Painter, Pos2, Rect, Role, Sense, Stroke,
+    Color32, Context, CornerRadius, CursorIcon, FontId, Id, Order, Painter, Pos2, Rect, Role, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2, WidgetInfo,
 };
 
@@ -165,15 +165,7 @@ impl HorizonApp {
                             Vec2::new(inner.width(), metrics.block_height + PAGE_PAD_BOTTOM),
                             Sense::hover(),
                         );
-                        let painted = paint_page(
-                            ui,
-                            &mut self.welcome,
-                            content,
-                            metrics,
-                            &shortcut_lines,
-                            &pickup,
-                            &self.session_pickup,
-                        );
+                        let painted = paint_page(ui, content, metrics, &shortcut_lines, &pickup, &self.session_pickup);
                         pressed = painted.tile;
                         pickup_press = painted.pickup;
                     });
@@ -285,7 +277,6 @@ struct WelcomePagePress {
 /// Paints the whole page inside `content` and answers the presses of the person.
 fn paint_page(
     ui: &mut Ui,
-    cache: &mut WelcomeCache,
     content: Rect,
     metrics: WelcomeMetrics,
     shortcuts: &[(String, String)],
@@ -303,7 +294,7 @@ fn paint_page(
         #[allow(clippy::cast_precision_loss)]
         let top = y + row as f32 * (metrics.tile_height + ROW_GAP);
         let rect = Rect::from_min_size(Pos2::new(x, top), Vec2::new(metrics.tile_width, metrics.tile_height));
-        if paint_tile(ui, cache, *tile, rect, index, metrics) {
+        if paint_tile(ui, *tile, rect, index, metrics) {
             pressed = Some(*tile);
         }
     }
@@ -384,14 +375,7 @@ fn tile_title_job(text: &str, font: &FontId, color: Color32, max_width: f32, wei
 }
 
 /// Paints one tile, and answers whether the person pressed it.
-fn paint_tile(
-    ui: &mut Ui,
-    cache: &mut WelcomeCache,
-    tile: WelcomeTile,
-    rect: Rect,
-    index: usize,
-    metrics: WelcomeMetrics,
-) -> bool {
+fn paint_tile(ui: &mut Ui, tile: WelcomeTile, rect: Rect, index: usize, metrics: WelcomeMetrics) -> bool {
     let response = ui.interact(rect, ui.make_persistent_id(("welcome_tile", index)), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, tile.spoken()));
     let hovered = response.hovered();
@@ -432,13 +416,12 @@ fn paint_tile(
         Pos2::new(rect.min.x + TILE_PAD, rect.min.y + TILE_PAD),
         Pos2::new(rect.max.x - TILE_PAD, rect.max.y - TILE_PAD),
     );
-    // The drawing of a tile is static, so it is built once per size of its band
-    // and theme and painted in the place of the band on every frame. The compact
-    // form of the page gives the band no height, and then the tile keeps no
-    // drawing at all.
+    // The drawing of a tile is a score of shapes built from constants, so it is
+    // built on the frame that paints it. The compact form of the page gives the
+    // band no height, and then the tile keeps no drawing at all.
     let band = Rect::from_min_size(inner.min, Vec2::new(inner.width(), metrics.art_height));
     if band.height() > 0.0 {
-        let mut drawing = cache.drawing(tile, index, band.size());
+        let mut drawing = Shape::Vec(art::local(tile, band.size()));
         drawing.translate(band.min.to_vec2());
         painter.add(drawing);
     }
@@ -529,12 +512,6 @@ fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String,
 
 #[cfg(test)]
 impl HorizonApp {
-    /// How many drawings of tiles the page built, for a test that asks whether a
-    /// frame of a page that changed nothing built one again.
-    pub(in crate::app) fn welcome_drawing_builds_for_test(&self) -> usize {
-        self.welcome.builds()
-    }
-
     /// The height of the block of the first start page and of its section, for a
     /// test that pins the layout of the page.
     pub(in crate::app) fn welcome_block_heights_for_test(&mut self, ctx: &Context) -> (f32, f32) {

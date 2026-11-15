@@ -1,10 +1,9 @@
 //! The drawings of the tiles, on a window that changes size.
 //!
-//! The drawing of a tile is a band and the shapes on it, and the page builds it
-//! once for the size of the band. This test walks the page through the sizes of a
-//! window that a person resizes and reads every drawing of the frame back from the
-//! shapes that the page painted, so a drawing that the page kept from an earlier
-//! size shows here as a drawing outside the band of its own tile.
+//! The drawing of a tile is a band and the shapes on it. This test walks the page
+//! through the sizes of a window that a person resizes and reads every drawing of
+//! the frame back from the shapes that the page painted, so a band that the page
+//! drew for an earlier size shows here as a drawing outside its own tile.
 
 use egui::Context;
 
@@ -72,30 +71,4 @@ fn the_drawing_of_a_tile_stands_in_the_band_of_its_tile_after_a_resize() {
             );
         }
     }
-}
-
-#[test]
-fn a_frame_that_changes_nothing_builds_no_drawing_again() {
-    let (_temp, mut app) = test_app();
-    let ctx = Context::default();
-
-    let _ = frame_shapes_at(&ctx, &mut app, [1600.0, 1000.0]);
-    let built = app.welcome_drawing_builds_for_test();
-    assert!(
-        built > 0,
-        "the first frame of the page builds the drawings of the tiles"
-    );
-
-    let _ = frame_shapes_at(&ctx, &mut app, [1600.0, 1000.0]);
-    assert_eq!(
-        app.welcome_drawing_builds_for_test(),
-        built,
-        "a frame of a page that changed nothing builds no drawing again"
-    );
-
-    let _ = frame_shapes_at(&ctx, &mut app, [1280.0, 800.0]);
-    assert!(
-        app.welcome_drawing_builds_for_test() > built,
-        "a window of another size builds the drawings of that size"
-    );
 }

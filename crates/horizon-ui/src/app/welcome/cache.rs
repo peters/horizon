@@ -1,18 +1,12 @@
-//! What the first start page remembers between frames: where its parts stand and
-//! the drawings of the four tiles.
+//! What the first start page remembers between frames: where its parts stand.
 //!
 //! The page is measured once per width, theme and count of the rows of the section
-//! **Pick up where you left off**, and the drawing of a tile is built once per
-//! size of its band and theme, so a frame that changes nothing only paints the
-//! shapes that the frame before it built. A window that a person resizes changes
-//! the width of a band, which measures the page again and builds the drawings of
-//! that width.
-//!
-//! A drawing is kept in the coordinates of its own band, not of the canvas: a
-//! drawing follows the place that the page gives its band, and a frame that moves
-//! the page, for example because the sidebar grew, moves the same shapes.
+//! **Pick up where you left off**. The measurement lays out the wrapped titles and
+//! sentences of the four tiles, which is the work that a still page would do on
+//! every frame; the drawings of the tiles are a few dozen shapes built from
+//! constants and are built on the frame that paints them.
 
-use egui::{Painter, Shape, Vec2};
+use egui::Painter;
 
 use super::art;
 use super::layout::{ROW_GAP, tile_width, welcome_columns};
@@ -33,11 +27,6 @@ pub(in crate::app) struct WelcomeCache {
     /// to.
     key: Option<WelcomeKey>,
     metrics: Option<WelcomeMetrics>,
-    drawings: Drawings,
-    /// How many drawings the page built, so a test can ask whether a frame that
-    /// changed nothing built one again.
-    #[cfg(test)]
-    builds: usize,
 }
 
 impl WelcomeCache {
@@ -68,63 +57,12 @@ impl WelcomeCache {
         self.metrics
             .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows, canvas_height))
     }
-
-    /// The drawing of `tile`, the tile at `index`, for a band of `size`, in the
-    /// coordinates of the band.
-    ///
-    /// The page keeps one drawing per tile: the shapes are built again only when
-    /// the size of the band or the theme changes, and a frame of a page that
-    /// changed nothing paints the shapes of the frame before.
-    pub(in crate::app) fn drawing(&mut self, tile: WelcomeTile, index: usize, size: Vec2) -> Shape {
-        let key = DrawingKey {
-            width: size.x.to_bits(),
-            height: size.y.to_bits(),
-            theme: theme::current_theme(),
-        };
-        if self.drawings.key != Some(key) {
-            self.drawings = Drawings {
-                key: Some(key),
-                shapes: Default::default(),
-            };
-        }
-        let slot = &mut self.drawings.shapes[index];
-        #[cfg(test)]
-        let built = slot.is_none();
-        let shape = slot.get_or_insert_with(|| Shape::Vec(art::local(tile, size))).clone();
-        #[cfg(test)]
-        if built {
-            self.builds += 1;
-        }
-        shape
-    }
-
-    /// How many drawings of tiles the page built, for a test that asks whether a
-    /// frame of a page that changed nothing built one again.
-    #[cfg(test)]
-    pub(in crate::app) fn builds(&self) -> usize {
-        self.builds
-    }
-}
-
-/// The drawings of the four tiles, in the coordinates of their own band.
-#[derive(Default)]
-struct Drawings {
-    key: Option<DrawingKey>,
-    shapes: [Option<Shape>; WelcomeTile::ALL.len()],
 }
 
 /// Whether a block of `block_height` points fits a canvas `canvas_height` tall
 /// with the top pad of the page above it and the same pad under it.
 fn fits(canvas_height: f32, block_height: f32) -> bool {
     canvas_height >= block_height + 2.0 * f32::from(PAGE_PAD_TOP)
-}
-
-/// The size of a band and the theme that one drawing belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DrawingKey {
-    width: u32,
-    height: u32,
-    theme: theme::ResolvedTheme,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
