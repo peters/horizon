@@ -95,6 +95,9 @@ fn an_agent_of_a_machine_that_waits_sends_one_notice_with_the_name_of_its_machin
     wait_for_unfocused(&ctx, &mut app, "the approval of the agent", |app| {
         agent_state(app, "hz-shop-1") == Some(AgentState::NeedsYou)
     });
+    // The report of the machine can arrive inside a frame, after that frame read the
+    // snapshot, so one frame reads the change and queues its notice.
+    frame_with_focus(&ctx, &mut app, false);
     app.notifications
         .poll(app.board.workspaces.len() > 1, Instant::now() + GROUP, &ctx);
     assert_eq!(
@@ -114,12 +117,13 @@ fn an_agent_of_a_machine_that_waits_sends_nothing_while_a_window_is_in_front() {
     wait_for(&ctx, &mut app, "the approval of the agent", |app| {
         agent_state(app, "hz-shop-1") == Some(AgentState::NeedsYou)
     });
-    // The frame that reads the snapshot of the change queues its notice.
-    frame_with_focus(&ctx, &mut app, false);
+    // A frame with the window in front reads the snapshot too, and it queues nothing.
+    frame_with_focus(&ctx, &mut app, true);
     app.notifications
         .poll(app.board.workspaces.len() > 1, Instant::now() + GROUP, &ctx);
     assert!(
         recorder.lines().is_empty(),
-        "the sidebar shows the change to a person who is here"
+        "the sidebar shows the change to a person who is here: {:?}",
+        recorder.lines()
     );
 }

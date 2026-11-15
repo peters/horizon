@@ -150,7 +150,9 @@ impl Ssh {
         }
         let folder = tempfile::tempdir().ok()?;
         let calls = folder.path().join("calls");
-        let marker = format!("hzw-ui-ssh-{}-{}", std::process::id(), server.socket());
+        // The marker ends with its own word, so the marker of another test of this
+        // process, whose socket number starts with the same digits, is another word.
+        let marker = format!("hzw-ui-ssh-{}-{}-end", std::process::id(), server.socket());
         let body = format!(
             "#!/bin/sh\nprintf 'c' >> {calls}\nmarker={marker}\n\
              for a in \"$@\"; do last=$a; done\n\
