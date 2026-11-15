@@ -1,3 +1,4 @@
+mod agent_status;
 mod cwd;
 mod echo;
 mod lifecycle;
@@ -41,7 +42,7 @@ use serde::Deserialize;
 use crate::agent_definition;
 use crate::agent_work::ResumePolicy;
 use crate::agent_work::TitleState;
-use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
+use crate::agents::AgentStatus;
 use crate::browser::{BrowserPanelRequest, BrowserPlace};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
@@ -977,28 +978,6 @@ impl Panel {
     pub fn set_focused(&mut self, focused: bool) {
         if let Some(terminal) = self.content.terminal_mut() {
             terminal.set_focused(focused);
-        }
-    }
-
-    /// Check whether this panel's agent TUI is rendering its working
-    /// indicator (animated spinner plus a working status line pinned near the
-    /// bottom of the screen, as Pi, Codex, Claude Code & co. do while busy).
-    #[must_use]
-    pub fn detect_agent_status(&self) -> AgentStatus {
-        if !self.kind.is_agent() {
-            return AgentStatus::Idle;
-        }
-        let Some(terminal) = self.content.terminal() else {
-            return AgentStatus::Idle;
-        };
-        if terminal
-            .bottom_lines_text(AGENT_WORKING_SCAN_ROWS)
-            .iter()
-            .any(|line| is_agent_working_line(line))
-        {
-            AgentStatus::Working
-        } else {
-            AgentStatus::Idle
         }
     }
 }

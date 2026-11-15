@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/panel.rs,crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
+applyTo: "crates/horizon-core/src/panel.rs,crates/horizon-core/src/panel/agent_status.rs,crates/horizon-core/src/agent_work/**,crates/horizon-core/src/attention.rs,crates/horizon-core/src/attention/**,crates/horizon-core/src/workspace_list.rs,crates/horizon-ui/src/agent_work_hook.rs,crates/horizon-ui/src/plugin_install/work_hooks.rs,crates/horizon-ui/src/plugin_install/work_extension.rs,assets/plugins/pi/**,crates/horizon-ui/src/app/attention.rs,crates/horizon-ui/src/app/attention/**,crates/horizon-ui/src/app/sidebar/list.rs,crates/horizon-ui/src/app/sidebar/rows.rs,crates/horizon-ui/src/app/sidebar/panel_rows.rs"
 ---
 
 # Trust boundary of the agent work ledger and of the attention state
