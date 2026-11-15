@@ -90,6 +90,47 @@ fixture keeps its state in its own folder and touches no real Horizon home.
    card in a second colour. The line of the Claude panel and its card is faint,
    because the pointer rests in the panel of Codex.
 
+### 6.1b AL-1b — A card that stands beside its agent
+
+A card that the agent draws in a workspace with the grid layout takes a place
+directly right of the agent panel. The gap between the two panels is 12 to 20
+points. The line of that pair is short.
+
+1. Arrange the workspace with the grid layout.
+
+   Result: the agent panel keeps its place.
+
+2. In the agent panel, write: `Draw a card with the title Build`, and then
+   `Draw a second card with the title Review`.
+
+   Result: two cards appear. Card A stands directly right of the agent panel,
+   and card B stands right of card A. Two lines are drawn: a short line with its
+   ring at the left edge of card A, and a line to card B that passes behind
+   card A.
+
+3. Drag card B with the pointer to a free place below and to the right of
+   card A. Release the pointer.
+
+   Result: the line to card B is a smooth curve to the left edge of card B. The
+   line to card A is still drawn: it keeps its dot on the agent panel and its
+   ring at the left edge of card A. A manual move returns the workspace to free
+   placement, so the cards then take the size of their content.
+
+4. Click the body of the agent panel, and then click an empty area of the board.
+
+   Result: the two lines stay in both cases.
+
+5. Drag card A until it touches the agent panel, and then drag it 14 points away
+   from the agent panel.
+
+   Result: a card at 0 to 7 points from the agent panel carries no line, because
+   the dot and the ring would merge. A card at 14 points carries a line again.
+
+The line to card B passes behind card A in step 2 and behind no panel after
+step 3. A line that passes behind another panel is hidden by that panel: the
+line is drawn below every panel and above the canvas. Do not report that as a
+defect, and do not expect the line to go around a panel.
+
 ### 6.2 AL-2 — The panel of a page and of a terminal
 
 1. In the Claude panel, write: `Open a browser panel and load https://example.com`.
@@ -211,6 +252,10 @@ fixture keeps its state in its own folder and touches no real Horizon home.
   focus are clear while the other lines are faint.
 - At a zoom of 0.6 or less, every line has the same middle strength.
 - A line that passes behind a panel is hidden by the panel.
+- A card that stands beside its agent keeps its line and its ring at the edge of
+  the card, also after the person moves another card of the same agent.
+- Two panels that stand closer than 8 points carry no line, and two panels that
+  stand 14 points apart carry one.
 - The clear check box draws no line.
 - All of this holds in the dark theme and in the light theme, and after a restart
   the lines of a card appear again while the line of a page appears only after an

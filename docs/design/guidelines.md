@@ -673,7 +673,12 @@ workspace, and no panel when two do.
 - Geometry: the line leaves the side of the panel that faces the other panel, at
   a right angle, as a cubic Bezier. The starts of the lines of one agent spread
   along that side in the order of their ends, so those lines do not cross near
-  the panel. Two panels that overlap or almost touch carry no line.
+  the panel. Two panels that overlap, and two whose facing edges stand closer
+  than 8 points, carry no line: the dot and the ring of a shorter line would
+  merge into one mark. The two panels of a pair decide that, never the two
+  places that the starts take: a start follows the number of lines of one side
+  and the height of its panel, so a card beside its agent would draw its line in
+  one frame and lose it in the next.
 - Strength: the lines of the agent in focus are clear (alpha 230), the lines of
   every other agent are faint (alpha 46), and at a canvas zoom of 0.6 or less
   every line takes one middle strength (alpha 153). The agent in focus is the

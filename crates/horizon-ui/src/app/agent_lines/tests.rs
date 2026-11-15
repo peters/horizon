@@ -518,3 +518,260 @@ fn the_frame_draws_the_lines_and_the_setting_turns_them_off() {
 fn canvas_input() -> egui::RawInput {
     raw_input([1_600.0, 900.0], None)
 }
+
+/// The size of a panel that the grid layout arranges, in points.
+const GRID: Vec2 = Vec2::new(520.0, 340.0);
+/// The gap that the grid leaves between two panels of a workspace, in points.
+const GRID_GAP: f32 = 14.0;
+
+/// An app whose board holds one agent panel and the cards that it drew, at the
+/// canvas places and sizes that `cards` names.
+///
+/// The workspace keeps the layout of the Columns preset, so the frames of the
+/// test leave every card at the size that its place names, as a workspace that a
+/// person arranged keeps the size of its panels. A drag returns the workspace to
+/// free placement, and from that frame on a card takes the size of its content.
+fn app_with_cards(agent: Rect, cards: &[Rect]) -> (tempfile::TempDir, egui::Context, crate::app::HorizonApp) {
+    let (temp, ctx, mut app) = test_app_with_config_and_startup(
+        &Config::default(),
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("Work");
+    let agent_id = app
+        .board
+        .create_panel_waiting(
+            PanelOptions {
+                kind: PanelKind::Claude,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("an agent panel");
+    let actor = horizon_core::browser_actor(&app.board.panel(agent_id).expect("the agent panel").local_id);
+    let mut card_ids = Vec::new();
+    for _ in cards {
+        let state = BlockPanelState {
+            owner_actor: Some(actor.clone()),
+            ..BlockPanelState::new(BlockPanelState::empty_document())
+        };
+        card_ids.push(
+            app.board
+                .create_panel_waiting(
+                    PanelOptions {
+                        kind: PanelKind::Block,
+                        block: Some(state),
+                        ..PanelOptions::default()
+                    },
+                    workspace,
+                )
+                .expect("a card that the agent drew"),
+        );
+    }
+    // No process of this test starts: the panels wait for a preparation that no
+    // worker of the test reads.
+    app.board.take_pending_starts();
+    app.board
+        .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Columns);
+    for (id, place) in std::iter::once((agent_id, agent)).chain(card_ids.into_iter().zip(cards.iter().copied())) {
+        let panel = app.board.panel_mut(id).expect("a panel of the board");
+        panel.layout.position = [place.min.x, place.min.y];
+        panel.layout.size = [place.width(), place.height()];
+    }
+    (temp, ctx, app)
+}
+
+/// The shapes that one frame of the test window painted for one line.
+#[derive(Clone, Debug, PartialEq)]
+struct Marks {
+    /// The points of the curve of one pair.
+    curve: Vec<Pos2>,
+    /// The centre of the filled dot at the agent end.
+    dot: Pos2,
+    /// The centre of the ring at the other end.
+    ring: Pos2,
+}
+
+/// The marks that the frames of the test window paint, in the order of the pairs.
+fn frame_marks(ctx: &egui::Context, app: &mut crate::app::HorizonApp) -> Vec<Marks> {
+    // A panel shows from its second frame on.
+    for _ in 0..3 {
+        run_app_frame_with_input(ctx, app, canvas_input());
+    }
+    let built = app.agent_lines.built.as_ref().expect("a frame of a board with pairs");
+    built
+        .shapes
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|shapes| {
+            let [Shape::Path(curve), Shape::Circle(dot), Shape::Circle(ring)] = shapes else {
+                panic!("a pair paints a curve, a dot and a ring: {shapes:?}");
+            };
+            assert_eq!(
+                dot.fill, ring.stroke.color,
+                "the dot and the ring of one pair share the colour of its line"
+            );
+            Marks {
+                curve: curve.points.clone(),
+                dot: dot.center,
+                ring: ring.center,
+            }
+        })
+        .collect()
+}
+
+/// The place of `panel_id` on the screen of the frames of this test.
+fn screen_place(app: &crate::app::HorizonApp, ctx: &egui::Context, panel_id: PanelId) -> Rect {
+    let panel = app.board.panel(panel_id).expect("a panel of the frame");
+    app.panel_screen_place(panel, app.canvas_rect(ctx))
+}
+
+/// The panel of the card that stands at `place` of the canvas.
+fn card_at(app: &crate::app::HorizonApp, place: Rect) -> PanelId {
+    app.board
+        .panels
+        .iter()
+        .find(|panel| {
+            panel.kind == PanelKind::Block
+                && (panel.layout.position[0] - place.min.x).abs() < 0.01
+                && (panel.layout.position[1] - place.min.y).abs() < 0.01
+        })
+        .map(|panel| panel.id)
+        .expect("a card at that place")
+}
+
+/// Every card of `cards` carries a ring at the middle of the side that faces the
+/// agent, and each line starts with a dot on the agent panel.
+fn assert_rings(marks: &[Marks], agent: Rect, cards: &[Rect]) {
+    assert_eq!(
+        marks.len(),
+        cards.len(),
+        "one curve, one dot and one ring for each of the {} pairs",
+        cards.len()
+    );
+    for card in cards {
+        let expected = Side::facing(agent, *card).opposite().middle(*card);
+        assert!(
+            marks.iter().any(|marks| (marks.ring - expected).length() < 0.01),
+            "a ring stands at {expected:?}, on the side of the card that faces the agent: {:?}",
+            marks.iter().map(|marks| marks.ring).collect::<Vec<_>>()
+        );
+        assert!(
+            marks.iter().any(|marks| agent.expand(0.01).contains(marks.dot)),
+            "a dot stands on the edge of the agent panel: {:?}",
+            marks.iter().map(|marks| marks.dot).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The board that the person reported: an agent panel, a card A beside it at the
+/// gap of the grid, and a card B right of A.
+///
+/// Both lines are painted. Then the person drags B to a free place below and to
+/// the right of A. The drag returns the workspace to free placement, so the cards
+/// take the size of their content from that frame on, and the card A is no longer
+/// as tall as the agent panel. The line to A keeps its ring at the edge of A: the
+/// two panels of a pair decide whether it carries a line, not the places of the
+/// two starts, which follow the number of lines that leave one side of the agent.
+#[test]
+fn the_line_to_a_card_beside_its_agent_survives_the_drag_that_shrinks_the_cards() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let beside = rect(GRID.x + GRID_GAP, 0.0, GRID.x, GRID.y);
+    let right_of_that = rect(beside.min.x + GRID.x + 20.0, 0.0, GRID.x, GRID.y);
+    let below = rect(beside.min.x + 40.0, 300.0, GRID.x, GRID.y);
+
+    let (_temp, ctx, mut app) = app_with_cards(agent, &[beside, right_of_that]);
+    let beside_id = card_at(&app, beside);
+    let moved_id = card_at(&app, right_of_that);
+
+    let before = frame_marks(&ctx, &mut app);
+    assert_rings(
+        &before,
+        screen_place(&app, &ctx, app.board.panels[0].id),
+        &[screen_place(&app, &ctx, beside_id), screen_place(&app, &ctx, moved_id)],
+    );
+
+    // The drag of B: the workspace returns to free placement and B takes its new
+    // place.
+    app.board.clear_workspace_layout(app.board.workspaces[0].id);
+    app.board.panel_mut(moved_id).expect("the card B").layout.position = [below.min.x, below.min.y];
+
+    let after = frame_marks(&ctx, &mut app);
+    assert_rings(
+        &after,
+        screen_place(&app, &ctx, app.board.panels[0].id),
+        &[screen_place(&app, &ctx, beside_id), screen_place(&app, &ctx, moved_id)],
+    );
+}
+
+/// A card that the grid put beside its agent draws its line at every gap that a
+/// drag can leave, and two panels that stand closer than their two marks carry no
+/// line at all.
+///
+/// The line is the same whether or not another line leaves the same side of the
+/// agent, because the two panels of the pair decide it.
+#[test]
+fn a_card_beside_its_agent_draws_its_line_at_every_grid_gap() {
+    for gap in [0.0, 4.0, GRID_GAP, 40.0] {
+        let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+        let card = rect(GRID.x + gap, 0.0, GRID.x, GRID.y);
+        let (_temp, ctx, mut app) = app_with_cards(agent, &[card]);
+        let card_id = card_at(&app, card);
+        let marks = frame_marks(&ctx, &mut app);
+        if gap < 8.0 {
+            assert!(
+                marks.is_empty(),
+                "two panels {gap} points apart carry no line, because their two marks would merge: {marks:?}"
+            );
+            continue;
+        }
+        assert_rings(
+            &marks,
+            screen_place(&app, &ctx, app.board.panels[0].id),
+            &[screen_place(&app, &ctx, card_id)],
+        );
+    }
+}
+
+/// A card that stands above its agent at the gap of the grid draws its line from
+/// the top side of the agent panel.
+#[test]
+fn a_card_above_its_agent_draws_its_line_from_the_top_side() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let above = rect(0.0, -GRID_GAP - GRID.y, GRID.x, GRID.y);
+    let (_temp, ctx, mut app) = app_with_cards(agent, &[above]);
+    let above_id = card_at(&app, above);
+    let marks = frame_marks(&ctx, &mut app);
+    let agent_place = screen_place(&app, &ctx, app.board.panels[0].id);
+    assert_rings(&marks, agent_place, &[screen_place(&app, &ctx, above_id)]);
+    assert!(
+        (marks[0].dot.y - agent_place.min.y).abs() < 0.01,
+        "the dot of the pair stands on the top edge of the agent panel: {:?}",
+        marks[0].dot
+    );
+}
+
+/// Three cards on one side of the agent all draw their line, at three places of
+/// that side.
+#[test]
+fn three_cards_on_one_side_all_draw_their_line() {
+    let agent = rect(0.0, 0.0, GRID.x, GRID.y);
+    let cards = [
+        rect(GRID.x + GRID_GAP, -150.0, 200.0, 120.0),
+        rect(GRID.x + GRID_GAP, 0.0, 200.0, 120.0),
+        rect(GRID.x + GRID_GAP, 150.0, 200.0, 120.0),
+    ];
+    let (_temp, ctx, mut app) = app_with_cards(agent, &cards);
+    let ids: Vec<PanelId> = cards.iter().map(|card| card_at(&app, *card)).collect();
+    let marks = frame_marks(&ctx, &mut app);
+    let places: Vec<Rect> = ids.iter().map(|id| screen_place(&app, &ctx, *id)).collect();
+    assert_rings(&marks, screen_place(&app, &ctx, app.board.panels[0].id), &places);
+    let mut dots: Vec<f32> = marks.iter().map(|marks| marks.dot.y).collect();
+    dots.sort_by(f32::total_cmp);
+    assert!(
+        dots.windows(2).all(|pair| pair[1] - pair[0] > 1.0),
+        "the three lines leave the agent panel at three places: {dots:?}"
+    );
+}
