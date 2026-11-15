@@ -31,6 +31,12 @@ contract, and `open_terminal` gives the shell.
   overview card and in the sidebar.
 - The person can put a workspace on a machine from the sidebar, and the new
   terminals of that workspace then run there in tmux. You do nothing for it.
+- Horizon watches the agents that run on each machine of your list, with no
+  panel open: the sidebar shows the agents of a machine with Working, Needs you
+  or Done. An agent that you start in a `tmux` session of that user on the
+  machine is seen, and it needs no Horizon process and no program of its own on
+  that machine. The watch runs `tmux`, `ps` and the shell alone there, and
+  `machines.watch_agents` turns it off.
 - A terminal that attaches a tmux session reconnects by itself when its link was
   lost: its titlebar says `Reconnecting`, it keeps its last screen, and it runs
   its command again after 3, 6, 12 and 24 seconds, then every 30 seconds, until

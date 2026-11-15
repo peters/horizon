@@ -72,6 +72,10 @@ state.
   session name, of a folder name, of a title or of a program name can break a
   line. A value that this text does not flatten, because a program of the machine
   wrote it, is still one line of the report or the report is dropped.
+- **The words of `ssh` are read to one bound and then dropped.** A refusal needs
+  the words of the `ssh` child of this computer, so the reader keeps at most
+  [`MAX_REFUSAL_BYTES`] bytes of its standard error, names one of the typed
+  reasons, and drops the words. No line of the log quotes them.
 - **No text of a screen is stored.** The bottom rows of a pane are read for one
   state and then dropped. A name is cut at [`MAX_NAME_CHARS`] characters. No
   title, no row, no folder and no command line of a machine reaches a file, a log

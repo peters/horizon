@@ -141,6 +141,37 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux
 (`crates/horizon-core/src/panel/spawn.rs:764-777`). Horizon starts each agent
 through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:738-742`).
 
+## Machines and their agents
+
+Horizon watches the agents that run in `tmux` on the machines of its machine
+list, with no panel open (`crates/horizon-core/src/machine_watch.rs`,
+[docs/architecture/machine-watch.md](architecture/machine-watch.md)). This
+computer starts one `ssh` child per machine, and that child runs one text of
+POSIX shell on the machine.
+
+| Function | Linux | macOS |
+|---|---|---|
+| Watch the agents of a machine | Yes | Yes |
+| A machine with no `tmux` or no `tmux` server | Yes (note 1) | Yes (note 1) |
+| An agent that another program starts through an interpreter | Partial (note 2) | Partial (note 2) |
+| The text of the watch under `dash`, `bash` and the shell of `BusyBox` | Yes | Partial (note 3) |
+
+1. A machine without `tmux` or without a `tmux` server is a machine whose watch
+   reports that in one line. The watch keeps that machine in the list.
+2. The program of a pane answers first. When an interpreter such as `node` or
+   `python3` runs there, the watch reads the command lines of the processes of
+   that pane's terminal with `ps -t`, which GNU `ps` and the `ps` of macOS have.
+   A small appliance with a `BusyBox` `ps` has no `-t`, so such a machine names
+   the interpreter alone and an agent behind one keeps no row. The text of the
+   watch still runs there.
+3. The text is POSIX shell and its tests run it under each shell that the test
+   computer has. macOS has `sh` and `bash` by default and no `dash` and no
+   `BusyBox`, so those two lanes run on Linux only. This computer needs the
+   OpenSSH client `ssh` in its `PATH`.
+
+The sidebar row of these agents comes in the next round. Until then the watch
+runs its tests and starts no process at the start of Horizon.
+
 ## The keyboard
 
 The Control key of a Mac is the control key of the terminal. **Control+C**
