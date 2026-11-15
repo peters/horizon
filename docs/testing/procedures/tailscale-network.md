@@ -270,7 +270,8 @@ Task 6.1 rents no machine. The card of task 6.2 is the same card.
 3. Read the rent card, and press `Rent 1 machine`.
 
    Result: the pill `home` is selected on the rent card, and the steps card holds
-   six steps, with `Join the network home` after `Install the tools` and before
+   seven steps, with `Join the network home` after `Install the tools` and
+   before `Bring the repository`, and `Trust the repository folder` after
    `Bring the repository`.
 4. Wait until the check of the recipe answers.
 

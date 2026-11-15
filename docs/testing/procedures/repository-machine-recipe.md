@@ -14,7 +14,7 @@ owner: peters
 
 This procedure makes sure that an agent reads the recipe of a repository, that
 the rent card states the resources, the count and the price of all machines
-together, that one press rents them, that each machine gets a steps card of five
+together, that one press rents them, that each machine gets a steps card of six
 steps, that a machine card says `Ready for <repository>` with the check of the
 recipe as evidence, and that a step that failed keeps its card with the last
 lines of the output and the buttons `Try again` and `Delete the machine`. It also
@@ -23,9 +23,9 @@ question on a card and no machine.
 
 No step of this procedure reaches a provider: the program `hcloud` of the
 fixture is the stand-in of `scripts/device-smoke/hcloud-standin.sh`, and the
-machine that it reports does not answer SSH. The steps that install a tool and
-bring a repository therefore fail at the SSH step, which is the failure card of
-task 6.
+machine that it reports does not answer SSH. The steps that install a tool,
+bring a repository and trust its folder therefore fail at the SSH step, which is
+the failure card of task 6.
 
 ## 2. Applicability
 
@@ -102,9 +102,11 @@ itself and opens no socket. Task 9 removes them.
 
 3. Press `Rent 1 machine`.
 
-   Result: the run card changes to the steps card of that machine, with the five
+   Result: the run card changes to the steps card of that machine, with the six
    steps `Prepare the system`, `Install the tools`, `Bring the repository`,
-   `Warm up` and `Run the check`, and the first step is `now` or `done`.
+   `Trust the repository folder`, `Warm up` and `Run the check`, and the first
+   step is `now` or `done`. The step `Trust the repository folder` follows
+   `Bring the repository`.
 
 4. Wait until the steps card reaches the SSH step.
 
