@@ -472,8 +472,10 @@ field that the answer does not hold names no machine.
    removes the key on every computer of the same server; an answer of
    `key_unavailable` means that the key is already gone.
 6. Update the card to a `Deleted` badge, the line of the browser host and the
-   line of the server when they named this machine, and the buttons
-   `Use this computer again` and `Close`. Tell the person in the `text` component
+   line of the server when they named this machine, and the button `Close`. Put
+   the button `Use this computer again` before `Close` only when the browser host
+   named this machine. For the server, the line of the card is the whole answer:
+   it has no button. Tell the person in the `text` component
    that the terminal that Connect opened keeps trying to reach the machine that
    is gone, and that they can close it.
 7. A press on `Use this computer again` says where the person clears the browser
@@ -723,6 +725,10 @@ After the delete and the key removal, update the same card to this document:
     {"id": "use_this_computer", "label": "Use this computer again"},
     {"id": "close", "label": "Close"}]}]}
 ```
+
+This document is of a machine that both settings named. Leave out the line of a
+setting that did not name the machine, and leave out the button
+`Use this computer again` when the browser host did not name it.
 
 ## Rules
 
