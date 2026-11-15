@@ -250,6 +250,22 @@ fn call_turn(call: &Call) -> String {
         .to_string()
 }
 
+/// The dialog identity of one call that names one.
+fn call_span(call: &Call) -> String {
+    call_document(call)["tool_use_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The first call of `event`, or the reason that the report sent none.
+fn call_of<'a>(calls: &'a [Call], event: &str) -> &'a Call {
+    calls
+        .iter()
+        .find(|call| call.event() == event)
+        .unwrap_or_else(|| panic!("the report sent no {event}"))
+}
+
 #[test]
 fn the_report_starts_the_entry_once_for_each_event_of_a_turn() {
     let Some(_) = node() else {
@@ -265,15 +281,20 @@ fn the_report_starts_the_entry_once_for_each_event_of_a_turn() {
     );
     let answers = fire_turn(&mut harness);
     let calls = fixture.wait_for_calls(6);
+    // The report of a pi panel starts each entry as a detached process, so the
+    // files of two calls of one run can arrive in either order. The test reads
+    // the events and their turn identities, not the order of the files.
+    let mut events: Vec<String> = calls.iter().map(Call::event).collect();
+    events.sort();
     assert_eq!(
-        calls.iter().map(Call::event).collect::<Vec<String>>(),
+        events,
         vec![
-            "UserPromptSubmit".to_string(),
-            "PermissionRequest".to_string(),
-            "PostToolUse".to_string(),
-            "Stop".to_string(),
-            "UserPromptSubmit".to_string(),
-            "Interrupt".to_string(),
+            "Interrupt",
+            "PermissionRequest",
+            "PostToolUse",
+            "Stop",
+            "UserPromptSubmit",
+            "UserPromptSubmit",
         ],
         "the report sends one event for each step of the turn: {answers:?}"
     );
@@ -286,10 +307,47 @@ fn the_report_starts_the_entry_once_for_each_event_of_a_turn() {
     }
     // The turn id of a closing event is the id of the turn that opened it, so a
     // late or a repeated event cannot close another turn of this launch.
-    let ids: Vec<String> = calls.iter().map(call_turn).collect();
-    assert_eq!(ids[0], ids[3], "the stop closes the turn of the prompt");
-    assert_eq!(ids[4], ids[5], "the interrupt closes the second turn");
-    assert_ne!(ids[0], ids[4], "every busy span opens a turn of its own");
+    let prompts: Vec<String> = calls.iter().map(call_turn).collect();
+    let opened: Vec<String> = calls
+        .iter()
+        .filter(|call| call.event() == "UserPromptSubmit")
+        .map(call_turn)
+        .collect();
+    assert_eq!(opened.len(), 2, "each busy span opens one turn");
+    assert_ne!(opened[0], opened[1], "every busy span opens a turn of its own");
+    assert!(
+        prompts.contains(&opened[0]) && prompts.contains(&opened[1]),
+        "{prompts:?}"
+    );
+    let stop = call_of(&calls, "Stop");
+    let interrupt = call_of(&calls, "Interrupt");
+    assert!(opened.contains(&call_turn(stop)), "the stop closes a turn that opened");
+    assert!(
+        opened.contains(&call_turn(interrupt)),
+        "the interrupt closes a turn that opened"
+    );
+    assert_ne!(
+        call_turn(stop),
+        call_turn(interrupt),
+        "a stop and an interrupt close different turns"
+    );
+    let ask = call_of(&calls, "PermissionRequest");
+    let answer = call_of(&calls, "PostToolUse");
+    assert_eq!(
+        call_turn(ask),
+        call_turn(stop),
+        "the dialog belongs to the turn of the stop"
+    );
+    assert_eq!(
+        call_span(ask),
+        call_span(answer),
+        "the answer closes the dialog of its call"
+    );
+    assert!(
+        call_span(ask).starts_with("ui-prompt-"),
+        "the dialog names itself: {}",
+        call_span(ask)
+    );
     harness.end();
     let calls = fixture.wait_for_calls(7);
     let last = calls.last().expect("the call of the session end");
