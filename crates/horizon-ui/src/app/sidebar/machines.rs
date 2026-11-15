@@ -187,10 +187,11 @@ impl HorizonApp {
                     .panels
                     .iter()
                     .find(|panel| panel.machine() == Some(machine.name.as_str()));
+                let refusal = self.node_cards.refusal(&machine.name);
                 let watch = MachineWatchRow::of(
                     snapshot.as_ref().and_then(|snapshot| snapshot.machine(&machine.name)),
                     now_millis,
-                    machine.cards.then(|| self.node_cards.refusal(&machine.name)).flatten(),
+                    machine.cards.then_some(refusal).flatten().as_deref(),
                 );
                 MachineRow {
                     name: machine.name.clone(),

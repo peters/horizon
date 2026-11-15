@@ -50,6 +50,24 @@ impl WatchRefusal {
 }
 
 impl WatchRefusal {
+    /// The sentence of this refusal with the last line of the words of `ssh`, as one
+    /// line of visible text of the machine, cut at 200 characters.
+    #[must_use]
+    pub fn sentence_with(self, stderr: &str) -> String {
+        let last = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default();
+        let visible = last.replace(|character: char| character.is_control(), " ");
+        let words = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+        if words.is_empty() {
+            return self.sentence().to_owned();
+        }
+        let cut: String = words.chars().take(200).collect();
+        format!("{} The last words of ssh were: {cut}", self.sentence())
+    }
+
     /// The refusal that the words of `ssh` name, or [`Self::Other`].
     #[must_use]
     pub fn of_ssh(stderr: &str) -> Self {
@@ -256,10 +274,8 @@ impl Shared {
     /// Forgets `machine`: its link and its rows leave the snapshot.
     pub fn remove(&self, machine: &str) {
         let mut inner = self.lock();
-        if inner.links.remove(machine).is_some()
-            | inner.models.remove(machine).is_some()
-            | inner.sessions.remove(machine).is_some()
-        {
+        inner.sessions.remove(machine);
+        if inner.links.remove(machine).is_some() | inner.models.remove(machine).is_some() {
             inner.publish();
         }
     }
@@ -316,9 +332,7 @@ impl Inner {
         self.links.insert(machine.to_owned(), link);
         if !link.watching() {
             self.sessions.remove(machine);
-            if let Some(model) = self.models.get_mut(machine) {
-                model.clear();
-            }
+            let _ = self.models.get_mut(machine).map(MachineModel::clear);
         }
     }
 

@@ -44,8 +44,8 @@ pub(in crate::app) struct CardMachine {
     pub(in crate::app) links: Links,
 }
 
-/// The refusal that ended the card link of each machine whose `ssh` child is gone.
-pub(in crate::app) type Links = Arc<Mutex<BTreeMap<String, WatchRefusal>>>;
+/// Why the card link of each machine whose `ssh` child is gone ended, in its words.
+pub(in crate::app) type Links = Arc<Mutex<BTreeMap<String, String>>>;
 
 /// One set of machines to serve, with the identity of the host that serves their
 /// sockets.
@@ -110,9 +110,9 @@ impl NodeCards {
     }
 
     /// The words of the refusal that ended the card link of `machine`, while it waits.
-    pub(in crate::app) fn refusal(&self, machine: &str) -> Option<&'static str> {
+    pub(in crate::app) fn refusal(&self, machine: &str) -> Option<String> {
         let links = self.links.lock().unwrap_or_else(PoisonError::into_inner);
-        links.get(machine).map(|refusal| refusal.sentence())
+        links.get(machine).cloned()
     }
 
     /// Ends every socket, stops every child, removes every socket file and joins
@@ -284,17 +284,16 @@ async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut sto
         }
         // A child that ends is a lost link of the cards of that machine, and the
         // words of `ssh` name why. No card of it is served while it is gone.
-        let refused = match words {
-            Some(handle) => handle
-                .await
-                .map_or(WatchRefusal::Other, |words| WatchRefusal::of_ssh(&words)),
-            None => WatchRefusal::Other,
+        let words = match words {
+            Some(handle) => handle.await.unwrap_or_default(),
+            None => String::new(),
         };
+        let refused = WatchRefusal::of_ssh(&words);
         {
             let mut lost = machine.links.lock().unwrap_or_else(PoisonError::into_inner);
-            lost.insert(machine.name.clone(), refused);
+            lost.insert(machine.name.clone(), refused.sentence_with(&words));
         }
-        tracing::warn!(machine = %machine.name, refusal = ?refused, "the card link of a machine ended");
+        tracing::warn!(machine = %machine.name, refusal = ?refused, words = %words, "the card link of a machine ended");
         if started.elapsed() >= RECONNECT_RESET_AFTER {
             attempts = 0;
         }

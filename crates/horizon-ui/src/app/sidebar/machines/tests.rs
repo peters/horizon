@@ -379,9 +379,13 @@ fn a_card_link_that_is_not_up_says_so_under_its_machine() {
                 Some(super::agents::CARDS_DOWN),
                 "the line of the card link"
             );
+            let spoken = format!(
+                "{} The last words of ssh were: {REFUSED_FORWARD}",
+                horizon_core::machine_watch::WatchRefusal::Other.sentence()
+            );
             assert!(
-                screen_reader_hears(&output, horizon_core::machine_watch::WatchRefusal::Other.sentence()),
-                "a screen reader hears why the card link is not up"
+                screen_reader_hears(&output, &spoken),
+                "a screen reader hears why the card link is not up, with the last words of ssh"
             );
         } else {
             assert!(line.is_none(), "a child that holds its link draws no line: {line:?}");

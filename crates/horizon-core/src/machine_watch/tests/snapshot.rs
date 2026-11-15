@@ -193,6 +193,31 @@ fn a_refusal_names_its_reason() {
 }
 
 #[test]
+fn a_sentence_with_the_words_of_ssh_holds_its_last_line_of_visible_text() {
+    let words = "Warning: Permanently added 'x' to the list.\nunix_listener: cannot bind to path /tmp/a.sock: Address already in use\n";
+    let sentence = WatchRefusal::Other.sentence_with(words);
+    assert!(sentence.starts_with(WatchRefusal::Other.sentence()), "{sentence}");
+    assert!(
+        sentence.ends_with(
+            "The last words of ssh were: unix_listener: cannot bind to path /tmp/a.sock: Address already in use"
+        ),
+        "only the last line of the words, in one line: {sentence}"
+    );
+    let escaped = WatchRefusal::Other.sentence_with("first\u{1b}[2Ksecond line\n");
+    assert!(!escaped.chars().any(char::is_control), "{escaped}");
+    let long = WatchRefusal::Key.sentence_with(&"w".repeat(400));
+    assert!(
+        long.chars().count() <= WatchRefusal::Key.sentence().chars().count() + 200 + 32,
+        "{long}"
+    );
+    assert_eq!(
+        WatchRefusal::Key.sentence_with("\n\n  \n"),
+        WatchRefusal::Key.sentence(),
+        "words of nothing add nothing"
+    );
+}
+
+#[test]
 fn a_preset_of_the_settings_names_an_agent_of_a_machine() {
     let shared = Shared::new();
     let preset = crate::config::PresetConfig {
