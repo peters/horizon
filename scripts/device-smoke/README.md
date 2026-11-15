@@ -285,13 +285,19 @@ scripts/device-smoke/serve.py --horizon target/debug/horizon \
 `--machine-watch` writes the record of one machine, `build-1`, into the machine
 list of the private home, starts one private `tmux` server with two sessions of
 the Codex stand-in, and puts a stand-in `ssh` first on the `PATH` of the
-candidate. That `ssh` runs the text of the watch on that server, and it answers
-no other call: a run with it reads no machine of the person. The session
-`hz-shop` blinks the trust question of a launch, which is an approval that waits,
-and `hz-notes` works through a turn, so the section shows **Needs you** and
-**Working** in one frame. A press on a row opens the terminal of that session, a
-chevron folds the agents of the machine, and the setting **Show the agents of
-each machine** turns the watch off.
+candidate. `tmux` places its socket in the folder that `TMUX_TMPDIR` names, so
+the server starts in the folder that the sandbox sees as `/tmp`, and the run
+stops that server at its exit. The stand-in `ssh` runs every command that the
+candidate sends with a `tmux` that names that server, so a panel of an agent
+opens the real session. It answers no other call: a run with it reads no machine
+of the person.
+
+The fixture types `start` and then `ask` into the session `hz-shop`, so that
+stand-in starts a turn and asks for an approval, which waits for the person. It
+types `start` into `hz-notes`, which works through a turn. The section shows
+**Needs you** and **Working** in one frame. A press on a row opens the terminal
+of that session, a chevron folds the agents of the machine, and the setting
+**Show the agents of each machine** turns the watch off.
 
 ### Speech input with the real recorder of the session
 
