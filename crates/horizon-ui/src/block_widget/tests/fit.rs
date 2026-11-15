@@ -11,7 +11,7 @@ use horizon_core::{CardRuntime, PanelId};
 
 use super::{Owner, one_button};
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
-use crate::block_widget::metrics::{CARD_MIN_HEIGHT, FOOTER_HEIGHT, MORE_BELOW_HEIGHT};
+use crate::block_widget::metrics::{CARD_MIN_HEIGHT, FOOTER_HEIGHT, MORE_BELOW_HEIGHT, MORE_BELOW_STRIP};
 use crate::block_widget::{CARD_HEIGHT_LIMITS, CardView, fitted_card_height, show};
 use crate::test_egui::DiscardTextures;
 use crate::theme;
@@ -405,15 +405,34 @@ fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
 
 /// The fade of the mark at the lower edge of `body`, as the mesh that painted it.
 fn fade_of(output: &egui::FullOutput, body: Rect) -> Option<egui::epaint::Mesh> {
-    let bottom = body.max.y - FOOTER_HEIGHT;
+    let solid = body.max.y - FOOTER_HEIGHT - MORE_BELOW_STRIP;
     output.shapes.iter().find_map(|clipped| match &clipped.shape {
         Shape::Mesh(mesh) if mesh.vertices.len() == 4 => {
             let top = mesh.vertices.iter().map(|vertex| vertex.pos.y).fold(f32::MAX, f32::min);
             let low = mesh.vertices.iter().map(|vertex| vertex.pos.y).fold(f32::MIN, f32::max);
-            ((low - bottom).abs() < 0.01 && (top - (bottom - MORE_BELOW_HEIGHT)).abs() < 0.01).then(|| (**mesh).clone())
+            ((low - solid).abs() < 0.01 && (top - (solid - (MORE_BELOW_HEIGHT - MORE_BELOW_STRIP))).abs() < 0.01)
+                .then(|| (**mesh).clone())
         }
         _ => None,
     })
+}
+
+/// The solid strip in the body colour that the words of the mark stand on, with
+/// the place in the pass where it was painted.
+fn strip_of(output: &egui::FullOutput, body: Rect) -> Option<(usize, Rect)> {
+    let bottom = body.max.y - FOOTER_HEIGHT;
+    let strip = Rect::from_min_max(
+        Pos2::new(body.min.x, bottom - MORE_BELOW_STRIP),
+        Pos2::new(body.max.x, bottom),
+    );
+    output
+        .shapes
+        .iter()
+        .enumerate()
+        .find_map(|(index, clipped)| match &clipped.shape {
+            Shape::Rect(shape) if shape.fill == theme::PANEL_BG() && shape.rect == strip => Some((index, strip)),
+            _ => None,
+        })
 }
 
 #[test]
@@ -454,6 +473,27 @@ fn a_body_that_holds_more_fades_into_the_body_colour_and_marks_its_lower_edge() 
             words.pos
         );
 
+        // The strip is opaque and painted after the content, so nothing of the
+        // document shows under the words.
+        let ink = Rect::from_min_size(words.pos, words.galley.size());
+        let (strip_index, strip) =
+            strip_of(&output, body).unwrap_or_else(|| panic!("the pass paints no solid strip in {resolved:?}"));
+        assert!(
+            strip.contains_rect(ink),
+            "the words stand on the solid strip in {resolved:?}: {ink:?} in {strip:?}"
+        );
+        for (index, clipped) in output.shapes.iter().enumerate() {
+            let Shape::Text(text) = &clipped.shape else {
+                continue;
+            };
+            let drawn = Rect::from_min_size(text.pos, text.galley.size());
+            assert!(
+                !drawn.intersects(ink) || index < strip_index || text.galley.text() == "More below",
+                "{} shows under the words in {resolved:?}",
+                text.galley.text()
+            );
+        }
+
         let nodes = output
             .platform_output
             .accesskit_update
@@ -480,6 +520,10 @@ fn a_body_that_holds_all_of_its_content_paints_no_mark() {
     assert!(
         fade_of(&output, card_body(smallest_card())).is_none(),
         "no fade on a card that fits"
+    );
+    assert!(
+        strip_of(&output, card_body(smallest_card())).is_none(),
+        "no strip of the body colour on a card that fits"
     );
     assert!(
         !output

@@ -56,8 +56,8 @@ use crate::theme;
 use form::{Answers, Form};
 
 use metrics::{
-    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, MORE_BELOW_FONT, MORE_BELOW_HEIGHT, TEXT_FONT,
-    TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
+    BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, MORE_BELOW_FONT, MORE_BELOW_HEIGHT, MORE_BELOW_STRIP,
+    TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_PROGRESS_WIDTH,
 };
 
 /// What a card with no components says.
@@ -173,10 +173,14 @@ fn show_more_below(ui: &mut Ui, live: bool) {
     }
     let top = body.max.y - MORE_BELOW_HEIGHT;
     let painter = ui.painter_at(body);
-    let rect = Rect::from_min_max(Pos2::new(body.min.x, top), body.max);
+    let solid = Rect::from_min_max(Pos2::new(body.min.x, body.max.y - MORE_BELOW_STRIP), body.max);
+    let band = Rect::from_min_max(Pos2::new(body.min.x, top), Pos2::new(body.max.x, solid.min.y));
     let fade = [theme::alpha(theme::PANEL_BG(), 0), theme::PANEL_BG()];
-    painter.add(Shape::gradient_rect(rect, Direction::TopDown, fade));
-    let at = Pos2::new(body.center().x, top + MORE_BELOW_HEIGHT * 0.5);
+    painter.add(Shape::gradient_rect(band, Direction::TopDown, fade));
+    // The words stand on the body colour, so no half-faded label of the content
+    // shows under them.
+    painter.rect_filled(solid, 0.0, theme::PANEL_BG());
+    let at = Pos2::new(body.center().x, solid.center().y);
     let font = FontId::proportional(MORE_BELOW_FONT);
     let text_color = theme::FG_SOFT();
     let words = painter.text(at, Align2::CENTER_CENTER, MORE_BELOW, font.clone(), text_color);

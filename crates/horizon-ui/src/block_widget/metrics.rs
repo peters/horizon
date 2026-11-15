@@ -35,8 +35,9 @@ pub(super) const RADIUS_BAR: u8 = 2;
 pub(super) const FOOTER_HEIGHT: f32 = 30.0;
 
 /// Height of the mark at the lower edge of a body that holds more than it shows,
-/// and the font of its words.
+/// the strip of the body colour that its words stand on, and the font of them.
 pub(super) const MORE_BELOW_HEIGHT: f32 = 32.0;
+pub(super) const MORE_BELOW_STRIP: f32 = 20.0;
 pub(super) const MORE_BELOW_FONT: f32 = 11.0;
 /// Font of the footer texts.
 pub(super) const FOOTER_FONT: f32 = 11.0;
