@@ -201,9 +201,8 @@ fn the_title_of_a_codex_panel_takes_the_sidebar_through_its_turn() {
         Attention::Idle,
         "the program that ended claims nothing"
     );
-    assert_eq!(
+    assert!(
         stand_in.app.attention.states.from_title(&stand_in.local_id),
-        true,
         "the titles of the launch answered for the panel"
     );
 }
