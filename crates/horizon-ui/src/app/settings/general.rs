@@ -220,6 +220,25 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
 /// panels that a create makes after the change.
 fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
+    super::section_heading(ui, "Machines");
+    super::section_card(ui, |ui| {
+        changed |= ui
+            .checkbox(
+                &mut config.machines.watch_agents,
+                egui::RichText::new("Show the agents of each machine")
+                    .color(theme::FG())
+                    .size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "Horizon asks each machine of the list for the agents that run there in tmux, and it \
+             shows their state in the sidebar with no panel open: a machine whose agent waits for \
+             you says so, and its row opens the terminal of that session. The machines of the list \
+             and their keys are on the tab Server.",
+        );
+    });
+
     super::section_heading(ui, "Browser host");
     super::section_card(ui, |ui| {
         super::dim_label(

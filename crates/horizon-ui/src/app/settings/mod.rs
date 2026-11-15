@@ -6,6 +6,8 @@ mod field_tests;
 mod footer_tests;
 mod general;
 #[cfg(test)]
+mod machines_tests;
+#[cfg(test)]
 mod panel_test_support;
 #[cfg(test)]
 mod panel_tests;
