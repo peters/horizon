@@ -219,26 +219,7 @@ fn render_vnc_ports(ui: &mut Ui, config: &mut Config) -> bool {
 /// the tab that holds the server of the machine list. The browser host serves the
 /// panels that a create makes after the change.
 fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
-    let mut changed = false;
-    super::section_heading(ui, "Machines");
-    super::section_card(ui, |ui| {
-        changed |= ui
-            .checkbox(
-                &mut config.machines.watch_agents,
-                egui::RichText::new("Show the agents of each machine")
-                    .color(theme::FG())
-                    .size(12.0),
-            )
-            .changed();
-        super::dim_label(
-            ui,
-            "Horizon asks each machine of the list for the agents that run there in tmux, and it \
-             shows their state in the sidebar with no panel open: a machine whose agent waits for \
-             you says so, and its row opens the terminal of that session. The machines of the list \
-             and their keys are on the tab Server.",
-        );
-    });
-
+    let mut changed = render_watch_section(ui, config);
     super::section_heading(ui, "Browser host");
     super::section_card(ui, |ui| {
         super::dim_label(
@@ -337,6 +318,30 @@ fn render_machines_section(ui: &mut Ui, config: &mut Config) -> bool {
         );
     });
     changed
+}
+
+/// The entry that shows the agents of the machines of the machine list in the
+/// sidebar, with no panel open.
+fn render_watch_section(ui: &mut Ui, config: &mut Config) -> bool {
+    super::section_heading(ui, "Machines");
+    super::section_card(ui, |ui| {
+        let changed = ui
+            .checkbox(
+                &mut config.machines.watch_agents,
+                egui::RichText::new("Show the agents of each machine")
+                    .color(theme::FG())
+                    .size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "Horizon asks each machine of the list for the agents that run there in tmux, and it \
+             shows their state in the sidebar with no panel open: a machine whose agent waits for \
+             you says so, and its row opens the terminal of that session. The machines of the list \
+             and their keys are on the tab Server.",
+        );
+        changed
+    })
 }
 
 /// The name of one engine of a browser host, as the settings window writes it.

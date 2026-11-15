@@ -534,6 +534,19 @@ impl HorizonApp {
         ui.add_space(1.0);
     }
 
+    /// The actions of a press on a machine or on an agent of a machine.
+    fn apply_machine_actions(&mut self, ctx: &Context, actions: &SidebarActions) {
+        if let Some(name) = actions.forget_machine.clone() {
+            self.forget_machine(&name, ctx);
+        }
+        if let Some(name) = actions.connect_machine.clone() {
+            self.connect_machine(&name, ctx);
+        }
+        if let Some(agent) = actions.open_machine_agent.clone() {
+            self.open_machine_agent(&agent, ctx);
+        }
+    }
+
     /// What the row of `panel` says: an agent's task, or `display_title`.
     pub(in crate::app) fn sidebar_panel_label(&self, panel: &horizon_core::Panel, display_title: &str) -> String {
         let own_name = (!text::name_labels_agent(
@@ -600,15 +613,7 @@ impl HorizonApp {
             drop.dragged_workspace_id
         });
         self.apply_workspace_place_actions(actions);
-        if let Some(name) = actions.forget_machine.clone() {
-            self.forget_machine(&name, ctx);
-        }
-        if let Some(name) = actions.connect_machine.clone() {
-            self.connect_machine(&name, ctx);
-        }
-        if let Some(agent) = actions.open_machine_agent.clone() {
-            self.open_machine_agent(&agent, ctx);
-        }
+        self.apply_machine_actions(ctx, actions);
         if let Some(panel_id) = actions.focus_panel {
             // A click on a row of an open machine or of a panel is the person's,
             // so the terminal of that panel takes the next key.
