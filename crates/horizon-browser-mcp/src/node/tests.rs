@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use horizon_browser_control::manifest::block::{self, Operation};
+use rmcp::ServerHandler as _;
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
 use super::serve_stream;
@@ -39,6 +40,30 @@ fn every_card_operation() -> Vec<Operation> {
             panel_id: "panel".to_owned(),
         },
     ]
+}
+
+#[test]
+fn a_card_socket_says_what_its_one_tool_does_and_names_no_browser_tool() {
+    let cards = HorizonBrowserMcp::for_cards(ACTOR, HOST);
+    let instructions = cards.get_info().instructions.unwrap_or_default();
+    assert!(
+        !instructions.contains("browser_"),
+        "the instructions of a card socket name no browser tool: {instructions}"
+    );
+    for words in ["block_panel", "next_click", "call again"] {
+        assert!(
+            instructions.contains(words),
+            "the instructions name {words}: {instructions}"
+        );
+    }
+    let full = HorizonBrowserMcp::for_host(ACTOR, HOST);
+    assert!(
+        full.get_info()
+            .instructions
+            .unwrap_or_default()
+            .contains("browser_list"),
+        "a server of this computer keeps the instructions of its tools"
+    );
 }
 
 #[test]

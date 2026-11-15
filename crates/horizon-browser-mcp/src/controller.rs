@@ -241,6 +241,11 @@ impl BrowserController {
         self
     }
 
+    /// Whether this controller serves the cards of one machine session alone.
+    pub(crate) fn cards_only(&self) -> bool {
+        self.cards_only
+    }
+
     #[cfg(test)]
     pub(crate) fn with_actor(actor: impl Into<String>) -> Self {
         Self {
