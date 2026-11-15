@@ -1044,8 +1044,10 @@ def machine_watch_record(private_home):
     """
     root = Path(private_home) / HORIZON_HOME_FOLDER / 'machines'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # `cards` is the mark that the setup of the cards writes with `machine_set`:
+    # without it Horizon serves no card socket for the sessions of this machine.
     record = {'name': MACHINE_WATCH_MACHINE, 'host': MACHINE_WATCH_MACHINE,
-              'provider': 'Stand-in, this fixture', 'added_at_millis': 0}
+              'provider': 'Stand-in, this fixture', 'cards': True, 'added_at_millis': 0}
     (root / 'registry.json').write_text(json.dumps({'machines': [record]}, indent=2), encoding='utf-8')
     return root / 'registry.json'
 

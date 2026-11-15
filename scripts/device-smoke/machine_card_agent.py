@@ -132,7 +132,8 @@ def wait_for_click(client: SocketClient, panel_id: str) -> None:
         if payload.get('status') != 'clicked':
             log(f'the wait ended: {payload.get("status")}')
             continue
-        pressed = str(payload.get('component_id', ''))
+        # The press is the object `click` of the answer, as the block skill states it.
+        pressed = str((payload.get('click') or {}).get('component_id', ''))
         label = {'continue': 'Continue', 'stop': 'Stop'}.get(pressed, pressed)
         log(f'the person pressed {label}')
         updated = client.call_tool({
