@@ -23,15 +23,18 @@ fn socket_name() -> String {
 }
 
 /// Whether this computer has this program.
+///
+/// A program that this computer has starts and answers with its version or with a
+/// refusal, and a program that it does not have does not start at all. The status of
+/// the start is no part of the answer: `dash` refuses `-V` and it is here.
 pub(crate) fn has(program: &str) -> bool {
     Command::new(program)
-        .arg("-c")
-        .arg("true")
+        .arg("-V")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .is_ok_and(|status| status.success())
+        .is_ok()
 }
 
 /// One private `tmux` server on a socket of its own, which its drop stops.
@@ -43,6 +46,7 @@ impl Server {
     /// The server of this test, or `None` when this computer has no `tmux`.
     pub(crate) fn new() -> Option<Self> {
         if !has("tmux") {
+            eprintln!("the tests of the watch skip their tmux lane: this computer has no tmux");
             return None;
         }
         let server = Self { socket: socket_name() };
