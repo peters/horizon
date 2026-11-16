@@ -292,6 +292,13 @@ Horizon skills, so Set up does not start. The card then says: `Agent
 integrations are off, so the agent has no Horizon skills. Start Horizon without
 HORIZON_AGENT_INTEGRATIONS=off.`
 
+Horizon writes its skills only for the agent programs of this computer. The
+search reads the `PATH`. If the search does not find a program, Horizon still
+writes its skills when the folder of the program is there, for example `~/.grok`.
+Horizon writes nothing for a program with neither: no folder, no config file and
+no MCP registration. A program that you install later receives its skills at the
+next start of Horizon. Horizon deletes no folder of an earlier start.
+
 ### What each choice of Set up does, and what it costs
 
 Set up draws one card beside the panel of your agent and changes that card at

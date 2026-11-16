@@ -78,8 +78,9 @@ Horizon before they write anything.
 - The repository that built the candidate, as `<repo>`.
 - An empty evidence folder `<state-fresh>` for the first start, an empty folder
   `<state-off>` for the run with the integrations off, an empty folder
-  `<state-tiles>` for the tile presses, and an empty folder `<state-cards>` for
-  the stand-in agent.
+  `<state-tiles>` for the tile presses, an empty folder `<state-cards>` for
+  the stand-in agent, and an empty folder `<state-homes>` for task 6.14 with the
+  folder `<homes-bin>` for its stand-in agent program.
 - The files of the stand-in agent, in the state folder of the fixture. The
   sandbox of the fixture shows the whole file system read-only, and it binds only
   these folders read-write: the state folder `<state>`, its `data/home` (the
@@ -891,6 +892,67 @@ price card and stops.
    row. The first start page still holds four tiles, and it holds no tile for
    this goal.
 
+### 6.14 F14 — The home folders that a first start writes
+
+This task starts no agent and rents nothing. It examines the folders that
+Horizon writes for the agent programs of the computer.
+
+1. Make `<homes-bin>` and one stand-in agent program in it:
+
+   ```sh
+   mkdir -p <homes-bin> && printf '#!/bin/sh\n' > <homes-bin>/codex && chmod 755 <homes-bin>/codex
+   ```
+
+   Result: `<homes-bin>` holds the program `codex` and no other agent program.
+
+2. Examine the `PATH` that step 3 gives the candidate:
+
+   ```sh
+   PATH=<homes-bin>:/usr/local/bin:/usr/bin:/bin sh -c 'command -v claude codex grok pi'
+   ```
+
+   Result: The output names `<homes-bin>/codex` only. No other agent program is
+   in this `PATH`.
+
+3. Start the fixture on the empty state folder `<state-homes>` and look at the
+   window of the candidate:
+
+   ```sh
+   PATH=<homes-bin>:/usr/local/bin:/usr/bin:/bin \
+     python3 scripts/device-smoke/serve.py --horizon <candidate> --native-view \
+     --state <state-homes>
+   ```
+
+   Result: The fixture prints one JSON line, and the first start page opens.
+
+4. List the private home of the run:
+
+   ```sh
+   ls -A <state-homes>/data/home
+   ```
+
+   Result: The list holds `.codex` and `.local` only. It holds no `.grok`, `.pi`,
+   `.gemini`, `.kilocode`, `.agents` or `.claude`, because this computer has no
+   program of those folders.
+
+5. Make a stand-in `grok`, stop the fixture, and start it again on the same state
+   folder:
+
+   ```sh
+   printf '#!/bin/sh\n' > <homes-bin>/grok && chmod 755 <homes-bin>/grok
+   ```
+
+   Result: `<state-homes>/data/home/.grok` and its `skills/horizon-device` exist
+   after the second start. A program that a person installs later receives its
+   skills at the next start.
+
+6. Remove `<homes-bin>/grok`, stop the fixture, and start it again on the same
+   state folder.
+
+   Result: `.grok/config.toml` and `.grok/skills/horizon-device/SKILL.md` are
+   still there. The folder of the program keeps its files when the search does
+   not find the program.
+
 ## 7. Pass criteria
 
 - The first start page shows its heading, the four tiles and the row of keys,
@@ -929,6 +991,9 @@ price card and stops.
   workspace holds the keyboard.
 - A preset without its program says `not installed`, stands last, and still
   starts.
+- A first start writes the folder of an agent program that the search finds, and
+  no folder of a program that the computer does not have. A folder that is there
+  keeps its skills.
 
 ## 8. Cleanup
 
@@ -941,12 +1006,16 @@ price card and stops.
 
    Result: The fixture process ends and the live view closes.
 
+   Task 6.14 starts the fixture two more times on `<state-homes>`. Close each
+   window in the same way.
+
 3. Remove the state folders of this procedure.
 
    Result: The folders are gone.
 
 4. Remove `<state-agent>`, `<state-rent>`, `<state-server>`, `<state-browser>`
-   and `<state-join>` with their work folders.
+   and `<state-join>` with their work folders, and remove `<state-homes>` and
+   `<homes-bin>`.
 
    Result: The folders are gone, and no `hcloud-standin.record` is left.
 

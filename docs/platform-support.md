@@ -313,3 +313,11 @@ phone of a device cloud, and its tool is one Python script that runs on both
 platforms. The `horizon-device` skill tells agents to drive an
 isolated desktop. This part works on Linux with X11 only (note 2 under
 "Panels and the board").
+
+Horizon writes a skill folder only for an agent program that this computer has.
+The search of the `PATH` finds the program, or the home folder of the program is
+there already, for example `~/.grok`. The folders are `~/.codex` and `~/.grok`,
+and `CODEX_HOME` and `GROK_HOME` name other folders. Horizon writes nothing for a
+program with neither: no folder, no config file and no MCP registration. A
+program that you install later receives its skills at the next start of Horizon.
+Horizon deletes no folder of an earlier start.
