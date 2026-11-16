@@ -85,11 +85,13 @@ computer.
 A child that ends leaves one socket file for each session on the machine, and the
 `sshd` of a machine binds no streamlocal path that a file still holds: its unlink
 option, `StreamLocalBindUnlink`, is the option of that `sshd` and not of this
-child. Before each start, the child therefore asks its own login for one `rm -f`
-of exactly the paths that it will bind, under the same route, key, batch mode and
-a ten-second bound. That is one extra connection of the machine for each start;
-the paths are built from the two names after their rules, so this call needs no
-quote.
+child. `sshd` binds nothing in a folder that is not there either, and a fresh
+machine holds neither `/tmp/horizon-cards` nor the folder of its machine. Before
+each start, the child therefore asks its own login for one call, under the same
+route, key, batch mode and a ten-second bound, that makes both folders, sets both
+to mode 700, and then removes exactly the paths that it will bind. That is one
+extra connection of the machine for each start; the paths and the two folders are
+built from the checked names, so this call needs no quote.
 
 A child that ends waits the delay of `place::reconnect_delay` and starts again,
 and the words of `ssh` name the refusal in the log and in one quiet line under
@@ -104,6 +106,29 @@ child of every machine and joins its loop, so no child outlives Horizon.
 A machine with no known session gets no socket and no child: the watch is the
 only source of the sessions of a machine, so with `machines.watch_agents` off a
 machine with the mark carries nothing.
+
+## The relay of a machine
+
+The setup writes one relay program for the account of the machine
+(`~/.horizon-cards/relay.py`, mode 700), and every entry of an agent program of
+that machine starts `python3 ~/.horizon-cards/relay.py <machine>`. The program is
+the text of the machines skill, so the fixture tests read it out of that text, and
+the relay that a person writes is the relay that those tests prove.
+
+A link that ends leaves the relay alive. It answers every call that waited for the
+link with the error `-32000` and the words `The link to Horizon was lost. Call
+again.`, and it reads an `OSError` of `recv` as a lost link too: a hard cut of a
+forward resets the stream, and a relay without that reading ended with a traceback
+and took the entry of the agent program with it. The relay then meets the next
+stream of the socket: the remembered `initialize` and its
+`notifications/initialized` go before the calls that waited, so the far end sees
+one hello for the new stream, and the answer of that hello never reaches the agent.
+The agent program calls again.
+
+An entry of an agent program holds a start bound where its program has the field,
+and the setup sets it to 60 seconds: the socket of a new session comes about one
+second after the session, so the bound of a program covers a machine that answers
+slowly. An entry that failed at its start needs a restart of the agent program.
 
 ## What is not built yet
 
@@ -134,4 +159,5 @@ machine with the mark carries nothing.
 | The operations of the one tool on a socket | the seven card operations |
 | The tools on a socket | `block_panel` alone, with the instructions of a card socket |
 | The seconds that the relay waits for a link, once | 30 |
+| The start bound of the entry of an agent | 60 seconds, where the program has the field |
 | The characters of the words of `ssh` of a refused card link | 200 |

@@ -1207,6 +1207,23 @@ Merge with the program of step 2 of
 [the exact state](#the-exact-state-of-an-agent-on-a-machine): copy the file first,
 prefer `python3`, and change no other key.
 
+The agent program gives the entry a bound for its start, and the socket of a new
+session of a machine comes about one second after the session. The setup sets that
+bound to 60 seconds where the program has one:
+
+- Codex: `startup_timeout_sec = 60` beside `command` and `args` of
+  `[mcp_servers.horizon-cards]` in `~/.codex/config.toml`. Horizon writes that key
+  for its own Codex server, and `codex mcp add --help` names no option for it, so
+  the merge writes it into the file.
+- Claude Code: the variable `MCP_TIMEOUT` in the `env` of the entry, which
+  `claude mcp add --env KEY=value` writes. The help of the program does not name
+  that variable, so that value is `UNVERIFIED`.
+- The default of a program is `UNVERIFIED`. A program that shows neither place
+  keeps its default.
+
+An entry that failed at its start does not try again. The person restarts the agent
+program after the repair, and the entry starts with the session of that program.
+
 ### 4. Mark the machine
 
 Write the record of this Horizon with the field of the cards:

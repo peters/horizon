@@ -139,10 +139,12 @@ server, so it changes no setting of the person.
    of an agent program that a person makes.
 
    Result: the card of `Night shift by relay` stays in the workspace, and the
-   sidebar keeps its rows. The log of the candidate holds the words `rm -f --`
-   of the child that removes the socket files of the machine, and it holds no
-   `Address already in use`. After the next report of the watch, a press on that
-   card reaches the agent again, with a new card of the restarted program.
+   sidebar keeps its rows. The child of the cards starts again with the call that
+   makes the folder of the sockets on the machine, sets it to mode 700, and removes
+   the socket files of the child before it, so the log of the candidate holds no
+   `remote port forwarding failed` and no `Address already in use`. After the next
+   report of the watch, a press on that card reaches the agent again, with a new
+   card of the restarted program.
 
 4. Press the row of `hz-relay` once more, and read the card that it draws.
 
@@ -176,7 +178,18 @@ server, so it changes no setting of the person.
    Result: the folder holds `hz-new.sock` beside the sockets of the other
    sessions.
 
-4. Remove that session again:
+4. Read the mode of the two folders of the sockets:
+
+   ```bash
+   ls -ld /var/tmp/machine-cards-1/private/tmp/horizon-cards \
+     /var/tmp/machine-cards-1/private/tmp/horizon-cards/build-1
+   ```
+
+   Result: both lines start with `drwx------`. Horizon makes both folders, with
+   mode 700, before each start of the child of the machine: `sshd` binds no socket
+   in a folder that is not there.
+
+5. Remove that session again:
 
    ```bash
    tmux -L hz-watch kill-session -t hz-new
@@ -190,38 +203,44 @@ server, so it changes no setting of the person.
 CAUTION: this step stops the card link of the machine. A card that an agent draws
 while the link is down reaches nothing, and the agent reads an error.
 
-1. Stop the fixture, which ends the child of the cards of the machine, and start
-   it again with the same state folder:
+1. Stop the fixture with `Ctrl+C` in the terminal of step 5.1 of the setup, which
+   ends the child of the cards of the machine.
+
+   Result: the card of `Night shift` stays in the workspace, and the row of
+   `hz-night` leaves the Machines section.
+
+2. Read the pane of the session `hz-relay` in the private server:
 
    ```bash
-   scripts/device-smoke/serve.py --horizon target/debug/horizon \
-     --state /var/tmp/machine-cards-1 --native-view --machine-watch \
-     --vnc-port 5911
+   tmux -L hz-watch attach -t hz-relay
    ```
 
-   Result: the cards of the workspace stay, and the rows of the sessions leave
-   the sidebar while the link is down.
-
-2. Read the pane of `hz-relay` again.
+   Detach with `Ctrl+b`, `d`.
 
    Result: the pane holds one line `machine-card-agent: the card socket ended:
-   The link to Horizon was lost. Call again.` The relay program answers the call
-   that the lost link cut, and the agent program ends it.
+   The link to Horizon was lost. Call again.` That call of the agent waited when
+   the link ended: a call during a cut is answered with that error, and the agent
+   calls again.
 
-Evidence that the relay itself answers: the test
-`scripts/device-smoke/tests/test_machine_card_relay.py` proves the error answers
-and the reconnect on a socket of its own, and it runs in the check of the
-fixture.
+3. Start the fixture again with the same state folder and the same command of
+   step 5.1 of the setup. Wait until the Machines section reports the sessions
+   again, and press `Continue` on the card of `Night shift`.
 
-1. Stop the fixture, which ends the child of the cards of the machine.
+   Result: the card of `Night shift` is in the workspace, and the press reaches
+   the agent of the session: the card says `The person pressed Continue.`
 
-   Result: the card stays in the workspace, and the row of `hz-night` leaves the
-   Machines section.
+4. Read the lane of a stream that resets, in the check of the fixture:
 
-2. Start the fixture again with the same state folder.
+   ```bash
+   python3 -B -m unittest discover -s scripts/device-smoke/tests -v \
+     -k test_a_stream_that_resets_is_a_lost_link
+   ```
 
-   Result: the card of `Night shift` is in the workspace again after the watch
-   reports the session, and a press on it reaches the agent again.
+   Result: the test passes. Its server leaves one call of the relay unread and
+   resets the stream of the socket, so `recv` of the relay raises
+   `ConnectionResetError`: the relay stays alive, it answers the call in flight with
+   the error, and a call after the reconnect works. The fixture above ends the link
+   with a close, and this test is the lane of the harder cut.
 
 ### 6.6 MC-6 — A machine without the watch reports no session
 
@@ -260,11 +279,13 @@ fixture.
   program keeps its socket.
 - A restart of the agent program keeps the card link, and the child of the machine
   binds the socket files of the sessions again.
+- Horizon makes the folder of the card sockets of a machine, with mode 700, before
+  the child of that machine starts.
 - A new session of the machine gets its socket without a restart of the child and
   without a lost card of another session.
 - A lost link answers the call of the agent with an error that the agent program
-  ends, and the relay program of the skill is the text that the card of
-  `hz-relay` came through.
+  ends, the relay program of the skill outlives a stream that resets, and the relay
+  is the text that the card of `hz-relay` came through.
 - The card shows its buttons whole and says no `More below`, also after a
   terminal of that session joins the workspace.
 

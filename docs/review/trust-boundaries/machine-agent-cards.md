@@ -24,12 +24,14 @@ page states only what the machine adds.
   `-o StreamLocalBindUnlink=yes`, and the login options of a terminal of that
   machine.
 - **One removal before each start of that child.** A child that ended leaves one
-  socket file for each session on the machine, and a machine binds no path that a
-  file holds. Before each start, the same login runs one `rm -f` whose paths are
-  exactly the socket paths of that machine's sessions, built here from the machine
-  name and the session names after their rules. It removes no other file, it takes
-  no value from the text of the machine, and a machine that does not answer costs
-  at most ten seconds of the start.
+  socket file for each session on the machine, a machine binds no path that a file
+  holds, and `sshd` binds nothing in a folder that is not there. Before each start,
+  the same login makes `/tmp/horizon-cards` and the folder of that machine, sets
+  both to mode 700, and runs one `rm -f` whose paths are exactly the socket paths
+  of that machine's sessions, built here from the machine name and the session
+  names after their rules. It removes no other file, it takes no value from the
+  text of the machine, and a machine that does not answer costs at most ten seconds
+  of the start.
 - **A relay program that the person's own account holds.** The setup writes
   `~/.horizon-cards/relay.py`, mode 700, and every agent program of that machine
   starts it. It is one readable python program: it reads the session name from the
