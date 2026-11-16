@@ -1,3 +1,4 @@
+use serde::de::{Deserializer, IgnoredAny};
 use serde::{Deserialize, Serialize};
 
 use super::TurnState;
@@ -6,21 +7,45 @@ use super::TurnState;
 #[derive(Clone, Debug, Deserialize)]
 pub struct HookEvent {
     pub session_id: String,
-    #[serde(default, alias = "turn_id")]
+    #[serde(default, alias = "turn_id", deserialize_with = "optional")]
     pub prompt_id: Option<String>,
     pub hook_event_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional")]
     pub reason: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional")]
     pub source: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional")]
     pub tool_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "optional")]
     pub tool_use_id: Option<String>,
     /// The background work that the agent still runs when its turn ends. An
     /// adapter that cannot count it sends nothing.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "background_count")]
     pub background_tasks: Option<u32>,
+}
+
+/// An optional field of the input. The program that sends the event is not this
+/// code, so a shape that this version does not read is "not given" rather than a
+/// refused event. Only the fields that name the evidence itself are refused.
+fn optional<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).ok())
+}
+
+/// The background work of a stopped turn: a count, or the tasks themselves,
+/// whose number is the count. A version that sends neither sends nothing.
+fn background_count<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Reported {
+        Count(u32),
+        Tasks(Vec<IgnoredAny>),
+    }
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(Reported::deserialize(value).ok().map(|reported| match reported {
+        Reported::Count(count) => count,
+        Reported::Tasks(tasks) => u32::try_from(tasks.len()).unwrap_or(u32::MAX),
+    }))
 }
 
 /// A matching Stop closes only its own prompt. Missing identifiers never

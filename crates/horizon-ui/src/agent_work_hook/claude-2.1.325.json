@@ -1,0 +1,66 @@
+[
+  {
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "transcript_path": "/tmp/horizon-agent-work/transcript.jsonl",
+    "cwd": "/tmp/horizon-agent-work",
+    "scratchpad_dir": "/tmp/horizon-agent-work/scratchpad",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "seconds_since_last_response": 41,
+    "context_tokens": 128,
+    "prompt_cache_likely_expired": false,
+    "estimated_cache_write_usd": 0.25
+  },
+  {
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "transcript_path": "/tmp/horizon-agent-work/transcript.jsonl",
+    "cwd": "/tmp/horizon-agent-work",
+    "scratchpad_dir": "/tmp/horizon-agent-work/scratchpad",
+    "prompt_id": "prompt-1",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "a prompt of the person"
+  },
+  {
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "transcript_path": "/tmp/horizon-agent-work/transcript.jsonl",
+    "cwd": "/tmp/horizon-agent-work",
+    "scratchpad_dir": "/tmp/horizon-agent-work/scratchpad",
+    "prompt_id": "prompt-1",
+    "permission_mode": "default",
+    "effort": { "level": "medium" },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "a command of the program" },
+    "tool_use_id": "tool-1"
+  },
+  {
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "transcript_path": "/tmp/horizon-agent-work/transcript.jsonl",
+    "cwd": "/tmp/horizon-agent-work",
+    "scratchpad_dir": "/tmp/horizon-agent-work/scratchpad",
+    "prompt_id": "prompt-1",
+    "permission_mode": "default",
+    "effort": { "level": "medium" },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "a command of the program" },
+    "tool_response": { "stdout": "an output of the program" },
+    "tool_use_id": "tool-1",
+    "duration_ms": 1200
+  },
+  {
+    "session_id": "00000000-0000-0000-0000-000000000001",
+    "transcript_path": "/tmp/horizon-agent-work/transcript.jsonl",
+    "cwd": "/tmp/horizon-agent-work",
+    "scratchpad_dir": "/tmp/horizon-agent-work/scratchpad",
+    "prompt_id": "prompt-1",
+    "permission_mode": "default",
+    "effort": { "level": "medium" },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "an answer of the program",
+    "background_tasks": [],
+    "session_crons": []
+  }
+]

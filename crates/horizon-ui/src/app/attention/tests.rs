@@ -701,3 +701,78 @@ fn a_card_without_a_callout_or_with_a_callout_of_no_answer_keeps_its_row_quiet()
     let note = card_panel(&mut app, workspace, asking_card("Nothing to answer here", &[]));
     assert_eq!(row_attention(&app, note), Attention::Idle);
 }
+
+/// The five events of one turn of Claude Code 2.1.325, whose `Stop` sends
+/// `background_tasks` and `session_crons` as lists.
+const CLAUDE_2_1_325: &str = include_str!("../../agent_work_hook/claude-2.1.325.json");
+/// The folder and the session of those events.
+const CWD: &str = "/tmp/horizon-agent-work";
+const SESSION: &str = "00000000-0000-0000-0000-000000000001";
+
+/// Runs the frames of the window until the row of `local` shows `expected`. The
+/// attention worker reads the records of the home, so an answer comes after a
+/// frame or two.
+fn wait_for_attention(ctx: &egui::Context, app: &mut crate::app::HorizonApp, local: &str, expected: Attention) {
+    let deadline = Instant::now() + PATIENCE;
+    while app.panel_attention(local) != expected {
+        assert!(
+            Instant::now() < deadline,
+            "the row of the panel shows {expected:?} rather than {:?}",
+            app.panel_attention(local)
+        );
+        run_app_frame(ctx, app);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_turn_of_claude_2_1_325_moves_the_row_of_its_panel() {
+    let (_temp, ctx, mut app) = test_app_with_config_and_startup(
+        &horizon_core::Config::default(),
+        horizon_core::StartupDecision::Ephemeral {
+            runtime_state: Box::new(horizon_core::RuntimeState::default()),
+        },
+    );
+    let workspace = app.board.create_workspace("a");
+    let panel = agent_panel(&mut app, workspace, "Fix the sync");
+    let local = local_id(&app, panel);
+    app.board.focused = None;
+    // The attention worker reads the records of the home of this window.
+    let store = horizon_core::agent_work::WorkStore::new(app.session_store.home().root());
+    store
+        .register_owner(
+            &local,
+            PanelKind::Claude,
+            "owner",
+            Some(SESSION),
+            std::path::Path::new(CWD),
+        )
+        .expect("the launch of the panel");
+    let events: Vec<serde_json::Value> = serde_json::from_str(CLAUDE_2_1_325).expect("the fixture");
+    let feed = |index: usize, at: i64| {
+        let bytes = serde_json::to_vec(&events[index]).expect("the event");
+        let input: horizon_core::agent_work::HookInput =
+            serde_json::from_slice(&bytes).expect("this build reads every event of 2.1.325");
+        store
+            .apply_hook(&local, PanelKind::Claude, "owner", &input, at)
+            .expect("the event is recorded");
+    };
+    let now = horizon_core::current_unix_millis();
+    feed(1, now - 5);
+    wait_for_attention(&ctx, &mut app, &local, Attention::Working);
+    feed(4, now - 1);
+    // The stop of that version ends the turn, so the row leaves `Working`. A lone
+    // panel of the board has the focus of a frame, so its finished turn is the one
+    // of a person who looks at it.
+    let deadline = Instant::now() + PATIENCE;
+    while app.panel_attention(&local) == Attention::Working {
+        assert!(Instant::now() < deadline, "the stop of 2.1.325 ends the working turn");
+        run_app_frame(&ctx, &mut app);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        matches!(app.panel_attention(&local), Attention::Idle | Attention::Done),
+        "the finished turn of the panel: {:?}",
+        app.panel_attention(&local)
+    );
+}

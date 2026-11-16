@@ -92,6 +92,8 @@ impl HookContext {
 }
 
 #[cfg(test)]
+mod lifecycle_inputs;
+#[cfg(test)]
 mod tests {
     use super::*;
 
