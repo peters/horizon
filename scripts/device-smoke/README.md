@@ -406,6 +406,11 @@ What a person looks at:
 - A socket file that a child left behind stops the next bind. Horizon removes it
   before each start, so a restart of the child binds again.
 
+With `--machine-folder NAME`, the run also makes the folder `NAME` in the home of
+the machine and writes it as the folder of the machine record. Put a workspace on
+`build-1` in the sidebar and open a terminal in it: the terminal starts in that
+folder, and `pwd` shows it.
+
 The option needs `bwrap`, `ssh`, `ssh-keygen` and `tmux` on this computer. A run
 without one of them stops with one sentence. Linux only: a Mac cannot create the
 namespace.

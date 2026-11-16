@@ -1127,7 +1127,7 @@ def machine_watch_standin(state):
     return program.parent
 
 
-def machine_watch_record(private_home, provider=MACHINE_WATCH_PROVIDER):
+def machine_watch_record(private_home, provider=MACHINE_WATCH_PROVIDER, folder=None):
     """The machine list of the fixture: one machine whose route is the stand-in.
 
     The candidate reads `<home>/machines/registry.json`, and a record of a route
@@ -1135,11 +1135,15 @@ def machine_watch_record(private_home, provider=MACHINE_WATCH_PROVIDER):
     runs the stand-in and reads the server of this fixture. A run with
     `--machine-sshd` writes the same record: the route is the alias `build-1`, and
     the seeded `~/.ssh/config` of the private home sends it to the real machine.
+    `folder` is the folder of the record, in which a new terminal of a workspace
+    that is placed on the machine starts.
     """
     root = Path(private_home) / HORIZON_HOME_FOLDER / 'machines'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     record = {'name': MACHINE_WATCH_MACHINE, 'host': MACHINE_WATCH_MACHINE,
               'provider': provider, MACHINE_RECORD_CARDS: True, 'added_at_millis': 0}
+    if folder is not None:
+        record['folder'] = str(folder)
     (root / 'registry.json').write_text(json.dumps({'machines': [record]}, indent=2), encoding='utf-8')
     return root / 'registry.json'
 
@@ -1781,6 +1785,12 @@ def arguments():
              'no stand-in. SSHD is a program that this run can start as its own user; the README '
              'names the two commands that unpack one into a folder')
     parser.add_argument(
+        '--machine-folder', metavar='NAME',
+        help='With --machine-sshd: make the folder NAME in the home of the machine and write '
+             'it as the folder of the machine record, so a new terminal of a workspace that is '
+             'placed on the machine starts there. NAME is one folder name of letters, digits, '
+             '`.`, `_` and `-`')
+    parser.add_argument(
         '--notifications-log', action='store_true',
         help='Put a stand-in notify-send first on the PATH of the candidate, which appends the '
              'arguments of one call as one line of JSON to notifications.log of the state, and '
@@ -1838,6 +1848,13 @@ def main():
         problem = machine_sshd_requirement(args.machine_sshd)
         if problem:
             parser.error(problem)
+    if args.machine_folder is not None:
+        if args.machine_sshd is None:
+            parser.error('--machine-folder names a folder of the machine of --machine-sshd, '
+                         'which this run lacks')
+        if not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}', args.machine_folder):
+            parser.error('--machine-folder must be one folder name of letters, digits, `.`, `_` '
+                         'and `-`')
     check_browser_host_arguments(parser, args)
     if args.worktree_card and args.presets:
         parser.error('--worktree-card writes the presets of the worktree card; do not give '
@@ -2008,7 +2025,13 @@ def main():
                 # The real machine of the run: no stand-in on the `PATH`, and the sessions of
                 # its user in the tmux server of its own namespace.
                 machine_sshd_start(machine, box, sys.executable)
-                machine_watch_record(box.private_home, MACHINE_SSHD_PROVIDER)
+                folder = None
+                if args.machine_folder is not None:
+                    # The home of the machine lies over the home of the user in its
+                    # namespace, so the record names the folder by that home.
+                    (machine.home / args.machine_folder).mkdir(mode=0o700, exist_ok=True)
+                    folder = Path(machine.user_home) / args.machine_folder
+                machine_watch_record(box.private_home, MACHINE_SSHD_PROVIDER, folder)
             else:
                 # The stand-in goes first on the `PATH` of the candidate, and the record of
                 # the machine comes from the private home of this run.

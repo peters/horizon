@@ -250,6 +250,19 @@ class ThePrepareOfTheMachine(unittest.TestCase):
         self.assertEqual((home / '.ssh' / serve.MACHINE_SSHD_IDENTITY).read_bytes(),
                          self.machine.identity.read_bytes())
 
+    def test_the_record_of_the_machine_names_its_folder_only_when_one_is_given(self):
+        self.machine.prepare()
+
+        plain = json.loads(serve.machine_watch_record(
+            self.work / 'home', serve.MACHINE_SSHD_PROVIDER).read_text(encoding='utf-8'))
+        named = json.loads(serve.machine_watch_record(
+            self.work / 'home', serve.MACHINE_SSHD_PROVIDER,
+            '/home/example/example-repo').read_text(encoding='utf-8'))
+
+        self.assertNotIn('folder', plain['machines'][0],
+                         'a record with no folder has the fields of a run without the option')
+        self.assertEqual(named['machines'][0]['folder'], '/home/example/example-repo')
+
     def test_the_record_of_the_machine_names_the_alias_of_the_configuration(self):
         self.machine.prepare()
 
