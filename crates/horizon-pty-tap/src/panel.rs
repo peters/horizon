@@ -1,7 +1,16 @@
 //! The PTY of a panel: a terminal of this process, or the socket of its holder.
 //!
 //! [`PanelPty`] forwards the three traits of the event loop of `alacritty_terminal`
-//! to the variant of the panel, and it registers only the source that it owns.
+//! to the variant of the panel, and it registers only the source that it owns. The
+//! reader of either variant hands every byte of the program on unchanged while a
+//! [`StatusReader`] scanner looks at it, so one pass over the output serves both the
+//! VT parser and the status reports of the program.
+//!
+//! The interface of that trait cannot be implemented without one `unsafe`
+//! function, because the trait declares `register` as an `unsafe fn` and the wrapper
+//! must forward it. Nothing unsafe is added: the wrapper registers exactly the
+//! sources of the variant that it owns and that live as long as it, and it registers
+//! no source of its own.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -12,8 +21,7 @@ use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
 use polling::{Event, PollMode, Poller};
 
-use crate::inbox::StatusInbox;
-use crate::pty::TapPty;
+use crate::inbox::{StatusInbox, StatusTap};
 use crate::reader::StatusReader;
 use crate::socket::{self, AttachedLink, LinkReader, LinkWriter};
 
@@ -45,10 +53,10 @@ impl PanelPty {
     /// # Errors
     ///
     /// Returns why its reader cannot start.
-    pub fn local(pty: tty::Pty) -> io::Result<Self> {
-        let (mut tap, inbox) = TapPty::new(pty)?;
-        let writer = tap.writer().try_clone()?;
-        let (pty, reader) = tap.split();
+    pub fn local(mut pty: tty::Pty) -> io::Result<Self> {
+        let (tap, inbox) = StatusTap::new();
+        let reader = StatusReader::new(pty.reader().try_clone()?, tap);
+        let writer = pty.writer().try_clone()?;
         Ok(Self {
             source: Source::Local(pty),
             reader: PanelReader::Local(reader),

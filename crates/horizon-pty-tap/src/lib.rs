@@ -6,10 +6,11 @@
 //! `state=idle` and `state=clear`. The VT parser of this workspace drops a private
 //! OSC number, so this crate reads the bytes in the reader of the PTY instead.
 //!
-//! [`TapPty`] wraps a PTY: every call the terminal event loop makes reaches the PTY
-//! it owns, and the reader shows every byte unchanged while a [`StatusReader`]
-//! scanner looks at it. Each complete payload reaches a [`StatusInbox`] that the
-//! event loop thread never waits on, and a frame reads the newest one.
+//! [`PanelPty`] wraps a PTY or the socket of a holder: every call the terminal
+//! event loop makes reaches the source that the wrapper owns, and the reader shows
+//! every byte unchanged while a [`StatusReader`] scanner looks at it. Each complete
+//! payload reaches a [`StatusInbox`] that the event loop thread never waits on, and
+//! a frame reads the newest one.
 //!
 //! The bytes of a panel are untrusted input of the program that runs in it. The
 //! scanner is bounded: it keeps at most [`scanner::MAX_PAYLOAD_BYTES`] bytes of one
@@ -20,14 +21,12 @@
 pub mod frames;
 mod inbox;
 mod panel;
-mod pty;
 mod reader;
 mod scanner;
 mod socket;
 
 pub use inbox::{QUERY_PAYLOAD, QUEUE_DEPTH, StatusInbox, StatusTap};
 pub use panel::{PanelPty, PanelReader, PanelWriter};
-pub use pty::TapPty;
 pub use reader::StatusReader;
 pub use scanner::{MAX_PAYLOAD_BYTES, Payload, Scanner};
 pub use socket::{LinkReader, LinkWriter};

@@ -220,13 +220,14 @@ when it names one of those kinds.
 
 - Owns the reader of a panel's pseudo terminal that reports the program status
   protocol (OSC 7501) of the program in it. The VT parser of this workspace drops
-  a private OSC number, so the crate wraps the PTY in `TapPty`: every call of the
-  terminal event loop reaches the PTY that the wrapper owns, and its reader hands
-  every byte on unchanged while a bounded scanner looks at it.
+  a private OSC number, so the crate wraps the PTY of a panel, or the socket of its
+  holder, in `PanelPty`: every call of the terminal event loop reaches the source
+  that the wrapper owns, and its reader hands every byte on unchanged while a
+  bounded scanner looks at it.
 - The interface it implements, `alacritty_terminal::tty::EventedReadWrite`, cannot
   be implemented without one `unsafe fn`, because the trait declares `register` as
   an unsafe function and the wrapper must forward it. That forward is the only
-  `unsafe` in the crate: the wrapper registers exactly the sources of the PTY it
+  `unsafe` in the crate: the wrapper registers exactly the sources of the variant it
   owns and adds no source of its own. It is why this crate carries
   `#![deny(unsafe_code)]` with one scoped `#[allow(unsafe_code)]` and a
   `// SAFETY:` rationale, and why every other crate keeps `forbid`.
