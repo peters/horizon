@@ -3,8 +3,8 @@ use std::path::Path;
 use horizon_core::HorizonHome;
 
 use super::{
-    AgentMcpEntry, AgentPluginHostLease, RETIRED_MCP_SKILLS, RETIRED_OFFLOAD_SKILL, install_agent_plugins_impl,
-    provider_home, user_skill_cleanup_dirs, user_skill_lease_dirs,
+    AgentMcpEntry, AgentPluginHostLease, CODEX_PROVIDER, GROK_PROVIDER, RETIRED_MCP_SKILLS, RETIRED_OFFLOAD_SKILL,
+    install_agent_plugins_impl, provider_home, user_skill_cleanup_dirs, user_skill_lease_dirs,
 };
 
 fn write_skill(dir: &Path) {
@@ -22,8 +22,8 @@ fn retired_mcp_skills_are_cleanup_only_in_codex_and_grok_roots() {
         (Some(home.as_path()), Some(custom.as_path())),
         (None, Some(custom.as_path())),
     ] {
-        let codex_root = provider_home(override_home, user_home, ".codex").expect("codex root");
-        let grok_root = provider_home(override_home, user_home, ".grok").expect("grok root");
+        let codex_root = provider_home(override_home, user_home, CODEX_PROVIDER.dir).expect("codex root");
+        let grok_root = provider_home(override_home, user_home, GROK_PROVIDER.dir).expect("grok root");
         let cleanup = user_skill_cleanup_dirs(user_home, Some(&grok_root), Some(&codex_root));
         let active = user_skill_lease_dirs(Some(&codex_root));
         for skill in RETIRED_MCP_SKILLS {
@@ -83,7 +83,7 @@ fn retired_skill_is_cleanup_only_in_default_and_overridden_homes() {
         (Some(home.as_path()), Some(custom.as_path())),
         (None, Some(custom.as_path())),
     ] {
-        let root = provider_home(override_home, user_home, ".codex").expect("codex root");
+        let root = provider_home(override_home, user_home, CODEX_PROVIDER.dir).expect("codex root");
         let retired = root.join("skills").join(RETIRED_OFFLOAD_SKILL);
         let active = user_skill_lease_dirs(Some(&root));
         let cleanup = user_skill_cleanup_dirs(user_home, None, Some(&root));

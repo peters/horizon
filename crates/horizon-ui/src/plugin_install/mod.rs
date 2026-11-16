@@ -1342,13 +1342,9 @@ mod tests {
 
     /// A folder of stand-in agent programs, and the `PATH` value that names it.
     fn stand_in_programs(bin: &Path, programs: &[&str]) -> std::ffi::OsString {
-        use std::os::unix::fs::PermissionsExt as _;
-
         std::fs::create_dir_all(bin).expect("stand-in folder");
         for program in programs {
-            let file = bin.join(program);
-            std::fs::write(&file, "#!/bin/sh\n").expect("stand-in program");
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("executable program");
+            horizon_core::stand_in_program_in(bin, program, "exit 0").expect("stand-in program");
         }
         std::env::join_paths([bin]).expect("search path")
     }

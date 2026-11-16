@@ -4,7 +4,6 @@
 #![cfg(target_os = "linux")]
 #![forbid(unsafe_code)]
 
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -18,9 +17,7 @@ const EXIT_GUARD: Duration = Duration::from_mins(2);
 fn stand_in_program_folder(root: &Path) -> PathBuf {
     let bin = root.join("bin");
     std::fs::create_dir(&bin).expect("stand-in folder");
-    let program = bin.join("codex");
-    std::fs::write(&program, "#!/bin/sh\n").expect("stand-in program");
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("executable program");
+    let _program = horizon_core::stand_in_program_in(&bin, "codex", "exit 0").expect("stand-in program");
     bin
 }
 
