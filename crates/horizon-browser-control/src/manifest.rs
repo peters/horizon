@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 mod agent;
+mod argument;
 mod audit;
 pub mod block;
 pub mod block_keys;

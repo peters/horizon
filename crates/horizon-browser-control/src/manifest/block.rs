@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AgentIdentity, ManifestLock,
+    argument::value_or_text,
     block_terminal::TerminalRoute,
     now_millis,
     request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json},
@@ -118,7 +119,7 @@ pub enum Operation {
         /// The SSH host to reach: host, user and port only. Leave it out when
         /// `machine` names a machine of this Horizon, because the record holds
         /// the route.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "value_or_text")]
         ssh: Option<TerminalRoute>,
         /// One line to run on the host after login, such as
         /// `tmux new -A -s build`. Letters, digits, spaces and `. _ : / , = @ + -`.
@@ -179,6 +180,7 @@ pub enum Operation {
     MachineSet {
         name: String,
         /// The SSH host to reach: host, user and port only.
+        #[serde(deserialize_with = "value_or_text")]
         ssh: TerminalRoute,
         /// Name of a machine key of this Horizon, as `machine_key` reports it.
         /// Horizon then connects with that key alone.
@@ -1188,6 +1190,40 @@ mod tests {
             };
             assert_eq!(name, expected);
         }
+    }
+
+    /// A field that is an object is what an agent program that builds every tool
+    /// argument as a string sends as the JSON text of the object.
+    #[test]
+    fn the_ssh_route_of_a_terminal_and_of_a_machine_record_is_read_as_its_text() {
+        let route = serde_json::json!({"host": "lab-1", "user": "deploy", "port": 2222});
+        let text = serde_json::to_string(&route).expect("the text of a route");
+        let Operation::OpenTerminal { ssh: Some(ssh), .. } =
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({"operation": "open_terminal", "ssh": text}))
+                .expect("public input")
+                .into_operation()
+        else {
+            panic!("open_terminal did not read the text of a route");
+        };
+        assert_eq!(ssh.host, "lab-1");
+        assert_eq!(ssh.user.as_deref(), Some("deploy"));
+        assert_eq!(ssh.port, Some(2222));
+
+        let Operation::MachineSet { ssh, .. } = serde_json::from_value::<BlockPanelInput>(serde_json::json!({
+            "operation": "machine_set", "name": "build-1", "ssh": text
+        }))
+        .expect("public input")
+        .into_operation() else {
+            panic!("machine_set did not read the text of a route");
+        };
+        assert_eq!((ssh.host.as_str(), ssh.port), ("lab-1", Some(2222)));
+        assert!(
+            serde_json::from_value::<BlockPanelInput>(serde_json::json!({
+                "operation": "machine_set", "name": "build-1", "ssh": "not a route"
+            }))
+            .is_err(),
+            "a text that is no route is still refused"
+        );
     }
 
     #[test]

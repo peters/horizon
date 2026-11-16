@@ -9,7 +9,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AgentIdentity, ManifestLock, now_millis,
+    AgentIdentity, ManifestLock,
+    argument::value_or_text,
+    now_millis,
     request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json},
 };
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
@@ -25,10 +27,10 @@ pub enum Operation {
         /// from this machine or, with `ssh`, from that SSH host.
         endpoint: String,
         /// Optional labels supplied by the session creator, not verified by VNC.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "value_or_text")]
         identity: Option<DeviceIdentity>,
         /// Reach `endpoint` on another machine's loopback through `ssh -W`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "value_or_text")]
         ssh: Option<SshRoute>,
     },
     List,
@@ -958,6 +960,41 @@ mod tests {
         assert_eq!(decoded.image.received_frame_sequence, 7);
         assert_eq!(decoded.image.frame_sequence, 0);
         assert!(!decoded.image.image_received && !decoded.image.image_displayed);
+    }
+
+    /// The route, the identity and the address list of a viewer are objects and
+    /// lists: an agent program that builds every tool argument as a string sends
+    /// the JSON text of them.
+    #[test]
+    fn the_route_and_the_identity_of_a_viewer_are_read_as_their_text() {
+        let Operation::Create {
+            ssh: Some(ssh),
+            identity: Some(identity),
+            ..
+        } = serde_json::from_value::<DevicePanelInput>(serde_json::json!({
+            "operation": "create",
+            "endpoint": "127.0.0.1:5900",
+            "ssh": "{\"host\": \"lab-1\", \"port\": 2222}",
+            "identity": "{\"machine_name\": \"lab-1\", \"ip_addresses\": [\"127.0.0.1\"]}"
+        }))
+        .expect("public input")
+        .into_operation()
+        else {
+            panic!("create did not read the text of a route and of an identity");
+        };
+        assert_eq!((ssh.host.as_str(), ssh.port), ("lab-1", Some(2222)));
+        assert_eq!(identity.machine_name.as_deref(), Some("lab-1"));
+        assert_eq!(
+            identity.ip_addresses,
+            vec!["127.0.0.1".parse::<std::net::IpAddr>().expect("an address")]
+        );
+        assert!(
+            serde_json::from_value::<DevicePanelInput>(serde_json::json!({
+                "operation": "create", "endpoint": "127.0.0.1:5900", "identity": "not an identity"
+            }))
+            .is_err(),
+            "a text that is no identity is still refused"
+        );
     }
 
     #[test]
