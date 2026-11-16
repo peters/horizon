@@ -60,6 +60,9 @@ pub(in crate::app) struct NodeCards {
     pub(in crate::app) base: PathBuf,
     /// The program of the `ssh` children.
     pub(in crate::app) program: String,
+    /// The delay before the next attempt of a lost card link, which a test sets to a
+    /// short one; the rule of [`reconnect_delay`] is the delay of a person.
+    pub(in crate::app) delay: Option<Duration>,
     wanted: Option<UnboundedSender<Wanted>>,
     supervisor: Option<JoinHandle<()>>,
     /// The card link of each machine whose child is gone, for the line of the sidebar.
@@ -71,6 +74,7 @@ impl Default for NodeCards {
         Self {
             base: std::env::temp_dir(),
             program: SSH_PROGRAM.to_owned(),
+            delay: None,
             wanted: None,
             supervisor: None,
             links: Links::default(),
@@ -91,10 +95,14 @@ impl NodeCards {
     pub(in crate::app) fn set_sessions(&mut self, machines: Vec<CardMachine>, host_instance: &str) {
         if self.wanted.is_none() {
             let (wanted, orders) = tokio::sync::mpsc::unbounded_channel();
-            let (base, program) = (self.base.clone(), self.program.clone());
+            let base = self.base.clone();
+            let launch = Launch {
+                program: self.program.clone(),
+                delay: self.delay,
+            };
             match std::thread::Builder::new()
                 .name("horizon-card-sockets".to_owned())
-                .spawn(move || supervise(orders, &base, &program))
+                .spawn(move || supervise(orders, &base, launch))
             {
                 Ok(supervisor) => {
                     self.wanted = Some(wanted);
@@ -142,20 +150,26 @@ struct Carried {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// The program of an `ssh` child of the cards, and the delay before the next attempt of a lost link.
+#[derive(Clone)]
+struct Launch {
+    program: String,
+    delay: Option<Duration>,
+}
+
 /// The loop of the supervisor: serve the set that each message names, and end
 /// every socket and child when the window drops its sender.
-fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, program: &str) {
+fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, launch: Launch) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
         return;
     };
     let folder = node_cards::local_dir(base);
-    let program = program.to_owned();
     runtime.block_on(async {
         let mut bound: BTreeMap<String, Bound> = BTreeMap::new();
         let mut carried: BTreeMap<String, Carried> = BTreeMap::new();
         let mut orders = orders;
         while let Some((machines, host_instance)) = orders.recv().await {
-            apply_set(&folder, &program, &machines, &host_instance, &mut bound, &mut carried).await;
+            apply_set(&folder, &launch, &machines, &host_instance, &mut bound, &mut carried).await;
         }
         for (_, socket) in std::mem::take(&mut bound) {
             end(socket).await;
@@ -173,7 +187,7 @@ fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, 
 /// machine that left loses its socket or its child.
 async fn apply_set(
     folder: &Path,
-    program: &str,
+    launch: &Launch,
     machines: &[CardMachine],
     host_instance: &str,
     bound: &mut BTreeMap<String, Bound>,
@@ -224,7 +238,7 @@ async fn apply_set(
             refused,
             ..machine.clone()
         };
-        let task = tokio::spawn(carry(machine, program.to_owned(), args.clone(), stopped));
+        let task = tokio::spawn(carry(machine, launch.clone(), args.clone(), stopped));
         carried.insert(name, Carried { args, stop, task });
     }
     let left: Vec<String> = bound.keys().filter(|actor| !actors.contains(*actor)).cloned().collect();
@@ -251,7 +265,7 @@ async fn apply_set(
 /// Runs the `ssh` child of one machine until its stop: an end of the child waits
 /// the delay of [`reconnect_delay`] and starts the next attempt, and the words of
 /// `ssh` are read for the refusal that they name.
-async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut stop: oneshot::Receiver<()>) {
+async fn carry(machine: CardMachine, launch: Launch, args: Vec<String>, mut stop: oneshot::Receiver<()>) {
     let remotes: Vec<String> = machine
         .sessions
         .iter()
@@ -268,9 +282,9 @@ async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut sto
             }
         }
         // The child before this one left a socket file for each of these paths.
-        prune_stale(&program, &prune).await;
+        prune_stale(&launch.program, &prune).await;
         let started = Instant::now();
-        let mut child = match tokio::process::Command::new(&program)
+        let mut child = match tokio::process::Command::new(&launch.program)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -315,9 +329,10 @@ async fn carry(machine: CardMachine, program: String, args: Vec<String>, mut sto
             attempts = 0;
         }
         attempts = attempts.saturating_add(1);
+        let wait = launch.delay.unwrap_or_else(|| reconnect_delay(attempts));
         tokio::select! {
             _ = &mut stop => return,
-            () = tokio::time::sleep(reconnect_delay(attempts)) => {}
+            () = tokio::time::sleep(wait) => {}
         }
     }
 }

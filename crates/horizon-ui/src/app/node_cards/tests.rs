@@ -123,35 +123,34 @@ fn machine_of(cards: &NodeCards, folder: &Path, name: &str, sessions: &[&str]) -
     }
 }
 
-/// One stand-in `ssh` of a test: the count of its calls and the argv of each call.
+/// One stand-in `ssh` of a test: the argv of each call it ran.
 struct StandIn {
     folder: tempfile::TempDir,
-    calls: PathBuf,
     argv: PathBuf,
 }
 
 impl StandIn {
     /// The stand-in that holds its link, as a forward that `sshd` accepted does.
     fn holding() -> Self {
-        Self::of("sleep 30\n")
+        Self::of("case $* in *'mkdir -p '*) exit 0 ;; esac\nsleep 30\n")
     }
 
     /// The stand-in that ends at once with the words of a refused forward.
     fn refusing() -> Self {
-        Self::of("printf 'remote port forwarding failed\n' >&2\nexit 255\n")
+        Self::of("case $* in *'mkdir -p '*) exit 0 ;; esac\nprintf 'remote port forwarding failed\n' >&2\nexit 255\n")
     }
 
+    /// A stand-in of `body`, which answers the removal of the socket files of a
+    /// machine at once unless it proves that removal itself.
     fn of(body: &str) -> Self {
         let folder = scratch();
-        let calls = folder.path().join("calls");
         let argv = folder.path().join("argv");
         let script = format!(
-            "#!/bin/sh\nprintf 'c' >> {calls}\nprintf '%s\\n' \"$*\" >> {argv}\n{body}",
-            calls = calls.display(),
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {argv}\n{body}",
             argv = argv.display(),
         );
         stand_in_program_in(folder.path(), "ssh", &script).expect("the stand-in ssh of the test");
-        Self { folder, calls, argv }
+        Self { folder, argv }
     }
 
     /// The program of the stand-in.
@@ -159,14 +158,24 @@ impl StandIn {
         self.folder.path().join("ssh")
     }
 
-    /// How many times the supervisor started this program.
+    /// How many times the supervisor started the child of a machine: the argv of each
+    /// call, without the removal of the socket files that comes before each of them.
     fn calls(&self) -> usize {
-        std::fs::metadata(&self.calls).map_or(0, |held| usize::try_from(held.len()).unwrap_or(0))
+        self.argv().lines().filter(|line| !line.contains("mkdir -p ")).count()
     }
 
     /// The command line of every call, as one text.
     fn argv(&self) -> String {
         std::fs::read_to_string(&self.argv).unwrap_or_default()
+    }
+
+    /// The command line of the child of the machine, once the supervisor started it.
+    fn carried(&self) -> Option<String> {
+        self.argv()
+            .lines()
+            .rev()
+            .find(|line| line.split_whitespace().any(|word| word == "-R"))
+            .map(str::to_owned)
     }
 }
 
@@ -240,6 +249,9 @@ fn children_of(cards: &NodeCards) -> usize {
 fn cards_with(directory: &tempfile::TempDir, stand_in: &StandIn) -> NodeCards {
     let mut cards = cards_in(directory);
     cards.program = stand_in.program().to_string_lossy().into_owned();
+    // A child that ends starts the next one at once: a lane proves that the supervisor
+    // tries again, and the length of the rule of a person is proven beside it.
+    cards.delay = Some(Duration::from_millis(40));
     cards
 }
 
@@ -312,15 +324,9 @@ fn a_machine_carries_one_child_for_all_of_its_sessions() {
     let mut cards = cards_with(&directory, &stand_in);
     let machine = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
     cards.set_sessions(vec![machine], HOST);
-    wait_until("the child of the machine", || stand_in.calls() >= 2);
-    let argv = stand_in.argv();
-    // The first call of the machine removes the socket files that its child is about
-    // to bind, and the second one is the child itself.
-    let carried: String = argv
-        .lines()
-        .find(|line| line.contains("-R"))
-        .unwrap_or_default()
-        .to_owned();
+    wait_until("the child of the machine", || stand_in.carried().is_some());
+    // The child of the two sessions of one machine carries one `-R` for each of them.
+    let carried = stand_in.carried().expect("the child of the machine");
     assert_eq!(carried.matches("-R").count(), 2, "{carried}");
     assert!(carried.contains("-N") && carried.contains("-T"), "{carried}");
     assert!(carried.contains("StreamLocalBindUnlink=yes"), "{carried}");
