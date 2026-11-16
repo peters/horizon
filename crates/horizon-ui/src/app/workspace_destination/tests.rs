@@ -337,6 +337,9 @@ fn menu_search_field_uses_an_inset_well_instead_of_the_selection_stroke() {
     use crate::theme;
 
     let mut harness = Harness::new();
+    // The theme of the process is one value for every thread, and the tests of this crate
+    // run as threads that paint: this lane holds its own palette on its own thread.
+    let _dark_theme = crate::test_egui::with_theme(theme::ResolvedTheme::Dark);
     theme::apply(&harness.ctx, horizon_core::AppearanceTheme::Dark);
     // The opening frame requests focus after the editor is painted.
     harness.frame(Vec::new(), true);
