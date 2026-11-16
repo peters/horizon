@@ -15,8 +15,15 @@ use crate::HorizonHome;
 /// The longest time that a test waits for one condition of a holder.
 const TEST_BOUND: Duration = Duration::from_secs(10);
 
-fn home(folder: &tempfile::TempDir) -> HorizonHome {
-    HorizonHome::from_root(folder.path().to_path_buf())
+/// A home in a folder of a short path. The path of a Unix socket is bounded, and
+/// the temp folder of a system is long on a Mac.
+fn temp_home() -> (tempfile::TempDir, HorizonHome) {
+    let folder = tempfile::Builder::new()
+        .prefix("hz-holder")
+        .tempdir_in("/tmp")
+        .expect("a folder for a home");
+    let home = HorizonHome::from_root(folder.path().to_path_buf());
+    (folder, home)
 }
 
 fn launch(local_id: &str, script: &str) -> Launch {
@@ -142,8 +149,7 @@ fn close(client: &mut Client, serving: Serving) {
 
 #[test]
 fn the_hello_names_the_pid_of_a_live_program() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(&home, &launch("hello", "exec sleep 60"), 1024);
     let (mut client, hello) = attach_when_free(&serving.socket);
 
@@ -160,8 +166,7 @@ fn the_hello_names_the_pid_of_a_live_program() {
 
 #[test]
 fn the_output_of_the_program_reaches_the_client() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch("output", "printf 'hello from the program\\n'; exec cat"),
@@ -176,8 +181,7 @@ fn the_output_of_the_program_reaches_the_client() {
 
 #[test]
 fn the_input_of_the_client_reaches_the_program() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch("input", "read line; printf 'read %s\\n' \"$line\""),
@@ -198,8 +202,7 @@ fn the_input_of_the_client_reaches_the_program() {
 
 #[test]
 fn a_resize_reaches_the_program() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(&home, &launch("resize", "read line; stty size; exec cat"), 1024);
     let (mut client, _hello) = attach_when_free(&serving.socket);
 
@@ -217,8 +220,7 @@ fn a_resize_reaches_the_program() {
 
 #[test]
 fn the_program_and_its_text_survive_a_detach() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch("detach", "printf 'first\\n'; sleep 1; printf 'second\\n'; exec cat"),
@@ -244,8 +246,7 @@ fn the_program_and_its_text_survive_a_detach() {
 
 #[test]
 fn a_second_client_while_one_is_attached_gets_the_refusal() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch("refusal", "read line; printf 'read %s\\n' \"$line\""),
@@ -269,8 +270,7 @@ fn a_second_client_while_one_is_attached_gets_the_refusal() {
 
 #[test]
 fn a_close_ends_the_program_and_removes_the_socket() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(&home, &launch("close", "exec sleep 120"), 1024);
     let (mut client, hello) = attach_when_free(&serving.socket);
     let socket = serving.socket.clone();
@@ -282,8 +282,7 @@ fn a_close_ends_the_program_and_removes_the_socket() {
 
 #[test]
 fn the_status_of_a_program_that_ended_reaches_the_client() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(&home, &launch("status", "read line; exit 3"), 1024);
     let (mut client, hello) = attach_when_free(&serving.socket);
 
@@ -307,8 +306,7 @@ fn the_status_of_a_program_that_ended_reaches_the_client() {
 
 #[test]
 fn the_ring_holds_only_its_newest_bytes() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch(
@@ -340,8 +338,7 @@ fn the_ring_holds_only_its_newest_bytes() {
 
 #[test]
 fn the_socket_and_its_folder_are_private() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(&home, &launch("private", "exec sleep 60"), 1024);
     let (mut client, _hello) = attach_when_free(&serving.socket);
 
@@ -362,8 +359,7 @@ fn the_socket_and_its_folder_are_private() {
 
 #[test]
 fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let dead = launch("stale", "read line; printf 'read %s\\n' \"$line\"");
     let paths = Paths::of(&home, &dead.local_id).expect("the socket");
     std::fs::create_dir_all(paths.socket().parent().expect("the folder")).expect("the folder");
@@ -388,8 +384,7 @@ fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
 
 #[test]
 fn a_client_that_breaks_the_protocol_leaves_the_program_running() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let serving = Serving::start(
         &home,
         &launch(
@@ -441,8 +436,7 @@ fn the_launch_document_is_no_argument_of_the_holder() {
 
 #[test]
 fn a_start_writes_the_launch_document_to_the_standard_input() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (folder, home) = temp_home();
     let copy = folder.path().join("document.json");
     let stand_in = crate::util::stand_in_program_in(
         folder.path(),
@@ -468,8 +462,7 @@ fn a_start_writes_the_launch_document_to_the_standard_input() {
 
 #[test]
 fn a_probe_finds_no_holder_where_no_socket_answers() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     assert_eq!(
         super::probe(&home, "nothing").expect("no socket"),
         None,
@@ -495,8 +488,7 @@ fn a_probe_finds_no_holder_where_no_socket_answers() {
 
 #[test]
 fn the_folder_of_the_sockets_is_made_private() {
-    let folder = tempfile::tempdir().expect("a folder");
-    let home = home(&folder);
+    let (_folder, home) = temp_home();
     let paths = Paths::of(&home, "private-folder").expect("the socket");
     std::fs::DirBuilder::new()
         .recursive(true)
