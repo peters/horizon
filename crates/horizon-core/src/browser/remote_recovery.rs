@@ -104,7 +104,22 @@ impl RemoteAllocations {
 
 #[cfg(test)]
 mod tests {
+    use super::super::remote_slots::{SlotError, acquire_slot};
     use super::*;
+
+    /// Asks for a slot through the window in which a forked child of another test
+    /// still holds the descriptor of the coordination lock.
+    fn slot(root: &std::path::Path) -> Result<SlotLease, SlotError> {
+        let mut answer = acquire_slot(root, "quota", 2);
+        for _ in 0..200 {
+            if !matches!(answer, Err(SlotError::Contended)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            answer = acquire_slot(root, "quota", 2);
+        }
+        answer
+    }
     use horizon_browser::RemoteRecoveryStatus;
 
     #[test]
@@ -155,7 +170,7 @@ mod tests {
                 provider: "grid".into(),
                 workspace: "workspace-a".into(),
                 owner: owner.into(),
-                lease: Some(super::super::remote_slots::acquire_slot(dir.path(), "quota", 2).expect("lease")),
+                lease: Some(slot(dir.path()).expect("lease")),
             });
         }
         assert_eq!(records.summaries(Some(("actor-a", "workspace-a"))).len(), 1);
@@ -166,21 +181,16 @@ mod tests {
         assert_eq!(released[0].status, RemoteRecoveryStatus::Released);
         // Concurrent test forks can retain a released descriptor until exec.
         let _available = (0..100)
-            .find_map(
-                |_| match super::super::remote_slots::acquire_slot(dir.path(), "quota", 2) {
-                    Ok(lease) => Some(lease),
-                    Err(super::super::remote_slots::SlotError::Busy { .. }) => {
-                        std::thread::sleep(std::time::Duration::from_millis(5));
-                        None
-                    }
-                    Err(error) => panic!("{error}"),
-                },
-            )
+            .find_map(|_| match slot(dir.path()) {
+                Ok(lease) => Some(lease),
+                Err(SlotError::Busy { .. }) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("{error}"),
+            })
             .expect("a published release makes its lease available after forked children exec");
-        assert!(matches!(
-            super::super::remote_slots::acquire_slot(dir.path(), "quota", 2),
-            Err(super::super::remote_slots::SlotError::Busy { .. })
-        ));
+        assert!(matches!(slot(dir.path()), Err(SlotError::Busy { .. })));
         assert!(records.records[first.reference()].lease.is_none());
         assert!(records.records[second.reference()].lease.is_some());
         assert!(records.reconcile(first.reference(), Some(("actor-a", "workspace-a"))));
