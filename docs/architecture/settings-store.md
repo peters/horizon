@@ -220,6 +220,15 @@ versions of the person. The key bindings of the machines are not a section of th
 store. They follow the server as objects of their own, and a credential value is a
 row of `secrets.sqlite`, as the machine list page says.
 
+One field of a shared section stays with one computer.
+`features.keep_agents_through_restart` says how this computer runs the programs of
+its agent panels, so it is not a value of the server: `LOCAL_FIELDS` in
+`crates/horizon-core/src/settings_sync.rs` names it, the body that this computer
+sends has no such field, a change of it is no change of a shared section, and a
+section that arrives from the server keeps the value of this computer. A field
+that this computer has and that the server does not send never replaces the value
+of the other computers either, because the field is out of the body that they read.
+
 ### One section on the server, and one on the computer
 
 One shared section is one object of the kind `setting` of the server of the

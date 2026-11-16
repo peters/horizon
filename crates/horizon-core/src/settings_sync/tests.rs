@@ -545,3 +545,42 @@ fn a_store_of_another_schema_is_refused_by_both_write_paths_of_a_section() {
     rows.insert("appearance".to_owned(), json!({ "theme": "light" }).to_string());
     assert!(store.write_sections(&rows).is_err(), "a newer store is never written");
 }
+
+/// The one field of a shared section that says how this computer runs stays with
+/// this computer: the body that the server carries has no such field, a change of
+/// it is no change of a shared section, and a section of another computer does not
+/// replace it.
+#[test]
+fn the_field_of_a_shared_section_that_stays_with_this_computer_does_not_travel() {
+    let mut config = Config::default();
+    config.features.keep_agents_through_restart = true;
+    let local = body_of_section(&config, "features");
+    assert!(
+        local.get("keep_agents_through_restart").is_none(),
+        "the server carries no field of this computer: {local}"
+    );
+    assert_eq!(
+        changed_sections(&Config::default(), &config),
+        Vec::<String>::new(),
+        "a change of the field of this computer is no change of a shared section"
+    );
+
+    let (_directory, store) = saved(&config);
+    let mut other = Config::default();
+    other.features.sidebar_accordion = true;
+    let arriving = arriving("features", &envelope(&other, "features"));
+    apply_to_store(&store, &arriving).expect("the section of the other computer");
+
+    let stored = store.section_rows().expect("the rows of the store");
+    let stored_features: Value = serde_json::from_str(stored.get("features").expect("the row")).expect("json");
+    assert_eq!(
+        stored_features["keep_agents_through_restart"],
+        json!(true),
+        "another computer does not end the programs of this one"
+    );
+    assert_eq!(
+        stored_features["sidebar_accordion"],
+        json!(true),
+        "the rest of the section applies"
+    );
+}

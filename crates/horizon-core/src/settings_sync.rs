@@ -250,13 +250,35 @@ impl std::fmt::Display for SectionFault {
     }
 }
 
-/// The JSON value of one section of `config`, or `None` when no section of this
-/// build has that name.
+/// The fields of a shared section that stay with this computer, and the section of
+/// each one: they say how this computer runs its programs, so the server never
+/// carries them.
+const LOCAL_FIELDS: &[(&str, &str)] = &[("features", "keep_agents_through_restart")];
+
+/// `value` of the section `name` with its local-only fields taken from `row`, or with them taken out when `row` is none.
+#[must_use]
+pub fn local_fields(name: &str, value: &Value, row: Option<&Value>) -> Value {
+    let Value::Object(fields) = value else {
+        return value.clone();
+    };
+    let mut result = fields.clone();
+    for (_, field) in LOCAL_FIELDS.iter().filter(|(section, _)| *section == name) {
+        match row.and_then(|row| row.get(*field)) {
+            Some(local) => result.insert((*field).to_owned(), local.clone()),
+            None => result.remove(*field),
+        };
+    }
+    Value::Object(result)
+}
+
+/// The JSON value of one section of `config` as the server carries it, or `None`
+/// when no section of this build has that name.
 ///
 /// # Errors
 /// Returns why the section cannot be encoded.
 pub fn body_of(config: &Config, name: &str) -> Result<Option<Value>> {
-    config_store::section_value(config, name)
+    let value = config_store::section_value(config, name)?;
+    Ok(value.map(|value| local_fields(name, &value, None)))
 }
 
 /// The body of the server object of one section of `config`, or `None` when the
@@ -459,8 +481,9 @@ pub fn changed_sections(before: &Config, after: &Config) -> Vec<String> {
 /// The whole merged configuration passes the rule of this build before one byte is
 /// written, and only the arriving rows are written: the settings of this computer
 /// that the server did not change stay exactly as they are, unknown sections
-/// included. The arriving row is written as the JSON that the server gave, so a
-/// field of a newer Horizon stays in the store and in the next push.
+/// included. The arriving row is written as the JSON that the server gave with the
+/// fields of that section that stay with this computer, so a field of a newer
+/// Horizon stays in the store and in the next push.
 ///
 /// # Errors
 /// Returns a fault when a section does not read, when the merged configuration
@@ -475,9 +498,14 @@ pub fn apply_to_store(
     let rows = store
         .section_rows()
         .map_err(|error| SectionFault::Store(error.to_string()))?;
-    let config = merged_config(&rows, arriving)?;
-    let mut writes = BTreeMap::new();
+    let mut kept = BTreeMap::new();
     for (name, value) in arriving {
+        let row = rows.get(name).and_then(|text| serde_json::from_str::<Value>(text).ok());
+        kept.insert(name.clone(), local_fields(name, value, row.as_ref()));
+    }
+    let config = merged_config(&rows, &kept)?;
+    let mut writes = BTreeMap::new();
+    for (name, value) in &kept {
         let text = serde_json::to_string(value)
             .map_err(|error| SectionFault::Unreadable(format!("the section {name}: {error}")))?;
         writes.insert(name.clone(), text);

@@ -216,8 +216,8 @@ fn local_section(
     handle: &SyncHandle,
 ) -> Option<Value> {
     match local.get(section) {
-        Some(text) => match serde_json::from_str(text) {
-            Ok(value) => Some(value),
+        Some(text) => match serde_json::from_str::<Value>(text) {
+            Ok(value) => Some(settings_sync::local_fields(section, &value, None)),
             Err(error) => {
                 handle.push_notice(format!(
                     "The setting {section} of this computer cannot be read: {error}"

@@ -468,6 +468,20 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
         );
 
         ui.add_space(10.0);
+        changed |= ui
+            .checkbox(
+                &mut config.features.keep_agents_through_restart,
+                egui::RichText::new("Keep agent programs running when Horizon restarts")
+                    .color(theme::FG())
+                    .size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "The program of an agent panel runs in a small holder process of Horizon. Close the panel to end the program.",
+        );
+
+        ui.add_space(10.0);
         changed |= render_notification_row(ui, config, view);
     });
     changed

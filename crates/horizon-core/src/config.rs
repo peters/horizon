@@ -264,6 +264,8 @@ pub struct FeaturesConfig {
     #[serde(alias = "organize_workspaces_on_startup")]
     pub organize_workspaces_on_session_load: bool,
     pub sidebar_accordion: bool,
+    /// Whether the program of an agent panel runs in a holder that outlives a restart of Horizon.
+    pub keep_agents_through_restart: bool,
     /// Which change of an agent panel a desktop notification tells, while no
     /// window of Horizon has the focus. A store of an older build has no such
     /// row, and it reads as the default that speaks of both changes.
@@ -1152,6 +1154,12 @@ mod tests {
     fn sidebar_accordion_defaults_disabled() {
         assert!(!FeaturesConfig::default().sidebar_accordion);
         assert!(!Config::default().features.sidebar_accordion);
+    }
+
+    #[test]
+    fn keep_agents_through_restart_defaults_disabled() {
+        assert!(!FeaturesConfig::default().keep_agents_through_restart);
+        assert!(!Config::default().features.keep_agents_through_restart);
     }
 
     /// A settings file of an older Horizon may hold keys of features that this
