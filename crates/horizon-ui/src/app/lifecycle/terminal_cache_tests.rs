@@ -320,6 +320,9 @@ fn collect_painted(shape: &Shape, wanted: &str, painted: &mut PaintedText) {
 #[test]
 fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
     const MARKER: &str = "IDLE-THEME-TEXT";
+    // The theme of the process is one value for every thread, and the tests of this crate
+    // run as threads that build apps: this lane holds its own theme on its own thread.
+    let _start_theme = crate::test_egui::with_theme(crate::theme::ResolvedTheme::Dark);
     let (temp, ctx, mut app) = offscreen_test_app();
     let panel_id = spawn_script(&mut app, &temp, "stty -echo; printf 'IDLE-THEME-TEXT'; sleep 60");
     drain_until_text(&mut app, panel_id, MARKER);
@@ -340,6 +343,7 @@ fn a_theme_change_repaints_an_idle_terminal_with_the_atlas_of_that_theme() {
     let mut config = app.template_config.clone();
     config.appearance.theme = horizon_core::AppearanceTheme::Light;
     app.apply_runtime_config(&config);
+    let _light_theme = crate::test_egui::with_theme(crate::theme::ResolvedTheme::Light);
     // The frame that applies the theme, and the frame that builds the font atlas of it.
     run_app_frame_with_input(&ctx, &mut app, raw_input([1400.0, 900.0], None));
     // A panel fades in, and the fade scales the colour of its text: this lane judges the
