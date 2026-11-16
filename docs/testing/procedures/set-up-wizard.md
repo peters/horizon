@@ -178,8 +178,16 @@ Horizon before they write anything.
    Result: Horizon makes a workspace and opens a panel of the first agent program
    that this computer has, in the order of Settings, Presets. On a computer with
    `claude` and `codex`, it is the preset of the agent that comes first in the
-   list. When the workspace has no directory, the dialog that asks for one opens
-   first.
+   list.
+
+   When the new workspace has no directory, the dialog that asks for one opens
+   first. For an agent preset its title is `Where should the agent work?`, and
+   for the shell preset it is `Select terminal directory`. The foot of the dialog
+   is `enter select`, `tab complete`, `esc cancel` and
+   `Type . to see hidden folders`. The list of the dialog holds no folder whose
+   name starts with a dot. Type `.` at the end of the query: the list then holds
+   the folders of the home that start with a dot, such as `.config` and `.codex`.
+   Type the work folder of the test in full, such as `~/hz-slim`, and push Enter.
 
    On a computer with no agent program, Horizon opens a panel of the first
    preset of the settings, which is a terminal, and one line in the sidebar says
@@ -288,6 +296,34 @@ Horizon before they write anything.
     that the row has, and no word of it stands outside the row. At 5120 x 1348
     the row shows the whole prompt: no ellipsis stands at its end, and the row is
     filled from the left pad to its press.
+
+17. Make a workspace with one panel, and keep the keyboard in another workspace.
+    Point at `+ Panel` on the line of the first workspace.
+
+    Result: The line of a workspace holds `Default`, `Rows`, `Cols`, `Grid`,
+    `Detach` and `+ Panel`, in this order. The hover text of `+ Panel` is
+    `Add a panel to this workspace`.
+
+18. Click `+ Panel` and read the list that opens. Select `Shell`.
+
+    Result: The list holds the presets alone, its title is `Presets`, and it
+    holds no action. The shell panel opens in the workspace whose line the press
+    came from. That workspace takes the keyboard, and the workspace that held it
+    before has no new panel.
+
+19. Push Ctrl+Shift+K and read the rows of the presets. On a computer without the
+    program of `Gemini CLI`, read the row of that preset.
+
+    Result: The presets whose program this computer has stand first, in the order
+    of Settings, Presets. The row of an agent preset without its program stands
+    after them, its label is dimmed, and the words `not installed` stand at its
+    right edge. The rows of the terminal, the browser and a card hold no such
+    words.
+
+20. Select the row of `Gemini CLI` and then `Escape`.
+
+    Result: The press opens a panel of that preset, as before the mark: the mark
+    tells the person that the program is not here, and it stops nothing.
 
 ### 6.2 F02 — The three entry points of Set up
 
@@ -887,6 +923,12 @@ price card and stops.
   hour and the three things that a person does next.
 - The row `choose.workshop` of the first card of Set up is the entry of that
   goal, and the first start page holds four tiles.
+- The dialog of a folder names the agent of an agent preset, and it lists a
+  folder that starts with a dot only when the query names one.
+- The line of a workspace adds a panel to that workspace, also when another
+  workspace holds the keyboard.
+- A preset without its program says `not installed`, stands last, and still
+  starts.
 
 ## 8. Cleanup
 

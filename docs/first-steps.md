@@ -205,6 +205,10 @@ or push Tab until it has the focus ring and then push Enter or Space.
 Under the tiles is the row of shortcuts of this computer: New terminal,
 Quick Nav and Machines you have. On macOS, the primary key is Cmd.
 
+The first tile asks for the folder of the new workspace when the workspace has
+none. The title of that dialog is `Where should the agent work?` for an agent
+preset.
+
 ### The page at any window size
 
 The page follows the size of the window. On a wide screen the block of the page
@@ -369,22 +373,41 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux. See
 
    Result: A second panel of the first preset opens.
 
-5. Push Ctrl+Shift+K.
+5. Click **+ Panel** on the line of a workspace, and then click a preset.
+
+   Result: A panel of that preset opens in that workspace. The keyboard moves to
+   that workspace, also when another workspace held it. The line of a workspace
+   holds **+ Panel** after **Detach**.
+
+6. Push Ctrl+Shift+K.
 
    Result: The command palette opens.
 
-6. Type a workspace name, a panel title or `>`.
+7. Type a workspace name, a panel title or `>`.
 
    Result: The command palette shows the matches.
 
-7. On the workspace header, click **Rows**, **Cols** or **Grid**.
+8. On the workspace header, click **Rows**, **Cols** or **Grid**.
 
    Result: The panels move into that layout.
 
-8. Close Horizon.
-9. Start Horizon again.
+9. Close Horizon.
+10. Start Horizon again.
 
-   Result: The board, the layout and the terminal history are the same.
+    Result: The board, the layout and the terminal history are the same.
+
+A preset of an agent program whose program is not on this computer says
+`not installed` at the right edge of its row, and it stands after the presets
+that this computer has. The mark tells you what to install. It stops nothing:
+the preset still opens, and a program that only your login shell finds still
+starts.
+
+The dialog that asks for the folder of a panel lists no folder whose name starts
+with a dot, so the list of a home is short. Type a dot in the query to see them:
+`~/.` lists the folders of the home that start with a dot, and its foot says
+`Type . to see hidden folders`. A folder that starts with a dot and that you type
+in full still opens with Enter. The title of the dialog is
+`Where should the agent work?` for an agent preset.
 
 The README lists all keyboard and mouse shortcuts. A shortcut with Ctrl uses
 Cmd on macOS. A panel becomes fullscreen with F11 on Linux and with

@@ -52,6 +52,9 @@ empty, on every platform. Without one, nothing is searched.
   listing hangs; the field and its keys work on meanwhile.
 - The typed folder is listed whole, with no cap on its entries, and each listed
   folder is read as a checkout (`checkout_in`) to mark repositories.
+- A folder whose name starts with a dot is listed only when the last segment of
+  the typed text starts with a dot, so the list of the home folder shows its work
+  first: `~/.` lists the folders of the home that start with a dot.
 - On macOS a guarded folder itself, or a link into one, is no checkout, so
   marking repositories while `~/` is listed reads nothing inside them. A path the person types into a
   guarded folder is looked at there (its `.git` entry only), and macOS can then

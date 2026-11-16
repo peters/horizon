@@ -354,7 +354,7 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig], missing: 
                 label: preset.name.clone(),
                 detail,
                 keywords,
-                not_installed: missing.contains(&index),
+                not_installed: preset.kind.is_agent() && missing.contains(&index),
             }
         })
         .collect()
