@@ -197,7 +197,7 @@ or push Tab until it has the focus ring and then push Enter or Space.
 
 | Tile | What it does |
 |---|---|
-| `Run agents side by side` | Makes a workspace and opens a panel of the first preset of your settings. |
+| `Run agents side by side` | Makes a workspace and opens a panel of the first agent program that your computer has, in the order of your settings. A computer with no agent program gets a terminal, and one line in the sidebar says so. |
 | `Work on a bigger machine` | Starts Set up with the goal `rent`. |
 | `Use Horizon on all your computers` | Starts Set up with the goal `server`. |
 | `A browser that stays signed in` | Starts Set up with the goal `browser`. |

@@ -15,7 +15,7 @@ pub(crate) mod notice;
 
 use egui::Context;
 use horizon_browser_control::manifest::now_millis;
-use horizon_core::setup::{SetupAgent, setup_agents};
+use horizon_core::setup::{FolderPanel, SetupAgent, folder_panel, setup_agents};
 use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, PresetConfig, SetupGoal};
 
 use super::HorizonApp;
@@ -240,6 +240,23 @@ impl HorizonApp {
         self.setup.panel = None;
         None
     }
+}
+
+/// The preset of the settings that a press which starts an agent runs: the first
+/// agent preset, in the order of the settings, whose program this computer has.
+///
+/// `found` is the answer of the search of the programs that [`setup_agents`]
+/// names, in its order, so the search runs on a worker and no frame reads a
+/// folder. [`FolderPanel::Terminal`] says that this computer has no agent program.
+pub(in crate::app) fn installed_agent(presets: &[PresetConfig], found: &[bool]) -> FolderPanel {
+    let agents = setup_agents(presets);
+    folder_panel(presets, |program| {
+        agents
+            .iter()
+            .position(|agent| agent.program == program)
+            .and_then(|place| found.get(place).copied())
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]

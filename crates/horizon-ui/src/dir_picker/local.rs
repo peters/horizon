@@ -178,6 +178,15 @@ impl DirPicker {
     }
 }
 
+#[cfg(test)]
+impl DirPicker {
+    /// The purpose of the question, so a test sees which preset a press asked
+    /// about before the person answers it.
+    pub(crate) fn purpose(&self) -> Option<&DirPickerPurpose> {
+        self.selected_purpose.as_ref()
+    }
+}
+
 fn render_result_row(ui: &mut egui::Ui, width: f32, index: usize, row: &dir_search::DirRow, is_selected: bool) -> bool {
     let display = dir_search::abbreviate_home(&row.path);
     // The flag comes from the lookup of the row, so the frame reads no entry of

@@ -175,9 +175,16 @@ Horizon before they write anything.
 
 4. Push Space while the first tile holds the keyboard.
 
-   Result: Horizon makes a workspace and opens a panel of the first preset of
-   the settings. When the workspace has no directory, the dialog that asks for
-   one opens first.
+   Result: Horizon makes a workspace and opens a panel of the first agent program
+   that this computer has, in the order of Settings, Presets. On a computer with
+   `claude` and `codex`, it is the preset of the agent that comes first in the
+   list. When the workspace has no directory, the dialog that asks for one opens
+   first.
+
+   On a computer with no agent program, Horizon opens a panel of the first
+   preset of the settings, which is a terminal, and one line in the sidebar says
+   `No agent program was found on this computer (<programs>). This is a
+   terminal.` The line names the programs that Horizon looked for.
 
 5. Close that workspace's panels and the workspace. Then push Enter while the
    second tile holds the keyboard.

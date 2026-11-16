@@ -15,10 +15,11 @@ use std::path::PathBuf;
 
 use egui::Context;
 use horizon_core::folder_requests::{Answer, FolderRequest};
-use horizon_core::setup::{FolderPanel, SetupAgent, folder_panel, setup_agents};
+use horizon_core::setup::{FolderPanel, setup_agents};
 use horizon_core::{PanelKind, PanelOptions, PresetConfig, WorkspaceId};
 
 use super::HorizonApp;
+use super::setup::installed_agent;
 
 /// The folder that a frame shows, and the request of another process that named
 /// it when one did.
@@ -65,8 +66,10 @@ impl HorizonApp {
 
     /// Opens the one panel of the workspace of a folder of this start.
     fn open_folder_panel(&mut self, ctx: &Context, workspace_id: WorkspaceId, folder: PathBuf) {
-        let candidates: Vec<SetupAgent> = setup_agents(&self.presets);
-        let programs: Vec<String> = candidates.iter().map(|agent| agent.program.clone()).collect();
+        let programs: Vec<String> = setup_agents(&self.presets)
+            .into_iter()
+            .map(|agent| agent.program)
+            .collect();
         let presets = self.presets.clone();
         let opening = ctx.clone();
         self.browser_create_host.io.then(
@@ -77,14 +80,8 @@ impl HorizonApp {
                     .collect::<Vec<bool>>()
             },
             move |app, found| {
-                let found = found.unwrap_or_else(|| vec![false; candidates.len()]);
-                let choice = folder_panel(&presets, |program| {
-                    candidates
-                        .iter()
-                        .position(|agent| agent.program == program)
-                        .and_then(|position| found.get(position).copied())
-                        .unwrap_or(false)
-                });
+                let found = found.unwrap_or_default();
+                let choice = installed_agent(&presets, &found);
                 let mut options = folder_panel_options(&presets, choice, &folder, &app.template_config.browser);
                 options.name = Some(super::session_pickup::folder_name(&folder));
                 options.name_is_custom = Some(false);

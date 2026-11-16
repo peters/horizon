@@ -1,6 +1,7 @@
 //! The first start page: its rule, its tiles and the press that each starts.
 
 use egui::Context;
+use horizon_core::{PanelKind, PanelResume, PresetConfig};
 
 use super::{
     HEADING, LEAD, PAGE_PAD_TOP, SHORTCUTS_LEAD, TILE_INNER_GAP, TILE_PAD, TILE_RADIUS, WelcomeTile, page_top,
@@ -566,17 +567,109 @@ fn the_page_goes_away_as_soon_as_the_board_holds_a_panel() {
 }
 
 #[test]
-fn the_first_tile_starts_a_panel_of_the_first_preset() {
-    let (_temp, mut app) = test_app();
+fn the_first_tile_starts_a_panel_of_the_first_agent_that_this_computer_has() {
+    let (temp, mut app) = test_app();
+    let folder = programs_folder(&temp);
+    // The program of the second agent preset is a file of this computer, and the
+    // program of the first is not.
+    install_program(&folder, "claude");
+    app.presets = first_start_presets(&folder);
     let mut ctx = Context::default();
     ctx.enable_accesskit();
+
     let pressed = press_tile(&mut ctx, &mut app, WelcomeTile::Agents);
 
     assert!(pressed, "the first tile is a control of the page");
-    assert!(
-        !app.board.panels.is_empty() || app.dir_picker.is_some(),
-        "the first tile starts the panel of the person, or asks where to run it"
+    assert_eq!(
+        asked_preset(&ctx, &mut app),
+        "Claude Code",
+        "the first tile starts the agent that this computer has, not the shell that the settings keep first"
     );
+}
+
+/// A computer with no agent program keeps the first preset, and one line says
+/// why.
+#[test]
+fn the_first_tile_keeps_the_first_preset_and_says_so_when_no_agent_program_is_here() {
+    let (temp, mut app) = test_app();
+    let folder = programs_folder(&temp);
+    app.presets = first_start_presets(&folder);
+    let mut ctx = Context::default();
+    ctx.enable_accesskit();
+
+    assert!(
+        press_tile(&mut ctx, &mut app, WelcomeTile::Agents),
+        "the first tile is a control of the page"
+    );
+
+    assert_eq!(asked_preset(&ctx, &mut app), "Shell", "no agent program is here");
+    let notice = app.sidebar_notice.clone().unwrap_or_default();
+    assert!(notice.contains("No agent program was found"), "{notice}");
+    assert!(
+        notice.contains("codex") && notice.contains("claude"),
+        "the line names the programs that Horizon looked for: {notice}"
+    );
+}
+
+/// The folder of the stand-in agent programs of a test.
+fn programs_folder(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    let folder = temp.path().join("bin");
+    std::fs::create_dir_all(&folder).expect("the folder of the programs");
+    folder
+}
+
+/// The settings list of a first start: a terminal, and two agent programs whose
+/// paths are files of `folder` that the test makes or leaves out.
+fn first_start_presets(folder: &std::path::Path) -> Vec<PresetConfig> {
+    let preset = |name: &str, kind: PanelKind, program: Option<&str>| PresetConfig {
+        name: name.to_owned(),
+        alias: None,
+        kind,
+        command: program.map(|program| folder.join(program).display().to_string()),
+        args: Vec::new(),
+        resume: PanelResume::Fresh,
+        ssh_connection: None,
+    };
+    vec![
+        preset("Shell", PanelKind::Shell, None),
+        preset("Codex", PanelKind::Codex, Some("codex")),
+        preset("Claude Code", PanelKind::Claude, Some("claude")),
+    ]
+}
+
+/// Makes `program` an executable file of `folder`, so the search of the agent
+/// programs of this computer finds it.
+fn install_program(folder: &std::path::Path, program: &str) {
+    horizon_core::stand_in_program_in(folder, program, "exit 0\n").expect("the program of the test");
+}
+
+/// The name of the preset that the press asked for, once the search of the agent
+/// programs of this computer answered it.
+///
+/// The search reads the folders of the `PATH` on the coordination worker, so the
+/// question opens on a later frame. The bound is the hang guard of the test, not a
+/// rule of the product.
+fn asked_preset(ctx: &Context, app: &mut crate::app::HorizonApp) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let asked = app
+            .dir_picker
+            .as_ref()
+            .and_then(|picker| picker.purpose())
+            .and_then(|purpose| match purpose {
+                crate::dir_picker::DirPickerPurpose::AddPanel { preset, .. } => Some(preset.name.clone()),
+                crate::dir_picker::DirPickerPurpose::NewWorkspace { .. } => None,
+            });
+        if let Some(name) = asked {
+            return name;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first tile asked nothing within the bound"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        run_app_frame(ctx, app);
+    }
 }
 
 #[test]

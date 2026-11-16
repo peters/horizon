@@ -36,6 +36,8 @@ use self::layout::{ROW_GAP, TILE_GAP, page_width};
 use self::pickup as pickup_section;
 use super::HorizonApp;
 use super::session_pickup::SessionPickup;
+use super::setup;
+use horizon_core::setup::{FolderPanel, find_program, setup_agents};
 
 use self::pickup::PickupSectionPress;
 
@@ -202,17 +204,49 @@ impl HorizonApp {
     fn start_welcome_tile(&mut self, ctx: &Context, tile: WelcomeTile) {
         match tile.goal() {
             Some(goal) => self.press_set_up(ctx, goal),
-            // The first tile opens the panel of the person's first preset, as
-            // the New Terminal button of the canvas did.
-            None => {
-                if let Some(preset) = self.presets.first().cloned() {
-                    let workspace_id = self.ensure_workspace_visible(ctx);
-                    self.add_panel_to_workspace(ctx, workspace_id, preset, None);
-                } else {
-                    self.create_panel(ctx);
-                }
-            }
+            None => self.start_agent_tile(ctx),
         }
+    }
+
+    /// The first tile starts a panel of the first agent preset, in the order of
+    /// the settings, whose program this computer has.
+    ///
+    /// A computer with no agent program keeps the first preset of the settings,
+    /// and one line says that this is a terminal. The search reads the folders of
+    /// the `PATH`, so it runs on the coordination worker and the panel opens on a
+    /// later frame.
+    fn start_agent_tile(&mut self, ctx: &Context) {
+        if self.presets.is_empty() {
+            self.create_panel(ctx);
+            return;
+        }
+        let workspace_id = self.ensure_workspace_visible(ctx);
+        let presets = self.presets.clone();
+        let programs: Vec<String> = setup_agents(&presets).into_iter().map(|agent| agent.program).collect();
+        let searched = programs.clone();
+        let opening = ctx.clone();
+        self.browser_create_host.io.then(
+            move || {
+                searched
+                    .iter()
+                    .map(|program| find_program(program, None).is_some())
+                    .collect::<Vec<bool>>()
+            },
+            move |app, found| {
+                let found = found.unwrap_or_default();
+                let preset = match setup::installed_agent(&presets, &found) {
+                    FolderPanel::Preset(index) => presets.get(index).cloned(),
+                    FolderPanel::Terminal => {
+                        app.set_sidebar_plain_notice(no_agent_program(&programs));
+                        presets.first().cloned()
+                    }
+                };
+                match preset {
+                    Some(preset) => app.add_panel_to_workspace(&opening, workspace_id, preset, None),
+                    None => app.create_panel(&opening),
+                }
+            },
+        );
     }
 
     /// Whether the first page shows: no workspace, no panel, and no dialog over
@@ -258,6 +292,15 @@ fn page_step(ui: &Ui, page: f32) -> f32 {
         step += page;
     }
     step
+}
+
+/// The one line that says that this computer has no agent program, with the
+/// programs that Horizon looked for.
+fn no_agent_program(programs: &[String]) -> String {
+    format!(
+        "No agent program was found on this computer ({}). This is a terminal.",
+        programs.join(", ")
+    )
 }
 
 /// Whether the first page shows, from the counts of the board.
