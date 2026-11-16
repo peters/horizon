@@ -15,6 +15,11 @@ cards of a machine forwards one Unix socket of each session. This test proves:
     then `block_panel create` with a card of two buttons, and `--once` ends it;
   * a click that the server answers in the shape of the block skill leads to one
     `block_panel update` whose document names the label that the person pressed;
+  * a server that cuts the stream ends no call: the agent meets the socket again,
+    says `initialize` again, asks the same card for its next press and draws no
+    second card, and that press becomes an update;
+  * the relay answers one call with the error of a lost link, and the agent calls
+    again and goes on with the card that it drew;
   * a socket that never answers ends the program with one line and a status;
   * the machine record that the fixture writes carries the mark of the cards, which
     is the field that the record reader in core reads.
@@ -51,6 +56,15 @@ DEADLINE = 20.0
 CLICK_ANSWER = {'status': 'clicked', 'click': {
     'event_id': 4, 'panel_id': 'card-1', 'component_id': 'continue',
     'revision': 1, 'selected': [], 'at_millis': 1700000000000, 'stale': False}}
+
+# The error that the relay program of the machines skill answers a call with when the
+# link to Horizon ended, as `assets/plugins/claude-code/skills/horizon-machines/SKILL.md`
+# states it.
+LOST = 'The link to Horizon was lost. Call again.'
+
+# The file of this test serves as the relay of the relay lane, which is the idiom of
+# the fake servers of this folder: a run with one argument is that relay.
+THIS_FILE = Path(__file__).resolve()
 
 
 def wait_for(what, wanted, deadline=DEADLINE):
@@ -91,15 +105,26 @@ class Bridge:
 
 
 class OneServer(threading.Thread):
-    """One MCP server on a Unix socket, which answers from `answers`."""
+    """One MCP server on a Unix socket, which answers from `answers`.
 
-    def __init__(self, path: Path, answers: list[dict]):
+    `cut_after` answers that many `tools/call` calls and then ends the stream without
+    an answer for the next one, which is the cut of a link. The server then accepts
+    the next stream of the agent, as the `sshd` of a machine does after a reconnect,
+    and `streams` counts the connections of the agent.
+    """
+
+    def __init__(self, path: Path, answers: list[dict], cut_after: int | None = None):
         super().__init__(daemon=True)
         self.path = path
         self.answers = answers
+        self.cut_after = cut_after
+        self.cut_stream: int | None = None
         self.calls: list[dict] = []
+        self.answered = 0
+        self.streams = 0
         self.ready = threading.Event()
         self.done = threading.Event()
+        self.finished = threading.Event()
 
     def run(self) -> None:
         path = Path(self.path)
@@ -110,9 +135,19 @@ class OneServer(threading.Thread):
         path.parent.mkdir(parents=True, exist_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(path))
-        listener.listen(1)
+        listener.listen(4)
         self.ready.set()
-        held, _ = listener.accept()
+        try:
+            while not self.finished.is_set():
+                held, _ = listener.accept()
+                self.streams += 1
+                self.serve(held)
+        finally:
+            listener.close()
+            self.done.set()
+
+    def serve(self, held: socket.socket) -> None:
+        """One stream of the socket: the calls of the agent, and its answers."""
         stream = held.makefile('rwb')
         try:
             for line in stream:
@@ -120,33 +155,53 @@ class OneServer(threading.Thread):
                 if 'id' not in message:
                     continue
                 self.calls.append(message)
+                # The server of a test holds one answer for each call that it answers;
+                # the socket closes when the answers end, which ends the agent. A cut
+                # stream answers nothing, so the call after it takes the next answer.
+                if (self.cut_after is not None and self.cut_stream is None
+                        and len(self.tool_calls()) > self.cut_after):
+                    self.cut_stream = self.streams
+                    return
                 answer = {'jsonrpc': '2.0', 'id': message['id'], 'result': self.answer(message)}
                 stream.write(json.dumps(answer).encode('utf-8') + b'\n')
                 stream.flush()
-                # The server of a test holds one answer for each call of the agent;
-                # the socket closes when the answers end, which ends the agent.
-                if message['method'] == 'tools/call' and len(self.tool_calls()) >= len(self.answers):
-                    break
+                if message['method'] != 'tools/call':
+                    continue
+                self.answered += 1
+                if self.answered >= len(self.answers):
+                    self.finished.set()
+                    return
         finally:
             stream.close()
             held.close()
-            listener.close()
-            self.done.set()
 
     def answer(self, message: dict) -> dict:
         if message['method'] == 'initialize':
             return {'protocolVersion': '2025-06-18', 'capabilities': {}, 'serverInfo': {'name': 'test', 'version': '1'}}
         return {'structuredContent': self.answers[self.answered]}
 
-    @property
-    def answered(self) -> int:
-        """How many `tools/call` calls this server answered before this one."""
-        return len(self.tool_calls()) - 1
-
     def tool_calls(self) -> list[dict]:
         """The `block_panel` operations that the agent asked for, in order."""
         return [message['params']['arguments'] for message in self.calls
                 if message['method'] == 'tools/call']
+
+
+class Pane(threading.Thread):
+    """The lines of the pane of one agent, which the test reads while it runs."""
+
+    def __init__(self, child: subprocess.Popen):
+        super().__init__(daemon=True)
+        self.child = child
+        self.lines: list[str] = []
+        self.start()
+
+    def run(self) -> None:
+        for line in self.child.stdout:
+            self.lines.append(line)
+
+    def says(self, words: str) -> bool:
+        """Whether one line of the pane holds `words`."""
+        return any(words in line for line in self.lines)
 
 
 class MachineCardAgentTest(unittest.TestCase):
@@ -155,12 +210,18 @@ class MachineCardAgentTest(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
 
-    def start_agent(self, socket_path: Path, *extra: str) -> subprocess.Popen:
+    def start_agent(self, *words: str, env: dict | None = None) -> subprocess.Popen:
         child = subprocess.Popen(
-            [sys.executable, '-u', str(AGENT), '--socket', str(socket_path), *extra],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            [sys.executable, '-u', str(AGENT), *words],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         self.addCleanup(lambda: child.poll() is None and child.kill())
         return child
+
+    def stop_agent(self, child: subprocess.Popen) -> str:
+        """Ends one agent of the test, and returns the words of its pane."""
+        child.terminate()
+        output, _ = child.communicate(timeout=30)
+        return output
 
     def test_the_forward_of_a_machine_copies_a_stream_both_ways(self):
         here = self.root / 'here'
@@ -191,7 +252,7 @@ class MachineCardAgentTest(unittest.TestCase):
         server = OneServer(socket_path, [{'status': 'created', 'panel_id': 'card-1', 'revision': 1}])
         server.start()
         wait_for('the socket of the server', lambda: server.ready.is_set())
-        agent = self.start_agent(socket_path, '--once')
+        agent = self.start_agent('--socket', str(socket_path), '--once')
         output, _ = agent.communicate(timeout=30)
         self.assertEqual(agent.returncode, 0, output)
         self.assertIn('card-1', output)
@@ -213,7 +274,7 @@ class MachineCardAgentTest(unittest.TestCase):
         ])
         server.start()
         wait_for('the socket of the server', lambda: server.ready.is_set())
-        child = self.start_agent(socket_path)
+        child = self.start_agent('--socket', str(socket_path))
 
         wait_for('the update of the click', lambda: len(server.tool_calls()) >= 3)
         calls = server.tool_calls()
@@ -225,10 +286,54 @@ class MachineCardAgentTest(unittest.TestCase):
 
     def test_a_socket_that_never_answers_says_so_and_ends(self):
         missing = self.root / 'cards' / 'build-1' / 'nothing.sock'
-        agent = self.start_agent(missing, '--once', '--connect-timeout', '1')
+        agent = self.start_agent('--socket', str(missing), '--once', '--connect-timeout', '1')
         output, _ = agent.communicate(timeout=60)
         self.assertEqual(agent.returncode, 1, output)
         self.assertIn('machine-card-agent:', output)
+
+    def test_a_cut_stream_ends_no_call_and_the_press_after_it_is_an_update(self):
+        socket_path = self.root / 'cards' / 'build-1' / 'hz-night.sock'
+        server = OneServer(socket_path, [
+            {'status': 'created', 'panel_id': 'card-1', 'revision': 1},
+            CLICK_ANSWER,
+            {'status': 'updated', 'panel_id': 'card-1', 'revision': 2},
+        ], cut_after=1)
+        server.start()
+        wait_for('the socket of the server', lambda: server.ready.is_set())
+        child = self.start_agent('--socket', str(socket_path))
+
+        # The first stream ends after the card, without an answer for the
+        # `next_click` that follows: the agent meets the socket again and asks the
+        # card that it drew for its next press.
+        wait_for('the update after the cut', lambda: len(server.tool_calls()) >= 4)
+        self.assertIsNone(child.poll(), 'the agent lives on after the cut')
+        self.assertEqual(server.streams, 2, 'the agent connected again after the cut')
+        calls = server.tool_calls()
+        self.assertEqual([call['operation'] for call in calls[:4]],
+                         ['create', 'next_click', 'next_click', 'update'], calls)
+        self.assertEqual([call['panel_id'] for call in calls[1:4]],
+                         ['card-1'] * 3, 'a cut draws no second card')
+        texts = [component.get('text', '') for component in calls[3]['document']['components']]
+        self.assertIn('The person pressed Continue.', texts)
+        self.assertIn('the socket of the session ended', self.stop_agent(child))
+
+    def test_an_error_answer_of_the_relay_ends_no_call(self):
+        log = self.root / 'relay-calls.jsonl'
+        env = dict(os.environ, FAKE_RELAY_LOG=str(log))
+        child = self.start_agent('--relay', str(THIS_FILE), 'build-1', env=env)
+        pane = Pane(child)
+
+        wait_for('the call after the error', lambda: pane.says('the person pressed Continue'))
+        self.assertIsNone(child.poll(), 'the agent lives on after the error answer')
+        calls = [json.loads(line) for line in log.read_text(encoding='utf-8').splitlines()]
+        arguments = [message['params']['arguments'] for message in calls
+                     if message['method'] == 'tools/call']
+        self.assertEqual([call['operation'] for call in arguments[:4]],
+                         ['create', 'next_click', 'next_click', 'update'], arguments)
+        texts = [component.get('text', '') for component in arguments[3]['document']['components']]
+        self.assertIn('The person pressed Continue.', texts)
+        self.assertTrue(pane.says('the call was answered with an error'), pane.lines)
+        self.stop_agent(child)
 
 
 class RelayOfTheSkillTest(unittest.TestCase):
@@ -351,5 +456,52 @@ class StandInSshTest(unittest.TestCase):
             self.assertTrue(str(path).endswith('/horizon-cards/build-1/hz-night.sock'), path)
 
 
+# The relay of the relay lane: this file, run with one argument, answers the calls of
+# its agent itself, and names the calls in the file that `FAKE_RELAY_LOG` names. The
+# second `next_click` call is answered with the error of a lost link.
+FAKE_RELAY_ANSWERS = [
+    {'status': 'created', 'panel_id': 'card-relay', 'revision': 1},
+    {'error': {'code': -32000, 'message': LOST}},
+    CLICK_ANSWER,
+    {'status': 'updated', 'panel_id': 'card-relay', 'revision': 2},
+]
+
+
+def serve_fake_relay() -> int:
+    """Answers the calls of one agent, one error among them, and ends with its input."""
+    log_path = os.environ.get('FAKE_RELAY_LOG')
+    answers = iter(FAKE_RELAY_ANSWERS)
+    log = open(log_path, 'a', encoding='utf-8') if log_path else None
+    try:
+        for line in sys.stdin:
+            message = json.loads(line)
+            if log:
+                log.write(line.rstrip('\n') + '\n')
+                log.flush()
+            if 'id' not in message:
+                continue
+            if message.get('method') == 'initialize':
+                print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': {
+                    'protocolVersion': '2025-06-18', 'capabilities': {},
+                    'serverInfo': {'name': 'fake-relay', 'version': '1'}}}), flush=True)
+                continue
+            answer = next(answers, None)
+            if answer is None:
+                continue
+            if 'error' in answer:
+                said = {'jsonrpc': '2.0', 'id': message['id'], 'error': answer['error']}
+            else:
+                said = {'jsonrpc': '2.0', 'id': message['id'],
+                        'result': {'structuredContent': answer}}
+            print(json.dumps(said), flush=True)
+    finally:
+        if log:
+            log.close()
+    return 0
+
+
 if __name__ == '__main__':
+    if len(sys.argv) == 2:
+        # The agent of the relay lane runs this file as its relay program.
+        sys.exit(serve_fake_relay())
     unittest.main()

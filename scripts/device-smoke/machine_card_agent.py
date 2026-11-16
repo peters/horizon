@@ -12,6 +12,12 @@ component that the person pressed, and the agent then updates the card with the
 label of that press. Nothing of Horizon is on this side: one socket, one protocol,
 and the identity arrives from the socket that Horizon chose.
 
+A lost link ends no call. The agent says one line, waits, and asks again, as the
+machines skill tells an agent of a machine: the relay answers the call that a cut
+reached with an error and meets the socket again. Without the relay the agent is the
+client of the socket itself, so it connects again and says `initialize` again, and it
+keeps the card that it drew instead of drawing a second one.
+
 Standard library only. Nothing is written outside the socket.
 """
 from __future__ import annotations
@@ -50,6 +56,14 @@ CONNECT_POLL_SECONDS = 0.2
 # it, and the agent asks again.
 CLICK_TIMEOUT_MILLIS = 120_000
 
+# How long the agent waits after an error answer, and after a link that ended, in
+# seconds. A cut is no end: the agent calls again for as long as it lives.
+RETRY_SECONDS = 1.0
+
+# How long the agent waits between two tries of the socket of its session after a cut,
+# in seconds, which is the retry of the relay program of the machines skill.
+RECONNECT_POLL_SECONDS = 0.5
+
 
 def log(line: str) -> None:
     """One line in the pane of the agent, which the person reads there."""
@@ -63,9 +77,14 @@ class SocketClient:
         self.path = path
         self._buffer = b''
         self._next_id = 0
-        self.sock = RelayChannel(*relay) if relay else self._connect(deadline)
+        self.sock = RelayChannel(*relay) if relay else self._connect(deadline, CONNECT_POLL_SECONDS)
 
-    def _connect(self, deadline: float) -> socket.socket:
+    def _connect(self, deadline: float | None, poll: float) -> socket.socket:
+        """Meets the socket of the session, and waits for it until `deadline`.
+
+        `deadline` of `None` waits for ever, which is what a cut of the link asks
+        for: the agent of a session keeps its call, and the socket comes back.
+        """
         while True:
             held = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
@@ -73,10 +92,21 @@ class SocketClient:
                 return held
             except OSError as error:
                 held.close()
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
                     raise
                 log(f'waiting for {self.path} ({error})')
-                time.sleep(CONNECT_POLL_SECONDS)
+                time.sleep(poll)
+
+    def reconnect(self) -> None:
+        """Meets the socket of the session again after a cut and says hello again.
+
+        The card of the agent stays the card that it drew: the next `next_click`
+        call names the same panel, so a cut draws no second card.
+        """
+        self.close()
+        self._buffer = b''
+        self.sock = self._connect(None, RECONNECT_POLL_SECONDS)
+        self.initialize()
 
     def close(self) -> None:
         self.sock.close()
@@ -155,14 +185,35 @@ def draw(client: SocketClient, title: str) -> str:
     return payload['panel_id']
 
 
-def wait_for_click(client: SocketClient, panel_id: str, title: str) -> None:
+def ask(client: SocketClient, arguments: dict, reconnect: bool) -> dict:
+    """One `block_panel` call that an error answer or a cut of the link does not end.
+
+    The machines skill tells an agent of a machine that a lost link answers its call
+    with an error and that it calls again. This agent does the same, so a card of a
+    session outlives a cut, as the card of a real agent does.
+    """
+    while True:
+        try:
+            return client.call_tool(arguments)
+        except RuntimeError as error:
+            log(f'the call was answered with an error: {error}')
+            time.sleep(RETRY_SECONDS)
+        except (ConnectionError, OSError) as error:
+            log(f'the socket of the session ended: {error}')
+            if not reconnect:
+                raise
+            time.sleep(RETRY_SECONDS)
+            client.reconnect()
+
+
+def wait_for_click(client: SocketClient, panel_id: str, title: str, reconnect: bool) -> None:
     """Keeps `next_click` open and updates the card with the label of each press."""
     while True:
-        payload = client.call_tool({
+        payload = ask(client, {
             'operation': 'next_click',
             'panel_id': panel_id,
             'timeout_millis': CLICK_TIMEOUT_MILLIS,
-        })
+        }, reconnect)
         if payload.get('status') != 'clicked':
             log(f'the wait ended: {payload.get("status")}')
             continue
@@ -170,11 +221,11 @@ def wait_for_click(client: SocketClient, panel_id: str, title: str) -> None:
         pressed = str((payload.get('click') or {}).get('component_id', ''))
         label = {'continue': 'Continue', 'stop': 'Stop'}.get(pressed, pressed)
         log(f'the person pressed {label}')
-        updated = client.call_tool({
+        updated = ask(client, {
             'operation': 'update',
             'panel_id': panel_id,
             'document': card(title, f'The person pressed {label}.'),
-        })
+        }, reconnect)
         if updated.get('status') != 'updated':
             log(f'the update was refused: {updated}')
 
@@ -192,17 +243,23 @@ def main(argv: list[str]) -> int:
     arguments = parser.parse_args(argv)
     if (arguments.socket is None) == (arguments.relay is None):
         parser.error('name one of --socket and --relay')
-    client = SocketClient(arguments.socket, time.monotonic() + arguments.connect_timeout,
-                          tuple(arguments.relay) if arguments.relay else None)
+    relay = tuple(arguments.relay) if arguments.relay else None
+    try:
+        client = SocketClient(arguments.socket, time.monotonic() + arguments.connect_timeout,
+                              relay)
+    except (ConnectionError, OSError) as error:
+        log(f'no socket of the session: {error}')
+        return 1
     try:
         client.initialize()
         panel_id = draw(client, arguments.title)
         if arguments.once:
             return 0
-        wait_for_click(client, panel_id, arguments.title)
+        wait_for_click(client, panel_id, arguments.title, reconnect=relay is None)
     except (ConnectionError, OSError, RuntimeError) as error:
-        # A lost link ends the call: the agent says so and the session keeps the
-        # line for the person who reads it.
+        # No card, or the stream of the relay ended: the agent says why, and the pane
+        # keeps the line for the person who reads it. A cut of the link that the card
+        # of this agent already reached ends no call.
         log(f'the card socket ended: {error}')
         return 1
     finally:
