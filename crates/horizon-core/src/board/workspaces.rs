@@ -361,6 +361,12 @@ impl Board {
         // This avoids blocking the UI thread — the child process is cleaned
         // up asynchronously in the background.
         let mut panel = removed_panel?;
+        // The program of a panel whose holder runs it ends with the frame of the
+        // close: a drop of the terminal is only a detach, and it would leave a
+        // program that no panel shows.
+        if let Some(terminal) = panel.terminal_mut() {
+            terminal.close_holder();
+        }
         // A closed panel gets the same hangup and the same two steps as the
         // programs of the exit, so a program that ignores the hangup cannot run
         // on after the panel is gone.

@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::panel_holder::{self, HolderError, Launch};
 use crate::terminal::Terminal;
-use crate::{HorizonHome, Panel, PanelId, PanelKind, PanelOptions, PanelResume, WorkspaceId};
+use crate::{Board, HorizonHome, Panel, PanelId, PanelKind, PanelOptions, PanelResume, RuntimeState, WorkspaceId};
 
-use super::super::start::{StartRequest, prepare_panel_start};
+use super::super::start::{StartRequest, finish_restart, prepare_panel_start, prepare_restart};
 use super::super::terminal::spawn_started_terminal;
 
 /// The marker that the stand-in program of these tests prints.
@@ -270,4 +270,132 @@ fn a_holder_of_a_path_that_is_too_long_leaves_the_program_in_this_window() {
         text.contains("is longer than 100 bytes"),
         "the line names the bound of the path: {text:?}"
     );
+}
+
+/// A board with one workspace and one agent panel of a stand-in program, started
+/// as the app starts it.
+fn board_with_a_held_panel(home: &HorizonHome, local_id: &str, keep: bool) -> (Board, PanelId) {
+    let state = RuntimeState {
+        workspaces: vec![crate::WorkspaceState {
+            local_id: "workspace".to_owned(),
+            name: "workspace".to_owned(),
+            panels: vec![crate::PanelState {
+                local_id: local_id.to_owned(),
+                name: local_id.to_owned(),
+                kind: PanelKind::Codex,
+                command: Some("/bin/sh".to_owned()),
+                args: vec!["-c".to_owned(), format!("printf '{MARKER}\\n'; exec cat")],
+                rows: 24,
+                cols: 400,
+                ..crate::PanelState::default()
+            }],
+            ..crate::WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let mut board = Board::from_runtime_state_waiting(&state, None).expect("the restored board");
+    for pending in board.take_pending_starts() {
+        let request = StartRequest {
+            id: pending.id,
+            local_id: pending.options.local_id.clone().unwrap_or_default(),
+            opts: pending.options.clone(),
+            home: home.clone(),
+            keep_agents_through_restart: keep,
+        };
+        let start = prepare_panel_start(request);
+        board
+            .start_panel(pending.id, &pending.options, start)
+            .expect("the panel starts");
+    }
+    let id = board.panel_id_by_local_id(local_id).expect("the panel of the board");
+    (board, id)
+}
+
+/// Whether a program of `pid` still runs.
+fn runs(pid: u32) -> bool {
+    crate::process::is_alive(pid)
+}
+
+#[test]
+fn closing_the_panel_ends_the_program_of_its_holder() {
+    let (_folder, home) = temp_home();
+    let (mut board, id) = board_with_a_held_panel(&home, "closed-panel", true);
+    let pid = board
+        .panel(id)
+        .and_then(Panel::terminal)
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the program of the panel");
+    assert!(
+        matches!(panel_holder::probe(&home, "closed-panel"), Err(HolderError::Busy)),
+        "a holder serves this panel before it closes"
+    );
+
+    board.close_panel(id);
+    wait_until("the holder of the closed panel to go", || {
+        matches!(panel_holder::probe(&home, "closed-panel"), Ok(None))
+    });
+    assert!(
+        !home.root().join("panel-holders").join("closed-panel.sock").exists(),
+        "the holder removed the socket of the closed panel"
+    );
+    assert!(!runs(pid), "the program of the closed panel ended");
+}
+
+#[test]
+fn closing_the_workspace_ends_the_program_of_its_holder() {
+    let (_folder, home) = temp_home();
+    let (mut board, id) = board_with_a_held_panel(&home, "closed-workspace", true);
+    let workspace = board.panel(id).expect("the panel").workspace_id;
+    let pid = board
+        .panel(id)
+        .and_then(Panel::terminal)
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the program of the panel");
+
+    board.close_panels_in_workspace(workspace);
+    wait_until("the holder of the closed workspace to go", || {
+        matches!(panel_holder::probe(&home, "closed-workspace"), Ok(None))
+    });
+    assert!(!runs(pid), "the program of the closed workspace ended");
+}
+
+#[test]
+fn a_restart_of_the_panel_starts_a_new_holder_with_another_program() {
+    let (_folder, home) = temp_home();
+    let (mut board, id) = board_with_a_held_panel(&home, "restarted-panel", true);
+    let before = board
+        .panel(id)
+        .and_then(Panel::terminal)
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the program of the panel");
+
+    let request = board
+        .panel_mut(id)
+        .expect("the panel")
+        .restart_request(home.clone(), true)
+        .expect("the pre-flight of the restart")
+        .expect("a panel that restarts");
+    let preflight = prepare_restart(request).expect("the pre-flight of a worker");
+    let wanted = preflight.work_brief_wanted();
+    let pending = preflight.into_pending().expect("a panel whose process ends first");
+    board.begin_restart(id, wanted).expect("the old program ends");
+    let start = finish_restart(pending).expect("the launch of the new program");
+    board.apply_restart(id, start).expect("the panel restarts");
+
+    let after = board
+        .panel(id)
+        .and_then(Panel::terminal)
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the new program");
+    assert_ne!(after, before, "a new program serves the restarted panel");
+    assert!(
+        matches!(panel_holder::probe(&home, "restarted-panel"), Err(HolderError::Busy)),
+        "a holder serves the restarted panel"
+    );
+    assert_eq!(
+        board.panel(id).and_then(Panel::terminal).and_then(Terminal::child_pid),
+        Some(after),
+        "the terminal of the restarted panel reads the new program"
+    );
+    assert!(!runs(before), "the program of the holder before the restart ended");
 }

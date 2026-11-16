@@ -52,7 +52,10 @@ impl HorizonApp {
         let Some(panel) = self.board.panel_mut(panel_id) else {
             return;
         };
-        let request = match panel.restart_request() {
+        let request = match panel.restart_request(
+            self.session_store.home().clone(),
+            self.template_config.features.keep_agents_through_restart,
+        ) {
             Ok(Some(request)) => request,
             // A page relaunches itself, as it reads no file, and a panel that
             // runs no process has nothing to start again.

@@ -258,6 +258,9 @@ pub struct Terminal {
     /// This terminal runs a stand-in process that exits at once, because it
     /// shows a screen that a frame draws instead of the output of a program.
     snapshot: bool,
+    /// The link to the holder of this panel, for the one frame that ends its
+    /// program. A terminal of a program of this process has none.
+    holder: Option<std::os::unix::net::UnixStream>,
 }
 
 #[cfg(test)]

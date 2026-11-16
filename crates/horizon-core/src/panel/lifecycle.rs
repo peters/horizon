@@ -48,7 +48,7 @@ impl Panel {
     /// also refuses stale authorization, unverifiable saved history or launch
     /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
-        let Some(request) = self.restart_request()? else {
+        let Some(request) = self.restart_request(crate::HorizonHome::resolve(), false)? else {
             return Ok(());
         };
         let mut preflight = super::spawn::prepare_restart(request)?;
@@ -98,8 +98,6 @@ impl Panel {
         let Some(launch) = start.launch else {
             return Ok(());
         };
-        // This restart starts the program of the panel here, so it has no link to a
-        // holder: the restart of the app runs on the worker, which reads the setting.
         let PreparedLaunch {
             session_binding,
             program,
@@ -107,14 +105,14 @@ impl Panel {
             env,
             work,
             named_secrets_late,
+            attached,
             notice,
-            ..
         } = launch;
         let mut replay_bytes = replay_bytes_with_notice(start.replay_bytes, named_secrets_late);
         if let Some(notice) = notice {
             replay_bytes.extend_from_slice(notice.as_bytes());
         }
-        self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
+        let options = TerminalSpawnOptions {
             program,
             args,
             cwd: self.launch_cwd.clone(),
@@ -127,7 +125,12 @@ impl Panel {
             replay_bytes,
             env,
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
-        })?);
+        };
+        let terminal = match attached {
+            Some(link) => Terminal::spawn_attached(options, link.socket, link.hello, link.replay)?,
+            None => Terminal::spawn(options)?,
+        };
+        self.content = PanelContent::Terminal(terminal);
         self.session_binding = session_binding;
         if let Some(terminal) = self.terminal_mut() {
             terminal.work_owner = work.owner;

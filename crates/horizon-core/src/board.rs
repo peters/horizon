@@ -426,6 +426,9 @@ impl Board {
         let terminal = panel
             .terminal_mut()
             .ok_or_else(|| Error::State("No terminal to restart".into()))?;
+        // The program that this restart replaces ends here, and only the frame of
+        // the close ends it: a program of a holder is no child of this process.
+        terminal.close_holder();
         crate::panel::shutdown_for_restart(terminal, continuation)
     }
 

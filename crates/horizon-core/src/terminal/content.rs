@@ -199,6 +199,18 @@ impl Terminal {
         self.child_pid
     }
 
+    /// Ends the program of the holder of this panel, which a panel that the
+    /// person closes does before its terminal goes: a drop alone detaches, and
+    /// the program would run with no panel.
+    pub fn close_holder(&mut self) {
+        let Some(holder) = &mut self.holder else {
+            return;
+        };
+        if let Err(error) = horizon_pty_tap::frames::write(holder, &horizon_pty_tap::frames::Frame::Close) {
+            tracing::warn!(%error, "the holder of a closed panel took no close");
+        }
+    }
+
     #[must_use]
     pub fn child_exited(&self) -> bool {
         self.child_exited

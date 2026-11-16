@@ -5,8 +5,17 @@
 //! instead of starting the program in the process of Horizon. The decision runs on
 //! the coordination worker: a start and a link both wait.
 
+use std::thread;
+use std::time::{Duration, Instant};
+
 use crate::panel_holder::{self, Hello, HolderError, Launch, Linked};
 use crate::{HorizonHome, PanelOptions};
+
+/// The longest time that a new holder waits for the holder of the program that a
+/// restart ended to go.
+const CLEAR_BOUND: Duration = Duration::from_secs(5);
+/// The pause between two probes of that wait.
+const WAIT_PAUSE: Duration = Duration::from_millis(10);
 
 /// Whether the panel of `opts` runs its program in a holder: an agent panel that
 /// runs on this computer, and not a terminal of a machine or an ssh terminal.
@@ -41,6 +50,16 @@ pub(in crate::panel) fn started(
 ) -> (Option<Linked>, Option<String>) {
     if !(keep && may_hold(opts)) {
         return (None, None);
+    }
+    started_here(home, launch)
+}
+
+/// The link to the new holder that starts `launch`, once the holder of the program
+/// before is gone. The caller judged that this panel runs its program in a holder.
+pub(in crate::panel) fn started_here(home: &HorizonHome, launch: &Launch) -> (Option<Linked>, Option<String>) {
+    let deadline = Instant::now() + CLEAR_BOUND;
+    while !matches!(panel_holder::probe(home, &launch.local_id), Ok(None)) && Instant::now() < deadline {
+        thread::sleep(WAIT_PAUSE);
     }
     match start_holder(home, launch).and_then(|_| panel_holder::linked(home, &launch.local_id)) {
         Ok(Some(link)) => (Some(link), None),

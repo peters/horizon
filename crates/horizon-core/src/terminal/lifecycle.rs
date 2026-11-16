@@ -119,6 +119,7 @@ impl Terminal {
         replay: Vec<u8>,
     ) -> Result<Self> {
         options.replay_bytes = replay;
+        let holder = socket.try_clone().ok();
         let pty = horizon_pty_tap::PanelPty::attached(socket, window_size_of(&options))
             .map_err(|error| Error::Pty(format!("failed to attach the pty of the panel: {error}")))?;
         let child_start_time = Arc::new(std::sync::OnceLock::new());
@@ -130,6 +131,7 @@ impl Terminal {
             pty,
             Some(hello.pid),
             child_start_time,
+            holder,
         )
     }
 
@@ -151,7 +153,7 @@ impl Terminal {
         let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
         let pty = horizon_pty_tap::PanelPty::local(pty)
             .map_err(|error| Error::Pty(format!("failed to read the pty of the panel: {error}")))?;
-        Self::on_pty(options, trust, output, pty, child_pid, child_start_time)
+        Self::on_pty(options, trust, output, pty, child_pid, child_start_time, None)
     }
 
     /// Starts the event loop of a terminal on `pty`, with the replay of `options`,
@@ -163,6 +165,7 @@ impl Terminal {
         pty: horizon_pty_tap::PanelPty,
         child_pid: Option<u32>,
         child_start_time: Arc<std::sync::OnceLock<Option<String>>>,
+        holder: Option<UnixStream>,
     ) -> Result<Self> {
         let program_status = pty.inbox();
         let rows = options.rows.max(1);
@@ -232,6 +235,7 @@ impl Terminal {
             answered_query: false,
             child_exit_status: None,
             snapshot: matches!(output, PtyOutput::Discarded),
+            holder,
         };
         terminal.process_events();
         Ok(terminal)

@@ -255,6 +255,13 @@ pub struct RestartRequest {
     pub(in crate::panel) replay_bytes: Vec<u8>,
     /// Whether the panel restarts into a saved conversation.
     pub(in crate::panel) work_brief: Option<String>,
+    /// The home that holds the sockets of the holders of this run.
+    pub(in crate::panel) home: HorizonHome,
+    /// Whether an agent panel keeps its program in a holder after Horizon ends.
+    pub(in crate::panel) keep_agents_through_restart: bool,
+    /// The size of the terminal of the panel, which a holder opens.
+    pub(in crate::panel) rows: u16,
+    pub(in crate::panel) cols: u16,
 }
 
 /// The answer of the pre-flight of a restart. A panel that restarts into a
@@ -279,6 +286,10 @@ pub struct PendingRestart {
     work_brief: Option<String>,
     /// Whether the read of the named secrets ended before this restart started.
     named_secrets_late: bool,
+    home: HorizonHome,
+    keep_agents_through_restart: bool,
+    rows: u16,
+    cols: u16,
 }
 
 /// Reads the pre-flight of a restart and resolves its launch. This is the work
@@ -294,6 +305,10 @@ pub fn prepare_restart(request: RestartRequest) -> Result<RestartPreflight> {
         work,
         replay_bytes,
         work_brief,
+        home,
+        keep_agents_through_restart,
+        rows,
+        cols,
     } = request;
     if let Some(editor) = &work.editor_file {
         let text = std::fs::read_to_string(editor).map_err(|error| error.to_string());
@@ -356,6 +371,10 @@ pub fn prepare_restart(request: RestartRequest) -> Result<RestartPreflight> {
             owned,
             work_brief,
             named_secrets_late: !named_secrets_published,
+            home,
+            keep_agents_through_restart,
+            rows,
+            cols,
         }),
     })
 }
@@ -401,9 +420,33 @@ pub fn finish_restart(pending: PendingRestart) -> Result<PanelStart> {
         owned,
         work_brief,
         named_secrets_late,
+        home,
+        keep_agents_through_restart,
+        rows,
+        cols,
     } = pending;
     let crate::panel::work_resume::RestartWork { owner, state } =
         work.prepare_restart_work(owned.as_deref(), &mut args, &mut env, work_brief.as_deref())?;
+    // The new program of the panel runs in a new holder, as the program of a start
+    // does; the holder that served the program before has gone by now.
+    let (attached, notice) = if keep_agents_through_restart && work.kind.is_agent() && work.ssh_connection.is_none() {
+        holder::started_here(
+            &home,
+            &Launch {
+                local_id: work.local_id.clone(),
+                program: program.clone(),
+                args: args.clone(),
+                cwd: work.launch_cwd.clone(),
+                env: env.clone(),
+                rows,
+                cols,
+                cell_width: crate::panel::DEFAULT_CELL_WIDTH,
+                cell_height: crate::panel::DEFAULT_CELL_HEIGHT,
+            },
+        )
+    } else {
+        (None, None)
+    };
     Ok(PanelStart {
         working_directory,
         replay_bytes,
@@ -415,8 +458,8 @@ pub fn finish_restart(pending: PendingRestart) -> Result<PanelStart> {
             env,
             work: StartupPlan::settled(owner, state),
             named_secrets_late,
-            attached: None,
-            notice: None,
+            attached,
+            notice,
         }),
         editor_text: None,
         work_brief_wanted: work_brief.is_some(),
@@ -432,7 +475,11 @@ impl Panel {
     /// # Errors
     ///
     /// Returns the refusal of a resume that the panel can no longer offer.
-    pub fn restart_request(&mut self) -> Result<Option<RestartRequest>> {
+    pub fn restart_request(
+        &mut self,
+        home: HorizonHome,
+        keep_agents_through_restart: bool,
+    ) -> Result<Option<RestartRequest>> {
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
             return Ok(None);
@@ -442,11 +489,19 @@ impl Panel {
         }
         let work_brief = self.requested_work_brief()?;
         let work = self.work_panel();
+        let defaults = PanelOptions::default();
+        let (rows, cols) = self.terminal().map_or((defaults.rows, defaults.cols), |terminal| {
+            (terminal.rows(), terminal.cols())
+        });
         Ok(Some(RestartRequest {
             id: self.id,
             work,
             replay_bytes: self.restart_replay_bytes(),
             work_brief,
+            home,
+            keep_agents_through_restart,
+            rows,
+            cols,
         }))
     }
 }
