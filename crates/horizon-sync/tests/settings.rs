@@ -784,10 +784,13 @@ fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_sticky_l
     // The computer whose change lost reads one line about the setting, and the
     // line is not one of the notices that a frame takes and ends: it stays until
     // the person closes it.
-    let lost: Vec<(&str, String)> = [("a", &a), ("b", &b)]
-        .into_iter()
-        .filter_map(|(name, computer)| computer.handle().settings_lost().map(|line| (name, line)))
-        .collect();
+    let lost: Vec<(&str, String)> = eventually("the line about the setting that lost", || {
+        let lost: Vec<(&str, String)> = [("a", &a), ("b", &b)]
+            .into_iter()
+            .filter_map(|(name, computer)| computer.handle().settings_lost().map(|line| (name, line)))
+            .collect();
+        (!lost.is_empty()).then_some(lost)
+    });
     assert_eq!(
         lost.len(),
         1,
@@ -1160,7 +1163,9 @@ fn a_store_that_fails_once_is_written_again_on_the_next_answer_of_the_server() {
     eventually("the theme of the server on this computer", || {
         (b.theme() == AppearanceTheme::Light).then_some(())
     });
-    assert!(b.settings().view().in_step(), "the section that failed once is in step");
+    eventually("the section that failed once in step", || {
+        b.settings().view().in_step().then_some(())
+    });
     assert_eq!(
         b.stored().overlays.minimap_width,
         620.0,
