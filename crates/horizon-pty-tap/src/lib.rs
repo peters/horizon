@@ -17,6 +17,7 @@
 //! or panic on any byte of a stream.
 #![deny(unsafe_code)]
 
+pub mod frames;
 mod inbox;
 mod pty;
 mod reader;

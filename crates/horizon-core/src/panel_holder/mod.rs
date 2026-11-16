@@ -18,7 +18,6 @@
 //! holder. Nothing of this module is reachable for a person yet: no panel uses a
 //! holder until the attach of a terminal lands.
 
-mod frames;
 mod launch;
 mod serve;
 
@@ -31,12 +30,14 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use horizon_pty_tap::frames;
+
 use crate::horizon_home::safe_local_id;
 use crate::util::spawn_stand_in;
 use crate::{HorizonHome, HorizonHomeError};
 
-pub use self::frames::Hello;
 pub use self::launch::Launch;
+pub use horizon_pty_tap::frames::Hello;
 
 /// The argument that starts the mode of a holder.
 pub const PANEL_HOLDER_ARG: &str = "--panel-holder";
@@ -84,12 +85,8 @@ pub enum HolderError {
     StartExited(Option<i32>),
     #[error("the holder of this panel serves another client")]
     Busy,
-    #[error("a frame of {length} bytes is above the bound of {} bytes", frames::MAX_PAYLOAD)]
-    TooLarge { length: u32 },
-    #[error("a frame of the unknown kind {0}")]
-    UnknownFrame(u8),
-    #[error("a frame of the kind {0} has the wrong length")]
-    MalformedFrame(u8),
+    #[error(transparent)]
+    Frame(#[from] horizon_pty_tap::frames::FrameError),
     #[error("the answer of a holder has the kind {0}, which is no hello")]
     NoHello(u8),
 }

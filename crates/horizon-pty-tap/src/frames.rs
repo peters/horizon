@@ -1,10 +1,25 @@
 //! The frames between a holder and its client: one kind byte, a 4-byte length in
 //! big-endian order, and the payload. The output of the program is sent as bytes,
 //! never as JSON, because a program can write a megabyte in a second.
+//!
+//! A terminal that attaches to a holder reads the same frames: its reader yields
+//! the bytes of a `replay` or `output` frame, and its writer wraps input in an
+//! `input` frame.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
-use super::HolderError;
+/// Why a frame of a holder link cannot be written or read.
+#[derive(Debug, thiserror::Error)]
+pub enum FrameError {
+    #[error("a frame of {length} bytes is above the bound of {MAX_PAYLOAD} bytes")]
+    TooLarge { length: u32 },
+    #[error("a frame of the unknown kind {0}")]
+    UnknownKind(u8),
+    #[error("a frame of the kind {0} has the wrong length")]
+    Malformed(u8),
+    #[error("the link of a holder: {0}")]
+    Io(#[from] io::Error),
+}
 
 /// The version of this protocol, which the hello of a holder names.
 pub(crate) const VERSION: u8 = 1;
@@ -40,7 +55,7 @@ pub struct Hello {
 
 /// One frame of a holder and its client.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Frame {
+pub enum Frame {
     /// A client: the bytes to write to the program.
     Input(Vec<u8>),
     /// A client: the size of the terminal.
@@ -66,7 +81,7 @@ pub(crate) enum Frame {
 
 impl Frame {
     /// The kind byte of this frame.
-    pub(crate) fn kind(&self) -> u8 {
+    pub fn kind(&self) -> u8 {
         match self {
             Self::Input(_) => INPUT,
             Self::Resize { .. } => SIZE_KIND,
@@ -105,12 +120,12 @@ impl Frame {
         }
     }
 
-    fn decode(kind: u8, payload: Vec<u8>) -> Result<Self, HolderError> {
+    fn decode(kind: u8, payload: Vec<u8>) -> Result<Self, FrameError> {
         Ok(match kind {
             INPUT => Self::Input(payload),
             SIZE_KIND => {
                 if payload.len() != SIZE {
-                    return Err(HolderError::MalformedFrame(kind));
+                    return Err(FrameError::Malformed(kind));
                 }
                 let field = |at: usize| u16::from_be_bytes([payload[at], payload[at + 1]]);
                 Self::Resize {
@@ -126,13 +141,13 @@ impl Frame {
             OUTPUT => Self::Output(payload),
             EXIT => {
                 if payload.len() != 5 {
-                    return Err(HolderError::MalformedFrame(kind));
+                    return Err(FrameError::Malformed(kind));
                 }
                 let code = i32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
                 Self::Exit((payload[0] != 0).then_some(code))
             }
             REFUSAL => Self::Refusal,
-            unknown => return Err(HolderError::UnknownFrame(unknown)),
+            unknown => return Err(FrameError::UnknownKind(unknown)),
         })
     }
 }
@@ -150,17 +165,17 @@ impl Hello {
         payload
     }
 
-    fn decode(payload: &[u8]) -> Result<Self, HolderError> {
+    fn decode(payload: &[u8]) -> Result<Self, FrameError> {
         if payload.len() < 11 || payload[0] != VERSION {
-            return Err(HolderError::MalformedFrame(HELLO));
+            return Err(FrameError::Malformed(HELLO));
         }
         let pid = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
         let named = usize::from(u16::from_be_bytes([payload[5], payload[6]]));
         let Some(body) = payload.get(7..) else {
-            return Err(HolderError::MalformedFrame(HELLO));
+            return Err(FrameError::Malformed(HELLO));
         };
         if body.len() != named + 4 {
-            return Err(HolderError::MalformedFrame(HELLO));
+            return Err(FrameError::Malformed(HELLO));
         }
         let (name, length) = body.split_at(named);
         let ring_len = u32::from_be_bytes([length[0], length[1], length[2], length[3]]);
@@ -177,13 +192,13 @@ impl Hello {
 /// # Errors
 ///
 /// Returns why the frame cannot be written, or that its payload is too large.
-pub(crate) fn write(writer: &mut impl Write, frame: &Frame) -> Result<(), HolderError> {
+pub fn write(writer: &mut impl Write, frame: &Frame) -> Result<(), FrameError> {
     let (kind, payload) = frame.parts();
-    let length = u32::try_from(payload.len()).map_err(|_| HolderError::TooLarge {
+    let length = u32::try_from(payload.len()).map_err(|_| FrameError::TooLarge {
         length: MAX_PAYLOAD + 1,
     })?;
     if length > MAX_PAYLOAD {
-        return Err(HolderError::TooLarge { length });
+        return Err(FrameError::TooLarge { length });
     }
     let mut header = [0u8; HEADER];
     header[0] = kind;
@@ -198,12 +213,12 @@ pub(crate) fn write(writer: &mut impl Write, frame: &Frame) -> Result<(), Holder
 /// # Errors
 ///
 /// Returns why the frame cannot be read, or that it is no frame of this protocol.
-pub(crate) fn read_one(reader: &mut impl Read) -> Result<Frame, HolderError> {
+pub fn read_one(reader: &mut impl Read) -> Result<Frame, FrameError> {
     let mut header = [0u8; HEADER];
     reader.read_exact(&mut header)?;
     let length = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
     if length > MAX_PAYLOAD {
-        return Err(HolderError::TooLarge { length });
+        return Err(FrameError::TooLarge { length });
     }
     let mut payload = vec![0u8; length as usize];
     reader.read_exact(&mut payload)?;
@@ -212,7 +227,7 @@ pub(crate) fn read_one(reader: &mut impl Read) -> Result<Frame, HolderError> {
 
 /// The frames that one stream delivered, as far as a whole frame arrived.
 #[derive(Default)]
-pub(crate) struct Frames {
+pub struct Frames {
     bytes: Vec<u8>,
 }
 
@@ -222,7 +237,7 @@ impl Frames {
     /// # Errors
     ///
     /// Returns why the bytes are no frames of this protocol.
-    pub(crate) fn push(&mut self, more: &[u8]) -> Result<Vec<Frame>, HolderError> {
+    pub fn push(&mut self, more: &[u8]) -> Result<Vec<Frame>, FrameError> {
         self.bytes.extend_from_slice(more);
         let mut frames = Vec::new();
         loop {
@@ -231,7 +246,7 @@ impl Frames {
             }
             let length = u32::from_be_bytes([self.bytes[1], self.bytes[2], self.bytes[3], self.bytes[4]]);
             if length > MAX_PAYLOAD {
-                return Err(HolderError::TooLarge { length });
+                return Err(FrameError::TooLarge { length });
             }
             let whole = HEADER + length as usize;
             if self.bytes.len() < whole {

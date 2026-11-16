@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::tty::{ChildEvent, EventedPty, EventedReadWrite, Pty};
 
-use super::frames::{self, Frame, Frames, Hello};
 use super::{HolderError, Launch, Paths};
 use crate::HorizonHome;
+use horizon_pty_tap::frames::{self, Frame, Frames, Hello};
 
 /// The newest output that a holder keeps for the next client.
 pub(crate) const RING_LIMIT: usize = 2 * 1024 * 1024;

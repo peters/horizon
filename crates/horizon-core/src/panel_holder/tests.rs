@@ -10,9 +10,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::frames::{self, Frame, Hello};
 use super::{HolderError, Launch, PANEL_HOLDER_ARG, Paths, holder_command, start_with};
 use crate::HorizonHome;
+use horizon_pty_tap::frames::{self, Frame, Hello};
 
 /// The longest time that a test waits for one condition of a holder.
 const TEST_BOUND: Duration = Duration::from_secs(10);
@@ -595,7 +595,7 @@ fn the_exit_frame_is_the_last_frame_and_no_output_is_lost_before_it() {
         .set_read_timeout(Some(Duration::from_millis(250)))
         .expect("a read bound");
     match frames::read_one(&mut client.stream) {
-        Err(HolderError::Io(error)) => assert!(
+        Err(frames::FrameError::Io(error)) => assert!(
             matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut),
             "no frame follows the exit frame: {error}"
         ),

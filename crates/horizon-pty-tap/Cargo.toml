@@ -19,3 +19,5 @@ memchr.workspace = true
 # The trait `EventedReadWrite` of `alacritty_terminal` names the `Poller`, `Event`
 # and `PollMode` types of this crate, so the wrapper of that trait names them too.
 polling.workspace = true
+# The typed errors of the frame codec, in the form the rest of the workspace uses.
+thiserror.workspace = true
