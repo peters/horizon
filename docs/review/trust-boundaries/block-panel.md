@@ -32,6 +32,11 @@ person's terminals.
   with `invalid_document`, and the message names the place, such as
   `components[2].items[0].id`, and the bound it broke, such as
   `components[1].items[3].column is 4, above the 3 columns of the board`.
+- The document arrives as an object or as the JSON text of that object, because
+  an agent program that builds every tool argument as a string can send text
+  only. One reader, `parse_sent_document`, reads both forms: the text form passes
+  every check above, the size bound counts the text that the caller sent, and a
+  text that holds no document is `invalid_document`.
 - No field is a path, a file or a command. Horizon fetches nothing, opens
   nothing and runs nothing for a card, and a `link` reaches a page only when the
   person presses it. A card has no input, no image and no table.
