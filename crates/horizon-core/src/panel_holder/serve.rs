@@ -41,6 +41,8 @@ const INPUT_QUEUE: usize = 64;
 const BUFFER: usize = 64 * 1024;
 /// How long the loop waits for the event of a program whose output ended.
 const PROGRAM_END_BOUND: Duration = Duration::from_secs(2);
+/// How long a holder waits for the start time of its program before it serves it.
+const IDENTITY_BOUND: Duration = crate::process::START_TIME_BOUND;
 /// The pause between two reads of the event of a program whose output ended.
 const END_PAUSE: Duration = Duration::from_millis(5);
 
@@ -93,6 +95,12 @@ pub(crate) fn serve_watched(
     .map_err(|error| HolderError::Terminal(error.to_string()))?;
     let pid = pty.child().id();
     let start_time = crate::process::start_identity(pid);
+    // A system that reads the start time of a program with a program fills it after
+    // the start, and the hello of a holder names it.
+    let identity_until = Instant::now() + IDENTITY_BOUND;
+    while start_time.get().is_none() && Instant::now() < identity_until {
+        thread::sleep(END_PAUSE);
+    }
     let (send, events) = mpsc::sync_channel(QUEUE);
     let stop = Arc::new(AtomicBool::new(false));
     start_accepting(listener, send.clone(), Arc::clone(&stop))?;
