@@ -11,6 +11,8 @@ use crate::theme;
 
 const DEBOUNCE_MS: u64 = 60;
 const ROW_HEIGHT: f32 = 34.0;
+/// The hint of the foot that says how a hidden folder reaches the list.
+const TYPED_DOT_HINT: &str = "Type . to see hidden folders";
 
 pub enum DirPickerPurpose {
     NewWorkspace {
@@ -81,6 +83,7 @@ impl DirPicker {
                 status_text: None,
                 empty_state,
                 footer_action_label: Some(Self::footer_action_label()),
+                footer_hint: Some(TYPED_DOT_HINT),
             },
             &self.results,
             render_result_row,
@@ -102,6 +105,7 @@ impl DirPicker {
     fn heading(&self) -> &'static str {
         match &self.selected_purpose {
             Some(DirPickerPurpose::NewWorkspace { .. }) => "Select workspace directory",
+            Some(DirPickerPurpose::AddPanel { preset, .. }) if preset.kind.is_agent() => "Where should the agent work?",
             Some(DirPickerPurpose::AddPanel { .. }) | None => "Select terminal directory",
         }
     }
@@ -315,6 +319,40 @@ mod tests {
         };
         assert!(flag(&project), "a directory with the markers of a project is one");
         assert!(!flag(&other), "a plain directory is no project");
+    }
+
+    #[test]
+    fn the_question_of_an_agent_preset_says_where_the_agent_works() {
+        let question = |preset| {
+            DirPicker::new(DirPickerPurpose::AddPanel {
+                workspace_id: WorkspaceId(1),
+                preset,
+                canvas_pos: None,
+            })
+        };
+
+        assert_eq!(
+            question(agent_preset()).heading(),
+            "Where should the agent work?",
+            "the question names the folder that the agent works in"
+        );
+        assert_eq!(
+            question(shell_preset()).heading(),
+            "Select terminal directory",
+            "a shell keeps the name of the terminal directory"
+        );
+    }
+
+    fn agent_preset() -> PresetConfig {
+        PresetConfig {
+            name: "Codex".to_string(),
+            alias: None,
+            kind: PanelKind::Codex,
+            command: None,
+            args: Vec::new(),
+            resume: PanelResume::Fresh,
+            ssh_connection: None,
+        }
     }
 
     #[test]

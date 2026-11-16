@@ -142,15 +142,34 @@ pub fn lookup(query: &str) -> Vec<DirRow> {
 
 fn search_directories(query: &str) -> Vec<PathBuf> {
     let trimmed = query.trim();
+    // The hidden folders of a folder are most of its list, so a row shows only
+    // when the person typed a dot: `~/.` or `~/.co`.
+    let typed_hidden = last_segment(trimmed).starts_with('.');
+    // `~/.` names the hidden folders of `~`, so it lists that folder.
+    let listing = trimmed
+        .strip_suffix("/.")
+        .map_or_else(|| trimmed.to_owned(), |base| format!("{base}/"));
+    let trimmed = listing.as_str();
 
-    if trimmed.is_empty() {
-        return list_home_children();
-    }
+    let paths = if trimmed.is_empty() {
+        list_home_children()
+    } else {
+        match resolve_query_path(trimmed) {
+            Some(path) => complete_path(&path, trimmed.ends_with(std::path::is_separator)),
+            None => fuzzy_search(trimmed),
+        }
+    };
 
-    match resolve_query_path(trimmed) {
-        Some(path) => complete_path(&path, trimmed.ends_with(std::path::is_separator)),
-        None => fuzzy_search(trimmed),
+    if typed_hidden {
+        paths
+    } else {
+        paths.into_iter().filter(|path| !is_hidden(path)).collect()
     }
+}
+
+/// The name that the person is typing: the last segment of a query.
+fn last_segment(query: &str) -> &str {
+    query.rsplit(std::path::is_separator).next().unwrap_or(query)
 }
 
 /// List immediate subdirectories of $HOME, sorted with project-like dirs first.
@@ -374,5 +393,42 @@ mod tests {
         // Should return something (home always has directories)
         // Just verify it doesn't panic
         assert!(results.iter().all(|p| p.is_dir()));
+    }
+
+    #[test]
+    fn an_empty_query_lists_no_dot_folder_of_the_home() {
+        let home = home_dir();
+        for name in [".config", ".codex", "Documents", "github"] {
+            std::fs::create_dir_all(home.join(name)).expect("a folder of the home of the test");
+        }
+
+        let rows = search_directories("");
+        let names: Vec<String> = rows
+            .iter()
+            .filter_map(|path| Some(path.file_name()?.to_string_lossy().into_owned()))
+            .collect();
+
+        assert!(names.iter().any(|name| name == "Documents"), "{names:?}");
+        assert!(names.iter().any(|name| name == "github"), "{names:?}");
+        assert!(
+            names.iter().all(|name| !name.starts_with('.')),
+            "the list of an empty question holds no hidden folder: {names:?}"
+        );
+    }
+
+    #[test]
+    fn a_typed_dot_lists_the_dot_folders_of_the_home() {
+        let home = home_dir();
+        for name in [".config", ".codex", "Documents", "github"] {
+            std::fs::create_dir_all(home.join(name)).expect("a folder of the home of the test");
+        }
+
+        let names: Vec<String> = search_directories("~/.c")
+            .iter()
+            .filter_map(|path| Some(path.file_name()?.to_string_lossy().into_owned()))
+            .collect();
+
+        assert!(names.iter().any(|name| name == ".config"), "{names:?}");
+        assert!(names.iter().any(|name| name == ".codex"), "{names:?}");
     }
 }

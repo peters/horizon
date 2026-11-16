@@ -44,6 +44,8 @@ pub struct PickerModalConfig<'a> {
     pub status_text: Option<&'a str>,
     pub empty_state: PickerEmptyState<'a>,
     pub footer_action_label: Option<&'a str>,
+    /// A hint of the foot that names a rule of the list that no key shows.
+    pub footer_hint: Option<&'a str>,
 }
 
 struct PickerLayout {
@@ -100,7 +102,7 @@ impl PickerModalState {
             results,
             &mut render_row,
             |ui| {
-                if render_footer(ui, config.footer_action_label) {
+                if render_footer(ui, config.footer_action_label, config.footer_hint) {
                     PickerModalAction::FooterAction
                 } else {
                     PickerModalAction::None
@@ -347,13 +349,16 @@ fn render_empty_state(ui: &mut egui::Ui, empty_state: &PickerEmptyState<'_>, res
     });
 }
 
-fn render_footer(ui: &mut egui::Ui, footer_action_label: Option<&str>) -> bool {
+fn render_footer(ui: &mut egui::Ui, footer_action_label: Option<&str>, footer_hint: Option<&str>) -> bool {
     let mut footer_action = false;
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
         ui.horizontal(|ui| {
             keyboard_hint(ui, "enter", "select");
             keyboard_hint(ui, "tab", "complete");
             keyboard_hint(ui, "esc", "cancel");
+            if let Some(hint) = footer_hint {
+                ui.label(egui::RichText::new(hint).size(10.5).color(theme::FG_DIM()));
+            }
             if let Some(label) = footer_action_label {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
@@ -457,6 +462,7 @@ mod tests {
             color: Color32::WHITE,
         },
         footer_action_label: None,
+        footer_hint: None,
     };
 
     fn frame(ctx: &egui::Context, modal: &mut PickerModalState, events: Vec<Event>) {

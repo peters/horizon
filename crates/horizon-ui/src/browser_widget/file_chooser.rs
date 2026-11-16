@@ -124,6 +124,7 @@ impl FilePicker {
                     color: theme::FG_DIM(),
                 },
                 footer_action_label: None,
+                footer_hint: None,
             },
             &results,
             |ui, width, _, entry, focused| {

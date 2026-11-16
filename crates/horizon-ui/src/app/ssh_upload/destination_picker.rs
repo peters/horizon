@@ -92,6 +92,7 @@ impl RemoteDestinationPicker {
                 status_text: status_line.as_deref(),
                 empty_state,
                 footer_action_label: Some("Use typed path"),
+                footer_hint: None,
             },
             &self.results,
             render_remote_result_row,
