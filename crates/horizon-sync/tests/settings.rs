@@ -203,12 +203,97 @@ except Exception:
 
 /// The file that holds one line for each start of the stand-in of a computer.
 const STARTS: &str = "starts.log";
+/// A relay that holds the answer of the first push that carries a setting, once the
+/// test writes [`ARM_ANSWER`], until the test writes [`RELEASE_ANSWER`].
+///
+/// The server writes its decision of a push before it answers a request for changes
+/// that the same turn sent, so the answer of a push usually comes first. This relay
+/// keeps that answer open, so a row of another computer reaches this computer first.
+const HELD_ANSWER_RELAY: &str = "\
+import os
+import socket
+import sys
+import threading
+import time
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+directory = sys.argv[2]
+arm = os.path.join(directory, 'arm-answer')
+release = os.path.join(directory, 'release-answer')
+held = os.path.join(directory, 'answer.log')
+state = {'held': False}
+lock = threading.Lock()
+
+
+def wait_until(path):
+    while not os.path.exists(path):
+        time.sleep(0.01)
+
+
+def outward():
+    try:
+        while True:
+            data = os.read(sys.stdin.fileno(), 65536)
+            if not data:
+                break
+            sock.sendall(data)
+    except Exception:
+        pass
+    try:
+        sock.shutdown(socket.SHUT_WR)
+    except Exception:
+        pass
+
+
+def answer(frame):
+    with lock:
+        sys.stdout.buffer.write(frame)
+        sys.stdout.buffer.flush()
+
+
+def held_answer(frame):
+    wait_until(release)
+    answer(frame)
+
+
+threading.Thread(target=outward, daemon=True).start()
+buffer = b''
+try:
+    while True:
+        data = sock.recv(65536)
+        if not data:
+            break
+        buffer += data
+        while len(buffer) >= 4:
+            length = int.from_bytes(buffer[:4], 'big')
+            if len(buffer) < 4 + length:
+                break
+            frame = buffer[:4 + length]
+            buffer = buffer[4 + length:]
+            if not state['held'] and b'\"pushed\"' in frame and os.path.exists(arm):
+                state['held'] = True
+                with open(held, 'a') as log:
+                    log.write('held\\n')
+                threading.Thread(target=held_answer, args=(frame,), daemon=True).start()
+                continue
+            answer(frame)
+except Exception:
+    pass
+";
+
 /// The file whose existence releases the push that a gated stand-in holds, and the
 /// log of the pushes that it held.
 const RELEASE: &str = "release";
 /// The file whose existence releases the request for changes that a stand-in of
 /// the held push holds.
 const RELEASE_PULL: &str = "release-pull";
+/// The file whose existence arms a stand-in to hold the answer of the next push.
+const ARM_ANSWER: &str = "arm-answer";
+/// The file whose existence releases the answer that a stand-in holds.
+const RELEASE_ANSWER: &str = "release-answer";
+/// The log of the answer that a stand-in held.
+const HELD_ANSWER: &str = "answer.log";
 const HELD: &str = "held.log";
 
 /// A stand-in `ssh` that runs the link relay against the socket of the server.
@@ -232,6 +317,12 @@ fn held_pull_stand_in(directory: &Path, socket: &Path) -> String {
     stand_in_with(directory, socket, Relay::HeldPull)
 }
 
+/// A stand-in whose relay holds the answer of the next push that carries a setting
+/// once the test writes [`ARM_ANSWER`], until the test writes [`RELEASE_ANSWER`].
+fn held_answer_stand_in(directory: &Path, socket: &Path) -> String {
+    stand_in_with(directory, socket, Relay::HeldAnswer)
+}
+
 /// What a stand-in does with the frames of one link.
 #[derive(Clone, Copy)]
 enum Relay {
@@ -242,6 +333,9 @@ enum Relay {
     /// Holds the first push of the settings until [`RELEASE`], and the pull that
     /// follows it until [`RELEASE_PULL`].
     HeldPull,
+    /// Holds the answer of the first push that carries a setting, once the test
+    /// writes [`ARM_ANSWER`], until the test writes [`RELEASE_ANSWER`].
+    HeldAnswer,
 }
 
 fn stand_in_with(directory: &Path, socket: &Path, how: Relay) -> String {
@@ -251,6 +345,7 @@ fn stand_in_with(directory: &Path, socket: &Path, how: Relay) -> String {
         Relay::Plain => RELAY,
         Relay::Gated => GATED_RELAY,
         Relay::HeldPull => HELD_PULL_RELAY,
+        Relay::HeldAnswer => HELD_ANSWER_RELAY,
     };
     fs::write(&relay, text).expect("the relay of the stand-in");
     let script = format!(
@@ -288,6 +383,26 @@ fn held_request(computer: &Computer) {
 /// Releases the request for changes that the stand-in of `computer` holds.
 fn release_pull(computer: &Computer) {
     fs::write(computer.home.join("stand-in").join(RELEASE_PULL), b"release").expect("the release of the pull");
+}
+
+/// Arms the stand-in of `computer` to hold the answer of its next push.
+fn arm_answer(computer: &Computer) {
+    fs::write(computer.home.join("stand-in").join(ARM_ANSWER), b"arm").expect("the arm of the answer");
+}
+
+/// Waits until the stand-in of `computer` holds the answer of a push.
+fn held_answer(computer: &Computer) {
+    eventually("the answer of the push in the stand-in", || {
+        fs::read_to_string(computer.home.join("stand-in").join(HELD_ANSWER))
+            .ok()
+            .filter(|text| text.contains("held"))
+            .map(|_| ())
+    });
+}
+
+/// Releases the answer of the push that the stand-in of `computer` holds.
+fn release_answer(computer: &Computer) {
+    fs::write(computer.home.join("stand-in").join(RELEASE_ANSWER), b"release").expect("the release of the answer");
 }
 
 /// How many times the stand-in of the computer at `home` started, which is one
@@ -410,6 +525,12 @@ impl Computer {
         Self::start_with(home, config, socket, Relay::HeldPull)
     }
 
+    /// A computer whose stand-in holds the answer of its next push once the test
+    /// arms it.
+    fn start_held_answer(home: &Path, config: &Config, socket: &Path) -> Self {
+        Self::start_with(home, config, socket, Relay::HeldAnswer)
+    }
+
     fn start_with(home: &Path, config: &Config, socket: &Path, how: Relay) -> Self {
         fs::create_dir_all(home).expect("the home of the computer");
         let config_path = home.join("config.json");
@@ -427,6 +548,7 @@ impl Computer {
             Relay::Plain => stand_in(&stand_in_dir, socket),
             Relay::Gated => gated_stand_in(&stand_in_dir, socket),
             Relay::HeldPull => held_pull_stand_in(&stand_in_dir, socket),
+            Relay::HeldAnswer => held_answer_stand_in(&stand_in_dir, socket),
         };
         link.settings_path = Some(config_path.clone());
         let supervisor = Supervisor::start(link, || {}).expect("the supervisor");
@@ -930,6 +1052,53 @@ fn a_store_that_changed_before_the_answer_of_its_push_takes_the_row_of_the_serve
     });
     b.stop();
     a.stop();
+    server.stop();
+}
+
+#[test]
+fn a_row_of_another_computer_that_comes_before_the_answer_of_a_push_keeps_its_version() {
+    // The server decided the push of this computer, and the answer waits in the
+    // stand-in. The row of another computer for the same section reaches this computer
+    // first, at a higher version. The answer of the push must not move the mirror of
+    // this computer back to the version of the push: the two computers hold the row of
+    // the other computer, and the next save names that version.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
+    let mut b = Computer::start_held_answer(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&a);
+    in_step(&b);
+
+    arm_answer(&b);
+    b.save(&config_with_theme(AppearanceTheme::Dark));
+    held_answer(&b);
+    a.save(&config_with_theme(AppearanceTheme::Light));
+    eventually("the light theme of the computer whose answer waits", || {
+        (b.theme() == AppearanceTheme::Light).then_some(())
+    });
+    release_answer(&b);
+
+    settled(&b);
+    settled(&a);
+    assert_eq!(
+        b.theme(),
+        a.theme(),
+        "the two computers hold the row of the other computer, and not the value of the push"
+    );
+    // The next save names the version of that row, so the server accepts it.
+    b.save(&config_with_theme(AppearanceTheme::Auto));
+    eventually("the auto theme of the section of the server", || {
+        server
+            .setting("appearance")
+            .is_some_and(|(_, body)| body["section"]["theme"] == json!("auto"))
+            .then_some(())
+    });
+    settled(&b);
+    eventually("the auto theme of the other computer", || {
+        (a.theme() == AppearanceTheme::Auto).then_some(())
+    });
+    a.stop();
+    b.stop();
     server.stop();
 }
 
