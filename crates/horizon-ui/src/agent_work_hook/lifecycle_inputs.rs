@@ -1,5 +1,7 @@
-//! The lifecycle input of an agent program as that program sends it, and the
-//! rule that a shape this build does not read leaves its field "not given".
+//! The lifecycle input of an agent program as that program sends it, the rule that
+//! a shape this build does not read leaves its field "not given", and the line that
+//! the hook prints when it refuses one.
+use std::io;
 use std::path::Path;
 
 use horizon_core::PanelKind;
@@ -92,4 +94,15 @@ fn only_the_identity_of_the_evidence_refuses_an_event() {
         .process(serde_json::to_vec(&missing_cwd).expect("input").as_slice(), 1)
         .expect_err("an event without the folder of its evidence is refused");
     assert_eq!(error.to_string(), "invalid lifecycle input");
+}
+
+#[test]
+fn the_hook_prints_the_message_of_an_error_and_no_text_of_the_event() {
+    let refused = io::Error::new(io::ErrorKind::InvalidData, "invalid lifecycle input");
+    assert_eq!(super::message(&refused), "invalid lifecycle input");
+    // A message of the system is one line and bounded, whatever it names.
+    let long = io::Error::other(format!("a line\nand {}", "x".repeat(1000)));
+    let line = super::message(&long);
+    assert!(!line.contains('\n'), "one line: {line}");
+    assert!(line.chars().count() <= 200, "bounded: {}", line.chars().count());
 }

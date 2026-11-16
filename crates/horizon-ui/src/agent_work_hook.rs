@@ -33,9 +33,16 @@ pub(crate) fn run() {
             // must report failure without changing provider turn behavior.
             std::process::exit(3);
         }
-        eprintln!("agent work hook could not save evidence ({:?})", error.kind());
+        eprintln!("agent work hook could not save evidence: {}", message(&error));
         std::process::exit(1);
     }
+}
+
+/// The line that the hook prints for an error: the message of the error and not
+/// only its kind, on one line and at most 200 characters, so the terminal of the
+/// agent program holds no text of the event that this build could not read.
+fn message(error: &io::Error) -> String {
+    horizon_core::session_pickup::one_line(&error.to_string(), 200)
 }
 
 struct HookContext {
