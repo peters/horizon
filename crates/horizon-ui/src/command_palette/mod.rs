@@ -52,6 +52,9 @@ pub struct CommandPalette {
     opened_at: Instant,
     /// Whether the search field has had focus since the palette opened.
     focused: bool,
+    /// Whether the list holds the presets alone, for a press that adds a panel
+    /// to a workspace.
+    presets_only: bool,
 }
 
 pub enum PaletteAction {
@@ -65,6 +68,7 @@ enum PaletteMode {
     All,
     ActionsOnly,
     PanelsOnly,
+    PresetsOnly,
 }
 
 // ── Filtered result item (uniform across categories) ────────────────
@@ -87,6 +91,16 @@ impl CommandPalette {
             selected: 0,
             opened_at: Instant::now(),
             focused: false,
+            presets_only: false,
+        }
+    }
+
+    /// The same list, with the presets alone, for a press that adds a panel to
+    /// a workspace.
+    pub fn presets_only() -> Self {
+        Self {
+            presets_only: true,
+            ..Self::new()
         }
     }
 
@@ -99,6 +113,11 @@ impl CommandPalette {
         actions: &[CommandEntry],
     ) -> PaletteAction {
         let (mode, search_query) = parse_mode(&self.query);
+        let mode = if self.presets_only {
+            PaletteMode::PresetsOnly
+        } else {
+            mode
+        };
         let items = build_results(mode, search_query, workspaces, panels, presets, actions);
         let layout = palette_layout(ctx.input(egui::InputState::viewport_rect));
 
@@ -177,6 +196,7 @@ impl CommandPalette {
             PaletteMode::All => "Command Palette",
             PaletteMode::ActionsOnly => "Presets & Actions",
             PaletteMode::PanelsOnly => "Panels",
+            PaletteMode::PresetsOnly => "Presets",
         };
         ui.label(egui::RichText::new(title).color(theme::FG()).size(15.0).strong());
         ui.add_space(10.0);
@@ -378,7 +398,7 @@ fn build_results(
         }
     }
 
-    if mode == PaletteMode::All || mode == PaletteMode::ActionsOnly {
+    if mode != PaletteMode::PanelsOnly {
         for preset in presets {
             let keyword_refs: Vec<&str> = preset.keywords.iter().map(String::as_str).collect();
             if matches_query(&query_lower, &preset.label, &keyword_refs) {
@@ -392,7 +412,9 @@ fn build_results(
                 });
             }
         }
+    }
 
+    if mode == PaletteMode::All || mode == PaletteMode::ActionsOnly {
         for action in actions {
             let keyword_refs: Vec<&str> = action.keywords.iter().map(String::as_str).collect();
             if matches_query(&query_lower, &action.label, &keyword_refs) {

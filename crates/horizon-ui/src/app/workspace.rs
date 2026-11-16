@@ -55,6 +55,7 @@ enum WorkspaceAction {
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
     Detach,
+    AddPanel,
 }
 
 const WORKSPACE_LAYOUT_BUTTON_HEIGHT: f32 = 24.0;
@@ -211,6 +212,12 @@ impl HorizonApp {
                 Some(WorkspaceAction::Detach) => {
                     focus_workspace = Some(workspace.id);
                     self.detach_workspace(workspace.id);
+                }
+                Some(WorkspaceAction::AddPanel) => {
+                    // The list creates its panel in the active workspace, so the
+                    // press makes this one active before the person chooses.
+                    focus_workspace = Some(workspace.id);
+                    self.open_preset_palette();
                 }
                 Some(WorkspaceAction::CloseAllPanels) => {
                     focus_workspace = Some(workspace.id);
@@ -432,8 +439,187 @@ fn workspace_dock_side(dragged_rect: Rect, target_rect: Rect) -> Option<Workspac
 #[cfg(test)]
 mod tests {
     use super::{WorkspaceVisual, toolbar::should_show_workspace_layout_toolbar};
-    use egui::{Color32, Pos2, Rect, Vec2};
-    use horizon_core::WorkspaceId;
+    use egui::{Color32, Context, Event, PointerButton, Pos2, Rect, Vec2};
+    use horizon_core::{RuntimeState, StartupDecision, WorkspaceId};
+
+    use crate::app::HorizonApp;
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
+    const ADD_PANEL: &str = "+ Panel";
+
+    /// The window of a whole application, with the clock that its frames need.
+    struct AppWindow {
+        ctx: Context,
+        app: HorizonApp,
+        time: f64,
+        _temp: tempfile::TempDir,
+        _folder: tempfile::TempDir,
+    }
+
+    impl AppWindow {
+        /// Two workspaces: `beta` holds a panel, and the empty `alpha` that the
+        /// person makes after it is the active one and shows no workspace line.
+        fn with_two_workspaces() -> Self {
+            let folder = tempfile::tempdir().expect("a folder of the test");
+            let mut beta = editor_workspace_state("beta", [520.0, 80.0]);
+            beta.cwd = Some(folder.path().display().to_string());
+            let (temp, ctx, app) = test_app_with_startup(StartupDecision::Ephemeral {
+                runtime_state: Box::new(RuntimeState {
+                    workspaces: vec![beta],
+                    ..RuntimeState::default()
+                }),
+            });
+            let mut window = Self {
+                ctx,
+                app,
+                time: 1.0,
+                _temp: temp,
+                _folder: folder,
+            };
+            window.app.theme_applied = true;
+            window.app.initial_pan_done = true;
+            window.app.startup_workspace_organization_pending = false;
+            window.app.root_viewport_stabilizer = None;
+            window.ctx.enable_accesskit();
+            // The startup frames move the canvas to the workspaces, and a press
+            // follows the canvas that the person sees.
+            window.frames_until("the startup view settles", |app| app.pan_target.is_none());
+            // The active workspace is an empty one, so a press on the line of
+            // `beta` proves that the choice follows the press and not the focus.
+            let alpha = window.app.board.create_workspace("alpha");
+            window.app.board.focus_workspace(alpha);
+            window
+        }
+
+        fn workspace_id(&self, name: &str) -> WorkspaceId {
+            self.app
+                .board
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.name == name)
+                .map(|workspace| workspace.id)
+                .expect("the workspace of the state")
+        }
+
+        fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
+            self.time += 0.016;
+            let mut input = raw_input([1400.0, 900.0], None);
+            input.time = Some(self.time);
+            input.events = events;
+            run_app_frame_with_input(&self.ctx, &mut self.app, input)
+        }
+
+        /// Where this frame draws the middle of the control of `label`.
+        fn control(&mut self, label: &str) -> Option<Pos2> {
+            let mut position = None;
+            for _ in 0..2 {
+                let output = self.frame(Vec::new());
+                let Some(update) = output.platform_output.accesskit_update else {
+                    continue;
+                };
+                position = update.nodes.iter().find_map(|(_, node)| {
+                    (node.label().or_else(|| node.value()) == Some(label))
+                        .then(|| node.bounds())
+                        .flatten()
+                });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            position.map(|bounds| {
+                // A control of the canvas answers its place on the canvas.
+                let canvas = Pos2::new(
+                    f64::midpoint(bounds.x0, bounds.x1) as f32,
+                    f64::midpoint(bounds.y0, bounds.y1) as f32,
+                );
+                crate::app::view::canvas_scene_transform(self.app.canvas_rect(&self.ctx), self.app.canvas_view) * canvas
+            })
+        }
+
+        fn press(&mut self, position: Pos2) {
+            let button = |pressed: bool| Event::PointerButton {
+                pos: position,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            let _ = self.frame(vec![Event::PointerMoved(position)]);
+            let _ = self.frame(vec![button(true)]);
+            let _ = self.frame(vec![button(false)]);
+        }
+
+        fn frames_until(&mut self, what: &str, mut ready: impl FnMut(&HorizonApp) -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                let _ = self.frame(Vec::new());
+                if ready(&self.app) {
+                    return;
+                }
+                assert!(std::time::Instant::now() < deadline, "{what}");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn the_panel_control_of_a_workspace_opens_the_presets_and_adds_one_there() {
+        let mut window = AppWindow::with_two_workspaces();
+        let beta = window.workspace_id("beta");
+        assert_ne!(
+            window.app.board.active_workspace,
+            Some(beta),
+            "the press adds a panel to a workspace that is not the active one"
+        );
+        let panels_before = window.app.board.panels.len();
+
+        let position = window
+            .control(ADD_PANEL)
+            .expect("the workspace line of a workspace holds the control that adds a panel");
+        window.press(position);
+
+        window.frames_until("the press opens the list of the presets", |app| {
+            app.command_palette.is_some()
+        });
+        assert_eq!(
+            window.app.board.panels.len(),
+            panels_before,
+            "opening the list adds no panel by itself"
+        );
+
+        // The list holds the presets alone, in the order of the settings, so
+        // Enter chooses the first one.
+        let _ = window.frame(vec![Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        window.frames_until("the preset that the person chose opens", |app| {
+            app.board.panels.len() > panels_before
+        });
+        assert!(
+            window
+                .app
+                .board
+                .panels
+                .iter()
+                .any(|panel| { panel.workspace_id == beta && panel.kind == horizon_core::PanelKind::Shell }),
+            "the preset that the person chose opened in the workspace of the press: {:?}",
+            window
+                .app
+                .board
+                .panels
+                .iter()
+                .map(|panel| (panel.kind, panel.workspace_id))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            window.app.board.panels.len(),
+            panels_before + 1,
+            "one panel joined the board"
+        );
+    }
 
     fn workspace_visual(panel_count: usize) -> WorkspaceVisual {
         let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(120.0, 64.0));

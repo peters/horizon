@@ -11,6 +11,9 @@ use super::{
     WorkspaceAction, WorkspaceInteraction, WorkspaceVisual,
 };
 
+const DETACH_BUTTON_WIDTH: f32 = 54.0;
+const ADD_PANEL_BUTTON_WIDTH: f32 = 62.0;
+
 /// A workspace with panels has the toolbar, even when they are all hidden.
 pub(super) fn should_show_workspace_layout_toolbar(workspace: &WorkspaceVisual) -> bool {
     workspace.panel_count > 0 || !workspace.is_empty
@@ -52,6 +55,10 @@ pub(super) fn render_workspace_layout_toolbar(
 
                         if render_detach_button(ui, workspace) {
                             action = Some(WorkspaceAction::Detach);
+                        }
+
+                        if render_add_panel_button(ui, workspace) {
+                            action = Some(WorkspaceAction::AddPanel);
                         }
                     });
                 });
@@ -173,8 +180,9 @@ pub(super) fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()
-                + 4.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
-                + 54.0
+                + 5.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + DETACH_BUTTON_WIDTH
+                + ADD_PANEL_BUTTON_WIDTH
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
         ),
@@ -202,23 +210,48 @@ fn workspace_layout_preset_row_width() -> f32 {
 }
 
 fn render_detach_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
-    let response = ui
-        .add_enabled(
-            workspace.capabilities.can_detach,
-            Button::new(egui::RichText::new("Detach").size(10.5).color(theme::FG_SOFT()))
-                .min_size(Vec2::new(54.0, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
-                .fill(theme::alpha(
-                    theme::blend(theme::PANEL_BG_ALT(), workspace.color, 0.05),
-                    220,
-                ))
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    theme::alpha(theme::blend(theme::BORDER_SUBTLE(), workspace.color, 0.24), 216),
-                ))
-                .corner_radius(8),
-        )
-        .on_hover_text("Open in a separate window");
-    response.clicked()
+    render_toolbar_button(
+        ui,
+        "Detach",
+        DETACH_BUTTON_WIDTH,
+        workspace.capabilities.can_detach,
+        workspace.color,
+        "Open in a separate window",
+    )
+}
+
+fn render_add_panel_button(ui: &mut egui::Ui, workspace: &WorkspaceVisual) -> bool {
+    render_toolbar_button(
+        ui,
+        "+ Panel",
+        ADD_PANEL_BUTTON_WIDTH,
+        true,
+        workspace.color,
+        "Add a panel to this workspace",
+    )
+}
+
+fn render_toolbar_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    width: f32,
+    enabled: bool,
+    color: egui::Color32,
+    hover: &str,
+) -> bool {
+    ui.add_enabled(
+        enabled,
+        Button::new(egui::RichText::new(label).size(10.5).color(theme::FG_SOFT()))
+            .min_size(Vec2::new(width, WORKSPACE_LAYOUT_BUTTON_HEIGHT))
+            .fill(theme::alpha(theme::blend(theme::PANEL_BG_ALT(), color, 0.05), 220))
+            .stroke(Stroke::new(
+                1.0_f32,
+                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), color, 0.24), 216),
+            ))
+            .corner_radius(8),
+    )
+    .on_hover_text(hover)
+    .clicked()
 }
 
 #[cfg(test)]
@@ -323,6 +356,7 @@ mod tests {
                 WorkspaceAction::ArrangeLayout(_) => "ArrangeLayout(non-Grid)",
                 WorkspaceAction::CloseAllPanels => "CloseAllPanels",
                 WorkspaceAction::Detach => "Detach",
+                WorkspaceAction::AddPanel => "AddPanel",
             })
         );
     }

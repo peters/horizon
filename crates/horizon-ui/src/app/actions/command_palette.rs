@@ -13,10 +13,20 @@ use super::support::{
 
 impl HorizonApp {
     pub(in crate::app) fn open_command_palette(&mut self) {
+        self.open_palette(CommandPalette::new());
+    }
+
+    /// The list of the presets alone, which a press that adds a panel to a
+    /// workspace opens.
+    pub(in crate::app) fn open_preset_palette(&mut self) {
+        self.open_palette(CommandPalette::presets_only());
+    }
+
+    fn open_palette(&mut self, palette: CommandPalette) {
         if self.root_viewport_stabilization_blocks_interaction() {
             return;
         }
-        self.command_palette = Some(CommandPalette::new());
+        self.command_palette = Some(palette);
     }
 
     fn toggle_command_palette(&mut self) {
