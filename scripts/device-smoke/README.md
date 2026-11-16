@@ -80,6 +80,28 @@ of the earlier run.
 > **CAUTION:** A reused private home holds the credentials, sessions and records
 > of the earlier run. Delete the state path when the task ends.
 
+### Agent programs that outlive the restart
+
+`--keep-agents` writes `features.keep_agents_through_restart` as true in the
+config of the fixture, so the program of an agent panel runs in a holder and not
+in the candidate. A procedure proves the promise of that setting with two runs in
+one state path:
+
+1. Start the fixture with `--saved-session --reuse-state --keep-agents` and an
+   agent panel of a stand-in program.
+2. Read the pid of the program of the panel and the text of the panel.
+3. Quit the candidate with the close button of the window manager.
+4. Start the fixture again with `--reuse-state --resume-session` in the same
+   state path.
+5. Compare the pid and the text of the panel with the values of step 2.
+   Result: The pid is the same and the panel shows the text from before the quit.
+   The program is the program of the earlier run, and a new panel starts a new
+   program.
+
+The first run writes the setting into the settings store of the private home, so
+the second run reads it without the option. Do not write that setting into
+another settings store: it says how this computer runs its agent programs.
+
 Pass `--firefox-system-access` only
 with the Firefox disclosure procedure. The flag sets `browser.backend` to
 `firefox` and `browser.firefox_system_access` to true. It also opens the

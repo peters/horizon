@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-pty-tap/src/socket.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,docs/architecture/panel-holder.md"
+applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/panel/spawn/holder.rs,crates/horizon-core/src/panel/spawn/start.rs,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/terminal/content.rs,crates/horizon-pty-tap/src/socket.rs,crates/horizon-pty-tap/src/panel.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,docs/architecture/panel-holder.md"
 ---
 
 # Trust boundary of the holder of a panel
@@ -7,8 +7,8 @@ applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/termin
 A holder is one process of Horizon in the mode `horizon --panel-holder`. It owns a
 terminal, the program in that terminal, and a private Unix socket of the Horizon
 home. It keeps the program alive when Horizon ends, and a new Horizon attaches
-again. No panel uses a holder yet, so this page states the boundary of a part that
-is not reachable for a person.
+again. A panel uses a holder when the setting `features.keep_agents_through_restart`
+is on, which is off at first.
 
 The design is in [`docs/architecture/panel-holder.md`](../../architecture/panel-holder.md).
 The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/horizon-sync/src/link.rs).

@@ -7,8 +7,18 @@ A new Horizon attaches again and reads the last output.
 
 This page gives the design of the holder. The trust boundary is in
 [`docs/review/trust-boundaries/panel-holder.md`](../review/trust-boundaries/panel-holder.md).
-The setting that uses a holder and the attach of a terminal are later parts, so no
-panel uses a holder yet.
+
+The setting `features.keep_agents_through_restart`, off at first, decides whether
+a panel uses a holder. An agent panel of this computer uses one, and a panel of a
+machine, an ssh panel and every other kind of panel start their program in the
+process of Horizon as before. The worker of a panel start reads the setting, and it
+runs the probe, the start of a holder and the link of the terminal, so no frame
+waits for any of them (`crates/horizon-core/src/panel/spawn/holder.rs`).
+
+A start of Horizon also ends the programs of the holders that no panel of the
+restored board shows: the person closed the session another way, or the setting is
+off now. One holder process per panel costs one thread of its own, so the count of
+holders is the count of the agent panels that the board shows.
 
 ## The launch document
 
@@ -121,8 +131,31 @@ happenings.
 
 - `panel_holder::serve` runs the mode. It is the only entry of the process.
 - `panel_holder::start` starts a holder and answers its hello.
+- `panel_holder::linked` links to a holder and answers its hello and its replay, or
+  nothing when no holder listens. A holder that still serves the client of a probe
+  answers a refusal, so this tries again until its read bound passes.
 - `panel_holder::probe` answers the hello of a live holder, or nothing when no
   holder listens.
+- `panel_holder::close_unshown` ends the program of every holder whose panel is on
+  no restored board, and removes a socket that nobody listens on. It reads at most
+  64 sockets in one start.
 
-`start` and `probe` start a process and wait for a socket, so only a worker thread
-calls them.
+`start`, `linked`, `probe` and `close_unshown` start a process or wait for a socket,
+so only a worker thread calls them.
+
+## A panel that ends its program
+
+A drop of the terminal of an attached panel is a detach: the link closes and the
+program continues. Only these paths send the `Close` frame, which ends the program
+as a local panel ends:
+
+| Path | Where |
+|---|---|
+| The person closes the panel | `Board::close_panel_returning_teardown` |
+| The person closes the workspace of the panel | `Board::close_panels_in_workspace`, which calls the row above |
+| The person restarts the panel | `Board::begin_restart` ends the program, and the pre-flight of the restart starts a new holder |
+
+The end of Horizon, a crash of it and a session that replaces the board send no
+`Close` frame, so the program continues in its holder. A start of Horizon then
+finds the holder of every panel of the restored board and attaches to it, and it
+ends the program of a holder that no panel shows.

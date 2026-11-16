@@ -41,6 +41,7 @@ function, update this document in the same PR.
 | Agent panels | Yes | Yes |
 | Agent state from the program (note 10) | Yes | Yes |
 | Continue work after restart (note 6) | Yes | Yes |
+| Agent program kept through a restart (note 11) | Tested with a stand-in program | Not tested |
 | Browser panels: Chromium and Firefox | Yes | Yes |
 | Browser panels: Safari | No (note 1) | Yes |
 | File drops into local Chromium and Firefox panels | Yes | Not tested |
@@ -135,6 +136,16 @@ function, update this document in the same PR.
     title, and its default string prefixes the pane title with the session name,
     which Horizon reads as no state. The other agents keep the rule of their
     screen on both systems.
+
+11. The program of an agent panel runs in a holder process of Horizon when the
+    setting `Keep agent programs running when Horizon restarts` is on
+    (`crates/horizon-core/src/panel_holder/`). The holder calls `setsid`, so the
+    end of Horizon sends it no hangup, and a new Horizon attaches to its socket.
+    The holder, the attach of a terminal and the end of a program that a holder
+    runs are proven on Linux with a stand-in program and with the test lanes of
+    the crate. They are not tested on macOS, and no run of the Horizon window
+    with the setting on was watched, so what a person sees is not proven on
+    either system.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux

@@ -1463,7 +1463,8 @@ def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None)
 def application_document(cwd, device_address=None, firefox_system_access=False, presets=None, extra_panels=None,
                          browser_host=None, browser_host_profile=None, browser_host_engine=None,
                          browser_host_command=None, theme='dark', server_target=None,
-                         server_command=None, server_address=None, secret_names=None, speech=None):
+                         server_command=None, server_address=None, secret_names=None, speech=None,
+                         keep_agents=False):
     """Disposable Horizon config. System access and a browser host stay off unless requested.
 
     The theme is part of the config, so the first start at a state path imports it. A
@@ -1502,6 +1503,10 @@ def application_document(cwd, device_address=None, firefox_system_access=False, 
                  'args': ['-u', '-c', "import time\nprint('HORIZON DEBUG / noVNC LIVE VIEW')\nfor i in range(3600):\n print('Live frame heartbeat:', i, flush=True); time.sleep(1)"],
                  'position': [40, 720], 'size': [550, 140]},
             ]
+    if keep_agents:
+        # The program of an agent panel runs in a holder that a restart of Horizon
+        # outlives, so a procedure compares the pid of that program before and after.
+        fixture['features'] = {'keep_agents_through_restart': True}
     fixture['browser'] = browser
     if browser_host:
         # A browser host that a browser panel follows, so a procedure proves the
@@ -1591,6 +1596,7 @@ PLAIN_START_SETTINGS_OPTIONS = (
     ('speech_recorder', '--speech-recorder'), ('speech_transcriber_command', '--speech-transcriber-command'),
     ('speech_service', '--speech-service'),
     ('saved_session', '--saved-session'), ('resume_session', '--resume-session'),
+    ('keep_agents', '--keep-agents'),
 )
 
 
@@ -1642,6 +1648,11 @@ def arguments():
         '--screen', default='1600x1000',
         help='Size of the isolated desktop as WIDTHxHEIGHT, such as 2800x1000 for a wide screen')
     parser.add_argument('--device-address', help='Read-only native Device panel endpoint inside the Horizon fixture')
+    parser.add_argument(
+        '--keep-agents', action='store_true',
+        help='Set features.keep_agents_through_restart in the fixture config, so the program of '
+             'an agent panel runs in a holder of the private home and outlives a restart of the '
+             'candidate. Use with --saved-session --reuse-state, then --reuse-state --resume-session.')
     parser.add_argument(
         '--firefox-system-access', action='store_true',
         help='Set browser.firefox_system_access in the fixture config. Firefox disclosure procedure only.')
@@ -2065,7 +2076,8 @@ def main():
             str(data.resolve()), args.device_address, args.firefox_system_access, presets, extra_panels,
             args.browser_host, args.browser_host_profile, args.browser_host_engine,
             args.browser_host_command, args.theme, args.server_target,
-            args.server_command, args.server_address, named_secret_names(held), speech)
+            args.server_command, args.server_address, named_secret_names(held), speech,
+            keep_agents=args.keep_agents)
         if not args.plain_start:
             # A plain start keeps the home as its own settings writer: the fixture
             # writes no settings file into that home.

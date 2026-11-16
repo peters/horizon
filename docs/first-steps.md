@@ -539,6 +539,16 @@ The check box **Show the agents of each machine** in Settings, General,
 **Machines** turns this off. The shortcut for the next agent that waits for you
 also reaches the agents of your machines, after the panels of this window.
 
+### Keep an agent program through a restart
+
+The setting **Keep agent programs running when Horizon restarts**, on the General
+tab, runs the program of a new agent panel in a small holder process of Horizon.
+The holder keeps the program when Horizon ends, and the next Horizon attaches to
+it: the panel shows the last output of the program and keeps its pid. Close the
+panel, and its program ends. The setting is off at first and it is a value of
+this computer, so it does not follow a server. A panel of a machine and an ssh
+panel run their program in another place, so a holder never serves one.
+
 ## Open a browser panel
 
 Browser panels need a source build from `main`. The **Browser** preset uses a
