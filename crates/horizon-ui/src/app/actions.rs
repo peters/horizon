@@ -242,7 +242,7 @@ mod tests {
             }),
         }];
 
-        let entries = command_palette_preset_entries(&presets);
+        let entries = command_palette_preset_entries(&presets, &[]);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].detail, "deploy@prod-api");

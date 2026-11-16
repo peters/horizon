@@ -474,6 +474,8 @@ pub struct HorizonApp {
     pending_preset_pick: Option<(Option<WorkspaceId>, [f32; 2], std::time::Instant)>,
     dir_picker: Option<DirPicker>,
     command_palette: Option<CommandPalette>,
+    /// The presets whose program the search of the open list did not find.
+    preset_programs: actions::support::PresetPrograms,
     search_overlay: Option<SearchOverlay>,
     action_commands_cache: Vec<CommandEntry>,
     runtime_dirty_since: Option<Instant>,

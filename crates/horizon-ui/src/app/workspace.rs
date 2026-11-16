@@ -454,7 +454,7 @@ mod tests {
         app: HorizonApp,
         time: f64,
         _temp: tempfile::TempDir,
-        _folder: tempfile::TempDir,
+        folder: tempfile::TempDir,
     }
 
     impl AppWindow {
@@ -475,7 +475,7 @@ mod tests {
                 app,
                 time: 1.0,
                 _temp: temp,
-                _folder: folder,
+                folder,
             };
             window.app.theme_applied = true;
             window.app.initial_pan_done = true;
@@ -500,6 +500,39 @@ mod tests {
                 .find(|workspace| workspace.name == name)
                 .map(|workspace| workspace.id)
                 .expect("the workspace of the state")
+        }
+
+        /// Every text that this frame painted, with the box of it.
+        fn texts(output: &egui::FullOutput) -> Vec<(String, Rect)> {
+            fn walk(shape: &egui::Shape, out: &mut Vec<(String, Rect)>) {
+                match shape {
+                    egui::Shape::Text(text) => out.push((
+                        text.galley.text().to_owned(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    egui::Shape::Vec(inner) => {
+                        for shape in inner {
+                            walk(shape, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut out);
+            }
+            out
+        }
+
+        fn key(key: egui::Key) -> Event {
+            Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }
         }
 
         fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -587,13 +620,7 @@ mod tests {
 
         // The list holds the presets alone, in the order of the settings, so
         // Enter chooses the first one.
-        let _ = window.frame(vec![Event::Key {
-            key: egui::Key::Enter,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }]);
+        let _ = window.frame(vec![AppWindow::key(egui::Key::Enter)]);
 
         window.frames_until("the preset that the person chose opens", |app| {
             app.board.panels.len() > panels_before
@@ -618,6 +645,103 @@ mod tests {
             window.app.board.panels.len(),
             panels_before + 1,
             "one panel joined the board"
+        );
+    }
+
+    /// The settings list of a first start, with the program of each agent
+    /// preset in the folder of the test.
+    fn presets_of(folder: &std::path::Path) -> Vec<horizon_core::PresetConfig> {
+        let preset = |name: &str, kind: horizon_core::PanelKind, program: Option<&str>| horizon_core::PresetConfig {
+            name: name.to_owned(),
+            alias: None,
+            kind,
+            command: program.map(|program| folder.join(program).display().to_string()),
+            args: Vec::new(),
+            resume: horizon_core::PanelResume::Fresh,
+            ssh_connection: None,
+        };
+        vec![
+            preset("Shell", horizon_core::PanelKind::Shell, None),
+            preset("Codex", horizon_core::PanelKind::Codex, Some("codex")),
+            preset("Claude Code", horizon_core::PanelKind::Claude, Some("claude")),
+        ]
+    }
+
+    #[test]
+    fn a_preset_without_its_program_stands_last_is_marked_and_still_starts() {
+        let mut window = AppWindow::with_two_workspaces();
+        let folder = window.folder.path().to_path_buf();
+        horizon_core::stand_in_program_in(&folder, "claude", "exit 0\n").expect("the program of a test");
+        window.app.presets = presets_of(&folder);
+        let beta = window.workspace_id("beta");
+        let panels_before = window.app.board.panels.len();
+
+        let position = window
+            .control(ADD_PANEL)
+            .expect("the workspace line of a workspace holds the control that adds a panel");
+        window.press(position);
+
+        // The search of the programs runs on the worker, so the list is unmarked
+        // until its answer is here.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut rows;
+        loop {
+            let output = window.frame(Vec::new());
+            rows = AppWindow::texts(&output);
+            if rows.iter().any(|(text, _)| text == "not installed") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the list marks the preset whose program this computer lacks: {rows:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let row = |label: &str| {
+            rows.iter()
+                .find(|(text, _)| text == label)
+                .map_or_else(|| panic!("the list draws the row {label}: {rows:?}"), |(_, rect)| *rect)
+        };
+        let (shell, claude, codex) = (row("Shell"), row("Claude Code"), row("Codex"));
+        assert!(
+            shell.top() < claude.top() && claude.top() < codex.top(),
+            "a preset without its program stands last: {rows:?}"
+        );
+        let marks: Vec<Rect> = rows
+            .iter()
+            .filter(|(text, _)| text == "not installed")
+            .map(|(_, rect)| *rect)
+            .collect();
+        assert_eq!(marks.len(), 1, "one preset without its program: {rows:?}");
+        assert!(
+            (marks[0].center().y - codex.center().y).abs() < 1.0 && marks[0].left() > codex.right(),
+            "the words stand at the right of the row of Codex: {marks:?} {codex:?}"
+        );
+
+        // The mark informs: the preset still starts, and it starts where the
+        // person pressed.
+        let _ = window.frame(vec![AppWindow::key(egui::Key::ArrowDown)]);
+        let _ = window.frame(vec![AppWindow::key(egui::Key::ArrowDown)]);
+        let _ = window.frame(vec![AppWindow::key(egui::Key::Enter)]);
+        window.frames_until("the preset that the person chose opens", |app| {
+            app.board.panels.len() > panels_before
+        });
+        assert!(
+            window
+                .app
+                .board
+                .panels
+                .iter()
+                .any(|panel| { panel.workspace_id == beta && panel.kind == horizon_core::PanelKind::Codex }),
+            "the marked preset opened in the workspace of the press: {:?}",
+            window
+                .app
+                .board
+                .panels
+                .iter()
+                .map(|panel| (panel.kind, panel.workspace_id))
+                .collect::<Vec<_>>()
         );
     }
 

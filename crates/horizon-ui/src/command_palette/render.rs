@@ -120,13 +120,29 @@ pub(super) fn render_result_row(
         row_rect.min.x + 10.0
     };
 
+    let label_color = match (item.not_installed, is_selected) {
+        (true, _) => theme::FG_DIM(),
+        (false, true) => theme::FG(),
+        (false, false) => theme::FG_SOFT(),
+    };
     ui.painter_at(row_rect).text(
         Pos2::new(label_x, text_y),
         egui::Align2::LEFT_CENTER,
         &item.label,
         egui::FontId::proportional(13.0),
-        if is_selected { theme::FG() } else { theme::FG_SOFT() },
+        label_color,
     );
+
+    if item.not_installed {
+        let words = Pos2::new(row_rect.max.x - 12.0, text_y);
+        ui.painter_at(row_rect).text(
+            words,
+            egui::Align2::RIGHT_CENTER,
+            "not installed",
+            egui::FontId::proportional(10.5),
+            theme::FG_DIM(),
+        );
+    }
 
     if !item.detail.is_empty() {
         let detail_x = label_x + estimate_text_width(&item.label, 13.0) + 12.0;

@@ -304,7 +304,27 @@ pub(super) fn command_palette_panel_entries(
         .collect()
 }
 
-pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<PresetEntry> {
+/// The presets whose agent program this computer does not have.
+///
+/// The search reads folders, so it runs on the worker when the list of the
+/// presets opens, and the list draws unmarked until its answer is here.
+#[derive(Default)]
+pub(in crate::app) struct PresetPrograms {
+    /// The presets without their program, by index of the settings.
+    pub(in crate::app) missing: Vec<usize>,
+}
+
+/// The presets of `programs` whose program no folder of `PATH` holds. The search
+/// reads folders, so only a worker calls it.
+pub(in crate::app) fn missing_programs(programs: &[(usize, String)]) -> Vec<usize> {
+    programs
+        .iter()
+        .filter(|(_, program)| horizon_core::setup::find_program(program, None).is_none())
+        .map(|(index, _)| *index)
+        .collect()
+}
+
+pub(super) fn command_palette_preset_entries(presets: &[PresetConfig], missing: &[usize]) -> Vec<PresetEntry> {
     presets
         .iter()
         .enumerate()
@@ -334,6 +354,7 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
                 label: preset.name.clone(),
                 detail,
                 keywords,
+                not_installed: missing.contains(&index),
             }
         })
         .collect()
@@ -343,7 +364,28 @@ pub(super) fn command_palette_preset_entries(presets: &[PresetConfig]) -> Vec<Pr
 mod tests {
     use horizon_core::{PanelKind, PanelResume, PresetConfig, SshConnection};
 
-    use super::{PresetCategory, command_palette_preset_entries, preset_category, preset_panel_options};
+    use super::{
+        PresetCategory, command_palette_preset_entries, missing_programs, preset_category, preset_panel_options,
+    };
+
+    #[test]
+    fn the_search_marks_the_agent_presets_whose_program_is_not_here() {
+        let folder = tempfile::tempdir().expect("a folder of the test");
+        horizon_core::stand_in_program_in(folder.path(), "claude", "exit 0\n").expect("the program of a test");
+        let program = |name: &str| folder.path().join(name).display().to_string();
+        let programs = vec![
+            (0, program("sh")),
+            (1, program("codex")),
+            (2, program("claude")),
+            (3, program("gemini")),
+        ];
+
+        assert_eq!(
+            missing_programs(&programs),
+            vec![0, 1, 3],
+            "only the program that is a file of this computer is found"
+        );
+    }
 
     fn browser_preset() -> PresetConfig {
         PresetConfig {
@@ -491,7 +533,7 @@ mod tests {
 
     #[test]
     fn command_palette_preset_entries_ignore_stale_ssh_metadata_for_non_ssh_presets() {
-        let entries = command_palette_preset_entries(&[shell_preset_with_stale_ssh_metadata()]);
+        let entries = command_palette_preset_entries(&[shell_preset_with_stale_ssh_metadata()], &[]);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].detail, "Shell");

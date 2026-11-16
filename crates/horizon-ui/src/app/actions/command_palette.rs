@@ -8,7 +8,7 @@ use crate::search_overlay::SearchOverlay;
 
 use super::support::{
     command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
-    detached_workspace_ids,
+    detached_workspace_ids, missing_programs,
 };
 
 impl HorizonApp {
@@ -26,7 +26,27 @@ impl HorizonApp {
         if self.root_viewport_stabilization_blocks_interaction() {
             return;
         }
+        self.refresh_preset_programs();
         self.command_palette = Some(palette);
+    }
+
+    /// Asks the worker which presets start a program that this computer does not
+    /// have. The list draws unmarked until the answer is here.
+    fn refresh_preset_programs(&mut self) {
+        let programs: Vec<(usize, String)> = self
+            .presets
+            .iter()
+            .enumerate()
+            .filter(|(_, preset)| preset.kind.is_agent())
+            .map(|(index, preset)| (index, horizon_core::setup::preset_program(preset)))
+            .collect();
+        if programs.is_empty() {
+            return;
+        }
+        self.browser_create_host.io.then(
+            move || missing_programs(&programs),
+            |app, missing| app.preset_programs.missing = missing.unwrap_or_default(),
+        );
     }
 
     fn toggle_command_palette(&mut self) {
@@ -46,7 +66,7 @@ impl HorizonApp {
         let workspace_entries =
             command_palette_workspace_entries(&self.board, &detached_workspace_ids, self.board.active_workspace);
         let panel_entries = command_palette_panel_entries(&self.board, &detached_workspace_ids);
-        let preset_entries = command_palette_preset_entries(&self.presets);
+        let preset_entries = command_palette_preset_entries(&self.presets, &self.preset_programs.missing);
 
         let action = palette.show(
             ctx,

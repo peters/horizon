@@ -229,7 +229,7 @@ impl HorizonApp {
             session_manager_reload: None,
             canvas_gesture: super::canvas_gesture::CanvasGesture::default(), pending_preset_pick: None,
             press_frame: super::press_frame::PressFrame::default(),
-            dir_picker: None, command_palette: None, search_overlay: None,
+            dir_picker: None, command_palette: None, preset_programs: super::actions::support::PresetPrograms::default(), search_overlay: None,
             action_commands_cache,
             runtime_dirty_since: None,
             startup_workspace_organization_pending: false, startup_selection_restored: false,

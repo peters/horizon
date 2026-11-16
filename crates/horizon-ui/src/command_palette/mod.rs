@@ -42,6 +42,9 @@ pub struct PresetEntry {
     pub label: String,
     pub detail: String,
     pub keywords: Vec<String>,
+    /// Whether the program of the preset was not found on this computer. The
+    /// row says so and the preset still starts.
+    pub not_installed: bool,
 }
 
 // ── Palette state ───────────────────────────────────────────────────
@@ -80,6 +83,7 @@ struct ResultItem {
     shortcut: Option<String>,
     category: Category,
     accent: Option<Color32>,
+    not_installed: bool,
 }
 
 // ── Implementation ──────────────────────────────────────────────────
@@ -209,7 +213,7 @@ impl CommandPalette {
         ui.allocate_space(Vec2::new(layout.inner.width(), INPUT_HEIGHT));
         ui.add_space(4.0);
 
-        self.render_hint(ui, layout.inner.width());
+        Self::render_hint(ui, layout.inner.width(), mode);
         ui.add_space(4.0);
 
         match self.render_results(ui, items, layout) {
@@ -255,8 +259,7 @@ impl CommandPalette {
         }
     }
 
-    fn render_hint(&self, ui: &mut egui::Ui, width: f32) {
-        let (mode, _) = parse_mode(&self.query);
+    fn render_hint(ui: &mut egui::Ui, width: f32, mode: PaletteMode) {
         if mode != PaletteMode::All {
             return;
         }
@@ -371,6 +374,7 @@ fn build_results(
                     shortcut: None,
                     category: Category::Workspace,
                     accent: Some(ws.color),
+                    not_installed: false,
                 });
             }
         }
@@ -393,13 +397,17 @@ fn build_results(
                     shortcut: None,
                     category: Category::Panel,
                     accent: None,
+                    not_installed: false,
                 });
             }
         }
     }
 
     if mode != PaletteMode::PanelsOnly {
-        for preset in presets {
+        // A preset whose program was not found stands after the presets that
+        // this computer has, so the list offers them first.
+        let found = presets.iter().filter(|preset| !preset.not_installed);
+        for preset in found.chain(presets.iter().filter(|preset| preset.not_installed)) {
             let keyword_refs: Vec<&str> = preset.keywords.iter().map(String::as_str).collect();
             if matches_query(&query_lower, &preset.label, &keyword_refs) {
                 items.push(ResultItem {
@@ -409,6 +417,7 @@ fn build_results(
                     shortcut: None,
                     category: Category::Preset,
                     accent: None,
+                    not_installed: preset.not_installed,
                 });
             }
         }
@@ -425,6 +434,7 @@ fn build_results(
                     shortcut: action.shortcut.clone(),
                     category: Category::Action,
                     accent: None,
+                    not_installed: false,
                 });
             }
         }
@@ -580,6 +590,7 @@ mod tests {
             label: "SSH: prod-api".into(),
             detail: "ssh".into(),
             keywords: vec!["prod".into(), "deploy".into()],
+            not_installed: false,
         }];
         let actions = crate::command_registry::action_commands(&AppShortcuts::default(), "Ctrl");
 
