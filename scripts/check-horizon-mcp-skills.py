@@ -97,6 +97,9 @@ MACHINE_CARD_BUTTONS = (
     'stop',
     'delete',
 )
+# The button that starts an agent program of the machine, one for each program that
+# the machine has. It stands directly after `Connect`, before the server button.
+MACHINE_CARD_AGENT_BUTTON = re.compile(r'start_[a-z0-9]+_here$')
 
 
 def variant_fields(source, name):
@@ -189,7 +192,9 @@ def example_errors(documents):
 
 
 def machine_card_errors(documents):
-    """Every card example with a machine button offers all eight buttons."""
+    """Every card example with a machine button offers all eight buttons, in the
+    order of the skill, and the buttons that start an agent program of the machine
+    directly after `Connect`."""
     errors = []
     for skill, document in sorted(documents.items()):
         for block in EXAMPLE.findall(document):
@@ -202,18 +207,32 @@ def machine_card_errors(documents):
             components = value.get('components')
             if not isinstance(components, list):
                 continue
-            buttons = {
+            ids = [
                 item.get('id')
                 for component in components
                 if isinstance(component, dict)
                 for item in component.get('items') or []
                 if isinstance(item, dict)
-            }
-            if 'server_here' not in buttons:
+            ]
+            if 'server_here' not in ids:
                 continue
-            missing = [name for name in MACHINE_CARD_BUTTONS if name not in buttons]
+            missing = [name for name in MACHINE_CARD_BUTTONS if name not in ids]
             if missing:
                 errors.append(f'{skill}: a machine card example lacks the buttons {", ".join(missing)}')
+                continue
+            order = [name for name in ids if name in MACHINE_CARD_BUTTONS]
+            if order != list(MACHINE_CARD_BUTTONS):
+                errors.append(
+                    f'{skill}: a machine card example draws the buttons as {", ".join(order)}; '
+                    f'the skill draws {", ".join(MACHINE_CARD_BUTTONS)}'
+                )
+            between = ids[ids.index('connect') + 1 : ids.index('server_here')]
+            strangers = [name for name in between if not (name and MACHINE_CARD_AGENT_BUTTON.match(name))]
+            if strangers:
+                errors.append(
+                    f'{skill}: a machine card example draws {", ".join(strangers)} between Connect and '
+                    'the server button; only the buttons that start an agent program stand there'
+                )
     return errors
 
 

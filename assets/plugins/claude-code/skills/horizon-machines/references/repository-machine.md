@@ -206,6 +206,9 @@ older Horizon refuses the record of a newer one.
   {"type": "text", "text": "cargo test --workspace: 412 tests pass, 0 failed"},
   {"type": "buttons", "items": [
     {"id": "connect", "label": "Connect", "tone": "primary"},
+    {"id": "start_claude_here", "label": "Start Claude here"},
+    {"id": "start_codex_here", "label": "Start Codex here"}]},
+  {"type": "buttons", "items": [
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
     {"id": "join_network", "label": "Join a network"},
@@ -234,6 +237,43 @@ Draw `Start` instead
 of `Stop` while the machine is stopped. A card that holds only `Connect` and
 `Delete` is a card that cannot continue the set-up, and the person must open
 another card to put the server or a browser there.
+
+The ready card of a machine that holds a repository holds one button
+`Start <program> here` for each agent program that the machine has, directly
+after `Connect`: `Start Claude here`, `Start Codex here` and `Start pi here` for a
+machine that has all three. The machine has a program when `command -v
+<program>` answers a path, as the trust step reads it. A machine with no agent
+program holds no such button, and the card says `No agent program on this
+machine.` A stopped machine runs no program, so it holds none either. The id of
+the button is `start_<program>_here`: the button `Start Claude here` has the id
+`start_claude_here`. One row of a card holds at most eight buttons, so the card
+of such a machine holds two rows: `Connect` and the buttons of the agent programs
+in the first row, and the other seven buttons in the second row.
+
+A press runs the program in the folder that the trust step holds, in a detached
+session that stays after the ssh command ends:
+
+```sh
+session="hz-agent-claude-$(printf '%s' "$folder" | sha256sum | cut -c1-8)"
+tmux has-session -t "$session" 2>/dev/null ||
+    tmux new-session -d -s "$session" -c "$folder" claude
+# tmux has-session answers 0: the agent starts no second copy.
+```
+
+`$folder` is the absolute canonical path that the step `Trust the repository
+folder` read with `realpath`, and `claude` is the program of the button. The
+name is `hz-agent-`, the program, and the first eight characters of the SHA-256
+of that path: one program in one folder has one name. The name is 1 to 40
+characters of `A-Z`, `a-z`, `0-9`, `_` and `-` that never starts with `-`, as the
+session name of a machine record.
+
+Then update the card with one `text` line that names the program, the folder and
+the row that opens the panel, for example `Claude runs in /home/example/example-repo.
+Its row under build-1 in the sidebar opens it.` The person signs in there, in the
+panel of that row, with the commands of [the logins](../SKILL.md#the-logins). Do
+not copy a login file, a token, a keyring, a cookie or `~/.ssh` of this computer
+to a machine. The row of the agent in the sidebar holds no button that starts a
+program: a program starts on the card.
 
 ### 4. A step that fails keeps its card
 

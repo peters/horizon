@@ -383,6 +383,13 @@ cards for agents here`, `Stop`, and `Delete`. Draw
 repository keeps these buttons too, so a set-up continues from the card that the
 run left.
 
+A machine that holds a repository holds one `Start <program> here` button for each
+agent program that the machine has, directly after `Connect`, and a machine with
+no agent program says `No agent program on this machine.` The page
+`references/repository-machine.md` of the skill `horizon-machines` gives the
+button, its command and the row of the sidebar that opens the panel. The machine
+of this goal holds no repository folder, so its card holds no such button.
+
 - `Connect` opens the terminal of `horizon-machines`, with the machine record.
 - `Put the Horizon server here` continues with the goal `server` and this machine
   as its place.

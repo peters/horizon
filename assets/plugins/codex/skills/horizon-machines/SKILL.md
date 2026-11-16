@@ -393,6 +393,15 @@ that the person asked for. Then give
 `Delete` in `danger`. When the
 machine is stopped, draw `Start` instead of `Stop`.
 
+A machine that holds a repository holds one `Start <program> here` button for
+each agent program that the machine has, directly after `Connect`, and a machine
+with no agent program says `No agent program on this machine.`
+[repository-machine](references/repository-machine.md) gives the button, its
+command and the row of the sidebar that opens the panel. A press starts the
+program in the repository folder, and the row of the agent in the sidebar opens
+it. Do not copy a login file, a token, a keyring, a cookie or `~/.ssh` of this
+computer to a machine.
+
 `Join a network` draws the network card of
 [tailscale](references/tailscale.md). The card holds the stored networks as pills
 and no field for a secret. A machine that is already in a network shows its rows

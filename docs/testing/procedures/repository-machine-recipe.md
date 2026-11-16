@@ -18,6 +18,10 @@ together, that one press rents them, that each machine gets a steps card of six
 steps, that a machine card says `Ready for <repository>` with the check of the
 recipe as evidence, and that a step that failed keeps its card with the last
 lines of the output and the buttons `Try again` and `Delete the machine`. It also
+makes sure that the ready card of a machine holds one `Start <program> here`
+button for each agent program of that machine, that a press starts the program in
+the folder of the repository, that the row of the agent in the sidebar opens its
+panel, and that a second press starts no second copy. It also
 makes sure that a repository without the section `## Horizon machine` gets one
 question on a card and no machine.
 
@@ -161,7 +165,45 @@ the provider of the person, and follow the caution of
 
    Result: the record of the machine holds `repository` with the same text as
    the row.
-5. Press `Delete the machine`, and finish the delete as the skill says.
+
+5. Read the buttons of the card, directly after `Connect`.
+
+   Result: one `Start <program> here` button stands there for each agent program
+   that the machine has, for example `Start Claude here` and `Start Codex here`.
+   A machine with no agent program holds no such button, and the card says
+   `No agent program on this machine.`
+
+> **CAUTION:** STEP 6 STARTS A PROGRAM ON A RENTED MACHINE. The machine costs
+> money from the rent until the delete of step 10, and the program runs in the
+> folder of the repository. No login of this computer reaches the machine.
+
+6. Press `Start Claude here`.
+
+   Result: the card holds one line that names `Claude`, the folder of the
+   repository and the row of the sidebar. The Machines section of the sidebar
+   holds a row of the agent under the row of the machine, named with the last part
+   of that folder, for example `example-repo`, and with the mark of Claude.
+
+7. Read the session on the machine.
+
+   ```sh
+   ssh <options of the machine key> <user>@<address> 'tmux ls'
+   ```
+
+   Result: one session whose name starts with `hz-agent-claude-`.
+
+8. Press the row of the agent in the sidebar.
+
+   Result: a panel of that machine opens and shows the screen of `claude` in the
+   folder of the repository. The person signs in there, and no login file, token,
+   keyring, cookie or `~/.ssh` of this computer is on the machine.
+
+9. Press `Start Claude here` again, and read `tmux ls` on the machine again.
+
+   Result: the second press starts no second copy: the card still names one line
+   of `Claude`, and `tmux ls` names the same one session.
+
+10. Press `Delete the machine`, and finish the delete as the skill says.
 
    Result: the card of the machine goes, and the machine list of the sidebar
    holds no record of it.
