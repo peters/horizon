@@ -184,10 +184,24 @@ pub enum PanelReader {
 impl Read for PanelReader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         match self {
-            Self::Local(reader) => reader.read(buffer),
+            Self::Local(reader) => match reader.read(buffer) {
+                // The event loop takes the bytes of a program and the end of its
+                // terminal in one pass, and an error on the end would discard the
+                // bytes that it took before it. So the end of the output answers
+                // what the end of a file answers, and those bytes reach the grid.
+                Err(error) if ends_the_output(&error) => Ok(0),
+                answer => answer,
+            },
             Self::Attached(reader) => reader.read(buffer),
         }
     }
+}
+
+/// Whether `error` is the end of the output of the program of a terminal: the
+/// system answers `EIO` when no process holds the client side of a terminal and
+/// its buffer is empty.
+fn ends_the_output(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error())
 }
 
 /// The writer of the PTY of a panel.

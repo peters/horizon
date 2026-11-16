@@ -98,3 +98,41 @@ fn dropping_a_finished_event_loop_does_not_wait_for_its_live_child() {
         "background PTY cleanup did not complete",
     );
 }
+
+/// The bytes that a program wrote before it ended reach the grid, also when the
+/// event loop takes them together with the end of the terminal: the end of the
+/// output is no error that discards what the same pass took.
+#[test]
+fn the_output_of_a_program_that_ends_does_not_go_missing_when_the_grid_is_busy() {
+    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf 'kept-line\\n'".into()],
+        cwd: None,
+        rows: 24,
+        cols: 80,
+        cell_width: 8,
+        cell_height: 16,
+        scrollback_limit: 256,
+        window_id: 44,
+        replay_bytes: Vec::new(),
+        env: HashMap::new(),
+        kitty_keyboard: true,
+    })
+    .expect("the terminal of a program that ends");
+    // A frame holds the grid while the program writes and ends, so the reader of
+    // the terminal takes the bytes and the end of its terminal in one pass.
+    let held = terminal.term.lock();
+    std::thread::sleep(Duration::from_millis(200));
+    drop(held);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && terminal.viewport_text().first().is_none_or(|line| line != "kept-line") {
+        let _ = terminal.process_events();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(
+        terminal.viewport_text().first().map(String::as_str),
+        Some("kept-line"),
+        "the grid of the terminal shows the bytes of the program that ended"
+    );
+}
