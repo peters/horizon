@@ -1,0 +1,273 @@
+//! The decision of a holder, proven against a holder that serves on a thread.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::panel_holder::{self, HolderError, Launch};
+use crate::terminal::Terminal;
+use crate::{HorizonHome, Panel, PanelId, PanelKind, PanelOptions, PanelResume, WorkspaceId};
+
+use super::super::start::{StartRequest, prepare_panel_start};
+use super::super::terminal::spawn_started_terminal;
+
+/// The marker that the stand-in program of these tests prints.
+const MARKER: &str = "held marker";
+
+/// The longest time that a test waits for one condition of a panel.
+const TEST_BOUND: Duration = Duration::from_secs(10);
+
+/// A home in a folder of a short path, because the path of a socket is bounded.
+fn temp_home() -> (tempfile::TempDir, HorizonHome) {
+    let folder = tempfile::Builder::new()
+        .prefix("hz-hold")
+        .tempdir_in("/tmp")
+        .expect("a folder for a home");
+    let home = HorizonHome::from_root(folder.path().to_path_buf());
+    (folder, home)
+}
+
+/// The options of the panel of a test: a stand-in program that prints a marker.
+fn panel_options(kind: PanelKind, local_id: &str, is_restore: bool) -> PanelOptions {
+    PanelOptions {
+        kind,
+        local_id: Some(local_id.to_owned()),
+        is_restore,
+        command: Some("/bin/sh".to_owned()),
+        args: vec!["-c".to_owned(), format!("printf '{MARKER}\\n'; exec cat")],
+        cwd: Some(PathBuf::from("/tmp")),
+        resume: PanelResume::Fresh,
+        cols: 400,
+        ..PanelOptions::default()
+    }
+}
+
+/// The launch of the stand-in program of a test, for a holder that it serves.
+fn stand_in(local_id: &str) -> Launch {
+    Launch {
+        local_id: local_id.to_owned(),
+        program: "/bin/sh".to_owned(),
+        args: vec!["-c".to_owned(), format!("printf '{MARKER}\\n'; exec cat")],
+        cwd: Some(PathBuf::from("/tmp")),
+        env: HashMap::new(),
+        rows: 24,
+        cols: 80,
+        cell_width: 8,
+        cell_height: 17,
+    }
+}
+
+/// Starts a panel as the app starts it, and answers it with the arguments of its
+/// launch and whether it attached to a holder.
+fn start_panel(home: &HorizonHome, opts: PanelOptions, local_id: &str, keep: bool) -> (Panel, Vec<String>, bool) {
+    let id = PanelId(1);
+    let start = prepare_panel_start(StartRequest {
+        id,
+        local_id: local_id.to_owned(),
+        opts: opts.clone(),
+        home: home.clone(),
+        keep_agents_through_restart: keep,
+    });
+    let launch = start.launch.as_ref().expect("the launch of the panel of a test");
+    let args = launch.args.clone();
+    let attached = launch.attached.is_some();
+    let panel = spawn_started_terminal(id, WorkspaceId(1), local_id.to_owned(), opts, start)
+        .expect("the panel of a test starts");
+    (panel, args, attached)
+}
+
+/// Waits until the grid of `panel` holds `wanted`, and answers its text.
+fn wait_for_text(panel: &mut Panel, wanted: &str) -> String {
+    let deadline = Instant::now() + TEST_BOUND;
+    loop {
+        let text = match panel.terminal_mut() {
+            Some(terminal) => {
+                terminal.process_events();
+                terminal.try_last_lines_text(40).unwrap_or_default()
+            }
+            None => String::new(),
+        };
+        if text.contains(wanted) {
+            return text;
+        }
+        assert!(Instant::now() < deadline, "waited for {wanted:?}, read {text:?}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits until `condition` holds, and fails the test when it does not.
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + TEST_BOUND;
+    while !condition() {
+        assert!(Instant::now() < deadline, "waited for {what}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The pid of the program that the terminal of `panel` shows.
+fn pid_of(panel: &Panel) -> u32 {
+    panel
+        .terminal()
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the program of a panel")
+}
+
+#[test]
+fn a_panel_of_a_computer_that_keeps_no_agents_starts_no_holder() {
+    let (_folder, home) = temp_home();
+    let (mut panel, args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Codex, "off-panel", false),
+        "off-panel",
+        false,
+    );
+
+    assert!(!attached, "the program of this panel runs in this process");
+    assert_eq!(
+        args.first().map(String::as_str),
+        Some("-ic"),
+        "an agent panel starts through the login shell of this computer, as it does today"
+    );
+    assert!(
+        args.get(1).is_some_and(|line| line.contains("exec cat")),
+        "the program of the panel is in the command line of the shell: {args:?}"
+    );
+    assert!(
+        !home.root().join("panel-holders").exists(),
+        "a run that keeps no agent makes no folder of holders"
+    );
+    assert!(
+        matches!(panel_holder::probe(&home, "off-panel"), Ok(None)),
+        "no holder answers for the panel"
+    );
+
+    wait_for_text(&mut panel, MARKER);
+}
+
+#[test]
+fn an_agent_panel_of_a_computer_that_keeps_its_agents_starts_in_a_holder() {
+    let (_folder, home) = temp_home();
+    let (mut panel, _args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Codex, "held-panel", false),
+        "held-panel",
+        true,
+    );
+
+    assert!(attached, "the panel attaches to the holder of its program");
+    assert!(
+        !matches!(panel_holder::probe(&home, "held-panel"), Ok(None)),
+        "a holder answers the probe of the panel, which attached to it"
+    );
+    let pid = pid_of(&panel);
+    wait_for_text(&mut panel, MARKER);
+
+    let (mut shell, _args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Shell, "shell-panel", false),
+        "shell-panel",
+        true,
+    );
+    assert!(!attached, "a shell panel runs its program in this process");
+    assert!(
+        matches!(panel_holder::probe(&home, "shell-panel"), Ok(None)),
+        "a shell panel makes no holder"
+    );
+    wait_for_text(&mut shell, MARKER);
+    assert_ne!(pid_of(&shell), pid, "the shell is a program of this process");
+}
+
+/// The promise of the round: the end of Horizon leaves the program in its holder,
+/// and the next Horizon attaches to the same program and reads its last output.
+#[test]
+fn a_restored_agent_panel_attaches_to_the_program_that_its_holder_keeps() {
+    let (_folder, home) = temp_home();
+    let (mut panel, _args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Codex, "promise", false),
+        "promise",
+        true,
+    );
+    assert!(attached, "the panel attaches to the holder of its program");
+    let pid = pid_of(&panel);
+    wait_for_text(&mut panel, MARKER);
+    // The end of Horizon: the terminal goes, and the holder keeps its program.
+    drop(panel);
+
+    let mut restoring = panel_options(PanelKind::Codex, "promise", true);
+    // A panel that a person restarts resumes its conversation, which a program
+    // that runs already must not be given.
+    restoring.resume = PanelResume::Session {
+        session_id: "4d7a1a44-0000-4000-8000-000000000000".to_owned(),
+    };
+    let (mut restored, args, attached) = start_panel(&home, restoring, "promise", true);
+    assert!(
+        attached,
+        "the restored panel attaches to the holder that runs its program"
+    );
+    assert_eq!(pid_of(&restored), pid, "the same program serves both Horizons");
+    assert!(
+        wait_for_text(&mut restored, MARKER).contains(MARKER),
+        "the grid of the restored panel shows the marker of the program"
+    );
+    assert!(
+        args.is_empty(),
+        "no resume argument is built for a program that runs: {args:?}"
+    );
+}
+
+/// A holder that serves another client: the panel runs its program here, and one
+/// line says why.
+#[test]
+fn a_holder_that_serves_another_client_leaves_the_program_in_this_window() {
+    let (_folder, home) = temp_home();
+    panel_holder::serve_on_a_thread(&home, &stand_in("busy-panel")).expect("the holder of a test");
+    let client = panel_holder::linked(&home, "busy-panel")
+        .expect("the link of the holder")
+        .expect("a holder answers");
+    wait_until("the holder to serve the client of the test", || {
+        matches!(panel_holder::probe(&home, "busy-panel"), Err(HolderError::Busy))
+    });
+
+    let (mut panel, _args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Codex, "busy-panel", true),
+        "busy-panel",
+        true,
+    );
+    assert!(!attached, "the panel runs its program in this process");
+    let text = wait_for_text(&mut panel, "This program runs in this window");
+    assert!(
+        text.contains("serves another client"),
+        "the line says why the holder does not serve this panel: {text:?}"
+    );
+    drop(client);
+}
+
+/// A holder whose socket path is above the bound of a system: the panel runs its
+/// program here, and one line says why. The path is never cut.
+#[test]
+fn a_holder_of_a_path_that_is_too_long_leaves_the_program_in_this_window() {
+    let folder = tempfile::Builder::new()
+        .prefix("hz-hold")
+        .tempdir_in("/tmp")
+        .expect("a folder for a home");
+    let long = Path::new("/tmp")
+        .join("x".repeat(96))
+        .join(folder.path().file_name().expect("the name of the folder"));
+    let home = HorizonHome::from_root(long);
+
+    let (mut panel, _args, attached) = start_panel(
+        &home,
+        panel_options(PanelKind::Codex, "long-path", true),
+        "long-path",
+        true,
+    );
+    assert!(!attached, "the panel runs its program in this process");
+    let text = wait_for_text(&mut panel, "This program runs in this window");
+    assert!(
+        text.contains("is longer than 100 bytes"),
+        "the line names the bound of the path: {text:?}"
+    );
+}

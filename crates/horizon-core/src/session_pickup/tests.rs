@@ -586,6 +586,8 @@ fn the_open_of_a_row_starts_the_program_of_the_row_with_exactly_its_session() {
         id: crate::panel::PanelId(7),
         opts: options,
         local_id: "pickup-panel".to_string(),
+        home: crate::HorizonHome::resolve(),
+        keep_agents_through_restart: false,
     });
 
     assert!(
@@ -635,6 +637,8 @@ fn a_codex_row_resumes_with_the_subcommand_of_its_program() {
         id: crate::panel::PanelId(8),
         opts: options,
         local_id: "pickup-codex".to_string(),
+        home: crate::HorizonHome::resolve(),
+        keep_agents_through_restart: false,
     });
 
     let (_, args) = start.launch_command().expect("the launch of the program");

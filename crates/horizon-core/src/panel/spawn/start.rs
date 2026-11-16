@@ -9,14 +9,16 @@
 
 use std::collections::HashMap;
 
-use crate::agent_work::StartupPlan;
+use crate::HorizonHome;
+use crate::agent_work::{StartupPlan, WorkContinuation};
 use crate::error::Result;
+use crate::panel_holder::{Launch, Linked};
 use crate::runtime_state::AgentSessionBinding;
 use crate::transcript::PanelTranscript;
 
 use super::super::{Panel, PanelContent, PanelId, PanelKind, PanelOptions};
 use super::{
-    ResolvedTerminalLaunch, UnusableWorkingDirectory, WorkPanel, agent_env, prepare_transcript_restore,
+    ResolvedTerminalLaunch, UnusableWorkingDirectory, WorkPanel, agent_env, holder, prepare_transcript_restore,
     resolve_spawn_launch, resolve_terminal_launch, usable_working_directory,
 };
 
@@ -70,6 +72,11 @@ pub struct PreparedLaunch {
     /// Whether the read of the named secrets of this start ended before this
     /// agent panel started, so it keeps no variable and says that in one line.
     pub(in crate::panel) named_secrets_late: bool,
+    /// The link to the holder that runs the program of this panel, or `None` when
+    /// this process starts it.
+    pub(in crate::panel) attached: Option<Linked>,
+    /// The line that tells the person why a holder does not run this program.
+    pub(in crate::panel) notice: Option<String>,
 }
 
 /// The work that a start reads, and the values that it needs for it. The frame
@@ -78,6 +85,10 @@ pub struct StartRequest {
     pub id: PanelId,
     pub opts: PanelOptions,
     pub local_id: String,
+    /// The home that holds the sockets of the holders of this run.
+    pub home: HorizonHome,
+    /// Whether an agent panel keeps its program in a holder after Horizon ends.
+    pub keep_agents_through_restart: bool,
 }
 
 /// Reads everything that the start of a panel needs. This is the work of the
@@ -85,7 +96,13 @@ pub struct StartRequest {
 /// it.
 #[must_use]
 pub fn prepare_panel_start(request: StartRequest) -> PanelStart {
-    let StartRequest { id, opts, local_id } = request;
+    let StartRequest {
+        id,
+        opts,
+        local_id,
+        home,
+        keep_agents_through_restart,
+    } = request;
     if opts.kind == PanelKind::Editor {
         // The panel opens at once; its text comes from its file on this worker.
         // A scratch buffer reads nothing and answers empty text.
@@ -110,7 +127,14 @@ pub fn prepare_panel_start(request: StartRequest) -> PanelStart {
     let working_directory = working_directory_failure(&opts);
     let (transcript, replay_bytes, had_persisted_transcript_state) =
         prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
-    let launch = prepare_launch(id, &opts, &local_id, transcript.as_ref());
+    let launch = prepare_launch(
+        id,
+        &opts,
+        &local_id,
+        transcript.as_ref(),
+        &home,
+        keep_agents_through_restart,
+    );
     PanelStart {
         working_directory,
         replay_bytes,
@@ -144,6 +168,8 @@ fn prepare_launch(
     opts: &PanelOptions,
     local_id: &str,
     transcript: Option<&PanelTranscript>,
+    home: &HorizonHome,
+    keep: bool,
 ) -> PreparedLaunch {
     let ResolvedTerminalLaunch {
         session_binding,
@@ -154,6 +180,23 @@ fn prepare_launch(
     // start before that answer. The wait is the worker's, bounded by the store.
     let named_secrets_published = super::wait_for_named_secrets(opts.kind);
     let mut env = agent_env(opts.kind, local_id, opts.command.is_none());
+    // A restored panel whose program still runs in a holder attaches to it: the
+    // program needs no launch, so no resume argument is built and no work plan
+    // speaks of a process that this Horizon starts.
+    let (attached, refused) = holder::attached(home, opts, local_id, keep);
+    if let Some(link) = attached {
+        return PreparedLaunch {
+            session_binding,
+            program,
+            // The program runs, so this panel builds no argument for a launch.
+            args: Vec::new(),
+            env,
+            work: StartupPlan::settled(None, WorkContinuation::default()),
+            named_secrets_late: !named_secrets_published,
+            attached: Some(link),
+            notice: None,
+        };
+    }
     let work = crate::agent_work::WorkLaunch {
         panel: local_id,
         kind: opts.kind,
@@ -169,6 +212,28 @@ fn prepare_launch(
         &mut launch_args,
         &mut env,
     );
+    // A start in a holder runs the launch that this process would run. A holder
+    // that answers and cannot be attached leaves the program in this window: the
+    // panel starts no second program in another holder.
+    let (attached, notice) = match refused {
+        Some(notice) => (None, Some(notice)),
+        None => holder::started(
+            home,
+            opts,
+            keep,
+            &Launch {
+                local_id: local_id.to_owned(),
+                program: program.clone(),
+                args: launch_args.clone(),
+                cwd: opts.cwd.clone(),
+                env: env.clone(),
+                rows: opts.rows,
+                cols: opts.cols,
+                cell_width: crate::panel::DEFAULT_CELL_WIDTH,
+                cell_height: crate::panel::DEFAULT_CELL_HEIGHT,
+            },
+        ),
+    };
     PreparedLaunch {
         session_binding,
         program,
@@ -176,6 +241,8 @@ fn prepare_launch(
         env,
         work,
         named_secrets_late: !named_secrets_published,
+        attached,
+        notice,
     }
 }
 
@@ -348,6 +415,8 @@ pub fn finish_restart(pending: PendingRestart) -> Result<PanelStart> {
             env,
             work: StartupPlan::settled(owner, state),
             named_secrets_late,
+            attached: None,
+            notice: None,
         }),
         editor_text: None,
         work_brief_wanted: work_brief.is_some(),

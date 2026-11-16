@@ -3,6 +3,7 @@ mod cwd;
 mod events;
 pub mod latency;
 mod lifecycle;
+pub(crate) use self::lifecycle::holder_hello;
 mod replay;
 mod resize;
 mod screen_replay;

@@ -5,6 +5,7 @@ mod browser;
 mod device;
 mod editor;
 mod environment;
+mod holder;
 mod launch_arguments;
 #[cfg(test)]
 mod pi_attention_tests;

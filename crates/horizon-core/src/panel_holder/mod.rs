@@ -39,6 +39,18 @@ use crate::{HorizonHome, HorizonHomeError};
 pub use self::launch::Launch;
 pub use horizon_pty_tap::frames::Hello;
 
+/// The link to the program of the holder of one panel, whose hello and replay
+/// this value took: a terminal attaches to `socket` and reads the output of the
+/// program from there.
+pub struct Linked {
+    /// The socket of the holder, whose hello and replay this value took.
+    pub socket: UnixStream,
+    /// The pid and the start time of the program of the holder.
+    pub hello: Hello,
+    /// The newest output of the program from before this link.
+    pub replay: Vec<u8>,
+}
+
 /// The argument that starts the mode of a holder.
 pub const PANEL_HOLDER_ARG: &str = "--panel-holder";
 
@@ -257,6 +269,60 @@ pub fn probe(home: &HorizonHome, local_id: &str) -> Result<Option<Hello>, Holder
         frames::Frame::Hello(hello) => Ok(Some(hello)),
         frames::Frame::Refusal => Err(HolderError::Busy),
         frame => Err(HolderError::NoHello(frame.kind())),
+    }
+}
+
+/// Links to the holder of `local_id` and answers its hello and its replay, or
+/// `None` when no holder listens on its socket.
+///
+/// A holder that still serves the client of a probe answers a refusal, so this
+/// tries again until its read bound passes. This connects to a socket, so only a
+/// worker calls it.
+///
+/// # Errors
+///
+/// Returns why the socket cannot be reached, or why the holder answers no hello.
+pub fn linked(home: &HorizonHome, local_id: &str) -> Result<Option<Linked>, HolderError> {
+    let deadline = Instant::now() + READ_BOUND;
+    loop {
+        let mut socket = match UnixStream::connect(Paths::of(home, local_id)?.socket()) {
+            Ok(socket) => socket,
+            Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match crate::terminal::holder_hello(&mut socket) {
+            Ok((hello, replay)) => return Ok(Some(Linked { socket, hello, replay })),
+            // The client of a probe, or a holder that is going, holds the link for
+            // one more turn of its loop.
+            Err(_) if Instant::now() < deadline => thread::sleep(WAIT_PAUSE),
+            Err(error) => return Err(HolderError::Terminal(error.to_string())),
+        }
+    }
+}
+
+/// Serves `launch` on a thread of a test, so that a test starts no process.
+#[cfg(test)]
+pub(crate) fn serve_on_a_thread(home: &HorizonHome, launch: &Launch) -> Result<Hello, HolderError> {
+    let owned = home.clone();
+    let served = launch.clone();
+    thread::Builder::new()
+        .name("panel-holder-of-a-test".to_owned())
+        .spawn(move || {
+            let _ = serve::serve(&owned, &served, serve::RING_LIMIT);
+        })?;
+    let deadline = Instant::now() + START_BOUND;
+    loop {
+        match probe(home, &launch.local_id)? {
+            Some(hello) => return Ok(hello),
+            None if Instant::now() >= deadline => {
+                return Err(HolderError::NoAnswer(
+                    Paths::of(home, &launch.local_id)?.socket().to_path_buf(),
+                ));
+            }
+            None => thread::sleep(WAIT_PAUSE),
+        }
     }
 }
 

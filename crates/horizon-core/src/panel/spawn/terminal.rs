@@ -171,10 +171,13 @@ pub(super) fn spawn_terminal(
     local_id: String,
     opts: PanelOptions,
 ) -> Result<Panel> {
+    // The panels of this path run no local program here, so no holder keeps them.
     let request = StartRequest {
         id,
         local_id: local_id.clone(),
         opts: opts.clone(),
+        home: crate::HorizonHome::resolve(),
+        keep_agents_through_restart: false,
     };
     let start = super::start::prepare_panel_start(request);
     spawn_started_terminal(id, workspace_id, local_id, opts, start)
@@ -317,8 +320,13 @@ pub(super) fn spawn_started_terminal(
         env,
         work,
         named_secrets_late,
+        attached,
+        notice,
     } = launch;
-    let replay_bytes = replay_bytes_with_notice(replay_bytes, named_secrets_late);
+    let mut replay_bytes = replay_bytes_with_notice(replay_bytes, named_secrets_late);
+    if let Some(notice) = notice {
+        replay_bytes.extend_from_slice(notice.as_bytes());
+    }
     let (has_custom_name, title) = panel_title(name, name_is_custom, id, ssh_connection.as_ref());
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
     let panel_args = TerminalPanelBuildArgs {
@@ -355,7 +363,7 @@ pub(super) fn spawn_started_terminal(
         }
         None => (program, launch_args),
     };
-    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+    let options = TerminalSpawnOptions {
         program,
         args: launch_args,
         cwd,
@@ -368,7 +376,13 @@ pub(super) fn spawn_started_terminal(
         replay_bytes,
         env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
-    })?;
+    };
+    // A holder runs the program, so this terminal attaches to the program that it
+    // started instead of starting one.
+    let mut terminal = match attached {
+        Some(link) => Terminal::spawn_attached(options, link.socket, link.hello, link.replay)?,
+        None => Terminal::spawn(options)?,
+    };
     terminal.work_owner = work.owner;
     terminal.work_continuation = work.state;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);

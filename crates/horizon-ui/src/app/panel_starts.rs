@@ -61,6 +61,8 @@ impl HorizonApp {
                 id: pending.id,
                 local_id,
                 opts: pending.options,
+                home: self.session_store.home().clone(),
+                keep_agents_through_restart: self.template_config.features.keep_agents_through_restart,
             };
             let id = pending.id;
             self.browser_create_host.io.then(

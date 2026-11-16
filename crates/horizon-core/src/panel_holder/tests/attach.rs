@@ -1,7 +1,6 @@
 //! A terminal of a panel that attaches to the holder of its program.
 
 use std::collections::HashMap;
-use std::os::unix::net::UnixStream;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,14 +31,13 @@ fn options() -> TerminalSpawnOptions {
 fn attach(home: &HorizonHome, local_id: &str) -> Terminal {
     let deadline = Instant::now() + TEST_BOUND;
     loop {
-        let socket = Paths::of(home, local_id)
-            .expect("the socket of the holder")
-            .socket()
-            .to_path_buf();
-        let stream = UnixStream::connect(&socket).expect("the socket of the holder");
-        match Terminal::spawn_attached(options(), stream) {
-            Ok(terminal) => return terminal,
-            Err(error) => assert!(Instant::now() < deadline, "a terminal attaches: {error}"),
+        if let Ok(Some(link)) = crate::panel_holder::linked(home, local_id) {
+            match Terminal::spawn_attached(options(), link.socket, link.hello, link.replay) {
+                Ok(terminal) => return terminal,
+                Err(error) => assert!(Instant::now() < deadline, "a terminal attaches: {error}"),
+            }
+        } else {
+            assert!(Instant::now() < deadline, "a holder answers for {local_id}");
         }
         thread::sleep(Duration::from_millis(10));
     }

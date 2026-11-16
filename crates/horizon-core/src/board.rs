@@ -411,21 +411,6 @@ impl Board {
         }
     }
 
-    /// The values that the pre-flight of a restart reads, for a worker. `None`
-    /// when the panel restarts nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns the refusal of a resume that the panel can no longer offer.
-    pub fn request_restart(&mut self, id: PanelId) -> Result<Option<crate::panel::RestartRequest>> {
-        let panel = self
-            .panels
-            .iter_mut()
-            .find(|p| p.id == id)
-            .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
-        panel.restart_request()
-    }
-
     /// Ends the process of a panel that a restart replaces, so the new one starts
     /// from a screen that no old output reaches.
     ///

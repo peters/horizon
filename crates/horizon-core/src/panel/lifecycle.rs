@@ -98,6 +98,8 @@ impl Panel {
         let Some(launch) = start.launch else {
             return Ok(());
         };
+        // This restart starts the program of the panel here, so it has no link to a
+        // holder: the restart of the app runs on the worker, which reads the setting.
         let PreparedLaunch {
             session_binding,
             program,
@@ -105,7 +107,13 @@ impl Panel {
             env,
             work,
             named_secrets_late,
+            notice,
+            ..
         } = launch;
+        let mut replay_bytes = replay_bytes_with_notice(start.replay_bytes, named_secrets_late);
+        if let Some(notice) = notice {
+            replay_bytes.extend_from_slice(notice.as_bytes());
+        }
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args,
@@ -116,7 +124,7 @@ impl Panel {
             cell_height: DEFAULT_CELL_HEIGHT,
             scrollback_limit: scrollback_limit_for_kind(self.kind),
             window_id: self.id.0,
-            replay_bytes: replay_bytes_with_notice(start.replay_bytes, named_secrets_late),
+            replay_bytes,
             env,
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);

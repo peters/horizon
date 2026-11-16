@@ -270,6 +270,8 @@ fn start_waiting_panels(board: &mut Board) {
             id: pending.id,
             local_id: pending.options.local_id.clone().unwrap_or_default(),
             opts: pending.options.clone(),
+            home: crate::HorizonHome::resolve(),
+            keep_agents_through_restart: false,
         };
         let start = prepare_panel_start(request);
         board

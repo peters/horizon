@@ -30,7 +30,7 @@ fn window_size_of(options: &TerminalSpawnOptions) -> WindowSize {
 /// # Errors
 ///
 /// Returns why the holder answers no hello, or no replay that its hello names.
-fn holder_hello(socket: &mut UnixStream) -> Result<(Hello, Vec<u8>)> {
+pub(crate) fn holder_hello(socket: &mut UnixStream) -> Result<(Hello, Vec<u8>)> {
     socket
         .set_read_timeout(Some(HELLO_BOUND))
         .map_err(|error| Error::Pty(format!("the link of the holder takes no bound: {error}")))?;
@@ -111,11 +111,13 @@ impl Terminal {
     ///
     /// # Errors
     ///
-    /// Returns why the holder answers no hello, or why its link cannot start.
-    pub fn spawn_attached(mut options: TerminalSpawnOptions, mut socket: UnixStream) -> Result<Self> {
-        // The hello of a holder and its replay wait in a socket, so only a worker
-        // calls this: the guard of the UI thread reports a frame that waits here.
-        let (hello, replay) = holder_hello(&mut socket)?;
+    /// Returns why the link of the holder cannot start.
+    pub fn spawn_attached(
+        mut options: TerminalSpawnOptions,
+        socket: UnixStream,
+        hello: Hello,
+        replay: Vec<u8>,
+    ) -> Result<Self> {
         options.replay_bytes = replay;
         let pty = horizon_pty_tap::PanelPty::attached(socket, window_size_of(&options))
             .map_err(|error| Error::Pty(format!("failed to attach the pty of the panel: {error}")))?;
