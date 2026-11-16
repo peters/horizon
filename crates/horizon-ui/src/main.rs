@@ -93,6 +93,14 @@ fn main() -> eframe::Result {
             init_tracing();
             std::process::exit(horizon_core::browser::host_driver::run(&options));
         }
+        // The holder of a panel owns one terminal and the program in it, and
+        // speaks on a private socket of its home. Its launch arrives on its
+        // standard input, so it opens no window, reads no settings and starts no
+        // session of the desktop path.
+        Start::PanelHolder => {
+            init_tracing();
+            std::process::exit(run_panel_holder());
+        }
         // The server and its link are the same binary, and they touch one
         // directory of their own. They come before the Horizon home, the settings
         // and the agent integration of the desktop, because a server must never
@@ -276,6 +284,19 @@ fn run_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> e
         observed_keyboard_inputs,
         device_requests,
     )
+}
+
+/// Runs the mode of a holder and answers its exit code: zero when it ended
+/// cleanly, and one for any failure, whose reason is one line on the standard
+/// error.
+fn run_panel_holder() -> i32 {
+    match horizon_core::panel_holder::serve() {
+        Ok(()) => 0,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            1
+        }
+    }
 }
 
 /// Runs the mode and answers its exit code: zero when it ended cleanly, the fixed

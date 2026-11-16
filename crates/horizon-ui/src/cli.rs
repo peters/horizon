@@ -20,6 +20,9 @@ pub(crate) enum Start {
     Version,
     /// `--agent-work-hook`: one lifecycle answer of an opted-in panel.
     AgentWorkHook,
+    /// `--panel-holder`: the holder of one panel, which owns its terminal and its
+    /// program and speaks on a private socket of its home.
+    PanelHolder,
     /// One of the three modes of the server.
     Sync(SyncMode),
     /// `--browser-mcp`: the browser MCP server on the standard input and output.
@@ -47,6 +50,7 @@ pub(crate) fn parse_start(args: impl IntoIterator<Item = std::ffi::OsString>) ->
         Some("--help" | "-h") => alone(&args, Start::Help),
         Some("--version" | "-V") => alone(&args, Start::Version),
         Some("--agent-work-hook") => alone(&args, Start::AgentWorkHook),
+        Some(horizon_core::panel_holder::PANEL_HOLDER_ARG) => alone(&args, Start::PanelHolder),
         Some("--browser-mcp") => {
             parse_browser_mcp_args(args.iter().cloned())?;
             Ok(Start::BrowserMcp)
@@ -352,6 +356,14 @@ mod tests {
             start(&["--browser-mcp"]).expect("the browser MCP mode"),
             Start::BrowserMcp
         ));
+        assert!(
+            matches!(start(&["--panel-holder"]).expect("the holder mode"), Start::PanelHolder),
+            "the holder of a panel is one mode"
+        );
+        assert!(
+            start(&["--panel-holder", "--list"]).is_err(),
+            "the holder takes no other argument"
+        );
         assert!(
             matches!(start(&[]).expect("a start with no argument"), Start::Desktop(_)),
             "no argument is the window of the person"

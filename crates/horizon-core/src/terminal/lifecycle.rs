@@ -7,6 +7,33 @@ use super::{
 
 use crate::panel_shutdown::PanelCompletion;
 
+/// Opens the terminal of `program` with its arguments, its folder and its
+/// environment, and starts it in that terminal.
+///
+/// The holder of a panel owns the same terminal without a `Terminal`, so both
+/// users open and start it here instead of each writing the options of a PTY.
+///
+/// # Errors
+///
+/// Returns why the system cannot open the terminal or start the program.
+pub(crate) fn open_pty(
+    program: String,
+    args: Vec<String>,
+    cwd: Option<std::path::PathBuf>,
+    env: std::collections::HashMap<String, String>,
+    window_size: WindowSize,
+    window_id: u64,
+) -> Result<tty::Pty> {
+    tty::setup_env();
+    let pty_options = PtyOptions {
+        shell: Some(Shell::new(program, args)),
+        working_directory: cwd,
+        drain_on_exit: true,
+        env,
+    };
+    tty::new(&pty_options, window_size, window_id).map_err(|error| Error::Pty(error.to_string()))
+}
+
 impl Terminal {
     /// Spawn a terminal session backed by `alacritty_terminal`.
     ///
@@ -60,15 +87,6 @@ impl Terminal {
         let event_loop_proxy = TerminalEventProxy::new(event_tx, trust, Arc::clone(&latency), Arc::clone(&output_wake));
         let term_proxy = event_loop_proxy.clone();
 
-        tty::setup_env();
-
-        let pty_options = PtyOptions {
-            shell: Some(Shell::new(options.program, options.args)),
-            working_directory: options.cwd,
-            drain_on_exit: true,
-            env: options.env,
-        };
-
         let term = Arc::new(FairMutex::new(Term::new(terminal_config, &dimensions, term_proxy)));
         let replay_restore = if replay_bytes.is_empty() {
             ReplayRestoreState::default()
@@ -76,8 +94,14 @@ impl Terminal {
             replay_terminal_bytes(&term, &replay_bytes);
             drain_replay_events(&event_rx)
         };
-        let pty =
-            tty::new(&pty_options, window_size, options.window_id).map_err(|error| Error::Pty(error.to_string()))?;
+        let pty = open_pty(
+            options.program,
+            options.args,
+            options.cwd,
+            options.env,
+            window_size,
+            options.window_id,
+        )?;
         let child_pid = Some(pty.child().id());
         let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
         let (pty, program_status) = horizon_pty_tap::TapPty::new(pty)

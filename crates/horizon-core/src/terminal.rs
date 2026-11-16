@@ -33,6 +33,7 @@ use crate::error::{Error, Result};
 pub use self::cwd::{CwdReader, PROGRAM_BOUND, read_cwd};
 use self::events::PendingClipboard;
 pub use self::events::{ClipboardTarget, ClipboardWrite};
+pub(crate) use self::lifecycle::open_pty;
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};

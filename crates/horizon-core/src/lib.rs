@@ -28,6 +28,7 @@ pub mod node_cards;
 pub mod notify;
 mod opencode_paths;
 mod panel;
+pub mod panel_holder;
 mod panel_shutdown;
 pub mod place;
 mod process;

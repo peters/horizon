@@ -1,0 +1,245 @@
+//! The frames between a holder and its client: one kind byte, a 4-byte length in
+//! big-endian order, and the payload. The output of the program is sent as bytes,
+//! never as JSON, because a program can write a megabyte in a second.
+
+use std::io::{Read, Write};
+
+use super::HolderError;
+
+/// The version of this protocol, which the hello of a holder names.
+pub(crate) const VERSION: u8 = 1;
+
+/// The largest payload of one frame, in either direction.
+pub(crate) const MAX_PAYLOAD: u32 = 1024 * 1024;
+
+/// The bytes of a kind and a length, before every payload.
+const HEADER: usize = 5;
+
+/// The bytes of a size: rows, columns, cell width and cell height.
+const SIZE: usize = 8;
+
+pub(crate) const INPUT: u8 = 1;
+pub(crate) const SIZE_KIND: u8 = 2;
+pub(crate) const CLOSE: u8 = 3;
+const HELLO: u8 = 16;
+const REPLAY: u8 = 17;
+const OUTPUT: u8 = 18;
+const EXIT: u8 = 19;
+const REFUSAL: u8 = 20;
+
+/// The first answer that a holder gives a client that attached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hello {
+    /// The process id of the program in the terminal.
+    pub pid: u32,
+    /// The start time of that process, as Horizon records the child of a panel.
+    pub start_time: Option<String>,
+    /// The bytes of the replay frame of this link, which follow the hello.
+    pub ring_len: u32,
+}
+
+/// One frame of a holder and its client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Frame {
+    /// A client: the bytes to write to the program.
+    Input(Vec<u8>),
+    /// A client: the size of the terminal.
+    Resize {
+        rows: u16,
+        cols: u16,
+        cell_width: u16,
+        cell_height: u16,
+    },
+    /// A client: end the program and the holder.
+    Close,
+    /// A holder: the answer to a client that attached.
+    Hello(Hello),
+    /// A holder: the newest output of the program from before the attach.
+    Replay(Vec<u8>),
+    /// A holder: output of the program.
+    Output(Vec<u8>),
+    /// A holder: the program ended, with the status that the system reported.
+    Exit(Option<i32>),
+    /// A holder: another client is attached, so this link closes.
+    Refusal,
+}
+
+impl Frame {
+    /// The kind byte of this frame.
+    pub(crate) fn kind(&self) -> u8 {
+        match self {
+            Self::Input(_) => INPUT,
+            Self::Resize { .. } => SIZE_KIND,
+            Self::Close => CLOSE,
+            Self::Hello(_) => HELLO,
+            Self::Replay(_) => REPLAY,
+            Self::Output(_) => OUTPUT,
+            Self::Exit(_) => EXIT,
+            Self::Refusal => REFUSAL,
+        }
+    }
+
+    fn parts(&self) -> (u8, Vec<u8>) {
+        match self {
+            Self::Input(bytes) | Self::Replay(bytes) | Self::Output(bytes) => (self.kind(), bytes.clone()),
+            Self::Resize {
+                rows,
+                cols,
+                cell_width,
+                cell_height,
+            } => {
+                let mut payload = Vec::with_capacity(SIZE);
+                for value in [rows, cols, cell_width, cell_height] {
+                    payload.extend_from_slice(&value.to_be_bytes());
+                }
+                (SIZE_KIND, payload)
+            }
+            Self::Close | Self::Refusal => (self.kind(), Vec::new()),
+            Self::Hello(hello) => (HELLO, hello.encode()),
+            Self::Exit(status) => {
+                let mut payload = Vec::with_capacity(5);
+                payload.push(u8::from(status.is_some()));
+                payload.extend_from_slice(&status.unwrap_or_default().to_be_bytes());
+                (EXIT, payload)
+            }
+        }
+    }
+
+    fn decode(kind: u8, payload: Vec<u8>) -> Result<Self, HolderError> {
+        Ok(match kind {
+            INPUT => Self::Input(payload),
+            SIZE_KIND => {
+                if payload.len() != SIZE {
+                    return Err(HolderError::MalformedFrame(kind));
+                }
+                let field = |at: usize| u16::from_be_bytes([payload[at], payload[at + 1]]);
+                Self::Resize {
+                    rows: field(0),
+                    cols: field(2),
+                    cell_width: field(4),
+                    cell_height: field(6),
+                }
+            }
+            CLOSE => Self::Close,
+            HELLO => Self::Hello(Hello::decode(&payload)?),
+            REPLAY => Self::Replay(payload),
+            OUTPUT => Self::Output(payload),
+            EXIT => {
+                if payload.len() != 5 {
+                    return Err(HolderError::MalformedFrame(kind));
+                }
+                let code = i32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+                Self::Exit((payload[0] != 0).then_some(code))
+            }
+            REFUSAL => Self::Refusal,
+            unknown => return Err(HolderError::UnknownFrame(unknown)),
+        })
+    }
+}
+
+impl Hello {
+    fn encode(&self) -> Vec<u8> {
+        let start_time = self.start_time.as_deref().unwrap_or_default();
+        let mut payload = Vec::with_capacity(11 + start_time.len());
+        payload.push(VERSION);
+        payload.extend_from_slice(&self.pid.to_be_bytes());
+        let named = u16::try_from(start_time.len()).unwrap_or(u16::MAX);
+        payload.extend_from_slice(&named.to_be_bytes());
+        payload.extend_from_slice(&start_time.as_bytes()[..usize::from(named)]);
+        payload.extend_from_slice(&self.ring_len.to_be_bytes());
+        payload
+    }
+
+    fn decode(payload: &[u8]) -> Result<Self, HolderError> {
+        if payload.len() < 11 || payload[0] != VERSION {
+            return Err(HolderError::MalformedFrame(HELLO));
+        }
+        let pid = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+        let named = usize::from(u16::from_be_bytes([payload[5], payload[6]]));
+        let Some(body) = payload.get(7..) else {
+            return Err(HolderError::MalformedFrame(HELLO));
+        };
+        if body.len() != named + 4 {
+            return Err(HolderError::MalformedFrame(HELLO));
+        }
+        let (name, length) = body.split_at(named);
+        let ring_len = u32::from_be_bytes([length[0], length[1], length[2], length[3]]);
+        Ok(Self {
+            pid,
+            start_time: (!name.is_empty()).then(|| String::from_utf8_lossy(name).into_owned()),
+            ring_len,
+        })
+    }
+}
+
+/// Writes `frame` as one frame.
+///
+/// # Errors
+///
+/// Returns why the frame cannot be written, or that its payload is too large.
+pub(crate) fn write(writer: &mut impl Write, frame: &Frame) -> Result<(), HolderError> {
+    let (kind, payload) = frame.parts();
+    let length = u32::try_from(payload.len()).map_err(|_| HolderError::TooLarge {
+        length: MAX_PAYLOAD + 1,
+    })?;
+    if length > MAX_PAYLOAD {
+        return Err(HolderError::TooLarge { length });
+    }
+    let mut header = [0u8; HEADER];
+    header[0] = kind;
+    header[1..].copy_from_slice(&length.to_be_bytes());
+    writer.write_all(&header)?;
+    writer.write_all(&payload)?;
+    Ok(())
+}
+
+/// Reads one frame from a reader that blocks until the frame arrives.
+///
+/// # Errors
+///
+/// Returns why the frame cannot be read, or that it is no frame of this protocol.
+pub(crate) fn read_one(reader: &mut impl Read) -> Result<Frame, HolderError> {
+    let mut header = [0u8; HEADER];
+    reader.read_exact(&mut header)?;
+    let length = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
+    if length > MAX_PAYLOAD {
+        return Err(HolderError::TooLarge { length });
+    }
+    let mut payload = vec![0u8; length as usize];
+    reader.read_exact(&mut payload)?;
+    Frame::decode(header[0], payload)
+}
+
+/// The frames that one stream delivered, as far as a whole frame arrived.
+#[derive(Default)]
+pub(crate) struct Frames {
+    bytes: Vec<u8>,
+}
+
+impl Frames {
+    /// Adds the bytes that arrived and answers every frame that is now whole.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the bytes are no frames of this protocol.
+    pub(crate) fn push(&mut self, more: &[u8]) -> Result<Vec<Frame>, HolderError> {
+        self.bytes.extend_from_slice(more);
+        let mut frames = Vec::new();
+        loop {
+            if self.bytes.len() < HEADER {
+                break;
+            }
+            let length = u32::from_be_bytes([self.bytes[1], self.bytes[2], self.bytes[3], self.bytes[4]]);
+            if length > MAX_PAYLOAD {
+                return Err(HolderError::TooLarge { length });
+            }
+            let whole = HEADER + length as usize;
+            if self.bytes.len() < whole {
+                break;
+            }
+            frames.push(Frame::decode(self.bytes[0], self.bytes[HEADER..whole].to_vec())?);
+            self.bytes.drain(..whole);
+        }
+        Ok(frames)
+    }
+}
