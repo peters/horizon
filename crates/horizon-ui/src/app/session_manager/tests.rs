@@ -1,9 +1,12 @@
-use horizon_core::{CanvasViewState, Config, RuntimeState, StartupDecision, WindowConfig};
+use horizon_core::{
+    CanvasViewState, Config, RuntimeState, StartupDecision, WindowConfig, WorkspaceState, panel_holder,
+};
 
 use super::super::HorizonApp;
 use super::super::session_manager::{SessionSwitchShutdownState, session_switch_shutdown_state};
 use super::super::test_support::{
-    editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_config_and_startup,
+    HELD_PANEL_ID, editor_workspace_state, held_panel_state, held_program_launch, program_runs, raw_input,
+    run_app_frame_with_input, test_app_with_config_and_startup,
 };
 
 fn runtime_with_staggered_workspaces(prefix: &str) -> RuntimeState {
@@ -291,4 +294,80 @@ fn the_session_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
         egui::Id::unique("session_manager_modal"),
         "the reopened card must sit above the backdrop"
     );
+}
+
+/// A session switch sends `close` to the holders of the board that it leaves
+/// before that board goes, so no program runs with no panel that shows it.
+#[test]
+fn a_session_switch_ends_the_program_of_a_holder_that_its_board_leaves() {
+    let mut config = Config::default();
+    config.features.keep_agents_through_restart = true;
+    let (temp, ctx, mut app) = test_app_with_config_and_startup(
+        &config,
+        StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState {
+                workspaces: vec![WorkspaceState {
+                    local_id: "workspace".to_owned(),
+                    name: "workspace".to_owned(),
+                    panels: vec![held_panel_state(HELD_PANEL_ID)],
+                    ..WorkspaceState::default()
+                }],
+                ..RuntimeState::default()
+            }),
+        },
+    );
+    // The holder serves the socket of the panel before that panel starts, so the
+    // panel attaches to it instead of starting a program of its own.
+    let home = app.session_store.home().clone();
+    let hello = panel_holder::serve_on_a_thread(&home, &held_program_launch(HELD_PANEL_ID)).expect("the holder");
+    app.root_viewport_stabilizer = None;
+    app.settle_panel_starts();
+    let panel = app
+        .board
+        .panels
+        .iter()
+        .find(|panel| panel.local_id == HELD_PANEL_ID)
+        .map(|panel| panel.id)
+        .expect("the panel of the first board");
+    assert_eq!(
+        app.board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .and_then(horizon_core::Terminal::child_pid),
+        Some(hello.pid),
+        "the panel of the first board attaches to the program of the holder"
+    );
+
+    let target = app
+        .session_store
+        .create_session_from_runtime(runtime_with_staggered_workspaces("target"))
+        .expect("the target session");
+    app.begin_session_switch(&target);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while program_runs(hello.pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the program of the board that the switch leaves ends with the frame of the switch"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    while app.poll_session_switch(&ctx) {
+        assert!(std::time::Instant::now() < deadline, "the session switch completes");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        !home.root().join("panel-holders").is_dir()
+            || std::fs::read_dir(home.root().join("panel-holders"))
+                .expect("the folder of the holders")
+                .filter_map(Result::ok)
+                .all(|entry| entry.path().extension().is_none_or(|extension| extension != "sock")),
+        "the holder of the board that the switch leaves removes its socket"
+    );
+    assert_eq!(
+        app.board.workspaces.len(),
+        2,
+        "the switch restores the board of the target session"
+    );
+    drop(temp);
 }

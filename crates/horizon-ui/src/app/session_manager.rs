@@ -291,6 +291,11 @@ impl HorizonApp {
         self.retire_browser_requests();
         // The switch overlay hides every viewer until the old board is gone.
         self.abandon_device_reveals("Device panel closed by a session switch");
+        // The board this switch leaves runs the programs of its holders: the
+        // holders end them, with the frame that a panel close sends.
+        // The board that this switch leaves runs the programs of its holders: a
+        // holder ends the program of its panel with the frame that a close sends.
+        self.board.close_held_programs();
         self.pending_session_switch = Some(PendingSessionSwitch {
             shutdown_progress: self.board.begin_async_shutdown(),
             target: Some(session.clone()),

@@ -411,6 +411,17 @@ impl Board {
         }
     }
 
+    /// Sends `close` to the holder of every panel, so a program that runs there
+    /// ends with the board that its panel served. A panel that the person closes
+    /// sends the same frame to the holder of its own program.
+    pub fn close_held_programs(&mut self) {
+        for panel in &mut self.panels {
+            if let Some(terminal) = panel.terminal_mut() {
+                terminal.close_holder();
+            }
+        }
+    }
+
     /// Ends the process of a panel that a restart replaces, so the new one starts
     /// from a screen that no old output reaches.
     ///

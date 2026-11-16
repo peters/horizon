@@ -5,45 +5,21 @@
 //! Horizon. Every lane uses the id of a real panel and the path that the app
 //! takes: a saved board, the coordination worker, and the exit of a window.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::panel_holder::{self, Launch};
-use horizon_core::{
-    Config, HorizonHome, PanelId, PanelKind, PanelResume, PanelState, RuntimeState, SessionStore, StartupDecision,
-    WorkspaceState,
-};
+use horizon_core::panel_holder;
+use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
+use crate::app::test_support::{
+    HELD_PANEL_ID, HELD_PROGRAM_MARKER, held_panel_state, held_program_launch, program_runs,
+};
 use crate::input;
 
-/// The id of a real panel: 36 characters, as the app gives it.
-const LOCAL_ID: &str = "9bc6f6c5-175a-4f16-a55a-1619bb1a93b1";
-/// The line that the stand-in program of the holder prints.
-const MARKER: &str = "held marker";
 /// The longest time that a test waits for one condition.
 const TEST_BOUND: Duration = Duration::from_secs(20);
-
-fn stand_in_args() -> Vec<String> {
-    vec!["-c".to_owned(), format!("printf '{MARKER}\\n'; exec cat")]
-}
-
-/// The launch that the holder of a test serves: the program of the panel.
-fn stand_in() -> Launch {
-    Launch {
-        local_id: LOCAL_ID.to_owned(),
-        program: "/bin/sh".to_owned(),
-        args: stand_in_args(),
-        cwd: Some(std::path::PathBuf::from("/tmp")),
-        env: HashMap::new(),
-        rows: 24,
-        cols: 80,
-        cell_width: 8,
-        cell_height: 17,
-    }
-}
 
 /// The saved board of one agent panel that continues its work after a restart.
 fn saved_board() -> RuntimeState {
@@ -51,21 +27,7 @@ fn saved_board() -> RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_owned(),
             name: "workspace".to_owned(),
-            panels: vec![PanelState {
-                local_id: LOCAL_ID.to_owned(),
-                name: "Codex".to_owned(),
-                kind: PanelKind::Codex,
-                command: Some("/bin/sh".to_owned()),
-                args: stand_in_args(),
-                resume: PanelResume::Fresh,
-                work_resume: horizon_core::agent_work::ResumePolicy {
-                    enabled: true,
-                    ..horizon_core::agent_work::ResumePolicy::default()
-                },
-                rows: 24,
-                cols: 80,
-                ..PanelState::default()
-            }],
+            panels: vec![held_panel_state(HELD_PANEL_ID)],
             ..WorkspaceState::default()
         }],
         ..RuntimeState::default()
@@ -102,7 +64,7 @@ fn held_panel(app: &HorizonApp) -> PanelId {
     app.board
         .panels
         .iter()
-        .find(|panel| panel.local_id == LOCAL_ID)
+        .find(|panel| panel.local_id == HELD_PANEL_ID)
         .map(|panel| panel.id)
         .expect("the panel of the saved board")
 }
@@ -134,16 +96,6 @@ fn wait_for_text(app: &mut HorizonApp, panel: PanelId, wanted: &str) -> String {
     }
 }
 
-/// Whether a program of `pid` still runs. Signal 0 reads the process table and
-/// sends nothing to the process.
-fn runs(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
 /// The end of Horizon detaches from the program of a holder and signals nothing:
 /// the same program serves the panel of the next start, and the panel offers no
 /// conversation to resume, because that conversation still runs in it.
@@ -151,7 +103,8 @@ fn runs(pid: u32) -> bool {
 fn the_end_of_horizon_keeps_the_program_of_a_holder_and_the_next_start_attaches() {
     let folder = crate::app::test_support::short_temp("hz-held-exit");
     let home = HorizonHome::from_root(folder.path().join(".horizon"));
-    let hello = panel_holder::serve_on_a_thread(&home, &stand_in()).expect("the holder of a test");
+    let hello =
+        panel_holder::serve_on_a_thread(&home, &held_program_launch(HELD_PANEL_ID)).expect("the holder of a test");
     let board = saved_board();
 
     let (_ctx, mut app) = app_on(folder.path(), &board);
@@ -161,7 +114,7 @@ fn the_end_of_horizon_keeps_the_program_of_a_holder_and_the_next_start_attaches(
         hello.pid,
         "the panel of the saved board attaches to the program of the holder"
     );
-    wait_for_text(&mut app, panel, MARKER);
+    wait_for_text(&mut app, panel, HELD_PROGRAM_MARKER);
 
     // The end of the application, as `on_exit` runs it.
     app.begin_shutdown();
@@ -170,7 +123,7 @@ fn the_end_of_horizon_keeps_the_program_of_a_holder_and_the_next_start_attaches(
     // program that outlives it, so a signal of this app would have landed.
     std::thread::sleep(horizon_core::AFTER_HANGUP + horizon_core::AFTER_TERM + Duration::from_millis(500));
     assert!(
-        runs(hello.pid),
+        program_runs(hello.pid),
         "the program of a holder outlives the end of Horizon (pid {})",
         hello.pid
     );
@@ -179,7 +132,7 @@ fn the_end_of_horizon_keeps_the_program_of_a_holder_and_the_next_start_attaches(
     // its socket, which this app closes with the panel or with its process.
     drop(app);
     let deadline = Instant::now() + TEST_BOUND;
-    while !matches!(panel_holder::probe(&home, LOCAL_ID), Ok(Some(_))) {
+    while !matches!(panel_holder::probe(&home, HELD_PANEL_ID), Ok(Some(_))) {
         assert!(
             Instant::now() < deadline,
             "the holder of the panel still answers after the end of Horizon"
@@ -195,7 +148,7 @@ fn the_end_of_horizon_keeps_the_program_of_a_holder_and_the_next_start_attaches(
         "the next start attaches to the same program"
     );
     assert!(
-        wait_for_text(&mut after, restored, MARKER).contains(MARKER),
+        wait_for_text(&mut after, restored, HELD_PROGRAM_MARKER).contains(HELD_PROGRAM_MARKER),
         "the grid of the restored panel shows the output of the program"
     );
     assert!(

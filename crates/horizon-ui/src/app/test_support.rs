@@ -160,6 +160,63 @@ pub(super) fn primary_modifier_press() -> egui::Modifiers {
     }
 }
 
+/// The id of a real panel: 36 characters, as the app gives it.
+pub(super) const HELD_PANEL_ID: &str = "9bc6f6c5-175a-4f16-a55a-1619bb1a93b1";
+/// The line that the stand-in program of a holder prints.
+pub(super) const HELD_PROGRAM_MARKER: &str = "held marker";
+
+/// The arguments of the stand-in program of a holder: it prints the marker and
+/// reads its input until it ends.
+pub(super) fn held_program_args() -> Vec<String> {
+    vec!["-c".to_owned(), format!("printf '{HELD_PROGRAM_MARKER}\\n'; exec cat")]
+}
+
+/// The launch that the holder of a test owns, which prints the marker.
+pub(super) fn held_program_launch(local_id: &str) -> horizon_core::panel_holder::Launch {
+    horizon_core::panel_holder::Launch {
+        local_id: local_id.to_owned(),
+        program: "/bin/sh".to_owned(),
+        args: held_program_args(),
+        cwd: Some(std::path::PathBuf::from("/tmp")),
+        env: std::collections::HashMap::new(),
+        rows: 24,
+        cols: 80,
+        cell_width: 8,
+        cell_height: 17,
+    }
+}
+
+/// The saved panel of an agent that continues its work after a restart, whose
+/// program the holder of a test runs.
+pub(super) fn held_panel_state(local_id: &str) -> PanelState {
+    PanelState {
+        local_id: local_id.to_owned(),
+        name: "Codex".to_owned(),
+        kind: PanelKind::Codex,
+        command: Some("/bin/sh".to_owned()),
+        args: held_program_args(),
+        resume: horizon_core::PanelResume::Fresh,
+        work_resume: horizon_core::agent_work::ResumePolicy {
+            enabled: true,
+            ..horizon_core::agent_work::ResumePolicy::default()
+        },
+        rows: 24,
+        cols: 80,
+        ..PanelState::default()
+    }
+}
+
+/// Whether a program of `pid` still runs. Signal 0 reads the process table and
+/// sends nothing to the process.
+pub(super) fn program_runs(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 pub(super) fn editor_panel_state(local_id: &str, position: [f32; 2]) -> PanelState {
     PanelState {
         local_id: local_id.to_string(),
