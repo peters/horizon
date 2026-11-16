@@ -238,7 +238,10 @@ fn server_section(section: &str, body: &Value) -> Result<Value, SectionFault> {
 /// The value of one section in the rows of a store, or the default of this build.
 fn store_section(rows: &BTreeMap<String, String>, section: &str, defaults: &Config) -> Option<Value> {
     rows.get(section)
-        .and_then(|text| serde_json::from_str(text).ok())
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        // A field that stays with this computer is in no body of the server, so the
+        // two values are compared without it.
+        .map(|value| settings_sync::local_fields(section, &value, None))
         .or_else(|| settings_sync::body_of(defaults, section).ok().flatten())
 }
 

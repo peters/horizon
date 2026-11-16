@@ -14,6 +14,12 @@ const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
 const SESSION_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
+/// The holders that no panel of a restored board shows, which a worker ends.
+#[derive(Default)]
+pub(in crate::app) struct UnshownHolders {
+    receiver: Option<std::sync::mpsc::Receiver<usize>>,
+}
+
 #[derive(Default)]
 pub(super) struct SessionCatalogRefreshState {
     pub receiver: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
@@ -474,16 +480,34 @@ impl HorizonApp {
         let home = self.session_store.home().clone();
         let shown: std::collections::BTreeSet<String> =
             self.board.panels.iter().map(|panel| panel.local_id.clone()).collect();
-        self.browser_create_host.io.then(
-            move || horizon_core::panel_holder::close_unshown(&home, &shown),
-            |app, answer| {
-                if let Some(Ok(count)) = answer
-                    && let Some(line) = super::board_notice::unshown_holders_notice(count)
-                {
-                    app.set_sidebar_plain_notice(line);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("unshown-holders".to_owned())
+            .spawn(move || {
+                if let Ok(count) = horizon_core::panel_holder::close_unshown(&home, &shown) {
+                    let _ = sender.send(count);
                 }
-            },
-        );
+            });
+        match spawned {
+            Ok(_) => self.unshown_holders.receiver = Some(receiver),
+            Err(error) => tracing::warn!(%error, "the holders of the restored board run on"),
+        }
+    }
+
+    /// Shows the line of the holders that a worker ended, once.
+    pub(super) fn poll_unshown_holders(&mut self) {
+        let Some(receiver) = self.unshown_holders.receiver.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(count) => {
+                if let Some(line) = super::board_notice::unshown_holders_notice(count) {
+                    self.set_sidebar_plain_notice(line);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => self.unshown_holders.receiver = Some(receiver),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+        }
     }
 
     pub(super) fn refresh_active_session_lease(&mut self) {
@@ -553,6 +577,7 @@ impl HorizonApp {
 
     pub(super) fn maybe_refresh_session_catalog(&mut self, ctx: &egui::Context) {
         self.poll_session_catalog_refreshes();
+        self.poll_unshown_holders();
 
         let picker_providers: HashSet<_> = super::panels::session_picker_panels(ctx)
             .into_iter()
