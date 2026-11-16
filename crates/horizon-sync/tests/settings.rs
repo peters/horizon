@@ -129,11 +129,86 @@ except Exception:
     pass
 ";
 
+/// A relay that holds the first push of the settings until the test writes
+/// [`RELEASE`], and then the request for changes that follows that push until the
+/// test writes [`RELEASE_PULL`].
+///
+/// Between the answer of the push and the answer of that request, the version that
+/// the push wrote is not in the mirror of the computer yet. The relay keeps that
+/// window open, so a test can save a setting in it.
+const HELD_PULL_RELAY: &str = "\
+import os
+import socket
+import sys
+import threading
+import time
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(sys.argv[1])
+directory = sys.argv[2]
+held = os.path.join(directory, 'held.log')
+release = os.path.join(directory, 'release')
+pull_release = os.path.join(directory, 'release-pull')
+state = {'pushed': False}
+
+
+def wait_until(path):
+    while not os.path.exists(path):
+        time.sleep(0.01)
+
+
+def outward():
+    buffer = b''
+    try:
+        while True:
+            data = os.read(sys.stdin.fileno(), 65536)
+            if not data:
+                break
+            buffer += data
+            while len(buffer) >= 4:
+                length = int.from_bytes(buffer[:4], 'big')
+                if len(buffer) < 4 + length:
+                    break
+                frame = buffer[:4 + length]
+                buffer = buffer[4 + length:]
+                if b'setting_put' in frame:
+                    with open(held, 'a') as log:
+                        log.write('push\\n')
+                    wait_until(release)
+                    state['pushed'] = True
+                elif state['pushed'] and (b'\"pull\":' in frame or b'\"wait\":' in frame):
+                    with open(held, 'a') as log:
+                        log.write('request\\n')
+                    wait_until(pull_release)
+                sock.sendall(frame)
+    except Exception:
+        pass
+    try:
+        sock.shutdown(socket.SHUT_WR)
+    except Exception:
+        pass
+
+
+threading.Thread(target=outward, daemon=True).start()
+try:
+    while True:
+        data = sock.recv(65536)
+        if not data:
+            break
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+except Exception:
+    pass
+";
+
 /// The file that holds one line for each start of the stand-in of a computer.
 const STARTS: &str = "starts.log";
 /// The file whose existence releases the push that a gated stand-in holds, and the
 /// log of the pushes that it held.
 const RELEASE: &str = "release";
+/// The file whose existence releases the request for changes that a stand-in of
+/// the held push holds.
+const RELEASE_PULL: &str = "release-pull";
 const HELD: &str = "held.log";
 
 /// A stand-in `ssh` that runs the link relay against the socket of the server.
@@ -142,19 +217,42 @@ const HELD: &str = "held.log";
 /// instant of an attempt of the link itself and not the handshake that follows
 /// the start of its transport.
 fn stand_in(directory: &Path, socket: &Path) -> String {
-    stand_in_with(directory, socket, false)
+    stand_in_with(directory, socket, Relay::Plain)
 }
 
 /// A stand-in whose relay holds the first push of the settings until the test
 /// writes [`RELEASE`] beside [`HELD`].
 fn gated_stand_in(directory: &Path, socket: &Path) -> String {
-    stand_in_with(directory, socket, true)
+    stand_in_with(directory, socket, Relay::Gated)
 }
 
-fn stand_in_with(directory: &Path, socket: &Path, gate: bool) -> String {
+/// A stand-in whose relay holds the first push of the settings and then the pull
+/// that follows it, each until the test writes its own file.
+fn held_pull_stand_in(directory: &Path, socket: &Path) -> String {
+    stand_in_with(directory, socket, Relay::HeldPull)
+}
+
+/// What a stand-in does with the frames of one link.
+#[derive(Clone, Copy)]
+enum Relay {
+    /// Relays every frame.
+    Plain,
+    /// Holds the first push of the settings until [`RELEASE`].
+    Gated,
+    /// Holds the first push of the settings until [`RELEASE`], and the pull that
+    /// follows it until [`RELEASE_PULL`].
+    HeldPull,
+}
+
+fn stand_in_with(directory: &Path, socket: &Path, how: Relay) -> String {
     fs::create_dir_all(directory).expect("the directory of the stand-in");
     let relay = directory.join("relay.py");
-    fs::write(&relay, if gate { GATED_RELAY } else { RELAY }).expect("the relay of the stand-in");
+    let text = match how {
+        Relay::Plain => RELAY,
+        Relay::Gated => GATED_RELAY,
+        Relay::HeldPull => HELD_PULL_RELAY,
+    };
+    fs::write(&relay, text).expect("the relay of the stand-in");
     let script = format!(
         "printf '.\\n' >> '{}'\nexec /usr/bin/env python3 '{}' '{}' '{}'",
         directory.join(STARTS).display(),
@@ -164,6 +262,32 @@ fn stand_in_with(directory: &Path, socket: &Path, gate: bool) -> String {
     );
     let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
     program.to_string_lossy().into_owned()
+}
+
+/// Waits until the stand-in of `computer` holds its push of the settings.
+fn held_push(computer: &Computer) {
+    eventually("the push of the settings in the stand-in", || {
+        fs::read_to_string(computer.home.join("stand-in").join(HELD))
+            .ok()
+            .filter(|text| text.contains("push"))
+            .map(|_| ())
+    });
+}
+
+/// Waits until the stand-in of `computer` holds the request for changes that
+/// follows that push, which is the pull or the wait that the link opens.
+fn held_request(computer: &Computer) {
+    eventually("the request after the push in the stand-in", || {
+        fs::read_to_string(computer.home.join("stand-in").join(HELD))
+            .ok()
+            .filter(|text| text.contains("request"))
+            .map(|_| ())
+    });
+}
+
+/// Releases the request for changes that the stand-in of `computer` holds.
+fn release_pull(computer: &Computer) {
+    fs::write(computer.home.join("stand-in").join(RELEASE_PULL), b"release").expect("the release of the pull");
 }
 
 /// How many times the stand-in of the computer at `home` started, which is one
@@ -271,16 +395,22 @@ impl Computer {
     /// A computer at `home` with `config` in its settings store, linked to
     /// `socket`.
     fn start(home: &Path, config: &Config, socket: &Path) -> Self {
-        Self::start_with(home, config, socket, false)
+        Self::start_with(home, config, socket, Relay::Plain)
     }
 
     /// A computer whose stand-in holds its first push of the settings until the
     /// test writes [`RELEASE`], so two computers can link at the same moment.
     fn start_gated(home: &Path, config: &Config, socket: &Path) -> Self {
-        Self::start_with(home, config, socket, true)
+        Self::start_with(home, config, socket, Relay::Gated)
     }
 
-    fn start_with(home: &Path, config: &Config, socket: &Path, gate: bool) -> Self {
+    /// A computer whose stand-in holds its first push of the settings, and then the
+    /// pull that would bring the row of that push back.
+    fn start_held_pull(home: &Path, config: &Config, socket: &Path) -> Self {
+        Self::start_with(home, config, socket, Relay::HeldPull)
+    }
+
+    fn start_with(home: &Path, config: &Config, socket: &Path, how: Relay) -> Self {
         fs::create_dir_all(home).expect("the home of the computer");
         let config_path = home.join("config.json");
         Config::save(&config_path, config).expect("the settings store of the computer");
@@ -293,10 +423,10 @@ impl Computer {
             keys_only(keys),
         )
         .expect("the settings of the link");
-        link.program = if gate {
-            gated_stand_in(&stand_in_dir, socket)
-        } else {
-            stand_in(&stand_in_dir, socket)
+        link.program = match how {
+            Relay::Plain => stand_in(&stand_in_dir, socket),
+            Relay::Gated => gated_stand_in(&stand_in_dir, socket),
+            Relay::HeldPull => held_pull_stand_in(&stand_in_dir, socket),
         };
         link.settings_path = Some(config_path.clone());
         let supervisor = Supervisor::start(link, || {}).expect("the supervisor");
@@ -351,6 +481,20 @@ impl Computer {
     /// How many attempts of the link this computer started.
     fn attempts(&self) -> usize {
         attempts_of(&self.home)
+    }
+
+    /// The version that the intent of `section` names, when one of its intents
+    /// waits in the queue of this computer.
+    fn queued_seen(&self, section: &str) -> Option<u64> {
+        let path = self.home.join("stand-in").join("server-queue.json");
+        let text = fs::read_to_string(&path).expect("the queue of this computer");
+        let queue: Value = serde_json::from_str(&text).expect("the queue of this computer");
+        queue["pending"]
+            .as_array()
+            .expect("the intents of the queue")
+            .iter()
+            .find(|intent| intent["op"]["setting_put"]["id"] == json!(section))
+            .and_then(|intent| intent["seen"].as_u64())
     }
 
     /// The ids of the setting intents that wait in the queue of this computer.
@@ -670,6 +814,69 @@ fn two_changes_of_one_section_decide_by_the_first_and_the_other_reads_a_sticky_l
         "the computer whose value stayed reads no such line"
     );
     a.stop();
+    b.stop();
+    server.stop();
+}
+
+#[test]
+fn a_save_before_the_first_pull_back_names_the_version_that_its_push_applied() {
+    // The first link of this computer pushes every section that the server does not
+    // have. The row of that push is in the mirror of this computer only when the
+    // request behind it comes back, so a save of the person in that window names no
+    // version, and the server answers `already_answered`: the save is lost with the
+    // value of the push.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start_held_pull(&home.path().join("b"), &Config::default(), &server.socket);
+    // The stand-in holds the push of the eleven sections, so the first answer of the
+    // link is behind it.
+    held_push(&b);
+    assert!(
+        matches!(b.handle().state(), LinkState::InStep { .. }),
+        "the first answer of the link is applied: {:?}",
+        b.handle().state()
+    );
+    release(&b);
+    // The push reached the server and its answer is applied; the request that would
+    // bring the row of it back waits in the stand-in.
+    held_request(&b);
+    eventually("the answer of the push of this computer", || {
+        matches!(b.handle().state(), LinkState::Behind).then_some(())
+    });
+    let applied = server
+        .setting("appearance")
+        .expect("the push of the appearance reached the server")
+        .0;
+
+    // The person changes the theme in that window, before the row of the push comes
+    // back.
+    b.save(&config_with_theme(AppearanceTheme::Light));
+    assert_eq!(
+        b.queued_seen("appearance"),
+        Some(applied),
+        "the intent of the save names the version that the push of this computer applied"
+    );
+
+    // The request comes back, and the save reaches the server on the version that
+    // the push wrote.
+    release_pull(&b);
+    eventually("the section of the save on the server", || {
+        server
+            .setting("appearance")
+            .is_some_and(|(_, body)| body["section"]["theme"] == json!("light"))
+            .then_some(())
+    });
+    settled(&b);
+    assert_eq!(
+        b.theme(),
+        AppearanceTheme::Light,
+        "the row of the server is the value that the person saved"
+    );
+    assert!(
+        b.handle().settings_lost().is_none(),
+        "the save of the person lost to no value of another computer: {:?}",
+        b.handle().settings_lost()
+    );
     b.stop();
     server.stop();
 }

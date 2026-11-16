@@ -222,6 +222,8 @@ body and the number of sections, and it stores the JSON.
   worker writes the store, and then it writes one `setting` intent for each shared
   section whose value differs from the store that it wrote. The intent carries the
   version that this computer saw, so the version rule of the next list decides it.
+  A push that the server applied is in the mirror of this computer at once, so a
+  save before the answer behind the push names the version that the push wrote.
 - **A push that loses decides nothing by itself.** A push that the version rule
   refuses moves the mark of the computer back, and the row of the version that
   decided it says whether the value of this computer differs from that row. A row

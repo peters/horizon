@@ -18,14 +18,15 @@ use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState, reset};
 use crate::client::PullOutcome;
 use crate::error::SyncError;
-use crate::intent::{KIND_BINDING, KIND_MACHINE, KIND_SETTING, Op, PushReply};
+use crate::intent::{KIND_BINDING, KIND_MACHINE, KIND_SETTING, Op, Outcome, PushReply};
 use crate::protocol::HelloOk;
 use crate::store::Changes;
 
 pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     // The queue loses the refused intent here, so the ids of the secrets that the
-    // server refused and the version that a refusal names are read before the
-    // queue is settled.
+    // server refused, the version that a refusal names and the version that a
+    // section of this push wrote are read before the queue is settled.
+    let mut written: Vec<(String, u64, serde_json::Value)> = Vec::new();
     let (refused_secrets, refused_settings, rewind): (Vec<String>, Vec<RefusedSection>, Option<u64>) = {
         let state = handle.lock();
         let mut ids = Vec::new();
@@ -35,12 +36,17 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
             if !intent.op.is_secret() && intent.op.kind() != crate::intent::KIND_SETTING {
                 continue;
             }
-            let Some(crate::intent::Outcome::Refused(refusal)) = reply
+            let found = reply
                 .results
                 .iter()
                 .find(|result| result.id == intent.id)
-                .map(|result| &result.outcome)
-            else {
+                .map(|result| &result.outcome);
+            // The row of a section that this push wrote is here before the request
+            // behind the push brings it, so a save in that window names its version.
+            if let (Op::SettingPut { id, body }, Some(Outcome::Applied { index })) = (&intent.op, found) {
+                written.push((id.clone(), *index, body.clone()));
+            }
+            let Some(Outcome::Refused(refusal)) = found else {
                 continue;
             };
             if intent.op.kind() == crate::intent::KIND_SETTING {
@@ -56,7 +62,19 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     };
     let outcome = {
         let mut state = handle.lock();
-        state.client.accept_push(reply)
+        let outcome = state.client.accept_push(reply);
+        for (section, version, body) in written {
+            // A newer row of the mirror stays: the server applied this intent again.
+            let seen = state.settings.get(&section).map(|seen| seen.version);
+            if seen.is_none_or(|seen| seen < version) {
+                state.settings_applied.insert(section.clone(), version);
+                state.settings.insert(section, MirroredSetting { version, body });
+                state.settings_generation = state.settings_generation.wrapping_add(1);
+                // The drop of the lock writes the mirror of the settings.
+                state.settings_dirty = true;
+            }
+        }
+        outcome
     };
     match outcome {
         Ok(outcome) => {
