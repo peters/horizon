@@ -36,7 +36,7 @@ use serde_json::Value;
 use super::SyncHandle;
 use super::files::MirroredSetting;
 use super::pull::now_millis;
-use super::state::{SettingsSyncView, SyncGuard};
+use super::state::{SettingsSyncView, SyncGuard, SyncState};
 use crate::intent::Op;
 
 /// The settings of one computer that follows a server, beside the machine store
@@ -195,9 +195,7 @@ fn reconcile(handle: &SyncHandle, store: &ConfigStore) -> bool {
     }
     state.settings_seeded = true;
     state.settings_applied.extend(applied);
-    for (section, (version, _)) in &faults {
-        state.settings_refused.insert(section.clone(), *version);
-    }
+    pin_refused(&mut state, &faults);
     state.settings_refusal = lines.iter().next_back().cloned();
     state.settings_generation = state.settings_generation.wrapping_add(1);
     // The drop of the lock writes the mirror of the settings.
@@ -335,9 +333,7 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
     }
     let mut state = handle.lock();
     state.settings_applied.extend(applied);
-    for (section, (version, _)) in &faults {
-        state.settings_refused.insert(section.clone(), *version);
-    }
+    pin_refused(&mut state, &faults);
     // Every row that arrived decided its refusal, so no section waits for one.
     for section in &decided {
         state.settings_lost_pending.remove(section);
@@ -361,6 +357,16 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
         handle.set_settings_lost(lost_line(&lost));
     }
     (handle.wake)();
+}
+
+/// Pins the sections whose content this build refused, so one refusal reads one
+/// notice. A store that failed once is no refusal: the next answer writes it again.
+fn pin_refused(state: &mut SyncState, faults: &BTreeMap<String, (u64, SectionFault)>) {
+    for (section, (version, fault)) in faults {
+        if !matches!(fault, SectionFault::Store(_)) {
+            state.settings_refused.insert(section.clone(), *version);
+        }
+    }
 }
 
 /// Queues one section with no version, as the first link pushes the value of a

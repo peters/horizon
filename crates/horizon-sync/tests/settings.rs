@@ -1122,6 +1122,54 @@ fn the_first_link_takes_the_value_of_the_server_and_keeps_the_own_one_in_a_backu
     server.stop();
 }
 
+/// A store that fails once is no refusal of the content of a section: the next
+/// answer of the server writes the section again, so it arrives on this computer.
+///
+/// The store of this computer is damaged when the section comes in, so the write of
+/// that section fails once. The version of the section stays the same while the
+/// store is broken, so only a second attempt can bring it.
+#[test]
+fn a_store_that_fails_once_is_written_again_on_the_next_answer_of_the_server() {
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&b);
+
+    let store = horizon_core::config_store::ConfigStore::resolve(&b.config_path());
+    let kept = home.path().join("kept.settings.sqlite");
+    fs::copy(store.path(), &kept).expect("a copy of the store");
+    fs::write(store.path(), b"this is not a settings store").expect("a store that cannot be read");
+
+    // The section of another computer arrives, and the store of this computer fails
+    // to write it.
+    push_of_another_computer(
+        &server,
+        "other-2c",
+        1,
+        "appearance",
+        &config_with_theme(AppearanceTheme::Light),
+    );
+    notice(&b, "the settings of this computer");
+
+    // The store returns. The next answer of the server carries the same version of
+    // the section, and this computer tries the write again.
+    fs::copy(&kept, store.path()).expect("the store that works again");
+    let mut dark = config_with_theme(AppearanceTheme::Dark);
+    dark.overlays.minimap_width = 620.0;
+    push_of_another_computer(&server, "other-2c", 2, "overlays", &dark);
+    eventually("the theme of the server on this computer", || {
+        (b.theme() == AppearanceTheme::Light).then_some(())
+    });
+    assert!(b.settings().view().in_step(), "the section that failed once is in step");
+    assert_eq!(
+        b.stored().overlays.minimap_width,
+        620.0,
+        "the section of the same answer arrived too"
+    );
+    b.stop();
+    server.stop();
+}
+
 #[test]
 fn a_section_that_this_computer_refuses_is_not_applied_and_its_own_row_stays() {
     let home = tempfile::tempdir().expect("a directory");
