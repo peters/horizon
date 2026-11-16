@@ -43,6 +43,8 @@ server, so it changes no setting of the person.
 
 - A Linux computer with `tmux`, `python3`, `Xvfb`, `x11vnc` and `ffmpeg`.
 - A built candidate: `cargo build` writes `target/debug/horizon`.
+- The checkout of this repository, which holds
+  `scripts/device-smoke/machine_card_probe.py`, the probe of the card link.
 - A free VNC port on the loopback address, for example `5911`.
 
 ## 5. Setup
@@ -209,40 +211,33 @@ while the link is down reaches nothing, and the agent reads an error.
    ends the child of the cards of the machine.
 
    Result: the card of `Night shift` stays in the workspace, and the row of
-   `hz-night` leaves the Machines section.
+   `hz-night` leaves the Machines section. The run also stops its private `tmux`
+   server, so the panes of the sessions end with the run.
 
-2. Read the pane of the session `hz-relay` in the private server:
-
-   ```bash
-   tmux -L hz-watch attach -t hz-relay
-   ```
-
-   Detach with `Ctrl+b`, `d`.
-
-   Result: the pane holds one line `machine-card-agent: the card socket ended:
-   The link to Horizon was lost. Call again.` That call of the agent waited when
-   the link ended: a call during a cut is answered with that error, and the agent
-   calls again.
-
-3. Start the fixture again with the same state folder and the same command of
+2. Start the fixture again with the same state folder and the same command of
    step 5.1 of the setup. Wait until the Machines section reports the sessions
    again, and press `Continue` on the card of `Night shift`.
 
    Result: the card of `Night shift` is in the workspace, and the press reaches
    the agent of the session: the card says `The person pressed Continue.`
 
-4. Read the lane of a stream that resets, in the check of the fixture:
+3. Read the lanes of a cut link in the check of the fixture:
 
    ```bash
    python3 -B -m unittest discover -s scripts/device-smoke/tests -v \
-     -k test_a_stream_that_resets_is_a_lost_link
+     -k test_a_stream_that_resets_is_a_lost_link \
+     -k test_an_error_answer_of_the_relay_ends_no_call \
+     -k test_a_cut_stream_ends_no_call_and_the_press_after_it_is_an_update
    ```
 
-   Result: the test passes. Its server leaves one call of the relay unread and
-   resets the stream of the socket, so `recv` of the relay raises
-   `ConnectionResetError`: the relay stays alive, it answers the call in flight with
-   the error, and a call after the reconnect works. The fixture above ends the link
-   with a close, and this test is the lane of the harder cut.
+   Result: the three tests pass. The first server resets the stream of the socket,
+   so `recv` of the relay raises `ConnectionResetError`: the relay stays alive, it
+   answers the call in flight with the error, and a call after the reconnect works.
+   The second relay answers one call with that error: the stand-in agent calls again,
+   and the next press becomes an update of the card that it drew. The third server
+   ends the stream of a direct card socket, which is the cut of the link of a card:
+   the agent meets the socket again, says `initialize` again, draws no second card,
+   and the press after the cut becomes an update of the same card.
 
 ### 6.6 MC-6 — A machine without the watch reports no session
 
@@ -335,8 +330,9 @@ session and Horizon reaches it with the real `ssh` of this computer.
    Result: the folder of step 3 holds `hz-late.sock` without a restart of the child,
    and the cards of the other sessions keep their buttons.
 
-5. Stop the `ssh` child that carries the sockets of the machine. It is a child of
-   the candidate, and its pid is the one whose arguments name `hz-night.sock`:
+5. Cut the link of the cards of the machine. The child that carries the sockets is
+   an `ssh -N` child of the candidate, and its pid is the one whose arguments name
+   `hz-night.sock`:
 
    ```bash
    ps -o pid,args -C ssh | grep -F hz-night.sock
@@ -346,29 +342,92 @@ session and Horizon reaches it with the real `ssh` of this computer.
    > **CAUTION:** THIS STEP CUTS THE LINK OF THE CARDS OF THE MACHINE. Read the pid,
    > and give that number to `kill`. Do not stop another process.
 
-   Result: `sshd` leaves the socket file of each session in place. The card of
-   `hz-relay` stays in the workspace, its pane says
-   `The link to Horizon was lost. Call again.` when the person presses a button, and
-   the relay reconnects to the socket that the next child binds.
+   Result: `sshd` leaves the socket file of each session in place. Both cards stay in
+   the workspace with their buttons on, and the agents of the two sessions do not
+   end: each one names the cut in its pane and calls again.
 
-6. Wait five seconds, and read the folder of step 3 again.
+6. Wait five seconds. Cut the link twice more with the two commands of step 5.
 
-   Result: Horizon made the folder and removed the old socket files before it
-   started the child again, so every socket file of the folder is bound again, and a
-   press on the card of `hz-night` reaches its agent and updates the card. A folder
-   that still names a file that no `sshd` bound, and a child that says
-   `remote port forwarding failed` in the log of the run, is a defect of the removal.
+   > **CAUTION:** THIS STEP CUTS THE LINK OF THE CARDS TWO MORE TIMES. Give `kill`
+   > the pid that the command prints, and stop no other process.
 
-7. Read the log of the machine:
+   Result: each cut ends one child, and Horizon starts the next child of the machine.
+   The two cards keep their buttons after the three cuts, and no card names a
+   session that is not there.
+
+7. Press `Continue` on the card of `Night shift`, and then on the card of `Night
+   shift by relay`.
+
+   Result: each card says `The person pressed Continue.` A press after the three cuts
+   therefore reaches the agent of the session, through the direct socket and through
+   the relay.
+
+8. Read the folder of step 3 again, and read the log of the machine for a bind
+   error:
 
    ```bash
-   grep -E 'Server listening|Starting session' \
-     /var/tmp/machine-cards-sshd-1/machine-sshd/sshd.log | tail -5
+   ls /var/tmp/machine-cards-sshd-1/machine-sshd/tmp/horizon-cards/build-1
+   grep -c 'cannot bind' /var/tmp/machine-cards-sshd-1/machine-sshd/sshd.log
    ```
 
-   Result: the log names the port that `machine_sshd.port` of `lab.json` names, and
-   one `Starting session: command for <user>` line for each call of Horizon: the
-   removal before a child and the child of the card sockets.
+   Result: every socket file of the folder is bound again, because Horizon removed
+   the old files before it started each child. The second command prints `0`: `sshd`
+   bound every socket, and it reported no `cannot bind` and no
+   `remote port forwarding failed`.
+
+9. Prove that Horizon answers every call of an agent through a cut. Copy the probe
+   of the fixture into the state folder, which the namespace of the machine binds:
+
+   ```bash
+   cp scripts/device-smoke/machine_card_probe.py \
+     /var/tmp/machine-cards-sshd-1/machine_card_probe.py
+   ```
+
+   Start a session of the machine that runs the probe. The relay learns the name of
+   its session from `tmux`, so the probe runs in a session of the machine:
+
+   ```bash
+   ssh -F /var/tmp/machine-cards-sshd-1/data/home/.ssh/config \
+     -i /var/tmp/machine-cards-sshd-1/machine-sshd/fixture_key build-1 \
+     'tmux new-session -d -s hz-probe -x 120 -y 30 \
+       "python3 /var/tmp/machine-cards-sshd-1/machine_card_probe.py \
+         --machine build-1 --relay ~/.horizon-cards/relay.py --calls 10 --pause 4"'
+   ```
+
+   Wait until the probe has made its first calls:
+
+   ```bash
+   ssh -F /var/tmp/machine-cards-sshd-1/data/home/.ssh/config \
+     -i /var/tmp/machine-cards-sshd-1/machine-sshd/fixture_key build-1 \
+     'tmux capture-pane -p -t hz-probe | tail -3'
+   ```
+
+   Result: the pane holds `machine-card-probe: call 2 is answered` and more lines of
+   that shape, so the probe speaks to the socket of its session.
+
+   Cut the link once more with the two commands of step 5.
+
+   > **CAUTION:** THIS CUT ENDS THE CHILD OF THE CARDS OF THE MACHINE AGAIN. Give
+   > `kill` the pid that the command of step 5 prints, and stop no other process.
+
+   Wait 30 seconds, and read the pane of the probe again with the command above.
+
+   Result: the pane holds one `call <n> is answered` line for each call, and its last
+   line reads `machine-card-probe: 10 of 10 calls are answered; status 0`. A call that
+   the cut reached reads `was answered with an error` and names the error of the lost
+   link, and the last line then reads `status 1`: run the probe again through the next
+   cut. The probe is the tool that shows that every call is answered through a cut.
+
+10. Read the log of the machine:
+
+    ```bash
+    grep -E 'Server listening|Starting session' \
+      /var/tmp/machine-cards-sshd-1/machine-sshd/sshd.log | tail -5
+    ```
+
+    Result: the log names the port that `machine_sshd.port` of `lab.json` names, and
+    one `Starting session: command for <user>` line for each call of Horizon: the
+    removal before a child and the child of the card sockets.
 
 ## 7. Pass criteria
 
@@ -389,14 +448,16 @@ session and Horizon reaches it with the real `ssh` of this computer.
   the child of that machine starts.
 - A new session of the machine gets its socket without a restart of the child and
   without a lost card of another session.
-- A lost link answers the call of the agent with an error that the agent program
-  ends, the relay program of the skill outlives a stream that resets, and the relay
-  is the text that the card of `hz-relay` came through.
+- A lost link answers the call of the agent with an error, and the stand-in agents
+  of a machine call again: the card of each session outlives the cut, the relay
+  program of the skill outlives a stream that resets, and the relay is the text that
+  the card of `hz-relay` came through.
 - The card shows its buttons whole and says no `More below`, also after a
   terminal of that session joins the workspace.
 - The lane of section 6.9 shows the results that it names: Horizon makes the folder
-  of the sockets of the machine, a new session gets its socket, a restart of the
-  child binds every socket again after a cut link, and the relay outlives the cut.
+  of the sockets of the machine, a new session gets its socket, three cuts of the
+  link leave both cards with their buttons, a press after the cuts changes each card,
+  `sshd` reports no `cannot bind`, and the probe reads `0` for every call.
 
 ## 8. Cleanup
 

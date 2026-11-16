@@ -399,6 +399,10 @@ What a person looks at:
   each forward.
 - The relay of `hz-relay` stays alive when the link drops, answers the calls in
   flight and reconnects.
+- The two stand-in agents of the machine call again after a cut: their cards keep
+  their buttons, and a press after the cut changes the card. The probe
+  `machine_card_probe.py` of this folder calls the card socket of a session through
+  the relay again and again, and it shows that every call is answered through a cut.
 - A socket file that a child left behind stops the next bind. Horizon removes it
   before each start, so a restart of the child binds again.
 
