@@ -10,7 +10,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{HolderError, Launch, PANEL_HOLDER_ARG, Paths, holder_command, start_with};
+use super::{
+    HOLDER_DIR, HolderError, Launch, MAX_SOCKET_PATH, PANEL_HOLDER_ARG, Paths, holder_command, socket_stem, start_with,
+};
 use crate::HorizonHome;
 use horizon_pty_tap::frames::{self, Frame, Hello};
 
@@ -56,6 +58,21 @@ struct Serving {
     socket: PathBuf,
     result: Receiver<Result<(), HolderError>>,
     thread: thread::JoinHandle<()>,
+}
+
+/// The id of a real panel is 36 characters. Its socket path stays under the bound
+/// of a socket path in the home of a person on both systems.
+#[test]
+fn the_socket_of_a_real_panel_id_fits_the_bound_of_a_socket_path() {
+    const REAL_ID: &str = "9bc6f6c5-175a-4f16-a55a-1619bb1a93b1";
+    let stem = socket_stem(REAL_ID);
+    assert_eq!(stem.len(), 32, "{stem}");
+    assert!(stem.bytes().all(|byte| byte.is_ascii_hexdigit()), "{stem}");
+    assert_ne!(stem, socket_stem("9bc6f6c5-175a-4f16-a55a-1619bb1a93b2"));
+    for home in ["/home/example/.horizon", "/Users/example-person/.horizon"] {
+        let path = format!("{home}/{HOLDER_DIR}/{stem}.sock");
+        assert!(path.len() <= MAX_SOCKET_PATH, "{} bytes: {path}", path.len());
+    }
 }
 
 impl Serving {
@@ -496,10 +513,10 @@ fn a_probe_finds_no_holder_where_no_socket_answers() {
         "a socket that nobody listens on is no holder"
     );
 
-    let mut long = launch("x", "exec cat");
-    long.local_id = "x".repeat(200);
+    // The name of a socket has one length, so only a deep home passes the bound.
+    let deep = HorizonHome::from_root(home.root().join("x".repeat(200)));
     assert!(
-        matches!(Paths::of(&home, &long.local_id), Err(HolderError::PathTooLong(_))),
+        matches!(Paths::of(&deep, "x"), Err(HolderError::PathTooLong(_))),
         "a socket path above the bound is refused, not cut"
     );
 }

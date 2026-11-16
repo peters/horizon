@@ -335,7 +335,11 @@ fn closing_the_panel_ends_the_program_of_its_holder() {
         matches!(panel_holder::probe(&home, "closed-panel"), Ok(None))
     });
     assert!(
-        !home.root().join("panel-holders").join("closed-panel.sock").exists(),
+        !home
+            .root()
+            .join("panel-holders")
+            .join(format!("{}.sock", panel_holder::socket_stem("closed-panel")))
+            .exists(),
         "the holder removed the socket of the closed panel"
     );
     assert!(!runs(pid), "the program of the closed panel ended");

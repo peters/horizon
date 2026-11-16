@@ -32,8 +32,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_pty_tap::frames;
+use sha2::{Digest, Sha256};
 
-use crate::horizon_home::safe_local_id;
 use crate::util::spawn_stand_in;
 use crate::{HorizonHome, HorizonHomeError};
 
@@ -108,6 +108,19 @@ pub enum HolderError {
 }
 
 /// The private folder and the socket of the holder of one panel.
+/// The file name of the socket of `local_id`: 32 hexadecimal characters of the
+/// SHA-256 of the id. The escaped form of a real id is 73 characters, which
+/// passes the bound of a socket path in every home.
+pub(crate) fn socket_stem(local_id: &str) -> String {
+    use std::fmt::Write as _;
+    Sha256::digest(local_id.as_bytes())[..16]
+        .iter()
+        .fold(String::with_capacity(32), |mut stem, byte| {
+            let _ = write!(stem, "{byte:02x}");
+            stem
+        })
+}
+
 #[derive(Clone, Debug)]
 struct Paths {
     socket: PathBuf,
@@ -115,11 +128,10 @@ struct Paths {
 }
 
 impl Paths {
-    /// The socket path of `local_id`. The id is encoded, so it can hold no path
-    /// part of its own.
+    /// The socket path of `local_id`, which holds no path part of the id.
     fn of(home: &HorizonHome, local_id: &str) -> Result<Self, HolderError> {
         let folder = home.root().join(HOLDER_DIR);
-        let socket = folder.join(format!("{}.sock", safe_local_id(local_id)));
+        let socket = folder.join(format!("{}.sock", socket_stem(local_id)));
         if socket.as_os_str().len() > MAX_SOCKET_PATH {
             return Err(HolderError::PathTooLong(socket));
         }
@@ -330,7 +342,7 @@ pub fn close_unshown(home: &HorizonHome, shown: &BTreeSet<String>) -> Result<usi
             continue;
         };
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("sock")
-            || shown.iter().any(|local_id| safe_local_id(local_id) == stem)
+            || shown.iter().any(|local_id| socket_stem(local_id) == stem)
         {
             continue;
         }
