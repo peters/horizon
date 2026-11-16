@@ -350,7 +350,10 @@ fn a_card_link_that_is_not_up_says_so_under_its_machine() {
         app.template_config.machines.watch_agents = false;
         crate::app::block_machines::settle_machine_load(&mut app);
         let stand = tempfile::tempdir().expect("a folder of the stand-in");
-        let ssh = stand_in_program_in(stand.path(), "ssh", &words).expect("the stand-in ssh");
+        // The removal of the socket files of a machine is no case of this test, so the
+        // stand-in answers it at once: no case waits the bound of that removal.
+        let body = format!("for a in \"$@\"; do last=$a; done\ncase $last in rm*--*) exit 0 ;; esac\n{words}");
+        let ssh = stand_in_program_in(stand.path(), "ssh", &body).expect("the stand-in ssh");
         app.node_cards.program = ssh.to_string_lossy().into_owned();
         let cards = short_temp("hz-cards");
         app.node_cards.base = folder.clone().unwrap_or_else(|| cards.path().to_path_buf());
