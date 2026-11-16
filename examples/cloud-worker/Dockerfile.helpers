@@ -18,7 +18,7 @@ RUN git init -q /src && git -C /src fetch -q --depth 1 https://github.com/peters
     && git -C /src -c advice.detachedHead=false checkout -q FETCH_HEAD
 
 FROM source AS build
-RUN cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.99.0 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
+RUN cd /src && GIT_LFS_SKIP_SMUDGE=1 RUSTUP_TOOLCHAIN=1.100.0 CARGO_HOME=/tmp/helper-cargo cargo build --locked --release \
         -p horizon-cloud-worker -p horizon-browser-cli -p horizon-device --features horizon-device/cli \
     && mkdir -p /output/usr/local/bin /output/usr/local/share/licenses/horizon \
     && install -m 755 -s target/release/horizon-cloud-worker target/release/horizon-browser \
