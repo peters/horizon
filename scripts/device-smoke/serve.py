@@ -4,11 +4,13 @@ import argparse
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shlex
 import shutil
 import signal
 import importlib.util
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -856,12 +858,41 @@ MACHINE_CARD_AGENT = 'machine_card_agent.py'
 # `-R` on the machine and copies every connection of it to the path here. The
 # stand-in names the same pairs, so a card of that session reaches Horizon.
 MACHINE_CARD_BRIDGE = 'card-bridge.py'
+# The provider line of each machine: the stand-in of the watch, or the real sshd of
+# `--machine-sshd`.
+MACHINE_WATCH_PROVIDER = 'Stand-in, this fixture'
+MACHINE_SSHD_PROVIDER = 'A real sshd, this fixture'
 # The relay program of the machines skill: the fixture runs one session through it, so a
 # person sees a card that came the way a real agent program's card comes.
 MACHINE_RELAY_PROGRAM = 'relay.py'
+# The folder of the relay of a machine: the setup of a machine writes the program into
+# `~/.horizon-cards/` of its home, and a run with `--machine-sshd` writes it there too.
+MACHINE_RELAY_FOLDER = '.horizon-cards'
 MACHINE_RELAY_SESSION = 'hz-relay'
 MACHINE_RELAY_TITLE = 'Night shift by relay'
 MACHINE_RELAY_SKILL = 'assets/plugins/claude-code/skills/horizon-machines/SKILL.md'
+# The private machine of `--machine-sshd`: one real `sshd` of the user of this run,
+# inside a namespace of its own, so the machine has its own `/tmp` and its own home.
+# A run with it puts no stand-in on the `PATH`: the candidate uses the real `ssh` of
+# this computer for the watch, for the card sockets, for the removal and for a session.
+MACHINE_SSHD_FOLDER = 'machine-sshd'
+MACHINE_SSHD_CONFIG = 'sshd_config'
+MACHINE_SSHD_SSH_CONFIG = 'ssh_config'
+MACHINE_SSHD_LOG = 'sshd.log'
+MACHINE_SSHD_PID = 'sshd.pid'
+MACHINE_SSHD_HOST_KEY = 'host_key'
+MACHINE_SSHD_IDENTITY = 'fixture_key'
+MACHINE_SSHD_KNOWN_HOSTS = 'known_hosts'
+MACHINE_SSHD_AUTHORIZED = 'authorized_keys'
+MACHINE_SSHD_HOME = 'home'
+MACHINE_SSHD_TMP = 'tmp'
+# The session programs of a split `sshd`, which a build puts beside the program.
+MACHINE_SSHD_PROGRAMS = ('sshd-session', 'sshd-auth')
+# The folder of the card sockets as the machine sees it: its own `/tmp`.
+MACHINE_CARDS_DIR = f'/tmp/{HORIZON_CARDS_FOLDER}'
+# What the end of a run with `--machine-sshd` ends, in order: the sshd of the machine,
+# and then the tmux server of its sessions, which `new-session -d` leaves behind it.
+MACHINE_SSHD_STOP = ('sshd', 'tmux')
 MACHINE_CARD_BRIDGE_BODY = """#!/usr/bin/env python3
 import os, socket, sys, threading
 
@@ -1096,19 +1127,297 @@ def machine_watch_standin(state):
     return program.parent
 
 
-def machine_watch_record(private_home):
+def machine_watch_record(private_home, provider=MACHINE_WATCH_PROVIDER):
     """The machine list of the fixture: one machine whose route is the stand-in.
 
     The candidate reads `<home>/machines/registry.json`, and a record of a route
     that no `ssh` reaches is still one row of the sidebar: the watch of that row
-    runs the stand-in and reads the server of this fixture.
+    runs the stand-in and reads the server of this fixture. A run with
+    `--machine-sshd` writes the same record: the route is the alias `build-1`, and
+    the seeded `~/.ssh/config` of the private home sends it to the real machine.
     """
     root = Path(private_home) / HORIZON_HOME_FOLDER / 'machines'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     record = {'name': MACHINE_WATCH_MACHINE, 'host': MACHINE_WATCH_MACHINE,
-              'provider': 'Stand-in, this fixture', MACHINE_RECORD_CARDS: True, 'added_at_millis': 0}
+              'provider': provider, MACHINE_RECORD_CARDS: True, 'added_at_millis': 0}
     (root / 'registry.json').write_text(json.dumps({'machines': [record]}, indent=2), encoding='utf-8')
     return root / 'registry.json'
+
+
+def machine_sshd_programs(sshd):
+    """The session programs of a split `sshd`, in the prefix of the given program.
+
+    OpenSSH 9.8 and later runs a session from `sshd-session` and a check of a key
+    from `sshd-auth`, both in `<prefix>/lib/openssh/` of `usr/sbin/sshd`.
+    """
+    folder = Path(sshd).resolve().parents[1] / 'lib' / 'openssh'
+    return tuple(folder / name for name in MACHINE_SSHD_PROGRAMS)
+
+
+def machine_sshd_requirement(sshd, which=shutil.which):
+    """One sentence for the piece of `--machine-sshd` that this computer lacks.
+
+    A computer usually has the client of `ssh` and no server, so a procedure names
+    a server that it unpacked into a folder of its own, and this run needs it with
+    the two session programs beside it.
+    """
+    absent = [name for name in ('bwrap', 'ssh', 'ssh-keygen', 'tmux') if not which(name)]
+    if absent:
+        return ('--machine-sshd needs ' + ', '.join(absent)
+                + ' on this computer, and this run finds no such program')
+    if not Path(sshd).is_file():
+        return f'--machine-sshd must name the sshd program as a file that exists: {sshd}'
+    missing = [str(program) for program in machine_sshd_programs(sshd) if not program.is_file()]
+    if missing:
+        return ('--machine-sshd needs sshd-session and sshd-auth in the prefix of the program it'
+                ' names, and these are no files: ' + ', '.join(missing))
+    return None
+
+
+def free_loopback_port():
+    """A port of the loopback address that this run can give its sshd."""
+    with socket.socket() as held:
+        held.bind(('127.0.0.1', 0))
+        return held.getsockname()[1]
+
+
+class MachineSshd:
+    """The private machine of `--machine-sshd`: folders, files and the sshd of this run.
+
+    The machine is one real `sshd` of the user of this run, inside a namespace of its
+    own: its own `/tmp`, so the sockets of the cards and the tmux server of the
+    machine never touch the `/tmp` of this computer, and its own home, so no
+    `~/.codex`, `~/.ssh` or tmux server of the person is read or written. The
+    sessions of the machine are a tmux server inside that namespace, which the
+    sshd's own login shell starts, so plain `tmux` finds them as on a real machine.
+    """
+
+    def __init__(self, state, sshd, port=None):
+        self.state = Path(state).resolve()
+        self.sshd = Path(sshd).resolve()
+        self.session, self.auth = machine_sshd_programs(self.sshd)
+        self.port = free_loopback_port() if port is None else port
+        entry = pwd.getpwuid(os.getuid())
+        self.user = entry.pw_name
+        self.user_home = Path(entry.pw_dir)
+        self.work = self.state / MACHINE_SSHD_FOLDER
+        self.home = self.work / MACHINE_SSHD_HOME
+        self.tmp = self.work / MACHINE_SSHD_TMP
+        self.config = self.work / MACHINE_SSHD_CONFIG
+        self.ssh_config = self.work / MACHINE_SSHD_SSH_CONFIG
+        self.log = self.work / MACHINE_SSHD_LOG
+        self.pid_file = self.work / MACHINE_SSHD_PID
+        self.host_key = self.work / MACHINE_SSHD_HOST_KEY
+        self.identity = self.work / MACHINE_SSHD_IDENTITY
+        self.authorized_keys = self.work / MACHINE_SSHD_AUTHORIZED
+        self.process = None
+
+    def prepare(self):
+        """Make the folders, the two keys and the two configurations of the machine.
+
+        `sshd -t` reads the configuration before a run starts, so a text that a real
+        `sshd` refuses ends the fixture here and not behind a window.
+        """
+        for folder in (self.work, self.home, self.tmp):
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            folder.chmod(0o700)
+        for key in (self.host_key, self.identity):
+            if key.exists():
+                continue
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', key.name,
+                            '-f', str(key)], check=True)
+        self.authorized_keys.write_text(self.public_key.read_text(encoding='utf-8'), encoding='utf-8')
+        self.authorized_keys.chmod(0o600)
+        self.config.write_text(machine_sshd_config(self), encoding='utf-8')
+        self.ssh_config.write_text(machine_sshd_ssh_config(self), encoding='utf-8')
+        checked = subprocess.run([str(self.sshd), '-t', '-f', str(self.config)],
+                                 capture_output=True, text=True)
+        if checked.returncode != 0:
+            raise SystemExit(f'the sshd of the fixture refuses its own configuration: {checked.stderr.strip()}')
+
+    @property
+    def public_key(self):
+        """The public half of the client key, which `ssh-keygen` writes beside it."""
+        return self.identity.with_name(self.identity.name + '.pub')
+
+    def ssh_sources(self):
+        """The two files that `sandbox.seed_ssh` copies into the private home."""
+        return self.ssh_config, self.identity
+
+    def namespace(self):
+        """The namespace of the machine: its own `/tmp`, and its own home.
+
+        The whole computer is read-only and the state folder is bound at its own
+        path, so the programs of the fixture are found where the fixture wrote them.
+        """
+        return ['bwrap', '--die-with-parent',
+                '--ro-bind', '/', '/',
+                '--dev-bind', '/dev', '/dev',
+                '--bind', str(self.state), str(self.state),
+                '--bind', str(self.tmp), '/tmp',
+                '--bind', str(self.home), str(self.user_home),
+                '--chdir', str(self.state), '--']
+
+    def command(self, *words):
+        """One command inside the namespace of the machine, such as its sshd."""
+        return self.namespace() + list(words)
+
+    def start(self):
+        """Run the sshd of the machine and wait until it listens on the port of the run."""
+        self.process = sandbox.start(
+            self.command(str(self.sshd), '-D', '-f', str(self.config), '-E', str(self.log)),
+            env=machine_sshd_environment(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        listened = bound_port(self.process, self.log, r'^Server listening on .* port (\d+)')
+        if listened != self.port:
+            raise SystemExit(f'the sshd of the machine listens on {listened} and not on {self.port}')
+
+    def describe(self):
+        """What a procedure reads about the machine of this run, and what its end ends."""
+        return {'sshd': str(self.sshd), 'port': self.port, 'log': str(self.log),
+                'home': str(self.home), 'tmp': str(self.tmp), 'stop': list(MACHINE_SSHD_STOP)}
+
+
+def machine_sshd_config(machine):
+    """The configuration of the sshd of the private machine.
+
+    `StrictModes no`, because the state folder has none of the parents that `sshd`
+    asks of the home of a person. `StreamLocalBindUnlink no` is the default of
+    `sshd`: the socket file of a card child that ended stays there, and a new child
+    binds only after the removal of Horizon. `SetEnv` gives every session the folder
+    of the card sockets, which is the `/tmp` of the machine itself.
+    """
+    return (f'Port {machine.port}\n'
+            'ListenAddress 127.0.0.1\n'
+            f'HostKey {machine.host_key}\n'
+            f'AuthorizedKeysFile {machine.authorized_keys}\n'
+            f'PidFile {machine.pid_file}\n'
+            'UsePAM no\n'
+            'PasswordAuthentication no\n'
+            'KbdInteractiveAuthentication no\n'
+            'StrictModes no\n'
+            'AllowStreamLocalForwarding yes\n'
+            'StreamLocalBindUnlink no\n'
+            f'SshdSessionPath {machine.session}\n'
+            f'SshdAuthPath {machine.auth}\n'
+            f'SetEnv HORIZON_CARDS_DIR={MACHINE_CARDS_DIR}\n'
+            'LogLevel VERBOSE\n')
+
+
+def machine_sshd_ssh_config(machine):
+    """The `ssh` configuration that sends the alias of the record to the machine.
+
+    It lands in `~/.ssh/config` of the private home of the candidate, as the file of
+    `--ssh-config` does, and the identity lands beside it: the real `ssh` of this
+    computer then reaches the machine with the record alone. The known-hosts file
+    lies in the state, so no run writes the key of its own machine into the
+    `known_hosts` of the person.
+    """
+    return (f'Host {MACHINE_WATCH_MACHINE}\n'
+            '  HostName 127.0.0.1\n'
+            f'  Port {machine.port}\n'
+            f'  User {machine.user}\n'
+            f'  IdentityFile ~/.ssh/{MACHINE_SSHD_IDENTITY}\n'
+            '  IdentitiesOnly yes\n'
+            f'  UserKnownHostsFile {machine.work / MACHINE_SSHD_KNOWN_HOSTS}\n'
+            '  StrictHostKeyChecking accept-new\n')
+
+
+def machine_sshd_environment(environ=None):
+    """The environment of the private machine: no `TMUX` of the shell that started it.
+
+    A fixture that a person starts inside tmux would otherwise hand the machine the
+    socket of the server of that person.
+    """
+    return {key: value for key, value in
+            sandbox.without_inherited_horizon(os.environ if environ is None else environ).items()
+            if not key.startswith('TMUX')}
+
+
+def machine_sshd_ssh(box, command):
+    """One command of the login shell of the machine, from the sandbox of the run.
+
+    The client is the real `ssh` of this computer and the private home of the
+    fixture is its home, so it reads the configuration that the candidate reads.
+    """
+    result = subprocess.run([*box.namespace, 'ssh', '-o', 'BatchMode=yes', MACHINE_WATCH_MACHINE, command],
+                            capture_output=True, text=True, errors='replace')
+    if result.returncode != 0:
+        raise SystemExit(f'the machine of --machine-sshd did not run `{command}`: '
+                         f'{result.returncode} {result.stderr.strip()}')
+    return result.stdout
+
+
+def machine_sshd_tmux(*words):
+    """One `tmux` command of the machine, in the words that its login shell reads."""
+    return ' '.join(['tmux -f /dev/null', *(shlex.quote(word) for word in words)])
+
+
+def machine_sshd_sessions(machine, box, python):
+    """The sessions of the machine, in a tmux server that the sshd itself started.
+
+    The two Codex stand-ins of the watch, one agent that draws a card through the
+    card socket of its session, and one agent that reaches it through the relay
+    program of the machines skill at `~/.horizon-cards/relay.py` of the home of the
+    machine. Every command names plain `tmux`: the `/tmp` of the namespace is the
+    `/tmp` of the machine, so this server is the server of that machine.
+    """
+    work = machine.state / MACHINE_WATCH_FOLDER
+    codex = work / 'bin' / ATTENTION_CODEX_PROGRAM
+    for session, folder, words in MACHINE_WATCH_AGENTS:
+        pane = work / folder
+        pane.mkdir(mode=0o700, exist_ok=True)
+        arguments = [word for word in words if word.startswith('--')]
+        machine_sshd_ssh(box, machine_sshd_tmux(
+            'new-session', '-d', '-s', session, '-c', str(pane), python, str(codex), *arguments))
+        for word in [word for word in words if not word.startswith('--')]:
+            machine_sshd_ssh(box, machine_sshd_tmux('send-keys', '-t', session, '-l', word))
+            machine_sshd_ssh(box, machine_sshd_tmux('send-keys', '-t', session, 'Enter'))
+    agent = work / 'bin' / MACHINE_CARD_AGENT
+    socket_path = f'{MACHINE_CARDS_DIR}/{MACHINE_WATCH_MACHINE}/{MACHINE_CARD_SESSION}.sock'
+    machine_sshd_ssh(box, machine_sshd_tmux(
+        'new-session', '-d', '-s', MACHINE_CARD_SESSION, '-c', str(work / 'night'),
+        python, '-u', str(agent), '--socket', socket_path))
+    pane_id = machine_sshd_ssh(box, machine_sshd_tmux(
+        'list-panes', '-t', MACHINE_CARD_SESSION, '-F', '#{pane_id}')).strip().splitlines()[0]
+    machine_sshd_ssh(box, machine_sshd_tmux('set-option', '-p', '-t', pane_id, '@horizon_state', 'idle'))
+    relay = machine.user_home / MACHINE_RELAY_FOLDER / MACHINE_RELAY_PROGRAM
+    machine_sshd_ssh(box, machine_sshd_tmux(
+        'new-session', '-d', '-s', MACHINE_RELAY_SESSION, '-c', str(work / 'relay'),
+        python, '-u', str(agent), '--relay', str(relay), MACHINE_WATCH_MACHINE,
+        '--title', MACHINE_RELAY_TITLE))
+
+
+def machine_sshd_start(machine, box, python):
+    """Start the machine of the fixture, and the sessions of its user."""
+    work = machine.state / MACHINE_WATCH_FOLDER
+    program_in_state(fixture_program(ATTENTION_KIND_SCRIPT['codex']),
+                     work / 'bin' / ATTENTION_CODEX_PROGRAM, machine.state)
+    program_in_state(fixture_program(MACHINE_CARD_AGENT), work / 'bin' / MACHINE_CARD_AGENT, machine.state)
+    body_in_state(machine.user_home / MACHINE_RELAY_FOLDER / MACHINE_RELAY_PROGRAM,
+                  machine_relay_text(), machine.state)
+    machine.start()
+    machine_sshd_sessions(machine, box, python)
+
+
+def machine_sshd_stop(machine, end=sandbox.end, run=subprocess.run, environment=None):
+    """End the processes of the stop list of the private machine, in its order.
+
+    The tmux server of the machine is no child of the run after `new-session -d`, so
+    the end of the sshd alone leaves it behind.
+    """
+    if machine.process is None:
+        return []
+    ended = []
+    for step in MACHINE_SSHD_STOP:
+        if step == 'sshd':
+            end(machine.process)
+        else:
+            run(machine.command('tmux', 'kill-server'), check=False,
+                env=machine_sshd_environment() if environment is None else environment,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ended.append(step)
+    return ended
 
 
 def plain_window_command(which=shutil.which, python=sys.executable, has_tk=None):
@@ -1447,6 +1756,13 @@ def arguments():
              'sidebar shows the agents of a machine with no machine. It answers no other ssh '
              'call of the run, so a run with it reads no machine of the person')
     parser.add_argument(
+        '--machine-sshd', type=Path, metavar='SSHD',
+        help='With --machine-watch: make the machine of the fixture one real sshd of this '
+             'computer on a loopback port, with a home and a /tmp of its own, so the candidate '
+             'uses the real ssh for the watch, the card sockets, the removal and a session, and '
+             'no stand-in. SSHD is a program that this run can start as its own user; the README '
+             'names the two commands that unpack one into a folder')
+    parser.add_argument(
         '--notifications-log', action='store_true',
         help='Put a stand-in notify-send first on the PATH of the candidate, which appends the '
              'arguments of one call as one line of JSON to notifications.log of the state, and '
@@ -1494,6 +1810,16 @@ def main():
         ssh_config, ssh_identity = sandbox.ssh_sources(args.ssh_config, args.ssh_identity)
     except ValueError as problem:
         parser.error(str(problem))
+    if args.machine_sshd is not None:
+        if not args.machine_watch:
+            parser.error('--machine-sshd makes the machine of --machine-watch a real sshd, '
+                         'which this run lacks')
+        if ssh_config is not None:
+            parser.error('--machine-sshd writes the SSH configuration of its own machine; do not '
+                         'give --ssh-config or --ssh-identity as well')
+        problem = machine_sshd_requirement(args.machine_sshd)
+        if problem:
+            parser.error(problem)
     check_browser_host_arguments(parser, args)
     if args.worktree_card and args.presets:
         parser.error('--worktree-card writes the presets of the worktree card; do not give '
@@ -1538,6 +1864,11 @@ def main():
         parser.error(f'--secret-row {problem}')
     host_audio = host_audio_bind() if args.host_audio else None
     args.state = sandbox.prepare_state(args.state, reuse=args.reuse_state).resolve()
+    machine = None
+    if args.machine_sshd is not None:
+        machine = MachineSshd(args.state, args.machine_sshd)
+        machine.prepare()
+        ssh_config, ssh_identity = machine.ssh_sources()
     app = args.horizon.resolve(strict=True)
     extra_ro_binds = [app]
     if args.tools:
@@ -1655,11 +1986,17 @@ def main():
             raise SystemExit('--attention-agent-kind names the agent of --attention-agent, '
                              'which this run lacks')
         if args.machine_watch:
-            # The stand-in goes first on the `PATH` of the candidate, and the record of
-            # the machine comes from the private home of this run.
-            machine_watch_server(args.state, box.private_tmp, sys.executable)
-            env.update(attention_environment(env, machine_watch_standin(args.state)))
-            machine_watch_record(box.private_home)
+            if machine is not None:
+                # The real machine of the run: no stand-in on the `PATH`, and the sessions of
+                # its user in the tmux server of its own namespace.
+                machine_sshd_start(machine, box, sys.executable)
+                machine_watch_record(box.private_home, MACHINE_SSHD_PROVIDER)
+            else:
+                # The stand-in goes first on the `PATH` of the candidate, and the record of
+                # the machine comes from the private home of this run.
+                machine_watch_server(args.state, box.private_tmp, sys.executable)
+                env.update(attention_environment(env, machine_watch_standin(args.state)))
+                machine_watch_record(box.private_home)
         if args.notifications_log:
             notification_bin = notification_standin(args.state)
             env.update(attention_environment(env, notification_bin))
@@ -1718,6 +2055,9 @@ def main():
             # The two files of the file agent, so the person reads the answers and
             # writes the commands at the paths of this run.
             manifest['file_agent'] = file_agent_manifest(*file_agent_files_in_run)
+        if machine is not None:
+            # What a procedure reads of the real machine, and what the end ends.
+            manifest['machine_sshd'] = machine.describe()
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)
@@ -1745,7 +2085,9 @@ def main():
             sandbox.end(child)
         for log in logs:
             log.close()
-        if args.machine_watch:
+        if machine is not None:
+            machine_sshd_stop(machine)
+        elif args.machine_watch:
             machine_watch_stop(box.private_tmp)
         # A reused state is what the next run starts from; a fresh one leaves nothing.
         if not args.reuse_state:
