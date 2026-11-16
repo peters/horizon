@@ -1,9 +1,11 @@
 //! The holder of a panel, proven with a stand-in program and a plain client.
 
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -59,6 +61,11 @@ struct Serving {
 impl Serving {
     /// Starts a holder and waits until it answers a hello.
     fn start(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> Self {
+        Self::start_counted(home, launch, ring_limit, None)
+    }
+
+    /// Starts a holder whose loop counts its turns in `turns`.
+    fn start_counted(home: &HorizonHome, launch: &Launch, ring_limit: usize, turns: Option<Arc<AtomicUsize>>) -> Self {
         let socket = Paths::of(home, &launch.local_id)
             .expect("the socket of the holder")
             .socket()
@@ -67,7 +74,12 @@ impl Serving {
         let owned = home.clone();
         let served = launch.clone();
         let thread = thread::spawn(move || {
-            let _ = send.send(super::serve::serve(&owned, &served, ring_limit));
+            let _ = send.send(super::serve::serve_watched(
+                &owned,
+                &served,
+                ring_limit,
+                turns.as_deref(),
+            ));
         });
         let serving = Self { socket, result, thread };
         let deadline = Instant::now() + TEST_BOUND;
@@ -104,6 +116,11 @@ impl Client {
         frames::read_one(&mut self.stream).expect("a frame of the holder")
     }
 
+    /// The next frame, or nothing when the holder closed this link.
+    fn next_if_any(&mut self) -> Option<Frame> {
+        frames::read_one(&mut self.stream).ok()
+    }
+
     fn send(&mut self, frame: &Frame) {
         frames::write(&mut self.stream, frame).expect("the write of a frame");
     }
@@ -123,15 +140,16 @@ impl Client {
     }
 }
 
-/// Attaches, and retries while the holder still serves the client that left.
+/// Attaches, and retries while the holder serves another client or closes a link
+/// that arrived while its loop was behind.
 fn attach_when_free(socket: &Path) -> (Client, Hello) {
     let deadline = Instant::now() + TEST_BOUND;
     loop {
         let mut client = Client::attach(socket);
-        match client.next() {
-            Frame::Hello(hello) => return (client, hello),
-            Frame::Refusal => {}
-            other => panic!("the holder answered {other:?}"),
+        match client.next_if_any() {
+            Some(Frame::Hello(hello)) => return (client, hello),
+            Some(Frame::Refusal) | None => {}
+            Some(other) => panic!("the holder answered {other:?}"),
         }
         assert!(
             Instant::now() < deadline,
@@ -504,6 +522,91 @@ fn the_folder_of_the_sockets_is_made_private() {
 }
 
 #[test]
+fn an_attached_holder_with_nothing_to_do_makes_no_turn() {
+    let (_folder, home) = temp_home();
+    let turns = Arc::new(AtomicUsize::new(0));
+    let serving = Serving::start_counted(&home, &launch("idle", "exec sleep 60"), 1024, Some(Arc::clone(&turns)));
+    let (mut client, _hello) = attach_when_free(&serving.socket);
+
+    let before = turns.load(Ordering::Relaxed);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        turns.load(Ordering::Relaxed),
+        before,
+        "an attached holder with nothing to do makes no turn of its loop"
+    );
+
+    close(&mut client, serving);
+}
+
+#[test]
+fn a_client_that_reads_nothing_is_detached_and_the_program_still_answers() {
+    let (_folder, home) = temp_home();
+    // The program writes more than a socket holds, and it reads nothing.
+    let serving = Serving::start(&home, &launch("slow-client", "exec yes"), 4096);
+    let (silent, hello) = attach_when_free(&serving.socket);
+    // This client reads the hello and nothing more, so the holder waits for it.
+
+    wait_until("the holder detaches a client that reads nothing", || {
+        matches!(super::probe(&home, "slow-client"), Ok(Some(_)))
+    });
+    let (mut client, again) = attach_when_free(&serving.socket);
+    assert_eq!(
+        again.pid, hello.pid,
+        "the program outlives the client that reads nothing"
+    );
+
+    client.send(&Frame::Close);
+    let deadline = Instant::now() + TEST_BOUND;
+    while Instant::now() < deadline && frames::read_one(&mut client.stream).is_ok() {}
+    serving.ended();
+    drop(silent);
+}
+
+#[test]
+fn the_exit_frame_is_the_last_frame_and_no_output_is_lost_before_it() {
+    let (_folder, home) = temp_home();
+    let serving = Serving::start(
+        &home,
+        &launch(
+            "exit-last",
+            "i=0; while [ $i -lt 3000 ]; do printf 'a line of the program\\n'; i=$((i+1)); done; \
+             printf 'before the end\\n'; sleep 1; exit 4",
+        ),
+        1024,
+    );
+    let (mut client, _hello) = attach_when_free(&serving.socket);
+
+    let mut seen = String::new();
+    let status = loop {
+        match client.next() {
+            Frame::Output(bytes) | Frame::Replay(bytes) => seen.push_str(&String::from_utf8_lossy(&bytes)),
+            Frame::Exit(code) => break code,
+            other => panic!("the holder sent {other:?} before the exit frame"),
+        }
+    };
+    assert_eq!(status, Some(4), "the exit frame carries the status of the program");
+    assert!(
+        seen.contains("before the end"),
+        "every part of the output precedes the exit frame: {seen:?}"
+    );
+    client
+        .stream
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .expect("a read bound");
+    match frames::read_one(&mut client.stream) {
+        Err(HolderError::Io(error)) => assert!(
+            matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut),
+            "no frame follows the exit frame: {error}"
+        ),
+        other => panic!("the holder sent {other:?} after the exit frame"),
+    }
+
+    drop(client);
+    serving.ended();
+}
+
+#[test]
 fn a_program_that_reads_no_input_still_writes_to_its_client() {
     let (_folder, home) = temp_home();
     let serving = Serving::start(
@@ -513,8 +616,8 @@ fn a_program_that_reads_no_input_still_writes_to_its_client() {
     );
     let (mut client, _hello) = attach_when_free(&serving.socket);
 
-    // More input than the terminal of a program holds, and this program reads none
-    // of it, so a holder that wrote the input in its own loop would wait for it.
+    // More input than the terminal of a program holds, and this program reads
+    // none of it, so a holder that wrote the input in its own loop would wait.
     for _ in 0..4 {
         client.send(&Frame::Input(vec![b'x'; 64 * 1024]));
     }

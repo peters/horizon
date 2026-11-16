@@ -141,7 +141,6 @@ impl Paths {
         }
         let listener = UnixListener::bind(&self.socket)?;
         fs::set_permissions(&self.socket, fs::Permissions::from_mode(SOCKET_MODE))?;
-        listener.set_nonblocking(true)?;
         Ok(listener)
     }
 

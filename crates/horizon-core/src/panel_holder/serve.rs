@@ -1,12 +1,18 @@
 //! The life of one holder: the terminal, its program, and one client at a time.
+//!
+//! The loop blocks until something happened: output of the program, a frame or the
+//! end of the client, a new client, or the end of the output of the program. Each
+//! of those is read on its own thread and the loop reads one channel, so an idle
+//! holder makes no turn.
 
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,18 +29,34 @@ pub(crate) const RING_LIMIT: usize = 2 * 1024 * 1024;
 const KEEP_STATUS: Duration = Duration::from_hours(1);
 /// How long a holder waits for a client to close after the status of its program.
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
-/// The pause of the loop while a client is attached.
-const POLL: Duration = Duration::from_millis(5);
-/// The pause of the loop while no client is attached.
-const IDLE_POLL: Duration = Duration::from_millis(50);
+/// How long a client may refuse the output of the program before the holder
+/// detaches it. The program keeps running and the ring keeps the output.
+const CLIENT_WRITE_BOUND: Duration = Duration::from_secs(5);
+/// The happenings that wait for the loop, which bounds the memory that a slow
+/// reader can hold.
+const QUEUE: usize = 8;
+/// The parts of input that wait for a program that reads nothing.
+const INPUT_QUEUE: usize = 64;
 /// The bytes of one read of the output of the program.
 const BUFFER: usize = 64 * 1024;
-/// The parts of output that wait for the loop, which bounds the memory that a
-/// program that writes faster than the loop reads can hold.
-const OUTPUT_QUEUE: usize = 8;
-/// The parts of input that wait for the program, which bounds the memory that a
-/// program that reads nothing can hold.
-const INPUT_QUEUE: usize = 64;
+/// How long the loop waits for the event of a program whose output ended.
+const PROGRAM_END_BOUND: Duration = Duration::from_secs(2);
+/// The pause between two reads of the event of a program whose output ended.
+const END_PAUSE: Duration = Duration::from_millis(5);
+
+/// Something that happened to a holder, and the reason that its loop runs.
+enum Happening {
+    /// Bytes of the output of the program.
+    Output(Vec<u8>),
+    /// The output of the program ended, so the event of its child is near.
+    OutputEnded,
+    /// A client connected.
+    NewClient(UnixStream),
+    /// Frames of a client, named by the generation of its link.
+    FromClient(u64, Vec<Frame>),
+    /// A client went away, named by the generation of its link.
+    ClientGone(u64),
+}
 
 /// Serves the socket of `launch` until the program or a client ends the holder.
 ///
@@ -46,6 +68,17 @@ const INPUT_QUEUE: usize = 64;
 ///
 /// Returns why the socket, the terminal or a frame of the link cannot continue.
 pub(crate) fn serve(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> Result<(), HolderError> {
+    serve_watched(home, launch, ring_limit, None)
+}
+
+/// Serves the socket of `launch`, and counts the turns of its loop in `turns`,
+/// which a test of an idle holder reads.
+pub(crate) fn serve_watched(
+    home: &HorizonHome,
+    launch: &Launch,
+    ring_limit: usize,
+    turns: Option<&AtomicUsize>,
+) -> Result<(), HolderError> {
     let paths = Paths::of(home, &launch.local_id)?;
     paths.prepare()?;
     let listener = paths.bind()?;
@@ -60,148 +93,149 @@ pub(crate) fn serve(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> R
     .map_err(|error| HolderError::Terminal(error.to_string()))?;
     let pid = pty.child().id();
     let start_time = crate::process::start_identity(pid);
-    let pump = start_pump(pty.reader().try_clone()?)?;
+    let (send, events) = mpsc::sync_channel(QUEUE);
+    let stop = Arc::new(AtomicBool::new(false));
+    start_accepting(listener, send.clone(), Arc::clone(&stop))?;
+    start_pump(pty.reader().try_clone()?, send.clone())?;
     let input = start_input(pty.writer().try_clone()?)?;
     let mut ring: VecDeque<u8> = VecDeque::new();
     let mut client: Option<Client> = None;
+    let mut generation = 0u64;
+    let mut output_ended = false;
+    let mut close = false;
     let mut ended: Option<Option<i32>> = None;
     let mut ended_at: Option<Instant> = None;
     let mut exit_sent_at: Option<Instant> = None;
     tracing::info!(pid, local_id = %launch.local_id, socket = %paths.socket().display(), "a holder serves a panel");
 
     loop {
-        while let Some(stream) = accept(&listener)? {
-            if client.is_some() {
+        let wait = exit_sent_at
+            .map(|at| at + CLOSE_WAIT)
+            .or_else(|| ended_at.map(|at| at + KEEP_STATUS));
+        let waited = match wait {
+            Some(at) => events.recv_timeout(at.saturating_duration_since(Instant::now())),
+            None => events.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        if let Some(turns) = turns {
+            turns.fetch_add(1, Ordering::Relaxed);
+        }
+        match waited {
+            Ok(Happening::NewClient(stream)) if client.is_some() => {
                 let mut refused = stream;
                 let _ = frames::write(&mut refused, &Frame::Refusal);
-                continue;
             }
-            let hello = Hello {
-                pid,
-                start_time: start_time.get().cloned().flatten(),
-                ring_len: u32::try_from(ring.len()).unwrap_or(u32::MAX),
-            };
-            client = Some(Client::attach(stream, &hello, &ring)?);
-        }
-
-        let mut close = false;
-        if let Some(attached) = client.as_mut() {
-            match answer(attached, &mut pty, &input) {
-                Some(asked) => close = asked,
-                None => client = None,
-            }
-        }
-        if close {
-            end_program(pty, pid, start_time);
-            paths.remove_socket()?;
-            return Ok(());
-        }
-
-        let mut output = Vec::new();
-        while let Ok(mut chunk) = pump.try_recv() {
-            ring.extend(chunk.iter().copied());
-            output.append(&mut chunk);
-        }
-        if ring.len() > ring_limit {
-            let excess = ring.len() - ring_limit;
-            ring.drain(..excess);
-        }
-        if !output.is_empty()
-            && let Some(attached) = client.as_mut()
-            && frames::write(&mut attached.socket, &Frame::Output(output)).is_err()
-        {
-            client = None;
-        }
-
-        if ended.is_none()
-            && let Some(ChildEvent::Exited(status)) = pty.next_child_event()
-        {
-            ended = Some(status.and_then(|status| status.code()));
-            ended_at = Some(Instant::now());
-            tracing::info!(pid, status = ?ended, "the program of a held panel ended");
-        }
-        if let Some(status) = ended {
-            if exit_sent_at.is_none()
-                && let Some(attached) = client.as_mut()
-            {
-                let _ = frames::write(&mut attached.socket, &Frame::Exit(status));
-                exit_sent_at = Some(Instant::now());
-            }
-            let unanswered = exit_sent_at.is_some_and(|sent| sent.elapsed() >= CLOSE_WAIT);
-            let kept = exit_sent_at.is_none() && ended_at.is_some_and(|end| end.elapsed() >= KEEP_STATUS);
-            if (client.is_none() && exit_sent_at.is_some()) || unanswered || kept {
-                paths.remove_socket()?;
-                return Ok(());
-            }
-        }
-
-        thread::sleep(if client.is_some() { POLL } else { IDLE_POLL });
-    }
-}
-
-/// The one client of a holder.
-struct Client {
-    socket: UnixStream,
-    frames: Frames,
-}
-
-impl Client {
-    /// Answers the hello and the newest output, so the client reads the last
-    /// screens before the live output.
-    fn attach(mut socket: UnixStream, hello: &Hello, ring: &VecDeque<u8>) -> Result<Self, HolderError> {
-        frames::write(&mut socket, &Frame::Hello(hello.clone()))?;
-        if !ring.is_empty() {
-            frames::write(&mut socket, &Frame::Replay(ring.iter().copied().collect()))?;
-        }
-        Ok(Self {
-            socket,
-            frames: Frames::default(),
-        })
-    }
-
-    /// Reads what the client sent, and answers the frames that arrived whole.
-    ///
-    /// `None` says that the client went away or broke the protocol: the program
-    /// keeps running and the ring keeps filling.
-    fn read(&mut self) -> Option<Vec<Frame>> {
-        let mut chunk = [0u8; 8192];
-        let mut answered = Vec::new();
-        loop {
-            match self.socket.read(&mut chunk) {
-                Ok(0) => return None,
-                Ok(got) => match self.frames.push(&chunk[..got]) {
-                    Ok(frames) => answered.extend(frames),
-                    Err(problem) => {
-                        tracing::warn!(%problem, "the client of a holder broke the protocol");
-                        return None;
-                    }
-                },
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Some(answered),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => {
-                    tracing::debug!(%error, "the client of a holder went away");
-                    return None;
+            Ok(Happening::NewClient(stream)) => {
+                generation = generation.saturating_add(1);
+                let hello = Hello {
+                    pid,
+                    start_time: start_time.get().cloned().flatten(),
+                    ring_len: u32::try_from(ring.len()).unwrap_or(u32::MAX),
+                };
+                match Client::attach(stream, generation, &hello, &ring, &send) {
+                    Ok(attached) => client = Some(attached),
+                    Err(error) => tracing::warn!(%error, "a client of a holder could not attach"),
                 }
             }
+            Ok(Happening::Output(chunk)) => {
+                ring.extend(chunk.iter().copied());
+                if ring.len() > ring_limit {
+                    ring.drain(..ring.len() - ring_limit);
+                }
+                if let Some(held) = client.as_mut()
+                    && frames::write(&mut held.socket, &Frame::Output(chunk)).is_err()
+                {
+                    client = None;
+                }
+            }
+            Ok(Happening::OutputEnded) => {
+                output_ended = true;
+                if let Some(status) = child_event(&mut pty, true) {
+                    (ended, ended_at) = ended_state(pid, status);
+                }
+            }
+            Ok(Happening::FromClient(who, whole)) if client.as_ref().is_some_and(|held| held.generation == who) => {
+                match answer(whole, &mut pty, &input) {
+                    Some(asked) => close |= asked,
+                    None => client = None,
+                }
+            }
+            Ok(Happening::ClientGone(who)) if client.as_ref().is_some_and(|held| held.generation == who) => {
+                client = None;
+            }
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        if ended.is_none()
+            && let Some(status) = child_event(&mut pty, false)
+        {
+            (ended, ended_at) = ended_state(pid, status);
+        }
+        if output_ended
+            && let Some(status) = ended
+            && exit_sent_at.is_none()
+            && let Some(held) = client.as_mut()
+        {
+            let _ = frames::write(&mut held.socket, &Frame::Exit(status));
+            exit_sent_at = Some(Instant::now());
+        }
+        let unanswered = exit_sent_at.is_some_and(|sent| sent.elapsed() >= CLOSE_WAIT);
+        let kept = exit_sent_at.is_none() && ended_at.is_some_and(|end| end.elapsed() >= KEEP_STATUS);
+        if close || (client.is_none() && exit_sent_at.is_some()) || unanswered || kept {
+            break;
+        }
+    }
+
+    if close {
+        crate::panel::watch_a_program_at_the_end(
+            crate::process::HangingChild::new(pid, start_time),
+            "panel holder",
+            None,
+        );
+        drop(pty);
+    }
+    stop.store(true, Ordering::Release);
+    let _ = UnixStream::connect(paths.socket());
+    paths.remove_socket()
+}
+
+/// Reads the event of the child of `pty`, and waits for it for
+/// [`PROGRAM_END_BOUND`] when `wait` says that its output ended as well.
+fn child_event(pty: &mut Pty, wait: bool) -> Option<Option<i32>> {
+    let deadline = Instant::now() + if wait { PROGRAM_END_BOUND } else { Duration::ZERO };
+    loop {
+        if let Some(ChildEvent::Exited(status)) = pty.next_child_event() {
+            return Some(status.and_then(|status| status.code()));
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(END_PAUSE);
     }
 }
 
-/// Answers the frames of the client: its input reaches the thread that writes it
+/// Records the status of a program that ended.
+fn ended_state(pid: u32, status: Option<i32>) -> (Option<Option<i32>>, Option<Instant>) {
+    tracing::info!(pid, status = ?status, "the program of a held panel ended");
+    (Some(status), Some(Instant::now()))
+}
+
+/// Answers the frames of the client: its input reaches the thread that writes it,
 /// and its size reaches the terminal.
 ///
-/// `None` says that the client went away or waits for a program that reads
-/// nothing, and `Some(true)` that it asked for the end of the program.
-fn answer(client: &mut Client, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Option<bool> {
+/// `None` says that the client waits for a program that reads nothing, and
+/// `Some(true)` that it asked for the end of the program.
+fn answer(whole: Vec<Frame>, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Option<bool> {
     let mut close = false;
-    for frame in client.read()? {
+    for frame in whole {
         match frame {
-            Frame::Input(bytes) => {
-                if input.try_send(bytes).is_err() {
+            Frame::Input(bytes) => match input.try_send(bytes) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                     tracing::warn!("the program of a held panel reads no input");
                     return None;
                 }
-            }
+            },
             Frame::Resize {
                 rows,
                 cols,
@@ -223,48 +257,120 @@ fn answer(client: &mut Client, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Op
     Some(close)
 }
 
-/// Accepts the next client of `listener`, or answers `None` when no client waits.
-fn accept(listener: &UnixListener) -> Result<Option<UnixStream>, HolderError> {
-    match listener.accept() {
-        Ok((stream, _)) => {
-            stream.set_nonblocking(true)?;
-            Ok(Some(stream))
+/// The one client of a holder: the link that the loop writes to.
+struct Client {
+    socket: UnixStream,
+    generation: u64,
+}
+
+impl Client {
+    /// Answers the hello and the newest output, so the client reads the last
+    /// screens before the live output, and reads this client on its own thread.
+    fn attach(
+        mut socket: UnixStream,
+        generation: u64,
+        hello: &Hello,
+        ring: &VecDeque<u8>,
+        send: &SyncSender<Happening>,
+    ) -> Result<Self, HolderError> {
+        socket.set_nonblocking(false)?;
+        socket.set_write_timeout(Some(CLIENT_WRITE_BOUND))?;
+        frames::write(&mut socket, &Frame::Hello(hello.clone()))?;
+        if !ring.is_empty() {
+            frames::write(&mut socket, &Frame::Replay(ring.iter().copied().collect()))?;
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-        Err(error) => Err(error.into()),
+        let mut read = socket.try_clone()?;
+        let send = send.clone();
+        thread::Builder::new()
+            .name("panel-holder-client".to_owned())
+            .spawn(move || {
+                let mut decoded = Frames::default();
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match read.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(got) => match decoded.push(&chunk[..got]) {
+                            Ok(whole) if !whole.is_empty() => {
+                                if send.send(Happening::FromClient(generation, whole)).is_err() {
+                                    return;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(problem) => {
+                                tracing::warn!(%problem, "the client of a holder broke the protocol");
+                                break;
+                            }
+                        },
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                        Err(error) => {
+                            tracing::debug!(%error, "the client of a holder went away");
+                            break;
+                        }
+                    }
+                }
+                let _ = send.send(Happening::ClientGone(generation));
+            })?;
+        Ok(Self { socket, generation })
     }
+}
+
+impl Drop for Client {
+    /// Ends the thread that reads this client, so a holder keeps no thread for a
+    /// client that left.
+    fn drop(&mut self) {
+        let _ = self.socket.shutdown(Shutdown::Both);
+    }
+}
+
+/// Answers every connection of `listener` to the loop until `stop` says that the
+/// holder ends.
+fn start_accepting(
+    listener: UnixListener,
+    send: SyncSender<Happening>,
+    stop: Arc<AtomicBool>,
+) -> Result<(), HolderError> {
+    thread::Builder::new()
+        .name("panel-holder-accept".to_owned())
+        .spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((_stream, _)) if stop.load(Ordering::Acquire) => return,
+                    Ok((stream, _)) => {
+                        // A client that arrives while the loop is behind waits in no
+                        // queue of its own: the holder drops it, and it connects again.
+                        let _ = send.try_send(Happening::NewClient(stream));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "the holder of a panel accepts no client");
+                        return;
+                    }
+                }
+            }
+        })?;
+    Ok(())
 }
 
 /// Reads the output of the program on its own thread, so the holder serves a
 /// client while the program writes nothing.
 ///
-/// The master of a terminal is non-blocking, so this reader is made blocking: the
-/// thread waits in the read instead of asking the kernel for new bytes.
-fn start_pump(mut reader: fs::File) -> Result<Receiver<Vec<u8>>, HolderError> {
+/// The master of a terminal is non-blocking, so this reader and the writer of the
+/// input are made blocking: both wait in the system call instead of asking the
+/// kernel for new bytes.
+fn start_pump(mut reader: fs::File, send: SyncSender<Happening>) -> Result<(), HolderError> {
     rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).map_err(io::Error::from)?;
-    let (send, receive) = mpsc::sync_channel(OUTPUT_QUEUE);
     thread::Builder::new()
         .name("panel-holder-reader".to_owned())
-        .spawn(move || pump(&mut reader, &send))?;
-    Ok(receive)
-}
-
-/// Hands every part of the output of the program to the holder, until it ends.
-fn pump(reader: &mut fs::File, send: &SyncSender<Vec<u8>>) {
-    let mut buffer = vec![0u8; BUFFER];
-    loop {
-        match reader.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(got) => {
-                if send.send(buffer[..got].to_vec()).is_err() {
-                    return;
+        .spawn(move || {
+            let mut buffer = vec![0u8; BUFFER];
+            while let Ok(got) = reader.read(&mut buffer) {
+                if got == 0 || send.send(Happening::Output(buffer[..got].to_vec())).is_err() {
+                    break;
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
-            Err(_) => return,
-        }
-    }
+            let _ = send.send(Happening::OutputEnded);
+        })?;
+    Ok(())
 }
 
 /// Writes the input of the client to the program on its own thread, so a program
@@ -281,11 +387,4 @@ fn start_input(mut writer: fs::File) -> Result<SyncSender<Vec<u8>>, HolderError>
             }
         })?;
     Ok(send)
-}
-
-/// Ends the program as Horizon ends one: the master of its terminal closes, and a
-/// program that outlives the hangup gets `SIGTERM`, then `SIGKILL`.
-fn end_program(pty: Pty, pid: u32, start_time: Arc<OnceLock<Option<String>>>) {
-    crate::panel::watch_a_program_at_the_end(crate::process::HangingChild::new(pid, start_time), "panel holder", None);
-    drop(pty);
 }
