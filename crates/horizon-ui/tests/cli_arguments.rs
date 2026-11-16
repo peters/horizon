@@ -72,21 +72,26 @@ fn start_with_integrations(
     let written = |name: &str| {
         std::fs::File::create(output.path().join(name)).unwrap_or_else(|error| panic!("create {name}: {error}"))
     };
-    let mut command = Command::new(binary);
-    command.args(arguments).env_clear().env("HOME", home);
-    if !integrations {
-        command.env("HORIZON_AGENT_INTEGRATIONS", "off");
-    }
-    command.env_remove("DISPLAY");
-    if let Some(horizon_home) = horizon_home {
-        command.env("HORIZON_HOME", horizon_home);
-    }
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(written("stdout")))
-        .stderr(Stdio::from(written("stderr")))
-        .spawn()
-        .unwrap_or_else(|error| panic!("start `{}`: {error}", binary.display()));
+    // A copy of this build is a program that another thread may still hold open for
+    // writing, and the kernel refuses to execute such a file: the helper builds the
+    // command line again and starts it again, as every test that starts one does.
+    let mut child = horizon_core::spawn_stand_in(|| {
+        let mut command = Command::new(binary);
+        command.args(arguments).env_clear().env("HOME", home);
+        if !integrations {
+            command.env("HORIZON_AGENT_INTEGRATIONS", "off");
+        }
+        command.env_remove("DISPLAY");
+        if let Some(horizon_home) = horizon_home {
+            command.env("HORIZON_HOME", horizon_home);
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(written("stdout")))
+            .stderr(Stdio::from(written("stderr")))
+            .spawn()
+    })
+    .unwrap_or_else(|error| panic!("start `{}`: {error}", binary.display()));
     let deadline = Instant::now() + BOUND;
     let status = loop {
         if let Some(status) = child.try_wait().expect("ask the start") {
