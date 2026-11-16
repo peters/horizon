@@ -217,12 +217,6 @@ class MachineCardAgentTest(unittest.TestCase):
         self.addCleanup(lambda: child.poll() is None and child.kill())
         return child
 
-    def stop_agent(self, child: subprocess.Popen) -> str:
-        """Ends one agent of the test, and returns the words of its pane."""
-        child.terminate()
-        output, _ = child.communicate(timeout=30)
-        return output
-
     def test_the_forward_of_a_machine_copies_a_stream_both_ways(self):
         here = self.root / 'here'
         there = self.root / 'there'
@@ -315,7 +309,9 @@ class MachineCardAgentTest(unittest.TestCase):
                          ['card-1'] * 3, 'a cut draws no second card')
         texts = [component.get('text', '') for component in calls[3]['document']['components']]
         self.assertIn('The person pressed Continue.', texts)
-        self.assertIn('the socket of the session ended', self.stop_agent(child))
+        child.terminate()
+        output, _ = child.communicate(timeout=30)
+        self.assertIn('the socket of the session ended', output)
 
     def test_an_error_answer_of_the_relay_ends_no_call(self):
         log = self.root / 'relay-calls.jsonl'
@@ -333,7 +329,8 @@ class MachineCardAgentTest(unittest.TestCase):
         texts = [component.get('text', '') for component in arguments[3]['document']['components']]
         self.assertIn('The person pressed Continue.', texts)
         self.assertTrue(pane.says('the call was answered with an error'), pane.lines)
-        self.stop_agent(child)
+        child.terminate()
+        child.wait(timeout=30)
 
 
 class RelayOfTheSkillTest(unittest.TestCase):
