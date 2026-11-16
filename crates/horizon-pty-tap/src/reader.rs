@@ -30,6 +30,11 @@ impl<R> StatusReader<R> {
     pub fn source(&self) -> &R {
         &self.source
     }
+
+    /// The reader under the scanner, for the wrapper that asks for its end.
+    pub fn source_mut(&mut self) -> &mut R {
+        &mut self.source
+    }
 }
 
 impl<R: Read> Read for StatusReader<R> {

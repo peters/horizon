@@ -54,6 +54,17 @@ where
     }
 }
 
+impl<P> TapPty<P>
+where
+    P: EventedReadWrite<Reader = File, Writer = File>,
+{
+    /// The PTY and its reader, taken apart for the panel that forwards them.
+    #[must_use]
+    pub fn split(self) -> (P, StatusReader<File>) {
+        (self.pty, self.reader)
+    }
+}
+
 impl<P> EventedReadWrite for TapPty<P>
 where
     P: EventedReadWrite<Reader = File, Writer = File>,

@@ -1929,6 +1929,7 @@ dependencies = [
  "alacritty_terminal",
  "memchr",
  "polling",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
 ]
 

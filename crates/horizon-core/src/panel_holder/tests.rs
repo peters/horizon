@@ -629,3 +629,7 @@ fn a_program_that_reads_no_input_still_writes_to_its_client() {
 
     close(&mut client, serving);
 }
+
+// The terminal of a panel that attaches to a holder.
+#[cfg(test)]
+mod attach;

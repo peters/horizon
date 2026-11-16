@@ -19,16 +19,18 @@
 
 pub mod frames;
 mod inbox;
+mod panel;
 mod pty;
 mod reader;
 mod scanner;
 mod socket;
 
 pub use inbox::{QUERY_PAYLOAD, QUEUE_DEPTH, StatusInbox, StatusTap};
+pub use panel::{PanelPty, PanelReader, PanelWriter};
 pub use pty::TapPty;
 pub use reader::StatusReader;
 pub use scanner::{MAX_PAYLOAD_BYTES, Payload, Scanner};
-pub use socket::{LinkReader, LinkWriter, SocketPty};
+pub use socket::{LinkReader, LinkWriter};
 
 #[cfg(test)]
 mod cost_tests;

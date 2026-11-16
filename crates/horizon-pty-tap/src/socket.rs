@@ -1,22 +1,22 @@
 //! A terminal that runs in the holder of a panel instead of in this process.
 //!
-//! [`SocketPty`] is the socket of a holder in the shape of a PTY: the reader yields
-//! the bytes of the `replay` and `output` frames as one plain stream, the writer
-//! wraps input in `input` frames, and a new size becomes a `resize` frame. The exit
-//! frame of the program reaches the terminal as the event of a local child, and the
-//! end of the link ends the event loop with one error and never with a read of zero
-//! bytes, which a socket at its end reports for ever.
+//! [`LinkReader`] yields the bytes of the `replay` and `output` frames of a holder
+//! as one plain stream, and [`LinkWriter`] wraps the input of a terminal in `input`
+//! frames and a new size in a `resize` frame. The exit frame of the program reaches
+//! the terminal as the event of a local child, and the end of the link ends the
+//! event loop with one error and never with a read of zero bytes, which a socket at
+//! its end reports for ever. [`AttachedLink`] holds the three of them for the PTY of
+//! a panel that attaches.
 
 use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
-use std::sync::Arc;
-use std::sync::mpsc::Sender;
 
-use alacritty_terminal::event::{Event, OnResize, WindowSize};
-use alacritty_terminal::tty::{ChildEvent, EventedPty, EventedReadWrite};
-use polling::{Event as Interest, PollMode, Poller};
+use alacritty_terminal::event::WindowSize;
+use alacritty_terminal::tty::ChildEvent;
+use rustix::net::{RecvFlags, recv};
 
 use crate::frames::{self, Frame, Frames};
 use crate::inbox::{StatusInbox, StatusTap};
@@ -36,96 +36,38 @@ enum Ending {
     Link,
 }
 
-/// The socket of a holder in the shape of a PTY.
-pub struct SocketPty {
-    reader: StatusReader<LinkReader>,
-    writer: LinkWriter,
+/// The link of a holder that is ready to serve the terminal of a panel.
+pub(crate) struct AttachedLink {
+    /// The socket that the event loop polls for the output of the program.
+    pub(crate) source: UnixStream,
+    /// The same socket, polled a second time for the end of the link.
+    pub(crate) watch: UnixStream,
+    pub(crate) reader: StatusReader<LinkReader>,
+    pub(crate) writer: LinkWriter,
+    /// The inbox of the program status of the program of this link.
+    pub(crate) inbox: StatusInbox,
 }
 
-impl SocketPty {
-    /// Makes a terminal of `stream`, the link of a holder that answered a hello, and
-    /// asks that holder for the size of its terminal first, so the screen of its
-    /// program starts at the size of the panel that shows it.
-    ///
-    /// # Errors
-    ///
-    /// Returns why the link takes no size.
-    pub fn attach(
-        stream: UnixStream,
-        window_size: WindowSize,
-        events: Sender<Event>,
-    ) -> io::Result<(Self, StatusInbox)> {
-        stream.set_nonblocking(true)?;
-        let mut writer = LinkWriter {
-            stream: stream.try_clone()?,
-            frame: Vec::new(),
-            sent: 0,
-            length: 0,
-            size: None,
-        };
-        writer.queue_size(window_size);
-        let _ = writer.send(&[])?;
-        let (tap, inbox) = StatusTap::new();
-        Ok((
-            Self {
-                reader: StatusReader::new(LinkReader::new(stream, events), tap),
-                writer,
-            },
-            inbox,
-        ))
-    }
-}
-
-impl EventedReadWrite for SocketPty {
-    type Reader = StatusReader<LinkReader>;
-    type Writer = LinkWriter;
-
-    // SAFETY: the contract of this method is that the source it registers outlives
-    // its registration in the poller. This registers the socket of the link, which
-    // this `SocketPty` owns for its whole life, and the poller is dropped with the
-    // event loop that owns this wrapper.
-    #[allow(unsafe_code)]
-    unsafe fn register(&mut self, poll: &Arc<Poller>, interest: Interest, mode: PollMode) -> io::Result<()> {
-        // SAFETY: the caller of this method promises that what it registers
-        // outlives the registration, and this call registers only the socket that
-        // this value owns.
-        unsafe { poll.add_with_mode(&self.reader.source().stream, interest, mode) }
-    }
-
-    fn reregister(&mut self, poll: &Arc<Poller>, interest: Interest, mode: PollMode) -> io::Result<()> {
-        poll.modify_with_mode(&self.reader.source().stream, interest, mode)
-    }
-
-    fn deregister(&mut self, poll: &Arc<Poller>) -> io::Result<()> {
-        poll.delete(&self.reader.source().stream)
-    }
-
-    fn reader(&mut self) -> &mut Self::Reader {
-        &mut self.reader
-    }
-
-    fn writer(&mut self) -> &mut Self::Writer {
-        &mut self.writer
-    }
-}
-
-impl EventedPty for SocketPty {
-    /// A holder has no child of this process: the exit of its program reaches the
-    /// terminal as [`Event::ChildExit`], which the reader of this link sends.
-    fn next_child_event(&mut self) -> Option<ChildEvent> {
-        None
-    }
-}
-
-impl OnResize for SocketPty {
-    fn on_resize(&mut self, window_size: WindowSize) {
-        self.writer.queue_size(window_size);
-        // A size that arrives while a frame is open reaches the holder with the next
-        // write of this link, and a link that is gone reports its own end.
-        if self.writer.sent == self.writer.frame.len() {
-            let _ = self.writer.send(&[]);
-        }
-    }
+/// Writes the hello of `stream` as the answers of no holder: the terminal that
+/// attaches reads that hello itself, and this link starts after it.
+///
+/// # Errors
+///
+/// Returns why the link takes no size.
+pub(crate) fn attach(stream: UnixStream, window_size: WindowSize) -> io::Result<AttachedLink> {
+    stream.set_nonblocking(true)?;
+    let source = stream.try_clone()?;
+    let watch = stream.try_clone()?;
+    let mut writer = LinkWriter::of(stream.try_clone()?);
+    writer.resize(window_size);
+    let (tap, inbox) = StatusTap::new();
+    Ok(AttachedLink {
+        source,
+        watch,
+        reader: StatusReader::new(LinkReader::new(stream), tap),
+        writer,
+        inbox,
+    })
 }
 
 /// The link of a holder, read as the plain output stream of its program.
@@ -134,17 +76,15 @@ pub struct LinkReader {
     decoded: Frames,
     pending: Vec<u8>,
     ending: Option<Ending>,
-    events: Sender<Event>,
 }
 
 impl LinkReader {
-    fn new(stream: UnixStream, events: Sender<Event>) -> Self {
+    fn new(stream: UnixStream) -> Self {
         Self {
             stream,
             decoded: Frames::default(),
             pending: Vec::new(),
             ending: None,
-            events,
         }
     }
 
@@ -177,22 +117,25 @@ impl LinkReader {
         Ok(())
     }
 
-    /// Tells the terminal how the link ended, and answers the error that ends the
-    /// event loop.
-    fn ended(&mut self, ending: Ending) -> io::Error {
-        let event = match ending {
-            Ending::Program(Some(code)) => Event::ChildExit(ExitStatus::from_raw(code << 8)),
-            Ending::Program(None) | Ending::Link => Event::Exit,
-        };
-        let _ = self.events.send(event);
-        // The end of the link ends the loop of the terminal, which logs this error.
-        match ending {
-            Ending::Program(_) => io::Error::other("the program of this panel ended"),
-            Ending::Link => io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "the holder of this panel closed its link",
-            ),
-        }
+    /// The end of the link, as the end of the child of a local terminal, once the
+    /// holder ended its program or went away.
+    ///
+    /// The event loop of a terminal asks this from the key of the child of a PTY,
+    /// which this link also registers, so no end of a link lets that loop spin.
+    pub(crate) fn ended_child(&mut self) -> Option<ChildEvent> {
+        let ending = self.ending.or_else(|| {
+            let mut probe = [0u8; 1];
+            match recv(&self.stream, &mut probe, RecvFlags::PEEK) {
+                Ok((0, _)) => Some(Ending::Link),
+                Ok(_) => None,
+                Err(error) if io::Error::from(error).kind() == io::ErrorKind::WouldBlock => None,
+                Err(_) => Some(Ending::Link),
+            }
+        })?;
+        Some(ChildEvent::Exited(match ending {
+            Ending::Program(status) => status.map(|code| ExitStatus::from_raw(code << 8)),
+            Ending::Link => None,
+        }))
     }
 }
 
@@ -206,11 +149,14 @@ impl Read for LinkReader {
                 self.pending.drain(..take);
                 return Ok(take);
             }
-            if let Some(ending) = self.ending.take() {
-                return Err(self.ended(ending));
+            if self.ending.is_some() {
+                // The link ends here, and the loop of the terminal must not read a
+                // socket at its end again: the read of this link reports no bytes
+                // and the key of its end reports the child event.
+                let _ = self.stream.shutdown(Shutdown::Both);
+                return Ok(0);
             }
             match self.stream.read(&mut chunk) {
-                // A socket at its end reports a read of zero bytes for ever.
                 Ok(0) => self.end_with(Ending::Link),
                 Ok(got) => self.decode(&chunk[..got])?,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -237,14 +183,31 @@ pub struct LinkWriter {
 }
 
 impl LinkWriter {
-    /// Keeps the newest size of the terminal, because a holder needs no older one.
-    fn queue_size(&mut self, size: WindowSize) {
+    /// The writer of `stream`, whose frames start empty.
+    pub(crate) fn of(stream: UnixStream) -> Self {
+        Self {
+            stream,
+            frame: Vec::new(),
+            sent: 0,
+            length: 0,
+            size: None,
+        }
+    }
+
+    /// Keeps the newest size of the terminal, because a holder needs no older one,
+    /// and writes it now when the link holds no frame.
+    pub(crate) fn resize(&mut self, size: WindowSize) {
         self.size = Some(frames::size(
             size.num_lines,
             size.num_cols,
             size.cell_width,
             size.cell_height,
         ));
+        // A size that arrives while a frame is open reaches the holder with the next
+        // write of this link, and a link that is gone reports its own end.
+        if self.sent == self.frame.len() {
+            let _ = self.send(&[]);
+        }
     }
 
     /// Writes what the link takes now, and answers the input bytes that it took.

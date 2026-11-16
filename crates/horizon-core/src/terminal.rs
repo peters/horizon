@@ -45,7 +45,7 @@ pub use self::wake::OutputWake;
 use self::wake::OutputWakeState;
 
 /// The PTY of a panel, whose reader reports the program status of its program.
-type TerminalPty = horizon_pty_tap::TapPty<tty::Pty>;
+type TerminalPty = horizon_pty_tap::PanelPty;
 
 type TerminalEventLoop = EventLoop<TerminalPty, TerminalEventProxy>;
 type TerminalEventLoopState = State;

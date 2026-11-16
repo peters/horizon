@@ -143,7 +143,7 @@ tempfile = "3.27.0"
 atomicwrites = "0.4.4"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 libc = "0.2.189"
-rustix = { version = "1.1.4", features = ["fs", "process", "system"] }
+rustix = { version = "1.1.4", features = ["fs", "net", "process", "system"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 sha2 = { version = "0.11.0", default-features = false }

@@ -1,3 +1,5 @@
+use std::os::unix::net::UnixStream;
+
 use super::{
     Arc, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
     PendingClipboard, PtyOptions, ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions,
@@ -5,7 +7,51 @@ use super::{
     replay_terminal_bytes, term, tty,
 };
 
+use horizon_pty_tap::frames::{self, Frame, Hello};
+
 use crate::panel_shutdown::PanelCompletion;
+
+/// The time that an attach waits for the hello of its holder.
+const HELLO_BOUND: Duration = Duration::from_secs(2);
+
+/// The size of the terminal that `options` names.
+fn window_size_of(options: &TerminalSpawnOptions) -> WindowSize {
+    WindowSize {
+        num_lines: options.rows.max(1),
+        num_cols: options.cols.max(2),
+        cell_width: options.cell_width.max(1),
+        cell_height: options.cell_height.max(1),
+    }
+}
+
+/// Reads the hello of a holder and the replay that follows it, which reaches the
+/// grid before the live output of its program.
+///
+/// # Errors
+///
+/// Returns why the holder answers no hello, or no replay that its hello names.
+fn holder_hello(socket: &mut UnixStream) -> Result<(Hello, Vec<u8>)> {
+    socket
+        .set_read_timeout(Some(HELLO_BOUND))
+        .map_err(|error| Error::Pty(format!("the link of the holder takes no bound: {error}")))?;
+    let answered =
+        frames::read_one(socket).map_err(|error| Error::Pty(format!("the holder answered no hello: {error}")))?;
+    let hello = match answered {
+        Frame::Hello(hello) => hello,
+        Frame::Refusal => return Err(Error::Pty("the holder of this panel serves another client".to_owned())),
+        other => return Err(Error::Pty(format!("the holder answered the frame {}", other.kind()))),
+    };
+    if hello.ring_len == 0 {
+        return Ok((hello, Vec::new()));
+    }
+    match frames::read_one(socket).map_err(|error| Error::Pty(format!("the holder answered no replay: {error}")))? {
+        Frame::Replay(bytes) => Ok((hello, bytes)),
+        other => Err(Error::Pty(format!(
+            "the holder sent the frame {} instead of a replay",
+            other.kind()
+        ))),
+    }
+}
 
 /// Opens the terminal of `program` with its arguments, its folder and its
 /// environment, and starts it in that terminal.
@@ -58,22 +104,70 @@ impl Terminal {
         Self::spawn_guarded(options, TerminalSshTrust::default(), PtyOutput::Discarded)
     }
 
+    /// Attaches a terminal to the holder of its panel, which `socket` reaches.
+    ///
+    /// The hello of the holder names the program and its start time, and the replay
+    /// that follows it reaches the grid before the live output of the program.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the holder answers no hello, or why its link cannot start.
+    pub fn spawn_attached(mut options: TerminalSpawnOptions, mut socket: UnixStream) -> Result<Self> {
+        // The hello of a holder and its replay wait in a socket, so only a worker
+        // calls this: the guard of the UI thread reports a frame that waits here.
+        let (hello, replay) = holder_hello(&mut socket)?;
+        options.replay_bytes = replay;
+        let pty = horizon_pty_tap::PanelPty::attached(socket, window_size_of(&options))
+            .map_err(|error| Error::Pty(format!("failed to attach the pty of the panel: {error}")))?;
+        let child_start_time = Arc::new(std::sync::OnceLock::new());
+        let _ = child_start_time.set(hello.start_time);
+        Self::on_pty(
+            options,
+            TerminalSshTrust::default(),
+            PtyOutput::Shown,
+            pty,
+            Some(hello.pid),
+            child_start_time,
+        )
+    }
+
     fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust, output: PtyOutput) -> Result<Self> {
         // A terminal panel is a process, so its start is the one process that a
         // frame owns: the fork and the exec are the panel that the person asked
         // for, and no frame can exist without them.
         let _accepted = crate::ui_thread::exception("terminal spawn: a terminal panel is a process");
+        let window_size = window_size_of(&options);
+        let pty = open_pty(
+            options.program.clone(),
+            options.args.clone(),
+            options.cwd.clone(),
+            options.env.clone(),
+            window_size,
+            options.window_id,
+        )?;
+        let child_pid = Some(pty.child().id());
+        let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
+        let pty = horizon_pty_tap::PanelPty::local(pty)
+            .map_err(|error| Error::Pty(format!("failed to read the pty of the panel: {error}")))?;
+        Self::on_pty(options, trust, output, pty, child_pid, child_start_time)
+    }
+
+    /// Starts the event loop of a terminal on `pty`, with the replay of `options`,
+    /// and answers that terminal.
+    fn on_pty(
+        options: TerminalSpawnOptions,
+        trust: TerminalSshTrust,
+        output: PtyOutput,
+        pty: horizon_pty_tap::PanelPty,
+        child_pid: Option<u32>,
+        child_start_time: Arc<std::sync::OnceLock<Option<String>>>,
+    ) -> Result<Self> {
+        let program_status = pty.inbox();
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
         let scrollback_limit = options.scrollback_limit.max(1);
         let cell_width = options.cell_width.max(1);
         let cell_height = options.cell_height.max(1);
-        let window_size = WindowSize {
-            num_lines: rows,
-            num_cols: cols,
-            cell_width,
-            cell_height,
-        };
         let dimensions = TerminalDimensions::new(rows, cols);
         let terminal_config = term::Config {
             scrolling_history: scrollback_limit,
@@ -94,18 +188,6 @@ impl Terminal {
             replay_terminal_bytes(&term, &replay_bytes);
             drain_replay_events(&event_rx)
         };
-        let pty = open_pty(
-            options.program,
-            options.args,
-            options.cwd,
-            options.env,
-            window_size,
-            options.window_id,
-        )?;
-        let child_pid = Some(pty.child().id());
-        let child_start_time = child_pid.map(crate::process::start_identity).unwrap_or_default();
-        let (pty, program_status) = horizon_pty_tap::TapPty::new(pty)
-            .map_err(|error| Error::Pty(format!("failed to read the pty of the panel: {error}")))?;
         let pty_term = match output {
             PtyOutput::Shown => term.clone(),
             PtyOutput::Discarded => Arc::new(FairMutex::new(Term::new(

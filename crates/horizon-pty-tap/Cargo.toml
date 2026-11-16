@@ -21,3 +21,6 @@ memchr.workspace = true
 polling.workspace = true
 # The typed errors of the frame codec, in the form the rest of the workspace uses.
 thiserror.workspace = true
+# The non-destructive read of a socket at its end, which `UnixStream::peek` has not
+# in a stable form. It reuses the version that the workspace already asks for.
+rustix.workspace = true
