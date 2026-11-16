@@ -177,6 +177,11 @@ shell commands, files, or other MCP servers.
   `unsupported_backend`.
 - `browser_act` clicks, fills, presses keys, scrolls, reloads, or traverses
   history. Set `count: 2` on a click for a backend-native trusted double-click.
+  A click takes a `ref` or a `selector`, or a point with `x` and `y` in CSS
+  pixels of the page; a point outside the page viewport is refused with
+  `invalid_input` and the point and the size in the message. A point click is one
+  trusted press and release for each click, so a page that needs a real pointer
+  position, such as a canvas or a map, takes one.
   `press` takes a `key` such as `Tab`, `Shift+Tab`, `Enter`, `Escape`,
   `ArrowDown` or `Control+a` and an optional `count` (1-100), and sends trusted
   key events to the focused element: CDP `Input.dispatchKeyEvent` on local

@@ -28,6 +28,7 @@ mod navigation;
 mod network;
 mod page_scroll;
 mod paths;
+mod pointer;
 pub mod process;
 mod profile;
 pub mod provider_catalog;

@@ -746,7 +746,7 @@ mod tests {
             "a panel of a browser host says that it keeps its host: {notes:?}"
         );
         assert!(
-            notes.iter().any(|note| note == horizon_core::browser::POINTER_NOTE),
+            notes.iter().any(|note| note == horizon_core::browser::HOST_INPUT_NOTE),
             "the pointer limit keeps its own line: {notes:?}"
         );
         remote.stop();

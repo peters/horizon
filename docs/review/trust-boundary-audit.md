@@ -102,9 +102,10 @@ guarantee that the code gives, and what the code does not guarantee.
   - Guarantees: the actor of every page of a panel is the constant
     `horizon:person:browser-panel`; the host instance always comes from the
     record of the remote machine; a frame is a bounded inline PNG and the panel
-    reads no remote path; a pointer position, a local dropped file, a video
-    capture and a handoff are refused with a typed reason and never sent as page
-    script; one line of the channel is bounded to 24 MiB.
+    reads no remote path; a left click crosses as one click at its point and a
+    drag does not; another mouse button, a local dropped file, a video capture
+    and a handoff are refused with a typed reason and never sent as page script;
+    one line of the channel is bounded to 24 MiB.
   - Does not guarantee: the host decides which profile and which page an actor
     sees; one profile of the host shares its cookies with every page of that
     profile; a compromised remote machine can send any PNG as a frame; a process

@@ -71,10 +71,26 @@ call of the panel.
 The input of the person becomes the calls of the contract, which are semantic:
 a key press on the focused element, a page scroll, a navigation, a viewport.
 
-- A pointer position never reaches the host. The panel refuses a press and a
-  release of a pointer with the typed reason `remote_host_pointer_unsupported`,
-  and the person sees one line that names the device panel of the machine as the
-  way to click the page. A mouse move and a key release change nothing.
+- A left click of the person crosses as one click at its point: the release of
+  the pointer becomes one `browser_act` click with `x` and `y` in CSS pixels of
+  the page and the count one, and the press alone becomes nothing. A drag
+  therefore does not cross, and its release clicks where the pointer let go. A
+  mouse move and a key release change nothing. The host refuses a point outside
+  the page viewport, and the panel states the drag limit in its note.
+- The count of the call is always one, because the contract presses again for
+  every click of its own count. A double click of the person is two releases, so
+  it crosses as two single clicks and the page gets as many presses as the person
+  made. The page gets no double click of its own.
+- Only a release of the person crosses. The widget also ends a capture by
+  itself, when it loses the pointer or the panel stops taking it, and that
+  release never crosses: the channel holds no pressed button to end, and the
+  point of such a release is the last point it saw, or `(0, 0)` while the panel
+  draws no body.
+- A release of another mouse button does not cross. The channel refuses it with
+  the typed reason `remote_host_button_unsupported`, and the person sees one line
+  that names the device panel of the machine as the way to use that button. The
+  contract clicks with the left button only, so a right-button release that
+  crossed would act as a left click on the page.
 - Text crosses as one key press for each character that the US layout holds. A
   character that the layout does not hold is refused with
   `remote_host_text_unsupported`, and it is never sent as page script.
