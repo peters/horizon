@@ -91,7 +91,10 @@ each start, the child therefore asks its own login for one call, under the same
 route, key, batch mode and a ten-second bound, that makes both folders, sets both
 to mode 700, and then removes exactly the paths that it will bind. That is one
 extra connection of the machine for each start; the paths and the two folders are
-built from the checked names, so this call needs no quote.
+built from the checked names, so this call needs no quote. Both folders belong to
+the login user that made them, which is what limits the cards to one login user of
+one machine: the boundary page states the limit and why a folder of a user needs a
+call that this child cannot make before it binds.
 
 A child that ends waits the delay of `place::reconnect_delay` and starts again,
 and the words of `ssh` name the refusal in the log and in one quiet line under
@@ -136,8 +139,11 @@ slowly. An entry that failed at its start needs a restart of the agent program.
   `block_requests::CardCaller`, whose session variant carries the machine name
   that the actor of the request was checked to hold. Its first card makes the
   workspace of the machine, its card takes a free place instead of one beside a
-  panel, its presence is the row of the watch snapshot of that machine and
-  session, and its footer names `<machine> · <session>` in Horizon's own words.
+  panel, its presence is the session that the watch snapshot of that machine
+  names, row or no row, and its footer names `<machine> · <session>` in Horizon's
+  own words. A card whose session is gone says so in the words of that session,
+  through `block_widget::gone_lines`, and keeps the words of a local card for the
+  owner of a panel of this computer.
   The chip of its titlebar names the machine, through `CardChip::on_machine`.
 - **The setup on the machine.** The probe of the relay program, the writer of
   the agent, the merge with one backup, the `Remove` direction and the text that

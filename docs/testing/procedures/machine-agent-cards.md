@@ -90,7 +90,9 @@ server, so it changes no setting of the person.
 
 4. Read the chip of the titlebar of that card.
 
-   Result: the chip names `build-1`.
+   Result: the chip names `build-1`. The card says no banner that its agent is not
+   here, and both of its buttons are on: the session of the card is there, also
+   when its program is no agent program and reports no state.
 
 ### 6.2 MC-2 — A press reaches the agent of the machine
 
@@ -268,6 +270,21 @@ while the link is down reaches nothing, and the agent reads an error.
 
    Result: the card alone remains in the workspace.
 
+### 6.8 MC-8 — A card whose session is gone says which session
+
+1. Stop the session `hz-relay` of the private server:
+
+   ```bash
+   tmux -L hz-watch kill-session -t hz-relay
+   ```
+
+2. Wait two seconds, and read the cards of the workspace `build-1`.
+
+   Result: the card `Night shift by relay` says `Its session hz-relay on build-1 is
+   not there.` and `Start the session on that machine again, or close the card.`
+   Its chip says `No agent` and its buttons are off. The card of `hz-night` keeps
+   its buttons, because its session is there.
+
 ## 7. Pass criteria
 
 - The cards of `hz-night` and of `hz-relay` appear in the workspace `build-1`
@@ -275,6 +292,10 @@ while the link is down reaches nothing, and the agent reads an error.
 - A press on a card reaches the agent of the session, and the card changes to the
   label of that press.
 - The footer names the machine and the session, and the chip names the machine.
+- A card of a live session names no missing agent and keeps its buttons on, also
+  when the program of its session is no agent program and reports no state.
+- A card whose session the watch no longer names says which session and which
+  machine are gone, and what the person can do.
 - The rows follow the sessions that the watch reports, and a session with no agent
   program keeps its socket.
 - A restart of the agent program keeps the card link, and the child of the machine

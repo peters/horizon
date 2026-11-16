@@ -31,7 +31,8 @@ page states only what the machine adds.
   of that machine's sessions, built here from the machine name and the session
   names after their rules. It removes no other file, it takes no value from the
   text of the machine, and a machine that does not answer costs at most ten seconds
-  of the start.
+  of the start. Both folders belong to the one login user of the machine that made
+  them; the limit that this costs is under [does not guarantee](#does-not-guarantee).
 - **A relay program that the person's own account holds.** The setup writes
   `~/.horizon-cards/relay.py`, mode 700, and every agent program of that machine
   starts it. It is one readable python program: it reads the session name from the
@@ -137,3 +138,14 @@ It cannot:
   gets nothing. A machine with no program to relay its stream gets no entry at
   all: that refusal is the text of the skill, which writes nothing, and this
   build holds no code for it.
+- **The cards of a second login user of one machine.** One login user of a
+  machine can have cards. The folder of the sockets is `/tmp/horizon-cards`, and
+  the first login user that sets the cards up makes it with mode 700, so a second
+  login user of that machine cannot make its folder there and gets no socket. The
+  folder of a user would be `/tmp/horizon-cards-<uid>`, and Horizon would have to
+  name that path before it starts the child, because the `-R` of the child carries
+  the path that `sshd` binds: a build that made the folder per user needs one
+  extra call of the machine for the id of the user before each start of a child,
+  and a machine that answered slowly would hold the sockets of every machine of
+  the list while it did. This build keeps the single folder, and the skill says
+  the limit to the person who asks for the cards of a second account.

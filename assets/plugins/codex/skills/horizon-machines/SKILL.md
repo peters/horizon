@@ -1003,6 +1003,12 @@ whose agents the watch does not report carries no card: with the setting
 `machines.watch_agents` off there is no socket, and the agent reads a transport
 error when it calls.
 
+The cards of a machine belong to one login user of that machine. The folder of the
+sockets is `/tmp/horizon-cards`, it has mode 700, and the first login user that
+sets the cards up owns it, so a second login user of the same machine cannot make a
+folder in it and gets no socket. Say this limit to a person who asks for the cards
+of a second account of one machine, and do not promise a card there.
+
 The person asks for this with the button `Horizon cards for agents here` on the
 machine card, or with the words "cards for the agents of my machine". The button
 stands after `Exact agent state` and before `Stop`, and it belongs to the work that
