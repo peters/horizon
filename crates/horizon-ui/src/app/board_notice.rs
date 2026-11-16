@@ -28,6 +28,12 @@ pub(in crate::app) fn left_out_panels_notice(left_out: &RetiredPanels) -> Option
     ))
 }
 
+/// The line that a start says when it ended the programs of holders that no panel
+/// showed, or `None` when no holder ran without a panel.
+pub(in crate::app) fn unshown_holders_notice(count: usize) -> Option<String> {
+    (count > 0).then(|| format!("Horizon ended {count} agent program(s) that no panel showed."))
+}
+
 /// The name of a removed panel kind as the person read it in the old window.
 fn kind_name(kind: &str) -> &str {
     match kind {
@@ -63,6 +69,15 @@ mod tests {
         let (_state, left_out) =
             horizon_core::RuntimeState::from_yaml_reporting(&board).expect("a board with the removed kinds");
         left_out
+    }
+
+    #[test]
+    fn a_notice_names_how_many_agent_programs_no_panel_showed() {
+        assert_eq!(super::unshown_holders_notice(0), None);
+        assert_eq!(
+            super::unshown_holders_notice(2).as_deref(),
+            Some("Horizon ended 2 agent program(s) that no panel showed.")
+        );
     }
 
     #[test]

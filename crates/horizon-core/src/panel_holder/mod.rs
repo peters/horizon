@@ -21,6 +21,7 @@
 mod launch;
 mod serve;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -70,6 +71,9 @@ const START_BOUND: Duration = Duration::from_secs(5);
 const READ_BOUND: Duration = Duration::from_secs(2);
 /// The pause between two probes of a start.
 const WAIT_PAUSE: Duration = Duration::from_millis(10);
+/// The most sockets that one start reads, so that a home with many holders costs a
+/// bounded time.
+const MAX_SOCKETS: usize = 64;
 
 /// Why a holder cannot serve, start or answer.
 #[derive(Debug, thiserror::Error)]
@@ -298,6 +302,65 @@ pub fn linked(home: &HorizonHome, local_id: &str) -> Result<Option<Linked>, Hold
             // one more turn of its loop.
             Err(_) if Instant::now() < deadline => thread::sleep(WAIT_PAUSE),
             Err(error) => return Err(HolderError::Terminal(error.to_string())),
+        }
+    }
+}
+
+/// Ends the program of every holder of `home` whose panel is not in `shown`, and
+/// answers how many holders it ended. A socket that nobody listens on is removed,
+/// and a home with more sockets than this build reads keeps the rest for the next
+/// start.
+///
+/// This connects to a socket and waits for its answer, so only a worker calls it.
+///
+/// # Errors
+///
+/// Returns why the folder of the holders or a socket cannot be read.
+pub fn close_unshown(home: &HorizonHome, shown: &BTreeSet<String>) -> Result<usize, HolderError> {
+    let folder = home.root().join(HOLDER_DIR);
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut ended = 0;
+    for entry in entries.take(MAX_SOCKETS) {
+        let path = entry?.path();
+        let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else {
+            continue;
+        };
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("sock")
+            || shown.iter().any(|local_id| safe_local_id(local_id) == stem)
+        {
+            continue;
+        }
+        ended += usize::from(end_holder(&path)?);
+    }
+    Ok(ended)
+}
+
+/// Ends the holder of `path` and answers whether one ran there, which a socket that
+/// nobody listens on is not.
+fn end_holder(path: &Path) -> Result<bool, HolderError> {
+    let deadline = Instant::now() + READ_BOUND;
+    loop {
+        let Ok(mut stream) = UnixStream::connect(path) else {
+            let _ = fs::remove_file(path);
+            return Ok(false);
+        };
+        stream.set_read_timeout(Some(READ_BOUND))?;
+        match frames::read_one(&mut stream) {
+            Ok(frames::Frame::Hello(_)) => {
+                frames::write(&mut stream, &frames::Frame::Close)?;
+                return Ok(true);
+            }
+            // The client of a probe holds the link for one more turn of the loop.
+            Ok(_) if Instant::now() < deadline => thread::sleep(WAIT_PAUSE),
+            Ok(_) => return Ok(false),
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                return Ok(false);
+            }
         }
     }
 }

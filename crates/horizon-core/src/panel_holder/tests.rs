@@ -633,3 +633,47 @@ fn a_program_that_reads_no_input_still_writes_to_its_client() {
 // The terminal of a panel that attaches to a holder.
 #[cfg(test)]
 mod attach;
+
+/// A holder whose panel is on no board of this home is closed, so no agent runs
+/// with nobody seeing it.
+#[test]
+fn a_holder_of_no_panel_of_the_board_is_closed_at_start() {
+    let (_folder, home) = temp_home();
+    let serving = Serving::start(&home, &launch("unshown-panel", "exec cat"), 1024);
+    let shown = std::collections::BTreeSet::from(["another-panel".to_owned()]);
+    assert_eq!(
+        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        1,
+        "the start ended the program of the panel that no board shows"
+    );
+    serving.ended();
+
+    let shown = std::collections::BTreeSet::from(["unshown-panel".to_owned()]);
+    let serving = Serving::start(&home, &launch("unshown-panel", "exec cat"), 1024);
+    assert_eq!(
+        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        0,
+        "a holder whose panel is on the board keeps its program"
+    );
+    drop(serving);
+}
+
+/// A socket that no process listens on is what a killed holder left, and the start
+/// removes it.
+#[test]
+fn a_socket_that_nobody_listens_on_is_removed_at_start() {
+    let (_folder, home) = temp_home();
+    let asked = launch("stale-socket", "exec cat");
+    let socket = Paths::of(&home, &asked.local_id).expect("the socket of the holder");
+    socket.prepare().expect("the folder of the sockets");
+    let listener = socket.bind().expect("the socket of a holder of a test");
+    drop(listener);
+
+    let shown = std::collections::BTreeSet::new();
+    assert_eq!(
+        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        0,
+        "a socket that nobody listens on ends no program"
+    );
+    assert!(!socket.socket().exists(), "the start removed the stale socket");
+}

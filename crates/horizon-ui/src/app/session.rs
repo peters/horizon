@@ -464,6 +464,26 @@ impl HorizonApp {
         // delete queued before the restore removes nothing.
         self.keep_restored_transcripts();
         self.startup_selection_restored = runtime_state_selection_was_restored(&self.board, &runtime_state);
+        self.close_unshown_holders();
+    }
+
+    /// Ends the programs of the holders that no panel of this board shows: a panel
+    /// that the person closed another way, or a run whose setting is off now. An
+    /// agent that runs with nobody seeing it costs money.
+    fn close_unshown_holders(&mut self) {
+        let home = self.session_store.home().clone();
+        let shown: std::collections::BTreeSet<String> =
+            self.board.panels.iter().map(|panel| panel.local_id.clone()).collect();
+        self.browser_create_host.io.then(
+            move || horizon_core::panel_holder::close_unshown(&home, &shown),
+            |app, answer| {
+                if let Some(Ok(count)) = answer
+                    && let Some(line) = super::board_notice::unshown_holders_notice(count)
+                {
+                    app.set_sidebar_plain_notice(line);
+                }
+            },
+        );
     }
 
     pub(super) fn refresh_active_session_lease(&mut self) {
