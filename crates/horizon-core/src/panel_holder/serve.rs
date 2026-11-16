@@ -10,9 +10,9 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -103,16 +103,13 @@ pub(crate) fn serve_watched(
     let mut generation = 0u64;
     let mut output_ended = false;
     let mut close = false;
-    let mut ended: Option<Option<i32>> = None;
+    let mut ended: Option<ChildEnd> = None;
     let mut ended_at: Option<Instant> = None;
     let mut exit_sent_at: Option<Instant> = None;
     tracing::info!(pid, local_id = %launch.local_id, socket = %paths.socket().display(), "a holder serves a panel");
 
     loop {
-        let wait = exit_sent_at
-            .map(|at| at + CLOSE_WAIT)
-            .or_else(|| ended_at.map(|at| at + KEEP_STATUS));
-        let waited = match wait {
+        let waited = match turn_deadline(exit_sent_at, ended_at) {
             Some(at) => events.recv_timeout(at.saturating_duration_since(Instant::now())),
             None => events.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
@@ -120,21 +117,10 @@ pub(crate) fn serve_watched(
             turns.fetch_add(1, Ordering::Relaxed);
         }
         match waited {
-            Ok(Happening::NewClient(stream)) if client.is_some() => {
-                let mut refused = stream;
-                let _ = frames::write(&mut refused, &Frame::Refusal);
-            }
+            Ok(Happening::NewClient(stream)) if client.is_some() => refuse_client(stream),
             Ok(Happening::NewClient(stream)) => {
                 generation = generation.saturating_add(1);
-                let hello = Hello {
-                    pid,
-                    start_time: start_time.get().cloned().flatten(),
-                    ring_len: u32::try_from(ring.len()).unwrap_or(u32::MAX),
-                };
-                match Client::attach(stream, generation, &hello, &ring, &send) {
-                    Ok(attached) => client = Some(attached),
-                    Err(error) => tracing::warn!(%error, "a client of a holder could not attach"),
-                }
+                client = attach_client(stream, generation, (pid, &start_time), (&ring, &send));
             }
             Ok(Happening::Output(chunk)) => {
                 ring.extend(chunk.iter().copied());
@@ -150,7 +136,7 @@ pub(crate) fn serve_watched(
             Ok(Happening::OutputEnded) => {
                 output_ended = true;
                 if let Some(status) = child_event(&mut pty, true) {
-                    (ended, ended_at) = ended_state(pid, status);
+                    (ended, ended_at) = (Some(status), Some(ended_state(pid, status.0)));
                 }
             }
             Ok(Happening::FromClient(who, whole)) if client.as_ref().is_some_and(|held| held.generation == who) => {
@@ -162,21 +148,20 @@ pub(crate) fn serve_watched(
             Ok(Happening::ClientGone(who)) if client.as_ref().is_some_and(|held| held.generation == who) => {
                 client = None;
             }
-            Ok(_) => {}
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if ended.is_none()
             && let Some(status) = child_event(&mut pty, false)
         {
-            (ended, ended_at) = ended_state(pid, status);
+            (ended, ended_at) = (Some(status), Some(ended_state(pid, status.0)));
         }
         if output_ended
             && let Some(status) = ended
             && exit_sent_at.is_none()
             && let Some(held) = client.as_mut()
         {
-            let _ = frames::write(&mut held.socket, &Frame::Exit(status));
+            let _ = frames::write(&mut held.socket, &Frame::Exit(status.0));
             exit_sent_at = Some(Instant::now());
         }
         let unanswered = exit_sent_at.is_some_and(|sent| sent.elapsed() >= CLOSE_WAIT);
@@ -187,25 +172,27 @@ pub(crate) fn serve_watched(
     }
 
     if close {
-        crate::panel::watch_a_program_at_the_end(
-            crate::process::HangingChild::new(pid, start_time),
-            "panel holder",
-            None,
-        );
-        drop(pty);
+        end_the_program(pty, pid, start_time);
     }
     stop.store(true, Ordering::Release);
     let _ = UnixStream::connect(paths.socket());
     paths.remove_socket()
 }
 
+/// Ends the program of a holder as Horizon ends a panel: the master of its terminal
+/// closes, and a program that outlives the hangup gets `SIGTERM`, then `SIGKILL`.
+fn end_the_program(pty: Pty, pid: u32, start_time: Arc<OnceLock<Option<String>>>) {
+    crate::panel::watch_a_program_at_the_end(crate::process::HangingChild::new(pid, start_time), "panel holder", None);
+    drop(pty);
+}
+
 /// Reads the event of the child of `pty`, and waits for it for
 /// [`PROGRAM_END_BOUND`] when `wait` says that its output ended as well.
-fn child_event(pty: &mut Pty, wait: bool) -> Option<Option<i32>> {
+fn child_event(pty: &mut Pty, wait: bool) -> Option<ChildEnd> {
     let deadline = Instant::now() + if wait { PROGRAM_END_BOUND } else { Duration::ZERO };
     loop {
         if let Some(ChildEvent::Exited(status)) = pty.next_child_event() {
-            return Some(status.and_then(|status| status.code()));
+            return Some(ChildEnd(status.and_then(|status| status.code())));
         }
         if Instant::now() >= deadline {
             return None;
@@ -215,9 +202,51 @@ fn child_event(pty: &mut Pty, wait: bool) -> Option<Option<i32>> {
 }
 
 /// Records the status of a program that ended.
-fn ended_state(pid: u32, status: Option<i32>) -> (Option<Option<i32>>, Option<Instant>) {
+fn ended_state(pid: u32, status: Option<i32>) -> Instant {
     tracing::info!(pid, status = ?status, "the program of a held panel ended");
-    (Some(status), Some(Instant::now()))
+    Instant::now()
+}
+
+/// The end of the child of a holder, with the status that the system reported, or
+/// with none when the system reported none.
+#[derive(Clone, Copy)]
+struct ChildEnd(Option<i32>);
+
+/// The deadline of the next turn of the loop, or none when the loop waits for the
+/// next happening.
+fn turn_deadline(exit_sent_at: Option<Instant>, ended_at: Option<Instant>) -> Option<Instant> {
+    exit_sent_at
+        .map(|at| at + CLOSE_WAIT)
+        .or_else(|| ended_at.map(|at| at + KEEP_STATUS))
+}
+
+/// Ends the link of a client that arrives while the holder serves another one.
+fn refuse_client(stream: UnixStream) {
+    let mut refused = stream;
+    let _ = frames::write(&mut refused, &Frame::Refusal);
+}
+
+/// Answers a new client with the hello and the newest output, and answers the link
+/// that the holder writes to, or nothing when that client cannot attach.
+fn attach_client(
+    stream: UnixStream,
+    generation: u64,
+    program: (u32, &Arc<OnceLock<Option<String>>>),
+    link: (&VecDeque<u8>, &SyncSender<Happening>),
+) -> Option<Client> {
+    let (ring, send) = link;
+    let hello = Hello {
+        pid: program.0,
+        start_time: program.1.get().cloned().flatten(),
+        ring_len: u32::try_from(ring.len()).unwrap_or(u32::MAX),
+    };
+    match Client::attach(stream, generation, &hello, ring, send) {
+        Ok(attached) => Some(attached),
+        Err(error) => {
+            tracing::warn!(%error, "a client of a holder could not attach");
+            None
+        }
+    }
 }
 
 /// Answers the frames of the client: its input reaches the thread that writes it,
