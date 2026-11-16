@@ -54,19 +54,28 @@ pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, Hotk
         GlobalHotKeyManager::new().map_err(|_| HotkeyError::Failed("failed to initialize macOS global hotkeys"))?;
     let mut registered = Vec::with_capacity(native.len());
     for (_, hotkey) in &native {
-        if manager.register(*hotkey).is_err() {
-            for registered_hotkey in registered.iter().rev().copied() {
-                let _ = manager.unregister(registered_hotkey);
+        match manager.register(*hotkey) {
+            Ok(()) => registered.push(*hotkey),
+            // Another app holds this key: keep the others working instead of failing them all.
+            Err(global_hotkey::Error::AlreadyRegistered(_)) => {}
+            Err(_) => {
+                for registered_hotkey in registered.iter().rev().copied() {
+                    let _ = manager.unregister(registered_hotkey);
+                }
+                return Err(HotkeyError::Failed("macOS denied one or more speech hotkeys"));
             }
-            return Err(HotkeyError::Failed("macOS denied one or more speech hotkeys"));
         }
-        registered.push(*hotkey);
+    }
+    if registered.is_empty() {
+        return Err(HotkeyError::Failed("every speech hotkey is already taken on macOS"));
     }
     let (sender, events) = channel();
     let wake = Arc::new(Mutex::new(None));
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    let registered_ids = registered.iter().map(NativeHotkey::id).collect::<HashSet<_>>();
     let profiles_by_id = native
         .iter()
+        .filter(|(_, hotkey)| registered_ids.contains(&hotkey.id()))
         .map(|(profile, hotkey)| (hotkey.id(), *profile))
         .collect::<HashMap<_, _>>();
     let mut profiles = profiles_by_id.values().copied().collect::<Vec<_>>();
