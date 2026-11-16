@@ -56,8 +56,11 @@ Prove these results:
    ```bash
    python3 scripts/device-smoke/serve.py --state /var/tmp/hz-kept-1 \
      --saved-session --reuse-state --keep-agents \
-     --attention-agent agent_attention_standin.py --native-view
+     --attention-agent --native-view
    ```
+
+   `--attention-agent` takes an optional number of seconds, and the default is
+   `6`. A value that is not a number stops the fixture.
 
    Result: The fixture starts its own desktop, and Horizon opens with an agent
    panel.
@@ -69,7 +72,8 @@ Prove these results:
    ```
 
    The private home of the fixture holds the folder `panel-holders`, and its
-   socket is named after the local id of the panel.
+   socket is named by 32 hexadecimal characters of the SHA-256 of the local id of
+   the panel.
 
    Result: The folder exists and holds one socket.
 
@@ -92,7 +96,20 @@ Prove these results:
 
 ### 6.2 K2 — Horizon ends and the program keeps running
 
-1. Quit Horizon with the close button of the window manager.
+The first run of the fixture ends when its candidate ends. The fixture keeps the
+private home and the board of the state path. Step 6.2.2 starts the fixture again
+with `--reuse-state --resume-session` in that state path, so the second run shows
+the board of the first run.
+
+1. Quit Horizon with the close request of its window, as the close button of the
+   window manager sends it:
+
+   ```bash
+   DISPLAY=<display> xdotool search --pid <candidate pid> --name '^Horizon$' windowquit
+   ```
+
+   Do not use `xdotool windowclose`: it destroys the window, and the candidate
+   ends with an error of its window library instead of the path of this test.
 
    Result: Horizon ends. The holder process and the program of the panel still
    run, and the socket of the holder is still in the folder `panel-holders` of

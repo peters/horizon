@@ -68,6 +68,10 @@ of the earlier run.
    this task owns. An ephemeral run writes no session file, so a later run has no
    board to open.
 2. Quit the candidate with the close button of the window manager.
+   The close request of the window manager sends it, for example:
+   `DISPLAY=<display> xdotool search --pid <pid> --name '^Horizon$' windowquit`.
+   Do not use `xdotool windowclose`: it destroys the window, and the candidate
+   ends with an error of its window library instead of the path of a test.
    Result: The candidate exits. The harness also exits, and it keeps the private
    home.
 3. Start the fixture again with the same state path, `--saved-session` and
@@ -90,7 +94,8 @@ one state path:
 1. Start the fixture with `--saved-session --reuse-state --keep-agents` and an
    agent panel of a stand-in program.
 2. Read the pid of the program of the panel and the text of the panel.
-3. Quit the candidate with the close button of the window manager.
+3. Quit the candidate with the close button of the window manager, as step 2 of
+   the section above says.
 4. Start the fixture again with `--reuse-state --resume-session` in the same
    state path.
 5. Compare the pid and the text of the panel with the values of step 2.
