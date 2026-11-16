@@ -460,7 +460,7 @@ fn a_place_of_a_machine_named_an_empty_string_is_this_computer() {
 #[test]
 fn the_remote_command_of_a_place_keeps_the_tmux_status_line_out_of_the_panel() {
     assert_eq!(
-        session_command("hz-c8dfe3af-1"),
+        session_command("hz-c8dfe3af-1", None),
         "tmux -u new-session -A -s hz-c8dfe3af-1 \\; set-option status off"
     );
     assert_eq!(kill_command("hz-c8dfe3af-1"), "tmux kill-session -t hz-c8dfe3af-1");

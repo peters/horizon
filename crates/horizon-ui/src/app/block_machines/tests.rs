@@ -75,6 +75,7 @@ fn set(name: &str, host: &str, key: Option<&str>, session: Option<&str>) -> bloc
         session: session.map(str::to_string),
         provider: Some("Hetzner, hel1".into()),
         repository: None,
+        folder: None,
         cards: false,
     }
 }
@@ -99,6 +100,33 @@ fn set_ready_for(name: &str, repository: Option<&str>) -> block::Operation {
         session,
         provider,
         repository: repository.map(str::to_string),
+        folder: None,
+        cards: false,
+    }
+}
+
+/// The same record as [`set_ready_for`], in the folder that the machine holds the work.
+fn set_in_folder(name: &str, folder: Option<&str>) -> block::Operation {
+    let block::Operation::MachineSet {
+        name,
+        ssh,
+        key,
+        session,
+        provider,
+        repository,
+        ..
+    } = set_ready_for(name, Some("example-org/shop"))
+    else {
+        unreachable!("an operation of one machine")
+    };
+    block::Operation::MachineSet {
+        name,
+        ssh,
+        key,
+        session,
+        provider,
+        repository,
+        folder: folder.map(str::to_string),
         cards: false,
     }
 }
@@ -212,6 +240,36 @@ fn a_machine_set_keeps_the_repository_and_machines_answers_it() {
         listed[0].repository, None,
         "a set without a repository forgets the one before"
     );
+}
+
+#[test]
+fn a_machine_set_keeps_the_folder_and_machines_answers_it() {
+    let (temp, ctx, mut app) = app();
+    let root = queue(&temp);
+    plant_key(&app, "build-1");
+
+    let _ = answered(
+        &mut app,
+        &ctx,
+        &root,
+        set_in_folder("build-1", Some("/home/dev/example-repo")),
+    );
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(
+        listed[0].folder.as_deref(),
+        Some("/home/dev/example-repo"),
+        "the answer of machines names the folder of the new terminals"
+    );
+    let reloaded = Machines::load(MachineRegistry::from_home(app.session_store.home())).expect("the list");
+    assert_eq!(
+        reloaded.records()[0].folder.as_deref(),
+        Some("/home/dev/example-repo"),
+        "a restart of Horizon reads the same folder"
+    );
+
+    let _ = answered(&mut app, &ctx, &root, set_in_folder("build-1", None));
+    let listed = machines(&mut app, &ctx, &root);
+    assert_eq!(listed[0].folder, None, "a set without a folder forgets the one before");
 }
 
 #[test]

@@ -28,6 +28,7 @@ fn keep_machine(app: &mut HorizonApp, cards: bool) {
         session: None,
         provider: None,
         repository: None,
+        folder: None,
         added_at_millis: 0,
         cards,
     };

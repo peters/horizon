@@ -49,6 +49,9 @@ pub enum MachineError {
     /// The tmux session name is not one plain name.
     #[error("{message}")]
     InvalidSession { message: String },
+    /// The folder of the machine's new terminals is not one absolute path.
+    #[error("{message}")]
+    InvalidFolder { message: String },
     /// The route breaks the rule of an SSH terminal.
     #[error("{message}")]
     InvalidRoute { message: String },
@@ -75,6 +78,7 @@ impl MachineError {
         match self {
             Self::InvalidName { .. } => INVALID_MACHINE_NAME,
             Self::InvalidSession { .. } => INVALID_SESSION_NAME,
+            Self::InvalidFolder { .. } => horizon_browser_control::manifest::block_machines::INVALID_FOLDER,
             Self::InvalidRoute { .. } => horizon_browser_control::manifest::block_terminal::INVALID_SSH_ROUTE,
             Self::InvalidKey { .. } => horizon_browser_control::manifest::block_keys::INVALID_KEY_NAME,
             Self::TooMany { .. } => TOO_MANY_MACHINES,

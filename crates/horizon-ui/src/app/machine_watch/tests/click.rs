@@ -116,7 +116,7 @@ fn a_press_on_the_row_of_an_agent_opens_its_session_in_the_workspace_of_the_mach
         workspace.name, "build-1",
         "the terminal opens in the workspace of the machine"
     );
-    let command = horizon_core::machines::session_command("hz-shop-1");
+    let command = horizon_core::machines::session_command("hz-shop-1", None);
     let args = panel
         .ssh_connection
         .as_ref()

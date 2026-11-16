@@ -1064,7 +1064,7 @@ mod tests {
         );
 
         panel.ssh_connection = Some(SshConnection {
-            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1")),
+            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1", None)),
             ..SshConnection::default()
         });
         assert!(
@@ -1120,7 +1120,7 @@ mod tests {
         panel.kind = PanelKind::Ssh;
         panel.ssh_connection = Some(SshConnection {
             host: "203.0.113.10".to_string(),
-            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1")),
+            remote_command: Some(crate::place::session_command("hz-c8dfe3af-1", None)),
             ..SshConnection::default()
         });
         let kept = panel.restart_replay_bytes();

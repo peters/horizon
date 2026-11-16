@@ -27,6 +27,7 @@ fn checked(name: &str, host: &str, session: Option<&str>) -> CheckedMachine {
         session,
         Some("Hetzner, hel1"),
         Some("example-org/shop"),
+        None,
         false,
     )
     .expect("the machine is accepted")
@@ -194,7 +195,7 @@ fn the_limit_counts_new_names_only_and_is_reported_with_its_own_code() {
 #[test]
 fn every_refusal_names_its_field_and_its_code() {
     let refused = |name: &str, route: TerminalRoute, session: Option<&str>| {
-        let error = check(name, &route, session, None, None, false).expect_err("the record is refused");
+        let error = check(name, &route, session, None, None, None, false).expect_err("the record is refused");
         (code(&error).to_owned(), error.to_string())
     };
 
@@ -236,11 +237,27 @@ fn every_refusal_names_its_field_and_its_code() {
         assert!(message.contains("session"), "{message}");
     }
     let longest = "a".repeat(MAX_SESSION_CHARS);
-    let accepted =
-        check("build-1", &route("203.0.113.10"), Some(&longest), None, None, false).expect("a session at the bound");
+    let accepted = check(
+        "build-1",
+        &route("203.0.113.10"),
+        Some(&longest),
+        None,
+        None,
+        None,
+        false,
+    )
+    .expect("a session at the bound");
     assert_eq!(accepted.session.as_deref(), Some(longest.as_str()));
-    let named =
-        check("build-1", &route("203.0.113.10"), Some("Build_1-x"), None, None, false).expect("a plain session");
+    let named = check(
+        "build-1",
+        &route("203.0.113.10"),
+        Some("Build_1-x"),
+        None,
+        None,
+        None,
+        false,
+    )
+    .expect("a plain session");
     assert_eq!(named.session.as_deref(), Some("Build_1-x"));
 }
 
@@ -252,19 +269,20 @@ fn a_provider_line_is_one_short_line_that_the_record_cuts_to_the_bound() {
         None,
         Some("  Hetzner,\n hel1   running  "),
         None,
+        None,
         false,
     )
     .expect("a record");
     assert_eq!(record.provider.as_deref(), Some("Hetzner, hel1 running"));
     let long = "a".repeat(MAX_PROVIDER_CHARS + 20);
-    let record = check("build-1", &route("203.0.113.10"), None, Some(&long), None, false).expect("a record");
+    let record = check("build-1", &route("203.0.113.10"), None, Some(&long), None, None, false).expect("a record");
     assert_eq!(
         record.provider.as_deref().map(str::len),
         Some(MAX_PROVIDER_CHARS),
         "a long provider line is cut"
     );
     assert_eq!(
-        check("build-1", &route("203.0.113.10"), None, None, None, false)
+        check("build-1", &route("203.0.113.10"), None, None, None, None, false)
             .expect("a record")
             .provider,
         None,
@@ -329,6 +347,148 @@ fn a_record_of_an_older_version_reads_without_a_repository_and_one_with_it_round
     assert!(
         refused.is_err(),
         "a record of a newer version is refused by name, not read in part"
+    );
+}
+
+/// The same record as [`checked`], in the folder that the machine holds the work.
+fn checked_in_folder(name: &str, host: &str, folder: &str) -> CheckedMachine {
+    check(
+        name,
+        &route(host),
+        None,
+        Some("Hetzner, hel1"),
+        Some("example-org/shop"),
+        Some(folder),
+        false,
+    )
+    .expect("the machine is accepted")
+}
+
+/// The command that a placed terminal runs on `machine`.
+fn placed_command(machine: Machine) -> String {
+    let machines = Machines::with_records(
+        MachineRegistry::new(std::env::temp_dir().join("hz-machine-folder-test")),
+        vec![machine],
+    );
+    let keys = crate::MachineKeys::new(std::env::temp_dir().join("hz-machine-folder-test-keys"));
+    let mut options = crate::PanelOptions {
+        kind: crate::PanelKind::Shell,
+        ..crate::PanelOptions::default()
+    };
+    crate::place_command(
+        &mut options,
+        &crate::WorkspacePlace::Machine("build-1".to_owned()),
+        &machines,
+        &keys,
+        &crate::place::PlaceWorkspace {
+            local_id: "c8dfe3af-0e07-4889-99ed-403b4a5a4c8a",
+            sessions: &[],
+        },
+    )
+    .expect("the place of the workspace");
+    options
+        .ssh_connection
+        .expect("the connection of the place")
+        .to_command_args()
+        .pop()
+        .expect("the remote command")
+}
+
+#[test]
+fn a_placed_terminal_of_a_machine_with_a_folder_starts_there() {
+    let command = placed_command(checked_in_folder("build-1", "203.0.113.10", "/home/dev/example-repo").record(1));
+    assert!(
+        command.contains("-c '/home/dev/example-repo'"),
+        "a new terminal of a workspace placed on the machine starts in its folder: {command}"
+    );
+    let without = placed_command(checked("build-1", "203.0.113.10", None).record(1));
+    assert!(
+        !without.contains(" -c "),
+        "a record without a folder starts in the home folder of the login: {without}"
+    );
+}
+
+#[test]
+fn the_folder_of_a_machine_is_one_word_of_the_remote_shell() {
+    let folder = "/home/dev/it's here";
+    let command = crate::machines::session_command("hz-1a2b3c4d-1", Some(folder));
+    let quoted = command
+        .strip_prefix("tmux -u new-session -A -s hz-1a2b3c4d-1 -c ")
+        .and_then(|rest| rest.strip_suffix(" \\; set-option status off"))
+        .expect("the folder is one word of the command");
+    let read = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("set -- {quoted}; [ \"$#\" = 1 ] && printf %s \"$1\""))
+        .output()
+        .expect("the shell of a test reads the word");
+    assert_eq!(
+        String::from_utf8_lossy(&read.stdout),
+        folder,
+        "the remote shell reads the folder as one word: {command}"
+    );
+}
+
+#[test]
+fn a_folder_of_a_machine_is_one_absolute_path() {
+    for folder in [
+        "example-repo",
+        "./example-repo",
+        "/home/dev/two\nlines",
+        "/home/dev/bell\u{7}",
+    ] {
+        let error = check("build-1", &route("203.0.113.10"), None, None, None, Some(folder), false)
+            .expect_err("a folder outside the rule is refused");
+        assert_eq!(code(&error), "invalid_folder", "{folder:?}");
+        assert!(
+            error.to_string().contains("folder must be an absolute path"),
+            "the refusal names the field: {error}"
+        );
+    }
+    assert_eq!(
+        check(
+            "build-1",
+            &route("203.0.113.10"),
+            None,
+            None,
+            None,
+            Some("/home/dev/example-repo"),
+            false
+        )
+        .expect("a folder of the machine")
+        .folder
+        .as_deref(),
+        Some("/home/dev/example-repo")
+    );
+}
+
+#[test]
+fn a_record_without_a_folder_writes_the_bytes_of_today_and_one_with_it_round_trips() {
+    let record = checked("build-1", "203.0.113.10", Some("work")).record(7);
+    assert_eq!(
+        serde_json::to_string(&record).expect("encode"),
+        r#"{"name":"build-1","host":"203.0.113.10","user":"root","session":"work","provider":"Hetzner, hel1","repository":"example-org/shop","added_at_millis":7}"#,
+        "a record without a folder writes the bytes of the version before it"
+    );
+
+    let temp = tempfile::tempdir().expect("home");
+    let machines = Machines::load(registry(&temp)).expect("an empty list");
+    let (written, _) = machines
+        .with_record(
+            checked_in_folder("build-1", "203.0.113.10", "/home/dev/example-repo").record(3),
+            None,
+        )
+        .expect("the record is kept");
+    written.save().expect("the list is written");
+    let text = std::fs::read_to_string(temp.path().join("machines/registry.json")).expect("the file");
+    assert!(
+        text.contains(r#""folder": "/home/dev/example-repo""#),
+        "the record holds the folder: {text}"
+    );
+    let again = Machines::load(registry(&temp)).expect("the written record reads");
+    assert_eq!(
+        again.records()[0].folder.as_deref(),
+        Some("/home/dev/example-repo"),
+        "a record with the field reads it again"
     );
 }
 
@@ -431,7 +591,7 @@ fn a_click_on_a_machine_and_a_terminal_of_a_place_build_one_command() {
     let clicked = clicked.last().expect("the command of the click").clone();
     assert_eq!(
         clicked,
-        crate::machines::session_command("work"),
+        crate::machines::session_command("work", None),
         "the click runs the one builder"
     );
     let suffix = "\\; set-option status off";
@@ -468,7 +628,7 @@ fn a_machine_name_is_the_key_name_rule() {
     for name in ["build-1", "a", "0", "rented-machine-17"] {
         assert_eq!(machine_name(name).expect("a plain name"), name);
         assert_eq!(
-            check(name, &route("203.0.113.10"), None, None, None, false)
+            check(name, &route("203.0.113.10"), None, None, None, None, false)
                 .expect("a record")
                 .name,
             name,

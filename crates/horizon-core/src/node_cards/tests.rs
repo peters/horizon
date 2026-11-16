@@ -69,6 +69,7 @@ fn record(name: &str) -> crate::Machine {
         session: None,
         provider: None,
         repository: None,
+        folder: None,
         added_at_millis: 0,
         cards: true,
     }

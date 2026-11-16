@@ -361,6 +361,7 @@ key:        "build-1"
 session:    "build-1"
 provider:   "<Provider>, <region>"
 repository: "<owner>/<repository>"
+folder:     "<absolute folder of the repository>"
 ```
 
 The answer is `machine_set` with `created`, which is false when the name was
@@ -370,7 +371,13 @@ are one line of at most 60 characters each. `repository` is the repository that
 the machine is ready for, and Horizon draws it on the second line of the row of
 the machine in the sidebar. Leave it out while the machine is ready for no
 repository, and read `references/repository-machine.md` for a machine of a
-repository. The record belongs to the person's Horizon and not to your
+repository. `folder` is the absolute folder of that repository, such as
+`/home/dev/example-repo`: a new terminal of a workspace that is placed on the
+machine starts there, and a press on `Start <program> here` starts its program
+in the same folder. This version holds one repository folder for each machine.
+A record that holds `folder` needs a Horizon that knows the field on every
+computer that follows one server, because an older Horizon refuses the record of
+a newer one. The record belongs to the person's Horizon and not to your
 workspace, so every agent panel of this Horizon sees it and it survives a
 restart. The same name then appears in the Machines section of the sidebar, and
 a click on it opens the tmux session `build-1` with the machine key: the person

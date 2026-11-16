@@ -95,7 +95,7 @@ fn no_command_line_of_a_machine_and_no_machine_environment_carries_a_named_secre
         host: "build-vm".to_string(),
         user: Some("deploy".to_string()),
         port: Some(2222),
-        remote_command: Some(session_command("hz-1a2b3c4d-1")),
+        remote_command: Some(session_command("hz-1a2b3c4d-1", None)),
         ..SshConnection::default()
     };
 

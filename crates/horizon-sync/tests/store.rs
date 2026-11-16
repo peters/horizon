@@ -26,6 +26,7 @@ fn machine(name: &str) -> Machine {
         session: Some("work".to_owned()),
         provider: Some("Hetzner, hel1".to_owned()),
         repository: Some("example-org/shop".to_owned()),
+        folder: None,
         added_at_millis: 7,
         cards: false,
     }
@@ -226,6 +227,42 @@ fn every_decided_intent_takes_the_next_index_so_the_log_has_no_gap() {
         .query_row("SELECT COUNT(*) FROM applied", [], |row| row.get(0))
         .expect("the applied identifiers");
     assert_eq!(decided, 3, "every decided intent is remembered");
+}
+
+#[test]
+fn the_row_of_a_machine_keeps_the_folder_of_its_new_terminals() {
+    let (_temp, store) = store();
+    let mut sent = machine("build-1");
+    sent.folder = Some("/home/dev/example-repo".to_owned());
+    applied(
+        &store,
+        "mbp-7c1",
+        Intent {
+            device: "mbp-7c1".to_owned(),
+            id: 1,
+            seen: None,
+            op: Op::MachinePut { record: sent },
+        },
+    );
+    let stored = store
+        .all()
+        .expect("the objects")
+        .rows
+        .into_iter()
+        .find(|row| row.kind == KIND_MACHINE && row.id == "build-1")
+        .expect("the row of the machine");
+    assert_eq!(
+        stored.body.get("folder").and_then(Value::as_str),
+        Some("/home/dev/example-repo"),
+        "the row of the server holds the folder: {:?}",
+        stored.body
+    );
+    let read: Machine = serde_json::from_value(stored.body).expect("the row reads as a record");
+    assert_eq!(
+        read.folder.as_deref(),
+        Some("/home/dev/example-repo"),
+        "a computer that pulls the row reads the folder"
+    );
 }
 
 #[test]

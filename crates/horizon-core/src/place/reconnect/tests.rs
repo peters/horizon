@@ -112,7 +112,8 @@ fn a_panel_of_another_kind_and_a_closed_panel_do_not_reconnect() {
 #[test]
 fn a_place_command_attaches_its_tmux_session() {
     assert!(attaches_a_tmux_session(Some(&crate::place::session_command(
-        "hz-c8dfe3af-1"
+        "hz-c8dfe3af-1",
+        None,
     ))));
     assert!(
         attaches_a_tmux_session(Some("tmux new -A -s build-1")),

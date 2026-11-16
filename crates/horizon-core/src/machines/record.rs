@@ -43,6 +43,9 @@ pub struct Machine {
     /// nothing else into it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    /// The folder that the new terminals of this machine start in: one absolute path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     pub added_at_millis: u64,
     /// Whether the setup of the cards of the agents of this machine ran, so this
     /// window serves a card socket for each of its sessions. `machine_set` writes
@@ -62,6 +65,7 @@ pub struct CheckedMachine {
     pub session: Option<String>,
     pub provider: Option<String>,
     pub repository: Option<String>,
+    pub folder: Option<String>,
     pub cards: bool,
 }
 
@@ -77,6 +81,7 @@ impl CheckedMachine {
             session: self.session.clone(),
             provider: self.provider.clone(),
             repository: self.repository.clone(),
+            folder: self.folder.clone(),
             added_at_millis,
             cards: self.cards,
         }
@@ -96,6 +101,7 @@ impl Machine {
             && self.session == other.session
             && self.provider == other.provider
             && self.repository == other.repository
+            && self.folder == other.folder
             && self.cards == other.cards
     }
 
@@ -117,7 +123,8 @@ impl Machine {
         // builder that a placed workspace terminal uses, so a click on a machine
         // hides the tmux status line exactly as a terminal of a place does.
         let mut terminal = block_terminal::check(&route, None).map_err(MachineError::from)?;
-        terminal.remote_command = session.as_deref().map(session_command);
+        // A click attaches to the session as the person left it, so it reads no folder.
+        terminal.remote_command = session.as_deref().map(|session| session_command(session, None));
         Ok(terminal)
     }
 
@@ -143,7 +150,7 @@ impl Machine {
 }
 
 /// Check one machine record from an agent: its name, route, tmux session,
-/// repository and provider line.
+/// repository, folder and provider line.
 ///
 /// # Errors
 /// Describes the first refused field with the code of [`MachineError::code`].
@@ -153,6 +160,7 @@ pub fn check(
     session: Option<&str>,
     provider: Option<&str>,
     repository: Option<&str>,
+    folder: Option<&str>,
     cards: bool,
 ) -> Result<CheckedMachine, MachineError> {
     let name = machine_name(name)?;
@@ -160,6 +168,13 @@ pub fn check(
     let session = session.map(session_name).transpose()?;
     let provider = provider.map(block_machines::provider_line);
     let repository = repository.map(block_machines::repository_line);
+    let folder = folder
+        .map(block_machines::check_folder)
+        .transpose()
+        .map_err(|refusal| MachineError::InvalidFolder {
+            message: refusal.message,
+        })?
+        .map(str::to_owned);
     Ok(CheckedMachine {
         name: name.to_owned(),
         host: terminal.host,
@@ -168,6 +183,7 @@ pub fn check(
         session,
         provider,
         repository,
+        folder,
         cards,
     })
 }
@@ -190,6 +206,7 @@ pub fn check_record(record: &Machine) -> Result<Machine, MachineError> {
         record.session.as_deref(),
         record.provider.as_deref(),
         record.repository.as_deref(),
+        record.folder.as_deref(),
         record.cards,
     )?;
     Ok(checked.record(record.added_at_millis))
@@ -227,9 +244,16 @@ pub fn machine_key_name(key: &str) -> Result<String, MachineError> {
 /// panel and not in the other. The `-u` flag keeps the text of the session as it
 /// is: an `ssh` command of a machine often has no UTF-8 locale, and such a client
 /// of `tmux` prints `_` in the place of every character outside ASCII.
+///
+/// A folder starts the session there as one quoted word; `-A` attaches to an
+/// existing session, so the folder applies to a session that the command makes.
 #[must_use]
-pub fn session_command(session: &str) -> String {
-    format!("tmux -u new-session -A -s {session} \\; set-option status off")
+pub fn session_command(session: &str, folder: Option<&str>) -> String {
+    let start = folder.map(|folder| format!(" -c {}", crate::agent_work::quote_argument(folder)));
+    format!(
+        "tmux -u new-session -A -s {session}{} \\; set-option status off",
+        start.unwrap_or_default()
+    )
 }
 
 /// Check one tmux session name.

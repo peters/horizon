@@ -100,6 +100,7 @@ fn record(name: &str) -> Machine {
         session: None,
         provider: None,
         repository: None,
+        folder: None,
         added_at_millis: 0,
         cards: true,
     }

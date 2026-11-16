@@ -23,7 +23,7 @@ fn an_agent_of_a_session_of_this_build_opens_that_session() {
         .expect("the session of the agent opens");
     assert_eq!(
         command,
-        crate::machines::session_command("hz-abc123-1"),
+        crate::machines::session_command("hz-abc123-1", None),
         "the command is the one that a terminal of a machine builds"
     );
     assert_eq!(

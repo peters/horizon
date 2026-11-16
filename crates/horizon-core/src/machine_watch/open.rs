@@ -17,7 +17,7 @@ impl MachineAgent {
     /// [`MachineError::InvalidSession`] for a session name outside the rule of this
     /// build, which a person may have made by hand in `tmux`.
     pub fn open_command(&self) -> Result<String, MachineError> {
-        Ok(session_command(&session_name(&self.session)?))
+        Ok(session_command(&session_name(&self.session)?, None))
     }
 
     /// Whether this build can open this agent: a session whose name holds a space or

@@ -177,6 +177,7 @@ key:        "build-1"
 session:    "build-1"
 provider:   "<Provider>, <region>"
 repository: "example-org/example-repo"
+folder:     "<absolute folder of the repository>"
 ```
 
 The field holds the name of the repository, such as `example-org/example-repo`,
@@ -187,6 +188,17 @@ field only when the check of the recipe passed on that machine; a machine that
 is ready for no repository has no field. A record that holds the field needs a
 Horizon that knows it on every computer that follows one server, because an
 older Horizon refuses the record of a newer one.
+
+The field `folder` holds the absolute canonical folder of the repository, which
+the step `Trust the repository folder` read with `realpath`, for example
+`/home/dev/example-repo`. A new terminal of a workspace that is placed on the
+machine starts there, and a press on `Start <program> here` starts its program in
+the same folder. Horizon draws the folder on the second line of the row of the
+machine in the sidebar. Write the field with the field `repository`, and write
+both only when the check of the recipe passed. This version holds one repository
+folder for each machine. A record that holds the field `folder` needs a Horizon
+that knows it on every computer that follows one server, because an older
+Horizon refuses the record of a newer one.
 
 ```json
 {"components": [
@@ -201,6 +213,7 @@ older Horizon refuses the record of a newer one.
     {"label": "Warm up", "state": "done", "at": "1 m 40 s"},
     {"label": "Run the check", "state": "done", "at": "6 m 02 s"}]},
   {"type": "kv", "rows": [
+    {"label": "Folder", "value": "/home/dev/example-repo", "mono": true},
     {"label": "Folder trusted for", "value": "Claude Code, Codex"},
     {"label": "Network", "value": "home", "mono": true}]},
   {"type": "text", "text": "cargo test --workspace: 412 tests pass, 0 failed"},
@@ -219,8 +232,13 @@ older Horizon refuses the record of a newer one.
 ```
 
 The ready card of a machine that was prepared for a repository holds the row
-`Folder trusted for` with the programs that trust the folder of the repository,
-for example `Folder trusted for: Claude Code, Codex`. The step that writes the
+`Folder` with the absolute folder of the record of the machine in `mono`, for
+example `Folder: /home/dev/example-repo`. It is the folder of the field `folder`
+of the record, so the person reads where the new terminals of the machine start.
+
+The ready card holds the row `Folder trusted for` with the programs that trust
+the folder of the repository, for example
+`Folder trusted for: Claude Code, Codex`. The step that writes the
 trust names the programs, and a machine whose agent programs were installed
 before the repository arrived holds that row too.
 

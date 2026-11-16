@@ -22,6 +22,11 @@ pub const MAX_REPOSITORY_CHARS: usize = 60;
 /// The longest tmux session name accepted, in characters.
 pub const MAX_SESSION_CHARS: usize = 40;
 
+/// Refusal code of a folder of a machine that is not one absolute path.
+pub const INVALID_FOLDER: &str = "invalid_folder";
+
+const MAX_FOLDER_BYTES: usize = 512;
+
 /// Refusal code of a machine name that is not one key label.
 pub const INVALID_MACHINE_NAME: &str = "invalid_machine_name";
 
@@ -103,6 +108,22 @@ pub fn check_session_name(session: &str) -> Result<&str, MachineRefusal> {
         return refused("session cannot start with '-', because tmux would read it as an option".into());
     }
     Ok(session)
+}
+
+/// Check the folder that the new terminals of a machine start in, which reaches
+/// `tmux new-session -c '<folder>'` as one quoted word.
+///
+/// # Errors
+/// Describes the rule with [`INVALID_FOLDER`].
+pub fn check_folder(folder: &str) -> Result<&str, MachineRefusal> {
+    let rule = format!("folder must be an absolute path of at most {MAX_FOLDER_BYTES} bytes with no control character");
+    if folder.len() > MAX_FOLDER_BYTES
+        || folder.chars().any(char::is_control)
+        || !std::path::Path::new(folder).is_absolute()
+    {
+        return Err(MachineRefusal::new(INVALID_FOLDER, rule));
+    }
+    Ok(folder)
 }
 
 /// The provider line and the repository line are short texts of a record that

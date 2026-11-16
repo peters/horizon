@@ -656,6 +656,7 @@ fn keep_machine(app: &mut HorizonApp) {
         session: None,
         provider: None,
         repository: None,
+        folder: None,
         added_at_millis: 0,
         cards: true,
     };

@@ -273,7 +273,7 @@ fn cancellation_input(bytes: &[u8]) -> bool {
     matches!(key, "99" | "67") && modifiers.saturating_sub(1) & 4 != 0
 }
 
-pub(super) fn quote_argument(argument: &str) -> String {
+pub(crate) fn quote_argument(argument: &str) -> String {
     format!("'{}'", argument.replace('\'', "'\\''"))
 }
 

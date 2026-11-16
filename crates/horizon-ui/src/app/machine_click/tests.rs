@@ -42,6 +42,7 @@ fn record(name: &str, session: Option<&str>) -> Machine {
         session: session.map(str::to_owned),
         provider: Some("Hetzner, hel1".to_owned()),
         repository: None,
+        folder: None,
         added_at_millis: 1,
         cards: false,
     }

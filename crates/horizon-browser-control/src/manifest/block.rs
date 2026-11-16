@@ -205,6 +205,10 @@ pub enum Operation {
         /// and it starts nothing from it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repository: Option<String>,
+        /// The folder that the new terminals of this machine start in, such as
+        /// `/home/dev/example-repo`: one absolute path of the machine.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
     },
     /// Forget one machine of this Horizon. Does not delete its key: call
     /// `delete_machine_key` for that. A terminal that the machine opened keeps
@@ -490,6 +494,9 @@ pub struct MachineSummary {
     /// The repository that this machine is ready for, when the agent set one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    /// The folder that the new terminals of this machine start in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     pub added_at_millis: u64,
     /// Whether a terminal panel of this machine is open in this Horizon.
     pub terminal_open: bool,
@@ -1307,6 +1314,7 @@ mod tests {
             "session": "build-1",
             "provider": "Hetzner, hel1",
             "repository": "example-org/shop",
+            "folder": "/home/dev/example-repo",
             "cards": true
         }))
         .expect("machine_set parses");
@@ -1317,6 +1325,7 @@ mod tests {
             session,
             provider,
             repository,
+            folder,
             cards,
         } = set
         else {
@@ -1329,6 +1338,11 @@ mod tests {
         assert_eq!(session.as_deref(), Some("build-1"));
         assert_eq!(provider.as_deref(), Some("Hetzner, hel1"));
         assert_eq!(repository.as_deref(), Some("example-org/shop"));
+        assert_eq!(
+            folder.as_deref(),
+            Some("/home/dev/example-repo"),
+            "machine_set carries the folder of the new terminals"
+        );
         assert!(cards, "machine_set carries the mark of the card setup");
         assert!(
             serde_json::from_value::<Operation>(serde_json::json!({
@@ -1362,6 +1376,7 @@ mod tests {
                 session: Some("build-1".into()),
                 provider: Some("Hetzner, hel1".into()),
                 repository: Some("example-org/shop".into()),
+                folder: None,
                 added_at_millis: 7,
                 terminal_open: true,
                 pending: true,

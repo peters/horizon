@@ -130,13 +130,15 @@ impl HorizonApp {
             session,
             provider,
             repository,
+            folder,
             cards,
         } = *asked;
-        let checked =
-            horizon_core::machines::check(name, ssh, session, provider, repository, cards).and_then(|checked| {
+        let checked = horizon_core::machines::check(name, ssh, session, provider, repository, folder, cards).and_then(
+            |checked| {
                 let key = key.map(horizon_core::machines::machine_key_name).transpose()?;
                 Ok((checked, key))
-            });
+            },
+        );
         let (checked, key) = match checked {
             Ok(checked) => checked,
             Err(error) => {
@@ -234,6 +236,7 @@ impl HorizonApp {
                 session,
                 provider,
                 repository,
+                folder,
                 cards,
             } => {
                 self.answer_machine_set(
@@ -244,6 +247,7 @@ impl HorizonApp {
                         session: session.as_deref(),
                         provider: provider.as_deref(),
                         repository: repository.as_deref(),
+                        folder: folder.as_deref(),
                         cards: *cards,
                     },
                     request,
@@ -375,6 +379,7 @@ impl HorizonApp {
                 session: machine.session.clone(),
                 provider: machine.provider.clone(),
                 repository: machine.repository.clone(),
+                folder: machine.folder.clone(),
                 added_at_millis: machine.added_at_millis,
                 terminal_open: self.machine_panel(&machine.name).is_some(),
                 key_missing: false,
@@ -432,6 +437,7 @@ pub(in crate::app) struct MachineSetFields<'a> {
     pub(in crate::app) session: Option<&'a str>,
     pub(in crate::app) provider: Option<&'a str>,
     pub(in crate::app) repository: Option<&'a str>,
+    pub(in crate::app) folder: Option<&'a str>,
     pub(in crate::app) cards: bool,
 }
 

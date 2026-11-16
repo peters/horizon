@@ -196,10 +196,7 @@ impl HorizonApp {
                 MachineRow {
                     name: machine.name.clone(),
                     // A lost link says when it was lost in the place of the record.
-                    second: watch
-                        .lost
-                        .clone()
-                        .or(second_line(machine.repository.as_deref(), machine.provider.as_deref())),
+                    second: watch.lost.clone().or(second_line(machine)),
                     state: MachineState::of(panel.and_then(horizon_core::Panel::ssh_status)),
                     pending: pending.contains(machine.name.as_str()),
                     panel: panel.map(|panel| panel.id),
@@ -655,11 +652,18 @@ pub(super) fn paint_machine_dot(painter: &egui::Painter, center: egui::Pos2, sta
     }
 }
 
-/// The second line of a machine row: the repository that the record names, then
-/// the provider words of the agent. The repository comes first, so a row that
-/// runs out of room cuts the claim of the agent and keeps the repository.
-fn second_line(repository: Option<&str>, provider: Option<&str>) -> Option<String> {
-    let parts: Vec<&str> = [repository, provider].into_iter().flatten().collect();
+/// The second line of a machine row: the repository that the record names, the
+/// folder that its new terminals start in, then the provider words of the agent.
+/// What Horizon knows comes first, so a narrow row cuts the claim of the agent.
+fn second_line(machine: &horizon_core::Machine) -> Option<String> {
+    let parts: Vec<&str> = [
+        machine.repository.as_deref(),
+        machine.folder.as_deref(),
+        machine.provider.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     (!parts.is_empty()).then(|| parts.join(" \u{00b7} "))
 }
 
@@ -679,6 +683,7 @@ fn machine_fingerprint(app: &HorizonApp) -> u64 {
         machine.session.hash(&mut hasher);
         machine.provider.hash(&mut hasher);
         machine.repository.hash(&mut hasher);
+        machine.folder.hash(&mut hasher);
         pending.contains(machine.name.as_str()).hash(&mut hasher);
         app.node_cards.refusal(&machine.name).hash(&mut hasher);
     }
