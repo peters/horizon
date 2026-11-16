@@ -1105,7 +1105,7 @@ def split(buffer, chunk):
 class Relay:
     def __init__(self):
         self.sock = None
-        self.pending, self.waiting, self.drop, self.again = [], None, False, False
+        self.pending, self.waiting, self.drop, self.again = [], None, None, False
         self.init = self.ready = None
         self.out = self.incoming = self.answers = b''
 
@@ -1119,7 +1119,7 @@ class Relay:
         try: held.connect(PATH)
         except OSError: held.close(); return
         self.sock, self.waiting = held, None
-        if self.again and self.init: self.drop, self.out = True, self.out + self.init + b'\n' + (self.ready + b'\n' if self.ready else b'')
+        if self.again and self.init: self.drop, self.out = json.loads(self.init).get('id'), self.init + b'\n' + (self.ready + b'\n' if self.ready else b'') + self.out
 
     def line(self, line):
         self.out += line + b'\n'
@@ -1133,7 +1133,9 @@ class Relay:
     def answered(self, line):
         try: ident = json.loads(line).get('id')
         except (ValueError, AttributeError): ident = None
-        if ident is not None: self.pending = [one for one in self.pending if one != ident]
+        self.pending = [one for one in self.pending if one != ident]
+        if ident is not None and ident == self.drop: self.drop = None
+        else: os.write(1, line + b'\n')
 
     def take(self):
         chunk = os.read(0, 65536)
@@ -1152,14 +1154,12 @@ class Relay:
                 except OSError: self.lost()
             if 0 in ready and not self.take(): return
             if self.sock in ready:
-                chunk = self.sock.recv(65536)
+                try: chunk = self.sock.recv(65536)
+                except OSError: chunk = b''
                 if not chunk: self.lost()
                 else:
                     self.answers, found = split(self.answers, chunk)
-                    for line in found:
-                        if self.drop: self.drop = False
-                        else: os.write(1, line + b'\n')
-                        self.answered(line)
+                    for line in found: self.answered(line)
             if self.waiting and time.monotonic() - self.waiting > WAIT: self.lost()
 
 Relay().run()

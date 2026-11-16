@@ -14,6 +14,9 @@ that a person writes on their machine is the text of this test, and proves:
   * a server that closes answers the calls in flight with the error `-32000`;
   * after the reconnect the server sees `initialize` again, and the agent side sees
     no second answer of it;
+  * a call that the agent sends while there is no link goes after the `initialize`
+    of the reconnect, and its answer is the only one of that call;
+  * a server that RESETS the stream is a lost link, and a call after it works;
   * a call after the reconnect is answered;
   * it ends with the standard input of the agent.
 
@@ -74,6 +77,8 @@ class CardServer(threading.Thread):
     `silent` keeps a call without an answer, as a link that a closed laptop cuts
     does. `cut` closes the stream of that number, and the next accept is a new
     stream, which is what the `sshd` of the machine gives after a reconnect.
+    `reset` ends the stream of that number with `shutdown(SHUT_RD)` and a close, as
+    a forward that a machine drops does: the relay reads `ConnectionResetError`.
     """
 
     def __init__(self, path: Path):
@@ -83,6 +88,8 @@ class CardServer(threading.Thread):
         self.streams = 0
         self.silent = False
         self.cut_stream = None
+        self.pause = False
+        self.reset_stream = None
         self.stopped = threading.Event()
         self.ready = threading.Event()
 
@@ -108,6 +115,16 @@ class CardServer(threading.Thread):
         held.settimeout(0.05)
         buffer = b''
         while not self.stopped.is_set() and self.cut_stream != stream:
+            if self.reset_stream == stream:
+                # One call of the relay stays unread in the queue of this server, and
+                # the close then resets the stream instead of ending it, as a forward
+                # that a machine drops does.
+                while not self.peek(held):
+                    pass
+                break
+            if self.pause:
+                time.sleep(0.05)
+                continue
             try:
                 data = held.recv(65536)
             except socket.timeout:
@@ -128,9 +145,19 @@ class CardServer(threading.Thread):
                 answer = {'jsonrpc': '2.0', 'id': message['id'], 'result': {'echo': message.get('method')}}
                 held.sendall(json.dumps(answer).encode() + b'\n')
         try:
+            if self.reset_stream == stream:
+                held.shutdown(socket.SHUT_RD)
             held.close()
         except OSError:
             pass
+
+    @staticmethod
+    def peek(held) -> bool:
+        """Whether a call of the relay waits unread in the queue of this stream."""
+        try:
+            return bool(held.recv(65536, socket.MSG_PEEK))
+        except (socket.timeout, OSError):
+            return False
 
     def seen(self, method, stream=None):
         """The calls of one method, in the streams that the test names."""
@@ -280,6 +307,63 @@ class RelayTest(unittest.TestCase):
         self.assertEqual(len(self.server.seen('initialize')), 2, 'the relay says hello again on the new stream')
         self.assertEqual(len([one for one in self.agent.answers if one.get('id') == 1]), 1,
                          'the agent saw one answer of its initialize')
+
+    def test_a_call_that_waits_for_a_lost_link_follows_the_hello_of_the_reconnect(self):
+        self.start_server()
+        agent = self.start_relay()
+        agent.say({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
+        agent.hear(lambda message: message.get('id') == 1)
+        agent.say({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        wait_for('the initialized line of the agent', lambda: self.server.seen('notifications/initialized'))
+
+        # The link goes before the call: no socket to meet, as a forward of a machine
+        # that ended leaves it.
+        self.server.stop()
+        self.server = None
+        self.socket.unlink()
+        agent.say({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call'})
+        time.sleep(1.0)
+        self.start_server()
+
+        # The new stream says hello first, and only then the call of the cut link.
+        wait_for('the call of the lost link on the new stream', lambda: self.server.seen('tools/call'))
+        self.assertEqual(
+            [message.get('method') for number, message in self.server.calls if number == 1],
+            ['initialize', 'notifications/initialized', 'tools/call'],
+            'the hello of the relay comes before the call that waited for the link')
+        answer = agent.hear(lambda message: message.get('id') == 2)
+        self.assertEqual(answer['result'], {'echo': 'tools/call'})
+        self.assertEqual(len([one for one in agent.answers if one.get('id') == 1]), 1,
+                         'the agent saw one answer of its initialize, and no second one')
+
+    def test_a_stream_that_resets_is_a_lost_link(self):
+        self.start_server()
+        agent = self.start_relay()
+        agent.say({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'})
+        agent.hear(lambda message: message.get('id') == 1)
+        agent.say({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        wait_for('the initialized line of the agent', lambda: self.server.seen('notifications/initialized'))
+
+        # A call in flight, and one more that the server never reads: the close of the
+        # server then resets the stream, and `recv` of the relay raises an `OSError`.
+        self.server.silent = True
+        agent.say({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call'})
+        wait_for('the call in flight', lambda: self.server.seen('tools/call'))
+        self.server.pause = True
+        time.sleep(0.2)
+        agent.say({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call'})
+        self.server.reset_stream = 1
+        error = agent.hear(lambda message: message.get('id') == 2)
+        self.assertEqual(error['error']['code'], -32000)
+        self.assertEqual(error['error']['message'], 'The link to Horizon was lost. Call again.')
+
+        # The relay stays alive, meets the next stream of the same socket, and a call
+        # there works.
+        self.server.silent, self.server.pause = False, False
+        wait_for('the hello of the reconnect', lambda: self.server.seen('initialize', 2))
+        agent.say({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call'})
+        answer = agent.hear(lambda message: message.get('id') == 4)
+        self.assertEqual(answer['result'], {'echo': 'tools/call'})
 
     def test_a_call_that_waits_on_a_live_link_is_not_cut(self):
         """`next_click` waits for a person for minutes: the bound of a call is for a lost link only."""
