@@ -1023,15 +1023,17 @@ def machine_watch_relay_session(state, work, python, private_tmp):
     the card reaches the workspace of the machine the way a real agent program's card
     does. `HORIZON_CARDS_DIR` names the folder that the sandbox sees as `/tmp`.
     """
-    environment = dict(machine_watch_environment(private_tmp),
-                       HORIZON_CARDS_DIR=str((Path(private_tmp) / HORIZON_CARDS_FOLDER).resolve()))
+    environment = machine_watch_environment(private_tmp)
+    cards = str((Path(private_tmp) / HORIZON_CARDS_FOLDER).resolve())
     agent = program_in_state(fixture_program(MACHINE_CARD_AGENT), work / 'bin' / MACHINE_CARD_AGENT, state)
     relay = machine_relay_program(state)
     pane = work / 'relay'
     pane.mkdir(mode=0o700, exist_ok=True)
     tmux = ['tmux', '-L', MACHINE_WATCH_SOCKET, '-f', '/dev/null']
-    command = [python, '-u', str(agent), '--relay', str(relay), MACHINE_WATCH_MACHINE,
-               '--title', MACHINE_RELAY_TITLE]
+    # A pane takes the environment of the tmux SERVER, which runs already, and not the
+    # one of this client: the folder of the cards reaches the relay through `env`.
+    command = ['env', f'HORIZON_CARDS_DIR={cards}', python, '-u', str(agent), '--relay', str(relay),
+               MACHINE_WATCH_MACHINE, '--title', MACHINE_RELAY_TITLE]
     subprocess.run([*tmux, 'new-session', '-d', '-s', MACHINE_RELAY_SESSION, '-c', str(pane),
                     '-x', '100', '-y', '20', *command], env=environment, check=True)
     return command
