@@ -14,9 +14,11 @@ use crate::test_egui::DiscardTextures;
 
 use super::support::{Server, Ssh, codex_command, record, wait_for, with_machines};
 
-/// The state of the agent of `session` in the snapshot of `app`.
+/// The state of the agent of `session` in the snapshot that the last frame of `app`
+/// read: a lane reads the value that the frame looked at, and not a snapshot that the
+/// watch of the machine wrote while the lane read it.
 fn agent_state(app: &mut HorizonApp, session: &str) -> Option<AgentState> {
-    let snapshot = app.machine_watch.watch.snapshot();
+    let snapshot = app.machine_watch.snapshot.clone()?;
     snapshot
         .machines
         .iter()
@@ -25,11 +27,11 @@ fn agent_state(app: &mut HorizonApp, session: &str) -> Option<AgentState> {
         .map(|agent| agent.state)
 }
 
-/// The link of `machine` in the snapshot of `app`.
+/// The link of `machine` in the snapshot that the last frame of `app` read.
 fn link(app: &mut HorizonApp, machine: &str) -> Option<WatchLink> {
     app.machine_watch
-        .watch
-        .snapshot()
+        .snapshot
+        .clone()?
         .machine(machine)
         .map(|state| state.link)
 }
@@ -174,6 +176,9 @@ fn a_turn_that_ends_in_the_panel_of_the_session_that_has_the_focus_is_no_done() 
     wait_for(&ctx, &mut app, "the end of the turn of the focused panel", |app| {
         agent_state(app, "hz-shop-1") != Some(AgentState::Working)
     });
+    // One more frame looks at the newest snapshot of the watch, so the row of the turn
+    // that ended is the row of a frame that looked after it ended.
+    run_app_frame(&ctx, &mut app);
     assert_ne!(
         agent_state(&mut app, "hz-shop-1"),
         Some(AgentState::Done),
