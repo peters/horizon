@@ -297,6 +297,9 @@ fn page_step(ui: &Ui, page: f32) -> f32 {
 /// The one line that says that this computer has no agent program, with the
 /// programs that Horizon looked for.
 fn no_agent_program(programs: &[String]) -> String {
+    if programs.is_empty() {
+        return "No preset in the settings starts an agent program. This is a terminal.".to_owned();
+    }
     format!(
         "No agent program was found on this computer ({}). This is a terminal.",
         programs.join(", ")

@@ -611,6 +611,14 @@ fn the_first_tile_keeps_the_first_preset_and_says_so_when_no_agent_program_is_he
     );
 }
 
+/// Settings with no agent preset give a line with no empty list of programs.
+#[test]
+fn the_line_of_settings_with_no_agent_preset_names_no_program() {
+    let line = super::no_agent_program(&[]);
+    assert!(line.contains("No preset in the settings"), "{line}");
+    assert!(!line.contains("()"), "{line}");
+}
+
 /// The folder of the stand-in agent programs of a test.
 fn programs_folder(temp: &tempfile::TempDir) -> std::path::PathBuf {
     let folder = temp.path().join("bin");
