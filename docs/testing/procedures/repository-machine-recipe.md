@@ -23,7 +23,10 @@ button for each agent program of that machine, that a press starts the program i
 the folder of the repository, that the row of the agent in the sidebar opens its
 panel, and that a second press starts no second copy. It also
 makes sure that a repository without the section `## Horizon machine` gets one
-question on a card and no machine.
+question on a card and no machine. It also makes sure that an agent continues
+its task on a machine in words only: it stops on a change that is not committed,
+writes the note `HANDOFF.md` on a branch, brings the branch with the bundle
+steps, and draws one card that says what moved and what did not.
 
 No step of this procedure reaches a provider: the program `hcloud` of the
 fixture is the stand-in of `scripts/device-smoke/hcloud-standin.sh`, and the
@@ -44,7 +47,7 @@ the failure card of task 6.
 
 No step of this procedure rents compute, deletes data, sends a secret or changes
 access. The stand-in provider makes nothing: it writes three small files beside
-itself and opens no socket. Task 9 removes them.
+itself and opens no socket. Task 10 removes them.
 
 ## 4. Equipment and preconditions
 
@@ -208,7 +211,60 @@ the provider of the person, and follow the caution of
    Result: the card of the machine goes, and the machine list of the sidebar
    holds no record of it.
 
-## 9. Clean up
+## 9. Continue a task on a machine
+
+This task needs the machine of task 8, so it does not run with the stand-in
+provider.
+
+1. Read the page `references/handoff-machine.md` of the skill `horizon-machines`,
+   and ask the agent in a local panel of `<example-repo>` to continue its task on
+   the machine of task 8. Change one file of `<example-repo>` first, and do not
+   commit it.
+
+   Result: the agent stops and names the change that is not committed. It asks
+   what to do with that change, and it changes no file.
+
+2. Say `commit it on the branch work/example`.
+
+> **CAUTION:** STEP 3 COPIES A BRANCH TO A RENTED MACHINE. The machine costs
+> money from the rent of task 8 until the delete of step 10, and the branch of
+> `<example-repo>` lands in the folder of the machine. No login of this computer
+> reaches the machine.
+
+3. Read the card that the agent draws.
+
+   Result: one card. Its heading is `The machine holds work/example` with the
+   badge `Moved`, one `text` line names the commit and says that the folder of
+   this computer is unchanged, one `kv` row `Not moved` names what did not move,
+   and the card holds `Start Claude here` and `Close`.
+
+   ```sh
+   ssh <options of the machine key> <user>@<address> \
+       'git -C <folder> branch --show-current; head -20 <folder>/HANDOFF.md'
+   ```
+
+   Result: the branch is `work/example`, and `HANDOFF.md` names the task, what is
+   done, what is next, the first command to run and the check of the repository.
+
+4. Read the rows of the machine card and of the sidebar.
+
+   Result: the second line of the row of the machine in the sidebar reads the
+   repository, then the folder of the record, then the provider words, and the
+   card holds the row `Folder` with the same folder in `mono`.
+
+5. Press `Start Claude here`, and ask the new agent on the machine to read
+   `HANDOFF.md` and to continue the task.
+
+   Result: the program runs in the folder of the record, and the conversation of
+   the new agent is new: it read the note and no message of the conversation of
+   this computer.
+
+6. Press `Close`.
+
+   Result: the card goes from the workspace, and the panel of this computer keeps
+   running.
+
+## 10. Clean up
 
 1. Stop the fixture with the window manager of the fixture desktop, and stop the
    agent panel.

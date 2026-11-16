@@ -1018,12 +1018,13 @@ mod tests {
                 "references/browser-machine/setup.sh",
                 "references/azure.md",
                 "references/gcp.md",
+                "references/handoff-machine.md",
                 "references/hetzner.md",
                 "references/repository-machine.md",
                 "references/runpod.md",
                 "references/tailscale.md",
             ],
-            "the body, the six provider references, the machine recipe and the browser machine"
+            "the body, the six provider references, the machine recipe, the handoff and the browser machine"
         );
         let body = MACHINES_SKILL_FILES[0].content;
         assert!(body.contains("block_panel"), "the skill draws cards with the card tool");

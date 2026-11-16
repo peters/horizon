@@ -109,6 +109,13 @@ pub(super) const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        relative_path: "skills/horizon-machines/references/handoff-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-machines/references/handoff-machine.md"
+        )),
+    },
+    EmbeddedFile {
         relative_path: "skills/horizon-machines/references/hetzner.md",
         content: include_str!(concat!(
             env!("OUT_DIR"),
@@ -393,6 +400,13 @@ pub(super) const MACHINES_SKILL_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/codex/skills/horizon-machines/references/gcp.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "references/handoff-machine.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-machines/references/handoff-machine.md"
         )),
     },
     EmbeddedFile {

@@ -666,6 +666,12 @@ confirms. When the repository holds no such section, ask one question on a card
 and offer to write the section from what the repository says about its own
 machine.
 
+When the person asks you to continue your task on a machine, read
+[continue on a machine](references/handoff-machine.md). It gives the branch, the
+note `HANDOFF.md`, the three bundle steps of the page above, and the one card
+that says what moved and what did not. The conversation stays in your panel, and
+the new agent on the machine starts a new one.
+
 ## The logins and the private files of a repository on a machine
 
 A machine that works on a repository needs the logins of the person and the files
