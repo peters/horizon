@@ -61,11 +61,16 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
         (ids, sections, oldest)
     };
     // The store is read outside the lock: a file is a wait that no frame may share.
-    let path = handle.lock().settings_path.clone();
+    let (path, generation) = {
+        let state = handle.lock();
+        (state.settings_path.clone(), state.settings_generation)
+    };
     let holds = path.map_or_else(BTreeSet::new, |path| held_by_store(&path, &written));
     let outcome = {
         let mut state = handle.lock();
         let outcome = state.client.accept_push(reply);
+        // A save that was queued while the store was read is not in `holds`.
+        let read_in_time = state.settings_generation == generation;
         for (section, version, body) in written {
             // A newer row stays: the server applied this intent again. The version of
             // this push is a version of the store only when the store holds the content
@@ -75,7 +80,7 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
             if seen.max(applied) >= version {
                 continue;
             }
-            if holds.contains(&section) {
+            if read_in_time && holds.contains(&section) {
                 state.settings_applied.insert(section.clone(), version);
             } else {
                 state.client.replay_before(version);
