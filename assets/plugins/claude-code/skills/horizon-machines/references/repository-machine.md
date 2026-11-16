@@ -209,6 +209,8 @@ older Horizon refuses the record of a newer one.
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
     {"id": "join_network", "label": "Join a network"},
+    {"id": "exact_state", "label": "Exact agent state"},
+    {"id": "cards_here", "label": "Horizon cards for agents here"},
     {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}]}
 ```
@@ -226,7 +228,8 @@ is in the network.
 
 The ready card of a machine that was prepared for a repository keeps the buttons
 of every machine card of the skill `horizon-machines`: `Connect`, `Put the
-Horizon server here`, `Add a browser`, `Join a network`, `Stop`, and `Delete`.
+Horizon server here`, `Add a browser`, `Join a network`, `Exact agent state`,
+`Horizon cards for agents here`, `Stop`, and `Delete`.
 Draw `Start` instead
 of `Stop` while the machine is stopped. A card that holds only `Connect` and
 `Delete` is a card that cannot continue the set-up, and the person must open

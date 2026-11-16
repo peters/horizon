@@ -84,6 +84,19 @@ NESTED_FIELDS = {
     ('block_panel', 'ssh'): ('crates/horizon-browser-control/src/manifest/block_terminal.rs', 'TerminalRoute'),
 }
 EXAMPLE = re.compile(r'```json\n(.*?)```', re.S)
+# The buttons of a machine card, in the order of the skill horizon-machines. A card
+# example that offers one of them offers all eight, so a set-up continues from the
+# card in every skill that draws it.
+MACHINE_CARD_BUTTONS = (
+    'connect',
+    'server_here',
+    'browser_here',
+    'join_network',
+    'exact_state',
+    'cards_here',
+    'stop',
+    'delete',
+)
 
 
 def variant_fields(source, name):
@@ -172,6 +185,35 @@ def example_errors(documents):
                                 f'{skill}: the {operation} example of {api} names {key}.{nested_key}; '
                                 f'the schema has {names}'
                             )
+    return errors
+
+
+def machine_card_errors(documents):
+    """Every card example with a machine button offers all eight buttons."""
+    errors = []
+    for skill, document in sorted(documents.items()):
+        for block in EXAMPLE.findall(document):
+            try:
+                value = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            components = value.get('components')
+            if not isinstance(components, list):
+                continue
+            buttons = {
+                item.get('id')
+                for component in components
+                if isinstance(component, dict)
+                for item in component.get('items') or []
+                if isinstance(item, dict)
+            }
+            if 'server_here' not in buttons:
+                continue
+            missing = [name for name in MACHINE_CARD_BUTTONS if name not in buttons]
+            if missing:
+                errors.append(f'{skill}: a machine card example lacks the buttons {", ".join(missing)}')
     return errors
 
 
@@ -270,6 +312,7 @@ def check():
         if name not in documents.get('horizon-setup', ''):
             errors.append(f'{name}: the setting operation missing from horizon-setup')
     errors.extend(example_errors(documents))
+    errors.extend(machine_card_errors(documents))
     standalone = ROOT / 'crates/horizon-device/skills/horizon-device/SKILL.md'
     if standalone.read_bytes() != (codex / 'horizon-device/SKILL.md').read_bytes():
         errors.append('standalone device skill differs from bundled skill')

@@ -368,6 +368,8 @@ session.
     {"id": "server_here", "label": "Put the Horizon server here"},
     {"id": "browser_here", "label": "Add a browser"},
     {"id": "join_network", "label": "Join a network"},
+    {"id": "exact_state", "label": "Exact agent state"},
+    {"id": "cards_here", "label": "Horizon cards for agents here"},
     {"id": "stop", "label": "Stop"},
     {"id": "delete", "label": "Delete", "tone": "danger"}]}
 ]}
@@ -375,7 +377,8 @@ session.
 
 The card of a machine holds the buttons of every machine card of the skill
 `horizon-machines`, and this card is no exception: `Connect`, `Put the Horizon
-server here`, `Add a browser`, `Join a network`, `Stop`, and `Delete`. Draw
+server here`, `Add a browser`, `Join a network`, `Exact agent state`, `Horizon
+cards for agents here`, `Stop`, and `Delete`. Draw
 `Start` instead of `Stop` while the machine is stopped. A machine that a run prepared for a
 repository keeps these buttons too, so a set-up continues from the card that the
 run left.
@@ -387,6 +390,12 @@ run left.
 - `Join a network` draws the card of the network of this machine, which the page
   `references/tailscale.md` of the skill `horizon-machines` gives. The card
   offers the stored networks as pills and no field for a secret.
+- `Exact agent state` opens the card of the exact state of an agent on this
+  machine, which `horizon-machines` gives. It writes the hook entries of Claude
+  Code into the settings of the machine.
+- `Horizon cards for agents here` opens the card of the cards of an agent on
+  this machine, which `horizon-machines` gives. It writes one MCP entry in the
+  settings of the agent program of the machine.
 - `Stop` stops the machine, and `Start` starts it again, as `horizon-machines`
   says. `Delete` asks before it deletes, as that skill says, and the record and
   the key go with the machine.
