@@ -285,6 +285,91 @@ while the link is down reaches nothing, and the agent reads an error.
    Its chip says `No agent` and its buttons are off. The card of `hz-night` keeps
    its buttons, because its session is there.
 
+### 6.9 MC-9 — The cards over a real `sshd`, with no machine
+
+This lane uses no rented machine. The machine of the fixture is one real `sshd` of
+this computer, inside a namespace of its own, so `sshd` binds the socket of each
+session and Horizon reaches it with the real `ssh` of this computer.
+
+1. Unpack an `sshd` into a folder of your own. Neither command needs root:
+
+   ```bash
+   apt-get download openssh-server
+   dpkg-deb -x openssh-server_*.deb /var/tmp/openssh-server
+   ```
+
+   Result: `/var/tmp/openssh-server/usr/sbin/sshd` and the two session programs in
+   `/var/tmp/openssh-server/usr/lib/openssh/` are files.
+
+2. Start the fixture with the real machine, and show its desktop in a Device panel
+   as steps 5.1 and 5.2 show it:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/machine-cards-sshd-1 --native-view --machine-watch \
+     --machine-sshd /var/tmp/openssh-server/usr/sbin/sshd --vnc-port 5912
+   ```
+
+   Result: the workspace `build-1` holds the cards of `hz-night` and of `hz-relay`,
+   as MC-1 and MC-3 show them.
+
+3. Read the folder of the card sockets of the machine. Horizon must have made it:
+
+   ```bash
+   ls -ld /var/tmp/machine-cards-sshd-1/machine-sshd/tmp/horizon-cards \
+     /var/tmp/machine-cards-sshd-1/machine-sshd/tmp/horizon-cards/build-1
+   ls /var/tmp/machine-cards-sshd-1/machine-sshd/tmp/horizon-cards/build-1
+   ```
+
+   Result: both folders have the mode `drwx------`, and the second one holds one
+   socket file for each session that the watch reports. `sshd` bound each of them.
+
+4. Start one more session on the machine, and wait two seconds:
+
+   ```bash
+   ssh -F /var/tmp/machine-cards-sshd-1/data/home/.ssh/config \
+     -i /var/tmp/machine-cards-sshd-1/machine-sshd/fixture_key build-1 \
+     'tmux new-session -d -s hz-late'
+   ```
+
+   Result: the folder of step 3 holds `hz-late.sock` without a restart of the child,
+   and the cards of the other sessions keep their buttons.
+
+5. Stop the `ssh` child that carries the sockets of the machine. It is a child of
+   the candidate, and its pid is the one whose arguments name `hz-night.sock`:
+
+   ```bash
+   ps -o pid,args -C ssh | grep -F hz-night.sock
+   kill <pid>
+   ```
+
+   > **CAUTION:** THIS STEP CUTS THE LINK OF THE CARDS OF THE MACHINE. Read the pid,
+   > and give that number to `kill`. Do not stop another process.
+
+   Result: `sshd` leaves the socket file of each session in place. The card of
+   `hz-relay` stays in the workspace, its pane says
+   `The link to Horizon was lost. Call again.` when the person presses a button, and
+   the relay reconnects to the socket that the next child binds.
+
+6. Wait five seconds, and read the folder of step 3 again.
+
+   Result: Horizon made the folder and removed the old socket files before it
+   started the child again, so every socket file of the folder is bound again, and a
+   press on the card of `hz-night` reaches its agent and updates the card. A folder
+   that still names a file that no `sshd` bound, and a child that says
+   `remote port forwarding failed` in the log of the run, is a defect of the removal.
+
+7. Read the log of the machine:
+
+   ```bash
+   grep -E 'Server listening|Starting session' \
+     /var/tmp/machine-cards-sshd-1/machine-sshd/sshd.log | tail -5
+   ```
+
+   Result: the log names the port that `machine_sshd.port` of `lab.json` names, and
+   one `Starting session: command for <user>` line for each call of Horizon: the
+   removal before a child and the child of the card sockets.
+
 ## 7. Pass criteria
 
 - The cards of `hz-night` and of `hz-relay` appear in the workspace `build-1`
@@ -309,6 +394,9 @@ while the link is down reaches nothing, and the agent reads an error.
   is the text that the card of `hz-relay` came through.
 - The card shows its buttons whole and says no `More below`, also after a
   terminal of that session joins the workspace.
+- The lane of section 6.9 shows the results that it names: Horizon makes the folder
+  of the sockets of the machine, a new session gets its socket, a restart of the
+  child binds every socket again after a cut link, and the relay outlives the cut.
 
 ## 8. Cleanup
 
@@ -329,6 +417,15 @@ while the link is down reaches nothing, and the agent reads an error.
 
    Result: no file of the run stays, and no socket file of a session is left in
    the folder that the fixture used for `/tmp`.
+
+4. Remove the state folder of MC-9 and the sshd that you unpacked:
+
+   ```bash
+   rm -rf /var/tmp/machine-cards-sshd-1 /var/tmp/openssh-server
+   ```
+
+   Result: both folders are gone, and no socket file and no `tmux` server of the
+   machine stays on this computer.
 
 ## 9. Record of results
 

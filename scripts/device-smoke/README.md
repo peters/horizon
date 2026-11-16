@@ -339,6 +339,73 @@ the program a person writes on their own machine.
 The procedure is
 [the machine agent cards procedure](../../docs/testing/procedures/machine-agent-cards.md).
 
+### The machine as a real sshd
+
+The stand-in `ssh` answers the calls of the candidate. A run with `--machine-sshd`
+makes the machine of `--machine-watch` one real `sshd` of the user of the run, so the
+candidate uses the real `ssh` of this computer for the watch, for the card sockets,
+for the removal before a child and for the terminal of a session. Use this lane to
+see a defect that only a machine shows: the socket file that `sshd` leaves behind,
+the folder that nobody made, a reset of the stream, the login shell that runs the
+command, the order of the hello after a reconnect, and the relay that starts before
+its socket.
+
+A computer usually has the client of `ssh` and no server. Unpack a server into a
+folder of your own. Neither command needs root:
+
+```bash
+apt-get download openssh-server
+dpkg-deb -x openssh-server_*.deb /var/tmp/openssh-server
+```
+
+The program is `/var/tmp/openssh-server/usr/sbin/sshd`, and its two session programs
+lie in `../lib/openssh/` of it. Then start the fixture:
+
+```bash
+scripts/device-smoke/serve.py --horizon target/debug/horizon \
+  --state /var/tmp/machine-sshd-1 --native-view \
+  --machine-watch --machine-sshd /var/tmp/openssh-server/usr/sbin/sshd
+```
+
+The run does these steps:
+
+1. It mints one host key and one client key in `<state>/machine-sshd/`, writes
+   `sshd_config` there, and starts `sshd` on a free port of `127.0.0.1`. It waits
+   until the log of that machine says that it listens.
+2. The sshd runs inside a `bwrap` namespace of its own. The namespace binds
+   `<state>/machine-sshd/tmp` over `/tmp` and `<state>/machine-sshd/home` over the
+   home of the user. A socket of a card and the `tmux` server of the machine
+therefore stay in the state folder, and no `~/.codex`, `~/.ssh` or `tmux` server of
+your home is read or written.
+3. It seeds `~/.ssh/config` of the private home of the candidate with the alias
+   `build-1`, the address `127.0.0.1`, the port of the run, the user, the client
+   key, a `known_hosts` file of the state and `StrictHostKeyChecking accept-new`,
+   as `--ssh-config` and `--ssh-identity` seed a configuration.
+4. It starts the four sessions of the machine through `ssh`, so the login shell of
+the user runs each command: the two Codex stand-ins `hz-shop` and `hz-notes`, the
+   card agent `hz-night` and the relay agent `hz-relay`. These commands name plain
+   `tmux`, because the `/tmp` of the namespace is the `/tmp` of the machine.
+5. It writes the relay program of the machines skill to
+   `~/.horizon-cards/relay.py` of the home of the machine, as the setup of a machine
+   does.
+6. It ends the `sshd` and the `tmux` server of the machine at the exit of the run.
+   `machine_sshd.stop` of `lab.json` names both.
+
+What a person looks at:
+
+- `<state>/machine-sshd/tmp/horizon-cards/build-1/` holds one socket file for each
+  session that the watch reports. The folder exists because Horizon made it.
+- The log of the machine, `<state>/machine-sshd/sshd.log`, names each session and
+  each forward.
+- The relay of `hz-relay` stays alive when the link drops, answers the calls in
+  flight and reconnects.
+- A socket file that a child left behind stops the next bind. Horizon removes it
+  before each start, so a restart of the child binds again.
+
+The option needs `bwrap`, `ssh`, `ssh-keygen` and `tmux` on this computer. A run
+without one of them stops with one sentence. Linux only: a Mac cannot create the
+namespace.
+
 ### Speech input with the real recorder of the session
 
 The fixture writes the section `speech` of its private settings, so a procedure

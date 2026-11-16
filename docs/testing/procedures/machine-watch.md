@@ -282,11 +282,109 @@ the state that the program of a pane reports, and that it starts and stops one
 
    Result: no notification arrives, because the sidebar shows the change.
 
+### 6.8 MW-8 — The watch over a real `sshd`, with no machine
+
+This lane uses no rented machine. The machine of the fixture is one real `sshd` of
+this computer, inside a namespace of its own, so the watch runs through the login
+shell of the user and through the plain `tmux` of that machine.
+
+1. Unpack an `sshd` into a folder of your own. Neither command needs root:
+
+   ```bash
+   apt-get download openssh-server
+   dpkg-deb -x openssh-server_*.deb /var/tmp/openssh-server
+   ```
+
+   Result: `/var/tmp/openssh-server/usr/sbin/sshd` and the two session programs in
+   `/var/tmp/openssh-server/usr/lib/openssh/` are files.
+
+2. Start the fixture with the real machine. Use a new state folder:
+
+   ```bash
+   scripts/device-smoke/serve.py --horizon target/debug/horizon \
+     --state /var/tmp/machine-watch-sshd-1 --native-view --machine-watch \
+     --machine-sshd /var/tmp/openssh-server/usr/sbin/sshd
+   ```
+
+   Result: the run prints the VNC address and the manifest names the section
+   `machine_sshd` with the port, the log and the stop list.
+
+3. Show the isolated desktop in a Horizon Device panel of the current workspace,
+   with the `device_panel` tool of the `horizon-device` skill.
+
+   Result: the panel shows the desktop of the fixture, and its image and its frame
+   sequence change while you look.
+
+4. Read the rows of the machine section of the sidebar.
+
+   Result: the machine `build-1` holds `1 needs you` and `1 done` of the two Codex
+   stand-ins, as MW-6 shows it. The watch of these rows came through the login
+   shell of the machine and through `ssh`, not through a stand-in.
+
+5. Read the report of the watch by hand. The configuration of the machine lies in
+   the private home of the run:
+
+   ```bash
+   sed -n '/^pub const REMOTE_TEXT/,/^"#;/p' \
+     crates/horizon-core/src/machine_watch/remote.rs | sed '1d;$d' | \
+     ssh -F /var/tmp/machine-watch-sshd-1/data/home/.ssh/config \
+       -i /var/tmp/machine-watch-sshd-1/machine-sshd/fixture_key build-1 sh
+   ```
+
+   Result: the first line is `HZ	1`, one `S` line names `hz-shop`, `hz-notes`,
+   `hz-night` and `hz-relay`, one `P` line names each pane, and the report ends with
+   `Z`. The text runs because the login shell of the machine runs the word `sh`.
+
+6. Read the log of the machine:
+
+   ```bash
+   grep -c 'Accepted publickey' /var/tmp/machine-watch-sshd-1/machine-sshd/sshd.log
+   ```
+
+   Result: the number is not `0`, and the log names the user of this computer.
+
+7. Start one more session on the machine, and wait two seconds:
+
+   ```bash
+   ssh -F /var/tmp/machine-watch-sshd-1/data/home/.ssh/config \
+     -i /var/tmp/machine-watch-sshd-1/machine-sshd/fixture_key build-1 \
+     'tmux new-session -d -s hz-mw-late'
+   ```
+
+   Result: a row of `hz-mw-late` appears in the sidebar within two seconds, and the
+   report of step 5 names it.
+
+8. Read the `/tmp` of this computer and the `/tmp` of the machine:
+
+   ```bash
+   ls /tmp/tmux-$(id -u)/
+   ls /var/tmp/machine-watch-sshd-1/machine-sshd/tmp/tmux-$(id -u)/
+   ```
+
+   Result: the second folder holds the server of the machine, and no server of the
+   machine stands in the first one. No session of the machine touches this computer.
+
+9. Stop the sshd of the run, and read the rows of the machine section.
+
+   ```bash
+   kill "$(cat /var/tmp/machine-watch-sshd-1/machine-sshd/sshd.pid)"
+   ```
+
+   Result: the row of the machine says that the link was lost and Horizon tries
+   again, and the agent rows of the machine leave the section.
+
+10. End the fixture with `Ctrl+C` in its terminal, and start it again with
+    `--reuse-state` and the same options.
+
+   Result: the run starts the machine again and its rows return. The run ends the
+   `sshd` and the `tmux` server of the machine at its own exit.
+
 ## 7. Pass criteria
 
-- Every test of section 6.1 to 6.6 passes, including the tests of the state that a
+- Every test of section 6.1 to 6.7 passes, including the tests of the state that a
   pane reports and of the row of a job.
-- The tasks of section 6.6 and of section 6.7 show the results that they name.
+- The tasks of section 6.6, of section 6.7 and of section 6.8 show the results that
+  they name.
 - `cargo clippy -p horizon-core -p horizon-ui --all-targets -- -D warnings` passes.
 - `./scripts/check-maintainability.sh` passes.
 - No `ssh` child of a test stays after its test: `ps -A -o args= | grep -c hzw-ui-ssh`
@@ -307,13 +405,16 @@ the state that the program of a pane reports, and that it starts and stops one
 
    Result: `ssh <machine> "tmux list-sessions"` names none of them.
 
-2. Remove the build folder of the test. Run:
+2. Remove the state folder of MW-8, the sshd that you unpacked, and the build folder
+   of the test. Run:
 
    ```bash
+   rm -rf /var/tmp/machine-watch-sshd-1 /var/tmp/openssh-server
    rm -rf "$CARGO_TARGET_DIR" "$TMPDIR"
    ```
 
-   Result: both folders are gone.
+   Result: all four folders are gone, and no socket file and no `tmux` server of a
+   machine stays on this computer.
 
 ## 9. Record of results
 
