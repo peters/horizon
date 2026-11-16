@@ -161,13 +161,13 @@ fn a_resource_group_body_over_the_limit_is_an_invalid_response() {
     let base = padded(0).len();
     let limit = usize::try_from(RESPONSE_LIMIT).unwrap();
     let client = scripted(vec![
-        get(group_url(GROUP), 200, padded(limit - base - 1)),
         get(group_url(GROUP), 200, padded(limit - base)),
+        get(group_url(GROUP), 200, padded(limit - base + 1)),
     ]);
     let cancel = Cancellation::default();
     assert!(
         client.azure.get_resource_group(GROUP, &cancel).unwrap().is_some(),
-        "one byte under the limit"
+        "a body exactly at the limit"
     );
     let failure = client.azure.get_resource_group(GROUP, &cancel).unwrap_err();
     assert!(!failure.definite());
