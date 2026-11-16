@@ -1,9 +1,11 @@
+use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use horizon_core::browser::manifest;
+use horizon_core::setup::find_program;
 use horizon_core::{
     Config, HorizonHome, ServerConfig, browser_mcp_args, browser_mcp_executable, codex_home_dir, grok_home_dir,
     user_home_dir,
@@ -443,6 +445,29 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     let user_home = user_home_dir();
     let grok_home = grok_home_dir();
     let codex_home = codex_home_dir();
+    *held_agent_plugin_lease() = install_agent_plugins_for(
+        horizon_home,
+        user_home.as_deref(),
+        grok_home.as_deref(),
+        codex_home.as_deref(),
+        None,
+    );
+    AgentPluginHostGuard
+}
+
+/// Installs the agent skills, plugins and MCP registrations of this start, and
+/// keeps their skill-root leases while the value lives.
+///
+/// `path` is the search of the agent programs, as [`find_program`] reads it: `None`
+/// is the `PATH` of this process. The homes and the search are arguments, so a test
+/// gives private homes and stand-in programs.
+fn install_agent_plugins_for(
+    horizon_home: &HorizonHome,
+    user_home: Option<&Path>,
+    grok_home: Option<&Path>,
+    codex_home: Option<&Path>,
+    path: Option<&OsStr>,
+) -> Option<AgentPluginHostLease> {
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
@@ -450,7 +475,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
-            return AgentPluginHostGuard;
+            return None;
         }
     };
     if let Err(error) = work_hooks::install(&horizon_home.agent_work_plugin_dir_for_host(manifest::host_instance())) {
@@ -461,38 +486,40 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     {
         tracing::warn!(%error, "the state report of a pi panel is unavailable");
     }
-    let user_skill_dirs = user_skill_lease_dirs(user_home.as_deref(), codex_home.as_deref());
-    let extra_cleanup = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
+    let grok_root = provider_root(grok_home, user_home, GROK_PROVIDER, path);
+    let codex_root = provider_root(codex_home, user_home, CODEX_PROVIDER, path);
+    let user_skill_dirs = user_skill_lease_dirs(codex_root.as_deref());
+    let extra_cleanup = user_skill_cleanup_dirs(user_home, grok_root.as_deref(), codex_root.as_deref());
     if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
-    if let Some(root) = provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok") {
-        match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref()) {
+    if let Some(root) = grok_root.as_deref() {
+        match grok_mcp::bind_browser_skill(root, manifest::host_instance().as_ref()) {
             Ok(roots) => {
                 lease.skill_roots.extend(roots);
-                lease.bind_grok_device_skill(&root, true);
-                lease.bind_grok_block_skill(&root, true);
-                lease.bind_grok_machines_skill(&root, true);
-                lease.bind_grok_mobile_skill(&root, true);
-                lease.bind_grok_plan_skill(&root, true);
-                lease.bind_grok_server_skill(&root, true);
-                lease.bind_grok_server_move_skill(&root, true);
-                lease.bind_grok_setup_skill(&root, true);
-                lease.bind_grok_speech_skill(&root, true);
-                lease.bind_grok_worktree_skill(&root, true);
+                lease.bind_grok_device_skill(root, true);
+                lease.bind_grok_block_skill(root, true);
+                lease.bind_grok_machines_skill(root, true);
+                lease.bind_grok_mobile_skill(root, true);
+                lease.bind_grok_plan_skill(root, true);
+                lease.bind_grok_server_skill(root, true);
+                lease.bind_grok_server_move_skill(root, true);
+                lease.bind_grok_setup_skill(root, true);
+                lease.bind_grok_speech_skill(root, true);
+                lease.bind_grok_worktree_skill(root, true);
             }
             Err(error) => {
                 tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
-                lease.bind_grok_device_skill(&root, false);
-                lease.bind_grok_block_skill(&root, false);
-                lease.bind_grok_machines_skill(&root, false);
-                lease.bind_grok_mobile_skill(&root, false);
-                lease.bind_grok_plan_skill(&root, false);
-                lease.bind_grok_server_skill(&root, false);
-                lease.bind_grok_server_move_skill(&root, false);
-                lease.bind_grok_setup_skill(&root, false);
-                lease.bind_grok_speech_skill(&root, false);
-                lease.bind_grok_worktree_skill(&root, false);
+                lease.bind_grok_device_skill(root, false);
+                lease.bind_grok_block_skill(root, false);
+                lease.bind_grok_machines_skill(root, false);
+                lease.bind_grok_mobile_skill(root, false);
+                lease.bind_grok_plan_skill(root, false);
+                lease.bind_grok_server_skill(root, false);
+                lease.bind_grok_server_move_skill(root, false);
+                lease.bind_grok_setup_skill(root, false);
+                lease.bind_grok_speech_skill(root, false);
+                lease.bind_grok_worktree_skill(root, false);
             }
         }
     }
@@ -500,9 +527,9 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         &lease,
         horizon_home,
         &claude_plugin_dir,
-        user_home.as_deref(),
-        grok_home.as_deref(),
-        codex_home.as_deref(),
+        user_home,
+        grok_root.as_deref(),
+        codex_root.as_deref(),
         AgentMcpEntry { command: &mcp_command },
     );
 
@@ -514,8 +541,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         Err(error) => tracing::warn!(%error, "failed to prune stale agent plugin hosts"),
     }
 
-    *held_agent_plugin_lease() = Some(lease);
-    AgentPluginHostGuard
+    Some(lease)
 }
 
 pub(crate) fn release_held_agent_plugin_host() {
@@ -537,8 +563,8 @@ fn sync_leased_user_skills(
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
     user_home: Option<&Path>,
-    grok_home: Option<&Path>,
-    codex_home: Option<&Path>,
+    grok_root: Option<&Path>,
+    codex_root: Option<&Path>,
     entry: AgentMcpEntry<'_>,
 ) {
     if let Some(home) = user_home {
@@ -549,9 +575,8 @@ fn sync_leased_user_skills(
     match install_agent_plugins_impl(
         horizon_home,
         claude_plugin_dir,
-        user_home,
-        grok_home,
-        codex_home,
+        grok_root,
+        codex_root,
         entry,
         Some(lease),
     ) {
@@ -630,9 +655,8 @@ fn prune_stale_agent_plugin_hosts(current_instance_dir: &Path) -> std::io::Resul
 fn install_agent_plugins_impl(
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
-    user_home: Option<&Path>,
-    grok_home: Option<&Path>,
-    codex_home: Option<&Path>,
+    grok_root: Option<&Path>,
+    codex_root: Option<&Path>,
     entry: AgentMcpEntry<'_>,
     lease: Option<&AgentPluginHostLease>,
 ) -> std::io::Result<usize> {
@@ -651,14 +675,14 @@ fn install_agent_plugins_impl(
     updated_files += sync_plugin_files(&horizon_home.codex_browser_skill_dir(), BROWSER_SKILL_FILES)?;
     updated_files += sync_integrations_skills(&horizon_home.codex_integrations_dir())?;
 
-    if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
+    if let Some(grok_root) = grok_root {
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
-            match grok_mcp::register(&grok_root) {
+            match grok_mcp::register(grok_root) {
                 Ok(changed) => {
                     updated_files += usize::from(changed);
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
-                    updated_files += sync_provider_skills(lease, &grok_root)?;
+                    updated_files += sync_provider_skills(lease, grok_root)?;
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -666,10 +690,10 @@ fn install_agent_plugins_impl(
             }
         }
     }
-    if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
+    if let Some(codex_root) = codex_root {
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
         updated_files += sync_leased_skill(lease, &browser_dir, BROWSER_SKILL_FILES)?;
-        updated_files += sync_provider_skills(lease, &codex_root)?;
+        updated_files += sync_provider_skills(lease, codex_root)?;
     }
     Ok(updated_files)
 }
@@ -725,28 +749,21 @@ fn sync_integrations_skills(dir: &Path) -> std::io::Result<usize> {
     Ok(updated_files)
 }
 
-fn user_skill_lease_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
-        dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_BLOCK_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_MACHINES_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_MOBILE_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_PLAN_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_SERVER_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_SERVER_MOVE_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_SETUP_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_WORKTREE_SKILL));
-    }
-    dirs
+/// The leases of the skill folders that this start writes in the folder of Codex.
+fn user_skill_lease_dirs(codex_root: Option<&Path>) -> Vec<PathBuf> {
+    let Some(root) = codex_root else {
+        return Vec::new();
+    };
+    std::iter::once(HORIZON_BROWSER_SKILL)
+        .chain(PROVIDER_SKILLS.iter().map(|(skill, _)| *skill))
+        .map(|skill| root.join("skills").join(skill))
+        .collect()
 }
 
 fn user_skill_cleanup_dirs(
     user_home: Option<&Path>,
-    grok_home: Option<&Path>,
-    codex_home: Option<&Path>,
+    grok_root: Option<&Path>,
+    codex_root: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut dirs = user_home.map(abandoned_user_skill_dirs).unwrap_or_default();
     if let Some(home) = user_home {
@@ -754,14 +771,14 @@ fn user_skill_cleanup_dirs(
             dirs.push(user_skill_dir(home, skill_root, RETIRED_NOTIFY_SKILL));
         }
     }
-    if let Some(root) = provider_home(grok_home, user_home, ".grok") {
+    if let Some(root) = grok_root {
         dirs.push(root.join("skills").join(RETIRED_NOTIFY_SKILL));
-        dirs.extend(retired_mcp_skill_dirs(&root));
+        dirs.extend(retired_mcp_skill_dirs(root));
     }
-    if let Some(root) = provider_home(codex_home, user_home, ".codex") {
+    if let Some(root) = codex_root {
         dirs.push(root.join("skills").join(RETIRED_NOTIFY_SKILL));
         dirs.push(root.join("skills").join(RETIRED_OFFLOAD_SKILL));
-        dirs.extend(retired_mcp_skill_dirs(&root));
+        dirs.extend(retired_mcp_skill_dirs(root));
     }
     dirs
 }
@@ -784,6 +801,48 @@ fn provider_home(override_home: Option<&Path>, user_home: Option<&Path>, default
     override_home
         .map(Path::to_path_buf)
         .or_else(|| user_home.map(|home| home.join(default_dir)))
+}
+
+/// One folder of an agent program in the person's home, and the programs that read it.
+#[derive(Clone, Copy)]
+struct Provider {
+    /// The folder below `HOME`.
+    dir: &'static str,
+    /// The programs of a person that read that folder.
+    programs: &'static [&'static str],
+}
+
+/// The folder of Grok Build, which `grok` reads.
+const GROK_PROVIDER: Provider = Provider {
+    dir: ".grok",
+    programs: &["grok"],
+};
+
+/// The folder of Codex, which `codex` reads.
+const CODEX_PROVIDER: Provider = Provider {
+    dir: ".codex",
+    programs: &["codex"],
+};
+
+/// The folder of `provider` that this start writes, or `None` when this computer
+/// has none of its programs and no folder of it.
+///
+/// A folder that is there stays updated, also when the search does not see its
+/// program: a person who keeps the program elsewhere keeps what an earlier start
+/// wrote there, and a program that a person installs later receives its skills at
+/// the next start of Horizon.
+fn provider_root(
+    override_home: Option<&Path>,
+    user_home: Option<&Path>,
+    provider: Provider,
+    path: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let root = provider_home(override_home, user_home, provider.dir)?;
+    let installed = provider
+        .programs
+        .iter()
+        .any(|program| find_program(program, path).is_some());
+    (installed || root.is_dir()).then_some(root)
 }
 
 fn user_skill_dir(home: &Path, skill_root: &[&str], skill_name: &str) -> PathBuf {
@@ -859,7 +918,7 @@ mod tests {
     use super::{
         AgentMcpEntry, AgentPluginHostLease, HORIZON_BLOCK_SKILL, HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL,
         HORIZON_MACHINES_SKILL, HORIZON_MOBILE_SKILL, HORIZON_PLAN_SKILL, HORIZON_SERVER_MOVE_SKILL,
-        HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
+        HORIZON_SERVER_SKILL, HORIZON_SETUP_SKILL, PROVIDER_SKILLS, RETIRED_NOTIFY_SKILL, RETIRED_NOTIFY_SKILL_ROOTS,
         abandoned_user_skill_dirs, agent_plugin_host_lock_path, claude_mcp_config, install_agent_plugins_impl,
         open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills,
         sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir, user_skill_lease_dirs,
@@ -880,7 +939,7 @@ mod tests {
     #[test]
     fn user_skill_lease_dirs_cover_private_homes_not_abandoned_broadcasts() {
         let home = Path::new("/tmp/horizon-user");
-        let dirs = user_skill_lease_dirs(Some(home), None);
+        let dirs = user_skill_lease_dirs(Some(&home.join(".codex")));
         let abandoned = abandoned_user_skill_dirs(home);
 
         assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
@@ -904,8 +963,8 @@ mod tests {
     fn retired_notify_skill_is_cleanup_only_in_every_former_home() {
         let home = Path::new("/tmp/horizon-user");
         let grok = Path::new("/tmp/custom-grok");
-        let dirs = user_skill_lease_dirs(Some(home), None);
-        let cleanup = user_skill_cleanup_dirs(Some(home), Some(grok), None);
+        let dirs = user_skill_lease_dirs(Some(&home.join(".codex")));
+        let cleanup = user_skill_cleanup_dirs(Some(home), Some(grok), Some(&home.join(".codex")));
 
         for skill_root in RETIRED_NOTIFY_SKILL_ROOTS {
             let retired = user_skill_dir(home, skill_root, RETIRED_NOTIFY_SKILL);
@@ -1261,6 +1320,159 @@ mod tests {
         assert!(!path.exists(), "{reason}");
     }
 
+    /// The names of the entries of `dir`, in the order of the names.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("read directory")
+            .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// The folders of the skills that one provider root receives.
+    fn skill_folder_names() -> Vec<String> {
+        let mut names: Vec<String> = std::iter::once(HORIZON_BROWSER_SKILL)
+            .chain(PROVIDER_SKILLS.iter().map(|(skill, _)| *skill))
+            .map(str::to_owned)
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    /// A folder of stand-in agent programs, and the `PATH` value that names it.
+    fn stand_in_programs(bin: &Path, programs: &[&str]) -> std::ffi::OsString {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::create_dir_all(bin).expect("stand-in folder");
+        for program in programs {
+            let file = bin.join(program);
+            std::fs::write(&file, "#!/bin/sh\n").expect("stand-in program");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("executable program");
+        }
+        std::env::join_paths([bin]).expect("search path")
+    }
+
+    fn claude_plugin_dir_of(horizon_home: &HorizonHome) -> std::path::PathBuf {
+        horizon_home.claude_plugin_dir_for_host(horizon_core::browser::manifest::host_instance())
+    }
+
+    #[test]
+    fn a_first_start_writes_only_the_agent_homes_of_the_programs_this_computer_has() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        std::fs::create_dir_all(&user_home).expect("user home");
+        let path = stand_in_programs(&temp.path().join("bin"), &["claude", "codex"]);
+
+        let lease = super::install_agent_plugins_for(&horizon_home, Some(user_home.as_path()), None, None, Some(&path))
+            .expect("the installer runs");
+
+        assert_eq!(
+            names_in(&user_home),
+            vec![".codex"],
+            "a program that this computer does not have receives no folder in the home"
+        );
+        let mut codex_skills = skill_folder_names();
+        codex_skills.push(".horizon-leases".to_owned());
+        codex_skills.sort_unstable();
+        assert_eq!(
+            names_in(&user_home.join(".codex/skills")),
+            codex_skills,
+            "the folder of Codex holds the skills that it holds today"
+        );
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-browser/SKILL.md"),
+            BROWSER_SKILL_FILES[0].content,
+        );
+        let claude_plugin_dir = claude_plugin_dir_of(&horizon_home);
+        assert_eq!(
+            names_in(&claude_plugin_dir.join("skills")),
+            skill_folder_names(),
+            "the plugin of Claude Code holds the skills that it holds today"
+        );
+        assert!(
+            claude_plugin_dir.join(".mcp.json").is_file(),
+            "the plugin of Claude Code keeps its browser MCP entry"
+        );
+        drop(lease);
+    }
+
+    #[test]
+    fn a_program_that_the_search_finds_gets_its_own_folder() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        std::fs::create_dir_all(&user_home).expect("user home");
+        let path = stand_in_programs(&temp.path().join("bin"), &["grok"]);
+
+        let lease = super::install_agent_plugins_for(&horizon_home, Some(user_home.as_path()), None, None, Some(&path))
+            .expect("the installer runs");
+
+        assert_eq!(
+            names_in(&user_home),
+            vec![".grok"],
+            "the folder of the program that is here"
+        );
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-device/SKILL.md"),
+            DEVICE_SKILL_FILES[0].content,
+        );
+        assert!(
+            user_home.join(".grok/config.toml").is_file(),
+            "Grok receives its browser MCP entry"
+        );
+        drop(lease);
+    }
+
+    #[test]
+    fn a_grok_folder_that_is_there_stays_updated_without_the_program() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        std::fs::create_dir_all(user_home.join(".grok")).expect("empty Grok folder");
+        let path = stand_in_programs(&temp.path().join("bin"), &["codex"]);
+
+        let lease = super::install_agent_plugins_for(&horizon_home, Some(user_home.as_path()), None, None, Some(&path))
+            .expect("the installer runs");
+
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-machines/SKILL.md"),
+            MACHINES_SKILL_FILES[0].content,
+        );
+        assert!(
+            user_home.join(".grok/config.toml").is_file(),
+            "a Grok folder that is there keeps its browser MCP entry"
+        );
+        drop(lease);
+        drop(horizon_home);
+    }
+
+    #[test]
+    fn a_shared_folder_is_used_when_one_of_its_readers_is_found() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
+        let shared = super::Provider {
+            dir: ".agents",
+            programs: &["gemini", "kilo"],
+        };
+        let absent = super::provider_root(
+            None,
+            Some(&home),
+            shared,
+            Some(&stand_in_programs(&temp.path().join("none"), &["codex"])),
+        );
+        assert_eq!(absent, None, "no reader of the folder is here, and the folder is not");
+        let found = super::provider_root(
+            None,
+            Some(&home),
+            shared,
+            Some(&stand_in_programs(&temp.path().join("some"), &["kilo"])),
+        );
+        assert_eq!(found, Some(home.join(".agents")), "one reader of the folder is here");
+    }
+
     #[test]
     fn install_agent_plugins_syncs_skills_into_agent_homes_without_notify() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -1271,9 +1483,8 @@ mod tests {
         let updated = install_agent_plugins_impl(
             &horizon_home,
             &claude_plugin_dir,
-            Some(&user_home),
-            None,
-            None,
+            Some(&user_home.join(".grok")),
+            Some(&user_home.join(".codex")),
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
             },
@@ -1374,7 +1585,7 @@ mod tests {
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
         lease
-            .bind_user_skills(&super::user_skill_lease_dirs(Some(&user_home), None))
+            .bind_user_skills(&super::user_skill_lease_dirs(Some(&user_home.join(".codex"))))
             .expect("bind user skills");
         sync_leased_user_skills(
             &lease,
@@ -1405,7 +1616,6 @@ mod tests {
         install_agent_plugins_impl(
             &horizon_home,
             &claude_plugin_dir,
-            Some(&user_home),
             Some(&grok_home),
             None,
             AgentMcpEntry {
@@ -1440,7 +1650,7 @@ mod tests {
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
         lease
-            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None))
+            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home.join(".codex"))))
             .expect("bind user skills");
         lease.bind_grok_device_skill(&grok_root, false);
         sync_leased_user_skills(
@@ -1500,7 +1710,6 @@ mod tests {
             &first_plugin_dir,
             None,
             None,
-            None,
             AgentMcpEntry {
                 command: Path::new("/opt/horizon-a"),
             },
@@ -1510,7 +1719,6 @@ mod tests {
         install_agent_plugins_impl(
             &horizon_home,
             &second_plugin_dir,
-            None,
             None,
             None,
             AgentMcpEntry {
@@ -1621,7 +1829,7 @@ mod tests {
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
         lease
-            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None))
+            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home.join(".codex"))))
             .expect("bind writable roots");
         sync_leased_user_skills(
             &lease,
@@ -1629,7 +1837,7 @@ mod tests {
             &claude_plugin_dir,
             Some(&user_home),
             None,
-            None,
+            Some(&user_home.join(".codex")),
             AgentMcpEntry {
                 command: Path::new("/opt/horizon"),
             },

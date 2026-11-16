@@ -4,7 +4,7 @@ use horizon_core::HorizonHome;
 
 use super::{
     AgentMcpEntry, AgentPluginHostLease, RETIRED_MCP_SKILLS, RETIRED_OFFLOAD_SKILL, install_agent_plugins_impl,
-    user_skill_cleanup_dirs, user_skill_lease_dirs,
+    provider_home, user_skill_cleanup_dirs, user_skill_lease_dirs,
 };
 
 fn write_skill(dir: &Path) {
@@ -17,18 +17,15 @@ fn retired_mcp_skills_are_cleanup_only_in_codex_and_grok_roots() {
     let temp = tempfile::tempdir().expect("temp directory");
     let home = temp.path().join("home");
     let custom = temp.path().join("custom");
-    for (user_home, override_home, codex_root, grok_root) in [
-        (Some(home.as_path()), None, home.join(".codex"), home.join(".grok")),
-        (
-            Some(home.as_path()),
-            Some(custom.as_path()),
-            custom.clone(),
-            custom.clone(),
-        ),
-        (None, Some(custom.as_path()), custom.clone(), custom.clone()),
+    for (user_home, override_home) in [
+        (Some(home.as_path()), None),
+        (Some(home.as_path()), Some(custom.as_path())),
+        (None, Some(custom.as_path())),
     ] {
-        let cleanup = user_skill_cleanup_dirs(user_home, override_home, override_home);
-        let active = user_skill_lease_dirs(user_home, override_home);
+        let codex_root = provider_home(override_home, user_home, ".codex").expect("codex root");
+        let grok_root = provider_home(override_home, user_home, ".grok").expect("grok root");
+        let cleanup = user_skill_cleanup_dirs(user_home, Some(&grok_root), Some(&codex_root));
+        let active = user_skill_lease_dirs(Some(&codex_root));
         for skill in RETIRED_MCP_SKILLS {
             for root in [&codex_root, &grok_root] {
                 let retired = root.join("skills").join(skill);
@@ -43,7 +40,6 @@ fn retired_mcp_skills_are_cleanup_only_in_codex_and_grok_roots() {
 fn install_run_removes_retired_mcp_skills_from_horizon_owned_directories() {
     let temp = tempfile::tempdir().expect("temp directory");
     let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
-    let user_home = temp.path().join("user-home");
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
     let integrations = horizon_home.codex_integrations_dir();
     for skill in RETIRED_MCP_SKILLS {
@@ -58,7 +54,6 @@ fn install_run_removes_retired_mcp_skills_from_horizon_owned_directories() {
     install_agent_plugins_impl(
         &horizon_home,
         &claude_plugin_dir,
-        Some(&user_home),
         None,
         None,
         AgentMcpEntry {
@@ -83,14 +78,15 @@ fn retired_skill_is_cleanup_only_in_default_and_overridden_homes() {
     let temp = tempfile::tempdir().expect("temp directory");
     let home = temp.path().join("home");
     let custom = temp.path().join("custom");
-    for (user_home, override_home, root) in [
-        (Some(home.as_path()), None, home.join(".codex")),
-        (Some(home.as_path()), Some(custom.as_path()), custom.clone()),
-        (None, Some(custom.as_path()), custom.clone()),
+    for (user_home, override_home) in [
+        (Some(home.as_path()), None),
+        (Some(home.as_path()), Some(custom.as_path())),
+        (None, Some(custom.as_path())),
     ] {
+        let root = provider_home(override_home, user_home, ".codex").expect("codex root");
         let retired = root.join("skills").join(RETIRED_OFFLOAD_SKILL);
-        let active = user_skill_lease_dirs(user_home, override_home);
-        let cleanup = user_skill_cleanup_dirs(user_home, None, override_home);
+        let active = user_skill_lease_dirs(Some(&root));
+        let cleanup = user_skill_cleanup_dirs(user_home, None, Some(&root));
         assert!(cleanup.contains(&retired));
         assert!(!active.contains(&retired));
         write_skill(&retired);

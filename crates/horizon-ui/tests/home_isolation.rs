@@ -4,22 +4,37 @@
 #![cfg(target_os = "linux")]
 #![forbid(unsafe_code)]
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const EXIT_GUARD: Duration = Duration::from_mins(2);
 
-/// Runs the binary with only the given environment and returns every path that it left in
-/// `home` outside `home/private`, the Horizon home.
-fn paths_outside_the_horizon_home(integrations: &str) -> Vec<PathBuf> {
+/// A folder that holds the only agent program that this run finds.
+///
+/// The search of the installer reads these folders, so the test does not depend on the
+/// programs of the computer that runs it.
+fn stand_in_program_folder(root: &Path) -> PathBuf {
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).expect("stand-in folder");
+    let program = bin.join("codex");
+    std::fs::write(&program, "#!/bin/sh\n").expect("stand-in program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("executable program");
+    bin
+}
+
+/// Runs the binary with only the given environment and returns the test home, and every path
+/// that the run left in it outside `home`/`private`, the Horizon home.
+fn paths_outside_the_horizon_home(integrations: &str) -> (PathBuf, Vec<PathBuf>) {
     let root = tempfile::tempdir().expect("temporary directory");
     let home = root.path().join("home");
     std::fs::create_dir(&home).expect("home directory");
     let horizon_home = home.join("private");
+    let path = std::env::join_paths([stand_in_program_folder(root.path())]).expect("search path");
     let mut child = Command::new(env!("CARGO_BIN_EXE_horizon"))
         .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("PATH", path)
         .env("HOME", &home)
         .env("HORIZON_HOME", &horizon_home)
         .env("HORIZON_AGENT_INTEGRATIONS", integrations)
@@ -46,7 +61,7 @@ fn paths_outside_the_horizon_home(integrations: &str) -> Vec<PathBuf> {
     );
     let mut outside = Vec::new();
     collect_outside(&home, &horizon_home, &mut outside);
-    outside
+    (home, outside)
 }
 
 fn collect_outside(directory: &Path, horizon_home: &Path, outside: &mut Vec<PathBuf>) {
@@ -64,16 +79,27 @@ fn collect_outside(directory: &Path, horizon_home: &Path, outside: &mut Vec<Path
 
 #[test]
 fn integrations_off_writes_nothing_outside_the_horizon_home() {
-    let outside = paths_outside_the_horizon_home("off");
+    let (_, outside) = paths_outside_the_horizon_home("off");
     assert!(outside.is_empty(), "horizon wrote in the home directory: {outside:#?}");
 }
 
 #[test]
-fn integrations_on_write_into_the_home_directory() {
-    // Proves that the check above sees what the integrations write.
-    let outside = paths_outside_the_horizon_home("on");
+fn integrations_on_write_only_the_folder_of_the_program_that_is_here() {
+    // Proves that the check above sees what the integrations write, and that a program
+    // that the search does not find receives no folder of its own.
+    let (home, outside) = paths_outside_the_horizon_home("on");
     assert!(
         !outside.is_empty(),
         "the integrations wrote nothing in the home directory"
     );
+    assert!(
+        outside.iter().any(|path| path.starts_with(home.join(".codex"))),
+        "the folder of the agent program that the search finds: {outside:#?}"
+    );
+    for folder in [".agents", ".claude", ".gemini", ".grok", ".kilocode", ".pi"] {
+        assert!(
+            !outside.iter().any(|path| path.starts_with(home.join(folder))),
+            "a program that the search does not find receives no {folder}: {outside:#?}"
+        );
+    }
 }

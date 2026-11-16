@@ -56,7 +56,10 @@ pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf], extra_cleanup:
         push_acquired(&mut leases, host_id, dir, true);
     }
     for dir in extra_cleanup {
-        if !claim_dir(&mut claimed, dir) {
+        // A cleanup root that holds nothing is not leased: a lease makes the folder
+        // of its coordination files, and a program that this computer does not have
+        // then receives a folder of its own.
+        if !claim_dir(&mut claimed, dir) || std::fs::symlink_metadata(dir).is_err() {
             continue;
         }
         push_acquired(&mut leases, host_id, dir, false);
