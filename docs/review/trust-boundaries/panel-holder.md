@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,docs/architecture/panel-holder.md"
+applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-pty-tap/src/socket.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,docs/architecture/panel-holder.md"
 ---
 
 # Trust boundary of the holder of a panel
@@ -40,6 +40,12 @@ The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/hor
   holder cannot tell it from Horizon.
 - **One client at a time.** A second client gets one refusal frame and is closed,
   so a process of the same user cannot read the ring while Horizon holds the link.
+- **A terminal that attaches trusts the holder of its socket.** The attached
+  terminal parses the frames of that socket with `alacritty_terminal` under the
+  rules of a local panel, and it sends the keys that a person types into the panel
+  to the same socket. A process of the same user that serves that socket can
+  therefore send any bytes to the terminal of the panel and read what the person
+  types, and the attached terminal cannot tell it from the holder.
 - **A stale socket is replaced, a live one is not.** A socket that answers a
   connect belongs to a holder that runs, so a second holder for the same panel
   refuses with `AlreadyServing` and ends. A socket that no process listens on is

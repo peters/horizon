@@ -28,7 +28,7 @@ pub(crate) const VERSION: u8 = 1;
 pub(crate) const MAX_PAYLOAD: u32 = 1024 * 1024;
 
 /// The bytes of a kind and a length, before every payload.
-const HEADER: usize = 5;
+pub(crate) const HEADER: usize = 5;
 
 /// The bytes of a size: rows, columns, cell width and cell height.
 const SIZE: usize = 8;
@@ -81,6 +81,7 @@ pub enum Frame {
 
 impl Frame {
     /// The kind byte of this frame.
+    #[must_use]
     pub fn kind(&self) -> u8 {
         match self {
             Self::Input(_) => INPUT,
@@ -102,13 +103,7 @@ impl Frame {
                 cols,
                 cell_width,
                 cell_height,
-            } => {
-                let mut payload = Vec::with_capacity(SIZE);
-                for value in [rows, cols, cell_width, cell_height] {
-                    payload.extend_from_slice(&value.to_be_bytes());
-                }
-                (SIZE_KIND, payload)
-            }
+            } => (SIZE_KIND, size(*rows, *cols, *cell_width, *cell_height).to_vec()),
             Self::Close | Self::Refusal => (self.kind(), Vec::new()),
             Self::Hello(hello) => (HELLO, hello.encode()),
             Self::Exit(status) => {
@@ -187,6 +182,31 @@ impl Hello {
     }
 }
 
+/// The payload of a size: rows, columns, cell width and cell height.
+pub(crate) fn size(rows: u16, cols: u16, cell_width: u16, cell_height: u16) -> [u8; SIZE] {
+    let mut payload = [0u8; SIZE];
+    for (at, value) in [rows, cols, cell_width, cell_height].into_iter().enumerate() {
+        payload[2 * at..2 * at + 2].copy_from_slice(&value.to_be_bytes());
+    }
+    payload
+}
+
+/// The bytes of the kind and the length of one frame with a payload of `length`.
+pub(crate) fn header(kind: u8, length: usize) -> [u8; HEADER] {
+    let mut header = [0u8; HEADER];
+    header[0] = kind;
+    header[1..].copy_from_slice(&u32::try_from(length).unwrap_or(MAX_PAYLOAD).to_be_bytes());
+    header
+}
+
+/// The bytes of one frame with a payload of `payload`.
+pub(crate) fn frame_bytes(kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(HEADER + payload.len());
+    bytes.extend_from_slice(&header(kind, payload.len()));
+    bytes.extend_from_slice(payload);
+    bytes
+}
+
 /// Writes `frame` as one frame.
 ///
 /// # Errors
@@ -194,16 +214,12 @@ impl Hello {
 /// Returns why the frame cannot be written, or that its payload is too large.
 pub fn write(writer: &mut impl Write, frame: &Frame) -> Result<(), FrameError> {
     let (kind, payload) = frame.parts();
-    let length = u32::try_from(payload.len()).map_err(|_| FrameError::TooLarge {
-        length: MAX_PAYLOAD + 1,
-    })?;
-    if length > MAX_PAYLOAD {
-        return Err(FrameError::TooLarge { length });
+    if payload.len() > MAX_PAYLOAD as usize {
+        return Err(FrameError::TooLarge {
+            length: u32::try_from(payload.len()).unwrap_or(MAX_PAYLOAD),
+        });
     }
-    let mut header = [0u8; HEADER];
-    header[0] = kind;
-    header[1..].copy_from_slice(&length.to_be_bytes());
-    writer.write_all(&header)?;
+    writer.write_all(&header(kind, payload.len()))?;
     writer.write_all(&payload)?;
     Ok(())
 }

@@ -22,11 +22,13 @@ mod inbox;
 mod pty;
 mod reader;
 mod scanner;
+mod socket;
 
 pub use inbox::{QUERY_PAYLOAD, QUEUE_DEPTH, StatusInbox, StatusTap};
 pub use pty::TapPty;
 pub use reader::StatusReader;
 pub use scanner::{MAX_PAYLOAD_BYTES, Payload, Scanner};
+pub use socket::{LinkReader, LinkWriter, SocketPty};
 
 #[cfg(test)]
 mod cost_tests;

@@ -25,6 +25,13 @@ impl<R> StatusReader<R> {
     }
 }
 
+impl<R> StatusReader<R> {
+    /// The reader under the scanner.
+    pub fn source(&self) -> &R {
+        &self.source
+    }
+}
+
 impl<R: Read> Read for StatusReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let read = self.source.read(buffer)?;
