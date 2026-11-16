@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::app::block_machines::settle_machine_load;
 use crate::app::test_support::{card_body, card_panel, drawn_text, drew_text, raw_input, run_app_frame_with_input};
 use horizon_core::machine_watch::{
     AgentState, MachineAgent, MachineWatch, MachineWatchSnapshot, MachineWatchState, WatchLink,
@@ -12,7 +13,13 @@ use horizon_core::{Machine, MachineRegistry, Machines, WorkspaceLayout};
 
 /// Keeps the machine `build-1` in the list of the app, with `cards` the mark of its card
 /// setup.
+///
+/// The startup read of the machine list answers on a thread of its own and takes the
+/// records of the registry file, so a record that this test keeps in memory is gone
+/// with that answer. The test waits for the answer first, as every other test that
+/// writes the machine list of this window does.
 fn keep_machine(app: &mut HorizonApp, cards: bool) {
+    settle_machine_load(app);
     let machine = Machine {
         name: "build-1".to_owned(),
         host: "127.0.0.1".to_owned(),
