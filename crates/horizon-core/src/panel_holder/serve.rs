@@ -1,11 +1,12 @@
 //! The life of one holder: the terminal, its program, and one client at a time.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,12 @@ const POLL: Duration = Duration::from_millis(5);
 const IDLE_POLL: Duration = Duration::from_millis(50);
 /// The bytes of one read of the output of the program.
 const BUFFER: usize = 64 * 1024;
+/// The parts of output that wait for the loop, which bounds the memory that a
+/// program that writes faster than the loop reads can hold.
+const OUTPUT_QUEUE: usize = 8;
+/// The parts of input that wait for the program, which bounds the memory that a
+/// program that reads nothing can hold.
+const INPUT_QUEUE: usize = 64;
 
 /// Serves the socket of `launch` until the program or a client ends the holder.
 ///
@@ -54,7 +61,8 @@ pub(crate) fn serve(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> R
     let pid = pty.child().id();
     let start_time = crate::process::start_identity(pid);
     let pump = start_pump(pty.reader().try_clone()?)?;
-    let mut ring: Vec<u8> = Vec::new();
+    let input = start_input(pty.writer().try_clone()?)?;
+    let mut ring: VecDeque<u8> = VecDeque::new();
     let mut client: Option<Client> = None;
     let mut ended: Option<Option<i32>> = None;
     let mut ended_at: Option<Instant> = None;
@@ -78,7 +86,7 @@ pub(crate) fn serve(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> R
 
         let mut close = false;
         if let Some(attached) = client.as_mut() {
-            match answer(attached, &mut pty) {
+            match answer(attached, &mut pty, &input) {
                 Some(asked) => close = asked,
                 None => client = None,
             }
@@ -91,7 +99,7 @@ pub(crate) fn serve(home: &HorizonHome, launch: &Launch, ring_limit: usize) -> R
 
         let mut output = Vec::new();
         while let Ok(mut chunk) = pump.try_recv() {
-            ring.extend_from_slice(&chunk);
+            ring.extend(chunk.iter().copied());
             output.append(&mut chunk);
         }
         if ring.len() > ring_limit {
@@ -140,10 +148,10 @@ struct Client {
 impl Client {
     /// Answers the hello and the newest output, so the client reads the last
     /// screens before the live output.
-    fn attach(mut socket: UnixStream, hello: &Hello, ring: &[u8]) -> Result<Self, HolderError> {
+    fn attach(mut socket: UnixStream, hello: &Hello, ring: &VecDeque<u8>) -> Result<Self, HolderError> {
         frames::write(&mut socket, &Frame::Hello(hello.clone()))?;
         if !ring.is_empty() {
-            frames::write(&mut socket, &Frame::Replay(ring.to_vec()))?;
+            frames::write(&mut socket, &Frame::Replay(ring.iter().copied().collect()))?;
         }
         Ok(Self {
             socket,
@@ -179,17 +187,20 @@ impl Client {
     }
 }
 
-/// Answers the frames of the client: its input reaches the program and its size
-/// reaches the terminal.
+/// Answers the frames of the client: its input reaches the thread that writes it
+/// and its size reaches the terminal.
 ///
-/// `None` says that the client went away, and `Some(true)` that it asked for the
-/// end of the program.
-fn answer(client: &mut Client, pty: &mut Pty) -> Option<bool> {
+/// `None` says that the client went away or waits for a program that reads
+/// nothing, and `Some(true)` that it asked for the end of the program.
+fn answer(client: &mut Client, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Option<bool> {
     let mut close = false;
     for frame in client.read()? {
         match frame {
             Frame::Input(bytes) => {
-                let _ = pty.writer().write_all(&bytes);
+                if input.try_send(bytes).is_err() {
+                    tracing::warn!("the program of a held panel reads no input");
+                    return None;
+                }
             }
             Frame::Resize {
                 rows,
@@ -231,7 +242,7 @@ fn accept(listener: &UnixListener) -> Result<Option<UnixStream>, HolderError> {
 /// thread waits in the read instead of asking the kernel for new bytes.
 fn start_pump(mut reader: fs::File) -> Result<Receiver<Vec<u8>>, HolderError> {
     rustix::fs::fcntl_setfl(&reader, rustix::fs::OFlags::empty()).map_err(io::Error::from)?;
-    let (send, receive) = mpsc::channel();
+    let (send, receive) = mpsc::sync_channel(OUTPUT_QUEUE);
     thread::Builder::new()
         .name("panel-holder-reader".to_owned())
         .spawn(move || pump(&mut reader, &send))?;
@@ -239,7 +250,7 @@ fn start_pump(mut reader: fs::File) -> Result<Receiver<Vec<u8>>, HolderError> {
 }
 
 /// Hands every part of the output of the program to the holder, until it ends.
-fn pump(reader: &mut fs::File, send: &Sender<Vec<u8>>) {
+fn pump(reader: &mut fs::File, send: &SyncSender<Vec<u8>>) {
     let mut buffer = vec![0u8; BUFFER];
     loop {
         match reader.read(&mut buffer) {
@@ -254,6 +265,22 @@ fn pump(reader: &mut fs::File, send: &Sender<Vec<u8>>) {
             Err(_) => return,
         }
     }
+}
+
+/// Writes the input of the client to the program on its own thread, so a program
+/// that reads nothing cannot stop the loop that its output needs.
+fn start_input(mut writer: fs::File) -> Result<SyncSender<Vec<u8>>, HolderError> {
+    let (send, input) = mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE);
+    thread::Builder::new()
+        .name("panel-holder-input".to_owned())
+        .spawn(move || {
+            for bytes in input {
+                if writer.write_all(&bytes).is_err() {
+                    return;
+                }
+            }
+        })?;
+    Ok(send)
 }
 
 /// Ends the program as Horizon ends one: the master of its terminal closes, and a

@@ -28,6 +28,7 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::horizon_home::safe_local_id;
@@ -172,7 +173,9 @@ pub fn serve() -> Result<(), HolderError> {
 
 /// Starts the holder of `launch` and answers its hello.
 ///
-/// This starts a process and waits for a socket, so only a worker calls it.
+/// The holder leads its own session and outlives this Horizon, so a thread of
+/// this Horizon waits for its end and the system reaps it. This starts a process
+/// and waits for a socket, so only a worker calls it.
 ///
 /// # Errors
 ///
@@ -189,7 +192,13 @@ fn start_with(exe: &Path, home: &HorizonHome, launch: &Launch) -> Result<Hello, 
     if answer.is_err() {
         let _ = child.kill();
         let _ = child.wait();
+        return answer;
     }
+    thread::Builder::new()
+        .name("panel-holder-reap".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+        })?;
     answer
 }
 

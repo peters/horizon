@@ -502,3 +502,27 @@ fn the_folder_of_the_sockets_is_made_private() {
         .mode();
     assert_eq!(mode & 0o777, 0o700, "a folder that existed is made private");
 }
+
+#[test]
+fn a_program_that_reads_no_input_still_writes_to_its_client() {
+    let (_folder, home) = temp_home();
+    let serving = Serving::start(
+        &home,
+        &launch("no-input", "sleep 2; printf 'after the input\\n'; exec sleep 60"),
+        1024,
+    );
+    let (mut client, _hello) = attach_when_free(&serving.socket);
+
+    // More input than the terminal of a program holds, and this program reads none
+    // of it, so a holder that wrote the input in its own loop would wait for it.
+    for _ in 0..4 {
+        client.send(&Frame::Input(vec![b'x'; 64 * 1024]));
+    }
+    let seen = client.text_until("after the input");
+    assert!(
+        seen.contains("after the input"),
+        "the output reaches the client while the input waits: {seen:?}"
+    );
+
+    close(&mut client, serving);
+}
