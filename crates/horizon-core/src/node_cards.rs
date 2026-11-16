@@ -41,14 +41,21 @@ pub fn forward_args(connection: &SshConnection, sockets: &[(String, PathBuf)]) -
     args
 }
 
-/// The argv of the one call that removes the socket files of a machine before the
-/// child of its cards binds them again: `sshd` binds no streamlocal path that a file
-/// holds, and its unlink option belongs to the `sshd` of the machine. The paths carry
-/// only the characters of a machine name and a session name.
+/// The argv of the one call that makes the folder of the card sockets of a machine and
+/// removes the socket files that the child before it left: `sshd` binds no streamlocal
+/// path that a file holds, and it binds nothing in a folder that is not there. The paths
+/// carry only the characters of a machine name and a session name.
 #[must_use]
 pub fn prune_args(connection: &SshConnection, remotes: &[String]) -> Vec<String> {
     let mut args = connection.ssh_transport_args();
-    args.push(format!("rm -f -- {}", remotes.join(" ")));
+    let folders = remotes.first().and_then(|remote| remote.rsplit_once('/')).map_or_else(
+        || paths::REMOTE_DIR.to_owned(),
+        |(folder, _)| format!("{} {folder}", paths::REMOTE_DIR),
+    );
+    args.push(format!(
+        "mkdir -p {folders} && chmod 700 {folders} && rm -f -- {}",
+        remotes.join(" ")
+    ));
     args
 }
 

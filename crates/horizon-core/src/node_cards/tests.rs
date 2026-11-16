@@ -123,6 +123,28 @@ fn the_child_of_one_session_forwards_one_socket_and_holds_no_terminal() {
 }
 
 #[test]
+fn the_prune_of_a_machine_makes_the_folder_of_its_sockets_before_it_removes_them() {
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let connection = login(folder.path(), "build-1");
+    let folders = "/tmp/horizon-cards /tmp/horizon-cards/build-1";
+    for (sessions, sockets) in [
+        (&["fix-71"][..], "/tmp/horizon-cards/build-1/fix-71.sock"),
+        (
+            &["fix-71", "night"][..],
+            "/tmp/horizon-cards/build-1/fix-71.sock /tmp/horizon-cards/build-1/night.sock",
+        ),
+    ] {
+        let remotes: Vec<String> = sessions
+            .iter()
+            .map(|session| remote_socket("build-1", session).expect("a plain pair"))
+            .collect();
+        let args = prune_args(&connection, &remotes);
+        let words = format!("mkdir -p {folders} && chmod 700 {folders} && rm -f -- {sockets}");
+        assert_eq!(args.last().map(String::as_str), Some(words.as_str()), "of {sessions:?}");
+    }
+}
+
+#[test]
 fn three_sessions_of_one_machine_get_three_forwards_of_one_child() {
     let folder = tempfile::tempdir().expect("a folder of the test");
     let connection = login(folder.path(), "build-1");

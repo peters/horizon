@@ -3,6 +3,7 @@
 //! no child behind.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -169,10 +170,25 @@ impl StandIn {
     }
 }
 
+/// The words of the removal that Horizon runs before each start of the child of a
+/// machine: the folder of its sockets, mode 700, and the socket file of each session.
+fn prune_words(sessions: &[&str]) -> String {
+    let folder = "/tmp/horizon-cards/build-1";
+    let paths: Vec<String> = sessions
+        .iter()
+        .map(|session| format!("{folder}/{session}.sock"))
+        .collect();
+    format!(
+        "mkdir -p /tmp/horizon-cards {folder} && chmod 700 /tmp/horizon-cards {folder} && rm -f -- {}",
+        paths.join(" ")
+    )
+}
+
 /// The body of one stand-in `ssh` that binds the socket file of each `-R` in
 /// `folder`, as the `sshd` of a machine does, and that leaves each file behind when
-/// it ends. A bind over a file that is still there is the words and the status of a
-/// real `sshd` that refuses a path, and `log` holds one line for each call.
+/// it ends. A bind over a file that is still there, and a bind in a folder that is
+/// not there, are the words and the status of a real `sshd` that refuses a path, and
+/// `log` holds one line for each call, with the words of a removal of Horizon.
 fn binding_body(folder: &Path, log: &Path) -> String {
     format!(
         "D={folder}\nL={log}\nbind=\nlast=\n\
@@ -184,13 +200,15 @@ while [ $# -gt 0 ]; do\n\
 \x20 esac\n\
 \x20 last=$1; shift\ndone\n\
 case $last in\n\
-\x20 rm\\ -f\\ --*)\n\
-\x20   printf 'prune\\n' >> \"$L\"\n\
-\x20   set -f; set -- $last; shift 3; set +f\n\
+\x20 mkdir\\ -p*\" && chmod 700 \"*\" && rm -f -- \"*)\n\
+\x20   printf 'prune %s\\n' \"$last\" >> \"$L\"\n\
+\x20   mkdir -p \"$D\"; chmod 700 \"$D\"\n\
+\x20   set -f; set -- ${{last#*rm -f -- }}; set +f\n\
 \x20   for p in \"$@\"; do rm -f \"$D/$(basename \"$p\")\"; done\n\
 \x20   exit 0 ;;\nesac\n\
 for pair in $bind; do\n\
 \x20 n=$(basename \"${{pair%%:*}}\")\n\
+\x20 if [ ! -d \"$D\" ]; then printf 'no folder %s\\n' \"$D\" >> \"$L\"; exit 255; fi\n\
 \x20 if [ -e \"$D/$n\" ]; then printf 'stale %s\\n' \"$n\" >> \"$L\"; exit 255; fi\n\
 \x20 : > \"$D/$n\"\n\
 \x20 printf 'bind %s\\n' \"$n\" >> \"$L\"\ndone\nsleep 0.4\nexit 255\n",
@@ -360,9 +378,82 @@ fn a_restarted_child_removes_the_socket_file_that_the_one_before_it_left() {
         !held.contains("stale"),
         "a bind found the file of the child before it: {held}"
     );
+    let night = prune_words(&["night"]);
     assert!(
-        held.starts_with("prune\nbind night.sock\nprune\nbind night.sock\n"),
+        held.starts_with(&format!(
+            "prune {night}\nbind night.sock\nprune {night}\nbind night.sock\n"
+        )),
         "each child removes the socket file of the one before it: {held}"
+    );
+    cards.stop_all();
+}
+
+#[test]
+fn a_fresh_machine_gets_the_folder_of_its_sockets_before_the_first_bind() {
+    // A machine whose folder is not there yet: `sshd` binds nothing in it until
+    // Horizon makes it, and no other program of that machine makes it.
+    let folder = scratch();
+    let machine = folder.path().join("machine");
+    let log = folder.path().join("log");
+    let stand_in = StandIn::of(&binding_body(&machine, &log));
+    let directory = scratch();
+    let mut cards = cards_with(&directory, &stand_in);
+    let one = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
+    cards.set_sessions(vec![one], HOST);
+    wait_until("the first bind of the socket of one session", || {
+        recorded(&log).contains("bind fix-71.sock")
+    });
+    let held = recorded(&log);
+    assert!(
+        !held.contains("no folder"),
+        "the folder of the machine was there: {held}"
+    );
+    let prunes: Vec<&str> = held.lines().filter_map(|line| line.strip_prefix("prune ")).collect();
+    let one = prune_words(&["fix-71"]);
+    assert_eq!(
+        prunes.first().copied(),
+        Some(one.as_str()),
+        "the removal of one session: {held}"
+    );
+    let mode = std::fs::metadata(&machine)
+        .expect("the folder of the machine")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700, "the folder of the machine of the removal is private");
+    cards.stop_all();
+}
+
+#[test]
+fn a_session_that_joins_makes_the_removal_name_both_socket_files() {
+    let folder = scratch();
+    let machine = folder.path().join("machine");
+    let log = folder.path().join("log");
+    let stand_in = StandIn::of(&binding_body(&machine, &log));
+    let directory = scratch();
+    let mut cards = cards_with(&directory, &stand_in);
+    let one = machine_of(&cards, directory.path(), "build-1", &["fix-71"]);
+    cards.set_sessions(vec![one], HOST);
+    wait_until("the child of one session", || {
+        recorded(&log).contains("bind fix-71.sock")
+    });
+    let two = machine_of(&cards, directory.path(), "build-1", &["fix-71", "night"]);
+    cards.set_sessions(vec![two], HOST);
+    wait_until("the child of two sessions", || {
+        recorded(&log).contains("bind night.sock")
+    });
+    let held = recorded(&log);
+    let prunes: Vec<&str> = held.lines().filter_map(|line| line.strip_prefix("prune ")).collect();
+    let (one, both) = (prune_words(&["fix-71"]), prune_words(&["fix-71", "night"]));
+    let one_session = prunes.iter().position(|words| *words == one.as_str());
+    let both_sessions = prunes.iter().position(|words| *words == both.as_str());
+    assert!(
+        matches!((one_session, both_sessions), (Some(one), Some(both)) if one < both),
+        "the removal of one session, then of two: {held}"
+    );
+    assert!(
+        !held.contains("stale"),
+        "a bind found the file of the child before it: {held}"
     );
     cards.stop_all();
 }
