@@ -102,7 +102,7 @@ impl NodeCards {
             };
             match std::thread::Builder::new()
                 .name("horizon-card-sockets".to_owned())
-                .spawn(move || supervise(orders, &base, launch))
+                .spawn(move || supervise(orders, &base, &launch))
             {
                 Ok(supervisor) => {
                     self.wanted = Some(wanted);
@@ -159,7 +159,7 @@ struct Launch {
 
 /// The loop of the supervisor: serve the set that each message names, and end
 /// every socket and child when the window drops its sender.
-fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, launch: Launch) {
+fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, launch: &Launch) {
     let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
         return;
     };
@@ -169,7 +169,7 @@ fn supervise(orders: tokio::sync::mpsc::UnboundedReceiver<Wanted>, base: &Path, 
         let mut carried: BTreeMap<String, Carried> = BTreeMap::new();
         let mut orders = orders;
         while let Some((machines, host_instance)) = orders.recv().await {
-            apply_set(&folder, &launch, &machines, &host_instance, &mut bound, &mut carried).await;
+            apply_set(&folder, launch, &machines, &host_instance, &mut bound, &mut carried).await;
         }
         for (_, socket) in std::mem::take(&mut bound) {
             end(socket).await;
