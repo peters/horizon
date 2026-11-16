@@ -44,6 +44,8 @@ pub(crate) use size::CARD_CHROME_HEIGHT;
 pub(crate) use size::CARD_HEIGHT_LIMITS;
 pub(crate) use size::{CARD_FOOT_SPAN, card_height_limits, card_width, default_card_size, fitted_card_height};
 
+use std::borrow::Cow;
+
 use egui::{
     Align2, Direction, FontId, Frame, Margin, Pos2, Rect, RichText, Role, Sense, Shape, Stroke, Ui, UiBuilder, Vec2,
     WidgetInfo,
@@ -66,6 +68,9 @@ pub(crate) const EMPTY_CARD: &str = "This card is empty.";
 pub(crate) const AGENT_GONE_TITLE: &str = "Its agent is not here";
 /// The second line of that frame.
 pub(crate) const AGENT_GONE_LINE: &str = "Start an agent in this workspace to use the buttons.";
+/// The second line of that frame for a card of a session of a machine, whose owner is a
+/// `tmux` session and no panel of this computer.
+const SESSION_GONE_LINE: &str = "Start the session on that machine again, or close the card.";
 /// The strong line of the frame that explains a refused click.
 pub(crate) const CLICKS_REFUSED_TITLE: &str = "Too many clicks are waiting";
 /// The second line of that frame.
@@ -202,6 +207,19 @@ fn show_more_below(ui: &mut Ui, live: bool, end: f32) -> bool {
     response.clicked() && ui.min_rect().max.y <= end + 0.5
 }
 
+/// The two lines of the frame that explains a card whose owner left. A card of a session
+/// of a machine names that session, which no panel of this computer stands in for; a card
+/// of a local agent panel keeps the words of an agent.
+fn gone_lines(owner_session: Option<(&str, &str)>) -> (Cow<'static, str>, &'static str) {
+    match owner_session {
+        Some((machine, session)) => (
+            format!("Its session {session} on {machine} is not there.").into(),
+            SESSION_GONE_LINE,
+        ),
+        None => (Cow::Borrowed(AGENT_GONE_TITLE), AGENT_GONE_LINE),
+    }
+}
+
 fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     let refused = view.card.refused_notice(view.now_millis);
     // A refused link takes a line of its own in the body, and the host fits the
@@ -219,7 +237,8 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     let form = Form::of(ui.available_width());
     let mut first = true;
     if !view.agent_present && !view.host_owned {
-        status::show(ui, "agent_gone", Tone::Warn, AGENT_GONE_TITLE, AGENT_GONE_LINE);
+        let (title, line) = gone_lines(view.owner_session);
+        status::show(ui, "agent_gone", Tone::Warn, &title, line);
         first = false;
     }
     if refused {

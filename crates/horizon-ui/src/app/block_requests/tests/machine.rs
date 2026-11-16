@@ -308,14 +308,17 @@ fn a_card_of_a_machine_session_names_its_owner_present_and_after_absent() {
     assert!(!agent_present, "a session that the watch no longer reports is absent");
 }
 
-#[test]
-fn the_owner_of_a_card_of_a_machine_session_is_present_while_the_watch_names_the_session() {
+/// The app of one test: the machine `build-1` with no card setup, the stand-in watch of
+/// `folder` whose report names the session `hz-relay`, whose mark is `left`, and a card of
+/// that session, centered in the view of the person.
+fn app_with_a_card_of(
+    prefix: &str,
+    folder: &Path,
+    left: &Path,
+) -> (tempfile::TempDir, Context, HorizonApp, WorkspaceId) {
     let (_temp, ctx, mut app) = app();
-    ctx.enable_accesskit();
     keep_machine(&mut app, false);
-    let folder = tempfile::tempdir().expect("a folder of the test");
-    let left = folder.path().join("left");
-    app.machine_watch.watch = Arc::new(MachineWatch::with_program(stand_in_watch(folder.path(), &left)));
+    app.machine_watch.watch = Arc::new(MachineWatch::with_program(stand_in_watch(folder, left)));
     let (card, _) = created(app.apply_block_request(
         &session_request(
             &app,
@@ -336,7 +339,23 @@ fn the_owner_of_a_card_of_a_machine_session_is_present_while_the_watch_names_the
     // The report of the machine names the session and holds no row of an agent.
     wait_for_sessions(&ctx, &mut app, Some("hz-relay"));
     let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(WINDOW, None));
-    assert!(app.center_workspace_in_rect(workspace, app.canvas_rect(&ctx)));
+    assert!(
+        app.center_workspace_in_rect(workspace, app.canvas_rect(&ctx)),
+        "{prefix}"
+    );
+    let temp = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .expect("a folder of the test");
+    (temp, ctx, app, workspace)
+}
+
+#[test]
+fn the_owner_of_a_card_of_a_machine_session_is_present_while_the_watch_names_the_session() {
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let left = folder.path().join("left");
+    let (_temp, ctx, mut app, _workspace) = app_with_a_card_of("hz-owner", folder.path(), &left);
+    ctx.enable_accesskit();
 
     let output = settle_frames(&ctx, &mut app);
     assert!(
@@ -353,4 +372,30 @@ fn the_owner_of_a_card_of_a_machine_session_is_present_while_the_watch_names_the
     );
     let stop = accesskit_disabled(&output, "Stop").expect("the button of the card is a control of the frame");
     assert!(!stop, "the buttons of a card of a session that is there are on");
+}
+
+#[test]
+fn a_card_of_a_machine_session_whose_session_left_names_the_session() {
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let left = folder.path().join("left");
+    let (_temp, ctx, mut app, workspace) = app_with_a_card_of("hz-left", folder.path(), &left);
+    let _ = settle_frames(&ctx, &mut app);
+
+    // The session leaves the list of the machine, as a session that ended does.
+    std::fs::write(&left, b"").expect("the mark of the test");
+    wait_for_sessions(&ctx, &mut app, None);
+    assert!(app.center_workspace_in_rect(workspace, app.canvas_rect(&ctx)));
+    let output = settle_frames(&ctx, &mut app);
+    assert!(
+        drew_text(&output, "Its session hz-relay on build-1 is not there."),
+        "the banner names the session that left"
+    );
+    assert!(
+        drew_text(&output, "Start the session on that machine again, or close the card."),
+        "the banner says what the person can do"
+    );
+    assert!(
+        !drew_text(&output, "Its agent is not here"),
+        "the sentence of a card of a local panel is not the sentence of a machine"
+    );
 }
