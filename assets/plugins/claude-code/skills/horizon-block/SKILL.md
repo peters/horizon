@@ -47,6 +47,9 @@ The card is drawn in the caller's workspace. It does not take keyboard focus.
      {"id": "delete", "label": "Delete", "tone": "danger"}]}]}}
 ```
 
+The `document` field is an object, and Horizon also reads the JSON text of
+the object when a caller can only send text.
+
 A document may ask for a wide card: `"width": "wide"` beside `components`. A
 wide card opens at half of the width of the canvas view, between 1100 and 2400
 points. A card fits its content: it takes the height that the content needs, up
