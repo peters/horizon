@@ -283,15 +283,20 @@ impl DriverLink {
         page: &LinkPage<'_>,
     ) -> Result<(), AttachedHostFailure> {
         let attached = self.attached();
-        self.send(&HostDriverRequest::Hello {
+        let hello = HostDriverRequest::Hello {
             version: HOST_LINK_VERSION,
             horizon_version: env!("CARGO_PKG_VERSION").to_string(),
             system: HostSystem::here(),
             quality,
             page: page.id.to_string(),
             private: page.private,
-        })
-        .map_err(|error| AttachedHostFailure::unreachable(&attached, &error))?;
+        };
+        if self.send(&hello).is_err() {
+            // The program of the link can end before it takes the greet, and the
+            // words of its end say why. The error of a write to a closed link says
+            // nothing that the person can act on.
+            return Err(self.ended());
+        }
         let first = self
             .recv(FIRST_ANSWER)
             .map_err(|failure| failure.unwrap_or_else(|| AttachedHostFailure::closed(&attached)))?;
