@@ -228,6 +228,26 @@ Prove these results:
    Result: The folder holds no file after a start that a window answered or that
    ended its wait.
 
+### 6.6 P6 — Every conversation is open in a panel
+
+1. Open the Menu of the titlebar and press **Recent agent sessions**.
+
+   Result: The window lists the conversations of the private home.
+
+2. Press `Open all` on each folder of the list, until the window shows no row.
+
+   Result: One panel opens for each conversation, and the list loses its rows.
+
+3. Press **Recent agent sessions** in the Menu again.
+
+   Result: The window shows no row, and it says `Every conversation of this
+   computer is open in a panel.` It does not say that no conversation of an agent
+   program is on this computer.
+
+4. Close one panel of one conversation. Press **Recent agent sessions** again.
+
+   Result: The row of that conversation is in the list again.
+
 ## 7. Pass criteria
 
 - P1: the section shows two folders, and each press continues the conversation of
@@ -242,6 +262,8 @@ Prove these results:
   writes the one line of its answer, also when the window has no panel open. A
   folder that is gone is answered `folder_gone` with status 2, and a window
   without a session takes no request.
+- P6: the window names the conversations that a panel already has, and it names a
+  conversation again after its panel closes.
 - The page without a conversation in the private home shows no section.
 
 ## 8. Cleanup
