@@ -80,13 +80,32 @@ pub(super) struct Pass {
 /// release reach the same widget.
 pub(super) struct CardFrames {
     ctx: egui::Context,
+    /// The session of a machine that owns the card, when it is one.
+    owner_session: Option<(&'static str, &'static str)>,
 }
 
 impl CardFrames {
     pub(super) fn new() -> Self {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        Self { ctx }
+        Self {
+            ctx,
+            owner_session: None,
+        }
+    }
+
+    /// The same frames, with a session named `session` on `machine` as the owner
+    /// of the card.
+    pub(super) fn on_machine(mut self, machine: &'static str, session: &'static str) -> Self {
+        self.owner_session = Some((machine, session));
+        self
+    }
+
+    /// The same frames, in the fonts of the window, whose widths decide the room
+    /// that the footer texts take.
+    pub(super) fn in_window_fonts(self) -> Self {
+        self.ctx.set_fonts(crate::app::bootstrap::configure_fonts());
+        self
     }
 
     /// One pass, as the shapes it painted.
@@ -122,7 +141,7 @@ impl CardFrames {
                         interactive: true,
                         now_millis: 1_000,
                         owner_name: owner.name(),
-                        owner_session: None,
+                        owner_session: self.owner_session,
                         updated_at_millis: 1_790_883_960_000,
                         opened_link: &mut opened_link,
                         pressed: &mut pressed,
@@ -261,7 +280,7 @@ impl CardFrames {
                         interactive,
                         now_millis: 1_000,
                         owner_name: owner.name(),
-                        owner_session: None,
+                        owner_session: self.owner_session,
                         updated_at_millis: 1_790_883_960_000,
                         opened_link: &mut opened_link,
                         pressed: &mut pressed,

@@ -5,7 +5,7 @@
 use horizon_browser_control::block::{BlockDocument, Button, Component, Tone};
 use horizon_core::{CardRuntime, PanelKind};
 
-use super::{CardFrames, Owner, bounds_of, every_component};
+use super::{CardFrames, Owner, bounds_of, every_component, one_button};
 use crate::block_widget::chip::{CardChip, ChipState};
 use crate::block_widget::heading::{BadgeRow, badge_row};
 use crate::block_widget::{buttons, default_card_size, fitted_card_height, footer, primary_button};
@@ -40,6 +40,32 @@ fn callout(items: Vec<Button>) -> BlockDocument {
             buttons: items,
         }],
     }
+}
+
+/// The words, the painted rectangle and the elision of every text of a pass whose
+/// words start with `prefix`.
+fn painted_texts(shapes: &[egui::epaint::ClippedShape], prefix: &str) -> Vec<(String, egui::Rect, bool)> {
+    fn walk(shape: &egui::epaint::Shape, prefix: &str, found: &mut Vec<(String, egui::Rect, bool)>) {
+        match shape {
+            egui::epaint::Shape::Text(shape) if shape.galley.text().starts_with(prefix) => found.push((
+                shape.galley.text().to_owned(),
+                egui::Rect::from_min_size(shape.pos, shape.galley.size()),
+                shape.galley.elided,
+            )),
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, prefix, found);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut found = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, prefix, &mut found);
+    }
+    found
 }
 
 /// The left edge of the first painted text whose words are `text`.
@@ -327,4 +353,42 @@ fn a_badge_leaves_the_heading_row_when_the_heading_would_lose_its_share() {
     assert_eq!(badge_row(388.0, 300.0, 167.0), BadgeRow::OwnRow);
     assert_eq!(badge_row(388.0, 300.0, 143.0), BadgeRow::SameRow);
     assert_eq!(badge_row(388.0, 300.0, 144.0), BadgeRow::OwnRow);
+}
+
+/// The foot line of a card of an agent on a machine leaves the room of the time,
+/// so the session name does not sit under it: the time stays at the right edge of
+/// the card and the line ends with an ellipsis in the room that the time leaves.
+#[test]
+fn the_foot_of_a_card_on_a_machine_ends_before_the_time() {
+    const CARD: f32 = 420.0;
+    let frames = CardFrames::new()
+        .in_window_fonts()
+        .on_machine("machine-sixteen1", "session-sixteen1");
+    let (shapes, _nodes) = frames.pass_in(CARD, &one_button(), &mut CardRuntime::default(), Owner::Gone);
+
+    let clock = painted_texts(&shapes, "updated ")
+        .into_iter()
+        .next()
+        .expect("the card says when its document changed");
+    // Every other text of the line of the time is the foot of the card.
+    let foot: Vec<(String, egui::Rect, bool)> = painted_texts(&shapes, "")
+        .into_iter()
+        .filter(|(words, rect, _)| *words != clock.0 && rect.min.y < clock.1.max.y && rect.max.y > clock.1.min.y)
+        .collect();
+    assert!(!foot.is_empty(), "the foot of the card is drawn");
+    let right = foot.iter().map(|(_, rect, _)| rect.max.x).fold(f32::MIN, f32::max);
+    let card_right = CARD - crate::block_widget::metrics::FOOTER_PAD_SIDE;
+
+    assert!(
+        clock.1.max.x <= card_right,
+        "the time keeps the right edge of the card: {:?} is past {card_right}",
+        clock.1
+    );
+    assert!(
+        right <= clock.1.min.x,
+        "the foot ends before the time: {right} meets {} in {foot:?}",
+        clock.1.min.x
+    );
+    assert_eq!(foot.len(), 1, "the foot is one line: {foot:?}");
+    assert!(foot[0].2, "the person sees that the foot is cut: {:?}", foot[0].0);
 }

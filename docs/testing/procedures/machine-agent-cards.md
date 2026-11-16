@@ -88,7 +88,9 @@ server, so it changes no setting of the person.
 
 3. Read the footer of that card.
 
-   Result: the footer names `build-1` and `hz-night`.
+   Result: the footer names `build-1` and `hz-night`. The time `updated HH:MM`
+   stands at the right edge of the card, and no word of the footer is painted
+   under it.
 
 4. Read the chip of the titlebar of that card.
 
@@ -436,6 +438,8 @@ session and Horizon reaches it with the real `ssh` of this computer.
 - A press on a card reaches the agent of the session, and the card changes to the
   label of that press.
 - The footer names the machine and the session, and the chip names the machine.
+- The time of a card of a machine keeps the right edge of the card, and the foot
+  line ends with an ellipsis in the room that the time leaves.
 - A card of a live session names no missing agent and keeps its buttons on, also
   when the program of its session is no agent program and reports no state.
 - A card whose session the watch no longer names says which session and which
