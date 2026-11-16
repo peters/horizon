@@ -12,6 +12,10 @@ const PICKER_WIDTH: f32 = 520.0;
 const PICKER_MAX_HEIGHT: f32 = 460.0;
 const INPUT_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT: f32 = 34.0;
+/// The foot of the picker: the key hints and the action of the right.
+const FOOTER_HEIGHT: f32 = 36.0;
+/// The line that a hint of the foot takes below the key hints.
+const FOOTER_HINT_HEIGHT: f32 = 16.0;
 const MAX_VISIBLE_ROWS: usize = 12;
 
 pub struct PickerModalState {
@@ -108,7 +112,12 @@ impl PickerModalState {
                     PickerModalAction::None
                 }
             },
-            36.0,
+            FOOTER_HEIGHT
+                + if config.footer_hint.is_some() {
+                    FOOTER_HINT_HEIGHT
+                } else {
+                    0.0
+                },
         )
     }
 
@@ -122,6 +131,8 @@ impl PickerModalState {
         footer_height: f32,
     ) -> PickerModalAction {
         let mut layout = picker_layout(ctx.input(egui::InputState::viewport_rect));
+        // The foot of this caller takes the height that it asked for, also when a hint of
+        // the foot takes a second line: the results keep their room above it.
         layout.footer_height = footer_height;
         if self.show_backdrop(ctx, layout.screen, config.id_source) {
             return PickerModalAction::Cancelled;
@@ -352,13 +363,15 @@ fn render_empty_state(ui: &mut egui::Ui, empty_state: &PickerEmptyState<'_>, res
 fn render_footer(ui: &mut egui::Ui, footer_action_label: Option<&str>, footer_hint: Option<&str>) -> bool {
     let mut footer_action = false;
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+        // The hint takes a line of the foot below the key hints, so the action at the right
+        // of the foot keeps the pixels that it drew before the hint existed.
+        if let Some(hint) = footer_hint {
+            ui.label(egui::RichText::new(hint).size(10.5).color(theme::FG_DIM()));
+        }
         ui.horizontal(|ui| {
             keyboard_hint(ui, "enter", "select");
             keyboard_hint(ui, "tab", "complete");
             keyboard_hint(ui, "esc", "cancel");
-            if let Some(hint) = footer_hint {
-                ui.label(egui::RichText::new(hint).size(10.5).color(theme::FG_DIM()));
-            }
             if let Some(label) = footer_action_label {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui
@@ -375,9 +388,8 @@ fn render_footer(ui: &mut egui::Ui, footer_action_label: Option<&str>, footer_hi
 }
 
 fn picker_layout(screen_rect: Rect) -> PickerLayout {
-    let footer_height = 36.0;
     let max_results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT;
-    let card_height = (INPUT_HEIGHT + 16.0 + max_results_height + footer_height + 44.0).min(PICKER_MAX_HEIGHT);
+    let card_height = (INPUT_HEIGHT + 16.0 + max_results_height + FOOTER_HEIGHT + 44.0).min(PICKER_MAX_HEIGHT);
     let width = PICKER_WIDTH.min((screen_rect.width() - 24.0).max(200.0));
     let height = card_height.min((screen_rect.height() - 24.0).max(200.0));
     let card_min = screen_rect.min
@@ -391,7 +403,7 @@ fn picker_layout(screen_rect: Rect) -> PickerLayout {
         screen: screen_rect,
         inner: card.shrink2(Vec2::new(20.0, 16.0)),
         card,
-        footer_height,
+        footer_height: FOOTER_HEIGHT,
     }
 }
 
@@ -464,6 +476,59 @@ mod tests {
         footer_action_label: None,
         footer_hint: None,
     };
+
+    /// The rectangle of the text shape that holds `wanted`, in the order of the frame.
+    fn text_rect(shapes: &[egui::epaint::ClippedShape], wanted: &str) -> Option<egui::Rect> {
+        fn walk(shape: &egui::Shape, wanted: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.text().contains(wanted) => Some(text.visual_bounding_rect()),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| walk(shape, wanted)),
+                _ => None,
+            }
+        }
+        shapes.iter().find_map(|clipped| walk(&clipped.shape, wanted))
+    }
+
+    /// The hint of the foot takes its own line under the key hints, so the action at the
+    /// right of the foot keeps the pixels that it drew before the hint existed.
+    #[test]
+    fn the_hint_of_the_foot_keeps_its_own_line_below_the_key_hints() {
+        let ctx = egui::Context::default();
+        let mut modal = PickerModalState::new("");
+        let config = PickerModalConfig {
+            footer_action_label: Some("Skip (use default)"),
+            footer_hint: Some("Type . to see hidden folders"),
+            ..CONFIG
+        };
+        let mut output = None;
+        // The first frame of a context loads its fonts and is discarded: the second paints.
+        for _ in 0..2 {
+            output = Some(
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2400.0, 1300.0))),
+                        ..RawInput::default()
+                    },
+                    |ui| {
+                        modal.show(ui.ctx(), &config, &[] as &[()], |_, _, _, (), _| false);
+                    },
+                )
+                .discard_textures(),
+            );
+        }
+        let shapes = output.expect("a frame").shapes;
+        let hint = text_rect(&shapes, "Type . to see hidden folders").expect("the hint of the foot");
+        let action = text_rect(&shapes, "Skip (use default)").expect("the action of the foot");
+        let keys = text_rect(&shapes, "select").expect("the key hints of the foot");
+        assert!(
+            !hint.intersects(action),
+            "the hint of the foot keeps its own line: {hint:?} does not cross {action:?}"
+        );
+        assert!(
+            hint.min.y > keys.max.y,
+            "the hint of the foot is the line below the key hints: {hint:?} is under {keys:?}"
+        );
+    }
 
     fn frame(ctx: &egui::Context, modal: &mut PickerModalState, events: Vec<Event>) {
         let input = RawInput {

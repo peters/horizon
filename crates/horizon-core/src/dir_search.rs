@@ -151,7 +151,7 @@ fn search_directories(query: &str) -> Vec<PathBuf> {
         .map_or_else(|| trimmed.to_owned(), |base| format!("{base}/"));
     let trimmed = listing.as_str();
 
-    let paths = if trimmed.is_empty() {
+    let mut paths = if trimmed.is_empty() {
         list_home_children()
     } else {
         match resolve_query_path(trimmed) {
@@ -161,6 +161,7 @@ fn search_directories(query: &str) -> Vec<PathBuf> {
     };
 
     if typed_hidden {
+        dot_folders_first(&mut paths);
         paths
     } else {
         paths.into_iter().filter(|path| !is_hidden(path)).collect()
@@ -322,6 +323,11 @@ fn list_child_dirs(parent: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The dot folders of a folder come first: a person who typed a dot asks for them.
+fn dot_folders_first(paths: &mut [PathBuf]) {
+    paths.sort_by_key(|path| !is_hidden(path));
+}
+
 fn is_hidden(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name.to_string_lossy().starts_with('.'))
@@ -414,6 +420,27 @@ mod tests {
             names.iter().all(|name| !name.starts_with('.')),
             "the list of an empty question holds no hidden folder: {names:?}"
         );
+    }
+
+    /// The order of the folders that a typed dot answers with, without the order of the
+    /// folder itself: the dot folders come first and each group keeps the order of today.
+    #[test]
+    fn a_typed_dot_lists_the_dot_folders_first() {
+        let home = home_dir();
+        let mut paths = vec![
+            home.join("github"),
+            home.join(".config"),
+            home.join("Documents"),
+            home.join(".codex"),
+        ];
+
+        dot_folders_first(&mut paths);
+
+        let names: Vec<String> = paths
+            .iter()
+            .filter_map(|path| Some(path.file_name()?.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(names, [".config", ".codex", "github", "Documents"]);
     }
 
     #[test]
