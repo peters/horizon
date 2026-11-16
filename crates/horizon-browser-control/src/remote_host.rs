@@ -34,7 +34,11 @@ pub const MAX_PROBE_BYTES: u64 = 64 * 1024;
 /// The exit code of the probe when the remote runtime root holds no record.
 const PROBE_NO_RECORD: i32 = 3;
 /// The remote default runtime root, as the remote shell reads it.
-const DEFAULT_ROOT: &str = "\"$HOME/.horizon\"";
+/// The runtime root of a host that names none: the variable that the host itself reads, then
+/// the default home. The image of `packaging/browser-vm` keeps its root on the state volume and
+/// names it in the environment of the SSH session, so a bridge that read only the home would
+/// find no host there.
+const DEFAULT_ROOT: &str = "\"${HORIZON_BROWSER_ROOT:-$HOME/.horizon}\"";
 /// The program that serves the MCP contract on the remote machine.
 const REMOTE_EXECUTABLE: &str = "horizon-browser";
 /// The record that a running profile host writes under its runtime root.

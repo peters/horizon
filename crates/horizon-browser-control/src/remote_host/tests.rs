@@ -256,10 +256,14 @@ fn the_remote_server_names_the_forwarded_identity_and_the_capture_flags() {
 
 #[test]
 fn the_probe_reads_the_record_of_the_remote_root_and_no_profile_folder() {
-    assert_eq!(root_expression(None), "\"$HOME/.horizon\"");
+    assert_eq!(
+        root_expression(None),
+        "\"${HORIZON_BROWSER_ROOT:-$HOME/.horizon}\"",
+        "the root that the host names wins over the home"
+    );
     assert_eq!(
         probe_command(None),
-        "root=\"$HOME/.horizon\"; printf '%s\\n' \"$root\"; \
+        "root=\"${HORIZON_BROWSER_ROOT:-$HOME/.horizon}\"; printf '%s\\n' \"$root\"; \
          tr -d '\\n' < \"$root/profile-host.json\" || exit 3; printf '\\n'"
     );
     assert_eq!(

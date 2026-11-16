@@ -182,7 +182,13 @@ start_ssh() {
     chmod 0600 "$home_dir/.ssh/authorized_keys"
     # A session of `ssh -T` gets no login shell, so the root of the browser
     # runtime and the display reach it through the permitted user environment.
-    printf 'HORIZON_BROWSER_ROOT=%s\nDISPLAY=%s\n' "$HORIZON_BROWSER_ROOT" "$DISPLAY" \
+    #
+    # The staging root is the one folder that a bridge copies an attachment into
+    # before it names the copy to the profile host. Without it here, the host
+    # allows only the home of root and refuses every upload with
+    # `attachment_policy`.
+    printf 'HORIZON_BROWSER_ROOT=%s\nDISPLAY=%s\nHORIZON_BROWSER_ATTACHMENT_ROOTS=%s\n' \
+        "$HORIZON_BROWSER_ROOT" "$DISPLAY" "${HORIZON_BROWSER_ROOT}/browser-staging" \
         >"$home_dir/.ssh/environment"
     chmod 0600 "$home_dir/.ssh/environment"
     local config="${ssh_dir}/sshd_config"
