@@ -490,3 +490,54 @@ fn a_panel_row_of_a_removed_kind_is_left_out_and_counted() {
     assert_eq!(left_out.total(), 1);
     assert_eq!(left_out.count_of("usage"), 1);
 }
+
+/// A `runtime.yaml` of an older build that holds both a removed panel kind and a
+/// tagged conversation reads without an index: the removed panel leaves, and the
+/// conversation of the other panel still reads.
+#[test]
+fn runtime_yaml_with_a_removed_kind_and_a_tagged_conversation_keeps_its_conversation() {
+    let fixture = Fixture::new();
+    let session = fixture.create(board());
+    let session_dir = fixture.home.session_dir(&session);
+    fixture.store.index.forget(&session);
+    for name in index_files(&session_dir) {
+        std::fs::remove_file(session_dir.join(name)).expect("remove index file");
+    }
+    std::fs::write(
+        fixture.yaml(&session),
+        "\
+workspaces:
+- local_id: setup
+  name: Setup
+  panels:
+  - local_id: guided
+    name: Setup
+    kind: setup_board
+- local_id: work
+  name: Work
+  panels:
+  - local_id: agent
+    name: Synthetic agent
+    kind: claude
+    resume: !session
+      session_id: 0000-example
+",
+    )
+    .expect("a board of an older build");
+
+    let (loaded, left_out) = fixture
+        .store
+        .load_runtime_reporting(&session)
+        .expect("load runtime.yaml without an index")
+        .expect("runtime.yaml has a board");
+
+    assert_eq!(left_out.count_of("setup_board"), 1);
+    assert_eq!(loaded.workspaces[0].panels.len(), 0, "the removed panel leaves");
+    assert_eq!(
+        loaded.workspaces[1].panels[0].resume,
+        PanelResume::Session {
+            session_id: "0000-example".into()
+        },
+        "the conversation of the other panel comes back"
+    );
+}

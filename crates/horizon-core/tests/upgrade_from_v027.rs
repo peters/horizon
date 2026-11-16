@@ -102,3 +102,48 @@ fn the_startup_of_that_profile_resumes_its_session() {
         other => panic!("the saved session must open, and the decision was {other:?}"),
     }
 }
+
+/// A saved board that holds a removed panel kind and a fixed conversation must
+/// open both ways: the removed panel leaves, and the conversation still reads.
+#[test]
+fn a_saved_board_with_a_tagged_conversation_opens_through_the_startup() {
+    let root = tempfile::tempdir().expect("a temporary home");
+    let home = HorizonHome::from_root(root.path().join(".horizon"));
+    let session_dir = home.sessions_dir().join(SESSION_ID);
+    fs::create_dir_all(&session_dir).expect("the folder of the saved session");
+    for name in ["meta.yaml", "index.yaml"] {
+        let target = if name == "index.yaml" {
+            home.session_index_path()
+        } else {
+            session_dir.join(name)
+        };
+        fs::copy(fixture(name), target).expect("a file of the saved session");
+    }
+    let board = fs::read_to_string(fixture("runtime.yaml")).expect("the board of the release");
+    let fixed = board.replacen(
+        "    resume: fresh\n",
+        "    resume: !session\n      session_id: 0000-old-conversation\n",
+        1,
+    );
+    assert_ne!(fixed, board, "the board names one fixed conversation");
+    fs::write(session_dir.join("runtime.yaml"), fixed).expect("the board of the saved session");
+
+    let store = SessionStore::new(home, PathBuf::from(CONFIG_PATH));
+    let decision = store
+        .prepare_startup(&Config::default())
+        .expect("the startup of the profile of v0.2.7");
+
+    match decision {
+        StartupDecision::Open { session, .. } => {
+            assert_eq!(session.retired_panels.total(), 2);
+            assert_eq!(
+                session.runtime_state.workspaces[0].panels[0].resume,
+                horizon_core::PanelResume::Session {
+                    session_id: "0000-old-conversation".to_owned()
+                },
+                "the conversation that the release saved still reads"
+            );
+        }
+        other => panic!("the saved session must open, and the decision was {other:?}"),
+    }
+}

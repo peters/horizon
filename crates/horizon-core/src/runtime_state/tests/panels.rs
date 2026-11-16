@@ -571,3 +571,38 @@ opened_by: Claude
     assert_eq!(options.opened_by.as_deref(), Some("Claude"));
     assert_eq!(options.opened_by_actor, None, "an older build saved no actor");
 }
+
+/// A board of an older build that has both a removed panel kind and a tagged
+/// conversation keeps the two apart: the removed panel leaves and counted, and the
+/// conversation of the other panel still reads.
+#[test]
+fn a_board_with_a_removed_kind_and_a_tagged_conversation_keeps_its_conversation() {
+    let yaml = "\
+workspaces:
+- name: Setup
+  panels:
+  - local_id: guided
+    name: Setup
+    kind: setup_board
+- name: Work
+  panels:
+  - local_id: agent
+    name: Claude
+    kind: claude
+    resume: !session
+      session_id: 0000-example
+";
+    let (state, left_out) = RuntimeState::from_yaml_reporting(yaml).expect("the board of an older build");
+
+    assert_eq!(state.workspaces.len(), 2, "every workspace of the board stays");
+    assert_eq!(state.workspaces[0].panels.len(), 0, "the removed panel leaves");
+    assert_eq!(left_out.total(), 1);
+    assert_eq!(left_out.count_of("setup_board"), 1);
+    assert_eq!(
+        state.workspaces[1].panels[0].resume,
+        PanelResume::Session {
+            session_id: "0000-example".to_owned()
+        },
+        "the conversation of the other panel comes back"
+    );
+}

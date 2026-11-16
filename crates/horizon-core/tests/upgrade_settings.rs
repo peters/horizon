@@ -350,3 +350,46 @@ fn a_yaml_file_that_cannot_be_read_writes_no_store_and_names_its_line() {
         "the broken file keeps every byte"
     );
 }
+
+/// A YAML settings document of an older build that names a removed panel kind and a
+/// preset with a fixed conversation keeps that conversation, as the document holds it.
+#[test]
+fn a_yaml_settings_document_with_a_tagged_conversation_keeps_it() {
+    let root = tempfile::tempdir().expect("a temporary home");
+    let home = root.path().join(".horizon");
+    fs::create_dir_all(&home).expect("the Horizon home");
+    let yaml = home.join("config.yaml");
+    fs::write(
+        &yaml,
+        "\
+presets:
+- name: Synthetic conversation
+  kind: claude
+  resume: !session
+    session_id: 0000-example
+- name: Removed
+  kind: upkeep
+",
+    )
+    .expect("the settings file of the release");
+    let settings = home.join("config.json");
+
+    let config = Config::load_from_home(&settings).expect("the settings of an older build");
+
+    let preset = config
+        .presets
+        .iter()
+        .find(|preset| preset.name == "Synthetic conversation")
+        .expect("the preset of the document");
+    assert_eq!(
+        preset.resume,
+        horizon_core::PanelResume::Session {
+            session_id: "0000-example".to_owned()
+        },
+        "the conversation of the preset comes back"
+    );
+    assert!(
+        config.presets.iter().all(|preset| preset.name != "Removed"),
+        "the preset of the removed kind leaves"
+    );
+}

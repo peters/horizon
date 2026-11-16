@@ -71,9 +71,9 @@ impl fmt::Display for RetiredPanels {
 
 /// `content` with every entry that names a retired panel kind removed.
 ///
-/// The settings of a computer are JSON and a saved board is still YAML, so the
-/// walk reads YAML, which also reads JSON, and answers JSON, which both readers
-/// accept.
+/// A JSON document comes back as JSON and a YAML document as YAML, so its reader reads
+/// what it read before. YAML also keeps the tag of a value such as a saved conversation,
+/// which JSON cannot carry.
 ///
 /// `content` that this walk does not understand comes back unchanged, so the typed parse
 /// reports the problem in its own terms.
@@ -90,9 +90,14 @@ pub(crate) fn without_retired_reporting(content: &str) -> (Cow<'_, str>, Retired
     if !drop_entries(&mut value, &mut left_out) {
         return (Cow::Borrowed(content), left_out);
     }
-    match serde_json::to_string(&value) {
+    let scrubbed = if serde_json::from_str::<serde_json::Value>(content).is_ok() {
+        serde_json::to_string(&value).map_err(|_| ())
+    } else {
+        serde_yaml::to_string(&value).map_err(|_| ())
+    };
+    match scrubbed {
         Ok(scrubbed) => (Cow::Owned(scrubbed), left_out),
-        Err(_) => (Cow::Borrowed(content), RetiredPanels::default()),
+        Err(()) => (Cow::Borrowed(content), RetiredPanels::default()),
     }
 }
 
@@ -168,10 +173,13 @@ workspaces:
     kind: upkeep
   - name: Shell
     kind: shell
+    resume: !session
+      session_id: 0000-example
 ";
         let scrubbed = without_retired(content);
         assert!(!scrubbed.contains("upkeep"), "{scrubbed}");
-        assert!(scrubbed.contains("\"Shell\""), "the answer is JSON: {scrubbed}");
+        assert!(scrubbed.contains("name: Shell"), "the answer is YAML: {scrubbed}");
+        assert!(scrubbed.contains("!session"), "the tag of a value stays: {scrubbed}");
     }
 
     #[test]
