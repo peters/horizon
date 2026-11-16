@@ -118,8 +118,16 @@ fn the_program_is_looked_up_off_the_frame() {
 }
 
 /// The line that a stand-in program writes, with its arguments, one per line.
+///
+/// It writes the whole list beside the line and renames it, so a test never reads a
+/// line that the program of another thread still writes.
 fn recording_program(folder: &Path, log: &Path) -> PathBuf {
-    let body = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", log.display());
+    let part = log.with_extension("part");
+    let body = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{part}'\nmv '{part}' '{log}'\n",
+        part = part.display(),
+        log = log.display()
+    );
     crate::util::stand_in_program_in(folder, "notify-send", &body).expect("the stand-in program")
 }
 
