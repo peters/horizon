@@ -174,6 +174,12 @@ without the field.
   (`invalid_key_name`) and its file must be there (`key_unavailable` when it is
   not). It becomes the binding of this computer and it is not written into the
   record.
+- **The folder is one quoted word.** `folder` is the folder that the new
+  terminals of a workspace placed on the machine start in. It is an absolute path
+  of at most 512 bytes with no control character; a violation is `invalid_folder`
+  and the message names the field. Horizon writes it into the tmux command as one
+  word that `quote_argument` escapes (`-c '<folder>'`), so a quote, a space or a
+  `;` in the path stays inside that one word and never becomes a second command.
 - **The provider line is a claim.** It is folded to one line and cut to 60
   characters. Horizon draws it in a low-emphasis style under the machine name. It
   is never read by a program and never becomes a command, a path or a title.
@@ -192,9 +198,10 @@ without the field.
   to the record, the three bounds of a machine terminal (`ConnectTimeout=10`,
   `ServerAliveInterval=5`, `ServerAliveCountMax=3`), `-p` when the record has a
   port, `-t` when it has a session, `user@host` as one argument and `tmux
-  -u new-session -A -s <session> \; set-option status off` last. A hand-edited
-  registry cannot add an ssh option, a proxy, an identity file or a second
-  command.
+  -u new-session -A -s <session> \; set-option status off` last, with
+  `-c '<folder>'` in front of the `\;` when the record holds a folder. A
+  hand-edited registry cannot add an ssh option, a proxy, an identity file or a
+  second command: a folder stays one quoted word of the tmux command.
 - **The list is private to the person.** It is one file of the Horizon home, in a
   `0700` directory, written as `0600` through a temporary file and a rename, on
   the coordination worker. It is not part of a session or a workspace.
