@@ -616,3 +616,46 @@ fn the_window_says_that_every_session_of_this_computer_is_open_in_a_panel() {
     );
     assert!(!texts.iter().any(|text| text == EMPTY_LINE), "{texts:?}");
 }
+
+/// A press that opened a panel ends the window, so the new panel is not left
+/// under the list that it came from.
+#[test]
+fn the_window_closes_after_a_press_that_opened_a_panel() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let folder_path = temp.path().join("repo");
+    std::fs::create_dir_all(&folder_path).expect("the folder");
+    let (_temp, ctx, mut app) = app_with_pickup(vec![folder(&folder_path, "repo", vec![ready_row()])]);
+    app.show_recent_agent_sessions();
+
+    app.apply_pickup_press(&ctx, &PickupPress::Open { folder: 0, row: 0 });
+
+    assert_eq!(app.board.panels.len(), 1, "the press opened the panel of the row");
+    assert!(
+        !app.session_pickup.window_open(),
+        "the window closes on the panel that its press opened"
+    );
+}
+
+/// A row that asks before it opens keeps the window until the person presses it
+/// again.
+#[test]
+fn the_window_of_a_row_that_asks_first_stays_until_the_second_press() {
+    let folder_path = std::env::temp_dir().join("horizon-pickup-asks-first");
+    let (_temp, ctx, mut app) = app_with_pickup(vec![folder(
+        &folder_path,
+        "one",
+        vec![PickupRow {
+            state: PickupState::OpenInAnotherProgram,
+            ..ready_row()
+        }],
+    )]);
+    app.show_recent_agent_sessions();
+
+    app.apply_pickup_press(&ctx, &PickupPress::Open { folder: 0, row: 0 });
+
+    assert!(
+        app.session_pickup.window_open(),
+        "a row that asks keeps the window for its second press"
+    );
+    assert!(app.session_pickup.notice.is_some(), "the window says why it asks");
+}

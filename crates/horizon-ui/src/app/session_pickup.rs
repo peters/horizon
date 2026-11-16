@@ -356,6 +356,7 @@ impl HorizonApp {
                 let opened = self.open_agent_session(ctx, &folder_path, row);
                 if opened {
                     self.session_pickup.notice = None;
+                    self.close_recent_agent_sessions();
                 }
             }
             PickupPress::OpenAll { folder } => {

@@ -121,7 +121,13 @@ Prove these results:
 4. Press `Open` on that row.
 
    Result: No panel opens. The window says that the program has the conversation
-   open now. The press on `Open anyway` opens the panel.
+   open now. The press on `Open anyway` opens the panel, and the window closes.
+
+5. Open the window again, and press `Open` on a row that says no other program
+   holds the conversation.
+
+   Result: The panel of that conversation opens, and the window closes, so the
+   person reads the panel alone.
 
 ### 6.3 P3 — A folder that is gone
 
@@ -254,6 +260,7 @@ Prove these results:
   its row.
 - P2: the window shows every conversation, `Open all` opens the rows of one
   folder, and a conversation of another program asks once more before it opens.
+  A press that opened a panel closes the window.
 - P3: a row of a folder that is gone says so and opens nothing.
 - P4: the workspace of the folder shows with one panel, and a second start makes
   no second workspace. A path that is not a folder ends with one sentence and
