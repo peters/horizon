@@ -24,6 +24,11 @@ use serde_json::{Value, json};
 /// The time a test gives a change to travel through a link and a store.
 const PATIENCE: Duration = Duration::from_secs(30);
 
+/// The time a test gives a change to travel through a link that may have ended: the
+/// attempts of a lost link wait 3, 6, 12 and 24 seconds, so thirty seconds cover no
+/// loss and sixty cover one of the first four attempts.
+const PATIENCE_LINK: Duration = Duration::from_secs(60);
+
 /// The relay of one stand-in `ssh`: the bytes of its standard input and output go
 /// to the socket of the server in both directions.
 const RELAY: &str = "\
@@ -381,8 +386,13 @@ fn keys_only(keys: horizon_core::MachineKeys) -> std::sync::Arc<dyn horizon_core
     std::sync::Arc::new(SecretVault::new(keys, credentials, named))
 }
 
-fn eventually<T>(what: &str, mut answer: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + PATIENCE;
+fn eventually<T>(what: &str, answer: impl FnMut() -> Option<T>) -> T {
+    eventually_within(PATIENCE, what, answer)
+}
+
+/// Waits for `answer` within `limit`, and names what the test waited for.
+fn eventually_within<T>(limit: Duration, what: &str, mut answer: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + limit;
     loop {
         if let Some(value) = answer() {
             return value;
@@ -533,7 +543,15 @@ fn a_theme_change_of_one_computer_reaches_the_other_and_is_applied() {
     in_step(&b);
 
     a.save(&config_with_theme(AppearanceTheme::Light));
-    eventually("the theme of the other computer", || {
+    // The section of this computer reaches the server before the other computer reads
+    // it, so a lane that fails names the side that did not do its work.
+    eventually("the light theme of the section of the server", || {
+        let light = server
+            .setting("appearance")
+            .is_some_and(|(_, body)| body["section"]["theme"] == json!("light"));
+        light.then_some(())
+    });
+    eventually_within(PATIENCE_LINK, "the theme of the other computer", || {
         (b.theme() == AppearanceTheme::Light).then_some(())
     });
     // The other computer read the value, and the computer that changed it ends its
