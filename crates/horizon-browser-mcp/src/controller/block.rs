@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use horizon_browser_control::block::parse_document;
+use horizon_browser_control::block::parse_sent_document;
 use horizon_browser_control::manifest::block::{self, Operation, Outcome};
 use horizon_browser_control::manifest::block_keys;
 use horizon_browser_control::manifest::block_machines;
@@ -99,8 +99,7 @@ fn refused_document(operation: &Operation) -> Option<Outcome> {
             return None;
         }
     };
-    let encoded = serde_json::to_string(document).ok()?;
-    parse_document(&encoded)
+    parse_sent_document(document)
         .err()
         .map(|error| Outcome::failed(error.code(), &error.to_string()))
 }
@@ -219,4 +218,42 @@ fn refused_panel(operation: &Operation) -> Option<Outcome> {
         .and_then(|_| prompt.as_deref().map_or(Ok(""), block_preset::check_prompt))
         .err()
         .map(|refusal| Outcome::failed(refusal.code, &refusal.message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn created(document: serde_json::Value) -> Operation {
+        Operation::Create { title: None, document }
+    }
+
+    fn code(outcome: Option<Outcome>) -> String {
+        match outcome {
+            Some(Outcome::Failed { code, .. }) => code,
+            other => panic!("expected a refusal: {other:?}"),
+        }
+    }
+
+    /// The document of a card socket of a machine session is read here, before
+    /// the queue holds it, exactly as the host reads it later.
+    #[test]
+    fn a_document_that_arrives_as_the_text_of_the_document_is_the_document() {
+        let document = serde_json::json!({
+            "components": [{"type": "heading", "text": "note"}]
+        });
+        let text = serde_json::Value::String(serde_json::to_string(&document).expect("the text of a document"));
+        assert!(refused_document(&created(document)).is_none(), "the object form");
+        assert!(
+            refused_document(&created(text)).is_none(),
+            "the text of the document is the document"
+        );
+        assert_eq!(
+            code(refused_document(&created(serde_json::Value::String(
+                "not a document".to_owned()
+            )))),
+            "invalid_document",
+            "a text that is no document is still refused"
+        );
+    }
 }

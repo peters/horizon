@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use egui::Context;
-use horizon_browser_control::block::{BlockDocument, parse_document};
+use horizon_browser_control::block::{BlockDocument, parse_sent_document};
 use horizon_browser_control::manifest::block_machines;
 use horizon_browser_control::manifest::block_terminal;
 use horizon_core::browser::manifest::{
@@ -95,15 +95,10 @@ impl BlockClaimState {
     }
 }
 
-/// The document a request carries, as the host draws it.
+/// The document a request carries, as the host draws it: the value itself, or
+/// the JSON text of it.
 fn card_document(document: &serde_json::Value) -> Result<BlockDocument, Outcome> {
-    let encoded = serde_json::to_string(document).map_err(|error| {
-        Outcome::failed(
-            "invalid_document",
-            &format!("block document is not valid JSON: {error}"),
-        )
-    })?;
-    parse_document(&encoded).map_err(|error| Outcome::failed(error.code(), &error.to_string()))
+    parse_sent_document(document).map_err(|error| Outcome::failed(error.code(), &error.to_string()))
 }
 
 /// Who asked for a card: an agent panel, or a session of a machine of the list.

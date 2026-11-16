@@ -237,6 +237,23 @@ pub fn parse_document(json: &str) -> Result<BlockDocument, BlockDocumentError> {
     Ok(document)
 }
 
+/// Parse and validate a document as a caller sent it: the value itself, or the
+/// JSON text of it, which is what the size bound counts.
+///
+/// # Errors
+/// Returns the rejection of [`parse_document`] for both forms.
+pub fn parse_sent_document(document: &serde_json::Value) -> Result<BlockDocument, BlockDocumentError> {
+    match document {
+        serde_json::Value::String(text) => parse_document(text),
+        value => {
+            let encoded = serde_json::to_string(value).map_err(|error| BlockDocumentError::InvalidJson {
+                message: error.to_string(),
+            })?;
+            parse_document(&encoded)
+        }
+    }
+}
+
 /// Check the rules that serde cannot express.
 ///
 /// # Errors

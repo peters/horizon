@@ -12,9 +12,10 @@
 //!
 //! The document holds components only. The host assigns the revision, keeps
 //! the card in its own state and reports a click on a button or a row back to
-//! the agent that owns it. [`parse_document`] is the single entry point for a
-//! document that arrives from outside Horizon: it checks the size, the shape
-//! and every rule of [`validate_document`] before the UI can draw anything.
+//! the agent that owns it. [`parse_sent_document`] is the single entry point for
+//! a document that arrives from outside Horizon: the value itself, or the JSON
+//! text of it, which [`parse_document`] then checks for size, shape and every
+//! rule of [`validate_document`] before the UI can draw anything.
 
 mod events;
 mod link;
@@ -27,7 +28,7 @@ pub use model::{
     Badge, BlockDocument, BoardColumn, BoardItem, BoardRow, BoardState, Button, Component, KvRow, ListLayout, ListRow,
     LogEntry, Selection, Step, StepState, Tone, Width,
 };
-pub use validate::{BlockDocumentError, parse_document, validate_document};
+pub use validate::{BlockDocumentError, parse_document, parse_sent_document, validate_document};
 
 #[cfg(test)]
 mod tests;
