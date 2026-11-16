@@ -17,9 +17,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use crate::place::{RECONNECT_RESET_AFTER, reconnect_delay};
+use crate::place::RECONNECT_RESET_AFTER;
 
 use super::report::parse_report;
 use super::snapshot::{Shared, WatchLink, WatchRefusal, unix_millis};
@@ -45,6 +45,7 @@ pub(super) fn run(
     shared: &Shared,
     stop: &Receiver<()>,
     slot: &Arc<Mutex<Option<Child>>>,
+    delay: fn(u32) -> Duration,
 ) {
     let machine = target.machine.as_str();
     let mut attempts = 0u32;
@@ -107,7 +108,7 @@ pub(super) fn run(
         }
         attempts = attempts.saturating_add(1);
         shared.set_link(machine, lost_link(refused, attempts));
-        match stop.recv_timeout(reconnect_delay(attempts)) {
+        match stop.recv_timeout(delay(attempts)) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
             Err(RecvTimeoutError::Timeout) => {}
         }

@@ -18,9 +18,12 @@ const DEADLINE: Duration = Duration::from_secs(25);
 /// How often a test reads the snapshot while it waits.
 const POLL: Duration = Duration::from_millis(20);
 
-/// How long a test waits for the next attempt of a watch: the first delay of the
-/// reconnect rule with a margin for a loaded computer.
-const ATTEMPT: Duration = Duration::from_secs(5);
+/// The delay that a lane of this module gives a lost link: the rule of a lost link is
+/// proven in `crate::place`, and a lane here waits milliseconds for its next attempt
+/// instead of the seconds that a person waits.
+fn short_delay(_attempt: u32) -> Duration {
+    Duration::from_millis(40)
+}
 
 /// One machine record of a test.
 fn record(name: &str) -> Machine {
@@ -344,16 +347,22 @@ fn a_link_that_drops_comes_back_by_the_rule_of_a_lost_link() {
     };
     let folder = tempfile::tempdir().expect("a folder of the test");
     let (machines, keys) = machines_of(folder.path(), &["build-1"]);
-    let watch = MachineWatch::with_program(stand_in.program());
+    let mut watch = MachineWatch::with_program(stand_in.program());
+    watch.delay = short_delay;
     let started = Instant::now();
     watch.reconcile(&machines, &keys, true);
     wait_for(&watch, "build-1", |link| matches!(link, WatchLink::Lost { .. }));
     let link = wait_for(&watch, "build-1", WatchLink::watching);
     assert_eq!(link, WatchLink::Watching, "the second attempt reached the machine");
     assert!(
-        started.elapsed() >= Duration::from_secs(2),
-        "the watch waited the delay of the first attempt: {:?}",
+        started.elapsed() >= short_delay(1),
+        "the watch waited the delay that it gives a lost link: {:?}",
         started.elapsed()
+    );
+    assert_eq!(
+        (MachineWatch::default().delay)(1),
+        crate::place::reconnect_delay(1),
+        "the watch of a person waits the delay of the rule of a lost link"
     );
     wait_until("the second attempt of the watch", || stand_in.calls() >= 2);
     assert_eq!(stand_in.calls(), 2, "two attempts of one watch");
@@ -385,10 +394,11 @@ fn a_child_that_ends_with_its_own_status_is_a_lost_link_that_comes_back() {
     };
     let folder = tempfile::tempdir().expect("a folder of the test");
     let (machines, keys) = machines_of(folder.path(), &["build-1"]);
-    let watch = MachineWatch::with_program(stand_in.program());
+    let mut watch = MachineWatch::with_program(stand_in.program());
+    watch.delay = short_delay;
     watch.reconcile(&machines, &keys, true);
     wait_for(&watch, "build-1", |link| matches!(link, WatchLink::Lost { .. }));
-    wait_until_within(ATTEMPT, "the second attempt of the watch", || stand_in.calls() >= 2);
+    wait_until("the second attempt of the watch", || stand_in.calls() >= 2);
     assert_eq!(
         wait_for(&watch, "build-1", WatchLink::watching),
         WatchLink::Watching,
@@ -407,10 +417,11 @@ fn a_child_that_a_signal_ends_is_a_lost_link_that_comes_back() {
     };
     let folder = tempfile::tempdir().expect("a folder of the test");
     let (machines, keys) = machines_of(folder.path(), &["build-1"]);
-    let watch = MachineWatch::with_program(stand_in.program());
+    let mut watch = MachineWatch::with_program(stand_in.program());
+    watch.delay = short_delay;
     watch.reconcile(&machines, &keys, true);
     wait_for(&watch, "build-1", |link| matches!(link, WatchLink::Lost { .. }));
-    wait_until_within(ATTEMPT, "the second attempt of the watch", || stand_in.calls() >= 2);
+    wait_until("the second attempt of the watch", || stand_in.calls() >= 2);
     assert_eq!(
         wait_for(&watch, "build-1", WatchLink::watching),
         WatchLink::Watching,
@@ -509,6 +520,7 @@ fn the_watch_holds_eight_machines_and_the_ninth_says_so() {
         9,
         "every machine of the list is in the snapshot"
     );
+    watch.stop_all();
     assert_eq!(
         stand_in.calls(),
         crate::machine_watch::MAX_WATCHED_MACHINES,
@@ -529,7 +541,10 @@ fn the_setting_off_stops_every_watch_and_says_so() {
     let (machines, keys) = machines_of(folder.path(), &["build-1", "build-2"]);
     let watch = MachineWatch::with_program(stand_in.program());
     watch.reconcile(&machines, &keys, true);
-    wait_for(&watch, "build-1", WatchLink::watching);
+    // Both watches are up and report, so the setting finds two readers that run.
+    for machine in ["build-1", "build-2"] {
+        wait_for(&watch, machine, WatchLink::watching);
+    }
     watch.reconcile(&machines, &keys, false);
     for machine in ["build-1", "build-2"] {
         assert_eq!(

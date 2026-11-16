@@ -39,6 +39,9 @@ const STOP_POLL: Duration = Duration::from_millis(10);
 pub struct MachineWatch {
     shared: Arc<Shared>,
     program: String,
+    /// How long a lost link waits before its next attempt, which a test of this
+    /// module shortens so a lane that waits for a second attempt waits milliseconds.
+    pub(super) delay: fn(u32) -> Duration,
     readers: Mutex<BTreeMap<String, Watch>>,
 }
 
@@ -67,6 +70,7 @@ impl MachineWatch {
         Self {
             shared: Arc::new(Shared::new()),
             program: program.into(),
+            delay: crate::place::reconnect_delay,
             readers: Mutex::new(BTreeMap::new()),
         }
     }
@@ -98,35 +102,39 @@ impl MachineWatch {
         crate::ui_thread::blocking("the watch of the machines starts and stops its readers");
         let mut readers = self.lock();
         let mut wanted: Vec<WatchTarget> = Vec::new();
-        let mut unwanted: Vec<String> = Vec::new();
+        let mut unwanted: Vec<(String, WatchLink)> = Vec::new();
         for (index, record) in machines.records().iter().enumerate() {
+            let name = record.name.clone();
             if !enabled {
-                unwanted.push(record.name.clone());
-                self.shared.set_link(&record.name, WatchLink::Off);
+                unwanted.push((name, WatchLink::Off));
                 continue;
             }
             if index >= MAX_WATCHED_MACHINES {
-                unwanted.push(record.name.clone());
-                self.shared.set_link(&record.name, WatchLink::OverTheLimit);
+                unwanted.push((name, WatchLink::OverTheLimit));
                 continue;
             }
             match WatchTarget::of(machines, keys, &record.name) {
                 Ok(target) => wanted.push(target),
                 Err(error) => {
-                    unwanted.push(record.name.clone());
-                    let link = WatchLink::Refused {
-                        reason: WatchRefusal::Record,
-                        since_millis: unix_millis(),
-                    };
-                    self.shared.set_link(&record.name, link);
+                    unwanted.push((
+                        name,
+                        WatchLink::Refused {
+                            reason: WatchRefusal::Record,
+                            since_millis: unix_millis(),
+                        },
+                    ));
                     tracing::warn!(machine = %record.name, %error, "the record of a machine cannot be watched");
                 }
             }
         }
-        for name in &unwanted {
+        // The reader of a machine stops before its link says why: a report of that
+        // reader that lands during the stop cannot write over that link and leave a
+        // watch that is off as one that is watching.
+        for (name, link) in &unwanted {
             if let Some(watch) = readers.remove(name) {
                 stop_watch(name, watch);
             }
+            self.shared.set_link(name, *link);
         }
         let keep: BTreeSet<String> = wanted.iter().map(|target| target.machine.clone()).collect();
         let left: Vec<String> = readers.keys().filter(|name| !keep.contains(*name)).cloned().collect();
@@ -172,13 +180,14 @@ impl MachineWatch {
         let child = Arc::new(Mutex::new(None));
         let shared = Arc::clone(&self.shared);
         let program = self.program.clone();
+        let delay = self.delay;
         let name = target.machine.clone();
         let started = {
             let target = target.clone();
             let child = Arc::clone(&child);
             std::thread::Builder::new()
                 .name(format!("machine-watch-{name}"))
-                .spawn(move || super::reader::run(&target, &program, &shared, &stopped, &child))
+                .spawn(move || super::reader::run(&target, &program, &shared, &stopped, &child, delay))
         };
         match started {
             Ok(reader) => {

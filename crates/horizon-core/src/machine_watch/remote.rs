@@ -110,7 +110,8 @@ last=
 while :; do
   now=$(report) && step=$FAST || step=$SLOW
   if [ "$now" = "$last" ]; then printf 'B\n'; else printf '%s\n' "$now"; last=$now; fi
-  sleep "$step"
+  # The sleep keeps no copy of the report pipe, so a stop ends the reader at once.
+  sleep "$step" >/dev/null 2>&1
 done
 "#;
 
