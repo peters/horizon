@@ -1252,11 +1252,27 @@ class MachineSshd:
         """
         return ['bwrap', '--die-with-parent',
                 '--ro-bind', '/', '/',
+                '--ro-bind', str(self.groups()), '/etc/group',
                 '--dev-bind', '/dev', '/dev',
                 '--bind', str(self.state), str(self.state),
                 '--bind', str(self.tmp), '/tmp',
                 '--bind', str(self.home), str(self.user_home),
                 '--chdir', str(self.state), '--']
+
+    def groups(self):
+        """The group file of the machine: the one of this computer with no group `tty`.
+
+        An sshd gives the terminal of a session to the group `tty`. The namespace of a
+        user maps no such group, the change of the owner fails, and the sshd ends every
+        session that asks for a terminal. With no group of that name the sshd keeps the
+        group of the user, as it does on a system that has none.
+        """
+        path = self.work / 'group'
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lines = [line for line in Path('/etc/group').read_text(encoding='utf-8').splitlines()
+                 if not line.startswith('tty:')]
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        return path
 
     def command(self, *words):
         """One command inside the namespace of the machine, such as its sshd."""
