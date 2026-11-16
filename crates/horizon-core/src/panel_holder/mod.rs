@@ -377,9 +377,10 @@ fn end_holder(path: &Path) -> Result<bool, HolderError> {
     }
 }
 
-/// Serves `launch` on a thread of a test, so that a test starts no process.
-#[cfg(test)]
-pub(crate) fn serve_on_a_thread(home: &HorizonHome, launch: &Launch) -> Result<Hello, HolderError> {
+/// Serves `launch` on a thread of this process, so that a test of the workspace
+/// starts no holder process.
+#[doc(hidden)]
+pub fn serve_on_a_thread(home: &HorizonHome, launch: &Launch) -> Result<Hello, HolderError> {
     let owned = home.clone();
     let served = launch.clone();
     thread::Builder::new()

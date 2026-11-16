@@ -482,3 +482,8 @@ mod terminal_cache_tests;
 #[cfg(test)]
 #[path = "lifecycle/workspace_persistence_tests.rs"]
 mod workspace_persistence_tests;
+
+// The holder serves on a thread of this process, and starts a Unix program.
+#[cfg(all(test, unix))]
+#[path = "lifecycle/held_program_tests.rs"]
+mod held_program_tests;

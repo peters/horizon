@@ -403,3 +403,34 @@ fn a_restart_of_the_panel_starts_a_new_holder_with_another_program() {
     );
     assert!(!runs(before), "the program of the holder before the restart ended");
 }
+
+/// The end of Horizon detaches from the program of a holder and signals nothing:
+/// that program is a child of its holder, and no panel of this process owns it.
+#[test]
+fn the_end_of_horizon_lets_the_program_of_a_holder_run() {
+    let (_folder, home) = temp_home();
+    let (mut board, id) = board_with_a_held_panel(&home, "kept-panel", true);
+    let pid = board
+        .panel(id)
+        .and_then(Panel::terminal)
+        .and_then(Terminal::child_pid)
+        .expect("the pid of the program of the panel");
+
+    let progress = board.begin_async_shutdown();
+    // Longer than the hangup and the two steps that the end of a terminal gives a
+    // program that outlives it, so a signal of this board would have landed.
+    thread::sleep(crate::panel::AFTER_HANGUP + crate::panel::AFTER_TERM + Duration::from_millis(500));
+
+    assert!(
+        runs(pid),
+        "the program of a holder outlives the end of Horizon (pid {pid})"
+    );
+    assert!(
+        matches!(panel_holder::probe(&home, "kept-panel"), Err(HolderError::Busy)),
+        "the holder of the panel still runs its program"
+    );
+    assert!(
+        progress.wait_for_completion(Duration::from_secs(1)),
+        "the end of Horizon counts the panel of a holder and waits for no program"
+    );
+}

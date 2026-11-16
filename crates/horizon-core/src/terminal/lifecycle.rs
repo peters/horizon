@@ -367,9 +367,13 @@ impl Terminal {
     /// A caller that ends a panel closes the master of this terminal, which
     /// sends the hangup to the process group. This value reaches the program
     /// when the hangup does not end it.
+    ///
+    /// An attached terminal started no process: the program of its panel is a
+    /// child of its holder, and the holder owns its end. The end of Horizon
+    /// detaches from that program and signals nothing to it.
     #[must_use]
     pub(crate) fn hanging_child(&self) -> Option<crate::process::HangingChild> {
-        if self.child_exited || self.shutdown_complete.load(Ordering::Acquire) {
+        if self.holder.is_some() || self.child_exited || self.shutdown_complete.load(Ordering::Acquire) {
             return None;
         }
         Some(crate::process::HangingChild::new(
@@ -403,7 +407,10 @@ impl Terminal {
     /// Preparation, cancellation and final evidence stay inside the existing
     /// asynchronous shutdown budget; the UI never waits for repository I/O.
     pub(crate) fn begin_work_shutdown(&mut self, completion: &PanelCompletion) -> bool {
-        if self.event_loop_handle.is_none() {
+        // The program of an attached panel keeps running, so its conversation is
+        // neither suspended nor sealed: the work ledger of the panel stays as the
+        // running program left it, and the next start attaches to that program.
+        if self.holder.is_some() || self.event_loop_handle.is_none() {
             return false;
         }
         // A launch that only reports the state of its panel continues nothing:
