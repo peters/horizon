@@ -1394,7 +1394,9 @@ def machine_sshd_start(machine, box, python):
     program_in_state(fixture_program(ATTENTION_KIND_SCRIPT['codex']),
                      work / 'bin' / ATTENTION_CODEX_PROGRAM, machine.state)
     program_in_state(fixture_program(MACHINE_CARD_AGENT), work / 'bin' / MACHINE_CARD_AGENT, machine.state)
-    body_in_state(machine.user_home / MACHINE_RELAY_FOLDER / MACHINE_RELAY_PROGRAM,
+    # The file is written at its place in the state: the namespace of the machine binds
+    # that folder over the home of the user, where the session reads it.
+    body_in_state(machine.home / MACHINE_RELAY_FOLDER / MACHINE_RELAY_PROGRAM,
                   machine_relay_text(), machine.state)
     machine.start()
     machine_sshd_sessions(machine, box, python)
