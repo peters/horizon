@@ -216,7 +216,6 @@ impl HorizonApp {
             pending_startup_runtime_state_changed: false,
             startup_bootstrap_failure: None, busy_claude_session_ids: std::collections::HashSet::new(),
             session_catalog_refresh: super::session::SessionCatalogRefreshState::default(),
-            unshown_holders: super::session::UnshownHolders::default(),
             saved_session_deletion: super::panels::SavedSessionDeletionState::default(),
             remote_hosts_overlay: None,
             remote_hosts_catalog: RemoteHostCatalog::default(),

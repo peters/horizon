@@ -14,12 +14,6 @@ const SESSION_BINDING_ACTIVITY_WINDOW: Duration = Duration::from_secs(10);
 const SESSION_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STARTUP_BOOTSTRAP_FAILURE_REPAINT_INTERVAL: Duration = Duration::from_secs(1);
 
-/// The holders that no panel of a restored board shows, which a worker ends.
-#[derive(Default)]
-pub(in crate::app) struct UnshownHolders {
-    receiver: Option<std::sync::mpsc::Receiver<usize>>,
-}
-
 #[derive(Default)]
 pub(super) struct SessionCatalogRefreshState {
     pub receiver: Option<Receiver<horizon_core::Result<AgentSessionCatalog>>>,
@@ -27,6 +21,8 @@ pub(super) struct SessionCatalogRefreshState {
     pub full_scan_superseded: bool,
     pub last_full_refresh: Option<Instant>,
     pub picker_times: HashMap<PanelKind, Instant>,
+    /// The holders that no panel of a restored board shows, which a worker ends.
+    pub unshown_holders: Option<Receiver<usize>>,
 }
 
 mod loading;
@@ -489,14 +485,14 @@ impl HorizonApp {
                 }
             });
         match spawned {
-            Ok(_) => self.unshown_holders.receiver = Some(receiver),
+            Ok(_) => self.session_catalog_refresh.unshown_holders = Some(receiver),
             Err(error) => tracing::warn!(%error, "the holders of the restored board run on"),
         }
     }
 
     /// Shows the line of the holders that a worker ended, once.
     pub(super) fn poll_unshown_holders(&mut self) {
-        let Some(receiver) = self.unshown_holders.receiver.take() else {
+        let Some(receiver) = self.session_catalog_refresh.unshown_holders.take() else {
             return;
         };
         match receiver.try_recv() {
@@ -505,7 +501,9 @@ impl HorizonApp {
                     self.set_sidebar_plain_notice(line);
                 }
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => self.unshown_holders.receiver = Some(receiver),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.session_catalog_refresh.unshown_holders = Some(receiver);
+            }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
         }
     }

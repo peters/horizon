@@ -5,6 +5,7 @@ use crate::agent_work::TitleState;
 use crate::agents::AgentStatus;
 use crate::editor::PanelContent;
 use crate::error::Result;
+use crate::panel_holder::Linked;
 use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, new_local_id};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -353,6 +354,56 @@ pub(super) fn spawn_started_terminal(
     if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
     }
+    let mut terminal = start_program(
+        id,
+        kind,
+        rows,
+        cols,
+        ProgramStart {
+            program,
+            launch_args,
+            cwd,
+            env,
+            replay_bytes,
+            launch_wrapper,
+        },
+        attached,
+    )?;
+    terminal.work_owner = work.owner;
+    terminal.work_continuation = work.state;
+    tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
+    Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
+}
+
+/// The program of a panel whose start a worker prepared, and the screen that its
+/// terminal shows before that program writes.
+struct ProgramStart {
+    program: String,
+    launch_args: Vec<String>,
+    cwd: Option<PathBuf>,
+    env: HashMap<String, String>,
+    replay_bytes: Vec<u8>,
+    launch_wrapper: Vec<String>,
+}
+
+/// The terminal of the program of a panel: this process starts it, or the terminal
+/// attaches to the holder that runs it.
+fn start_program(
+    id: PanelId,
+    kind: PanelKind,
+    rows: u16,
+    cols: u16,
+    start: ProgramStart,
+    attached: Option<Linked>,
+) -> Result<Terminal> {
+    let ProgramStart {
+        program,
+        launch_args,
+        cwd,
+        env,
+        replay_bytes,
+        launch_wrapper,
+    } = start;
     // The wrapper runs the resolved program, so the program starts inside it.
     let (program, launch_args) = match launch_wrapper.split_first() {
         Some((wrapper, wrapper_args)) => {
@@ -377,16 +428,10 @@ pub(super) fn spawn_started_terminal(
         env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     };
-    // A holder runs the program, so this terminal attaches to the program that it
-    // started instead of starting one.
-    let mut terminal = match attached {
-        Some(link) => Terminal::spawn_attached(options, link.socket, link.hello, link.replay)?,
-        None => Terminal::spawn(options)?,
-    };
-    terminal.work_owner = work.owner;
-    terminal.work_continuation = work.state;
-    tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
-    Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
+    match attached {
+        Some(link) => Terminal::spawn_attached(options, link.socket, link.hello, link.replay),
+        None => Terminal::spawn(options),
+    }
 }
 
 pub(crate) fn resolve_spawn_launch(

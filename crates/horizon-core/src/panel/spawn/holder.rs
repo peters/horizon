@@ -71,16 +71,16 @@ pub(in crate::panel) fn started_here(home: &HorizonHome, launch: &Launch) -> (Op
     }
 }
 
-/// Starts the holder of `launch`, or serves it on a thread of a test.
+/// Starts the holder of `launch` on a thread of a test, which starts no process.
+#[cfg(test)]
 fn start_holder(home: &HorizonHome, launch: &Launch) -> Result<Hello, HolderError> {
-    #[cfg(test)]
-    {
-        return panel_holder::serve_on_a_thread(home, launch);
-    }
-    #[cfg(not(test))]
-    {
-        panel_holder::start(home, launch)
-    }
+    panel_holder::serve_on_a_thread(home, launch)
+}
+
+/// Starts the holder of `launch` as a process of this computer.
+#[cfg(not(test))]
+fn start_holder(home: &HorizonHome, launch: &Launch) -> Result<Hello, HolderError> {
+    panel_holder::start(home, launch)
 }
 
 /// The one line that a panel says when a holder cannot serve it.

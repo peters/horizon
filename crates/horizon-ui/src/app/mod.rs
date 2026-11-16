@@ -443,7 +443,6 @@ pub struct HorizonApp {
     /// an answer of the person reuses them.
     busy_claude_session_ids: HashSet<String>,
     session_catalog_refresh: session::SessionCatalogRefreshState,
-    unshown_holders: session::UnshownHolders,
     saved_session_deletion: panels::SavedSessionDeletionState,
     remote_hosts_overlay: Option<RemoteHostsOverlay>,
     remote_hosts_catalog: RemoteHostCatalog,
