@@ -231,7 +231,7 @@ JSON and reads none of it; the frames and the rules are in
 | Event | What happens |
 |---|---|
 | A save of a shared section | The settings thread writes the store and then one `setting` intent for each section whose value changed. The intent carries the version that this computer saw. |
-| A push that the server applied | The version that the push wrote is kept in the mirror of this computer at once, before the answer that brings the row back. A save in that window therefore names that version, and the server decides it. Otherwise the server would answer `already_answered` and the save would lose to the row of the push. |
+| A push that the server applied | The version that the push wrote is kept in the mirror of this computer at once, before the answer that brings the row back. A save in that window therefore names that version, and the server decides it. Otherwise the server would answer `already_answered` and the save would lose to the row of the push. The version counts as a version of the store only when the store holds the content of the push. In every other case the row of that version comes again. |
 | A section of the server, after the first link | The row of the store is replaced on the worker of the link, after the merged settings passed the rule of this computer. The window reads the store again through its watch of the settings file. |
 | A section of the server that breaks a rule | The row of this computer stays, the section stays on the server, and one sentence shows. |
 | A section of a newer configuration version | The row of this computer stays, the section stays on the server, and one sentence says that this computer runs an older Horizon. |

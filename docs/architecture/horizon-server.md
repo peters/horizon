@@ -223,7 +223,10 @@ body and the number of sections, and it stores the JSON.
   section whose value differs from the store that it wrote. The intent carries the
   version that this computer saw, so the version rule of the next list decides it.
   A push that the server applied is in the mirror of this computer at once, so a
-  save before the answer behind the push names the version that the push wrote.
+  save before the answer behind the push names the version that the push wrote. The
+  version is a version of the store only when the store holds the content that the
+  push carried. When the person saved the section again, or a row of another
+  computer arrived, the row of that version comes again and its content is written.
 - **A push that loses decides nothing by itself.** A push that the version rule
   refuses moves the mark of the computer back, and the row of the version that
   decided it says whether the value of this computer differs from that row. A row

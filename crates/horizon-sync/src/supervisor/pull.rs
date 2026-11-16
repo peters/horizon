@@ -5,7 +5,7 @@
 //! A secret value is written outside the lock of the state, because a file and a
 //! credential store may take a while and no frame of the UI waits for them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use horizon_core::Machine;
 use horizon_core::secret::SecretId;
@@ -13,7 +13,7 @@ use horizon_core::secret::SecretId;
 use super::SyncHandle;
 use super::files::{MirrorFile, MirroredMachine, MirroredSetting};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
-use super::settings::{RefusedSection, apply as apply_settings, refuse_settings};
+use super::settings::{RefusedSection, apply as apply_settings, held_by_store, refuse_settings};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState, reset};
 use crate::client::PullOutcome;
@@ -60,19 +60,30 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
         }
         (ids, sections, oldest)
     };
+    // The store is read outside the lock: a file is a wait that no frame may share.
+    let path = handle.lock().settings_path.clone();
+    let holds = path.map_or_else(BTreeSet::new, |path| held_by_store(&path, &written));
     let outcome = {
         let mut state = handle.lock();
         let outcome = state.client.accept_push(reply);
         for (section, version, body) in written {
-            // A newer row of the mirror stays: the server applied this intent again.
-            let seen = state.settings.get(&section).map(|seen| seen.version);
-            if seen.is_none_or(|seen| seen < version) {
-                state.settings_applied.insert(section.clone(), version);
-                state.settings.insert(section, MirroredSetting { version, body });
-                state.settings_generation = state.settings_generation.wrapping_add(1);
-                // The drop of the lock writes the mirror of the settings.
-                state.settings_dirty = true;
+            // A newer row stays: the server applied this intent again. The version of
+            // this push is a version of the store only when the store holds the content
+            // of the push; otherwise the row of that version comes again.
+            let seen = state.settings.get(&section).map_or(0, |row| row.version);
+            let applied = state.settings_applied.get(&section).copied().unwrap_or(0);
+            if seen.max(applied) >= version {
+                continue;
             }
+            if holds.contains(&section) {
+                state.settings_applied.insert(section.clone(), version);
+            } else {
+                state.client.replay_before(version);
+            }
+            state.settings.insert(section, MirroredSetting { version, body });
+            state.settings_generation = state.settings_generation.wrapping_add(1);
+            // The drop of the lock writes the mirror of the settings.
+            state.settings_dirty = true;
         }
         outcome
     };

@@ -26,7 +26,7 @@
 //!    the settings whose content differed.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use horizon_core::config_store::ConfigStore;
 use horizon_core::settings_sync::{self, SectionFault};
@@ -34,7 +34,6 @@ use horizon_core::{Config, MachineError};
 use serde_json::Value;
 
 use super::SyncHandle;
-use super::files::MirroredSetting;
 use super::pull::now_millis;
 use super::state::{SettingsSyncView, SyncGuard, SyncState};
 use crate::intent::Op;
@@ -136,7 +135,7 @@ fn reconcile(handle: &SyncHandle, store: &ConfigStore) -> bool {
             pushes.push((section.to_owned(), local_value));
             continue;
         };
-        match server_section(section, row) {
+        match server_section(section, &row.body) {
             Ok(server) if settings_sync::covers(&server, &local_value) => {
                 applied.insert(section.to_owned(), row.version);
             }
@@ -232,11 +231,15 @@ fn local_section(
 
 /// The value of one section that the server holds, at the configuration version
 /// of this build.
-fn server_section(section: &str, row: &MirroredSetting) -> Result<Value, SectionFault> {
-    let text = serde_json::to_string(&row.body)
-        .map_err(|error| SectionFault::Unreadable(format!("the section {section}: {error}")))?;
-    let body = settings_sync::decode_body(&text)?;
-    settings_sync::arrive(section, &body)
+fn server_section(section: &str, body: &Value) -> Result<Value, SectionFault> {
+    settings_sync::arrive(section, &settings_sync::decode_body_value(body)?)
+}
+
+/// The value of one section in the rows of a store, or the default of this build.
+fn store_section(rows: &BTreeMap<String, String>, section: &str, defaults: &Config) -> Option<Value> {
+    rows.get(section)
+        .and_then(|text| serde_json::from_str(text).ok())
+        .or_else(|| settings_sync::body_of(defaults, section).ok().flatten())
 }
 
 /// Applies every section of the mirror that the store of this computer does not
@@ -270,7 +273,7 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
             if refused_at.is_some_and(|refused_at| row.version >= *refused_at) {
                 decided.insert(section.clone());
             }
-            match server_section(section, row) {
+            match server_section(section, &row.body) {
                 Ok(value) => {
                     arriving.insert(section.clone(), value);
                     versions.insert(section.clone(), row.version);
@@ -292,10 +295,7 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
     let mut writing: BTreeMap<String, Value> = BTreeMap::new();
     let mut lost: Vec<String> = Vec::new();
     for (section, value) in arriving {
-        let own = local
-            .get(&section)
-            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-            .or_else(|| settings_sync::body_of(&defaults, &section).ok().flatten());
+        let own = store_section(&local, &section, &defaults);
         if own.is_some_and(|own| settings_sync::covers(&value, &own)) {
             applied.insert(section.clone(), versions[&section]);
             continue;
@@ -357,6 +357,24 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
         handle.set_settings_lost(lost_line(&lost));
     }
     (handle.wake)();
+}
+
+/// The sections of `written` that the store at `path` holds now. A push answers
+/// after it left, so the store may hold another content by then.
+pub(super) fn held_by_store(path: &Path, written: &[(String, u64, Value)]) -> BTreeSet<String> {
+    let Ok(rows) = ConfigStore::resolve(path).section_rows() else {
+        return BTreeSet::new();
+    };
+    let defaults = Config::default();
+    written
+        .iter()
+        .filter(|(section, _, body)| {
+            store_section(&rows, section, &defaults).is_some_and(|own| {
+                server_section(section, body).is_ok_and(|pushed| settings_sync::covers(&pushed, &own))
+            })
+        })
+        .map(|(section, _, _)| section.clone())
+        .collect()
 }
 
 /// Pins the sections whose content this build refused, so one refusal reads one

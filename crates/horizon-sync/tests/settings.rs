@@ -885,6 +885,55 @@ fn a_save_before_the_first_pull_back_names_the_version_that_its_push_applied() {
 }
 
 #[test]
+fn a_store_that_changed_before_the_answer_of_its_push_takes_the_row_of_the_server() {
+    // The push of this computer left when its store held the default theme, and the
+    // person saves the light theme while the answer waits. The store therefore holds
+    // another content than the push when the answer arrives, so the version of the
+    // push is not a version that this store holds. The row of the server must be
+    // written again, as it was before the answer of a push kept its version: the two
+    // computers hold the value of that row, and no version is skipped.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start_held_pull(&home.path().join("b"), &Config::default(), &server.socket);
+    held_push(&b);
+    b.save(&config_with_theme(AppearanceTheme::Light));
+    assert_eq!(
+        b.theme(),
+        AppearanceTheme::Light,
+        "the store of the person holds the value of the save"
+    );
+    release(&b);
+    held_request(&b);
+    release_pull(&b);
+
+    settled(&b);
+    let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
+    in_step(&a);
+    assert_eq!(
+        b.theme(),
+        a.theme(),
+        "the two computers hold the theme of the row of the server"
+    );
+
+    // The version of the row is the version that a save of this computer names, so
+    // the next save of the section is accepted.
+    b.save(&config_with_theme(AppearanceTheme::Light));
+    eventually("the light theme of the section of the server", || {
+        server
+            .setting("appearance")
+            .is_some_and(|(_, body)| body["section"]["theme"] == json!("light"))
+            .then_some(())
+    });
+    settled(&b);
+    eventually("the light theme of the other computer", || {
+        (a.theme() == AppearanceTheme::Light).then_some(())
+    });
+    b.stop();
+    a.stop();
+    server.stop();
+}
+
+#[test]
 fn two_computers_with_equal_settings_that_join_together_read_no_line() {
     // Both computers keep the default settings and join an empty server at the same
     // moment: each one pushes every shared section, and the push that the server
