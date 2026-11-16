@@ -264,11 +264,13 @@ fn failed_hooks_poison_only_their_launch_even_while_the_record_is_locked() {
     assert!(fixture.store.read("panel").is_err());
     drop(lock);
     fixture.input.event.hook_event_name = "SessionEnd".into();
+    fixture
+        .store
+        .apply_hook("panel", PanelKind::Claude, "host", &fixture.input, 5)
+        .expect("the report of the panel follows the events of its launch");
     assert!(
-        fixture
-            .store
-            .apply_hook("panel", PanelKind::Claude, "host", &fixture.input, 5)
-            .is_err()
+        fixture.store.read("panel").is_err(),
+        "the launch stays vetoed for a resume"
     );
     fixture
         .store
@@ -289,6 +291,23 @@ fn failed_hooks_poison_only_their_launch_even_while_the_record_is_locked() {
         .invalidate("panel", "host")
         .expect("late failure from old launch");
     assert!(fixture.store.read("panel").expect("new launch unaffected").is_some());
+}
+
+#[test]
+fn a_failed_hook_of_a_launch_keeps_the_report_of_its_panel() {
+    let mut fixture = Fixture::new();
+    // A hook of this launch failed, so no turn of it may be resumed.
+    fixture.store.invalidate("panel", "host").expect("the failed hook");
+    assert!(fixture.store.read("panel").is_err(), "the turn cannot be resumed");
+    // The report of the panel is a separate answer, and it follows its events.
+    fixture.event("Stop", 3);
+    let report = fixture.store.read_report("panel").expect("report").expect("record");
+    assert_eq!(
+        report.ledger.state,
+        TurnState::Finished,
+        "the row of the panel leaves working"
+    );
+    assert!(fixture.store.read("panel").is_err(), "the turn stays vetoed");
 }
 
 #[test]

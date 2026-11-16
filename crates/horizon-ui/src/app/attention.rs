@@ -141,7 +141,7 @@ fn read_ledgers(store: &WorkStore, received: Receiver<Vec<(PanelId, String)>>, r
             .into_iter()
             .map(|(panel, local_id)| {
                 // A record that this home cannot read changes nothing.
-                let ledger = store.read(&local_id).ok().flatten().map(|record| record.ledger);
+                let ledger = store.read_report(&local_id).ok().flatten().map(|record| record.ledger);
                 (panel, local_id, ledger)
             })
             .collect();

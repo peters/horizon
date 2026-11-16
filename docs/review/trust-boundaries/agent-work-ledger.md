@@ -58,9 +58,11 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
 - **The launch identity gates the event.** The environment names the Horizon
   root, the panel and the launch token. The store accepts an event only for a
   panel that `register_owner` registered, only while that launch's health marker
-  holds `1`, and only while the record names the same owner token and panel kind.
-  An event of another launch is refused, and a refused hook ends the launch's
-  evidence instead of writing it.
+  is there, and only while the record names the same owner token and panel kind.
+  An event of another launch is refused. A hook that fails empties the health
+  marker of its launch, and no turn of that launch is resumed. The report of the
+  panel is a separate answer: it keeps the state that the events this launch did
+  record set, and its later events update it.
 - **The session must match.** An event carries a session identity. A ledger
   accepts it only when the ledger holds that session or no session yet, so a
   delayed event of an older session cannot reopen or close a later turn. A
@@ -133,6 +135,11 @@ Horizon. The person runs that agent, and its output is not Horizon's text.
   receives no prompt from Horizon. What an agent process can make the sidebar say
   is one of four states of its own row. It cannot make Horizon continue work, and
   it cannot reach the row of another panel.
+- **A failed hook costs a continuation, not a row.** The health marker of a launch
+  vetoes the resume of its work. It does not gate the report: the sidebar keeps
+  the state that the events the launch did record set, and a later event of the
+  launch updates it. One shape that this version cannot read therefore never ends
+  the report of a panel for the rest of its launch.
 - **The unread mark is memory.** Whether the person has looked at a finished
   turn lives in the process and is not saved. A restart shows the state of the
   ledger, and every panel starts as looked at.

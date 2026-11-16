@@ -92,6 +92,18 @@ impl WorkStore {
         Ok(Some(record))
     }
 
+    /// Read the record of a panel for its row in the sidebar.
+    ///
+    /// The health marker of a launch vetoes the continuation of its work, not the
+    /// report of its panel: a launch whose hook failed keeps the state that the
+    /// events it did record set.
+    ///
+    /// # Errors
+    /// Rejects invalid identities and oversized or corrupt records.
+    pub fn read_report(&self, panel_local_id: &str) -> io::Result<Option<StoredWork>> {
+        self.read_raw(panel_local_id)
+    }
+
     /// Bind evidence to a new launch before starting its provider process.
     /// Hooks cannot replace this owner. Use a fresh random token per launch.
     ///
@@ -380,6 +392,10 @@ impl WorkStore {
     fn check_health(&self, panel: &str, owner: &str) -> io::Result<()> {
         crate::ui_thread::blocking("the health markers of a work ledger are read");
         self.check_health_marker(panel, owner)?;
+        let marker = self.health_path(panel, owner)?;
+        if fs::metadata(&marker)?.len() != 1 || fs::read(marker)? != b"1" {
+            return Err(invalid("launch evidence was invalidated by a failed hook"));
+        }
         let prefix = format!("{owner}.pending.");
         for (index, entry) in fs::read_dir(self.health_directory(panel)?)?.enumerate() {
             if index >= 4096 {
@@ -392,13 +408,13 @@ impl WorkStore {
         Ok(())
     }
 
+    /// Rejects a launch that registered no marker, or whose marker can no longer
+    /// be invalidated. An empty marker stops no event: it vetoes only the
+    /// continuation, which [`Self::check_health`] reads.
     fn check_health_marker(&self, panel: &str, owner: &str) -> io::Result<()> {
         let path = self.health_path(panel, owner)?;
         // A marker that can no longer be invalidated cannot authorize work.
         let _writable = OpenOptions::new().write(true).open(&path)?;
-        if fs::metadata(&path)?.len() != 1 || fs::read(path)? != b"1" {
-            return Err(invalid("launch evidence was invalidated by a failed hook"));
-        }
         Ok(())
     }
 
