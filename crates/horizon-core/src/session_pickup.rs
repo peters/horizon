@@ -190,6 +190,8 @@ impl PickupFolder {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PickupList {
     folders: Vec<PickupFolder>,
+    /// The sessions of this computer that the list leaves out for an open panel.
+    pub open_in_panels: usize,
 }
 
 impl PickupList {
@@ -199,7 +201,10 @@ impl PickupList {
     /// that already holds the folders of its own read.
     #[must_use]
     pub fn new(folders: Vec<PickupFolder>) -> Self {
-        Self { folders }
+        Self {
+            folders,
+            open_in_panels: 0,
+        }
     }
 
     /// The folders, the one with the newest activity first.
@@ -358,6 +363,7 @@ fn group_rows<H: std::hash::BuildHasher>(
 ) -> PickupList {
     let oldest = now_millis.saturating_sub(MAX_SESSION_AGE_DAYS.saturating_mul(DAY_MILLIS));
     let mut usable: Vec<(PathBuf, crate::runtime_state::AgentSessionRecord)> = Vec::new();
+    let mut open_in_panels = 0;
     for record in records {
         if !programs.iter().any(|program| program.kind == record.kind) {
             continue;
@@ -366,6 +372,7 @@ fn group_rows<H: std::hash::BuildHasher>(
             continue;
         }
         if open_panels.contains(&AgentSessionKey::new(record.kind, record.session_id.clone())) {
+            open_in_panels += 1;
             continue;
         }
         // The only value of a store that reaches a command line is the session
@@ -413,7 +420,10 @@ fn group_rows<H: std::hash::BuildHasher>(
     }
     // The rows arrive newest first, so a folder stands at the place of its newest
     // row and its own rows keep that order.
-    PickupList { folders }
+    PickupList {
+        folders,
+        open_in_panels,
+    }
 }
 
 /// What the row says about one session.

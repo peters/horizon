@@ -515,6 +515,7 @@ fn a_folder_opens_all_of_its_rows_up_to_the_named_number() {
             rows: vec![list.folders()[0].rows[0].clone()],
             ..list.folders()[0].clone()
         }],
+        ..PickupList::new(Vec::new())
     };
     assert_eq!(single.folders()[0].open_all_count(), 0, "one row opens by itself");
 }

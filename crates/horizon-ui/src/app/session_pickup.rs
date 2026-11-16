@@ -44,6 +44,8 @@ pub(in crate::app) const MENU_DETAIL: &str = "Open a conversation that an agent 
 /// The line of the window when the stores answer nothing.
 pub(in crate::app) const EMPTY_LINE: &str =
     "No conversation of an agent program is on this computer. Open an agent panel, and its session stands here.";
+/// The line of the window when every conversation of this computer has a panel.
+pub(in crate::app) const EVERY_ONE_OPEN_LINE: &str = "Every conversation of this computer is open in a panel.";
 
 /// What one read of the session stores needs: the home folder that holds them,
 /// the programs of the settings, and the sessions that an open panel already has.
@@ -266,7 +268,9 @@ impl HorizonApp {
                     ui.add_space(8.0);
                 }
                 if folders.is_empty() {
-                    ui.label(RichText::new(EMPTY_LINE).size(12.5).color(theme::FG_SOFT()));
+                    let open = state.list.open_in_panels > 0;
+                    let empty = if open { EVERY_ONE_OPEN_LINE } else { EMPTY_LINE };
+                    ui.label(RichText::new(empty).size(12.5).color(theme::FG_SOFT()));
                     if ui.button("Close").clicked() {
                         close = true;
                     }

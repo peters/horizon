@@ -92,11 +92,8 @@ impl WorkStore {
         Ok(Some(record))
     }
 
-    /// Read the record of a panel for its row in the sidebar.
-    ///
-    /// The health marker of a launch vetoes the continuation of its work, not the
-    /// report of its panel: a launch whose hook failed keeps the state that the
-    /// events it did record set.
+    /// Read the record of a panel for its row. The health marker vetoes the
+    /// continuation of work, not the report, so a failed hook keeps the row state.
     ///
     /// # Errors
     /// Rejects invalid identities and oversized or corrupt records.
@@ -408,9 +405,8 @@ impl WorkStore {
         Ok(())
     }
 
-    /// Rejects a launch that registered no marker, or whose marker can no longer
-    /// be invalidated. An empty marker stops no event: it vetoes only the
-    /// continuation, which [`Self::check_health`] reads.
+    /// Rejects a launch that registered no marker, or whose marker can no longer be
+    /// invalidated. An empty marker vetoes only the continuation.
     fn check_health_marker(&self, panel: &str, owner: &str) -> io::Result<()> {
         let path = self.health_path(panel, owner)?;
         // A marker that can no longer be invalidated cannot authorize work.

@@ -15,8 +15,8 @@ use horizon_core::{
 
 use super::rows::{OPEN, OPEN_ALL, OPEN_ANYWAY, PickupPress, folder_text, open_label, row_lines, spoken};
 use super::{
-    EMPTY_LINE, MENU_TITLE, SECTION_TITLE, SHOW_ALL, SessionPickup, WINDOW_TITLE, folder_name, summary_line,
-    window_body_height,
+    EMPTY_LINE, EVERY_ONE_OPEN_LINE, MENU_TITLE, SECTION_TITLE, SHOW_ALL, SessionPickup, WINDOW_TITLE, folder_name,
+    summary_line, window_body_height,
 };
 use crate::app::root_chrome::ToolbarAction;
 use crate::app::test_support::{raw_input, run_app_frame, test_app, test_app_with_startup};
@@ -529,20 +529,90 @@ fn the_programs_of_the_pickup_are_the_programs_of_the_presets() {
     assert_eq!(programs[0].program, "claude");
 }
 
+/// The Claude store of `home` holds `session` in `folder`, as that program writes it.
+fn transcript_of(home: &Path, folder: &Path, session: &str) {
+    let project = home.join(".claude").join("projects").join("-repo");
+    std::fs::create_dir_all(&project).expect("the Claude store");
+    let record = serde_json::json!({
+        "type": "user",
+        "sessionId": session,
+        "cwd": folder.display().to_string(),
+    });
+    let prompt = serde_json::json!({"type": "last-prompt", "lastPrompt": "Pick this one up"});
+    std::fs::write(
+        project.join(format!("{session}.jsonl")),
+        format!("{record}\n{prompt}\n"),
+    )
+    .expect("the transcript");
+}
+
 #[test]
 fn a_session_of_an_open_panel_is_not_a_row_of_the_list() {
     let temp = tempfile::tempdir().expect("temp dir");
+    let home = temp.path().join("home-of-the-person");
     let folder_path = temp.path().join("repo");
     std::fs::create_dir_all(&folder_path).expect("the folder");
-    let open: HashSet<AgentSessionKey> = HashSet::from([AgentSessionKey::new(PanelKind::Claude, SESSION)]);
+    transcript_of(&home, &folder_path, SESSION);
     let programs = vec![PickupProgram {
         kind: PanelKind::Claude,
         program: "claude".to_string(),
     }];
-    let list = horizon_core::session_pickup::load_with(&temp.path().join("home"), &programs, &open, 0, |_| true);
+    let open: HashSet<AgentSessionKey> = HashSet::new();
+    let list = horizon_core::session_pickup::load_with(&home, &programs, &open, 0, |_| true);
+    assert_eq!(list.row_count(), 1, "the store of that home names one conversation");
+
+    let open = HashSet::from([AgentSessionKey::new(PanelKind::Claude, SESSION)]);
+    let list = horizon_core::session_pickup::load_with(&home, &programs, &open, 0, |_| true);
 
     assert!(
         list.is_empty(),
         "the pickup leaves out the sessions that the caller names"
     );
+    assert_eq!(
+        list.open_in_panels, 1,
+        "the read names the session that an open panel has"
+    );
+}
+
+#[test]
+fn the_window_says_that_every_session_of_this_computer_is_open_in_a_panel() {
+    let (temp, ctx, mut app) = app_with_pickup(Vec::new());
+    let home = temp.path().join("home-of-the-person");
+    let folder_path = home.join("repo");
+    std::fs::create_dir_all(&folder_path).expect("the folder");
+    transcript_of(&home, &folder_path, SESSION);
+    // A panel of this board has the one conversation of that store.
+    let workspace = app.board.create_workspace("a");
+    app.board
+        .create_panel(
+            horizon_core::PanelOptions {
+                kind: PanelKind::Claude,
+                command: Some("seed".to_string()),
+                resume: horizon_core::PanelResume::Session {
+                    session_id: SESSION.to_string(),
+                },
+                ..horizon_core::PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("the panel of the session");
+    app.session_pickup = SessionPickup::reading(home);
+    app.show_recent_agent_sessions();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while app.session_pickup.pending.is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the pickup reads the store of the home"
+        );
+        run_app_frame(&ctx, &mut app);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    let texts = window_texts(&ctx, &mut app);
+
+    assert!(
+        texts.iter().any(|text| text == EVERY_ONE_OPEN_LINE),
+        "the window names the conversations that panels have: {texts:?}"
+    );
+    assert!(!texts.iter().any(|text| text == EMPTY_LINE), "{texts:?}");
 }
