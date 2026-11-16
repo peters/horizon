@@ -12,7 +12,7 @@
 # The local container of one computer builds the target `browser-vm-local`, which
 # adds an SSH server. `scripts/browser-vm-local.sh` runs it.
 
-FROM rust:1.99.1-bookworm AS profile-host
+FROM rust:1.100.0-bookworm AS profile-host
 
 # rav1e, the video encoder of the browser engine, needs NASM on x86_64.
 RUN apt-get update \
