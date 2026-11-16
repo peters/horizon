@@ -1,13 +1,18 @@
 //! A card of a session of a machine: its workspace, its presence and its owner,
 //! judged on a test board.
 
+use std::sync::Arc;
+
 use super::*;
 use crate::app::test_support::{card_body, card_panel, drawn_text, drew_text, raw_input, run_app_frame_with_input};
-use horizon_core::machine_watch::{AgentState, MachineAgent, MachineWatchSnapshot, MachineWatchState, WatchLink};
+use horizon_core::machine_watch::{
+    AgentState, MachineAgent, MachineWatch, MachineWatchSnapshot, MachineWatchState, WatchLink,
+};
 use horizon_core::{Machine, MachineRegistry, Machines, WorkspaceLayout};
 
-/// Keeps the machine `build-1` in the list of the app, with the mark of its cards.
-fn keep_machine(app: &mut HorizonApp) {
+/// Keeps the machine `build-1` in the list of the app, with `cards` the mark of its card
+/// setup.
+fn keep_machine(app: &mut HorizonApp, cards: bool) {
     let machine = Machine {
         name: "build-1".to_owned(),
         host: "127.0.0.1".to_owned(),
@@ -17,7 +22,7 @@ fn keep_machine(app: &mut HorizonApp) {
         provider: None,
         repository: None,
         added_at_millis: 0,
-        cards: true,
+        cards,
     };
     app.machine_list = Machines::with_records(MachineRegistry::from_home(app.session_store.home()), vec![machine]);
 }
@@ -45,6 +50,44 @@ fn watch_reports(app: &mut HorizonApp, session: Option<&str>) {
         }],
         ..MachineWatchSnapshot::default()
     }));
+}
+
+/// The stand-in watch of `build-1`: its report names the session `hz-relay` and no pane,
+/// as a machine whose program is no agent program reports a session, and it names no
+/// session after the file `left` exists, as a session that left the machine does.
+fn stand_in_watch(folder: &Path, left: &Path) -> String {
+    let body = format!(
+        "#!/bin/sh\nprintf 'HZ\\t1\\nS\\thz-relay\\nZ\\n'\n\
+         while [ ! -e {left} ]; do sleep 0.05; done\nprintf 'HZ\\t1\\nZ\\n'\nexec sleep 300\n",
+        left = left.display()
+    );
+    horizon_core::stand_in_program_in(folder, "ssh", &body)
+        .expect("the stand-in watch of the test")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Runs frames of the window until the report of `build-1` names `wanted` as its only
+/// session, or no session when it is `None`.
+fn wait_for_sessions(ctx: &Context, app: &mut HorizonApp, wanted: Option<&str>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let _ = run_app_frame_with_input(ctx, app, raw_input(WINDOW, None));
+        let named = app.machine_watch.snapshot.as_ref().and_then(|snapshot| {
+            snapshot
+                .machine("build-1")
+                .and_then(|held| held.sessions.first())
+                .map(String::as_str)
+        });
+        if named == wanted {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the test waited for the report of the machine to name {wanted:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 /// A request of the session `session` of `build-1`, whose agent runs there.
@@ -76,6 +119,18 @@ fn fixture_card_document() -> serde_json::Value {
     })
 }
 
+/// Whether the frame drew the control that `label` names as disabled, or `None` when the
+/// frame holds no such control.
+fn accesskit_disabled(output: &egui::FullOutput, label: &str) -> Option<bool> {
+    output
+        .platform_output
+        .accesskit_update
+        .as_ref()?
+        .nodes
+        .iter()
+        .find_map(|(_, node)| (node.label() == Some(label)).then(|| node.is_disabled()))
+}
+
 /// Runs the frames that the layout of a new card needs: one pass measures the body,
 /// the host sizes the card, and the next pass draws the sized card. Returns the last
 /// frame, which is the one that the person sees.
@@ -90,7 +145,7 @@ fn settle_frames(ctx: &Context, app: &mut HorizonApp) -> egui::FullOutput {
 #[test]
 fn a_request_of_a_machine_session_opens_a_card_in_the_workspace_of_its_machine() {
     let (_temp, ctx, mut app) = app();
-    keep_machine(&mut app);
+    keep_machine(&mut app, true);
     watch_reports(&mut app, Some("night"));
     let request = session_request(
         &app,
@@ -130,7 +185,7 @@ fn a_card_of_a_machine_session_that_fits_shows_its_last_button_without_a_mark() 
     // then keeps the frame of an owner that is not there, and the fit counts that frame
     // as it counts the document.
     app.template_config.machines.watch_agents = false;
-    keep_machine(&mut app);
+    keep_machine(&mut app, true);
     watch_reports(&mut app, Some("night"));
     let (card, _) = created(app.apply_block_request(
         &session_request(
@@ -179,7 +234,7 @@ fn a_card_of_a_machine_session_that_fits_shows_its_last_button_without_a_mark() 
 #[test]
 fn a_layout_that_the_person_chose_keeps_the_cards_of_a_machine_in_its_cells() {
     let (_temp, ctx, mut app) = app();
-    keep_machine(&mut app);
+    keep_machine(&mut app, true);
     watch_reports(&mut app, Some("night"));
     let (card, _) = created(app.apply_block_request(
         &session_request(
@@ -223,7 +278,7 @@ fn a_layout_that_the_person_chose_keeps_the_cards_of_a_machine_in_its_cells() {
 #[test]
 fn a_card_of_a_machine_session_names_its_owner_present_and_after_absent() {
     let (_temp, ctx, mut app) = app();
-    keep_machine(&mut app);
+    keep_machine(&mut app, true);
     watch_reports(&mut app, Some("night"));
     let create = session_request(
         &app,
@@ -251,4 +306,51 @@ fn a_card_of_a_machine_session_names_its_owner_present_and_after_absent() {
         panic!("inspect answers");
     };
     assert!(!agent_present, "a session that the watch no longer reports is absent");
+}
+
+#[test]
+fn the_owner_of_a_card_of_a_machine_session_is_present_while_the_watch_names_the_session() {
+    let (_temp, ctx, mut app) = app();
+    ctx.enable_accesskit();
+    keep_machine(&mut app, false);
+    let folder = tempfile::tempdir().expect("a folder of the test");
+    let left = folder.path().join("left");
+    app.machine_watch.watch = Arc::new(MachineWatch::with_program(stand_in_watch(folder.path(), &left)));
+    let (card, _) = created(app.apply_block_request(
+        &session_request(
+            &app,
+            "hz-relay",
+            Operation::Create {
+                title: Some("Night shift".into()),
+                document: fixture_card_document(),
+            },
+        ),
+        &ctx,
+    ));
+    let workspace = app
+        .board
+        .panel_id_by_local_id(&card)
+        .and_then(|id| app.board.panel(id))
+        .expect("the card")
+        .workspace_id;
+    // The report of the machine names the session and holds no row of an agent.
+    wait_for_sessions(&ctx, &mut app, Some("hz-relay"));
+    let _ = run_app_frame_with_input(&ctx, &mut app, raw_input(WINDOW, None));
+    assert!(app.center_workspace_in_rect(workspace, app.canvas_rect(&ctx)));
+
+    let output = settle_frames(&ctx, &mut app);
+    assert!(
+        !drew_text(&output, "No agent"),
+        "the chip of a card of a session that is there names no missing agent"
+    );
+    assert!(
+        !drew_text(&output, "Its agent is not here"),
+        "a card of a session that is there says no banner of an agent that left"
+    );
+    assert!(
+        drew_text(&output, "on "),
+        "the chip of the card names the machine of the session"
+    );
+    let stop = accesskit_disabled(&output, "Stop").expect("the button of the card is a control of the frame");
+    assert!(!stop, "the buttons of a card of a session that is there are on");
 }

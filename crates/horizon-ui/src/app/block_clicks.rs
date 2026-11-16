@@ -128,7 +128,8 @@ impl HorizonApp {
     }
 
     /// Whether the owner of a card is here: a panel of its workspace, or the
-    /// session of a machine that the watch reports.
+    /// session of a machine that the watch reports. A session whose program is no
+    /// agent reports no row, so the list of sessions is what settles it.
     pub(in crate::app) fn card_owner_present(&self, panel: &Panel) -> bool {
         if self.card_owner_panel(panel).is_some() {
             return true;
@@ -139,7 +140,8 @@ impl HorizonApp {
         self.machine_watch
             .snapshot
             .as_ref()
-            .is_some_and(|snapshot| snapshot.agents(machine).iter().any(|agent| agent.session == session))
+            .and_then(|snapshot| snapshot.machine(machine))
+            .is_some_and(|held| held.sessions.iter().any(|name| name == session))
     }
 
     /// Whether the owner of a card is here, so its buttons are live.
