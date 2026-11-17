@@ -4,6 +4,8 @@
 //!
 //! A test never waits to see that a frame does not come. It sends a frame that
 //! must come after it, and reads that this one is the next frame of the link.
+//! The newest list replaces a list that still waits for a link, so a test reads
+//! one list for one change, or it reads lists until the one that it expects.
 
 use std::{
     io::Read,
@@ -93,11 +95,9 @@ impl Server {
     fn three(&self) -> (Link, Link, Link) {
         let (mut a, mut b, mut c) = (self.live(A), self.live(B), self.live(C));
         a.send(panels(&[("p1", true), ("p2", false)]));
-        let (two, three) = ("list laptop-a[] laptop-b[]", "list laptop-a[] laptop-b[] laptop-c[]");
-        let list = "list laptop-a[p1,p2] laptop-b[] laptop-c[]";
-        assert_eq!([a.next(), a.next(), a.next()], [two, three, list]);
-        assert_eq!([b.next(), b.next()], [three, list]);
-        assert_eq!(c.next(), list);
+        for link in [&mut a, &mut b, &mut c] {
+            link.settle("list laptop-a[p1,p2] laptop-b[] laptop-c[]");
+        }
         (a, b, c)
     }
 }
@@ -151,6 +151,18 @@ impl Link {
         match self.frame() {
             Frame::Error(error) => error.code.as_str(),
             other => panic!("the frame is not an error: {other:?}"),
+        }
+    }
+
+    /// Reads lists until the list of this link is `list`. A link reads fewer
+    /// lists than there were changes when a newer list replaced one that waited.
+    fn settle(&mut self, list: &str) {
+        loop {
+            let line = self.next();
+            assert!(line.starts_with("list "), "only a list comes before {list}: {line}");
+            if line == list {
+                return;
+            }
         }
     }
 
@@ -266,7 +278,8 @@ fn the_list_reaches_every_link_and_changes_when_a_link_ends() {
     }
 
     // A list of 70 panels is cut at 64, and each text at its bound. The same
-    // list again changes nothing, so the next list is the one after it.
+    // list again changes nothing: the next frame of its computer is the answer
+    // to the request that it sent after it.
     let mut many: Vec<LivePanel> = (10..80).map(|index| panel(&format!("p{index}"), true)).collect();
     many[0].title = "t".repeat(200);
     a.send(LiveRequest::Panels { panels: many });
@@ -278,10 +291,14 @@ fn the_list_reaches_every_link_and_changes_when_a_link_ends() {
         assert_eq!(computers[0].panels[0].title.len(), 120);
     }
     a.send(panels(&[("p1", true)]));
-    a.send(panels(&[("p1", true)]));
-    a.send(LiveRequest::Ended { panel: "p1".to_owned() });
     for link in [&mut a, &mut b, &mut c] {
         assert_eq!(link.next(), "list laptop-a[p1] laptop-b[] laptop-c[]");
+    }
+    a.send(panels(&[("p1", true)]));
+    a.send(follow(C, "nope"));
+    assert_eq!(a.next(), "ended laptop-c/nope NotFound", "the same list is no change");
+    a.send(LiveRequest::Ended { panel: "p1".to_owned() });
+    for link in [&mut a, &mut b, &mut c] {
         assert_eq!(link.next(), "list laptop-a[] laptop-b[] laptop-c[]");
     }
 
@@ -642,14 +659,8 @@ fn the_handle_of_a_computer_follows_a_panel_types_in_it_and_shares_its_own() {
         (handle.state(), computers[1].label.as_str()),
         (LiveState::Open, "Laptop B")
     );
-    assert_eq!(
-        [a.next(), a.next(), a.next()],
-        [
-            "list laptop-a[p1] laptop-b[]",
-            "list laptop-a[p1] laptop-b[q1]",
-            "watchers p1 [laptop-b] refresh=true"
-        ]
-    );
+    a.settle("list laptop-a[p1] laptop-b[q1]");
+    assert_eq!(a.next(), "watchers p1 [laptop-b] refresh=true");
 
     // This computer follows a panel: it reads the screen and the output, and
     // what its person types reaches the owner.
@@ -742,10 +753,7 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
     a.send(panels(&[]));
     wait_for(handle, woken, |event| show(event) == "ended laptop-a/p1 Closed");
     handle.ended("q1");
-    assert_eq!(
-        [a.next(), a.next()],
-        ["list laptop-a[] laptop-b[q1]", "list laptop-a[] laptop-b[]"]
-    );
+    a.settle("list laptop-a[] laptop-b[]");
     joined.supervisor.stop();
     assert_eq!(a.next(), "list laptop-a[]");
     assert!(!handle.screen("q1", 80, 24), "nothing is sent after a stop");
