@@ -133,6 +133,10 @@ use super::terminal_widget::{TerminalGridCache, TerminalSelectionDragState};
 use super::theme;
 
 const TOOLBAR_HEIGHT: f32 = 46.0;
+/// The width of the sidebar, at every window size. Its header needs these
+/// points for `Workspaces` and its two buttons, and the longest word of a state
+/// takes half of the text of a panel row at this width, so a narrower sidebar
+/// cuts both. The smallest window, 800 points, keeps 590 points of canvas.
 const SIDEBAR_WIDTH: f32 = 210.0;
 pub(crate) const PANEL_TITLEBAR_HEIGHT: f32 = 34.0;
 pub(crate) const PANEL_PADDING: f32 = 8.0;

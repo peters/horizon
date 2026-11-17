@@ -613,7 +613,7 @@ Fixed metrics:
 |---|---|
 | Root toolbar height | 46 |
 | Toolbar buttons | 30 high, 8 gap, 14 horizontal padding |
-| Sidebar width | 210 default, 168 minimum |
+| Sidebar width | 210 at every window size |
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
 | Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. On a card panel the hit target stops above the footer: its height is the on-screen height of the footer and the panel padding under it, at most 32 and at least 10 screen points, so a button of the card never loses its press to a resize grab. |

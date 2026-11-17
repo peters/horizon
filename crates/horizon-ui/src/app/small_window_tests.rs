@@ -16,7 +16,7 @@ struct Window {
     app: HorizonApp,
     size: [f32; 2],
     time: f64,
-    _temp: tempfile::TempDir,
+    temp: tempfile::TempDir,
 }
 
 /// One text that a frame painted.
@@ -26,6 +26,8 @@ struct Drawn {
     rect: Rect,
     /// The rectangle that the frame cuts the text to.
     clip: Rect,
+    /// Whether the text ends in the mark of a cut.
+    cut: bool,
 }
 
 impl Window {
@@ -43,7 +45,7 @@ impl Window {
             app,
             size,
             time: 1.0,
-            _temp: temp,
+            temp,
         };
         window.app.theme_applied = true;
         window.app.initial_pan_done = true;
@@ -77,6 +79,7 @@ fn texts(output: &egui::FullOutput) -> Vec<Drawn> {
                 text: text.galley.text().to_owned(),
                 rect: Rect::from_min_size(text.pos, text.galley.size()),
                 clip,
+                cut: text.galley.elided,
             }),
             egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, clip, out)),
             _ => {}
@@ -224,5 +227,95 @@ fn the_palette_and_the_preset_list_stay_inside_a_small_window() {
                 row.clip
             );
         }
+    }
+}
+
+/// The states that a panel row names, with the ledger of each.
+const STATES: [(horizon_core::agent_work::TurnState, u32, &str); 4] = [
+    (horizon_core::agent_work::TurnState::Working, 0, "Working"),
+    (horizon_core::agent_work::TurnState::Finished, 1, "Background"),
+    (horizon_core::agent_work::TurnState::Finished, 0, "Done"),
+    (horizon_core::agent_work::TurnState::Blocked, 0, "Needs you"),
+];
+
+/// A window of 800 by 600 points with one agent panel of a long name, which
+/// the keyboard is not in.
+fn window_with_an_agent() -> (Window, horizon_core::PanelId) {
+    let mut window = Window::new([800.0, 600.0], Vec::new());
+    // A program that stays until the panel closes, so the state of the row is
+    // the state of the ledger and not the end of a program.
+    let program =
+        horizon_core::stand_in_program_in(window.temp.path(), "claude", "exec cat\n").expect("the program of the test");
+    let workspace = window.app.board.create_workspace("Lane");
+    let panel = window
+        .app
+        .board
+        .create_panel(
+            horizon_core::PanelOptions {
+                name: Some("Atlas checkout redesign lane".to_owned()),
+                kind: horizon_core::PanelKind::Claude,
+                command: Some(program.display().to_string()),
+                ..horizon_core::PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("the panel of the test");
+    window.app.board.focused = None;
+    (window, panel)
+}
+
+#[test]
+fn the_sidebar_of_a_small_window_shows_its_header_whole() {
+    let (mut window, _panel) = window_with_an_agent();
+    let canvas_left = window.app.canvas_rect(&window.ctx).left();
+    let drawn = texts(&window.frame(Vec::new()));
+    let header = text_of(&drawn, "Workspaces");
+    assert!(!header.cut, "the header shows whole: {header:?}");
+    for button in ["New", "Fit"] {
+        let label = text_of(&drawn, button);
+        assert!(
+            header.rect.right() < label.rect.left() && label.rect.right() < canvas_left,
+            "the button {button} stands after the header and inside the sidebar: {header:?} {label:?}"
+        );
+    }
+}
+
+#[test]
+fn a_panel_row_of_a_small_window_holds_its_whole_state_word() {
+    let (mut window, panel) = window_with_an_agent();
+    let local = window.app.board.panel(panel).expect("the panel").local_id.clone();
+    let canvas_left = window.app.canvas_rect(&window.ctx).left();
+    let now = horizon_core::current_unix_millis();
+    for (index, (state, background_tasks, word)) in STATES.into_iter().enumerate() {
+        let mut ledger = horizon_core::agent_work::TurnLedger::default();
+        ledger.session_id = "session".into();
+        ledger.prompt_id = Some("prompt".into());
+        ledger.state = state;
+        ledger.background_tasks = background_tasks;
+        // The panel saw a turn before the one that ends here, so its end is unseen.
+        ledger.updated_at_millis = now - 4 + i64::try_from(index).expect("index");
+        let ctx = window.ctx.clone();
+        window
+            .app
+            .apply_attention_values(vec![(panel, local.clone(), Some(ledger))], &ctx);
+        let _ = window.frame(Vec::new());
+        let drawn = texts(&window.frame(Vec::new()));
+        let name = drawn
+            .iter()
+            .find(|entry| entry.text.starts_with("Atlas") && entry.rect.right() < canvas_left)
+            .unwrap_or_else(|| panic!("the sidebar draws the name of the panel: {drawn:?}"));
+        let row = name.rect.top()..=name.rect.bottom();
+        let state = drawn
+            .iter()
+            .find(|entry| entry.text.starts_with(&word[..2]) && row.contains(&entry.rect.center().y))
+            .unwrap_or_else(|| panic!("the row draws the word {word:?} of its state: {drawn:?}"));
+        assert!(
+            !state.cut && state.text == word,
+            "the row holds its whole state word {word:?}: {state:?}"
+        );
+        assert!(
+            name.cut && name.rect.right() < state.rect.left() && state.rect.right() < canvas_left,
+            "the name is cut before the word of the state, inside the sidebar: {name:?} {state:?}"
+        );
     }
 }

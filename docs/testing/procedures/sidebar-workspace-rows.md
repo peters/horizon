@@ -136,7 +136,7 @@ the hovered or focused row.
    Result: The tiles, the badges, the names and the lines are easy to read on
    the light surface.
 
-### 6.6 NARROW: A narrow sidebar
+### 6.6 NARROW: A small window
 
 1. Hold the pointer on a workspace name that ends with `…`, then on a status
    line that ends with `…`, then on a panel row that ends with `…`.
@@ -148,16 +148,19 @@ the hovered or focused row.
 
    Result: The row shows the `NEW WINDOW` badge before the panel count.
 
-3. Make the Horizon window 900 pixels wide or less. The sidebar becomes 168
-   pixels wide.
+3. Make the Horizon window 800 x 600 pixels. Click the row of `Horizon`.
 
-   Result: The row of `billing-service` shows no `NEW WINDOW` badge. The name
-   keeps its room. The group header summary becomes shorter or goes away; it
-   does not go to a second line.
+   Result: At a window of 800 x 600 the sidebar is 210 pixels wide, as it is in
+   a wide window. The header shows `Workspaces`, `New` and `Fit` whole, and no
+   button covers a letter of `Workspaces`. Each panel row of a working agent
+   shows the whole word `Working` after its name. A name that does not fit ends
+   with `…` before that word, and the pointer on the row shows the whole name.
 
 4. Hold the pointer on the tile of `billing-service`.
 
-   Result: The tooltip shows `Idle` and `In a new window`.
+   Result: The row of `billing-service` shows the `NEW WINDOW` badge. The
+   tooltip of the tile shows the state of the workspace. It does not show
+   `In a new window`, because the row shows the badge.
 
 5. Right-click the row of `billing-service` and click **Move to Main Window**.
    Make the Horizon window wide again.
@@ -192,8 +195,9 @@ the hovered or focused row.
   a hidden close button focuses the row and does not close the panel.
 - 6.4 scrolls the list.
 - 6.5 keeps the rows readable in the light theme.
-- 6.6 shows the full text of a cut name, line or title on hover, and moves the
-  `NEW WINDOW` badge to the tile tooltip on a narrow sidebar.
+- 6.6 shows the full text of a cut name, line or title on hover. At a window
+  of 800 x 600 the sidebar keeps its width, its header shows whole, and a panel
+  row shows the whole word of its state.
 - 6.7 gives each row, panel row and header a spoken name with the facts that
   the row shows.
 

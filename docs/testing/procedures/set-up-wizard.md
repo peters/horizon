@@ -244,8 +244,8 @@ Horizon before they write anything.
     | 5120 x 1348 | Four in one row | 92 points high | No | 1480 points |
     | 2560 x 1300 | Four in one row | 92 points high | No | 1480 points |
     | 1280 x 800 | Four in one row | 92 points high | No | 950 points |
-    | 1000 x 700 | Two in two rows | 30 points high | No | 700 points |
-    | 800 x 600 | One in one column | None | Yes | 512 points |
+    | 1000 x 700 | Two in two rows | 30 points high | No | 670 points |
+    | 800 x 600 | One in one column | None | Yes | 470 points |
 
     Result: The page answers each size as the table says. The size of a row of
     the section **Pick up where you left off** follows the block. After each

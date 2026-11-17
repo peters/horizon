@@ -111,7 +111,7 @@ fn the_detail_of_a_row_keeps_its_program_and_its_time_at_the_widths_of_a_window(
                 "a detail that does not fit is cut at {size:?}: {detail:?}"
             );
             assert!(
-                detail.contains("/a/long/path/that"),
+                detail.contains("/a/long/path/"),
                 "the start of the path stays in the detail at {size:?}: {detail:?}"
             );
             assert!(
@@ -264,8 +264,10 @@ fn the_title_of_a_row_uses_the_width_of_the_row() {
         "the row of a narrow window cuts the title at its end: {} points of text",
         narrow_text.width()
     );
+    // The cut stands between two words, so the text ends at most one word
+    // before the end of its room.
     assert!(
-        narrow_text.width() >= room - 16.0,
+        narrow_text.width() >= room * 0.9,
         "the row uses the room that it has: {} of {room} points",
         narrow_text.width()
     );

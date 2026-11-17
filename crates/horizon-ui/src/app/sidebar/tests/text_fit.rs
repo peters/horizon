@@ -5,10 +5,11 @@ use super::attention_ledger;
 use crate::test_egui::DiscardTextures;
 
 #[test]
-fn the_word_of_a_panel_state_fits_the_narrowest_sidebar() {
+fn the_word_of_a_panel_state_shares_a_row_that_is_too_narrow_for_it() {
     use super::super::panel_rows::{STATE_GAP, title_and_state};
-    // The narrowest sidebar is 168 wide. Its rows start 8 in, the card ends 8
-    // before the edge, the title starts at 68 and the row keeps 26 for a close.
+    // A row of a sidebar 168 wide, which is narrower than the sidebar of the
+    // window. Its rows start 8 in, the card ends 8 before the edge, the title
+    // starts at 68 and the row keeps 26 for a close.
     let right = 160.0 - 26.0;
     let title_left = 68.0;
     let room = right - title_left;
@@ -40,7 +41,7 @@ fn the_word_of_a_panel_state_fits_the_narrowest_sidebar() {
 #[test]
 fn the_default_sidebar_shows_the_whole_word_of_every_state() {
     use super::super::panel_rows::{STATE_GAP, title_and_state};
-    // The default sidebar is 210 wide, with the same insets as the narrowest one.
+    // The sidebar is 210 wide, with the same insets as the narrow row.
     let right = 210.0 - 8.0 - 26.0;
     let title_left = 68.0;
     for state_width in [54.0, 48.2, 40.5, 22.8] {
@@ -96,8 +97,10 @@ fn the_name_and_the_state_of_a_panel_row_never_cover_each_other() {
         ledger.background_tasks = background_tasks;
         app.apply_attention_values(vec![(panel, local.clone(), Some(ledger))], &ctx);
         assert_eq!(app.panel_attention(&local).word(), Some(word), "the state of the panel");
+        // The sidebar keeps one width, also in a window that is narrower than
+        // the smallest window that Horizon opens.
         for viewport in [1600.0_f32, 360.0] {
-            let sidebar = crate::app::root_chrome::effective_sidebar_width(viewport);
+            let sidebar = crate::app::SIDEBAR_WIDTH;
             let rects = sidebar_text_rects(&ctx, &mut app, viewport);
             let name = rects
                 .iter()
@@ -129,29 +132,12 @@ fn the_name_and_the_state_of_a_panel_row_never_cover_each_other() {
                 state.rect.left() >= sidebar / 2.0,
                 "the word of the state stays in the right half of the row"
             );
-            if sidebar >= 200.0 {
-                assert!(
-                    !state.cut,
-                    "the whole word of the state shows at the default width: {:?}",
-                    state.text
-                );
-                assert!(
-                    name.drawn >= 5,
-                    "the name keeps a read of it beside the whole word: {:?}",
-                    name.text
-                );
-            } else {
-                assert!(
-                    state.drawn >= 4,
-                    "the word of the state keeps a read of itself in the narrow row: {:?}",
-                    state.text
-                );
-                assert!(
-                    name.drawn >= 2,
-                    "the name keeps a read of itself in the narrow row: {:?}",
-                    name.text
-                );
-            }
+            assert!(!state.cut, "the whole word of the state shows: {:?}", state.text);
+            assert!(
+                name.drawn >= 5,
+                "the name keeps a read of it beside the whole word: {:?}",
+                name.text
+            );
         }
     }
 }
