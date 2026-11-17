@@ -110,6 +110,9 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | live link | The second link of a computer to its server. It carries the shared terminals. | terminal link, stream link |
 | screen | For a shared terminal: the bytes that draw the grid of the terminal and set its modes. The output after a screen continues it. | snapshot, replay |
 | hub | The part of the server that relays the frames of the live links. | broker, router |
+| Computers section | The section **Computers** of the sidebar. It lists the other computers of the server and the terminals that each one shares. | peers section, shared section |
+| chip | The short text in a small frame at the right of the title of a panel, such as `seen by <name>` or `on <name>`. | label, tag |
+| line of an ended stream | The line below the grid of a follow panel whose stream ended. It gives the cause and says that typed text is not sent. | error line, status line |
 
 ## Technical verbs
 
