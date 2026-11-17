@@ -42,6 +42,7 @@ function, update this document in the same PR.
 | Agent state from the program (note 10) | Yes | Yes |
 | Continue work after restart (note 6) | Yes | Yes |
 | Agent program kept through a restart (note 11) | Tested with a stand-in program | Not tested |
+| Terminals shared with the other computers of a server (note 12) | Tested without a window | Not tested |
 | Browser panels: Chromium and Firefox | Yes | Yes |
 | Browser panels: Safari | No (note 1) | Yes |
 | File drops into local Chromium and Firefox panels | Yes | Not tested |
@@ -146,6 +147,22 @@ function, update this document in the same PR.
     the crate. They are not tested on macOS, and no run of the Horizon window
     with the setting on was watched, so what a person sees is not proven on
     either system.
+
+12. A computer that follows a Horizon server shares its terminal panels with
+    the other computers of that server, and a person types in them from there
+    (`crates/horizon-sync/src/live/`, `crates/horizon-ui/src/app/shared_terminals/`,
+    [docs/architecture/shared-terminals.md](architecture/shared-terminals.md)).
+    No part of that code is for one system: the live link uses the transports
+    of the server link, and the follow panel uses a Unix socket pair. The
+    relay, the live link, the outlet, the screen and the follow panel are
+    proven on Linux by the test lanes of their crates. The join is proven on
+    Linux by tests that run two windows with no display against one real
+    server through a stand-in `ssh`. No run of these tests on macOS is
+    recorded, and no run of the Horizon window with two linked computers was
+    watched, so what a person sees is not proven on either system. Test it with
+    [the shared terminals procedure](testing/procedures/shared-terminals.md).
+    The server must answer protocol version 6. With an older server the machine
+    list stays in step, and the window shows no section **Computers**.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux
