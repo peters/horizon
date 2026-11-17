@@ -244,6 +244,11 @@ when it names one of those kinds.
 - The crate depends on `alacritty_terminal` and on `polling` for the types that
   the forwarded method names. It holds no state of the product: the panel parses
   the payload and owns the claim, so this crate has no Horizon dependency.
+- `share.rs` owns the outlet of a shared terminal. The reader copies each read
+  into one bounded buffer while a computer follows a screen of the terminal. A
+  read costs one atomic load while no computer follows. The crate holds no
+  frame and no link of a shared terminal. The design page is
+  [`shared-terminals.md`](shared-terminals.md).
 
 ### `horizon-core`
 
@@ -281,6 +286,12 @@ when it names one of those kinds.
   Terminal destruction sends shutdown, then a helper thread joins and destroys
   the PTY. A finished thread handle can still own a PTY that waits for its child.
   The bounded regression for this case lives in `terminal/lifecycle/tests.rs`.
+- `terminal/share.rs` writes the screen of a terminal for a follower.
+  `terminal/follow.rs` owns the terminal of a follow panel and its feed.
+  `panel/follow.rs` and `board/follow.rs` open the follow panel. A follow panel
+  has no program of this computer. The places that act on the program of a
+  panel ask `Panel::is_follower` and do nothing for a follow panel. The design
+  page is [`shared-terminals.md`](shared-terminals.md).
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
@@ -376,6 +387,13 @@ when it names one of those kinds.
 - The crate may depend on `horizon-core` for a machine record and its validators.
   It must not depend on `horizon-ui`, egui, eframe, wgpu or winit, so a server can
   run without a desktop.
+- `live/` owns the shared terminals of a server. `live/protocol.rs` holds the
+  frames and their bounds, and `live/hub.rs` is the relay. `live/outbox.rs`
+  holds the frames that wait for one link, and `live/relay.rs` serves one live
+  link. `supervisor/live.rs` is the live link of a computer. No module of `live/`
+  opens the store or a file. The design page is
+  [`shared-terminals.md`](shared-terminals.md) and the boundary is
+  [`shared-terminals.md`](../review/trust-boundaries/shared-terminals.md).
 
 ### `horizon-browser-cli`
 
