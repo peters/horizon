@@ -537,8 +537,8 @@ fn a_card_that_grows_by_an_update_stops_at_the_ceiling_of_a_card_in_a_tall_view(
     let body = card_body(panel, app.canvas_view.zoom);
     let ink = drawn_text(&output, "Delete");
     assert!(
-        ink.max.y > body.max.y && drew_text(&output, "More below"),
-        "the body cuts the last button and says so: {ink:?} in {body:?}"
+        body.contains_rect(ink) && drew_text(&output, "More below"),
+        "the foot of the card holds the last button, and the body says that it holds more: {ink:?} in {body:?}"
     );
 }
 
@@ -579,8 +579,8 @@ fn a_card_that_is_taller_than_the_ceiling_of_a_card_scrolls_in_its_body() {
     let body = card_body(panel, app.canvas_view.zoom);
     let ink = drawn_text(&output, "Delete");
     assert!(
-        ink.min.y > body.max.y,
-        "the body scrolls the last button below the room that the card gives it: {ink:?} in {body:?}"
+        body.contains_rect(ink) && drew_text(&output, "More below"),
+        "the body scrolls above the last button, which keeps the foot of the card: {ink:?} in {body:?}"
     );
 }
 
@@ -669,10 +669,19 @@ fn a_card_that_holds_more_than_it_shows_marks_the_lower_edge_of_its_body() {
         mark.min.y > body.center().y,
         "the mark stands at the lower edge of the body, not in its middle: {mark:?} in {body:?}"
     );
-    let last = drawn_text(&output, "Delete");
+    // The buttons that end the document keep the foot of the card, under the
+    // mark, and the words before them wait under the lower edge of the body.
+    let words = "The check passed.\nThe server and browser buttons continue the setup.\nThe rent is ready.";
+    let (first, last) = (drawn_text(&output, "Start the machine"), drawn_text(&output, "Delete"));
+    let above_the_foot =
+        |output: &egui::FullOutput| drew_text(output, words) && drawn_text(output, words).max.y <= first.min.y;
     assert!(
-        last.min.y > body.max.y,
-        "the body holds the last button under its lower edge: {last:?} in {body:?}"
+        body.contains_rect(first) && body.contains_rect(last) && mark.max.y <= first.min.y,
+        "the foot holds the buttons under the mark: {first:?} and {last:?} under {mark:?} in {body:?}"
+    );
+    assert!(
+        !above_the_foot(&output),
+        "the body holds its last words under its lower edge"
     );
 
     press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
@@ -682,10 +691,9 @@ fn a_card_that_holds_more_than_it_shows_marks_the_lower_edge_of_its_body() {
         !drew_text(&output, "More below"),
         "the mark is gone once the body shows its end"
     );
-    let last = drawn_text(&output, "Delete");
     assert!(
-        body.contains_rect(last),
-        "the press showed the last button of the card: {last:?} in {body:?}"
+        above_the_foot(&output) && drawn_text(&output, "Delete") == last,
+        "the press showed the last words of the card above its buttons, which keep their place"
     );
 }
 

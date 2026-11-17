@@ -72,7 +72,7 @@ fn a_card_of_two_lines_is_lower_than_a_card_of_twenty_rows_in_the_grid_of_a_new_
 }
 
 #[test]
-fn a_card_above_the_greatest_height_of_its_window_keeps_that_height_and_scrolls_to_its_buttons() {
+fn a_card_above_the_greatest_height_of_its_window_keeps_that_height_and_scrolls_above_its_buttons() {
     for (window, greatest) in [(SMALL_WINDOW, GREATEST), (WINDOW, TALLEST), ([5120.0, 1400.0], TALLEST)] {
         let (_temp, ctx, mut app) = started(workspace(None, vec![editor_panel_state(AGENT, [20.0, 20.0])]));
         app.template_config.canvas.fit_floor_zoom = 1.0;
@@ -102,13 +102,17 @@ fn a_card_above_the_greatest_height_of_its_window_keeps_that_height_and_scrolls_
             drew_text(&output, "More below"),
             "the card says that it holds more ({window:?})"
         );
+        // The button of the card stands in its foot, and the last row is under it.
         let button = drawn_text(&output, "Delete");
+        let above_the_foot = |output: &egui::FullOutput, row: &str| {
+            drew_text(output, row) && drawn_text(output, row).max.y <= drawn_text(output, "Delete").min.y
+        };
         assert!(
-            button.min.y > body.max.y,
-            "the body cuts the button: {button:?} in {body:?}"
+            body.contains(button.min) && !above_the_foot(&output, "Label 23"),
+            "the foot of the card holds its button, and its last row waits: {button:?} in {body:?}"
         );
 
-        // The wheel over the body brings the button of the card into it.
+        // The wheel over the body brings the last row of the card into it.
         let mut input = raw_input(window, None);
         input.events = vec![
             Event::PointerMoved(body.center()),
@@ -123,11 +127,11 @@ fn a_card_above_the_greatest_height_of_its_window_keeps_that_height_and_scrolls_
         let _ = run_app_frame_with_input(&ctx, &mut app, input);
         let output = frames(&ctx, &mut app, window);
         let body = card_body(card_panel(&app, &ctx, &card), app.canvas_view.zoom);
-        let button = drawn_text(&output, "Delete");
         assert!(
-            body.contains_rect(button),
-            "the wheel reaches the button of the card ({window:?}): {button:?} in {body:?}"
+            above_the_foot(&output, "Label 23") && body.contains_rect(drawn_text(&output, "Label 23")),
+            "the wheel reaches the last row of the card ({window:?}) in {body:?}"
         );
+        assert_eq!(drawn_text(&output, "Delete"), button, "the button keeps its place");
         assert!(
             drew_text(&output, "More below") != app.canvas_rect(&ctx).contains_rect(body),
             "the mark goes at the end of a body that the view shows whole ({window:?})"

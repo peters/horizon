@@ -30,6 +30,11 @@ impl Form {
     pub(crate) const fn is_wide(self) -> bool {
         matches!(self, Self::Wide)
     }
+
+    /// How the row of a `buttons` component sits in a body of this form.
+    pub(crate) fn answers(self) -> Answers {
+        [Answers::Row, Answers::RowClosedAtTheRight][usize::from(self.is_wide())]
+    }
 }
 
 /// How the buttons of a component sit in the room that the component gives

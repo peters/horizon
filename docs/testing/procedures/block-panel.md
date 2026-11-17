@@ -21,7 +21,8 @@ owns the card, with its selection and its time, that one wait covers every card
 of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
 column that the cards of one agent stand in, the fold of a finished card, the
-scrolling of a card that is shorter than its content, the mark that brings the
+scrolling of a card that is shorter than its content, the foot that holds the
+last buttons of a card that scrolls, the mark that brings the
 foot of a card that the view cuts into the view, the frame that a card fits for
 its own notices, the selected row of a card without its agent, and the press of a
 button at a low canvas zoom. The next tasks check that an agent can open an
@@ -557,8 +558,9 @@ every step on the fixture display that the native VNC Device panel shows.
 7. Drag the bottom edge of the card up until the card is shorter than its
    content.
 
-   Result: The body scrolls with the wheel, the footer stays at the bottom of
-   the card, and no button or row is drawn under the footer.
+   Result: The rows scroll with the wheel above the button row, which stays
+   above the footer under a thin line. The footer stays at the bottom of the
+   card, and no row is drawn under the button row or under the footer.
 
 8. Call `update` with a long document, then with a short one.
 
@@ -1261,7 +1263,8 @@ points.
    Result: The card is as high as the canvas of the window, not less than 560
    points and not more than 900 points: 560 points in a window of 800 x 600, and
    900 points in a window that is 1000 points high or more. Its body shows the
-   mark `More below`, and the button `Delete` is not in the body.
+   mark `More below`. The button `Delete` stands at the foot of the card, under
+   the mark and above the footer.
 
 4. Change the height of the window, and look at the card again.
 
@@ -1271,8 +1274,8 @@ points.
 
 5. Put the pointer on the body of that card and turn the wheel down.
 
-   Result: The body scrolls. The button `Delete` comes into the body and takes
-   a press.
+   Result: The rows scroll above the button `Delete`. The button keeps its
+   place and takes a press.
 
 6. Drag the corner grip of that card until the card is 300 points high. Then
    update the card with a document of ten rows.
@@ -1334,6 +1337,48 @@ points.
 10. In client A, create a card with `"finished": "yes"`.
 
     Result: The answer is `invalid_document`, and no card is created.
+
+### 5.34 B34 — The last buttons of a card that scrolls stay at its foot
+
+1. Make the window of the fixture 800 points wide and 600 points high. In
+   client A, create a card whose document holds these components, in this order:
+   one `heading`; two `kv` components of 15 rows each; one `buttons` component
+   with `Connect` (tone `primary`) and `Start Codex here`; one `buttons`
+   component with `Stop`, `Restart`, `Rebuild`, `Read the log`, `Rename`,
+   `Add a key` and `Delete` (tone `danger`); one `text` component with
+   `The machine costs money while it runs.`. Move the view until it shows the
+   whole card.
+
+   Result: The card is 560 points high. All nine buttons stand at the foot of
+   the card, under a thin line and above the footer, and you turned no wheel.
+   The buttons take three rows. `Connect` is the accent button, and `Delete` is
+   red at the right edge of its row. The mark `More below` stands above the thin
+   line.
+
+2. Put the pointer on the rows of the card and turn the wheel down to the end.
+
+   Result: The rows move up, and the nine buttons do not move. At the end, the
+   text `The machine costs money while it runs.` stands above the thin line, and
+   the mark is gone.
+
+3. In client A, call `next_click` for the card and keep the call open. Press
+   `Start Codex here`.
+
+   Result: The call answers `clicked` with the `component_id` of that button.
+
+4. In client A, update the card with the same document, but with two rows in
+   each `kv` component.
+
+   Result: The card ends directly under its content. It shows no thin line and
+   no mark. The buttons stand in the body, in the order of the document, and the
+   text stands under them.
+
+5. In client A, update the card with the document of step 1. Then drag the
+   bottom edge of the card up until the card is about 240 points high.
+
+   Result: After the update, the buttons stand at the foot again. In the low
+   card, the buttons scroll with the rows: a foot takes not more than half of
+   the height of a card.
 
 ## 6. With a real agent
 
@@ -1463,14 +1508,20 @@ Horizon, in a workspace of its own, with an agent panel that can call
 - B32: A card has the height of its content, from 140 points to the ceiling of
   its window, in a workspace with a preset too. The ceiling is the height of the
   canvas, not less than 560 points and not more than 900 points. A card above
-  the ceiling scrolls in its body, shows `More below`, and gives its buttons to
-  the wheel. A card that grows moves the
+  the ceiling scrolls in its body, shows `More below`, and keeps the buttons at
+  its end in its foot. A card that grows moves the
   cards under it. A card that the person resized keeps its size.
 - B33: A finished card is one line with its heading and its badge. A press on
   the line opens it, and the arrow in its title bar folds and opens every card.
   An update folds only a card that becomes finished, and never a card that the
   person opened after it was finished. The fold returns after a restart. A value
   of `finished` that is not `true` or `false` is `invalid_document`.
+- B34: The `buttons` components that end the document of a card that scrolls
+  stand at the foot of the card, above the footer, and only `text` components
+  may follow them in the document. The rows scroll above them, each button takes
+  its press, and the mark `More below` stands above them. A card that shows its
+  whole content draws its buttons in its body, and a card whose foot would take
+  more than half of its height has no foot.
 
 ## 8. Cleanup
 

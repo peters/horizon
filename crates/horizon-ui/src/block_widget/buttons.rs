@@ -36,20 +36,8 @@ pub(super) fn show(
         return;
     }
     let available = ui.available_width();
-    let tones_and_widths: Vec<(bool, f32)> = items
-        .iter()
-        .enumerate()
-        .map(|(item, button)| {
-            let is_primary = primary == Some((component, item));
-            (
-                is_primary,
-                button_width(ui.painter(), &button.label, is_primary).min(available),
-            )
-        })
-        .collect();
-
-    let lines = lines_of(items, &tones_and_widths, available, answers);
-    let height = count(lines.len()) * BUTTON_HEIGHT + count(lines.len().saturating_sub(1)) * BUTTON_GAP;
+    let (tones_and_widths, lines) = rows(ui.painter(), component, items, primary, available, answers);
+    let height = height(lines.len());
     let (rect, _) = ui.allocate_exact_size(Vec2::new(available, height), Sense::hover());
 
     for (line_index, line) in lines.iter().enumerate() {
@@ -78,9 +66,34 @@ pub(super) fn show(
     }
 }
 
+/// The width of every button of a component with whether it is the primary one
+/// of the card, and the lines that the buttons take in a room `available` wide.
+pub(super) fn rows(
+    painter: &egui::Painter,
+    component: usize,
+    items: &[Button],
+    primary: Option<(usize, usize)>,
+    available: f32,
+    answers: Answers,
+) -> (Vec<(bool, f32)>, Vec<ButtonLine>) {
+    let width = |(item, button): (usize, &Button)| {
+        let is_primary = primary == Some((component, item));
+        let width = button_width(painter, &button.label, is_primary).min(available);
+        (is_primary, width)
+    };
+    let tones_and_widths: Vec<(bool, f32)> = items.iter().enumerate().map(width).collect();
+    let lines = lines_of(items, &tones_and_widths, available, answers);
+    (tones_and_widths, lines)
+}
+
+/// The height that `lines` lines of buttons take.
+pub(super) fn height(lines: usize) -> f32 {
+    count(lines) * BUTTON_HEIGHT + count(lines.saturating_sub(1)) * BUTTON_GAP
+}
+
 /// One line of buttons: the ordinary ones from the left, the destructive ones
 /// right aligned.
-struct ButtonLine {
+pub(super) struct ButtonLine {
     left: Vec<usize>,
     right: Vec<usize>,
 }

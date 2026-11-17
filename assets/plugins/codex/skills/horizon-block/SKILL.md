@@ -78,7 +78,9 @@ the height of the canvas of the window of the person when Horizon fits the card,
 not less than 560 points and not more than 900 points. The ceiling of a wide
 card is 1200 points, or the room that the canvas view shows when that is more. A card that is taller than
 its ceiling scrolls: Horizon fades its last rows and marks its lower edge with
-`More below`, so put the buttons that matter in the first rows. A person who
+`More below`. The `buttons` components that end the document stay at the foot of
+a card that scrolls, where the person sees them with no scroll: only `text` may
+follow them. Put the buttons that matter at the end of a long card. A person who
 resizes the card by hand keeps that size, since the size of the person outranks
 the content. The form of a component
 follows the real width of the card body: the wide form at 1000 points or more,

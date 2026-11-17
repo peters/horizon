@@ -398,3 +398,41 @@ fn the_foot_of_a_card_on_a_machine_ends_before_the_time() {
     assert_eq!(foot.len(), 1, "the foot is one line: {foot:?}");
     assert!(foot[0].2, "the person sees that the foot is cut: {:?}", foot[0].0);
 }
+
+#[test]
+fn the_foot_takes_the_buttons_that_end_a_document_and_only_text_may_follow_them() {
+    let buttons = || Component::Buttons {
+        items: vec![button("connect", "Connect", Tone::Primary)],
+    };
+    let text = || Component::Text { text: "Words.".into() };
+    let foot = |components: Vec<Component>| {
+        crate::block_widget::foot::last_buttons(&BlockDocument {
+            width: None,
+            finished: false,
+            components,
+        })
+    };
+
+    assert_eq!(foot(vec![text(), buttons()]), Some(1..2));
+    assert_eq!(
+        foot(vec![text(), buttons(), buttons(), text(), text()]),
+        Some(1..3),
+        "two components of buttons at the end stand in the foot, and text may follow them"
+    );
+    assert_eq!(
+        foot(vec![buttons(), text(), buttons()]),
+        Some(2..3),
+        "buttons that other components follow stay in the body"
+    );
+    assert_eq!(
+        foot(vec![text(), buttons(), Component::Divider]),
+        None,
+        "a component that is no text ends the document"
+    );
+    assert_eq!(foot(vec![buttons(), buttons()]), None, "a foot leaves a body to scroll");
+    assert_eq!(
+        foot(vec![text(), Component::Buttons { items: Vec::new() }]),
+        None,
+        "a component without a button takes no foot"
+    );
+}

@@ -17,6 +17,7 @@ mod buttons;
 mod callout;
 mod caption;
 pub(crate) mod chip;
+mod foot;
 mod footer;
 mod form;
 mod heading;
@@ -55,7 +56,7 @@ use horizon_core::{CardFrames, CardRuntime, PanelId};
 
 use crate::theme;
 
-use form::{Answers, Form};
+use form::Form;
 
 use metrics::{
     BODY_PAD_BOTTOM, BODY_PAD_SIDE, BODY_PAD_TOP, COMPONENT_GAP, MORE_BELOW_FONT, MORE_BELOW_HEIGHT, MORE_BELOW_STRIP,
@@ -139,16 +140,32 @@ pub(crate) fn show(ui: &mut Ui, panel: PanelId, mut view: CardView<'_>) {
     let footer_top = (full.max.y - metrics::FOOTER_HEIGHT).max(full.min.y);
     let content = Rect::from_min_max(full.min, Pos2::new(full.max.x, footer_top));
     let footer_rect = Rect::from_min_max(Pos2::new(full.min.x, footer_top), full.max);
+    // The buttons that end the document of a card that scrolls keep the foot of
+    // the card, and the rest of the body scrolls above them.
+    let scrolled = foot::scrolls(&view, content.height());
+    let foot = foot::plan(ui, &view, content, full.height());
+    let (body, foot_rect) =
+        content.split_top_bottom_at_y(content.max.y - foot.as_ref().map_or(0.0, |foot| foot.height));
 
-    ui.scope_builder(UiBuilder::new().max_rect(content), |ui| {
-        ui.set_clip_rect(ui.clip_rect().intersect(content));
-        show_content(ui, panel, &mut view, enabled);
+    ui.scope_builder(UiBuilder::new().max_rect(body), |ui| {
+        show_content(ui, panel, &mut view, enabled, foot.as_ref());
     });
+    if let Some(foot) = &foot {
+        foot::show(ui, foot_rect, foot, &mut view, enabled);
+    }
+    // The measure of this pass decides the foot of the next one. A body that
+    // begins or ends to scroll with buttons at its end asks for that pass once.
+    if scrolled != foot::scrolls(&view, content.height()) && foot::last_buttons(view.document).is_some() {
+        ui.ctx().request_repaint();
+    }
     footer::show(ui, footer_rect, &mut view);
 }
 
-fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: bool) {
-    let end = ui.max_rect().max.y;
+fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: bool, foot: Option<&foot::Foot>) {
+    // A view that cuts the foot under the body cuts the card as it cuts a body.
+    let (body, foot_height) = (ui.max_rect(), foot.map_or(0.0, |foot| foot.height));
+    let end = body.max.y + (body.max.y + foot_height - ui.clip_rect().max.y).clamp(0.0, foot_height);
+    ui.set_clip_rect(ui.clip_rect().intersect(body));
     let output = egui::ScrollArea::vertical()
         .id_salt(("block_card", panel.0))
         .auto_shrink([false, false])
@@ -161,12 +178,13 @@ fn show_content(ui: &mut Ui, panel: PanelId, view: &mut CardView<'_>, enabled: b
                     top: BODY_PAD_TOP,
                     bottom: BODY_PAD_BOTTOM,
                 })
-                .show(ui, |ui| show_body(ui, view, enabled));
+                .show(ui, |ui| show_body(ui, view, enabled, foot));
             show_more_below(ui, view.interactive, end)
         });
     // The content size is what the body really needed, independent of the
-    // room the card gave it: the host fits the card to it once per document.
-    view.card.observe_content_height(output.content_size.y);
+    // room the card gave it and of a foot that holds its last buttons: the host
+    // fits the card to it once per document.
+    view.card.observe_content_height(output.content_size.y + foot_height);
     // A body that already showed its end asks for the cut foot of the card.
     *view.reveal = output.inner;
 }
@@ -220,7 +238,7 @@ fn gone_lines(owner_session: Option<(&str, &str)>) -> (Cow<'static, str>, &'stat
     }
 }
 
-fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
+fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool, foot: Option<&foot::Foot>) {
     let refused = view.card.refused_notice(view.now_millis);
     // A refused link takes a line of its own in the body, and the host fits the
     // card again when that set changes, exactly as it does for the frames above.
@@ -265,6 +283,10 @@ fn show_body(ui: &mut Ui, view: &mut CardView<'_>, enabled: bool) {
     let mut index = 0;
     while index < document.components.len() {
         let component = &document.components[index];
+        if foot.is_some_and(|foot| foot.components.contains(&index)) {
+            index += 1;
+            continue;
+        }
         if !first {
             ui.add_space(COMPONENT_GAP);
         }
@@ -386,18 +408,7 @@ fn show_component(
             form,
         ),
         Component::Log { entries } => log::show(ui, index, entries, form),
-        Component::Buttons { items } => buttons::show(
-            ui,
-            index,
-            items,
-            primary,
-            view,
-            enabled,
-            match form {
-                Form::Wide => Answers::RowClosedAtTheRight,
-                Form::Narrow => Answers::Row,
-            },
-        ),
+        Component::Buttons { items } => buttons::show(ui, index, items, primary, view, enabled, form.answers()),
         // A link opens a browser panel of Horizon itself, so it needs no agent:
         // only a host dialog over the card keeps it from taking a press.
         Component::Link { label, url } => {

@@ -306,8 +306,10 @@ card at each step. You press a row or a button on the card, or you write what yo
 want in the panel of the agent.
 
 The cards of one agent stand in one column at the right of its panel, with the
-newest card at the top. A card has the height of its content, up to 560 points; a
-longer card scrolls. When the job of a card is done, the card folds to one line
+newest card at the top. A card has the height of its content, up to the height
+of the canvas of your window: not less than 560 points and not more than 900
+points. A longer card scrolls, and the buttons at its end stay at its foot. When
+the job of a card is done, the card folds to one line
 with its heading and its badge. Press the line to open the card, and press the
 arrow in its title bar to fold a card. A card that you drag stays where you put
 it.
