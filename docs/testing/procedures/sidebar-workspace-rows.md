@@ -63,14 +63,17 @@ the hovered or focused row.
 
 1. Look at the row of `billing-service`.
 
-   Result: The row shows a tile with `BS` in the workspace color, the name in
-   bold text and, under the name, the line that the panel printed. The panel
-   count `1` is in the right column. The tile has no badge.
+   Result: The row shows a tile with `BS` in the workspace color and the name in
+   bold text. The row has no second line: it shows no text of the screen of its
+   panel. The panel count `1` is in the right column. The tile has no badge.
 
 2. Look at the row of `Checkout redesign`.
 
    Result: The tile shows `CR` and a green badge on its lower-right corner. The
-   line under the name shows the working line of the agent.
+   row has no second line while no agent waits for you. A row shows a second
+   line only for a fact about its workspace: the count of the agents that wait,
+   such as `1 needs you`, and the machine of the workspace, such as
+   `on build-1`. At a window of 800 x 600 that line is the same.
 
 3. Look at the counts of all rows.
 
@@ -138,7 +141,7 @@ the hovered or focused row.
 
 ### 6.6 NARROW: A small window
 
-1. Hold the pointer on a workspace name that ends with `…`, then on a status
+1. Hold the pointer on a workspace name that ends with `…`, then on a second
    line that ends with `…`, then on a panel row that ends with `…`.
 
    Result: Each time, a tooltip shows the full text.

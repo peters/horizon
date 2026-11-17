@@ -177,10 +177,10 @@ fn workspace_entry(row: horizon_core::workspace_list::Row, detached: bool) -> su
 #[test]
 fn a_dragged_workspace_drops_only_on_a_docked_row() {
     use horizon_core::workspace_list::Row;
-    let docked = workspace_entry(Row::local(horizon_core::Attention::Idle, None), false);
+    let docked = workspace_entry(Row::local(horizon_core::Attention::Idle), false);
     assert!(super::list::accepts_drop(&docked));
     assert!(!super::list::accepts_drop(&workspace_entry(
-        Row::local(horizon_core::Attention::Idle, None),
+        Row::local(horizon_core::Attention::Idle),
         true
     )));
 }

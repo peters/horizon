@@ -97,9 +97,10 @@ reported.
 1. Right-click the row of the workspace and click `build-1` in the `Place`
    section.
 
-   Result: The second line of the row starts with `on build-1`, in the dim style
-   of the status text, and a middle dot and the status text follow it when the
-   workspace has a status text. The name line is unchanged. The `Place` section
+   Result: The second line of the row is `on build-1`, in the dim style of the
+   second line. When an agent of the workspace waits, the count comes first, as
+   in `1 needs you · on build-1`. The line holds no text of the screen of a
+   panel. The name line is unchanged. The `Place` section
    now shows the check mark in front of `build-1` and no check mark in front of
    `This computer`.
 
@@ -287,7 +288,7 @@ reported.
    section.
 
    Result: The panel with the chip `on build-1` stays open. The second line of the
-   row holds the status text alone, with no `on` prefix.
+   row has no `on` prefix: the row has no second line while no agent waits.
 
 3. Press the shortcut for a new terminal.
 

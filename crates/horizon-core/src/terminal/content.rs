@@ -107,14 +107,6 @@ impl Terminal {
         bottom_row_texts(&term, usize::from(self.rows), max_rows)
     }
 
-    /// The rows of the screen, top to bottom with blank rows kept: the text of each
-    /// row and the number of columns that its text occupies. Concealed text is left out.
-    #[must_use]
-    pub fn screen_rows(&self) -> Vec<(String, usize)> {
-        let term = self.term.lock();
-        screen_row_texts(&term, usize::from(self.rows), usize::from(self.rows))
-    }
-
     /// Extract all text from the terminal grid including scrollback history.
     ///
     /// Returns `(lines, grid_total)` where `grid_total` is the total number
@@ -333,8 +325,10 @@ fn bottom_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usiz
         .collect()
 }
 
-/// As [`Terminal::screen_rows`], for the bottom `max_rows` rows. The rows come from
-/// the live screen, also while the view is scrolled into the history.
+/// The bottom `max_rows` rows of the screen, top to bottom with blank rows kept:
+/// the text of each row and the number of columns that its text occupies.
+/// Concealed text is left out. The rows come from the live screen, also while
+/// the view is scrolled into the history.
 fn screen_row_texts(term: &Term<TerminalEventProxy>, rows: usize, max_rows: usize) -> Vec<(String, usize)> {
     let grid = term.grid();
     (rows.saturating_sub(max_rows)..rows.min(grid.screen_lines()))

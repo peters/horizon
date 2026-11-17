@@ -238,14 +238,19 @@ const STATES: [(horizon_core::agent_work::TurnState, u32, &str); 4] = [
     (horizon_core::agent_work::TurnState::Blocked, 0, "Needs you"),
 ];
 
+/// The line that the stand-in agent prints on its screen.
+const SCREEN_LINE: &str = "synthetic line of the screen";
+/// The stand-in agent: it prints one line and stays until the panel closes.
+const AGENT_PROGRAM: &str = "printf 'synthetic line of the screen\\n'; exec cat\n";
+
 /// A window of 800 by 600 points with one agent panel of a long name, which
 /// the keyboard is not in.
 fn window_with_an_agent() -> (Window, horizon_core::PanelId) {
     let mut window = Window::new([800.0, 600.0], Vec::new());
     // A program that stays until the panel closes, so the state of the row is
     // the state of the ledger and not the end of a program.
-    let program =
-        horizon_core::stand_in_program_in(window.temp.path(), "claude", "exec cat\n").expect("the program of the test");
+    let program = horizon_core::stand_in_program_in(window.temp.path(), "claude", AGENT_PROGRAM)
+        .expect("the program of the test");
     let workspace = window.app.board.create_workspace("Lane");
     let panel = window
         .app
@@ -410,4 +415,71 @@ fn the_foot_line_of_the_first_page_wraps_in_a_small_window() {
             heading.rect.top() - 8.0
         );
     }
+}
+
+#[test]
+fn the_second_line_of_a_workspace_row_holds_facts_and_no_screen_text() {
+    let (mut window, panel) = window_with_an_agent();
+    let local = window.app.board.panel(panel).expect("the panel").local_id.clone();
+    let workspace = window.app.board.panel(panel).expect("the panel").workspace_id;
+    let canvas_left = window.app.canvas_rect(&window.ctx).left();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let _ = window.frame(Vec::new());
+        let screen = window
+            .app
+            .board
+            .panel(panel)
+            .and_then(horizon_core::Panel::terminal)
+            .map_or_else(String::new, |terminal| terminal.last_lines_text(20));
+        if screen.contains(SCREEN_LINE) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stand-in agent prints its line"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // The rows are read again when they are a second old.
+    let sidebar = |window: &mut Window| -> Vec<String> {
+        window
+            .app
+            .refresh_sidebar_rows(std::time::Instant::now() + std::time::Duration::from_secs(2));
+        texts(&window.frame(Vec::new()))
+            .into_iter()
+            .filter(|entry| entry.rect.right() < canvas_left)
+            .map(|entry| entry.text)
+            .collect()
+    };
+    let rows = sidebar(&mut window);
+    assert!(
+        rows.iter().any(|text| text == "Lane") && !rows.iter().any(|text| text.contains("synthetic")),
+        "the row of the workspace shows no text of the screen of its panel: {rows:?}"
+    );
+
+    // The facts of the workspace: the agents that wait, and its machine.
+    let mut ledger = horizon_core::agent_work::TurnLedger::default();
+    ledger.session_id = "session".into();
+    ledger.prompt_id = Some("prompt".into());
+    ledger.state = horizon_core::agent_work::TurnState::Blocked;
+    ledger.updated_at_millis = horizon_core::current_unix_millis() - 1;
+    let ctx = window.ctx.clone();
+    window
+        .app
+        .apply_attention_values(vec![(panel, local, Some(ledger))], &ctx);
+    let rows = sidebar(&mut window);
+    assert!(
+        rows.iter().any(|text| text == "1 needs you"),
+        "the row says that one agent needs the person: {rows:?}"
+    );
+    window
+        .app
+        .board
+        .set_workspace_place(workspace, horizon_core::WorkspacePlace::Machine("build-1".to_owned()));
+    let rows = sidebar(&mut window);
+    assert!(
+        rows.iter().any(|text| text == "1 needs you \u{00B7} on build-1"),
+        "the row says where the workspace runs after the count: {rows:?}"
+    );
 }
