@@ -241,6 +241,11 @@ One task has one card, at every size. The short path draws the same card with a
 board of one column and one row, and a task that grows to a plan updates that
 same card to the wide document. Never make a second card for the same task.
 
+A machine that a todo rents has one machine card, and the work that a button of
+that card starts goes on one work card of that machine, as the skill
+`horizon-machines` says. Draw no card for each job of a machine, and no card
+that only lists machines unless the person asks for the list.
+
 A plan of three or more todos asks for the wide card: `"width": "wide"` beside
 `components`. A task of one or two todos keeps the narrow card of today. The form
 follows the real width of the card, so the same document draws the board as a

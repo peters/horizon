@@ -14,6 +14,7 @@ use crate::block_widget::{buttons, default_card_size, fitted_card_height, footer
 fn buttons(items: Vec<Button>) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Buttons { items }],
     }
 }
@@ -33,6 +34,7 @@ const QUESTION: &str = "Rent the machine in Helsinki?";
 fn callout(items: Vec<Button>) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Callout {
             tone: Tone::Info,
             caption: None,
@@ -131,6 +133,7 @@ fn every_line_of_answers_of_a_narrow_callout_starts_at_the_left_edge() {
 fn only_the_first_primary_button_of_a_card_is_the_primary_one() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Divider,
             Component::Buttons {
@@ -258,6 +261,7 @@ fn the_chip_names_the_agent_and_says_when_it_listens() {
 fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     let empty = BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     };
     assert_eq!(
@@ -268,6 +272,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
 
     let small = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Kv {
             rows: (0..6)
                 .map(|index| horizon_browser_control::block::KvRow {
@@ -280,10 +285,11 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     };
     let [width, height] = default_card_size(&small, 0.0);
     assert!((width - 420.0).abs() < f32::EPSILON);
-    assert!(height > 140.0 && height < 900.0, "{height} fits the content");
+    assert!(height > 140.0 && height < 560.0, "{height} fits the content");
 
     let huge = BlockDocument {
         width: None,
+        finished: false,
         components: (0..16)
             .map(|_| Component::Kv {
                 rows: (0..24)
@@ -298,7 +304,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     };
     let [_, height] = default_card_size(&huge, 0.0);
     assert!(
-        (height - 900.0).abs() < f32::EPSILON,
+        (height - 560.0).abs() < f32::EPSILON,
         "a long card stops at the ceiling"
     );
 }
@@ -309,7 +315,7 @@ fn the_card_size_of_a_document_does_not_depend_on_its_owner() {
     let first = default_card_size(&document, 0.0);
     let second = default_card_size(&document, 0.0);
     assert_eq!(first, second);
-    assert!(first[1] >= 140.0 && first[1] <= 900.0, "{first:?}");
+    assert!(first[1] >= 140.0 && first[1] <= 560.0, "{first:?}");
 }
 
 #[test]
@@ -325,11 +331,11 @@ fn the_card_height_follows_the_measured_content_within_the_limits() {
         "an empty body keeps the floor"
     );
     assert!(
-        (height(600.0, false, 140.0) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        (height(300.0, false, 140.0) - (300.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
         "the content, its padding and the frame decide the height"
     );
     assert!(
-        (height(5_000.0, false, 140.0) - 900.0).abs() < f32::EPSILON,
+        (height(5_000.0, false, 140.0) - 560.0).abs() < f32::EPSILON,
         "a long body stops at the ceiling"
     );
     assert!(

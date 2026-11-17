@@ -6,8 +6,10 @@ use crate::panel::{DEFAULT_PANEL_SIZE, PanelId};
 use crate::workspace::{Workspace, WorkspaceId};
 
 use super::{Board, WorkspaceLayout, vec2_eq};
+use crate::CardPlace;
 
 mod alignment;
+mod card_columns;
 mod panel_collisions;
 mod reordering;
 mod slots;
@@ -119,15 +121,27 @@ impl Board {
         {
             return false;
         }
-        if let Some(workspace_id) = self.panel_workspace_id(id) {
+        let Some(workspace_id) = self.panel_workspace_id(id) else {
+            return false;
+        };
+        // A card that is no tile moves alone, and its workspace keeps its preset.
+        if !self.card_stands_free(id) {
             self.set_workspace_layout(workspace_id, None);
         }
-        if let Some(panel) = self.panel_mut(id) {
-            panel.move_to(position);
-            return true;
+        let Some(panel) = self.panel_mut(id) else {
+            return false;
+        };
+        panel.move_to(position);
+        // A card that the person moves leaves its column, and the column of an
+        // agent panel that the person moves goes with it.
+        let agent = panel.kind.is_agent();
+        if let Some(card) = panel.block_mut().filter(|card| card.place == CardPlace::Column) {
+            card.place = CardPlace::Free;
+            self.tidy_card_columns(workspace_id, Some(id));
+        } else if agent {
+            self.tidy_card_column(id, None);
         }
-
-        false
+        true
     }
 
     pub fn resize_panel(&mut self, id: PanelId, size: [f32; 2]) -> bool {
@@ -146,7 +160,11 @@ impl Board {
         }
         let ws_id = self.panel_workspace_id(id);
         let old_size = self.panel(id).map(|panel| panel.layout.size);
-        if let Some(workspace_id) = ws_id
+        // A card that is no tile takes its size alone: the preset of its workspace
+        // stays, and the card pushes no panel.
+        let tile = !self.card_stands_free(id);
+        if tile
+            && let Some(workspace_id) = ws_id
             && let Some(layout) = self.workspace_layout_value(workspace_id)
         {
             self.apply_workspace_layout_with_panel_size(workspace_id, layout, size);
@@ -159,7 +177,7 @@ impl Board {
             return true;
         }
 
-        if let Some(workspace_id) = ws_id {
+        if tile && let Some(workspace_id) = ws_id {
             self.set_workspace_layout(workspace_id, None);
         }
         if let Some(panel) = self.panel_mut(id) {
@@ -172,8 +190,12 @@ impl Board {
                 Some(old) => [size[0] - old[0], size[1] - old[1]],
                 None => size,
             };
-            if resize_expands(delta) {
+            if tile && resize_expands(delta) {
                 self.resolve_panel_collisions(id, ws_id, delta);
+            }
+            // A card that left the tiles leaves no hole in the preset.
+            self.reflow_workspace_layout(ws_id);
+            if resize_expands(delta) {
                 self.resolve_workspace_resize_collisions_in_scope(ws_id, delta, workspace_collision_ids);
             }
         }
@@ -232,7 +254,7 @@ impl Board {
     }
 
     pub(super) fn panel_follows_workspace_layout(&self, id: PanelId) -> bool {
-        self.panel(id).is_some_and(|panel| panel.visible)
+        self.panel(id).is_some_and(|panel| panel.visible) && !self.card_stands_free(id)
     }
 
     /// Compute the canvas position for the next workspace so it doesn't
@@ -283,6 +305,7 @@ impl Board {
         if let Some(layout) = self.workspace_layout_value(id) {
             self.apply_workspace_layout(id, layout);
         }
+        self.tidy_card_columns(id, None);
     }
 
     pub(crate) fn resolve_workspace_collisions_after_frame_growth(
@@ -413,6 +436,7 @@ impl Board {
         if !vec2_eq(needed, panel_size) {
             self.place_slots(id, origin, layout, &slots, needed);
         }
+        self.tidy_card_columns(id, None);
     }
 
     /// The rectangle `[min_x, min_y, max_x, max_y]` that a panel covers.

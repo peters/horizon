@@ -93,6 +93,31 @@ fn padded_document(target_len: usize) -> String {
 }
 
 #[test]
+fn a_document_says_that_its_job_is_finished_with_one_optional_field() {
+    let finished = parse_document(r#"{"finished": true, "components": [{"type": "divider"}]}"#).expect("finished");
+    assert!(finished.finished, "the field says that the job of the card is done");
+    assert_eq!(
+        serde_json::to_value(&finished).expect("the document")["finished"],
+        json!(true),
+        "a finished document keeps the field"
+    );
+
+    let open = parse_document(&document_of(&[divider()])).expect("a document without the field");
+    assert!(!open.finished, "a document without the field is not finished");
+    assert_eq!(
+        serde_json::to_string(&open).expect("the document"),
+        document_of(&[divider()]),
+        "a document that is not finished is written as before"
+    );
+
+    let refused = parse_document(r#"{"finished": "yes", "components": []}"#);
+    assert!(
+        matches!(refused, Err(BlockDocumentError::InvalidJson { .. })),
+        "the field takes true or false and nothing else: {refused:?}"
+    );
+}
+
+#[test]
 fn full_example_round_trips() {
     let document = parse_document(EXAMPLE).expect("the example is valid");
     assert_eq!(document.components.len(), 9);
@@ -123,6 +148,7 @@ fn full_example_round_trips() {
 fn a_hand_built_document_with_every_component_validates() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "cloud-1".to_owned(),
@@ -729,6 +755,7 @@ fn a_duplicate_id_across_a_button_and_a_list_row_is_rejected() {
 fn validate_document_rejects_a_repeated_button_id() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Buttons {
             items: vec![
                 Button {

@@ -22,7 +22,9 @@ socket in its own home.
 
 This skill gives the work. The cards of the flow are in `horizon-setup`, the
 card contract is in `horizon-block`, and the provider commands are in
-`horizon-machines`.
+`horizon-machines`. Draw the steps of this skill on the work card of the machine,
+as those skills say: update that one card, draw no new card for the server, and
+send the ready document with `"finished": true`.
 
 ## The model
 

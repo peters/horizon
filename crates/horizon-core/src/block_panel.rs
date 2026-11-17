@@ -40,6 +40,25 @@ pub struct BlockPanelState {
     /// of the card, and the answer outlives the frame and the run that saw it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_callout: Option<Component>,
+    /// Where the card stands among the panels of its workspace.
+    pub place: CardPlace,
+    /// The fold that the person chose. Without one, a finished card is folded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<bool>,
+}
+
+/// Where a card stands among the panels of its workspace. A card of a board
+/// that an older build saved is a tile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardPlace {
+    /// A tile as every panel: the preset of its workspace arranges it.
+    #[default]
+    Tile,
+    /// In the column of the cards of its agent panel, which Horizon lays out.
+    Column,
+    /// Where the person put it. No preset and no column moves it.
+    Free,
 }
 
 impl BlockPanelState {
@@ -58,7 +77,36 @@ impl BlockPanelState {
             owner_actor: None,
             updated_at_millis: 0,
             answered_callout: None,
+            place: CardPlace::Tile,
+            fold: None,
         }
+    }
+
+    /// Whether the card is one line: as the person left it, or because its job is finished.
+    #[must_use]
+    pub fn folded(&self) -> bool {
+        self.fold.unwrap_or(self.document.finished)
+    }
+
+    /// The line of a folded card: its heading, or its title without one, and the
+    /// words of the badge of that heading. A frame reads it for every card, so an
+    /// open card looks for no heading.
+    #[must_use]
+    pub fn folded_line(&self) -> Option<(&str, Option<&str>)> {
+        if !self.folded() {
+            return None;
+        }
+        let heading = self.document.components.iter().find_map(|component| match component {
+            Component::Heading { text, badge, .. } => Some((text.as_str(), badge.as_ref().map(|badge| &*badge.text))),
+            _ => None,
+        });
+        Some(heading.unwrap_or((&self.title, None)))
+    }
+
+    /// Whether the card stands in the column of the cards of the agent `actor`.
+    #[must_use]
+    pub fn stands_in_column_of(&self, actor: &str) -> bool {
+        self.place == CardPlace::Column && self.owner_actor.as_deref() == Some(actor)
     }
 
     /// The callout whose answer the person pressed, as the document holds it.
@@ -85,12 +133,15 @@ impl BlockPanelState {
     pub fn empty_document() -> BlockDocument {
         BlockDocument {
             width: None,
+            finished: false,
             components: Vec::new(),
         }
     }
 
     /// Store `document` and return the revision that the host assigned to it.
     pub fn replace_document(&mut self, document: BlockDocument) -> u64 {
+        // A job that finishes now folds its card, whatever the person chose before.
+        self.fold = self.fold.filter(|_| self.document.finished || !document.finished);
         self.document = document;
         self.revision = self.revision.saturating_add(1);
         self.revision
@@ -133,12 +184,48 @@ mod tests {
     fn document(text: &str) -> BlockDocument {
         BlockDocument {
             width: None,
+            finished: false,
             components: vec![Component::Heading {
                 text: text.to_string(),
                 subtitle: None,
                 badge: None,
             }],
         }
+    }
+
+    #[test]
+    fn a_finished_card_is_folded_until_the_person_opens_it_and_a_fold_of_the_person_stays() {
+        let finished = |text: &str| BlockDocument {
+            finished: true,
+            ..document(text)
+        };
+        let mut state = BlockPanelState::new(document("Start the server"));
+        assert!(
+            !state.folded() && state.folded_line().is_none(),
+            "a card opens unfolded"
+        );
+
+        let _ = state.replace_document(finished("Server ready"));
+        assert_eq!(
+            state.folded_line(),
+            Some(("Server ready", None)),
+            "a finished job folds"
+        );
+        state.fold = Some(false);
+        let _ = state.replace_document(finished("Server ready"));
+        assert!(!state.folded(), "an update folds no card that the person opened");
+
+        let _ = state.replace_document(document("Start the server"));
+        let _ = state.replace_document(finished("Server ready"));
+        assert!(state.folded(), "a job that finishes again folds its card again");
+
+        let mut open = BlockPanelState::new(document("Start the server"));
+        open.fold = Some(true);
+        let _ = open.replace_document(document("Still working"));
+        assert!(open.folded(), "a card that is not finished stays as the person left it");
+        let saved = serde_json::to_string(&open).expect("the saved card");
+        let restored: BlockPanelState = serde_json::from_str(&saved).expect("the restored card");
+        assert_eq!(restored.fold, Some(true), "the fold is saved with the card");
     }
 
     #[test]

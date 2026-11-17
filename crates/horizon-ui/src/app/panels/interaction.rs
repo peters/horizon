@@ -1,5 +1,5 @@
 use egui::{Context, Pos2, Rect, Vec2, ViewportId};
-use horizon_core::{PanelId, PanelKind, WorkspaceId};
+use horizon_core::{CardPlace, PanelId, PanelKind, WorkspaceId};
 
 use crate::app::speech::SpeechWindow;
 use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
@@ -76,14 +76,12 @@ impl HorizonApp {
     }
 
     fn panel_is_arranged(&self, panel_id: PanelId, workspace_id: WorkspaceId) -> bool {
-        if !self
+        // A card that is no tile of the preset moves alone, as in a free workspace.
+        let tile = self.board.panel(panel_id).is_some_and(|panel| {
+            panel.workspace_id == workspace_id && panel.block().is_none_or(|card| card.place == CardPlace::Tile)
+        });
+        tile && self
             .board
-            .panel(panel_id)
-            .is_some_and(|panel| panel.workspace_id == workspace_id)
-        {
-            return false;
-        }
-        self.board
             .workspace(workspace_id)
             .is_some_and(|workspace| workspace.layout.is_some())
     }

@@ -33,6 +33,7 @@ fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, H
                 kind: PanelKind::Block,
                 block: Some(BlockPanelState::new(BlockDocument {
                     width: None,
+                    finished: false,
                     components: Vec::new(),
                 })),
                 size: Some([420.0, 220.0]),
@@ -55,12 +56,12 @@ fn height(app: &HorizonApp, id: PanelId) -> f32 {
 
 #[test]
 fn a_card_takes_the_height_of_the_content_that_the_pass_measured() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
 
     app.fit_block_cards(&ctx);
 
     assert!(
-        (height(&app, id) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        (height(&app, id) - (360.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
         "the card fits its content: {}",
         height(&app, id)
     );
@@ -75,7 +76,7 @@ fn a_card_never_takes_less_than_the_floor_of_a_card() {
 
 #[test]
 fn one_fit_per_document_leaves_a_settled_card_alone() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.fit_block_cards(&ctx);
     assert!(app.board.resize_panel(id, [420.0, 320.0]), "the card is resized");
 
@@ -90,12 +91,13 @@ fn one_fit_per_document_leaves_a_settled_card_alone() {
 
 #[test]
 fn a_new_document_fits_the_card_again() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.fit_block_cards(&ctx);
 
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
     let _ = state.replace_document(BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     });
     app.panel_render_caches
@@ -114,7 +116,7 @@ fn a_new_document_fits_the_card_again() {
 
 #[test]
 fn a_card_that_the_person_resized_keeps_its_size() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.panel_render_caches
         .card_runtime
         .entry(id)
@@ -130,6 +132,7 @@ fn a_card_that_the_person_resized_keeps_its_size() {
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
     let _ = state.replace_document(BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     });
     app.panel_render_caches
@@ -147,7 +150,7 @@ fn a_card_that_the_person_resized_keeps_its_size() {
 
 #[test]
 fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.fit_block_cards(&ctx);
     let fitted = height(&app, id);
 
@@ -159,11 +162,11 @@ fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
         clicks_refused: false,
         link_refused: false,
     });
-    card.observe_content_height(700.0);
+    card.observe_content_height(420.0);
     app.fit_block_cards(&ctx);
 
     assert!(
-        (height(&app, id) - (700.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        (height(&app, id) - (420.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
         "the card grows for the frame of a gone agent: {} was {fitted}",
         height(&app, id)
     );
@@ -172,11 +175,11 @@ fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
     // its document again.
     let card = app.panel_render_caches.card_runtime.entry(id).or_default();
     card.observe_frames(CardFrames::default());
-    card.observe_content_height(600.0);
+    card.observe_content_height(360.0);
     app.fit_block_cards(&ctx);
 
     assert!(
-        (height(&app, id) - (600.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
+        (height(&app, id) - (360.0 + CARD_CHROME_HEIGHT)).abs() < f32::EPSILON,
         "the card drops the room of the frame when the agent is back: {}",
         height(&app, id)
     );
@@ -184,7 +187,7 @@ fn a_card_fits_again_when_a_frame_of_the_host_appears_or_goes() {
 
 #[test]
 fn a_card_that_the_person_resized_keeps_its_size_when_a_frame_appears() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     let card = app.panel_render_caches.card_runtime.entry(id).or_default();
     card.mark_hand_resized();
     card.observe_frames(CardFrames {
@@ -204,7 +207,7 @@ fn a_card_that_the_person_resized_keeps_its_size_when_a_frame_appears() {
 
 #[test]
 fn a_workspace_preset_keeps_the_size_of_its_cards() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     let workspace = app.board.panel(id).expect("the card").workspace_id;
     app.board
         .arrange_workspace(workspace, horizon_core::WorkspaceLayout::Rows);
@@ -238,6 +241,7 @@ fn width(app: &HorizonApp, id: PanelId) -> f32 {
 fn board_document(columns: usize) -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: (0..columns)
                 .map(|index| BoardColumn {
@@ -269,6 +273,7 @@ fn board_document(columns: usize) -> BlockDocument {
 fn narrow_document(columns: usize) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         ..board_document(columns)
     }
 }
@@ -285,7 +290,7 @@ const VIEW: [f32; 2] = [5120.0, 1200.0];
 
 #[test]
 fn a_card_takes_the_width_that_its_document_asks_for_at_every_update() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.sidebar_visible = false;
 
     // The card of a person who did not resize it: the width follows the document
@@ -314,14 +319,14 @@ fn a_card_takes_the_width_that_its_document_asks_for_at_every_update() {
 
 #[test]
 fn a_card_that_the_person_resized_by_hand_keeps_its_size_at_every_update() {
-    let (_temp, ctx, mut app, id) = app_with_card(600.0);
+    let (_temp, ctx, mut app, id) = app_with_card(360.0);
     app.sidebar_visible = false;
     replace(&mut app, id, board_document(2));
     run_app_frame_with_input(&ctx, &mut app, raw_input(VIEW, None));
     let card = app.panel_render_caches.card_runtime.entry(id).or_default();
     card.mark_hand_resized();
     assert!(
-        app.board.resize_panel(id, [700.0, 500.0]),
+        app.board.resize_panel(id, [420.0, 500.0]),
         "the person resizes the card"
     );
 
@@ -330,7 +335,7 @@ fn a_card_that_the_person_resized_by_hand_keeps_its_size_at_every_update() {
         run_app_frame_with_input(&ctx, &mut app, raw_input(VIEW, None));
         let size = app.board.panel(id).expect("the card").layout.size;
         assert!(
-            (size[0] - 700.0).abs() < f32::EPSILON && (size[1] - 500.0).abs() < f32::EPSILON,
+            (size[0] - 420.0).abs() < f32::EPSILON && (size[1] - 500.0).abs() < f32::EPSILON,
             "the person's own size stays: {size:?}"
         );
     }
@@ -510,23 +515,24 @@ fn grow_card(
 }
 
 #[test]
-fn a_card_that_grows_by_an_update_shows_its_last_button_without_a_scroll() {
+fn a_card_that_grows_by_an_update_stops_at_the_ceiling_of_a_card_in_a_tall_view() {
     let (_temp, ctx, mut app) = agent_app();
     let (card, opened) = card_of_first_document(&ctx, &mut app, VIEW);
+    let room = room_of_the_view(&app, &ctx);
 
     let output = grow_card(&ctx, &mut app, VIEW, &card, setup_document());
 
+    let grown = card_height(&app, &card);
+    assert!(
+        grown > opened && (grown - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON && room > grown,
+        "the card grew to the ceiling of a card and not to the room of the view: {opened} to {grown} of {room}"
+    );
     let panel = card_panel(&app, &ctx, &card);
     let body = card_body(panel, app.canvas_view.zoom);
     let ink = drawn_text(&output, "Delete");
     assert!(
-        body.contains_rect(ink),
-        "the last button of the card lies inside the room that the card gives its body: {ink:?} in {body:?}"
-    );
-    let grown = card_height(&app, &card);
-    assert!(
-        grown > opened && grown > CARD_HEIGHT_LIMITS[1],
-        "the card grew to the room that its document needs, past the ceiling of a narrow card: {opened} to {grown}"
+        ink.min.y > body.max.y && drew_text(&output, "More below"),
+        "the body scrolls the last button and says so: {ink:?} in {body:?}"
     );
 }
 
@@ -552,17 +558,16 @@ fn a_card_that_the_person_resized_by_hand_keeps_its_size_when_it_grows() {
 }
 
 #[test]
-fn a_card_that_is_taller_than_the_room_of_the_view_scrolls_in_its_body() {
+fn a_card_that_is_taller_than_the_ceiling_of_a_card_scrolls_in_its_body() {
     let (_temp, ctx, mut app) = agent_app();
     let (card, _) = card_of_first_document(&ctx, &mut app, VIEW);
-    let room = room_of_the_view(&app, &ctx);
 
     let output = grow_card(&ctx, &mut app, VIEW, &card, taller_than_the_view_document());
 
     let height = card_height(&app, &card);
     assert!(
-        (height - room.max(CARD_HEIGHT_LIMITS[1])).abs() < f32::EPSILON,
-        "a content that no window shows keeps a card at the room of the view: {height} of {room}"
+        (height - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON,
+        "a content above the ceiling keeps a card at the ceiling: {height}"
     );
     let panel = card_panel(&app, &ctx, &card);
     let body = card_body(panel, app.canvas_view.zoom);
@@ -695,7 +700,7 @@ fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
     let canvas = app.canvas_rect(&ctx);
     let panel = card_panel(&app, &ctx, &card);
     assert!(
-        (panel.height() - 900.0).abs() < f32::EPSILON,
+        (panel.height() - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON,
         "the card holds the ceiling of its height: {panel:?}"
     );
     assert!(
@@ -733,6 +738,11 @@ fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
         after.min.y < before.min.y - 100.0,
         "the press scrolled the body: {after:?} from {before:?}"
     );
+
+    // The body of a card at its ceiling is short, so a second page shows its end.
+    let mark = drawn_text(&output, "More below");
+    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
+    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
 
     // The body shows its end, so the next press brings the foot of the card into
     // the view at the zoom of the moment, which takes the top of a taller card out

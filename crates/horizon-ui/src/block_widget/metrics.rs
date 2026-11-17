@@ -240,8 +240,15 @@ pub(super) const WIDE_HEADING_FONT: f32 = 26.0;
 /// card with a single line of content ends right after that content instead of
 /// leaving an empty band above its footer.
 pub(super) const CARD_MIN_HEIGHT: f32 = 140.0;
-/// Largest height of a card that fits its content.
-pub(super) const CARD_MAX_HEIGHT: f32 = 900.0;
+/// Largest height of a card of the default width that fits its content.
+///
+/// A card above it scrolls in its body. The bound is a constant and reads
+/// nothing of the window, so a card has one height on every screen. Its body
+/// is 480 points, which holds the longest card that Horizon draws itself, the
+/// notice of the first start, without a scroll. The canvas of the smallest
+/// window of the build, 800 by 600 points, is 554 points high at zoom 1: it
+/// shows the title bar and the whole body, and cuts only the footer strip.
+pub(super) const CARD_MAX_HEIGHT: f32 = 560.0;
 /// Largest height of a wide card that fits its content.
 pub(super) const WIDE_CARD_MAX_HEIGHT: f32 = 1200.0;
 

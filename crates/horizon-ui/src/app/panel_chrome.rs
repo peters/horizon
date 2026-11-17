@@ -37,6 +37,8 @@ pub(super) struct PanelChrome<'a> {
     /// The microphone icon of speech input; `None` on a panel that speech input
     /// cannot enter, and while speech input is off.
     pub mic: Option<MicControl>,
+    /// The fold control of a card, in the place of the icon that a card never has.
+    pub fold: Option<Rect>,
 }
 
 impl PanelChrome<'_> {
@@ -45,7 +47,7 @@ impl PanelChrome<'_> {
     /// The icon takes its place left of the close control, so every other control
     /// keeps its own room and moves left with it.
     fn controls_anchor(&self) -> Rect {
-        self.mic.map_or(self.close_rect, |mic| mic.rect)
+        self.mic.map_or(self.fold.unwrap_or(self.close_rect), |mic| mic.rect)
     }
 }
 
@@ -747,6 +749,7 @@ mod tests {
             session_id: None,
             card: None,
             mic: None,
+            fold: None,
         }
     }
 

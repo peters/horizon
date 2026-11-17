@@ -210,9 +210,6 @@ impl Board {
         if explicit_position {
             self.set_workspace_layout(workspace, None);
         }
-        let workspace_layout = (!explicit_position)
-            .then(|| self.workspace_layout_value(workspace))
-            .flatten();
         let previous_frame = self.workspace_frame_rect(workspace);
 
         // Inherit workspace cwd if the panel doesn't specify one.
@@ -247,9 +244,7 @@ impl Board {
         if visible {
             self.focus(id);
         }
-        if let Some(layout) = workspace_layout {
-            self.apply_workspace_layout(workspace, layout);
-        }
+        self.reflow_workspace_layout(workspace);
         self.resolve_workspace_collisions_after_frame_growth(workspace, previous_frame);
 
         Ok(id)
@@ -458,6 +453,10 @@ impl Board {
         self.retained_empty_workspaces.remove(&workspace_id);
         if let Some(panel) = self.panel_mut(panel_id) {
             panel.workspace_id = workspace_id;
+            // A card that moves to another workspace is a tile there, as every panel.
+            if let Some(card) = panel.block_mut() {
+                card.place = crate::CardPlace::Tile;
+            }
         }
 
         if let Some(layout) = target_layout {

@@ -50,6 +50,7 @@ fn button(id: &str, label: &str, tone: Tone) -> Button {
 fn tall_document() -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Kv {
                 rows: (0..12)
@@ -173,6 +174,7 @@ fn notice_document() -> BlockDocument {
         .collect();
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Set up needs an agent".to_string(),
@@ -233,6 +235,7 @@ fn subtitle_shape<'a>(output: &'a egui::FullOutput, subtitle: &str) -> &'a egui:
 fn question_document(heading: &str) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: heading.to_string(),
@@ -369,6 +372,7 @@ fn a_short_document_gets_a_card_that_ends_right_after_its_content() {
     // points left an empty band above the footer.
     let mut components = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Heading {
             text: "home-mac".to_string(),
             subtitle: None,
@@ -515,6 +519,7 @@ fn a_body_that_holds_all_of_its_content_paints_no_mark() {
     let mut card = CardRuntime::default();
     let empty = BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     };
     let (output, _) = draw_card(smallest_card(), &empty, &mut card);

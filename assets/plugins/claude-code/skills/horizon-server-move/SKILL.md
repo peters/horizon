@@ -308,8 +308,10 @@ to, and each of those computers needs its own press. Say that plainly.
 
 ## The cards
 
-One card, titled with the new computer, changed with `update` at each step. The
-card of the move:
+One card, titled with the new computer, changed with `update` at each step. When
+the new computer has a work card, as the skill `horizon-machines` names it, the
+move is a job of that card: update it, and draw no second card. Send the card of
+the done step with `"finished": true`. The card of the move:
 
 ```json
 {"components": [

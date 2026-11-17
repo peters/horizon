@@ -20,6 +20,7 @@ Horizon. It then makes sure that a click of the person reaches the agent that
 owns the card, with its selection and its time, that one wait covers every card
 of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
+column that the cards of one agent stand in, the fold of a finished card, the
 scrolling of a card that is shorter than its content, the mark that brings the
 foot of a card that the view cuts into the view, the frame that a card fits for
 its own notices, the selected row of a card without its agent, and the press of a
@@ -152,9 +153,11 @@ with Claude Code and with a Codex panel.
    Result: The answer has `status: created`, `panel_id` `<card>` and
    `revision: 1`. The live view shows a new panel named `cloud-1` with the
    heading, the badge and the address. The card fits its content: the footer
-   sits below the address, and no part of the body is cut off. The card takes a
-   free place beside Agent A: its top edge is level with the top edge of the
-   agent panel, and it covers no terminal and no other card.
+   sits below the address, and no part of the body is cut off. The card stands
+   in the column of Agent A, at the right of the agent panel: its top edge is
+   level with the top edge of the agent panel, and it covers no terminal and no
+   other card. When another panel holds the place at the right of the agent
+   panel, the column stands at the right of that panel.
 
 2. Examine the fixture desktop.
 
@@ -586,7 +589,8 @@ every step on the fixture display that the native VNC Device panel shows.
    button.
 
    Result: The answer has `status: created` and `revision: 1`. The second card
-   takes a free place beside the first card and covers no panel.
+   stands at the top of the column of Agent A, the first card stands under it,
+   and no card covers a panel.
 
 2. In client A, call `block_panel` with
    `{"operation":"next_click","timeout_millis":120000}`, without `panel_id`, and
@@ -1150,9 +1154,9 @@ stop the server in step 8.
 
 ### 5.30 B30 — The mark brings the foot of a card that the view cuts
 
-The document of the scenario `tall` needs more room than the ceiling of a card
-gives it, so the card rests at the ceiling and the view of a window of 900 points
-cuts its foot.
+The document of the scenario `tall` needs more room than the ceiling of a card,
+560 points, gives it. The card rests at the ceiling, and the view of a window of
+900 points cuts the foot of a card that starts at 620 points.
 
 1. Write this panel list to `<work>/tall-panels.json`:
 
@@ -1194,6 +1198,133 @@ cuts its foot.
    Result: The press reaches the canvas, which now shows the room under the foot
    of the card. No mark appears and no part of the card changes.
 
+### 5.31 B31 — The cards of an agent stand in one column
+
+1. In client A, create three cards with the titles `job-1`, `job-2` and `job-3`,
+   in this order. Give `job-2` a `kv` component of six rows, and give the other
+   two cards one `heading` and one `text` component.
+
+   Result: The three cards stand in one column at the right of the panel of
+   Agent A. `job-3` is at the top, level with the top edge of the agent panel,
+   `job-2` is under it, and `job-1` is under `job-2`. The gap between two cards
+   is the gap between two tiles. No card covers a panel. A line goes from each
+   card to the agent panel.
+
+2. In client A, close `job-2`.
+
+   Result: `job-1` moves up and stands directly under `job-3`. The column has no
+   hole.
+
+3. In a workspace with no preset selected, drag the title bar of the panel of
+   Agent A by about 200 points.
+
+   Result: The agent panel moves, and its column moves with it: `job-3` is level
+   with the top edge of the agent panel again, at its right.
+
+4. Drag the title bar of `job-1` to an empty place under the agent panel.
+
+   Result: `job-1` stays where you put it. The preset of the workspace, if one
+   is selected, stays selected.
+
+5. In client A, create a card with the title `job-4`.
+
+   Result: `job-4` stands at the top of the column and `job-3` stands under it.
+   `job-1` does not move.
+
+6. Do the restart of B07 steps 1 to 3.
+
+   Result: Each card stands where it stood before the restart. `job-1` is not
+   in the column.
+
+### 5.32 B32 — A card has the height of its content
+
+1. In client A, create a card whose document holds one `heading` and one `text`
+   of two lines. Then create a card whose document holds one `heading`, a `kv`
+   component of eight rows and one `buttons` component.
+
+   Result: The first card is lower than the second card. Each card ends directly
+   under its content, and no card shows the mark `More below`. This is the result
+   in a workspace with a preset selected too: a card of an agent is no tile of
+   the preset.
+
+2. In client A, update the upper card of the column with a document that holds
+   four more rows.
+
+   Result: The card is higher by the height of four rows. Each card under it
+   moves down by the same height.
+
+3. In client A, create a card whose document holds one `heading`, a `kv`
+   component of 24 rows and one `buttons` component with the button `Delete`.
+
+   Result: The card is 560 points high in a window of every size. Its body shows
+   the mark `More below`, and the button `Delete` is not in the body.
+
+4. Put the pointer on the body of that card and turn the wheel down.
+
+   Result: The body scrolls. The button `Delete` comes into the body and takes
+   a press.
+
+5. Drag the corner grip of that card until the card is 300 points high. Then
+   update the card with a document of ten rows.
+
+   Result: The card keeps the size that you dragged.
+
+### 5.33 B33 — A finished card folds to one line
+
+1. In client A, create a card with this document:
+
+   ```json
+   {"finished": true, "components": [
+     {"type": "heading", "text": "Server ready", "badge": {"text": "Done", "tone": "ok"}},
+     {"type": "text", "text": "The server answers on its port."},
+     {"type": "buttons", "items": [{"id": "again", "label": "Run again"}]}]}
+   ```
+
+   Result: The card is one line at the width of its column. The line shows
+   `Server ready` and `Done`. It shows no text of the body and no button. The
+   card under it stands directly under the line.
+
+2. Press the line.
+
+   Result: The card opens. It shows the text and the button `Run again`.
+
+3. Press `Run again`, and call `next_click` in client A.
+
+   Result: The answer is `clicked` with `component_id` `again`. An open card
+   works as every card.
+
+4. In client A, update the card with the same document.
+
+   Result: The card stays open. An update folds no card that the person opened
+   after it was finished.
+
+5. Press the arrow in the title bar of the card, left of its close control.
+
+   Result: The card folds to its one line. A second press on the arrow opens it.
+
+6. In client A, create a card without the field `finished`, and update it two
+   times without the field.
+
+   Result: The card stays open after each update. Horizon folds no card that is
+   not finished.
+
+7. Press the arrow in the title bar of that card. Then update the card in
+   client A, without the field `finished`, with a new badge text.
+
+   Result: The card stays folded, and its line shows the new badge text.
+
+8. In client A, update that card with `"finished": true`.
+
+   Result: The card is folded.
+
+9. Do the restart of B07 steps 1 to 3.
+
+   Result: Each card has the fold that it had before the restart.
+
+10. In client A, create a card with `"finished": "yes"`.
+
+    Result: The answer is `invalid_document`, and no card is created.
+
 ## 6. With a real agent
 
 These steps check the same behaviour with a real AI agent. Do them in your own
@@ -1233,8 +1364,8 @@ Horizon, in a workspace of its own, with an agent panel that can call
 ## 7. Pass criteria
 
 - B01: The card appears in the workspace of the calling agent, at revision 1,
-  and takes no keyboard focus. It stands beside the agent panel with level top
-  edges.
+  and takes no keyboard focus. It stands in the column at the right of the agent
+  panel with level top edges.
 - B02 and B03: Each new document raises the revision, and list and inspect
   report the card.
 - B04: A hidden card keeps its document and revision, and a shown card returns.
@@ -1313,6 +1444,21 @@ Horizon, in a workspace of its own, with an agent panel that can call
   body, and the next press brings the foot of the card into the view at the zoom
   of the moment, takes the top of a card that is taller than the view out of it,
   and leaves no mark.
+
+- B31: The cards of one agent panel stand in one column at the right of that
+  panel, the newest card at the top, with the gap of tiles and no hole. A panel
+  that holds the place at the right of the agent panel puts the column at its own
+  right. The column moves with its agent panel. A card that the person drags
+  stays where the person put it, also after a restart.
+- B32: A card has the height of its content, from 140 points to 560 points, in a
+  workspace with a preset too. A card above 560 points scrolls in its body, shows
+  `More below`, and gives its buttons to the wheel. A card that grows moves the
+  cards under it. A card that the person resized keeps its size.
+- B33: A finished card is one line with its heading and its badge. A press on
+  the line opens it, and the arrow in its title bar folds and opens every card.
+  An update folds only a card that becomes finished, and never a card that the
+  person opened after it was finished. The fold returns after a restart. A value
+  of `finished` that is not `true` or `false` is `invalid_document`.
 
 ## 8. Cleanup
 

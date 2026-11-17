@@ -530,6 +530,7 @@ fn asking_card(text: &str, answers: &[(&str, &str)]) -> horizon_browser_control:
     use horizon_browser_control::block::{BlockDocument, Button, Component, Tone};
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Text {
                 text: "3 todos in 2 waves".to_owned(),
@@ -563,11 +564,7 @@ fn card_panel(
                 kind: PanelKind::Block,
                 block: Some(horizon_core::BlockPanelState {
                     title: "The plan".to_owned(),
-                    document,
-                    revision: 1,
-                    owner_actor: None,
-                    updated_at_millis: 0,
-                    answered_callout: None,
+                    ..horizon_core::BlockPanelState::new(document)
                 }),
                 ..PanelOptions::default()
             },
@@ -692,6 +689,7 @@ fn a_card_without_a_callout_or_with_a_callout_of_no_answer_keeps_its_row_quiet()
         workspace,
         BlockDocument {
             width: None,
+            finished: false,
             components: vec![Component::Text {
                 text: "the plan runs".to_owned(),
             }],

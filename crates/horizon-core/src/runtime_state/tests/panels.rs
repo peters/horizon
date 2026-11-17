@@ -421,6 +421,7 @@ fn a_saved_card_panel_comes_back_with_its_document_revision_and_owner() {
 
     let first = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Heading {
             text: "Cloud one".to_string(),
             subtitle: None,
@@ -429,6 +430,7 @@ fn a_saved_card_panel_comes_back_with_its_document_revision_and_owner() {
     };
     let second = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Cloud two".to_string(),

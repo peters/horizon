@@ -515,7 +515,7 @@ shows its short form.
    {"tool": "block_panel", "arguments": {"operation": "create", "title": "Rent a machine", "document": {"components": [{"type": "heading", "text": "Where do you rent?", "subtitle": "The machine is made in your own account. You pay the provider, not Horizon.", "badge": {"text": "Step 2 of 4"}}, {"type": "list", "selection": "single", "rows": [{"id": "provider.hetzner", "title": "Hetzner", "subtitle": "Signed in with hcloud", "badge": {"text": "Ready", "tone": "ok"}, "selected": true}, {"id": "provider.azure", "title": "Azure", "subtitle": "Signed in with az", "badge": {"text": "Ready", "tone": "ok"}}, {"id": "provider.gcloud", "title": "Google Cloud", "subtitle": "Not signed in. Run gcloud auth login", "disabled": true}, {"id": "provider.aws", "title": "AWS", "subtitle": "No profile found. Run aws configure sso", "disabled": true}, {"id": "provider.runpod", "title": "RunPod", "subtitle": "GPU machines. No RUNPOD_API_KEY is stored", "disabled": true}]}, {"type": "buttons", "items": [{"id": "back", "label": "Back"}, {"id": "look_again", "label": "Look again"}]}]}}, "timeout": 30}
    ```
 
-   Result: A card appears beside the panel of `File agent`. It says
+   Result: A card appears at the right of the panel of `File agent`. It says
    `Where do you rent?`, with the badge `Step 2 of 4` at the right of the title
    row. The line under the title is the whole sentence
    `The machine is made in your own account. You pay the provider, not Horizon.`:
@@ -624,7 +624,7 @@ network. The agent is real, and it follows the skill `horizon-setup`.
 
    Result: An agent panel opens with the first message
    `Use the horizon-setup skill. The person pressed Set up. Goal: choose.` A card
-   appears beside it, and the card says `What do you want to do?` with the badge
+   appears at its right, and the card says `What do you want to do?` with the badge
    `Step 1`. The card holds the rows `Work on a bigger machine`,
    `Use Horizon on all your computers` and `A browser that stays signed in`, and
    the line under them offers the join. The card holds no button.

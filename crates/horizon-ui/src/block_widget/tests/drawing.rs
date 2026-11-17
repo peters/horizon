@@ -165,6 +165,7 @@ fn an_empty_card_says_that_it_is_empty() {
     let nodes = card_nodes(
         &BlockDocument {
             width: None,
+            finished: false,
             components: Vec::new(),
         },
         Owner::Listening,
@@ -304,6 +305,7 @@ fn a_gone_owner_keeps_the_selected_row_in_a_dimmed_form() {
 fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::List {
             selection: Selection::None,
             rows: vec![horizon_browser_control::block::ListRow {
@@ -331,6 +333,7 @@ fn a_list_that_offers_no_selection_draws_its_rows_as_text() {
 fn a_button_without_a_tone_still_draws() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Buttons {
             items: vec![Button {
                 id: "later".to_string(),
@@ -352,6 +355,7 @@ fn narrow_heading(
 ) -> (Vec<egui::epaint::ClippedShape>, Vec<(String, egui::accesskit::Rect)>) {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Heading {
             text: "home-mac".to_string(),
             subtitle: subtitle.map(str::to_owned),
@@ -471,6 +475,7 @@ fn a_step_reports_its_own_state_to_a_reader_as_its_line() {
 fn a_failed_step_draws_the_cross_of_a_failed_item_in_the_danger_colour() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Steps {
             steps: vec![
                 horizon_browser_control::block::Step {
@@ -547,6 +552,7 @@ fn a_card_that_horizon_owns_says_so_and_shows_no_frame_of_a_gone_agent() {
 fn kv_document(rows: &[(&str, &str)]) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Kv {
             rows: rows
                 .iter()
@@ -687,6 +693,7 @@ fn the_height_estimate_of_a_new_card_counts_the_lines_of_a_value() {
 fn list_card(rows: &[(&str, &str)]) -> Vec<egui::epaint::ClippedShape> {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::List {
             selection: Selection::None,
             rows: rows

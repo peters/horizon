@@ -13,6 +13,7 @@ use super::{card_nodes, card_nodes_in, disabled_state};
 fn link(label: &str, url: &str) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Link {
             label: label.to_owned(),
             url: url.to_owned(),

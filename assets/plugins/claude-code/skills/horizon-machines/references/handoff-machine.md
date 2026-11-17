@@ -30,7 +30,9 @@ never commit a change that the person did not name.
      If it prints nothing, run `git -C <folder> fetch <bundle> <branch>:<branch>`
      and `git -C <folder> switch <branch>`.
    Remove the bundle file from the machine after the step.
-4. Draw one card. Never draw a second card for the same work.
+4. Draw one document on the work card of that machine: update that card, or
+   create it when the machine has none. Never draw a second card for the same
+   work.
 
 ## The card
 

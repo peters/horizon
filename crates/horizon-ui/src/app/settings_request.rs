@@ -209,15 +209,12 @@ impl HorizonApp {
         ctx: &Context,
     ) -> Result<PanelId, Outcome> {
         let size = crate::block_widget::default_card_size(&document, self.canvas_rect(ctx).width());
+        // Horizon wrote this document, so the card has no owner: its buttons are
+        // the host's controls and no agent reads a press on them.
         let state = BlockPanelState {
             title: title.to_owned(),
-            document,
-            revision: 1,
-            // Horizon wrote this document, so its buttons are the host's
-            // controls and no agent reads a press on them.
-            owner_actor: None,
             updated_at_millis: now_millis(),
-            answered_callout: None,
+            ..BlockPanelState::new(document)
         };
         let options = PanelOptions {
             kind: PanelKind::Block,
@@ -681,6 +678,7 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
     }
     let rest = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Text {
                 text: SERVER_SENT.to_owned(),
@@ -707,6 +705,7 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
     components.extend(rest.components);
     BlockDocument {
         width: None,
+        finished: false,
         components,
     }
 }
@@ -769,6 +768,7 @@ fn browser_document(
     };
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: format!("Use the browser on {host} for new browser panels?"),

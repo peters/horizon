@@ -237,6 +237,12 @@ impl CardRuntime {
         !self.hand_resized && self.measured_content_height.is_some() && self.fitted != Some((revision, self.frames))
     }
 
+    /// Forgets the last fit: a card that opens measures its content again.
+    pub fn forget_content_fit(&mut self) {
+        self.measured_content_height = None;
+        self.fitted = None;
+    }
+
     /// Records that the host gave the card the height its content and its
     /// frames of `revision` need.
     pub fn mark_content_fit(&mut self, revision: u64) {
@@ -408,6 +414,7 @@ mod tests {
     fn document(row_ids: &[&str]) -> horizon_browser_control::block::BlockDocument {
         horizon_browser_control::block::BlockDocument {
             width: None,
+            finished: false,
             components: vec![
                 Component::Heading {
                     text: "cloud-1".to_owned(),

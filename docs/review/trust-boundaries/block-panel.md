@@ -373,19 +373,33 @@ are written by Horizon and no document field can set them:
   ceiling of the card, and a title that the host trims to one line. A document
   that asks for the wide card opens at half of the canvas view of that moment,
   between 1100 and 2400 points, and as tall as its content needs. The ceiling of
-  a narrow card is 900 points and the ceiling of a wide card is 1200 points,
-  and the room that the canvas view shows at the zoom of the moment beats the
-  ceiling while it is larger: the card of a window that shows 1150 points may
-  take 1150 points, so nothing of its content hides under its footer. Every
+  a narrow card is 560 points in every window, so a document cannot make a card
+  that fills a screen. The ceiling of a wide card is 1200 points, and the room
+  that the canvas view shows at the zoom of the moment beats that ceiling while
+  it is larger. Every
   update of a document takes the width that it asks for, so a card of a board
   widens when the board gains a wave and narrows again when the document is
   narrow, and its left edge stays where the person put it. A card that the
-  person resized by hand keeps that size, a card of an arranged workspace keeps
-  the size of its preset, and a card that is taller than its ceiling and than
-  the room of the view scrolls its body above a footer that stays at the
+  person resized by hand keeps that size, a card that is a tile of an arranged
+  workspace keeps the size of its preset, and a card that is taller than its
+  ceiling scrolls its body above a footer that stays at the
   bottom. The form of every component follows the real width of the card body,
   so the same document draws the wide form at 1000 points or more and the narrow
   form under it.
+- **The place of a card** comes from the host. A document names no position
+  and no size. The cards of one agent panel stand in one column at the right of
+  that panel, the newest at the top, and the host moves the column to the right
+  of a panel that holds that place, so a card never covers a panel of the
+  person. Only a drag of the person takes a card out of its column.
+- **The fold of a card** follows one field of the document and the person. A
+  document may set `finished`, which takes `true` or `false` and no other value,
+  and Horizon then draws the card as one line with the text of its heading and of
+  the badge of that heading, which are the plain text of the document as in the
+  open card. A folded card draws no button, so a fold takes no press from an
+  agent and hides nothing that Horizon owns: the chip of the owner returns when
+  the card opens. A press of the person on the line or on the control of the
+  title bar opens every card, and the choice of the person outranks the field
+  until a document becomes finished again.
 
 A document may still choose its own words, its own ids, its tones, its order of
 components and which row of a list starts selected. None of those carry host

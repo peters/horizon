@@ -66,8 +66,8 @@ pub use alacritty_terminal::selection::SelectionType;
 pub use atomic_file::AtomicFile;
 pub use attention::{Attention, AttentionBoard, AttentionTarget, next_attention_target};
 pub use block_panel::{
-    BlockPanelState, CLICK_RETENTION_MILLIS, CardFrames, CardRuntime, ClickQueue, MAX_PENDING_CLICKS, PendingClick,
-    WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
+    BlockPanelState, CLICK_RETENTION_MILLIS, CardFrames, CardPlace, CardRuntime, ClickQueue, MAX_PENDING_CLICKS,
+    PendingClick, WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
 };
 pub use board::{
     Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
