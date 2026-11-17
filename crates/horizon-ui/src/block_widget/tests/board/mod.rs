@@ -376,21 +376,27 @@ fn the_form_of_a_card_changes_at_1000_points_of_its_body() {
 }
 
 #[test]
-fn a_wide_card_takes_a_height_up_to_1200_points_and_a_narrow_one_up_to_900() {
-    assert_eq!(card_height_limits(&board_document()), [CARD_HEIGHT_LIMITS[0], 1200.0]);
+fn a_wide_card_takes_a_height_up_to_1200_points_and_a_narrow_one_up_to_560() {
     assert_eq!(
-        card_height_limits(&BlockDocument {
-            width: None,
-            components: vec![],
-        }),
-        CARD_HEIGHT_LIMITS
+        card_height_limits(&board_document(), 0.0),
+        [CARD_HEIGHT_LIMITS[0], 1200.0]
     );
+    let narrow = BlockDocument {
+        width: None,
+        components: vec![],
+    };
+    assert_eq!(card_height_limits(&narrow, 0.0), CARD_HEIGHT_LIMITS);
+    assert_eq!(CARD_HEIGHT_LIMITS[1], 560.0);
+    // The room of the view lifts the ceiling of a wide card and never that of a
+    // card of the default width.
+    assert_eq!(card_height_limits(&board_document(), 1500.0)[1], 1500.0);
+    assert_eq!(card_height_limits(&narrow, 1500.0), CARD_HEIGHT_LIMITS);
     assert_eq!(
         fitted_card_height(
             4000.0,
             false,
             CARD_HEIGHT_LIMITS[0],
-            card_height_limits(&board_document())
+            card_height_limits(&board_document(), 0.0)
         ),
         1200.0
     );
@@ -444,8 +450,10 @@ fn the_estimate_of_a_board_a_callout_and_a_log_grows_with_their_parts_in_both_fo
     ] {
         let measured = CardFrames::new().measured(width, document, &mut CardRuntime::default());
         // The body records the height of its content with the padding of the
-        // body, which the estimate of the card also holds.
+        // body, which the estimate of the card also holds. A card stops at the
+        // ceiling of its form, and its body scrolls the content above that.
         let estimated = size[1] - crate::block_widget::CARD_CHROME_HEIGHT;
+        let measured = measured.min(card_height_limits(document, 0.0)[1] - crate::block_widget::CARD_CHROME_HEIGHT);
         assert!(
             estimated + 4.0 >= measured,
             "{name}: the estimate holds the content that the body measured: {estimated} against {measured}"

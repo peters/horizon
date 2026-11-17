@@ -64,13 +64,13 @@ fn asks_wide(document: &BlockDocument) -> bool {
     document.width == Some(Width::Wide)
 }
 
-/// The bounds of the height of a card that draws `document`: the wide card may
-/// grow taller, because a board grows with its waves. The host lifts the ceiling
-/// to the room that the canvas view shows, so a card of a person's window fits
-/// its content without a scroll.
-pub(crate) fn card_height_limits(document: &BlockDocument) -> [f32; 2] {
+/// The bounds of the height of a card that draws `document`. A card of the
+/// default width keeps one ceiling in every window. The wide card may grow
+/// taller, because a board grows with its waves, and it may take `view_room`,
+/// the height that the canvas view shows, when that is more.
+pub(crate) fn card_height_limits(document: &BlockDocument, view_room: f32) -> [f32; 2] {
     let ceiling = if asks_wide(document) {
-        WIDE_CARD_MAX_HEIGHT
+        WIDE_CARD_MAX_HEIGHT.max(view_room)
     } else {
         CARD_MAX_HEIGHT
     };
@@ -161,7 +161,7 @@ pub(crate) fn default_card_size(document: &BlockDocument, canvas_width: f32) -> 
     let form = Form::of(body_width);
     let body = components_height(document, form, body_width);
     let padding = f32::from(BODY_PAD_TOP) + f32::from(BODY_PAD_BOTTOM);
-    let limits = card_height_limits(document);
+    let limits = card_height_limits(document, 0.0);
     let height = (CARD_CHROME_HEIGHT + padding + body).clamp(limits[0], limits[1]);
     [width, height]
 }

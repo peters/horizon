@@ -855,4 +855,5 @@ fn secret_names_answers_the_names_of_the_stored_secrets_and_no_value() {
 
 mod columns;
 mod documents;
+mod heights;
 mod machine;

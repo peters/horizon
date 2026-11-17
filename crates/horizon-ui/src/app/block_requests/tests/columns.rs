@@ -10,16 +10,16 @@ use super::*;
 use crate::app::test_support::{card_panel, editor_panel_state, editor_workspace_state};
 
 /// The window of the person.
-const WINDOW: [f32; 2] = [1600.0, 1000.0];
+pub(super) const WINDOW: [f32; 2] = [1600.0, 1000.0];
 /// The gap that two tiles of a workspace keep.
-const GAP: f32 = 20.0;
+pub(super) const GAP: f32 = 20.0;
 /// The local id of the agent panel, in the form that Horizon gives a panel.
-const AGENT: &str = "0b9c2f5e-6a1d-4c3b-9e7f-2d4a6b8c0e11";
+pub(super) const AGENT: &str = "0b9c2f5e-6a1d-4c3b-9e7f-2d4a6b8c0e11";
 /// The local id of a terminal of the person in the same workspace.
 const OTHER: &str = "7d1e4a90-3c52-4f6b-8a1d-5e9c0b7f2a44";
 
 /// One workspace with the panels `panels`, arranged by `layout`.
-fn workspace(layout: Option<WorkspaceLayout>, panels: Vec<PanelState>) -> RuntimeState {
+pub(super) fn workspace(layout: Option<WorkspaceLayout>, panels: Vec<PanelState>) -> RuntimeState {
     RuntimeState {
         workspaces: vec![WorkspaceState {
             layout,
@@ -31,7 +31,7 @@ fn workspace(layout: Option<WorkspaceLayout>, panels: Vec<PanelState>) -> Runtim
 }
 
 /// The application of a saved board whose first panel is the agent panel.
-fn started(runtime: RuntimeState) -> (tempfile::TempDir, Context, HorizonApp) {
+pub(super) fn started(runtime: RuntimeState) -> (tempfile::TempDir, Context, HorizonApp) {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(runtime),
     });
@@ -43,12 +43,12 @@ fn started(runtime: RuntimeState) -> (tempfile::TempDir, Context, HorizonApp) {
 }
 
 /// A board with one agent panel.
-fn agent_board(layout: Option<WorkspaceLayout>) -> (tempfile::TempDir, Context, HorizonApp) {
+pub(super) fn agent_board(layout: Option<WorkspaceLayout>) -> (tempfile::TempDir, Context, HorizonApp) {
     started(workspace(layout, vec![editor_panel_state(AGENT, [20.0, 20.0])]))
 }
 
 /// The frames that measure a new document and give its card the height that fits.
-fn settle(ctx: &Context, app: &mut HorizonApp) {
+pub(super) fn settle(ctx: &Context, app: &mut HorizonApp) {
     for _ in 0..3 {
         let _ = run_app_frame_with_input(ctx, app, raw_input(WINDOW, None));
     }
@@ -63,7 +63,7 @@ fn rows_document(heading: &str, rows: usize) -> serde_json::Value {
 }
 
 /// Draws one card of the agent panel through its request and lets it settle.
-fn draw(ctx: &Context, app: &mut HorizonApp, heading: &str, rows: usize) -> String {
+pub(super) fn draw(ctx: &Context, app: &mut HorizonApp, heading: &str, rows: usize) -> String {
     let (card, _) = created(app.apply_block_request(
         &request(
             app,
@@ -79,7 +79,7 @@ fn draw(ctx: &Context, app: &mut HorizonApp, heading: &str, rows: usize) -> Stri
 }
 
 /// The rectangle `[left, top, right, bottom]` of the panel `local_id` on the canvas.
-fn place(app: &HorizonApp, local_id: &str) -> [f32; 4] {
+pub(super) fn place(app: &HorizonApp, local_id: &str) -> [f32; 4] {
     let panel = app
         .board
         .panel(app.board.panel_id_by_local_id(local_id).expect("the panel"))
@@ -107,7 +107,7 @@ fn beside_agent(app: &HorizonApp) -> f32 {
     place(app, AGENT)[2] + GAP
 }
 
-fn pointer(position: Pos2, pressed: bool) -> Event {
+pub(super) fn pointer(position: Pos2, pressed: bool) -> Event {
     Event::PointerButton {
         pos: position,
         button: PointerButton::Primary,
