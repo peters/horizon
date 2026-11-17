@@ -274,3 +274,69 @@ fn the_footer_offers_the_two_choices_of_a_value_of_another_computer() {
         );
     }
 }
+
+/// The rectangle of each button of the footer of `app`, with `dirty` as the state
+/// of the draft and `tab` open, in a window of `viewport`.
+fn button_places(
+    ctx: &egui::Context,
+    app: &mut crate::app::HorizonApp,
+    viewport: [f32; 2],
+    tab: super::SettingsTab,
+    dirty: bool,
+) -> Vec<(String, egui::Rect)> {
+    if let Some(editor) = app.settings.as_mut() {
+        editor.dirty = dirty;
+        editor.status = if dirty {
+            super::SettingsStatus::LivePreview
+        } else {
+            super::SettingsStatus::None
+        };
+    }
+    let shapes = settings_frame(ctx, app, viewport, tab);
+    let panel = panel_background_rect(&shapes, reserved_panel_rect(app));
+    footer_texts(&shapes, panel)
+        .into_iter()
+        .filter(|(text, _)| BUTTON_LABELS.contains(&text.as_str()))
+        .collect()
+}
+
+/// A change adds Revert to the footer. The places of `Save`, `Reset Defaults` and
+/// `Close` stand still, because a person who goes to press Save where it stood
+/// pressed Reset Defaults instead.
+#[test]
+fn the_places_of_save_and_reset_defaults_stand_still_when_a_change_adds_revert() {
+    // The narrowest panel that a window opens, and a panel of its widest width.
+    for viewport in [[1480.0_f32, 900.0], [3000.0, 900.0]] {
+        let (_temp, ctx, mut app, _names) = app_with_stored_secrets();
+        for tab in super::SettingsTab::ALL {
+            let before = button_places(&ctx, &mut app, viewport, *tab, false);
+            let after = button_places(&ctx, &mut app, viewport, *tab, true);
+            assert_eq!(
+                before.len(),
+                3,
+                "the clean footer of the {} tab: {before:?}",
+                tab.label()
+            );
+            assert_eq!(
+                after.len(),
+                4,
+                "the changed footer of the {} tab: {after:?}",
+                tab.label()
+            );
+            for label in ["Save", "Reset Defaults", "Close"] {
+                let place = |places: &[(String, egui::Rect)]| {
+                    places
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .map_or_else(|| panic!("the {} tab draws no {label}", tab.label()), |(_, rect)| *rect)
+                };
+                assert_eq!(
+                    place(&before),
+                    place(&after),
+                    "the {} tab keeps {label} in its place in a window of {viewport:?}",
+                    tab.label()
+                );
+            }
+        }
+    }
+}

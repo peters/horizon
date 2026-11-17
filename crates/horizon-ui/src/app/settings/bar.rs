@@ -97,7 +97,10 @@ fn button_row(
             .clicked()
         {
             action = Some(SettingsAction::Close);
-        } else if has_changes && ui.add(chrome_button("Revert")).clicked() {
+        // Revert keeps its room while there is nothing to revert, so the buttons
+        // of every state keep their places: a person who goes to press Save where
+        // it stood would otherwise press Reset Defaults.
+        } else if ui.add_visible(has_changes, chrome_button("Revert")).clicked() {
             action = Some(SettingsAction::Revert);
         } else if ui.add(chrome_button("Reset Defaults")).clicked() {
             action = Some(SettingsAction::ResetDefaults);
