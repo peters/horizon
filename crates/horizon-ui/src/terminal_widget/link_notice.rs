@@ -48,7 +48,7 @@ impl LinkNotice {
 /// Paints the line of `notice` under the grid of `body`, and answers whether the
 /// person asked for the next attempt in this pass.
 pub(super) fn show(ui: &mut Ui, body: Rect, notice: &LinkNotice, interactive: bool) -> bool {
-    let Some(strip) = notice_strip::paint(ui, body) else {
+    let Some(strip) = notice_strip::paint(ui, body, notice_strip::HEIGHT) else {
         return false;
     };
     notice_strip::row(ui, strip, |ui| {

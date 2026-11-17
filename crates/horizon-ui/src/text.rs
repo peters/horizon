@@ -48,6 +48,34 @@ pub(crate) fn single_line_job(max_width: f32) -> LayoutJob {
     }
 }
 
+/// `text` wrapped at `max_width` over the rows that its words need, and at most
+/// `max_rows` of them: the rows that do not fit end with an ellipsis.
+pub(crate) fn wrapped_rows_job(
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_width: f32,
+    max_rows: usize,
+) -> LayoutJob {
+    LayoutJob {
+        break_on_newline: false,
+        wrap: TextWrapping {
+            max_width: max_width.max(0.0),
+            max_rows,
+            break_anywhere: false,
+            overflow_character: Some('\u{2026}'),
+        },
+        ..LayoutJob::single_section(
+            text.to_owned(),
+            TextFormat {
+                font_id: font.clone(),
+                color,
+                ..TextFormat::default()
+            },
+        )
+    }
+}
+
 /// [`single_line_job`] pre-filled with one uniformly styled section.
 pub(crate) fn single_line_label_job(text: &str, font: &FontId, color: Color32, max_width: f32) -> LayoutJob {
     let mut job = single_line_job(max_width);

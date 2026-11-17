@@ -243,9 +243,7 @@ impl<'a> TerminalView<'a> {
         if let Some(line) = self.panel.follow_ended_line() {
             // Only a new screen of the stream brings a follow panel back, so the
             // line of a stream that ended has no control.
-            if let Some(strip) = notice_strip::paint(ui, body) {
-                notice_strip::row(ui, strip, |ui| notice_strip::sentence(ui, &line));
-            }
+            notice_strip::ended_line(ui, body, &line);
             return;
         }
         if let Some(end) = self.panel.program_end() {

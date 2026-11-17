@@ -42,7 +42,7 @@ impl ProgramEndNotice {
     /// Paints the line under the grid of `body` and answers what the person
     /// pressed in it.
     pub(crate) fn show(self, ui: &mut Ui, body: Rect, interactive: bool) -> PanelNoticeAction {
-        let Some(strip) = notice_strip::paint(ui, body) else {
+        let Some(strip) = notice_strip::paint(ui, body, notice_strip::HEIGHT) else {
             return PanelNoticeAction::None;
         };
         let line = self.line();

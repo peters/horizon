@@ -202,3 +202,73 @@ fn a_stream_that_ended_says_so_under_the_grid() {
         "the last screen stays"
     );
 }
+
+/// The galley that a frame drew for the text `text`, and the text of the rows
+/// that it lays out.
+fn laid_out(output: &egui::FullOutput, text: &str) -> (std::sync::Arc<egui::Galley>, String) {
+    let galley = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            Shape::Text(drawn) if drawn.galley.text() == text => Some(drawn.galley.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no galley of {text:?}"));
+    let rows = galley
+        .rows
+        .iter()
+        .flat_map(|row| row.row.glyphs.iter().map(|glyph| glyph.chr))
+        .collect::<String>();
+    (galley, rows)
+}
+
+/// The line of a stream that ended is readable at the width of a panel: a narrow
+/// panel wraps it over the rows that it needs instead of cutting it after the
+/// first words, and a panel below four rows of it keeps those rows.
+#[test]
+fn the_line_of_an_ended_stream_is_readable_at_a_narrow_width() {
+    let mut follower = Follower::new();
+    follower.show(b"last screen", "last screen");
+    follower
+        .feed
+        .ended("the other computer closed this terminal or shares it no longer");
+    let line = follower
+        .board
+        .panel(follower.id)
+        .and_then(Panel::follow_ended_line)
+        .expect("the line of a stream that ended");
+
+    // A narrow panel and the default size of a panel.
+    for width in [320.0_f32, 900.0] {
+        let available = Rect::from_min_size(Pos2::new(40.0, 30.0), Vec2::new(width, 400.0));
+        let output = follower.frame(available, Vec::new());
+        let (galley, rows) = laid_out(&output, &line);
+        assert!(!galley.elided, "the whole line is laid out in {width} points: {rows:?}");
+        assert_eq!(
+            rows.trim_end(),
+            line.trim_end(),
+            "the person reads the whole reason in {width}"
+        );
+        assert!(
+            galley.rows.len() <= 4,
+            "the line takes four rows at most: {}",
+            galley.rows.len()
+        );
+    }
+
+    // A panel that is narrower than four rows of the line keeps those rows,
+    // which is the bound of the strip.
+    let available = Rect::from_min_size(Pos2::new(40.0, 30.0), Vec2::new(130.0, 400.0));
+    let output = follower.frame(available, Vec::new());
+    let (galley, rows) = laid_out(&output, &line);
+    assert!(
+        galley.elided,
+        "a panel of 130 points cuts the line after four rows: {rows:?}"
+    );
+    assert_eq!(galley.rows.len(), 4);
+    assert!(
+        rows.ends_with('\u{2026}'),
+        "the last row ends with an ellipsis: {rows:?}"
+    );
+    assert!(line.starts_with(rows.trim_end_matches('\u{2026}').trim_end()));
+}
