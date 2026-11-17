@@ -530,6 +530,7 @@ fn asking_card(text: &str, answers: &[(&str, &str)]) -> horizon_browser_control:
     use horizon_browser_control::block::{BlockDocument, Button, Component, Tone};
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Text {
                 text: "3 todos in 2 waves".to_owned(),
@@ -688,6 +689,7 @@ fn a_card_without_a_callout_or_with_a_callout_of_no_answer_keeps_its_row_quiet()
         workspace,
         BlockDocument {
             width: None,
+            finished: false,
             components: vec![Component::Text {
                 text: "the plan runs".to_owned(),
             }],

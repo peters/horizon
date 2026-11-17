@@ -539,6 +539,7 @@ pub(super) fn every_component() -> BlockDocument {
     components.extend(pills_and_steps());
     BlockDocument {
         width: None,
+        finished: false,
         components,
     }
 }
@@ -602,6 +603,7 @@ fn pills_and_steps() -> Vec<Component> {
 pub(super) fn steps_document() -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Steps {
             steps: vec![
                 Step {
@@ -623,6 +625,7 @@ pub(super) fn steps_document() -> BlockDocument {
 pub(super) fn pills_document() -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::List {
             selection: Selection::Single,
             rows: vec![
@@ -656,6 +659,7 @@ pub(super) fn pills_document() -> BlockDocument {
 pub(super) fn one_button() -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Buttons {
             items: vec![Button {
                 id: "connect".to_string(),

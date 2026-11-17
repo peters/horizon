@@ -91,6 +91,7 @@ pub(super) fn board() -> Component {
 fn board_document() -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![board()],
     }
 }
@@ -168,6 +169,7 @@ pub(super) fn painted_text(shapes: &[ClippedShape], holding: &str) -> (Rect, usi
 pub(super) fn one_long_note(note: &str) -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: vec![
                 column("Understand", "1", "4 m", false),
@@ -184,6 +186,7 @@ pub(super) fn one_long_note(note: &str) -> BlockDocument {
 pub(super) fn one_long_note_narrow(note: &str) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Board {
             columns: vec![column("Change", "2", "10 m", true)],
             rows: vec![worker(1)],
@@ -196,6 +199,7 @@ pub(super) fn one_long_note_narrow(note: &str) -> BlockDocument {
 pub(super) fn board_of(columns: usize) -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: (0..columns)
                 .map(|index| {
@@ -265,6 +269,7 @@ pub(super) fn board_with_a_callout_a_log_and_a_button() -> BlockDocument {
 pub(super) fn heading_and_progress() -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Fix the login redirect".to_owned(),
@@ -336,6 +341,7 @@ fn a_wide_card_opens_as_wide_as_its_board_needs_and_the_view_allows() {
         default_card_size(
             &BlockDocument {
                 width: Some(Width::Narrow),
+                finished: false,
                 components: vec![board()],
             },
             5120.0
@@ -347,6 +353,7 @@ fn a_wide_card_opens_as_wide_as_its_board_needs_and_the_view_allows() {
     // A wide document that holds no board keeps the rule of round 40.
     let no_board = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Divider],
     };
     assert_eq!(default_card_size(&no_board, 5120.0)[0], 2400.0);
@@ -383,6 +390,7 @@ fn a_wide_card_takes_a_height_up_to_1200_points_and_a_narrow_one_up_to_560() {
     );
     let narrow = BlockDocument {
         width: None,
+        finished: false,
         components: vec![],
     };
     assert_eq!(card_height_limits(&narrow, 0.0), CARD_HEIGHT_LIMITS);
@@ -406,6 +414,7 @@ fn a_wide_card_takes_a_height_up_to_1200_points_and_a_narrow_one_up_to_560() {
 fn the_estimate_of_a_board_a_callout_and_a_log_grows_with_their_parts_in_both_forms() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Fix the login redirect".to_owned(),
@@ -489,10 +498,12 @@ fn the_estimate_of_a_board_a_callout_and_a_log_grows_with_their_parts_in_both_fo
     ] {
         let one = BlockDocument {
             width: None,
+            finished: false,
             components: vec![component.clone()],
         };
         let two = BlockDocument {
             width: None,
+            finished: false,
             components: vec![component.clone(), component],
         };
         let one = default_card_size(&one, 0.0)[1];

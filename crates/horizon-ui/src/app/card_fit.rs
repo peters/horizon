@@ -59,6 +59,7 @@ impl HorizonApp {
                 .board
                 .panel(id)
                 .and_then(|panel| panel.block())
+                .filter(|card| !card.folded())
                 .map(|bl| bl.revision)
             else {
                 continue;

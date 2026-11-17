@@ -38,6 +38,7 @@ mod canvas_drag;
 mod canvas_gesture;
 mod canvas_scroll;
 mod card_fit;
+mod card_fold;
 mod creation_notice;
 mod cwd_reads;
 mod detached_viewports;

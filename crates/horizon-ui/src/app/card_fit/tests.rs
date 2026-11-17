@@ -33,6 +33,7 @@ fn app_with_card(measured_content_height: f32) -> (tempfile::TempDir, Context, H
                 kind: PanelKind::Block,
                 block: Some(BlockPanelState::new(BlockDocument {
                     width: None,
+                    finished: false,
                     components: Vec::new(),
                 })),
                 size: Some([420.0, 220.0]),
@@ -96,6 +97,7 @@ fn a_new_document_fits_the_card_again() {
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
     let _ = state.replace_document(BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     });
     app.panel_render_caches
@@ -130,6 +132,7 @@ fn a_card_that_the_person_resized_keeps_its_size() {
     let state = app.board.panel_mut(id).and_then(Panel::block_mut).expect("a card");
     let _ = state.replace_document(BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     });
     app.panel_render_caches
@@ -238,6 +241,7 @@ fn width(app: &HorizonApp, id: PanelId) -> f32 {
 fn board_document(columns: usize) -> BlockDocument {
     BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: (0..columns)
                 .map(|index| BoardColumn {
@@ -269,6 +273,7 @@ fn board_document(columns: usize) -> BlockDocument {
 fn narrow_document(columns: usize) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         ..board_document(columns)
     }
 }

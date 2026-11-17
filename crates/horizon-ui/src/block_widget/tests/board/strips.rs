@@ -16,6 +16,7 @@ use crate::block_widget::metrics::{
 fn heading_row_of(subtitle: Option<&str>) -> (Rect, Rect, Rect) {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Fix the login redirect".to_owned(),
@@ -55,6 +56,7 @@ fn node_rect(nodes: &[(accesskit::NodeId, accesskit::Node)], label: &str) -> Opt
 fn the_callout_is_one_row_in_the_wide_form_and_a_stack_in_the_narrow_one() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Callout {
             tone: Tone::Warn,
             caption: Some("Needs you · t5 · waits 3 min".to_owned()),
@@ -123,6 +125,7 @@ fn the_callout_is_one_row_in_the_wide_form_and_a_stack_in_the_narrow_one() {
 fn a_list_that_offers_no_selection_draws_no_ring_and_keeps_one_right_edge() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::List {
             selection: Selection::None,
             rows: vec![
@@ -185,6 +188,7 @@ fn the_log_flows_into_columns_of_at_least_330_points_in_the_wide_form_only() {
         .collect();
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Log {
             entries: entries.clone(),
         }],
@@ -254,6 +258,7 @@ fn a_progress_bar_that_follows_a_heading_shares_its_row_in_the_wide_form_only() 
 fn the_detail_of_a_wide_bar_takes_its_own_line_under_the_bar() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![
             Component::Heading {
                 text: "Fix the login redirect".to_owned(),
@@ -351,6 +356,7 @@ fn the_row_of_a_wide_heading_takes_the_height_of_the_bar_beside_it() {
 fn the_buttons_of_a_wide_card_close_their_row_at_the_right_edge() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Buttons {
             items: vec![
                 Button {

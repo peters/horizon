@@ -514,6 +514,7 @@ impl HorizonApp {
             answered_callout: None,
             // The card of an agent panel stands in the column of that panel.
             place: caller.panel().map_or(CardPlace::Tile, |_| CardPlace::Column),
+            fold: None,
         };
         let revision = state.revision;
         let options = PanelOptions {
@@ -532,6 +533,7 @@ impl HorizonApp {
         if let Some(focused) = focused {
             self.board.focus(focused);
         }
+        self.settle_card_fold(ctx, id, false);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         let Some(panel) = self.board.panel(id) else {
@@ -564,6 +566,7 @@ impl HorizonApp {
         }
         // The card takes the width that its document asks for in the pass that
         // fits it, after the body measured the content of this revision.
+        self.settle_card_fold(ctx, id, false);
         self.mark_runtime_dirty();
         ctx.request_repaint();
         Outcome::Updated {

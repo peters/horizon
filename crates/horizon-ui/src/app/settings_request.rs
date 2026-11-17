@@ -678,6 +678,7 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
     }
     let rest = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Text {
                 text: SERVER_SENT.to_owned(),
@@ -704,6 +705,7 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
     components.extend(rest.components);
     BlockDocument {
         width: None,
+        finished: false,
         components,
     }
 }
@@ -766,6 +768,7 @@ fn browser_document(
     };
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Heading {
                 text: format!("Use the browser on {host} for new browser panels?"),

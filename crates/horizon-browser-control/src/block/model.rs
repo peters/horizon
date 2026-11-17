@@ -16,6 +16,10 @@ pub struct BlockDocument {
     /// How wide the card is; the narrow card of today when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Width>,
+    /// The job of the card is done and no button of it needs a press, so
+    /// Horizon draws the card folded to one line; false when omitted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
     /// Components in draw order.
     pub components: Vec<Component>,
 }

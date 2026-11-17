@@ -38,6 +38,7 @@ fn the_list_of_the_narrow_form_gives_a_note_two_lines_and_then_an_ellipsis() {
 fn the_narrow_board_names_the_place_of_every_item_and_folds_the_finished_waves() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: vec![
                 column("Understand", "1", "4 m", false),
@@ -86,6 +87,7 @@ fn the_narrow_board_names_the_place_of_every_item_and_folds_the_finished_waves()
 fn a_press_on_the_fold_line_shows_the_items_and_a_second_press_folds_them() {
     let document = BlockDocument {
         width: Some(Width::Wide),
+        finished: false,
         components: vec![Component::Board {
             columns: vec![
                 column("Understand", "1", "4 m", false),

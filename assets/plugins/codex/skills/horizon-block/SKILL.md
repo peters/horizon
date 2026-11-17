@@ -25,6 +25,9 @@ panel gets `caller_unavailable`.
 ## Create a card
 
 The card is drawn in the caller's workspace. It does not take keyboard focus.
+Horizon places the card: the cards of one agent panel stand in one column at the
+right of that panel, with the newest card at the top. A document names no
+position and no size.
 
 ```json
 {"operation": "create", "title": "cloud-1",
@@ -52,13 +55,14 @@ the object when a caller can only send text.
 
 A document may ask for a wide card: `"width": "wide"` beside `components`. A
 wide card opens at half of the width of the canvas view, between 1100 and 2400
-points. A card fits its content: it takes the height that the content needs, up
-to the room that the canvas view shows or the ceiling of the card, whichever is
-more. The ceiling is 900 points for a card of the default width and 1200 points
-for a wide card, and a card that is taller than both scrolls: Horizon fades its
-last rows and marks its lower edge with `More below`, so put the buttons that
-matter in the first rows. A person who resizes the card by hand keeps that size,
-since the size of the person outranks the content. The form of a component
+points. A card fits its content: it takes the height that the content needs,
+from 140 points up to its ceiling. The ceiling of a card of the default width is
+560 points in every window. The ceiling of a wide card is 1200 points, or the
+room that the canvas view shows when that is more. A card that is taller than
+its ceiling scrolls: Horizon fades its last rows and marks its lower edge with
+`More below`, so put the buttons that matter in the first rows. A person who
+resizes the card by hand keeps that size, since the size of the person outranks
+the content. The form of a component
 follows the real width of the card body: the wide form at 1000 points or more,
 the narrow form of today under it. A person who resizes the card changes the
 form and not the document. Use `wide` for a plan or a board that a person reads
@@ -82,6 +86,37 @@ the returned `revision`; it increases with every new document.
 
 Only the agent that created a card may update it or change its visibility.
 Another agent of the same workspace gets `not_owner`.
+
+## Finish a card
+
+A document takes one more optional field beside `components`:
+`"finished": true`. It says that the job of the card is done and that no button
+of the card needs a press. Horizon then folds the card to one line, which holds
+the heading of the card and the badge of that heading.
+
+```json
+{"operation": "update", "panel_id": "<panel_id>",
+ "document": {"finished": true, "components": [
+   {"type": "heading", "text": "Server ready",
+    "badge": {"text": "Done", "tone": "ok"}},
+   {"type": "text", "text": "The server answers on port 7890."}]}}
+```
+
+- Give a finished card a `heading` with a `badge`: they are the one line that
+  the person reads. A card without a heading shows its title.
+- A press of the person on the folded line unfolds the card, and the control in
+  its title bar folds it again. An unfolded card works as every card.
+- The person can fold and unfold every card with that control. A card that is
+  not finished stays as the person left it.
+- Horizon never folds a card whose document is not finished. An update that
+  sets `finished` folds the card, unless the person unfolded it after it was
+  finished.
+- A folded card shows no button. Set `finished` only when no button of the card
+  needs a press, and never on a card that asks the person something.
+- Leave the field out, or send `"finished": false`, when the job runs again. The
+  card then opens, unless the person folded it.
+- The fold is saved with the card, and it comes back after a restart of
+  Horizon.
 
 ## List and inspect cards
 

@@ -20,7 +20,7 @@ use horizon_core::{
     WorkspaceId, browser_actor, wake_verdict,
 };
 
-use crate::block_widget::CardChip;
+use crate::block_widget::{CardChip, chip::ChipState};
 
 use super::HorizonApp;
 use super::block_requests::{BlockAnswer, card_owner};
@@ -99,7 +99,13 @@ impl HorizonApp {
     /// that agent waits for a click right now.
     pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'_>> {
         let panel = self.board.panel(panel_id)?;
-        let owned_by_an_agent = panel.block()?.owner_actor.is_some();
+        let card = panel.block()?;
+        // A folded card keeps the words of the badge of its heading on its one line.
+        if let Some((_, badge)) = card.folded_line() {
+            let state = ChipState::Present;
+            return badge.map(|name| CardChip { name, state });
+        }
+        let owned_by_an_agent = card.owner_actor.is_some();
         // A card that Horizon wrote itself names Horizon, not an agent that is
         // not there: its buttons are Horizon's own controls.
         if !owned_by_an_agent {

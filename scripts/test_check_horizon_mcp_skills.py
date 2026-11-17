@@ -36,6 +36,24 @@ class CoverageCheckTests(unittest.TestCase):
                     blocks += 1
         self.assertGreater(blocks, 0, "the shipped skills hold card documents")
 
+    def test_a_card_document_names_only_the_fields_that_the_block_skill_names(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("coverage_check", SCRIPT)
+        check = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(check)
+        skill = "`width`, `finished` and `components`\n"
+        example = '```json\n{"operation": "create", "document": {"components": [], "position": [1, 2]}}\n```\n'
+
+        self.assertEqual(check.card_document_errors({"horizon-block": skill}), [])
+        self.assertEqual(
+            check.card_document_errors({"horizon-block": "`width` and `components`\n"}),
+            ["finished: the field of a card document is missing from horizon-block"],
+        )
+        errors = check.card_document_errors({"horizon-block": skill, "horizon-setup": example})
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("horizon-setup: a card example names the field position", errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()

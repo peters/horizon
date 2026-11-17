@@ -210,6 +210,12 @@ fn show_panel_body_contents(
             }
             false
         }
+        // A folded card of the canvas is its title bar alone.
+        PanelKind::Block
+            if panel.block().is_some_and(|card| card.folded()) && !body_context.browser_fullscreen_active =>
+        {
+            false
+        }
         PanelKind::Block => {
             let (Some(block), Some(card)) = (panel.block(), body_context.card_runtime) else {
                 ui.centered_and_justified(|ui| ui.label("Card state unavailable"));
@@ -803,6 +809,7 @@ impl HorizonApp {
                 // place. A card keeps its own state chip instead.
                 let opened_by = panel.and_then(Panel::opened_by);
                 let on_machine = panel.and_then(Panel::machine);
+                let folded_line = panel.and_then(Panel::block).and_then(|card| card.folded_line());
 
                 let chrome = PanelChrome {
                     panel_id,
@@ -811,7 +818,9 @@ impl HorizonApp {
                     panel_rect: rects.panel,
                     titlebar_rect: rects.titlebar,
                     close_rect: rects.close,
-                    title: display_title.as_deref(),
+                    title: display_title
+                        .as_deref()
+                        .map(|title| folded_line.map_or(title, |line| line.0)),
                     history_size: snapshot.history_size,
                     scrollback_limit: snapshot.scrollback_limit,
                     focused: snapshot.is_focused,
@@ -821,6 +830,7 @@ impl HorizonApp {
                     ssh_status_attempt: snapshot.ssh_status_attempt,
                     session_id,
                     mic: mic_widget.as_ref().map(|widget| widget.control),
+                    fold: (snapshot.kind == PanelKind::Block).then_some(rects.mic),
                     card: self
                         .card_titlebar_chip(panel_id)
                         .or_else(|| opened_by.map(CardChip::opened_by))
@@ -839,6 +849,9 @@ impl HorizonApp {
 
                 // Release the shared board borrow before the mutable borrow below.
                 drop(display_title);
+                if self.show_card_fold(ui, panel_id, rects.mic, interactive, drag_response.clicked()) {
+                    self.settle_card_fold(ctx, panel_id, true);
+                }
 
                 // The corner grip owns the panel's bottom-right square, so the
                 // terminal scrollbar stops above it and stays reachable.

@@ -193,7 +193,8 @@ impl Board {
             if tile && resize_expands(delta) {
                 self.resolve_panel_collisions(id, ws_id, delta);
             }
-            self.tidy_card_columns(ws_id, None);
+            // A card that left the tiles leaves no hole in the preset.
+            self.reflow_workspace_layout(ws_id);
             if resize_expands(delta) {
                 self.resolve_workspace_resize_collisions_in_scope(ws_id, delta, workspace_collision_ids);
             }

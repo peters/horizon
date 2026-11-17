@@ -14,6 +14,7 @@ use crate::block_widget::{buttons, default_card_size, fitted_card_height, footer
 fn buttons(items: Vec<Button>) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Buttons { items }],
     }
 }
@@ -33,6 +34,7 @@ const QUESTION: &str = "Rent the machine in Helsinki?";
 fn callout(items: Vec<Button>) -> BlockDocument {
     BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Callout {
             tone: Tone::Info,
             caption: None,
@@ -131,6 +133,7 @@ fn every_line_of_answers_of_a_narrow_callout_starts_at_the_left_edge() {
 fn only_the_first_primary_button_of_a_card_is_the_primary_one() {
     let document = BlockDocument {
         width: None,
+        finished: false,
         components: vec![
             Component::Divider,
             Component::Buttons {
@@ -258,6 +261,7 @@ fn the_chip_names_the_agent_and_says_when_it_listens() {
 fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     let empty = BlockDocument {
         width: None,
+        finished: false,
         components: Vec::new(),
     };
     assert_eq!(
@@ -268,6 +272,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
 
     let small = BlockDocument {
         width: None,
+        finished: false,
         components: vec![Component::Kv {
             rows: (0..6)
                 .map(|index| horizon_browser_control::block::KvRow {
@@ -284,6 +289,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
 
     let huge = BlockDocument {
         width: None,
+        finished: false,
         components: (0..16)
             .map(|_| Component::Kv {
                 rows: (0..24)

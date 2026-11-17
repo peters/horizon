@@ -145,3 +145,27 @@ fn a_card_that_moves_to_another_workspace_is_a_tile_there() {
     assert_eq!(board.workspace_layout_value(other), Some(WorkspaceLayout::Grid));
     assert_column(&board, agent, rect(&board, agent)[2] + TILE_GAP, &[first]);
 }
+
+#[test]
+fn a_tile_card_that_leaves_the_tiles_leaves_no_hole_in_the_preset() {
+    let (mut board, workspace, agent) = agent_board(Some(WorkspaceLayout::Grid));
+    let tile = card(&mut board, agent, CardPlace::Tile, 200.0);
+    let other = board.create_panel(editor_panel_options(), workspace).expect("a panel");
+    let third_tile = rect(&board, other);
+
+    // The card folds to one line, as the fold of the application does it.
+    board
+        .panel_mut(tile)
+        .and_then(Panel::block_mut)
+        .expect("the card")
+        .place = CardPlace::Free;
+    assert!(board.resize_panel(tile, [420.0, 34.0]), "the card takes one line");
+
+    assert_eq!(board.workspace_layout_value(workspace), Some(WorkspaceLayout::Grid));
+    assert_ne!(
+        rect(&board, other),
+        third_tile,
+        "the preset closes the hole of the card"
+    );
+    assert_eq!(rect(&board, other)[0], rect(&board, agent)[2] + TILE_GAP);
+}
