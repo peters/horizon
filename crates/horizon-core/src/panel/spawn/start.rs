@@ -378,12 +378,14 @@ impl RestartPreflight {
     }
 
     /// The launch that waits for the old process to end.
+    #[must_use]
     pub fn into_pending(self) -> Option<PendingRestart> {
         self.pending
     }
 
     /// Whether the restart continues a saved conversation, so the old process
     /// must end before the new one starts.
+    #[must_use]
     pub fn work_brief_wanted(&self) -> bool {
         self.pending
             .as_ref()

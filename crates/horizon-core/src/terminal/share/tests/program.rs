@@ -294,3 +294,60 @@ fn the_output_after_a_screen_continues_it_with_no_gap_and_no_repeat() {
     assert!(joins_while_writing > 0, "a follower joined while the program wrote");
     assert!(terminal.shutdown_with_timeout(PATIENCE));
 }
+
+/// The source of a terminal goes to another thread, which takes the screen and
+/// the output after it and types into the program. The window keeps the
+/// terminal and calls none of them.
+#[test]
+fn a_share_source_gives_another_thread_the_screen_the_output_and_the_way_to_the_program() {
+    fn sendable<T: Send + Sync + Clone>() {}
+    sendable::<crate::terminal::ShareSource>();
+
+    let command = "stty -echo; printf 'READY'; read -r line; printf 'GOT:%s' \"$line\"; sleep 60";
+    let mut terminal = spawn(command, 6, 30);
+    wait_for(&mut terminal, "READY");
+    let source = terminal
+        .share_source()
+        .expect("a terminal of this computer has a source");
+    let again = terminal.share_source().expect("a second source of the same terminal");
+    assert!(source.same_terminal(&again), "two sources of one terminal");
+
+    let other = source.clone();
+    let pump = std::thread::spawn(move || {
+        other.outlet().set_wanted(true);
+        let shared = other.screen().expect("the terminal is there");
+        other.write_input(b"hello\n");
+        let deadline = Instant::now() + PATIENCE;
+        let mut output = Vec::new();
+        while !String::from_utf8_lossy(&output).contains("GOT:hello") && Instant::now() < deadline {
+            output.extend_from_slice(&other.outlet().take().bytes);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        (shared, output)
+    });
+    let (shared, output) = pump.join().expect("the other thread");
+    assert!(
+        String::from_utf8_lossy(&shared.bytes).contains("READY"),
+        "the screen of the source"
+    );
+    assert_eq!((shared.cols, shared.rows), (30, 6));
+    assert!(
+        String::from_utf8_lossy(&output).contains("GOT:hello"),
+        "the keys of the other thread reached the program, and its answer came through the outlet"
+    );
+
+    // Another terminal has another source, and a terminal that is gone gives no screen.
+    let second = spawn("sleep 60", 6, 30);
+    let unlike = second.share_source().expect("the source of the second terminal");
+    assert!(!source.same_terminal(&unlike), "two terminals have two sources");
+    assert!(terminal.shutdown_with_timeout(PATIENCE));
+    drop(terminal);
+    let deadline = Instant::now() + PATIENCE;
+    while source.screen().is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "the source of a terminal that is gone gives no screen"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}

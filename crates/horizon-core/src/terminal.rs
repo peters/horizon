@@ -41,7 +41,7 @@ pub(crate) use self::lifecycle::open_pty;
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
-pub use self::share::{ShareOutlet, ShareScreen, ShareTake};
+pub use self::share::{ShareOutlet, ShareScreen, ShareSource, ShareTake};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;

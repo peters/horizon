@@ -22,17 +22,24 @@
 //! or a synchronized update that it still holds back, reaches the follower
 //! without its start, and the next screen repairs what that draws.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 
+use alacritty_terminal::event_loop::{EventLoopSender, Msg};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Column;
+use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle};
 pub use horizon_pty_tap::{ShareOutlet, ShareTake};
 
 use super::screen_replay::{Style, draw_rows, push_cell};
+use super::wake::OutputWakeState;
 use super::{Terminal, TerminalEventProxy};
+use crate::agent_work::WorkOwner;
 
 /// One screen of a terminal, as a follower draws it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +81,55 @@ const KEYBOARD: [(TermMode, u8); 5] = [
     (TermMode::REPORT_ASSOCIATED_TEXT, 16),
 ];
 
+/// What another thread needs of one terminal to share it: the outlet of its
+/// output, the way to its screen and the way to its program. A terminal gives
+/// it once, and every call is safe on a thread that is not the thread of the
+/// window. The source of a terminal that is gone gives no screen.
+#[derive(Clone)]
+pub struct ShareSource {
+    outlet: ShareOutlet,
+    term: Weak<FairMutex<Term<TerminalEventProxy>>>,
+    input: EventLoopSender,
+    work: Option<Arc<WorkOwner>>,
+    touched: Arc<AtomicBool>,
+    wake: Arc<OutputWakeState>,
+}
+
+impl ShareSource {
+    /// The outlet of the output of the terminal.
+    #[must_use]
+    pub fn outlet(&self) -> &ShareOutlet {
+        &self.outlet
+    }
+
+    /// The screen of the terminal now, as [`Terminal::share_screen`] gives it.
+    #[must_use]
+    pub fn screen(&self) -> Option<ShareScreen> {
+        Some(screen_of(&*self.term.upgrade()?, &self.outlet))
+    }
+
+    /// Writes the keys of a person at another computer into the program, as
+    /// [`Terminal::write_input`] writes the keys of this computer. The first
+    /// output after them asks the window for the frame that shows their echo.
+    pub fn write_input(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.touched.store(true, Ordering::Release);
+        if let Some(work) = &self.work {
+            work.note_input(bytes);
+        }
+        self.wake.arm();
+        let _ = self.input.send(Msg::Input(Cow::Owned(bytes.to_vec())));
+    }
+
+    /// Whether `other` is a source of the same terminal.
+    #[must_use]
+    pub fn same_terminal(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.term, &other.term)
+    }
+}
+
 impl Terminal {
     /// The outlet of the output of this terminal for its followers.
     #[must_use]
@@ -85,18 +141,37 @@ impl Terminal {
     /// so what it gives after this call continues this screen.
     #[must_use]
     pub fn share_screen(&self) -> ShareScreen {
-        // The reader is between two passes while this holds the lease, and the
-        // grid lock is taken before the lease goes back. The module says why
-        // that leaves no byte out and none twice.
-        let lease = self.term.lease();
-        self.share.start();
-        let term = self.term.lock_unfair();
-        drop(lease);
-        ShareScreen {
-            cols: u16::try_from(term.columns()).unwrap_or(u16::MAX),
-            rows: u16::try_from(term.screen_lines()).unwrap_or(u16::MAX),
-            bytes: share_screen_bytes(&term),
-        }
+        screen_of(&self.term, &self.share)
+    }
+
+    /// The source that shares this terminal from another thread, or `None` for
+    /// a follower, which shows a terminal of another computer.
+    #[must_use]
+    pub fn share_source(&self) -> Option<ShareSource> {
+        self.follow.is_none().then(|| ShareSource {
+            outlet: self.share.clone(),
+            term: Arc::downgrade(&self.term),
+            input: self.event_sender.clone(),
+            work: self.work_owner.clone(),
+            touched: Arc::clone(&self.work_continuation.touched),
+            wake: Arc::clone(&self.output_wake),
+        })
+    }
+}
+
+/// The screen of `term` now, with `outlet` started at the same instant.
+fn screen_of(term: &FairMutex<Term<TerminalEventProxy>>, outlet: &ShareOutlet) -> ShareScreen {
+    // The reader is between two passes while this holds the lease, and the
+    // grid lock is taken before the lease goes back. The module says why
+    // that leaves no byte out and none twice.
+    let lease = term.lease();
+    outlet.start();
+    let term = term.lock_unfair();
+    drop(lease);
+    ShareScreen {
+        cols: u16::try_from(term.columns()).unwrap_or(u16::MAX),
+        rows: u16::try_from(term.screen_lines()).unwrap_or(u16::MAX),
+        bytes: share_screen_bytes(&term),
     }
 }
 

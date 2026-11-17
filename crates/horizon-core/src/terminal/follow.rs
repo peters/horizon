@@ -22,7 +22,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use horizon_pty_tap::frames::{self, Frame};
 
 use super::lifecycle::{PtyOutput, window_size_of};
-use super::{Error, FairMutex, Result, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions};
+use super::wake::OutputWakeState;
+use super::{
+    Error, FairMutex, Result, Term, TermMode, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
+};
 use crate::panel::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, PANEL_SCROLLBACK_LIMIT, PanelKind};
 
 /// The largest grid that a stream can ask for.
@@ -70,6 +73,9 @@ struct Shared {
     state: Mutex<State>,
     /// The person closed the panel of the follower.
     closed: AtomicBool,
+    /// The wake of the terminal, which the feed arms: the stream arrives on a
+    /// thread of its own, and the frame that shows it follows its first byte.
+    wake: Arc<OutputWakeState>,
 }
 
 struct State {
@@ -168,6 +174,7 @@ impl FollowFeed {
             state.lost = false;
         }
         term.lock().resize(TerminalDimensions::new(rows, cols));
+        self.shared.wake.arm();
         let mut state = self.shared.state();
         state.queue(SCREEN_START);
         state.flush();
@@ -178,6 +185,7 @@ impl FollowFeed {
         if self.closed() {
             return;
         }
+        self.shared.wake.arm();
         let mut state = self.shared.state();
         let mut bytes = bytes;
         if state.waiting_bytes + bytes.len() > MAX_WAITING_OUTPUT {
@@ -224,6 +232,13 @@ impl FollowFeed {
     #[must_use]
     pub fn closed(&self) -> bool {
         self.shared.closed.load(Ordering::Acquire)
+    }
+
+    /// Whether the terminal of this follower shows the alternate screen now.
+    #[must_use]
+    pub fn on_alternate_screen(&self) -> bool {
+        let term = self.shared.term.upgrade();
+        term.is_some_and(|term| term.lock().mode().contains(TermMode::ALT_SCREEN))
     }
 }
 
@@ -294,6 +309,7 @@ impl Terminal {
                 lost: false,
             }),
             closed: AtomicBool::new(false),
+            wake: Arc::clone(&terminal.output_wake),
         });
         let feed = FollowFeed {
             shared: Arc::clone(&shared),

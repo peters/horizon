@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::PanelKind;
@@ -48,7 +49,9 @@ pub(crate) struct WorkContinuation {
     pub(crate) offered_session: Option<String>,
     pub(crate) owns_process: bool,
     reason: Option<AskReason>,
-    touched: AtomicBool,
+    /// Set by the first key of the person. A share source of the terminal holds
+    /// it too, because a person at another computer types on another thread.
+    pub(crate) touched: Arc<AtomicBool>,
 }
 
 impl WorkContinuation {

@@ -335,3 +335,52 @@ fn output_above_the_bound_drops_what_waits_and_the_terminal_goes_on() {
         "the newest output reaches the screen",
     );
 }
+
+/// The pump of a window feeds a follower on a thread of its own. The feed says
+/// which screen the terminal shows, and it asks for the frame that shows a
+/// stream when a frame drew the terminal.
+#[test]
+fn the_feed_knows_the_alternate_screen_and_asks_for_the_frame_of_its_stream() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (mut terminal, feed) = follower(20, 4);
+    assert!(terminal.share_source().is_none(), "a follower has no share source");
+    let frames = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::clone(&frames);
+    let wake: crate::terminal::OutputWake = Arc::new(move || {
+        asked.fetch_add(1, Ordering::Relaxed);
+    });
+    terminal.attach_output_wake(&wake);
+
+    // No frame drew the terminal, so its stream asks for none.
+    feed.screen(20, 4);
+    feed.output(b"\x1b[?1049hALT");
+    wait_for_screen(&mut terminal, &["ALT"]);
+    assert!(feed.on_alternate_screen(), "the stream entered the alternate screen");
+    assert_eq!(
+        frames.load(Ordering::Relaxed),
+        0,
+        "a follower that no frame draws asks for no frame"
+    );
+
+    // A frame drew it: the next bytes of the stream ask for the frame that shows them.
+    terminal.note_drawn(true);
+    feed.output(b"\x1b[?1049lMAIN");
+    wait_until(
+        &mut terminal,
+        |_| !feed.on_alternate_screen(),
+        "the stream left the alternate screen",
+    );
+    wait_until(
+        &mut terminal,
+        |_| frames.load(Ordering::Relaxed) > 0,
+        "the frame of the stream",
+    );
+
+    drop(terminal);
+    assert!(
+        !feed.on_alternate_screen(),
+        "a feed without its terminal shows no alternate screen"
+    );
+}
