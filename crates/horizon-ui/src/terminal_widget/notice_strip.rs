@@ -70,6 +70,7 @@ pub(super) fn ended_line(ui: &Ui, body: Rect, text: &str) {
     let painted = Rect::from_min_size(strip.min, galley.size());
     ui.painter().galley(strip.min, galley, theme::FG_SOFT());
     if elided {
+        // The rows that do not fit are the whole line while the pointer rests on it.
         ui.interact(painted, ui.scope_id().with("ended_line"), egui::Sense::hover())
             .on_hover_text(text);
     }
