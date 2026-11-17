@@ -150,10 +150,8 @@ impl HorizonApp {
             }
             return;
         };
-        let stored = stored_server(
-            self.settings.as_ref().map(|editor| &editor.original),
-            &self.template_config,
-        );
+        let baseline = self.settings.as_ref().map(|editor| &editor.original);
+        let stored = stored_server(baseline, &self.template_config);
         let shared = &mut self.shared_terminals;
         let away = sync.snapshot().state().code() == "away";
         let returned = std::mem::replace(&mut shared.sync_away, away) && !away;
@@ -168,10 +166,8 @@ impl HorizonApp {
         };
         // The new link has nothing of the old one, so the list and the follows go again.
         self.shared_link_lost(None);
-        let server = stored_server(
-            self.settings.as_ref().map(|editor| &editor.original),
-            &self.template_config,
-        );
+        let baseline = self.settings.as_ref().map(|editor| &editor.original);
+        let server = stored_server(baseline, &self.template_config);
         let shared = &mut self.shared_terminals;
         shared.owner = owner::Owner::default();
         shared.name.clone_from(&server.computer_name);

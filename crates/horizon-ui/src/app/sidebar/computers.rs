@@ -24,35 +24,16 @@ impl HorizonApp {
             return;
         }
         ui.add_space(4.0);
-        line(ui, "Computers", (13.0, text::SEMIBOLD, theme::FG_SOFT()), ONE_ROW, None);
+        line(ui, "Computers", (13.0, text::SEMIBOLD, theme::FG_SOFT()), None);
+        let note = (11.0, text::REGULAR, text::secondary());
         if let Some(reason) = &shared.down {
-            // The reason of a link that is down is a sentence of its own: it wraps
-            // under the line that it explains instead of being cut in it.
-            line(
-                ui,
-                "Shared terminals: no link",
-                (11.0, text::REGULAR, text::secondary()),
-                ONE_ROW,
-                None,
-            );
-            line(
-                ui,
-                reason,
-                (11.0, text::REGULAR, text::secondary()),
-                REASON_ROWS,
-                Some(reason),
-            );
+            line(ui, "Shared terminals: no link", note, None);
+            paragraph(ui, reason, note);
         }
         for computer in computers {
             ui.add_space(4.0);
             let name = computer_name(computer);
-            line(
-                ui,
-                name,
-                (13.0, text::MEDIUM, theme::FG()),
-                ONE_ROW,
-                Some(&computer.device),
-            );
+            line(ui, name, (13.0, text::MEDIUM, theme::FG()), Some(&computer.device));
             let last = computer.panels.len().saturating_sub(1);
             for (index, panel) in computer.panels.iter().enumerate() {
                 if render_panel(ui, name, panel, index == last) {
@@ -64,15 +45,31 @@ impl HorizonApp {
     }
 }
 
-/// The most rows that the reason of a link that is down takes. The sidebar is
-/// narrow, so four of them would be a paragraph of the section.
+/// The most rows that the reason of a link that is down takes: the sidebar is
+/// narrow, so a longer reason would push the computers out of the section.
 const REASON_ROWS: usize = 3;
-/// A line shows one row.
-const ONE_ROW: usize = 1;
 
-/// One line of the section in a size, a weight and a colour, wrapped over at most
-/// `rows` rows, with its hover text.
-fn line(ui: &mut egui::Ui, words: &str, (size, weight, color): (f32, f32, Color32), rows: usize, hover: Option<&str>) {
+/// One line of the section in a size, a weight and a colour, with its hover text.
+fn line(ui: &mut egui::Ui, words: &str, style: (f32, f32, Color32), hover: Option<&str>) {
+    indented(ui, words, style, text::ONE_ROW, hover);
+}
+
+/// The reason of a link that is down, under the line that says it: the rows that
+/// its words need and at most [`REASON_ROWS`] of them, with the whole reason while
+/// the pointer rests on it.
+fn paragraph(ui: &mut egui::Ui, words: &str, style: (f32, f32, Color32)) {
+    indented(ui, words, style, REASON_ROWS, Some(words));
+}
+
+/// One text of the section under its heading, in a size, a weight and a colour,
+/// wrapped over at most `rows` rows, with its hover text.
+fn indented(
+    ui: &mut egui::Ui,
+    words: &str,
+    (size, weight, color): (f32, f32, Color32),
+    rows: usize,
+    hover: Option<&str>,
+) {
     ui.horizontal(|ui| {
         ui.add_space(18.0);
         let width = ui.available_width() - 18.0;

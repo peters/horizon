@@ -63,7 +63,7 @@ fn format(size: f32, weight: f32, color: Color32) -> TextFormat {
 }
 
 /// A line shows one row and cuts the rest with an ellipsis.
-const ONE_ROW: usize = 1;
+pub(super) const ONE_ROW: usize = 1;
 /// A paragraph takes the rows that its words need.
 const ANY_ROW: usize = usize::MAX;
 
