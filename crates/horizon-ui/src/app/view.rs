@@ -279,7 +279,7 @@ impl HorizonApp {
     /// bottom-aligns the panel when it stays larger than the viewport even at
     /// the minimum zoom.
     pub(super) fn reveal_panel_visible(&mut self, ctx: &Context, panel_id: PanelId) {
-        self.reveal_panel_in_rect(panel_id, self.reveal_rect(ctx));
+        self.reveal_panel_in_rect(panel_id, self.reveal_rect(ctx), self.canvas_rect(ctx).height());
     }
 
     /// Brings the lower edge of a panel that the view cuts into the view at the
@@ -328,13 +328,16 @@ impl HorizonApp {
         }
     }
 
-    pub(super) fn reveal_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect) {
+    /// Reveals a panel in `canvas_rect`, the room of a jump, on a canvas of
+    /// `canvas_height` points.
+    pub(super) fn reveal_panel_in_rect(&mut self, panel_id: PanelId, canvas_rect: Rect, canvas_height: f32) {
         let Some((panel_frame, workspace_pos)) = self.reveal_frames(panel_id) else {
             return;
         };
 
         let (zoom, pan_offset) = reveal_view_state(
             canvas_rect,
+            canvas_height,
             panel_frame,
             workspace_pos,
             self.canvas_view.zoom,
@@ -531,8 +534,12 @@ const PAN_MARGIN: f32 = 40.0;
 /// left-aligned next to the canvas edge (close to the sidebar), the current
 /// zoom is kept while the panel already fits from there, otherwise the view
 /// zooms out just enough for the panel to fit (never zooming in).
+///
+/// `canvas_rect` is the room of a jump, which leaves the corner of the minimap
+/// out, and `canvas_height` is the height of the whole canvas.
 fn reveal_view_state(
     canvas_rect: Rect,
+    canvas_height: f32,
     panel: (Pos2, Vec2),
     workspace_pos: Pos2,
     current_zoom: f32,
@@ -548,12 +555,34 @@ fn reveal_view_state(
     let zoom = horizon_core::reveal_zoom(current_zoom, fit, floor);
     // The workspace is left-aligned while its left edge and the panel fit
     // together. A workspace that is too wide at this zoom still shows its panel
-    // whole, at the panel's own left edge. A panel that is larger than the view
-    // even at the floor of a Fit is shown from its top left, so the person reads
-    // the start of it.
+    // whole, at the panel's own left edge. A panel that is larger than the room
+    // of a jump even at the floor of a Fit is shown from its top left, so the
+    // person reads the start of it.
     let pan = reveal_pan_at_zoom(canvas_rect, panel, workspace_pos, zoom)
-        .unwrap_or_else(|| top_left_pan_offset(panel_pos, zoom));
+        .unwrap_or_else(|| oversize_pan_offset(canvas_height, panel, zoom));
     (zoom, pan)
+}
+
+/// The pan of a jump to a panel that the room of a jump does not hold at `zoom`.
+///
+/// The panel starts at the top left margin of the canvas. A panel that the
+/// height of the canvas still holds moves up from there until its lower edge
+/// stands in the canvas, so the buttons at the foot of a tall card are not under
+/// the edge of the window. A panel taller than the canvas keeps the margin, so
+/// the person reads the start of it.
+fn oversize_pan_offset(canvas_height: f32, frame: (Pos2, Vec2), zoom: f32) -> Vec2 {
+    let (frame_pos, frame_size) = frame;
+    let top_left = top_left_pan_offset(frame_pos, zoom);
+    // The frame of a jump is the panel and its padding, and the panel alone must
+    // stand in the canvas.
+    let pad = PANEL_PADDING * zoom;
+    let top = (canvas_height - (frame_size.y * zoom - 2.0 * pad)).min(PAN_MARGIN + pad);
+    // A card that took the whole height of the view is as tall as the canvas, less
+    // the rounding of its zoom.
+    if top < -0.5 {
+        return top_left;
+    }
+    Vec2::new(top_left.x, top - pad - frame_pos.y * zoom)
 }
 
 /// The pan of a jump to a panel at `zoom`, or `None` when the panel is larger
@@ -806,7 +835,14 @@ mod tests {
         let panel = (Pos2::new(500.0, 300.0), Vec2::new(400.0, 300.0));
         let workspace_pos = Pos2::new(484.0, 254.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
+        let (zoom, pan) = reveal_view_state(
+            canvas,
+            canvas.height(),
+            panel,
+            workspace_pos,
+            1.0,
+            DEFAULT_FIT_FLOOR_ZOOM,
+        );
 
         assert!((zoom - 1.0).abs() <= f32::EPSILON);
         // x: workspace left edge at the margin: 40 - 484 ; y centered on the panel.
@@ -824,7 +860,14 @@ mod tests {
         let panel = (Pos2::new(100.0, 50.0), Vec2::new(1200.0, 900.0));
         let workspace_pos = Pos2::new(84.0, -4.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
+        let (zoom, pan) = reveal_view_state(
+            canvas,
+            canvas.height(),
+            panel,
+            workspace_pos,
+            1.0,
+            DEFAULT_FIT_FLOOR_ZOOM,
+        );
 
         assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() < 0.001);
         assert!(
@@ -840,7 +883,14 @@ mod tests {
         let panel = (Pos2::new(0.0, 0.0), Vec2::new(100.0, 80.0));
         let workspace_pos = Pos2::new(-16.0, -44.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.5, DEFAULT_FIT_FLOOR_ZOOM);
+        let (zoom, pan) = reveal_view_state(
+            canvas,
+            canvas.height(),
+            panel,
+            workspace_pos,
+            1.5,
+            DEFAULT_FIT_FLOOR_ZOOM,
+        );
 
         assert!((zoom - horizon_core::DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
         // x: the left edge of the workspace at the margin, at the default zoom.
@@ -856,11 +906,44 @@ mod tests {
         let panel = (Pos2::new(100.0, 0.0), Vec2::splat(extent));
         let workspace_pos = Pos2::new(84.0, -44.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
+        let (zoom, pan) = reveal_view_state(
+            canvas,
+            canvas.height(),
+            panel,
+            workspace_pos,
+            1.0,
+            DEFAULT_FIT_FLOOR_ZOOM,
+        );
 
         assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() <= f32::EPSILON);
         assert!((pan.x - (PAN_MARGIN - panel.0.x * zoom)).abs() < 0.001);
         assert!((pan.y - (PAN_MARGIN - panel.0.y * zoom)).abs() < 0.001);
+    }
+
+    /// A card that took the whole height of the view is as tall as the canvas at
+    /// the floor: the jump shows it from its top edge to its foot, and a card one
+    /// row taller shows its top at the margin.
+    #[test]
+    fn reveal_view_state_shows_a_panel_of_the_height_of_the_canvas_whole() {
+        let canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let zoom = DEFAULT_FIT_FLOOR_ZOOM;
+        let frame = |height: f32| panel_focus_frame([100.0, 50.0], [420.0, height]);
+        let workspace_pos = Pos2::new(84.0, -4.0);
+
+        let whole = frame(canvas.height() / zoom);
+        let (held, pan) = reveal_view_state(canvas, canvas.height(), whole, workspace_pos, zoom, zoom);
+        let top = 50.0 * held + pan.y;
+        assert!(
+            top.abs() < 0.01 && (top + canvas.height() / zoom * held - canvas.height()).abs() < 0.01,
+            "the panel stands from the top of the canvas to its foot: top {top}"
+        );
+
+        let taller = frame(canvas.height() / zoom + 30.0);
+        let (held, pan) = reveal_view_state(canvas, canvas.height(), taller, workspace_pos, zoom, zoom);
+        assert!(
+            (pan.y - (PAN_MARGIN - taller.0.y * held)).abs() < 0.001,
+            "a panel taller than the canvas starts at the top margin"
+        );
     }
 
     /// A panel far to the right of its workspace shows the whole workspace width
@@ -874,7 +957,14 @@ mod tests {
         let panel = (Pos2::new(1000.0, 0.0), Vec2::new(400.0, 300.0));
         let workspace_pos = Pos2::new(0.0, -54.0);
 
-        let (zoom, pan) = reveal_view_state(canvas, panel, workspace_pos, 1.0, DEFAULT_FIT_FLOOR_ZOOM);
+        let (zoom, pan) = reveal_view_state(
+            canvas,
+            canvas.height(),
+            panel,
+            workspace_pos,
+            1.0,
+            DEFAULT_FIT_FLOOR_ZOOM,
+        );
 
         assert!((zoom - DEFAULT_FIT_FLOOR_ZOOM).abs() < 0.001);
         // The workspace is too wide for the view at this zoom, so the panel is
