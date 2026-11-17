@@ -15,8 +15,7 @@
 //! The bytes of the program, and any process of the same user, are untrusted
 //! here. [`docs/review/trust-boundaries/panel-holder.md`] states the boundary, and
 //! [`docs/architecture/panel-holder.md`] states the protocol and the life of a
-//! holder. Nothing of this module is reachable for a person yet: no panel uses a
-//! holder until the attach of a terminal lands.
+//! holder.
 
 mod launch;
 mod serve;
