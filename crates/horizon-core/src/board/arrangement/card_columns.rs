@@ -41,6 +41,33 @@ impl Board {
         }
     }
 
+    /// Puts the workspace `id` in order, as the person asks with `Tidy`.
+    ///
+    /// Every card of an agent panel of the workspace goes back into the column of
+    /// that panel: also a card that the person dragged out of it, and a tile of a
+    /// board that an older build saved. A card of Horizon itself, and a card whose
+    /// agent panel is not in the workspace, joins no column. The panels then take
+    /// the places of the preset of the workspace, or of the default preset in a
+    /// workspace without one, and each column stands beside its panel.
+    pub fn tidy_workspace(&mut self, id: WorkspaceId) {
+        let agents: Vec<String> = self
+            .panels
+            .iter()
+            .filter(|panel| panel.workspace_id == id && panel.kind.is_agent())
+            .map(|panel| browser_actor(&panel.local_id))
+            .collect();
+        let cards = self.panels.iter_mut().filter(|panel| panel.workspace_id == id);
+        for card in cards.filter_map(Panel::block_mut) {
+            if card.owner_actor.as_ref().is_some_and(|owner| agents.contains(owner)) {
+                card.place = CardPlace::Column;
+            }
+        }
+        let layout = self.workspace_layout_value(id).unwrap_or_default();
+        self.arrange_workspace(id, layout);
+        // A workspace that takes no preset lays its columns out too.
+        self.tidy_card_columns(id, None);
+    }
+
     /// Lays out the column of the agent panel `agent`. Returns whether a card moved.
     ///
     /// The column stands at the first place at the right of the agent panel where

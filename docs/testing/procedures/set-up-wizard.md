@@ -304,7 +304,7 @@ Horizon before they write anything.
     Point at `+ Panel` on the line of the first workspace.
 
     Result: The line of a workspace holds `Default`, `Rows`, `Cols`, `Grid`,
-    `Detach` and `+ Panel`, in this order. The hover text of `+ Panel` is
+    `Detach`, `Tidy` and `+ Panel`, in this order. The hover text of `+ Panel` is
     `Add a panel to this workspace`.
 
 18. Click `+ Panel` and read the list that opens. Select `Shell`.

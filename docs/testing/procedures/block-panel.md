@@ -22,7 +22,8 @@ of an agent, and that Horizon wakes an idle agent for a click. The last task
 checks the drawn look of the card in both themes, its fitted height, the
 column that the cards of one agent stand in, the fold of a finished card, the
 scrolling of a card that is shorter than its content, the foot that holds the
-last buttons of a card that scrolls, the mark that brings the
+last buttons of a card that scrolls, the button `Tidy` that puts a workspace
+in order, the mark that brings the
 foot of a card that the view cuts into the view, the frame that a card fits for
 its own notices, the selected row of a card without its agent, and the press of a
 button at a low canvas zoom. The next tasks check that an agent can open an
@@ -1380,6 +1381,48 @@ points.
    card, the buttons scroll with the rows: a foot takes not more than half of
    the height of a card.
 
+### 5.35 B35 — Tidy puts the panels and the cards of a workspace in order
+
+`Tidy` is the way back for a card that the person dragged out of its column.
+
+1. Read the line of the workspace of Agent A. Then put the pointer on `Tidy`.
+
+   Result: The line holds `Default`, `Rows`, `Cols`, `Grid`, `Detach`, `Tidy`
+   and `+ Panel`, in this order. The hover text of `Tidy` is
+   `Put the panels and the cards of this workspace in order`.
+
+2. In client A, create three cards with the titles `job-1`, `job-2` and `job-3`.
+   Drag the title bar of `job-2` to an empty place far below the column.
+
+   Result: `job-2` stays where you put it. `job-3` and `job-1` stand in the
+   column with no hole.
+
+3. Click `Tidy`.
+
+   Result: `job-2` is in the column again, between `job-3` and `job-1`: the
+   newest card is at the top. No card covers a panel or a card. The agent panel
+   does not move, and the preset of the workspace stays selected.
+
+4. Click `Default`. Then drag the title bar of a terminal panel of the workspace
+   to an empty place, and click `Tidy`.
+
+   Result: `Grid` is selected. The panels stand in the grid, and the column of
+   the cards stands at the right of the panels. No panel and no card covers a
+   panel or a card.
+
+5. Do this step only if a card of Horizon is in the workspace, for example
+   `Set up needs an agent`, or a card whose agent panel you closed. Click
+   `Tidy`.
+
+   Result: That card joins no column. It is a tile of the preset, as a panel is.
+   A card that stands in its place of the preset does not move.
+
+6. Make the window 800 points wide and 600 points high, with the sidebar open.
+   Move the view until the name of the workspace is at the left edge of the
+   canvas.
+
+   Result: The line shows all seven buttons in one row inside the canvas.
+
 ## 6. With a real agent
 
 These steps check the same behaviour with a real AI agent. Do them in your own
@@ -1522,6 +1565,13 @@ Horizon, in a workspace of its own, with an agent panel that can call
   its press, and the mark `More below` stands above them. A card that shows its
   whole content draws its buttons in its body, and a card whose foot would take
   more than half of its height has no foot.
+- B35: `Tidy` stands on the line of a workspace before `+ Panel`. A press puts
+  every card of an agent panel of the workspace into the column of that panel,
+  the newest card at the top, also a card that the person dragged out. It puts
+  the panels into the preset of the workspace, or into the grid when the
+  workspace has no preset. A card of Horizon and a card whose agent panel is
+  gone join no column. The line stays in one row inside the canvas of a window
+  of 800 x 600.
 
 ## 8. Cleanup
 

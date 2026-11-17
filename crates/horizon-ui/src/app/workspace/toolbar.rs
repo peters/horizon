@@ -12,6 +12,11 @@ use super::{
 };
 
 const DETACH_BUTTON_WIDTH: f32 = 54.0;
+const TIDY_BUTTON_WIDTH: f32 = 44.0;
+/// The padding at the left and the right of the label of a button of the line,
+/// so that each button has its declared width and the line holds one more
+/// button in the canvas of the smallest window, with the sidebar open too.
+const BUTTON_PADDING_X: f32 = 8.0;
 const ADD_PANEL_BUTTON_WIDTH: f32 = 62.0;
 
 /// A workspace with panels has the toolbar, even when they are all hidden.
@@ -48,6 +53,7 @@ pub(super) fn render_workspace_layout_toolbar(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = WORKSPACE_LAYOUT_BUTTON_SPACING;
+                        ui.spacing_mut().button_padding.x = BUTTON_PADDING_X;
                         let mut layout = workspace.layout;
                         if workspace_layout_buttons(ui, &mut layout, workspace.color) {
                             action = Some(layout.map_or(WorkspaceAction::ClearLayout, WorkspaceAction::ArrangeLayout));
@@ -55,6 +61,11 @@ pub(super) fn render_workspace_layout_toolbar(
 
                         if render_detach_button(ui, workspace) {
                             action = Some(WorkspaceAction::Detach);
+                        }
+
+                        let tidy = "Put the panels and the cards of this workspace in order";
+                        if render_toolbar_button(ui, "Tidy", TIDY_BUTTON_WIDTH, true, workspace.color, tidy) {
+                            action = Some(WorkspaceAction::Tidy);
                         }
 
                         if render_add_panel_button(ui, workspace) {
@@ -180,8 +191,9 @@ pub(super) fn workspace_layout_toolbar_rect(label_rect: Rect) -> Rect {
         Vec2::new(
             WORKSPACE_LAYOUT_DEFAULT_BUTTON_WIDTH
                 + workspace_layout_preset_row_width()
-                + 5.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
+                + 6.0 * WORKSPACE_LAYOUT_BUTTON_SPACING
                 + DETACH_BUTTON_WIDTH
+                + TIDY_BUTTON_WIDTH
                 + ADD_PANEL_BUTTON_WIDTH
                 + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_X),
             WORKSPACE_LAYOUT_BUTTON_HEIGHT + 2.0 * f32::from(WORKSPACE_LAYOUT_TOOLBAR_MARGIN_Y),
@@ -356,6 +368,7 @@ mod tests {
                 WorkspaceAction::ArrangeLayout(_) => "ArrangeLayout(non-Grid)",
                 WorkspaceAction::CloseAllPanels => "CloseAllPanels",
                 WorkspaceAction::Detach => "Detach",
+                WorkspaceAction::Tidy => "Tidy",
                 WorkspaceAction::AddPanel => "AddPanel",
             })
         );

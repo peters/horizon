@@ -312,7 +312,7 @@ points. A longer card scrolls, and the buttons at its end stay at its foot. When
 the job of a card is done, the card folds to one line
 with its heading and its badge. Press the line to open the card, and press the
 arrow in its title bar to fold a card. A card that you drag stays where you put
-it.
+it. To put it back into its column, click **Tidy** on the line of its workspace.
 
 | Your choice | What Set up does | What it costs |
 |---|---|---|
@@ -393,7 +393,7 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux. See
 
    Result: A panel of that preset opens in that workspace. The keyboard moves to
    that workspace, also when another workspace held it. The line of a workspace
-   holds **+ Panel** after **Detach**.
+   holds **+ Panel** after **Detach** and **Tidy**.
 
 6. Push Ctrl+Shift+K.
 
@@ -405,7 +405,10 @@ starts `/bin/zsh` on macOS and `/bin/bash` on Linux. See
 
 8. On the workspace header, click **Rows**, **Cols** or **Grid**.
 
-   Result: The panels move into that layout.
+   Result: The panels move into that layout. **Tidy** on the same line puts the
+   panels into the layout of the workspace again, or into the grid when the
+   workspace has no layout. It also puts each card of an agent back into the
+   column of that agent.
 
 9. Close Horizon.
 10. Start Horizon again.

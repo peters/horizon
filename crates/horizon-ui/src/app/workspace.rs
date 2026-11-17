@@ -55,6 +55,7 @@ enum WorkspaceAction {
     ArrangeLayout(WorkspaceLayout),
     CloseAllPanels,
     Detach,
+    Tidy,
     AddPanel,
 }
 
@@ -212,6 +213,11 @@ impl HorizonApp {
                 Some(WorkspaceAction::Detach) => {
                     focus_workspace = Some(workspace.id);
                     self.detach_workspace(workspace.id);
+                }
+                Some(WorkspaceAction::Tidy) => {
+                    focus_workspace = Some(workspace.id);
+                    self.board.tidy_workspace(workspace.id);
+                    self.mark_runtime_dirty();
                 }
                 Some(WorkspaceAction::AddPanel) => {
                     // The list creates its panel in the active workspace, so the

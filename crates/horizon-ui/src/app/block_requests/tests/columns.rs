@@ -16,7 +16,7 @@ pub(super) const GAP: f32 = 20.0;
 /// The local id of the agent panel, in the form that Horizon gives a panel.
 pub(super) const AGENT: &str = "0b9c2f5e-6a1d-4c3b-9e7f-2d4a6b8c0e11";
 /// The local id of a terminal of the person in the same workspace.
-const OTHER: &str = "7d1e4a90-3c52-4f6b-8a1d-5e9c0b7f2a44";
+pub(super) const OTHER: &str = "7d1e4a90-3c52-4f6b-8a1d-5e9c0b7f2a44";
 
 /// One workspace with the panels `panels`, arranged by `layout`.
 pub(super) fn workspace(layout: Option<WorkspaceLayout>, panels: Vec<PanelState>) -> RuntimeState {
@@ -90,7 +90,7 @@ pub(super) fn place(app: &HorizonApp, local_id: &str) -> [f32; 4] {
 
 /// Checks that `cards`, from the top, stand in one column whose left edge is
 /// `left` and whose top is the top of the agent panel, with the gap of tiles.
-fn assert_column(app: &HorizonApp, left: f32, cards: &[&str]) {
+pub(super) fn assert_column(app: &HorizonApp, left: f32, cards: &[&str]) {
     let mut top = place(app, AGENT)[1];
     for card in cards {
         let rect = place(app, card);
@@ -103,7 +103,7 @@ fn assert_column(app: &HorizonApp, left: f32, cards: &[&str]) {
 }
 
 /// The left edge of a column that stands directly at the right of the agent panel.
-fn beside_agent(app: &HorizonApp) -> f32 {
+pub(super) fn beside_agent(app: &HorizonApp) -> f32 {
     place(app, AGENT)[2] + GAP
 }
 
@@ -117,7 +117,7 @@ pub(super) fn pointer(position: Pos2, pressed: bool) -> Event {
 }
 
 /// Drags the title bar of the panel `local_id` by `by` screen points, as a person does.
-fn drag_title(ctx: &Context, app: &mut HorizonApp, local_id: &str, by: Vec2) {
+pub(super) fn drag_title(ctx: &Context, app: &mut HorizonApp, local_id: &str, by: Vec2) {
     let from = card_panel(app, ctx, local_id).min + Vec2::new(60.0, 17.0 * app.canvas_view.zoom);
     let frames = [
         vec![Event::PointerMoved(from)],
