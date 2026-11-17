@@ -7,6 +7,7 @@
 //! many panels are left out and of which kind, so the gap is not a surprise.
 
 use horizon_core::RetiredPanels;
+use horizon_core::panel_holder::UnshownHolders;
 
 /// The line that a session with left-out panels says, or `None` for a session
 /// that lost nothing.
@@ -29,9 +30,13 @@ pub(in crate::app) fn left_out_panels_notice(left_out: &RetiredPanels) -> Option
 }
 
 /// The line that a start says when it ended the programs of holders that no panel
-/// showed, or `None` when no holder ran without a panel.
-pub(in crate::app) fn unshown_holders_notice(count: usize) -> Option<String> {
-    (count > 0).then(|| format!("Horizon ended {count} agent program(s) that no panel showed."))
+/// showed, or could not end them, or `None` when no holder ran without a panel.
+pub(in crate::app) fn unshown_holders_notice(found: UnshownHolders) -> Option<String> {
+    let programs = |count: usize| format!("{count} agent program{}", if count == 1 { "" } else { "s" });
+    let ended = (found.ended > 0).then(|| format!("Horizon ended {} that no panel showed.", programs(found.ended)));
+    let alive = (found.alive > 0).then(|| format!("{} that no panel shows could not be ended.", programs(found.alive)));
+    let lines: Vec<String> = ended.into_iter().chain(alive).collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 /// The name of a removed panel kind as the person read it in the old window.
@@ -73,10 +78,18 @@ mod tests {
 
     #[test]
     fn a_notice_names_how_many_agent_programs_no_panel_showed() {
-        assert_eq!(super::unshown_holders_notice(0), None);
+        let found = |ended, alive| super::UnshownHolders { ended, alive };
+        assert_eq!(super::unshown_holders_notice(found(0, 0)), None);
         assert_eq!(
-            super::unshown_holders_notice(2).as_deref(),
-            Some("Horizon ended 2 agent program(s) that no panel showed.")
+            super::unshown_holders_notice(found(1, 0)).as_deref(),
+            Some("Horizon ended 1 agent program that no panel showed.")
+        );
+        assert_eq!(
+            super::unshown_holders_notice(found(2, 1)).as_deref(),
+            Some(
+                "Horizon ended 2 agent programs that no panel showed. \
+                 1 agent program that no panel shows could not be ended."
+            )
         );
     }
 

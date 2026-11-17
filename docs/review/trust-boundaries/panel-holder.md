@@ -86,6 +86,15 @@ The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/hor
   terminal closes, `panel/termination.rs` sends `SIGTERM` to the process group
   after `AFTER_HANGUP`, and `SIGKILL` after `AFTER_TERM`. The holder then removes
   its socket and exits.
+- **A `Close` is obeyed from every link that got a hello.** The holder reads the
+  frames of a client before it writes the replay, and it obeys a `Close` of a
+  client that it detached. This gives a process of the same user no new power:
+  that process can attach and send a `Close` at any time.
+- **The end of a holder that no panel shows has a bound.** A start sends the
+  `Close`, reads what the socket sends, and waits at most 6 seconds for the end of
+  the link, for at most 64 sockets, on a worker thread. A process that serves a
+  socket and does not end the link costs that time and one line in the sidebar.
+  It cannot stop a frame. The start does not remove a socket that accepts a link.
 - **The socket folder is private and the holder makes it so.** The folder is
   0700 and the socket is 0600, whatever the umask of the process is.
 - **The holder serves a socket of this computer only.** It opens no port, starts no

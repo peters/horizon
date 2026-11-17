@@ -25,7 +25,7 @@ pub enum FrameError {
 pub(crate) const VERSION: u8 = 1;
 
 /// The largest payload of one frame, in either direction.
-pub(crate) const MAX_PAYLOAD: u32 = 1024 * 1024;
+pub const MAX_PAYLOAD: u32 = 1024 * 1024;
 
 /// The bytes of a kind and a length, before every payload.
 pub(crate) const HEADER: usize = 5;
@@ -49,7 +49,7 @@ pub struct Hello {
     pub pid: u32,
     /// The start time of that process, as Horizon records the child of a panel.
     pub start_time: Option<String>,
-    /// The bytes of the replay frame of this link, which follow the hello.
+    /// The bytes of the replay frames of this link, which follow the hello.
     pub ring_len: u32,
 }
 

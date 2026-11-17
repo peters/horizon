@@ -23,7 +23,7 @@ mod serve;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -69,6 +69,8 @@ const MAX_SOCKET_PATH: usize = 100;
 const START_BOUND: Duration = Duration::from_secs(5);
 /// The time that a probe waits for the answer of a holder.
 const READ_BOUND: Duration = Duration::from_secs(2);
+/// The time that a holder has to end its link after a `Close`: `panel/termination.rs`.
+const END_BOUND: Duration = Duration::from_secs(6);
 /// The pause between two probes of a start.
 const WAIT_PAUSE: Duration = Duration::from_millis(10);
 /// The most sockets that one start reads, so that a home with many holders costs a
@@ -318,24 +320,32 @@ pub fn linked(home: &HorizonHome, local_id: &str) -> Result<Option<Linked>, Hold
     }
 }
 
+/// The holders whose panel no board shows, as a start left them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnshownHolders {
+    /// The holders whose program ended and whose socket is gone.
+    pub ended: usize,
+    /// The holders that answered and did not end, so their program still runs.
+    pub alive: usize,
+}
+
 /// Ends the program of every holder of `home` whose panel is not in `shown`, and
-/// answers how many holders it ended. A socket that nobody listens on is removed,
-/// and a home with more sockets than this build reads keeps the rest for the next
-/// start.
+/// answers how many ended and how many still run. A socket that nobody listens on
+/// is removed, and a home with more sockets than this build reads keeps the rest.
 ///
-/// This connects to a socket and waits for its answer, so only a worker calls it.
+/// This connects to a socket and waits for its holder, so only a worker calls it.
 ///
 /// # Errors
 ///
-/// Returns why the folder of the holders or a socket cannot be read.
-pub fn close_unshown(home: &HorizonHome, shown: &BTreeSet<String>) -> Result<usize, HolderError> {
+/// Returns why the folder of the holders cannot be read.
+pub fn close_unshown(home: &HorizonHome, shown: &BTreeSet<String>) -> Result<UnshownHolders, HolderError> {
     let folder = home.root().join(HOLDER_DIR);
     let entries = match fs::read_dir(&folder) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(UnshownHolders::default()),
         Err(error) => return Err(error.into()),
     };
-    let mut ended = 0;
+    let mut found = UnshownHolders::default();
     for entry in entries.take(MAX_SOCKETS) {
         let path = entry?.path();
         let Some(stem) = path.file_stem().and_then(std::ffi::OsStr::to_str) else {
@@ -346,35 +356,55 @@ pub fn close_unshown(home: &HorizonHome, shown: &BTreeSet<String>) -> Result<usi
         {
             continue;
         }
-        ended += usize::from(end_holder(&path)?);
+        match end_holder(&path) {
+            Some(true) => found.ended += 1,
+            Some(false) => found.alive += 1,
+            None => {}
+        }
     }
-    Ok(ended)
+    if found.alive > 0 {
+        tracing::warn!(alive = found.alive, "holders that no panel shows could not be ended");
+    }
+    Ok(found)
 }
 
-/// Ends the holder of `path` and answers whether one ran there, which a socket that
-/// nobody listens on is not.
-fn end_holder(path: &Path) -> Result<bool, HolderError> {
+/// Ends the holder of `path` and answers whether it ended, or `None` when nobody
+/// listens there or another client shows its panel. The socket of a holder that
+/// answered is never removed here: nothing could find that holder again.
+fn end_holder(path: &Path) -> Option<bool> {
     let deadline = Instant::now() + READ_BOUND;
     loop {
         let Ok(mut stream) = UnixStream::connect(path) else {
             let _ = fs::remove_file(path);
-            return Ok(false);
+            return None;
         };
-        stream.set_read_timeout(Some(READ_BOUND))?;
+        let _ = stream.set_read_timeout(Some(READ_BOUND));
         match frames::read_one(&mut stream) {
-            Ok(frames::Frame::Hello(_)) => {
-                frames::write(&mut stream, &frames::Frame::Close)?;
-                return Ok(true);
+            Ok(frames::Frame::Hello(_)) if frames::write(&mut stream, &frames::Frame::Close).is_ok() => {
+                return Some(link_ended(stream) && UnixStream::connect(path).is_err());
             }
-            // The client of a probe holds the link for one more turn of the loop.
-            Ok(_) if Instant::now() < deadline => thread::sleep(WAIT_PAUSE),
-            Ok(_) => return Ok(false),
-            Err(_) => {
-                let _ = fs::remove_file(path);
-                return Ok(false);
-            }
+            // The client of a probe holds the link for one more turn of the loop,
+            // and a holder whose loop is behind closes a link with no hello.
+            _ if Instant::now() < deadline => thread::sleep(WAIT_PAUSE),
+            Ok(frames::Frame::Refusal) => return None,
+            _ => return Some(false),
         }
     }
+}
+
+/// Takes the replay and the output of a holder after a `Close`, because a holder
+/// detaches a client that takes nothing, and answers whether its link ended in time.
+fn link_ended(mut stream: UnixStream) -> bool {
+    let deadline = Instant::now() + END_BOUND;
+    let mut taken = vec![0u8; 64 * 1024];
+    while Instant::now() < deadline {
+        match stream.read(&mut taken) {
+            Ok(0) => return true,
+            Err(error) if !matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Serves `launch` on a thread of this process, so that a test of the workspace

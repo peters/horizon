@@ -22,7 +22,7 @@ pub(super) struct SessionCatalogRefreshState {
     pub last_full_refresh: Option<Instant>,
     pub picker_times: HashMap<PanelKind, Instant>,
     /// The holders that no panel of a restored board shows, which a worker ends.
-    pub unshown_holders: Option<Receiver<usize>>,
+    pub unshown_holders: Option<Receiver<horizon_core::panel_holder::UnshownHolders>>,
 }
 
 mod loading;
@@ -480,8 +480,8 @@ impl HorizonApp {
         let spawned = std::thread::Builder::new()
             .name("unshown-holders".to_owned())
             .spawn(move || {
-                if let Ok(count) = horizon_core::panel_holder::close_unshown(&home, &shown) {
-                    let _ = sender.send(count);
+                if let Ok(found) = horizon_core::panel_holder::close_unshown(&home, &shown) {
+                    let _ = sender.send(found);
                 }
             });
         match spawned {
@@ -496,8 +496,8 @@ impl HorizonApp {
             return;
         };
         match receiver.try_recv() {
-            Ok(count) => {
-                if let Some(line) = super::board_notice::unshown_holders_notice(count) {
+            Ok(found) => {
+                if let Some(line) = super::board_notice::unshown_holders_notice(found) {
                     self.set_sidebar_plain_notice(line);
                 }
             }

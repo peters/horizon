@@ -41,16 +41,15 @@ pub(crate) fn holder_hello(socket: &mut UnixStream) -> Result<(Hello, Vec<u8>)> 
         Frame::Refusal => return Err(Error::Pty("the holder of this panel serves another client".to_owned())),
         other => return Err(Error::Pty(format!("the holder answered the frame {}", other.kind()))),
     };
-    if hello.ring_len == 0 {
-        return Ok((hello, Vec::new()));
+    // The ring arrives in replay frames of at most the bound of one frame.
+    let mut replay = Vec::new();
+    while replay.len() < hello.ring_len as usize {
+        match frames::read_one(socket).map_err(|error| Error::Pty(format!("the holder answered no replay: {error}")))? {
+            Frame::Replay(bytes) => replay.extend_from_slice(&bytes),
+            other => return Err(Error::Pty(format!("the holder answered the frame {}", other.kind()))),
+        }
     }
-    match frames::read_one(socket).map_err(|error| Error::Pty(format!("the holder answered no replay: {error}")))? {
-        Frame::Replay(bytes) => Ok((hello, bytes)),
-        other => Err(Error::Pty(format!(
-            "the holder sent the frame {} instead of a replay",
-            other.kind()
-        ))),
-    }
+    Ok((hello, replay))
 }
 
 /// Opens the terminal of `program` with its arguments, its folder and its

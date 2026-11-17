@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, SyncSender, TrySendError};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -147,10 +147,12 @@ pub(crate) fn serve_watched(
                     (ended, ended_at) = (Some(status), Some(ended_state(pid, status.0)));
                 }
             }
-            Ok(Happening::FromClient(who, whole)) if client.as_ref().is_some_and(|held| held.generation == who) => {
-                match answer(whole, &mut pty, &input) {
-                    Some(asked) => close |= asked,
-                    None => client = None,
+            Ok(Happening::FromClient(who, whole)) => {
+                // A `Close` is the one frame that must not be lost: it ends the
+                // program also when the holder detached its client before.
+                close |= whole.contains(&Frame::Close);
+                if client.as_ref().is_some_and(|held| held.generation == who) && !answer(whole, &mut pty, &input) {
+                    client = None;
                 }
             }
             Ok(Happening::ClientGone(who)) if client.as_ref().is_some_and(|held| held.generation == who) => {
@@ -258,21 +260,18 @@ fn attach_client(
 }
 
 /// Answers the frames of the client: its input reaches the thread that writes it,
-/// and its size reaches the terminal.
+/// and its size reaches the terminal. The loop reads its `Close` itself.
 ///
-/// `None` says that the client waits for a program that reads nothing, and
-/// `Some(true)` that it asked for the end of the program.
-fn answer(whole: Vec<Frame>, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Option<bool> {
-    let mut close = false;
+/// `false` says that the client waits for a program that reads nothing.
+fn answer(whole: Vec<Frame>, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> bool {
     for frame in whole {
         match frame {
-            Frame::Input(bytes) => match input.try_send(bytes) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+            Frame::Input(bytes) => {
+                if input.try_send(bytes).is_err() {
                     tracing::warn!("the program of a held panel reads no input");
-                    return None;
+                    return false;
                 }
-            },
+            }
             Frame::Resize {
                 rows,
                 cols,
@@ -284,14 +283,14 @@ fn answer(whole: Vec<Frame>, pty: &mut Pty, input: &SyncSender<Vec<u8>>) -> Opti
                 cell_width,
                 cell_height,
             }),
-            Frame::Close => close = true,
+            Frame::Close => {}
             other => tracing::warn!(
                 kind = other.kind(),
                 "the client of a holder sent a frame that only a holder sends"
             ),
         }
     }
-    Some(close)
+    true
 }
 
 /// The one client of a holder: the link that the loop writes to.
@@ -303,8 +302,10 @@ struct Client {
 impl Client {
     /// Answers the hello and the newest output, so the client reads the last
     /// screens before the live output, and reads this client on its own thread.
+    /// That thread starts first, so the `Close` of a client that is slow to take
+    /// its replay reaches the loop.
     fn attach(
-        mut socket: UnixStream,
+        socket: UnixStream,
         generation: u64,
         hello: &Hello,
         ring: &VecDeque<u8>,
@@ -312,10 +313,6 @@ impl Client {
     ) -> Result<Self, HolderError> {
         socket.set_nonblocking(false)?;
         socket.set_write_timeout(Some(CLIENT_WRITE_BOUND))?;
-        frames::write(&mut socket, &Frame::Hello(hello.clone()))?;
-        if !ring.is_empty() {
-            frames::write(&mut socket, &Frame::Replay(ring.iter().copied().collect()))?;
-        }
         let mut read = socket.try_clone()?;
         let send = send.clone();
         thread::Builder::new()
@@ -347,7 +344,14 @@ impl Client {
                 }
                 let _ = send.send(Happening::ClientGone(generation));
             })?;
-        Ok(Self { socket, generation })
+        let mut client = Self { socket, generation };
+        frames::write(&mut client.socket, &Frame::Hello(hello.clone()))?;
+        let (older, newer) = ring.as_slices();
+        let most = frames::MAX_PAYLOAD as usize;
+        for part in older.chunks(most).chain(newer.chunks(most)) {
+            frames::write(&mut client.socket, &Frame::Replay(part.to_vec()))?;
+        }
+        Ok(client)
     }
 }
 

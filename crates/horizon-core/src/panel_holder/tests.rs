@@ -650,6 +650,9 @@ fn a_program_that_reads_no_input_still_writes_to_its_client() {
 // The terminal of a panel that attaches to a holder.
 #[cfg(test)]
 mod attach;
+// The end of a holder whose program wrote much.
+#[cfg(test)]
+mod end;
 
 /// A holder whose panel is on no board of this home is closed, so no agent runs
 /// with nobody seeing it.
@@ -659,7 +662,9 @@ fn a_holder_of_no_panel_of_the_board_is_closed_at_start() {
     let serving = Serving::start(&home, &launch("unshown-panel", "exec cat"), 1024);
     let shown = std::collections::BTreeSet::from(["another-panel".to_owned()]);
     assert_eq!(
-        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        super::close_unshown(&home, &shown)
+            .expect("the holders of the home")
+            .ended,
         1,
         "the start ended the program of the panel that no board shows"
     );
@@ -668,7 +673,9 @@ fn a_holder_of_no_panel_of_the_board_is_closed_at_start() {
     let shown = std::collections::BTreeSet::from(["unshown-panel".to_owned()]);
     let serving = Serving::start(&home, &launch("unshown-panel", "exec cat"), 1024);
     assert_eq!(
-        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        super::close_unshown(&home, &shown)
+            .expect("the holders of the home")
+            .ended,
         0,
         "a holder whose panel is on the board keeps its program"
     );
@@ -688,7 +695,9 @@ fn a_socket_that_nobody_listens_on_is_removed_at_start() {
 
     let shown = std::collections::BTreeSet::new();
     assert_eq!(
-        super::close_unshown(&home, &shown).expect("the holders of the home"),
+        super::close_unshown(&home, &shown)
+            .expect("the holders of the home")
+            .ended,
         0,
         "a socket that nobody listens on ends no program"
     );

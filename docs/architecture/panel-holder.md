@@ -75,8 +75,9 @@ a kind that this protocol does not know, loses its link and the program continue
    terminal.
 4. It reads the output of the program on its own thread and appends each part to
    the ring.
-5. The first client gets the hello, then the ring as one replay frame, then each
-   new part as an output frame.
+5. The first client gets the hello, then the ring as replay frames of at most the
+   frame bound, then each new part as an output frame. The hello gives the length
+   of the ring, and the client reads replay frames until it has that length.
 6. A client that closes its link detaches. The program continues and the ring
    continues to fill.
 7. A second client while one is attached gets one refusal frame and is closed.
@@ -86,6 +87,12 @@ a kind that this protocol does not know, loses its link and the program continue
 8. A `Close` frame ends the program: the master of the terminal closes, and
    `panel/termination.rs` sends `SIGTERM`, then `SIGKILL`, to the process group of
    a program that outlives the hangup. The holder removes its socket and exits.
+   The holder then ends the link, so the end of the link tells the client that
+   the program is gone.
+   The `Close` frame is the one frame that the holder does not lose. The holder
+   reads the frames of a client before it writes the replay, and it obeys a
+   `Close` of a client that it detached before. A client that takes no replay is
+   detached after the client write bound, and its `Close` still ends the program.
 9. A program that ends by itself leaves its status with the holder. A client that
    is attached gets the status in one exit frame. The holder then waits for the
    client to close, at most 5 seconds, removes its socket and exits.
@@ -124,7 +131,8 @@ happenings.
 | Close wait | 5 seconds | A client that reads the status closes its link, and a client that does not must not hold the holder for ever. |
 | Socket path bound | 100 bytes | The bound of a Unix socket path is 104 bytes on macOS, and the holder refuses a longer path. |
 | Start bound | 5 seconds | A start waits for the hello of a new holder and reports one error after this time. |
-| Client write bound | 5 seconds | A client that takes no output is detached after this time, and the program continues. |
+| Client write bound | 5 seconds | A client that takes no output is detached after this time, and the program continues. One frame can wait two times this bound. |
+| End bound | 6 seconds | A start waits this time for the end of a holder that it closed: the hangup, the two signals and one read. |
 | Queue of happenings | 8 | The parts of output and the links that wait for the loop, which bounds the memory of a holder that is behind. |
 
 ## The functions of this part
@@ -137,8 +145,14 @@ happenings.
 - `panel_holder::probe` answers the hello of a live holder, or nothing when no
   holder listens.
 - `panel_holder::close_unshown` ends the program of every holder whose panel is on
-  no restored board, and removes a socket that nobody listens on. It reads at most
-  64 sockets in one start.
+  no restored board. It reads at most 64 sockets in one start. For each holder it
+  reads the hello, sends the `Close` frame, reads the replay and the output, and
+  waits for the end of the link for the end bound. It answers the count of the
+  holders that ended and the count of the holders that are alive after that time.
+  The sidebar shows the two counts, and the log has one warning for the holders
+  that are alive. It removes only a socket that refuses a link. It does not remove
+  the socket of a holder that accepts a link, because nothing can find that holder
+  again.
 
 `start`, `linked`, `probe` and `close_unshown` start a process or wait for a socket,
 so only a worker thread calls them.
