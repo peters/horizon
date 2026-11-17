@@ -589,8 +589,10 @@ computer holds a copy. The key of a machine is one value under
 
 The server holds no ssh login key of the person, no provider CLI login (az,
 gcloud, hcloud, aws), no browser profile, no session cookie, no agent token, no
-terminal content, no transcript and no setting of the person. `secret.key` itself
-never leaves the server home.
+transcript and no setting of the person. It stores no terminal content either:
+when a computer shares its terminals, the server passes what they show and what
+is typed in them on to your other computers, in memory only, and writes none of
+it to a file. `secret.key` itself never leaves the server home.
 
 ## The limits
 
