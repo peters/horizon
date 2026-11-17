@@ -326,6 +326,14 @@ Horizon before they write anything.
     Result: The press opens a panel of that preset, as before the mark: the mark
     tells the person that the program is not here, and it stops nothing.
 
+21. Make the window 800 x 600. Push Ctrl+Shift+K. Then push Escape, click
+    `+ Panel` on the line of a workspace, and push Escape again.
+
+    Result: At a window of 800 x 600 the whole card of each list stands inside
+    the window. Its title, `Command Palette` or `Presets`, and its search field
+    show whole at the top of the card. The list is shorter than in a large
+    window, and it scrolls under the search field.
+
 ### 6.2 F02 — The three entry points of Set up
 
 1. Examine the machine section of the sidebar before the first machine.

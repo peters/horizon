@@ -1,7 +1,7 @@
 //! Horizon in a small window: whole-app frames at the smallest window that the
 //! build opens, 800 by 600 points, and at the sizes between it and a wide screen.
 
-use egui::{Event, Rect};
+use egui::{Event, Pos2, Rect};
 use horizon_core::{RuntimeState, StartupDecision, WorkspaceState};
 
 use super::HorizonApp;
@@ -24,6 +24,8 @@ struct Window {
 struct Drawn {
     text: String,
     rect: Rect,
+    /// The rectangle that the frame cuts the text to.
+    clip: Rect,
 }
 
 impl Window {
@@ -61,23 +63,28 @@ impl Window {
         input.events = events;
         run_app_frame_with_input(&self.ctx, &mut self.app, input)
     }
+
+    fn screen(&self) -> Rect {
+        Rect::from_min_size(Pos2::ZERO, egui::vec2(self.size[0], self.size[1]))
+    }
 }
 
 /// Every text that `output` painted.
 fn texts(output: &egui::FullOutput) -> Vec<Drawn> {
-    fn walk(shape: &egui::Shape, out: &mut Vec<Drawn>) {
+    fn walk(shape: &egui::Shape, clip: Rect, out: &mut Vec<Drawn>) {
         match shape {
             egui::Shape::Text(text) => out.push(Drawn {
                 text: text.galley.text().to_owned(),
                 rect: Rect::from_min_size(text.pos, text.galley.size()),
+                clip,
             }),
-            egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, out)),
+            egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, clip, out)),
             _ => {}
         }
     }
     let mut out = Vec::new();
     for clipped in &output.shapes {
-        walk(&clipped.shape, &mut out);
+        walk(&clipped.shape, clipped.clip_rect, &mut out);
     }
     out
 }
@@ -110,6 +117,26 @@ fn text_of<'a>(drawn: &'a [Drawn], text: &str) -> &'a Drawn {
         .iter()
         .find(|entry| entry.text == text)
         .unwrap_or_else(|| panic!("the frame draws {text:?}: {drawn:?}"))
+}
+
+/// The card of the command palette: the one filled rectangle with its corners.
+fn palette_card(output: &egui::FullOutput) -> Rect {
+    fn walk(shape: &egui::Shape, out: &mut Option<Rect>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if rect.corner_radius == egui::CornerRadius::same(20) && rect.fill != egui::Color32::TRANSPARENT =>
+            {
+                *out = Some(rect.rect);
+            }
+            egui::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut card = None;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut card);
+    }
+    card.expect("the frame draws the card of the palette")
 }
 
 #[test]
@@ -158,4 +185,44 @@ fn the_palette_of_the_shortcut_marks_and_orders_the_presets_as_the_panel_list_do
         (marks[0].center().y - codex.center().y).abs() < 1.0 && marks[0].left() > codex.right(),
         "the words stand at the right of the row of Codex: {marks:?} {codex:?}"
     );
+}
+
+#[test]
+fn the_palette_and_the_preset_list_stay_inside_a_small_window() {
+    for size in [[1024.0, 640.0], [800.0, 600.0]] {
+        for presets_only in [false, true] {
+            let mut window = Window::new(size, vec![editor_workspace_state("beta", [520.0, 80.0])]);
+            let title = if presets_only {
+                window.app.open_preset_palette();
+                "Presets"
+            } else {
+                let _ = window.frame(vec![palette_chord()]);
+                "Command Palette"
+            };
+            let _ = window.frame(Vec::new());
+            let output = window.frame(Vec::new());
+            let screen = window.screen();
+            let card = palette_card(&output);
+            assert!(
+                screen.contains_rect(card),
+                "the {title} card {card:?} lies inside the window {screen:?}"
+            );
+            let drawn = texts(&output);
+            for whole in [title, "Type to search..."] {
+                let text = text_of(&drawn, whole);
+                assert!(
+                    card.contains_rect(text.rect) && text.clip.contains_rect(text.rect),
+                    "the {title} card {card:?} shows {whole:?} whole: {text:?}"
+                );
+            }
+            // The rows are cut to the list, which ends inside the card, so a list
+            // that is longer than the card scrolls there.
+            let row = text_of(&drawn, "Shell");
+            assert!(
+                card.contains_rect(row.clip),
+                "the list of {title} {:?} ends inside the card {card:?}",
+                row.clip
+            );
+        }
+    }
 }

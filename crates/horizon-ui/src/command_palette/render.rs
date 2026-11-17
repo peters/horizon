@@ -13,12 +13,21 @@ pub(super) struct PaletteLayout {
     pub results_height: f32,
 }
 
+/// The room that the card keeps between its outline and the edge of the window.
+const CARD_MARGIN: f32 = 8.0;
+
 pub(super) fn palette_layout(screen: Rect) -> PaletteLayout {
-    let results_height = usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT + 4.0 * SECTION_HEADER_HEIGHT;
-    let card_height = INPUT_HEIGHT + 16.0 + results_height + 60.0;
+    let chrome = INPUT_HEIGHT + 16.0 + 60.0;
+    // The card never passes the window. A window that is lower than the whole
+    // card gives the list fewer rows, and the list scrolls under the title and
+    // the search field, which keep their place.
+    let results_height = (usize_to_f32(MAX_VISIBLE_ROWS) * ROW_HEIGHT + 4.0 * SECTION_HEADER_HEIGHT)
+        .min(screen.height() - chrome - 2.0 * CARD_MARGIN)
+        .max(ROW_HEIGHT);
+    let card_height = chrome + results_height;
     let card_min = Pos2::new(
         (screen.width() - PALETTE_WIDTH) * 0.5,
-        (screen.height() - card_height) * 0.25,
+        ((screen.height() - card_height) * 0.25).max(CARD_MARGIN),
     );
     let card = Rect::from_min_size(card_min, Vec2::new(PALETTE_WIDTH, card_height));
 
