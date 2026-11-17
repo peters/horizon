@@ -234,6 +234,10 @@ impl HorizonApp {
             && let Some(panel) = self.board.panels.iter_mut().find(|panel| panel.local_id == id)
         {
             panel.write_input(bytes);
+            // The frame that drains the echo follows it at once, as for a key.
+            if let Some(terminal) = panel.terminal() {
+                terminal.arm_output_wake();
+            }
         }
     }
 

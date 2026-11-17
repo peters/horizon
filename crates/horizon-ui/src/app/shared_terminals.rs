@@ -28,8 +28,8 @@ use crate::block_widget::{CardChip, chip::ChipState};
 pub(in crate::app) use follower::{attention_of, computer_name, kind_of};
 pub(in crate::app) use link::LiveLink;
 
-/// The most characters of a text of another computer that a chip or a line shows.
-const SHOWN_CHARS: usize = 48;
+/// The most characters of a text of another computer that this window shows.
+const SHOWN_CHARS: usize = 80;
 
 /// The state of the join in this window.
 #[derive(Default)]
@@ -68,7 +68,7 @@ impl SharedTerminals {
 }
 
 /// A text of another computer as one bounded line.
-fn shown(text: &str) -> String {
+pub(in crate::app) fn shown(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(SHOWN_CHARS).collect()
 }
 

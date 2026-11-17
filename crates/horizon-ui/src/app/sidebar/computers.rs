@@ -13,7 +13,7 @@ use horizon_sync::LivePanel;
 use crate::theme;
 
 use super::super::HorizonApp;
-use super::super::shared_terminals::{attention_of, computer_name, kind_of};
+use super::super::shared_terminals::{attention_of, computer_name, kind_of, shown};
 use super::panel_rows::{self, PANEL_ROW_HEIGHT, PanelRowLook, PanelRowState};
 use super::{SidebarActions, rows, text};
 
@@ -33,11 +33,11 @@ impl HorizonApp {
         }
         for computer in computers {
             ui.add_space(4.0);
-            let name = computer_name(computer);
-            line(ui, name, (13.0, text::MEDIUM, theme::FG()), Some(&computer.device));
+            let name = shown(computer_name(computer));
+            line(ui, &name, (13.0, text::MEDIUM, theme::FG()), Some(&computer.device));
             let last = computer.panels.len().saturating_sub(1);
             for (index, panel) in computer.panels.iter().enumerate() {
-                if render_panel(ui, name, panel, index == last) {
+                if render_panel(ui, &name, panel, index == last) {
                     actions.open_shared_terminal = Some((computer.device.clone(), panel.id.clone()));
                 }
             }
@@ -66,8 +66,8 @@ fn render_panel(ui: &mut egui::Ui, computer: &str, panel: &LivePanel, last: bool
     let rect = ui.allocate_space(Vec2::new(ui.available_width(), PANEL_ROW_HEIGHT)).1;
     let hovered = ui.rect_contains_pointer(rect);
     let (kind, attention) = (kind_of(&panel.kind), attention_of(&panel.state));
-    let title = Some(panel.title.as_str()).filter(|title| !title.is_empty());
-    let label = title.unwrap_or(kind.display_name());
+    let title = Some(shown(&panel.title)).filter(|title| !title.is_empty());
+    let label = title.as_deref().unwrap_or(kind.display_name());
     let look = PanelRowLook {
         guide_x: panel_rows::guide_x(rows::card(rect)),
         accent: theme::ACCENT(),
