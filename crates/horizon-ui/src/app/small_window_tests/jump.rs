@@ -1,5 +1,10 @@
-//! A jump to a tall card from its row of the sidebar: the card stands whole in
-//! the canvas while the canvas holds it, and it shows its top while it does not.
+//! A jump to a card from its row of the sidebar: the card stands whole in the
+//! canvas while the canvas holds it, and it shows its top while it does not.
+//!
+//! A card of the default width stops at a ceiling that the smallest window
+//! holds, so a jump shows it whole. The cards that reach the edge of the canvas
+//! are the wide card, which may take the height of the view, and a card that the
+//! person made taller by hand.
 
 use egui::{Event, Pos2, Rect};
 use horizon_core::browser::manifest::{
@@ -17,8 +22,8 @@ const CARD: &str = "Tall card";
 const FOOT: &str = "Delete the machine";
 
 /// A document of `rows` pairs, `steps` steps and `lines` lines of text, with one
-/// button at its foot.
-fn document(rows: usize, steps: usize, lines: usize) -> serde_json::Value {
+/// button at its foot, for the wide card when `wide` says so.
+fn document(rows: usize, steps: usize, lines: usize, wide: bool) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = (0..rows)
         .map(|index| serde_json::json!({"label": format!("Label {index}"), "value": "value"}))
         .collect();
@@ -36,31 +41,42 @@ fn document(rows: usize, steps: usize, lines: usize) -> serde_json::Value {
     components.push(serde_json::json!(
         {"type": "buttons", "items": [{"id": "delete", "label": FOOT, "tone": "danger"}]}
     ));
-    serde_json::json!({ "components": components })
+    let mut document = serde_json::json!({ "components": components });
+    if wide {
+        document["width"] = serde_json::json!("wide");
+    }
+    document
 }
 
-/// A window of `size` points whose one workspace holds an agent panel. No preset
-/// arranges the workspace, so a card of it takes the height of its content.
+/// A window of `size` points whose one workspace holds an agent panel. A card of
+/// that panel stands in the column at its right.
 fn agent_window(size: [f32; 2]) -> Window {
     let mut window = Window::new(size, vec![editor_workspace_state("lane", [40.0, 40.0])]);
     window.app.board.panels[0].kind = PanelKind::Claude;
     window
 }
 
+/// One request of the agent panel of `window`, as the queue carries it.
+fn request(window: &Window, operation: Operation) -> Request {
+    Request {
+        request_id: "test".into(),
+        actor: format!("horizon:{}", window.app.board.panels[0].local_id),
+        host_instance: manifest::host_instance().into(),
+        deadline_at_millis: manifest::now_millis() + 10_000,
+        operation,
+    }
+}
+
 /// The card of `document` that the agent panel of `window` draws, after the
 /// frames that give it the height of its content.
 fn tall_card(window: &mut Window, document: serde_json::Value) -> PanelId {
-    let actor = window.app.board.panels[0].local_id.clone();
-    let request = Request {
-        request_id: "test".into(),
-        actor: format!("horizon:{actor}"),
-        host_instance: manifest::host_instance().into(),
-        deadline_at_millis: manifest::now_millis() + 10_000,
-        operation: Operation::Create {
+    let request = request(
+        window,
+        Operation::Create {
             title: Some(CARD.into()),
             document,
         },
-    };
+    );
     let ctx = window.ctx.clone();
     let Outcome::Created { panel_id, .. } = window.app.apply_block_request(&request, &ctx) else {
         panic!("the agent panel draws a card");
@@ -120,14 +136,13 @@ fn press_the_row(window: &mut Window) -> egui::FullOutput {
 #[test]
 fn a_press_on_the_row_of_a_tall_card_shows_the_whole_card_while_the_canvas_holds_it() {
     let mut window = agent_window([1280.0, 900.0]);
-    // The view of a jump before this one: the least zoom of a Fit. A card of that
-    // view may take the whole height that the view shows.
+    // The view of a jump before this one: the least zoom of a Fit.
     let floor = window.app.template_config.canvas.fit_floor();
     window.app.canvas_view.set_zoom(floor);
-    // The content of this card is taller than the ceiling of a card and shorter
-    // than the view, so the card takes the height of its content and scrolls
-    // nothing.
-    let card = tall_card(&mut window, document(12, 8, 3));
+    // A wide card takes the height of its content up to the ceiling of a wide
+    // card, which is more than this view shows: the card is as tall as the
+    // canvas almost, and it scrolls nothing.
+    let card = tall_card(&mut window, document(12, 8, 3, true));
     let canvas = window.app.canvas_rect(&window.ctx);
     let height = window.app.board.panel(card).expect("the card").layout.size[1] * floor;
     assert!(
@@ -161,7 +176,8 @@ fn a_press_on_the_row_of_a_tall_card_shows_the_whole_card_while_the_canvas_holds
 #[test]
 fn a_press_on_the_row_of_a_card_taller_than_the_canvas_shows_its_top() {
     let mut window = agent_window([800.0, 600.0]);
-    let card = tall_card(&mut window, document(24, 16, 0));
+    // A wide card of the ceiling of a wide card, in the smallest window.
+    let card = tall_card(&mut window, document(24, 16, 0, true));
     let canvas = window.app.canvas_rect(&window.ctx);
     let floor = window.app.template_config.canvas.fit_floor();
     let height = window.app.board.panel(card).expect("the card").layout.size[1] * floor;
@@ -181,4 +197,62 @@ fn a_press_on_the_row_of_a_card_taller_than_the_canvas_shows_its_top() {
         shown.bottom() > canvas.bottom(),
         "the foot of the card {shown:?} is below the canvas {canvas:?}"
     );
+}
+
+/// A card of the default width takes the ceiling of its height at the most, and
+/// it stands in the column at the right of its agent panel. A jump shows it whole
+/// in every window, and it shows the one line of the card when the card is folded.
+#[test]
+fn a_press_on_the_row_of_a_card_of_a_column_shows_that_card_open_and_folded() {
+    for size in [[800.0, 600.0], [1280.0, 900.0]] {
+        let mut window = agent_window(size);
+        let card = tall_card(&mut window, document(24, 16, 0, false));
+        let agent = window.app.board.panels[0].layout;
+        let (place, layout) = {
+            let panel = window.app.board.panel(card).expect("the card");
+            (panel.block().expect("a card").place, panel.layout)
+        };
+        assert!(
+            place == horizon_core::CardPlace::Column
+                && layout.position[0] > agent.position[0] + agent.size[0]
+                && (layout.position[1] - agent.position[1]).abs() < 0.5,
+            "the card {layout:?} stands in the column at the right of its agent panel {agent:?}: {place:?}"
+        );
+
+        let _ = press_the_row(&mut window);
+        let (canvas, shown) = (window.app.canvas_rect(&window.ctx), panel_rect(&window, card));
+        assert!(
+            canvas.contains_rect(shown),
+            "the jump shows the whole card {shown:?} of the column in the canvas {canvas:?} at {size:?}"
+        );
+
+        // The agent says that the job of the card is finished, so the card folds
+        // to one line.
+        let mut finished = document(24, 16, 0, false);
+        finished["finished"] = serde_json::json!(true);
+        let panel_id = window.app.board.panel(card).expect("the card").local_id.clone();
+        let ctx = window.ctx.clone();
+        let update = request(
+            &window,
+            Operation::Update {
+                panel_id,
+                document: finished,
+            },
+        );
+        let _ = window.app.apply_block_request(&update, &ctx);
+        for _ in 0..3 {
+            let _ = window.frame(Vec::new());
+        }
+        let line = window.app.board.panel(card).expect("the card").layout.size[1];
+        assert!(
+            (line - crate::app::PANEL_TITLEBAR_HEIGHT).abs() < 0.5,
+            "a folded card is one line high: {line}"
+        );
+        let _ = press_the_row(&mut window);
+        let (canvas, shown) = (window.app.canvas_rect(&window.ctx), panel_rect(&window, card));
+        assert!(
+            canvas.contains_rect(shown),
+            "the jump shows the line {shown:?} of the folded card in the canvas {canvas:?} at {size:?}"
+        );
+    }
 }
