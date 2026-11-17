@@ -112,8 +112,11 @@ fn persistent_session_switch_waits_for_viewport_before_finalizing_target() {
     assert!(temp.path().join(".horizon").exists());
 }
 
+/// The view of the target session is kept as it was saved while the window
+/// settles. The window that the target session saved is not taken: a switch
+/// inside one window keeps the size and the place of that window.
 #[test]
-fn persisted_target_view_and_window_are_protected_during_session_switch() {
+fn the_saved_view_of_the_target_is_protected_and_the_window_stays_during_session_switch() {
     let config = Config::default();
     let (_temp, ctx, mut app) = test_app_with_config_and_startup(
         &config,
@@ -136,14 +139,20 @@ fn persisted_target_view_and_window_are_protected_during_session_switch() {
         .expect("target persistent session");
     let target_before = std::fs::read(&target.runtime_state_path).expect("target runtime before switch");
 
+    let geometry = |window: &WindowConfig| (window.width, window.height, window.x, window.y);
+    let window = geometry(&app.window_config);
+
     app.activate_runtime_session(&ctx, &target);
     let _ = run_app_frame_with_input(&ctx, &mut app, raw_input([900.0, 700.0], None));
 
     assert!(app.root_viewport_stabilizer.is_some());
     assert!(!app.startup_workspace_organization_pending);
     assert!(app.initial_pan_done);
-    assert!((app.window_config.width - 1800.0).abs() <= 0.01);
-    assert!((app.window_config.height - 1100.0).abs() <= 0.01);
+    assert_eq!(
+        geometry(&app.window_config),
+        window,
+        "the switch keeps the window of before it"
+    );
     assert_eq!(
         std::fs::read(&target.runtime_state_path).expect("target runtime while pending"),
         target_before
@@ -151,8 +160,11 @@ fn persisted_target_view_and_window_are_protected_during_session_switch() {
 
     let _ = run_app_frame_with_input(&ctx, &mut app, raw_input([1800.0, 1100.0], Some([10.0, 20.0])));
     assert!(app.root_viewport_stabilizer.is_some());
-    assert_eq!(app.window_config.x, Some(120.0));
-    assert_eq!(app.window_config.y, Some(80.0));
+    assert_eq!(
+        geometry(&app.window_config),
+        window,
+        "a frame of a window that still settles changes nothing"
+    );
     assert_eq!(
         std::fs::read(&target.runtime_state_path).expect("target runtime while stale position is observed"),
         target_before

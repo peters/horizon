@@ -22,8 +22,9 @@ says so in its question before it removes that session.
 - Candidate: each candidate that changes the Sessions dialog, its backdrop or
   `SessionStore::delete_session`.
 - Platforms: Linux, with the fixture.
-- This procedure does not test the switch between sessions or the browser
-  profile cleanup of a board that the candidate can read.
+- This procedure tests the window of a new session. It does not test the other
+  parts of a switch between sessions, or the browser profile cleanup of a board
+  that the candidate can read.
 
 ## 3. Safety
 
@@ -216,6 +217,21 @@ says so in its question before it removes that session.
 
    Result: The dialog closes.
 
+### 6.5 NEW — A new session keeps the window
+
+1. Make the candidate window larger than its size at the start, and move it.
+   Record its size and its position.
+
+   Result: The window has a size and a position that are not those of the
+   start.
+
+2. Open **Menu** › **Sessions**. Click **Open New Session**.
+
+   Result: The dialog closes and the window shows the board of a new session.
+   The window has the size and the position that you recorded. Only the start
+   of the candidate takes the size of the window from the saved session or
+   from the settings.
+
 ## 7. Pass criteria
 
 - In tasks 6.1 and 6.2, the dialog is bright above a dim board each time that
@@ -226,6 +242,8 @@ says so in its question before it removes that session.
 - In task 6.3, the dialog removes the session and its session folder, and it
   shows no error text.
 - In task 6.4, **Close** and **Escape** close the dialog.
+- In task 6.5, the window of the new session has the size and the position of
+  the window before the switch.
 
 ## 8. Cleanup
 

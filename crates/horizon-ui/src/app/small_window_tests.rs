@@ -485,3 +485,4 @@ fn the_second_line_of_a_workspace_row_holds_facts_and_no_screen_text() {
 }
 
 mod jump;
+mod session;

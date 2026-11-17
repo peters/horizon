@@ -393,8 +393,12 @@ impl HorizonApp {
         let _ = self.drain_panel_output();
         let _ = self.auto_save_runtime_state();
         self.finish_session_switch();
+        // A switch inside one window keeps the size and the place of that window.
+        // Only the start of the program takes them from the session or from the
+        // settings, so the session takes the window that shows it.
+        let window = self.window_config.clone();
         self.activate_persistent_session(&target);
-        self.restore_window_viewport(ctx);
+        self.window_config = window;
         self.session_manager = None;
         false
     }
