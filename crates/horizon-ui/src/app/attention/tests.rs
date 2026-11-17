@@ -563,11 +563,7 @@ fn card_panel(
                 kind: PanelKind::Block,
                 block: Some(horizon_core::BlockPanelState {
                     title: "The plan".to_owned(),
-                    document,
-                    revision: 1,
-                    owner_actor: None,
-                    updated_at_millis: 0,
-                    answered_callout: None,
+                    ..horizon_core::BlockPanelState::new(document)
                 }),
                 ..PanelOptions::default()
             },

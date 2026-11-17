@@ -171,11 +171,8 @@ impl HorizonApp {
         let size = crate::block_widget::default_card_size(&document, self.canvas_rect(ctx).width());
         let state = BlockPanelState {
             title: notice::TITLE.to_owned(),
-            document,
-            revision: 1,
-            owner_actor: None,
             updated_at_millis: now_millis(),
-            answered_callout: None,
+            ..BlockPanelState::new(document)
         };
         let options = PanelOptions {
             kind: PanelKind::Block,

@@ -18,7 +18,7 @@ use horizon_core::browser::manifest::{
     block::{self, CardSummary, Operation, Outcome, Request},
 };
 use horizon_core::node_cards;
-use horizon_core::{BlockPanelState, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::HorizonApp;
 use super::answer_retries::{RefusedAnswer, RefusedAnswers};
@@ -512,6 +512,8 @@ impl HorizonApp {
             owner_actor: Some(owner.to_owned()),
             updated_at_millis: manifest::now_millis(),
             answered_callout: None,
+            // The card of an agent panel stands in the column of that panel.
+            place: caller.panel().map_or(CardPlace::Tile, |_| CardPlace::Column),
         };
         let revision = state.revision;
         let options = PanelOptions {
@@ -522,7 +524,7 @@ impl HorizonApp {
             ..PanelOptions::default()
         };
         let focused = self.board.focused;
-        let beside = caller.panel().map(|panel| self.new_card_beside(panel, owner));
+        let beside = caller.panel().map(|panel| panel.panel_id);
         let Ok(id) = self.create_agent_child_panel(options, workspace, beside) else {
             return Outcome::failed("panel_unavailable", "Horizon could not create a card in this workspace");
         };
@@ -657,15 +659,6 @@ impl HorizonApp {
                 .and_then(|closer| self.board.panel(closer))
                 .map_or_else(String::new, |panel| panel.local_id.clone()),
         }
-    }
-
-    /// The panel a new card of `owner` takes a free place beside: the card that
-    /// agent created last in this workspace, or the agent panel itself.
-    fn new_card_beside(&self, actor: ActorPanel, owner: &str) -> PanelId {
-        self.workspace_cards(actor.workspace_id)
-            .iter()
-            .rfind(|panel| card_owner(panel) == Some(owner))
-            .map_or(actor.panel_id, |panel| panel.id)
     }
 
     /// The cards of one workspace, in board order.

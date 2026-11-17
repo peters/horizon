@@ -1,6 +1,7 @@
 use crate::panel::{PanelKind, PanelOptions};
 
 mod alignment;
+mod card_columns;
 mod core;
 mod exit_bounds;
 mod layout;

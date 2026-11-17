@@ -40,6 +40,29 @@ pub struct BlockPanelState {
     /// of the card, and the answer outlives the frame and the run that saw it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_callout: Option<Component>,
+    /// Where the card stands among the panels of its workspace.
+    #[serde(default, skip_serializing_if = "CardPlace::is_tile")]
+    pub place: CardPlace,
+}
+
+/// Where a card stands among the panels of its workspace. A card of a board
+/// that an older build saved is a tile.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardPlace {
+    /// A tile as every panel: the preset of its workspace arranges it.
+    #[default]
+    Tile,
+    /// In the column of the cards of its agent panel, which Horizon lays out.
+    Column,
+    /// Where the person put it. No preset and no column moves it.
+    Free,
+}
+
+impl CardPlace {
+    fn is_tile(&self) -> bool {
+        *self == Self::Tile
+    }
 }
 
 impl BlockPanelState {
@@ -58,7 +81,14 @@ impl BlockPanelState {
             owner_actor: None,
             updated_at_millis: 0,
             answered_callout: None,
+            place: CardPlace::Tile,
         }
+    }
+
+    /// Whether the card stands in the column of the cards of the agent `actor`.
+    #[must_use]
+    pub fn stands_in_column_of(&self, actor: &str) -> bool {
+        self.place == CardPlace::Column && self.owner_actor.as_deref() == Some(actor)
     }
 
     /// The callout whose answer the person pressed, as the document holds it.

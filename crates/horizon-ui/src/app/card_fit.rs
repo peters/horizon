@@ -24,11 +24,11 @@
 //! when its document changes.
 //!
 //! A workspace that the person arranged with a preset owns the size of every
-//! panel in it, so a card there keeps the preset's size.
+//! tile in it, so a card that is a tile there keeps the preset's size.
 
 use egui::Context;
 
-use horizon_core::{PanelId, PanelKind};
+use horizon_core::{CardPlace, PanelId, PanelKind};
 
 use super::HorizonApp;
 use crate::block_widget::{card_height_limits, card_width, fitted_card_height};
@@ -75,22 +75,25 @@ impl HorizonApp {
             let hand_resized = card.hand_resized();
             // The bounds of the height and the width come from the document: a
             // wide card may grow taller and wider than the narrow card of today.
-            let Some((mut limits, width, current, workspace_id)) = self.board.panel(id).and_then(|panel| {
-                let document = &panel.block()?.document;
+            let Some((mut limits, width, current, workspace_id, tile)) = self.board.panel(id).and_then(|panel| {
+                let card = panel.block()?;
                 Some((
-                    card_height_limits(document),
-                    card_width(document, canvas_width),
+                    card_height_limits(&card.document),
+                    card_width(&card.document, canvas_width),
                     panel.layout.size,
                     panel.workspace_id,
+                    card.place == CardPlace::Tile,
                 ))
             }) else {
                 continue;
             };
-            // An arranged workspace gives every panel its preset size.
-            if self
-                .board
-                .workspace(workspace_id)
-                .is_some_and(|workspace| workspace.layout.is_some())
+            // An arranged workspace gives every tile its preset size. A card of a
+            // column, or one that the person placed, is no tile of the preset.
+            if tile
+                && self
+                    .board
+                    .workspace(workspace_id)
+                    .is_some_and(|workspace| workspace.layout.is_some())
             {
                 continue;
             }
