@@ -82,11 +82,17 @@ impl<'a> TerminalView<'a> {
             self.scrollbar_bottom_clearance,
         );
         let viewport = terminal_viewport_size(ui.available_size(), char_width, line_height);
-        let new_cols = viewport.cols;
-        let new_rows = viewport.rows;
-
-        self.panel
-            .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
+        // A follow panel keeps the grid of its stream: the widget never asks it
+        // to resize, it draws that grid from the top left of the body, and the
+        // pointer and the scrollbar read the grid that the terminal has.
+        let followed = self.panel.terminal().filter(|_| self.panel.is_follower());
+        let (new_rows, new_cols) = followed.map_or((viewport.rows, viewport.cols), |terminal| {
+            (terminal.rows(), terminal.cols())
+        });
+        if followed.is_none() {
+            self.panel
+                .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
+        }
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);
         if interactive && keyboard.take_keyboard_focus {
@@ -234,6 +240,14 @@ impl<'a> TerminalView<'a> {
             }
             return;
         }
+        if let Some(line) = self.panel.follow_ended_line() {
+            // Only a new screen of the stream brings a follow panel back, so the
+            // line of a stream that ended has no control.
+            if let Some(strip) = notice_strip::paint(ui, body) {
+                notice_strip::row(ui, strip, |ui| notice_strip::sentence(ui, &line));
+            }
+            return;
+        }
         if let Some(end) = self.panel.program_end() {
             let pressed = program_end_notice::ProgramEndNotice { end }.show(ui, body, interactive);
             if pressed != PanelNoticeAction::None {
@@ -287,3 +301,7 @@ pub(crate) fn scrollbar_hit_rect(available: Vec2, scrollbar_bottom_clearance: f3
 // The regression fixture uses a Unix shell and PTY.
 #[cfg(all(test, unix))]
 mod cache_tests;
+
+// A follow panel holds a terminal on a Unix socket pair.
+#[cfg(all(test, unix))]
+mod follow_tests;
