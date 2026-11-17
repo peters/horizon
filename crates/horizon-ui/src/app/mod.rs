@@ -378,7 +378,7 @@ pub struct HorizonApp {
     /// A workspace whose panels the person asked to close, waiting for the line
     /// that says the tmux sessions of its machine end with them.
     pub(in crate::app) close_workspace_confirm: Option<WorkspaceId>,
-    /// A panel whose close asks first, in the line that its one session ends.
+    /// A panel whose close waits for the answer about its one tmux session.
     pub(in crate::app) close_panel_confirm: Option<PanelId>,
     /// Counts the writes of the machine list, so a read asked for before a write
     /// never replaces it.
