@@ -2,6 +2,7 @@
 //! in the place of a server: an owner terminal that runs a small program and the
 //! panel that follows it.
 
+mod name;
 mod relay;
 mod window;
 

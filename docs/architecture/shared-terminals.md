@@ -429,7 +429,7 @@ computer, so no other computer changes them.
 
 | Field | Default | What it sets |
 |---|---|---|
-| `computer_name` | Empty | The name that the other computers show for this computer. An empty name is the host name. The name is one line of at most 60 characters. |
+| `computer_name` | Empty | The name that the other computers show for this computer. An empty name is the host name. The name is one line of at most 60 characters. A draft of the Settings window changes nothing on the live link; the link takes the name that the store saved. |
 | `share_terminals` | `true` | The other computers see the terminals of this computer. |
 | `remote_typing` | `true` | The other computers type in those terminals. It has no effect while `share_terminals` is `false`. |
 
@@ -467,7 +467,9 @@ window does.
 - **It starts again in two cases.** The first case is a sync link that was
   `away` in one frame and is not `away` in the next frame. The live link has no
   keepalive, so the return of the sync link is the sign that the live link can
-  be dead. The second case is a new value of `computer_name`.
+  be dead. The second case is a new value of `computer_name` in the settings
+  store: the label of the link is the saved name, so a key in the name field of
+  the Settings window sends nothing and starts no link.
 - **The old link stops on a thread of its own.** The stop of a `LiveSupervisor`
   waits for the thread of the link, so no frame does it.
 - **A lost link forgets what only an open link holds.** This occurs at the

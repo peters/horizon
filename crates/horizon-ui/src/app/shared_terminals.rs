@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use egui::Context;
-use horizon_core::PanelId;
+use horizon_core::{Config, PanelId, ServerConfig};
 use horizon_sync::{LiveEvent, LiveState, LiveSupervisor, SupervisorConfig};
 
 use super::HorizonApp;
@@ -70,6 +70,19 @@ impl SharedTerminals {
 /// A text of another computer as one bounded line.
 fn shown(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(SHOWN_CHARS).collect()
+}
+
+/// The server entry as the settings store holds it: the baseline of the Settings
+/// window, or the applied settings while no window edits them. A draft of the name
+/// of this computer is not a name that another computer reads, so a key in the name
+/// field changes nothing on the live link.
+fn stored_server<'a>(stored: Option<&'a Config>, applied: &'a Config) -> &'a ServerConfig {
+    &stored.unwrap_or(applied).server
+}
+
+/// Whether this computer saved a name that its live link does not have yet.
+fn link_renamed(shared: &SharedTerminals, server: &ServerConfig) -> bool {
+    shared.name != server.computer_name
 }
 
 /// Stops a live link on a thread of its own, because the stop joins a thread.
@@ -128,7 +141,8 @@ impl HorizonApp {
     }
 
     /// Starts the live link with the sync link of this computer, ends it with
-    /// it, and starts it again when the sync link came back or the name changed.
+    /// it, and starts it again when the sync link came back or the saved name
+    /// changed.
     fn follow_sync_link(&mut self, ctx: &Context) {
         let Some(sync) = self.server_sync.as_mut() else {
             if self.shared_terminals.supervisor.is_some() {
@@ -136,10 +150,14 @@ impl HorizonApp {
             }
             return;
         };
+        let stored = stored_server(
+            self.settings.as_ref().map(|editor| &editor.original),
+            &self.template_config,
+        );
         let shared = &mut self.shared_terminals;
         let away = sync.snapshot().state().code() == "away";
         let returned = std::mem::replace(&mut shared.sync_away, away) && !away;
-        let renamed = shared.name != self.template_config.server.computer_name;
+        let renamed = link_renamed(shared, stored);
         match sync.live.take() {
             Some(config) => shared.config = Some(config),
             None if shared.supervisor.is_some() && (returned || renamed) => {}
@@ -150,7 +168,10 @@ impl HorizonApp {
         };
         // The new link has nothing of the old one, so the list and the follows go again.
         self.shared_link_lost(None);
-        let server = &self.template_config.server;
+        let server = stored_server(
+            self.settings.as_ref().map(|editor| &editor.original),
+            &self.template_config,
+        );
         let shared = &mut self.shared_terminals;
         shared.owner = owner::Owner::default();
         shared.name.clone_from(&server.computer_name);
