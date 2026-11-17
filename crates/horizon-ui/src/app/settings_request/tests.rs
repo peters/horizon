@@ -966,3 +966,5 @@ fn plant_machine(app: &mut HorizonApp, name: &str) {
     std::fs::create_dir_all(&directory).expect("the key directory");
     std::fs::write(directory.join(name), "-----BEGIN OPENSSH PRIVATE KEY-----\n").expect("the key");
 }
+
+mod agent_row;
