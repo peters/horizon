@@ -170,6 +170,8 @@ pub(super) fn run_bounded(mut command: Command, limit: u64, deadline: Duration) 
 
 /// A value as the remote shell must read it: one word, with no expansion.
 #[must_use]
+/// This copy answers the same word as `horizon_core::util::quote`: this crate does not depend on
+/// `horizon-core`.
 pub(super) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

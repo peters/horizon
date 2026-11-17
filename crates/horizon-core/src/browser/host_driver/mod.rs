@@ -273,9 +273,9 @@ fn start_session_process(options: &HostDriverOptions) -> Result<std::path::PathB
     // that the entry of the host names.
     let script = format!(
         "{HOST_SESSION_ENV}=1 nohup {} {} >> {} 2>&1 &",
-        quote(&program.to_string_lossy()),
+        crate::util::quote(&program.to_string_lossy()),
         options.session_arguments(),
-        quote(&log.to_string_lossy()),
+        crate::util::quote(&log.to_string_lossy()),
     );
     Command::new("sh")
         .args(["-c", &script])
@@ -289,11 +289,6 @@ fn start_session_process(options: &HostDriverOptions) -> Result<std::path::PathB
             ))
         })?;
     Ok(log)
-}
-
-/// One `sh` word that keeps the value of the person literal.
-pub(super) fn quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Serve the session of this host: the browser, the page and the socket that

@@ -413,6 +413,7 @@ fn build_util_linux_script_command(
     )
 }
 
+/// This copy differs from `crate::util::quote`: a word of safe ASCII and an empty string stay bare.
 fn shell_escape(value: &str) -> String {
     if value
         .bytes()

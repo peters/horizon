@@ -92,9 +92,9 @@ impl StandIn {
              [ -f {options} ] || printf '%s\\n' \"$*\" | tr '\\n' ' ' > {options}\n\
              marker={marker}\nfor a in \"$@\"; do last=$a; done\n\
              HORIZON_MACHINE_WATCH_TMUX_SOCKET={socket}\nexport HORIZON_MACHINE_WATCH_TMUX_SOCKET\n{body}\n",
-            calls = quoted(&calls.to_string_lossy()),
-            options = quoted(&options.to_string_lossy()),
-            socket = quoted(server.socket()),
+            calls = crate::util::quote(&calls.to_string_lossy()),
+            options = crate::util::quote(&options.to_string_lossy()),
+            socket = crate::util::quote(server.socket()),
         );
         stand_in_program_in(folder.path(), "ssh", &body).ok()?;
         Some(Self {
@@ -130,11 +130,6 @@ impl StandIn {
         let text = String::from_utf8_lossy(&output.stdout);
         text.lines().filter(|line| line.contains(&self.marker)).count()
     }
-}
-
-/// One value as the remote shell must read it: one word, with no expansion.
-fn quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Waits until `wanted` holds, and names what the test waited for.
@@ -341,7 +336,7 @@ fn a_link_that_drops_comes_back_by_the_rule_of_a_lost_link() {
         &format!(
             "if [ -f {counter} ]; then exec $last -s \"$marker\"; fi\n\
              printf 'x' > {counter}\nprintf 'HZ\\t1\\nZ\\n'\nexit 255",
-            counter = quoted(&counter.to_string_lossy()),
+            counter = crate::util::quote(&counter.to_string_lossy()),
         ),
     ) else {
         return;
@@ -379,7 +374,7 @@ fn stand_in_that_ends(server: &Server, end: &str) -> Option<(StandIn, tempfile::
         &format!(
             "if [ -f {counter} ]; then exec $last -s \"$marker\"; fi\n\
              printf 'x' > {counter}\nprintf 'HZ\\t1\\nZ\\n'\n{end}",
-            counter = quoted(&counter.to_string_lossy()),
+            counter = crate::util::quote(&counter.to_string_lossy()),
         ),
     )?;
     Some((stand_in, phase))

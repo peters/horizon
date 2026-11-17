@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use super::lifecycle::quote_argument;
+use crate::util::quote;
 
 /// Resolve in the same interactive shell as the real launch. Functions and
 /// aliases retain ordinary launch behavior but cannot prove process ownership.
@@ -28,7 +28,7 @@ pub(super) fn owned_command(
         return None;
     }
     let output = tempfile::NamedTempFile::new().ok()?;
-    let script = format!("command -v {name} > {}", quote_argument(output.path().to_str()?));
+    let script = format!("command -v {name} > {}", quote(output.path().to_str()?));
     let mut probe = crate::Terminal::spawn(crate::terminal::TerminalSpawnOptions {
         program: program.to_owned(),
         args: vec!["-ic".into(), script],
@@ -68,7 +68,7 @@ pub(super) fn owned_command(
     }
     Some(format!(
         "exec {}{}{}",
-        quote_argument(text),
+        quote(text),
         if suffix.is_empty() { "" } else { " " },
         suffix
     ))

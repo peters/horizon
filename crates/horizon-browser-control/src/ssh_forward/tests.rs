@@ -68,10 +68,6 @@ fn scratch() -> tempfile::TempDir {
     tempfile::tempdir().expect("temporary directory")
 }
 
-fn quoted(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
-}
-
 #[test]
 fn a_target_that_ssh_reads_as_an_option_is_refused_before_a_connection() {
     let _serial = serial();
@@ -146,7 +142,10 @@ fn a_ready_forward_is_reaped_with_its_child_when_it_drops() {
     let pid_file = directory.path().join("ssh.pid");
     let program = stand_in(
         directory.path(),
-        &format!("printf '%s' \"$$\" > {}\nexec sleep 60", quoted(&pid_file)),
+        &format!(
+            "printf '%s' \"$$\" > {}\nexec sleep 60",
+            super::transport::quote(&pid_file.to_string_lossy())
+        ),
     );
     let mut probed = Vec::new();
     let forward = SshForward::start_with("browser-vm", 9222, &program, &[], DEADLINE, |port| {
@@ -174,7 +173,7 @@ fn a_local_port_that_another_process_took_is_tried_once_more() {
         &format!(
             "if [ -e {marker} ]; then\n  exec sleep 60\nfi\n: > {marker}\n\
              printf '%s\\n' 'bind [127.0.0.1]:41000: Address already in use' >&2\nexit 255",
-            marker = quoted(&first)
+            marker = super::transport::quote(&first.to_string_lossy())
         ),
     );
     let mut seen: Vec<u16> = Vec::new();
@@ -400,7 +399,7 @@ fn the_settings_of_a_connect_carry_the_program_and_the_bounds_of_a_test() {
         directory.path(),
         &format!(
             "case \" $* \" in\n  *\" -N \"*) printf '%s' \"$$\" > {}; exec sleep 60 ;;\n  *) printf '%s\\n' '41000' '/devtools/browser/6a0c1f' ;;\nesac",
-            quoted(&pid_file)
+            super::transport::quote(&pid_file.to_string_lossy())
         ),
     );
     let ssh = Ssh::default().with_program(&program).with_probe(|_port| true);

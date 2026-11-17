@@ -554,6 +554,8 @@ fn format_path_for_terminal(path: &Path) -> String {
     format_posix_path(&path)
 }
 
+/// This copy differs from `horizon_core::util::quote`: a word of safe ASCII stays bare, and a `'`
+/// becomes `'"'"'`.
 pub(super) fn format_posix_path(path: &str) -> String {
     if !path_needs_posix_quotes(path) {
         return path.to_string();

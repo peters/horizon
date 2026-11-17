@@ -249,7 +249,7 @@ pub fn machine_key_name(key: &str) -> Result<String, MachineError> {
 /// existing session, so the folder applies to a session that the command makes.
 #[must_use]
 pub fn session_command(session: &str, folder: Option<&str>) -> String {
-    let start = folder.map(|folder| format!(" -c {}", crate::agent_work::quote_argument(folder)));
+    let start = folder.map(|folder| format!(" -c {}", crate::util::quote(folder)));
     format!(
         "tmux -u new-session -A -s {session}{} \\; set-option status off",
         start.unwrap_or_default()

@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -295,7 +294,7 @@ pub(crate) fn append_seed(kind: PanelKind, args: &mut [String], brief: &str) -> 
         return false;
     }
     args[1].push_str(if kind == PanelKind::OpenCode { " --prompt " } else { " " });
-    let _ = write!(args[1], "'{}'", brief.replace('\'', "'\\''"));
+    args[1].push_str(&crate::util::quote(brief));
     true
 }
 

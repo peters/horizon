@@ -144,6 +144,8 @@ fn wrap_in_login_shell(program: String, args: Vec<String>) -> (String, Vec<Strin
     (shell, vec!["-ic".to_string(), joined])
 }
 
+/// This copy differs from `crate::util::quote`: `~`, `*`, a backtick, a non-ASCII word and a
+/// leading `-` stay bare.
 fn shell_escape(argument: &str) -> String {
     if argument.is_empty()
         || argument.contains(|character: char| {

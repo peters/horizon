@@ -114,7 +114,7 @@ fn stand_in_ssh(directory: &Path, log: &Path) -> String {
     stand_in(
         directory,
         log,
-        &format!("printf '%s\\n' {}", script_text("41000\n/devtools/browser/mock")),
+        &format!("printf '%s\\n' {}", crate::util::quote("41000\n/devtools/browser/mock")),
     )
 }
 

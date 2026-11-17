@@ -17,7 +17,7 @@ mod transcript;
 pub use startup::resume_brief;
 pub(crate) use startup::{RestoreBudget, WorkContinuation, append_seed, configured_resume_limit};
 
-pub(crate) use lifecycle::{WorkLaunch, WorkOwner, quote_argument};
+pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 
 pub use claim::{Claim, ClaimSource, ProgramClaim, Step, TitleClaim};
 pub use ledger::{HookEvent, TurnLedger};

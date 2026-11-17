@@ -159,9 +159,38 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
     Cow::Borrowed(value)
 }
 
+/// One `sh` word that keeps the value of the person literal: one word, with no
+/// expansion.
+pub fn quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{spawn_stand_in, stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
+    use super::{quote, spawn_stand_in, stand_in_program, stand_in_program_in, stand_in_shell_in, truncate_chars};
+
+    #[test]
+    fn quote_keeps_every_value_one_word_of_the_shell() {
+        let table = [
+            ("", "''"),
+            ("plain", "'plain'"),
+            ("two words", "'two words'"),
+            ("it's", "'it'\\''s'"),
+            ("a;'b", "'a;'\\''b'"),
+            ("say \"hi\"", "'say \"hi\"'"),
+            ("$HOME", "'$HOME'"),
+            ("back`tick", "'back`tick'"),
+            ("back\\slash", "'back\\slash'"),
+            ("one\ntwo", "'one\ntwo'"),
+            ("~", "'~'"),
+            ("*", "'*'"),
+            ("naïve-ærlig", "'naïve-ærlig'"),
+            ("-x", "'-x'"),
+        ];
+        for (input, expected) in table {
+            assert_eq!(quote(input), expected, "the word of {input:?}");
+        }
+    }
 
     #[test]
     fn stand_in_program_names_a_program_that_exists() {

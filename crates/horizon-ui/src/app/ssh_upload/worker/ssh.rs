@@ -408,6 +408,7 @@ fn sort_remote_entries(left: &str, right: &str) -> std::cmp::Ordering {
     }
 }
 
+/// This copy differs from `horizon_core::util::quote`: every value is quoted, and a `'` becomes `'"'"'`.
 fn shell_escape(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

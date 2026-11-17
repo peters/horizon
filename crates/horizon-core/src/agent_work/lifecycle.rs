@@ -162,7 +162,7 @@ impl WorkLaunch<'_> {
             _ => return None,
         };
         let path = path.to_str()?;
-        let report = format!(" {flag} {}", quote_argument(path));
+        let report = format!(" {flag} {}", crate::util::quote(path));
         present.then_some(report)
     }
 }
@@ -271,10 +271,6 @@ fn cancellation_input(bytes: &[u8]) -> bool {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(1);
     matches!(key, "99" | "67") && modifiers.saturating_sub(1) & 4 != 0
-}
-
-pub(crate) fn quote_argument(argument: &str) -> String {
-    format!("'{}'", argument.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -520,6 +516,6 @@ mod tests {
 
     #[test]
     fn plugin_path_is_always_shell_quoted() {
-        assert_eq!(quote_argument("a;'b"), "'a;'\\''b'");
+        assert_eq!(crate::util::quote("a;'b"), "'a;'\\''b'");
     }
 }

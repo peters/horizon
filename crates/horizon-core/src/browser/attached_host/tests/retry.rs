@@ -45,7 +45,7 @@ fn retry_after_a_lost_link_reconnects_with_a_fresh_forward() {
             close = quoted(&close),
             release = quoted(&release),
             answers = quoted(&answers),
-            running = script_text(&endpoint_text(RUNNING_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER))
         ),
     );
     let probe = {

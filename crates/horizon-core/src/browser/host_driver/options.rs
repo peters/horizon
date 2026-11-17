@@ -8,8 +8,9 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use super::{HostDriverEngine, quote};
+use super::HostDriverEngine;
 use crate::error::{Error, Result};
+use crate::util::quote;
 
 /// The settings of one driver of a browser host.
 #[derive(Clone, Debug, Eq, PartialEq)]

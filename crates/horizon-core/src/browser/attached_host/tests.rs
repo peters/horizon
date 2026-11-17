@@ -38,12 +38,7 @@ fn scratch() -> tempfile::TempDir {
 }
 
 fn quoted(path: &Path) -> String {
-    script_text(&path.to_string_lossy())
-}
-
-/// One value as the remote shell must read it: one word, with no expansion.
-fn script_text(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::util::quote(&path.to_string_lossy())
 }
 
 /// One `sh` program that stands in for `ssh`: it logs the call it got and
@@ -228,7 +223,7 @@ fn an_endpoint_file_that_answers_reuses_the_browser_that_wrote_it() {
         &log,
         &format!(
             "printf '%s\\n' {running}",
-            running = script_text(&endpoint_text(RUNNING_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER))
         ),
     );
     let probe = {
@@ -281,8 +276,8 @@ fn a_stale_endpoint_file_starts_the_browser_of_that_machine_once_more() {
         &log,
         &format!(
             "case \" $* \" in\n  *nohup*) printf '%s\\n' {started} ;;\n  *) printf '%s\\n' {running} ;;\nesac",
-            running = script_text(&endpoint_text(RUNNING_BROWSER)),
-            started = script_text(&endpoint_text(STARTED_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER)),
+            started = crate::util::quote(&endpoint_text(STARTED_BROWSER))
         ),
     );
     let probe = {
@@ -392,7 +387,7 @@ fn a_connect_that_a_panel_stopped_delivers_no_forward() {
         &log,
         &format!(
             "printf '%s\\n' {running}",
-            running = script_text(&endpoint_text(RUNNING_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER))
         ),
     );
     let host = AttachedHost::new("browser-vm", None).expect("one SSH name");
@@ -729,7 +724,7 @@ fn a_lost_link_comes_back_by_itself_and_leaves_the_page_report_to_its_driver() {
         &log,
         &format!(
             "printf '%s\\n' {running}",
-            running = script_text(&endpoint_text(RUNNING_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER))
         ),
     );
     let probe = {
@@ -812,7 +807,7 @@ fn an_automatic_attempt_does_not_start_a_browser_that_is_gone() {
         &log,
         &format!(
             "printf '%s\\n' {running}",
-            running = script_text(&endpoint_text(RUNNING_BROWSER))
+            running = crate::util::quote(&endpoint_text(RUNNING_BROWSER))
         ),
     );
     let probe = {
