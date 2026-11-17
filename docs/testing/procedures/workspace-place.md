@@ -17,9 +17,9 @@ workspace on a machine, that the row of that workspace says where it lives, that
 the canvas picker says where its agents and its terminals start, that each new
 terminal of that workspace runs on the machine in its own tmux session, that the
 work in it survives a restart of Horizon, that a terminal reconnects by itself
-after a lost link and keeps its session, that a close ends the session, that two
-workspaces on one machine do not collide, and that a forgotten machine is
-reported.
+after a lost link and keeps its session, that a close asks first and then ends
+the session, that two workspaces on one machine do not collide, and that a
+forgotten machine is reported.
 
 ## 2. Applicability
 
@@ -38,8 +38,9 @@ reported.
 > its own `HORIZON_HOME` and its own desktop. Do not start it with your own home.
 
 > **CAUTION: DO NOT RUN THIS PROCEDURE AGAINST A REAL MACHINE.** A close in task
-> P5 ends a tmux session with `tmux kill-session`, and the work in that session
-> stops.
+> P6 asks `End the tmux session of this panel on <machine>?` and then ends a tmux
+> session with `tmux kill-session`, and the work in that session stops. Click
+> `Cancel` to keep the session.
 
 > **CAUTION: A FIREWALL RULE CHANGES THE NETWORK OF THIS COMPUTER.** Task P9 cuts
 > a link. Stop the loopback SSH server instead of adding a rule when this
@@ -211,43 +212,63 @@ reported.
    Result: Two sessions that start with `hz-` are in the list, and the part
    after `hz-` differs.
 
-### 6.7 P6 — A close ends the session
+### 6.7 P6 — A close asks first, then it ends the session
 
 1. In the second terminal, note the name of the session of the second panel from
    `tmux ls`.
 
    Result: One name of the form `hz-<eight hexadecimal characters>-<n>`.
 
-2. Close the second panel with its titlebar close button.
+2. Click the close button of the titlebar of the second panel.
+
+   Result: The panel stays. Horizon shows the question `End the tmux session of
+   this panel on build-1?`, the red `Close` and `Cancel`.
+
+3. Click `Cancel`.
+
+   Result: The question goes away, the panel stays, and `tmux ls` in the second
+   terminal still lists the session of the second panel.
+
+4. Click the close button of the titlebar of the second panel again, and read
+   the question. Then click the red `Close`.
 
    Result: The panel goes away, and Horizon shows no error dialog.
 
-3. In the second terminal, run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
+5. In the second terminal, run `ssh -p 2222 -i <the machine key> 127.0.0.1 tmux
    ls` again.
 
    Result: The session of the second panel is not in the list. The session of
    the first panel is still there.
 
-4. Right-click the row of the second workspace, click `Close All Panels`, and
+6. Right-click the row of the second workspace, click `Close All Panels`, and
    read the confirm line.
 
    Result: The workspace holds no panel of the machine any more, so the menu
    closes its panels at once. Record what it does.
 
-5. Make one terminal in the second workspace again, then right-click the row of
+7. Make one terminal in the second workspace again, then right-click the row of
    the second workspace and click `Close All Panels`.
 
    Result: The menu shows the line `End 1 tmux session(s) of this workspace's
    machine?`, then `Close All Panels` and `Cancel`.
 
-6. Click `Cancel`.
+8. Click `Cancel`.
 
    Result: The panel stays, and the session stays in `tmux ls`.
 
-7. Click `Close All Panels` again and then `Close All Panels` in the confirm
+9. Click `Close All Panels` again and then `Close All Panels` in the confirm
    line.
 
    Result: The panel goes away, and its session is not in `tmux ls`.
+
+10. Make two terminals in the second workspace. Press the close button of the
+    titlebar of one of them, then click `Cancel` in the question. Click `Close`
+    in the row menu of the other one, and read the question. Then click its red
+    `Close`.
+
+    Result: Each of the two ways asks the same question. `Cancel` keeps the
+    panel and its session. The red `Close` removes the panel and its session,
+    and the session of the other panel stays.
 
 ### 6.8 P7 — A forgotten machine
 
@@ -388,7 +409,8 @@ reported.
 
 14. Press the shortcut for a new terminal in the workspace, run one command in
     it, and cut the link again as in step 2. When the mark reads
-    `Reconnecting`, close the panel with its titlebar close button.
+    `Reconnecting`, click the close button of its titlebar, then click the red
+    `Close` in the question.
 
     Result: The panel goes away, Horizon shows no error dialog, and Horizon
     starts no further attempt.
@@ -494,7 +516,11 @@ before the workspace had a place.
 - A session that ended does not reconnect, and a panel that a person closed
   starts no attempt.
 - Two workspaces on one machine hold two sessions.
-- A close of a panel ends its session, and a quit of Horizon ends none.
+- A close of a panel of a machine asks `End the tmux session of this panel on
+  <machine>?` first, in the same words as the close of a workspace. `Cancel`
+  keeps the panel and its session, and the red `Close` ends both. A panel of
+  this computer closes at once, with no question.
+- A quit of Horizon ends no session of a machine.
 - A workspace that holds a panel of a machine asks before it closes its panels.
 - A forgotten machine gives `machine_unavailable` and makes no panel, and a
   person can put the workspace on this computer again.
