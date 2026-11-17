@@ -292,6 +292,9 @@ when it names one of those kinds.
   has no program of this computer. The places that act on the program of a
   panel ask `Panel::is_follower` and do nothing for a follow panel. The design
   page is [`shared-terminals.md`](shared-terminals.md).
+- `config/server.rs` owns the three settings of the shared terminals of a
+  computer, beside the entry that names the server. It also holds the sentence
+  that the window shows for them (`SHARED_TERMINALS_NOTICE`).
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
@@ -505,6 +508,15 @@ when it names one of those kinds.
     the described Menu rows in
     `sidebar/rich_menu.rs`
   - `settings`: settings editor state and save/apply flows
+  - `shared_terminals`: the join of the shared terminals. `shared_terminals.rs`
+    starts and stops the live link and runs the join one time in each frame.
+    `shared_terminals/owner.rs` holds the list, the watched panels and the
+    check of the typed bytes, and `shared_terminals/follower.rs` holds the
+    other computers and the follow panels. `shared_terminals/link.rs` is the
+    trait of the calls of the link, so a test joins without a server. The
+    section of the sidebar is `sidebar/computers.rs`, and the fields of the
+    Settings window are `settings/server/sharing.rs`. The design page is
+    [`shared-terminals.md`](shared-terminals.md).
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
     result types in `session/types.rs` and loading/recovery rendering in
     `session/loading.rs`
