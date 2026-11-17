@@ -180,6 +180,15 @@ impl HorizonHome {
         self.agent_plugin_hosts_dir().join(safe_local_id(host_instance))
     }
 
+    /// The file beside the plugin folder of one Horizon that the holders of its
+    /// agent programs lock. While a holder holds it, that folder stays, and the
+    /// next Horizon of this home takes the identity of that Horizon.
+    #[must_use]
+    pub fn agent_plugin_host_held_path(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_hosts_dir()
+            .join(format!("{}.held", safe_local_id(host_instance)))
+    }
+
     #[must_use]
     pub fn claude_plugin_dir_for_host(&self, host_instance: &str) -> PathBuf {
         self.agent_plugin_host_dir(host_instance).join("claude-code")

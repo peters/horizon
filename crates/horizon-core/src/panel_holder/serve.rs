@@ -84,6 +84,7 @@ pub(crate) fn serve_watched(
     let paths = Paths::of(home, &launch.local_id)?;
     paths.prepare()?;
     let listener = paths.bind()?;
+    let _plugins = plugin_folder_lease(home, launch);
     let mut pty = crate::terminal::open_pty(
         launch.program.clone(),
         launch.args.clone(),
@@ -187,6 +188,17 @@ pub(crate) fn serve_watched(
     stop.store(true, Ordering::Release);
     let _ = UnixStream::connect(paths.socket());
     paths.remove_socket()
+}
+
+/// Locks the file that says that a program of the Horizon of this launch runs on.
+/// The arguments and the tools of that program name the plugin folder and the
+/// identity of that Horizon, so both stay while this value lives
+/// (`crates/horizon-ui/src/plugin_install/`).
+fn plugin_folder_lease(home: &HorizonHome, launch: &Launch) -> Option<fs::File> {
+    let host = launch.env.get(crate::browser::manifest::HOST_INSTANCE_ENV)?;
+    let held = fs::File::open(home.agent_plugin_host_held_path(host)).ok()?;
+    held.try_lock_shared().ok()?;
+    Some(held)
 }
 
 /// Ends the program of a holder as Horizon ends a panel: the master of its terminal

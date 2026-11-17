@@ -240,7 +240,9 @@ impl AgentPluginHostLease {
             }
             Err(TryLockError::Error(error)) => return Err(error),
         }
-        if let Err(error) = std::fs::create_dir_all(&instance_dir) {
+        // The file that the holders of the programs of this Horizon lock.
+        if let Err(error) = std::fs::create_dir_all(&instance_dir).and_then(|()| open_lock_file(&held_path(&lock_path)))
+        {
             drop(lock_file);
             let _ = std::fs::remove_file(&lock_path);
             return Err(error);
@@ -401,6 +403,12 @@ impl AgentPluginHostLease {
 impl Drop for AgentPluginHostLease {
     fn drop(&mut self) {
         release_skill_roots(&mut self.skill_roots);
+        // A program of this Horizon that runs on in a holder reads this folder, so
+        // the folder and its lease stay for the next Horizon of this home.
+        if held_by_a_holder(&self.lock_path) {
+            return;
+        }
+        let _ = std::fs::remove_file(held_path(&self.lock_path));
         if let Err(error) = std::fs::remove_dir_all(&self.host_dir)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -600,6 +608,17 @@ fn agent_plugin_host_lock_path(instance_dir: &Path) -> io::Result<PathBuf> {
     Ok(plugin_root.join(name))
 }
 
+/// The file beside the lease of a host that the holders of its programs lock, as
+/// `HorizonHome::agent_plugin_host_held_path` names it.
+fn held_path(lock_path: &Path) -> PathBuf {
+    lock_path.with_extension("held")
+}
+
+/// Whether a holder runs a program of the host of `lock_path`.
+fn held_by_a_holder(lock_path: &Path) -> bool {
+    open_lock_file(&held_path(lock_path)).is_ok_and(|held| matches!(held.try_lock(), Err(TryLockError::WouldBlock)))
+}
+
 fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     OpenOptions::new()
         .create(true)
@@ -637,6 +656,10 @@ fn prune_stale_agent_plugin_hosts(current_instance_dir: &Path) -> std::io::Resul
             Err(TryLockError::WouldBlock) => continue,
             Err(TryLockError::Error(error)) => return Err(error),
         }
+        if held_by_a_holder(&host_lock_path) {
+            continue;
+        }
+        let _ = std::fs::remove_file(held_path(&host_lock_path));
         match std::fs::remove_dir_all(&candidate_dir) {
             Ok(()) => pruned_hosts += 1,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -901,6 +924,8 @@ fn sync_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
     Ok(true)
 }
 
+#[cfg(test)]
+mod kept_folder_tests;
 #[cfg(test)]
 mod retired_skill_tests;
 
