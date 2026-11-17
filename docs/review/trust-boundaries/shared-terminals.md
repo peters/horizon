@@ -74,8 +74,9 @@ panels a computer shares and whether typing is on.
   the owner answers its own program.
 - **A follower takes no copy request.** An OSC 52 copy request of those bytes
   does not go to the clipboard of this computer.
-- **Those bytes do not change the size of a panel, and the panel does not
-  change their grid.** Only a `screen` event sets the grid of a follower.
+- **A follower takes no resize.** A resize of the panel changes nothing of a
+  follower, and no size goes to the program. Only a `screen` event sets the
+  grid of a follower.
 - **The texts of a stream are cleaned and cut.** The feed keeps 200 characters
   of each text and no control character. The texts are the device name, the
   label, the panel identifier, the title and the reason of an end.
@@ -131,11 +132,14 @@ panels a computer shares and whether typing is on.
 - **No program.** `Panel::follow` of `crates/horizon-core/src/panel/follow.rs`
   makes the panel from its content and never by the start of a panel. The kind
   of the panel is the shell, so no agent rule applies to it.
-- **Nothing stored.** The hub and the outbox hold memory only, and they open no
-  file. The handle of a computer holds memory only. A log line of the hub names
-  a device and a count. `LiveBytes` prints its count and never its bytes. The
+- **Nothing stored.** The hub and the outbox of `crates/horizon-sync/src/live/`
+  hold memory only, and they open no file. The handle of
+  `crates/horizon-sync/src/supervisor/live.rs` holds memory only.
+  `crates/horizon-core/src/runtime_state.rs` saves no follow panel. The
   greeting of a live link writes the row of its computer in the store, as the
   greeting of each link does.
+- **No byte of a terminal in a log line.** A log line of the hub names a device
+  and a count. `LiveBytes` prints its count and never its bytes.
 - **A removal of a computer ends its live link.** `remove_device` of
   `crates/horizon-sync/src/server.rs` ends each open link of that computer with
   `removed`, and the live link is one of them. `LiveHub::close` then removes its
@@ -149,6 +153,9 @@ panels a computer shares and whether typing is on.
 - **An older server gets no live frame.** `run` of
   `crates/horizon-sync/src/supervisor/live.rs` sends `open` only to a server
   that answered version 6 or higher.
+- **A computer gets only the streams that it asked for.** `Inner::accept` of
+  the same file drops a `screen` and `output` of a panel that the application
+  did not ask to follow. The mark `own` of a list never comes from a frame.
 - **No call waits for I/O.** No call of `LiveHandle` and no call of `FollowFeed`
   waits for a link, so the UI thread can call them.
 
@@ -170,7 +177,9 @@ panels a computer shares and whether typing is on.
   the content between two computers from the server.
 - **Who a computer is.** The label of a computer is text that the computer
   chose, and two computers can have the same label. On the Unix socket the
-  device name is a claim too, as [`server-link.md`](server-link.md) states.
+  device name is a claim too, as [`server-link.md`](server-link.md) states. A
+  computer of the socket can claim the device name of another computer. It
+  then ends the live link of that computer and has its name in the list.
 - **The content of a terminal.** The parts filter none of it. A follower sees
   all that the program shows, also a secret that the program prints. Those
   bytes can draw any text and set the title of the terminal. A click on a link
