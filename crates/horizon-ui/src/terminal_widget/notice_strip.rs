@@ -2,7 +2,8 @@
 //!
 //! Two panels keep their last screen and take no keys: one whose link is lost and
 //! one whose program ended. Both say it in the same strip, so a person reads the
-//! same shape of line and the same kind of control in either of them.
+//! same shape of line and the same kind of control in either of them. A follow
+//! panel whose stream ended has no control, so its line takes the strip alone.
 
 use egui::{Align, Layout, Rect, Ui, UiBuilder, Vec2};
 
