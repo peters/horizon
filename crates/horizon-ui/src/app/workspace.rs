@@ -652,6 +652,20 @@ mod tests {
             panels_before + 1,
             "one panel joined the board"
         );
+        // The panel runs in the folder of the workspace of the press, which the
+        // action of a workspace states for every panel that it adds.
+        let opened = window
+            .app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.workspace_id == beta && panel.kind == horizon_core::PanelKind::Shell)
+            .expect("the panel of the press");
+        assert_eq!(
+            opened.launch_cwd,
+            Some(window.folder.path().to_path_buf()),
+            "the new panel runs in the folder of the workspace that the person pressed"
+        );
     }
 
     #[test]
@@ -714,13 +728,15 @@ mod tests {
         window.frames_until("the preset that the person chose opens", |app| {
             app.board.panels.len() > panels_before
         });
+        let opened = window
+            .app
+            .board
+            .panels
+            .iter()
+            .find(|panel| panel.workspace_id == beta && panel.kind == horizon_core::PanelKind::Codex)
+            .map(|panel| panel.id);
         assert!(
-            window
-                .app
-                .board
-                .panels
-                .iter()
-                .any(|panel| { panel.workspace_id == beta && panel.kind == horizon_core::PanelKind::Codex }),
+            opened.is_some(),
             "the marked preset opened in the workspace of the press: {:?}",
             window
                 .app
@@ -729,6 +745,38 @@ mod tests {
                 .iter()
                 .map(|panel| (panel.kind, panel.workspace_id))
                 .collect::<Vec<_>>()
+        );
+        let opened = opened.expect("the panel of the marked preset");
+
+        // The mark informs and the program does not start: the panel says that the
+        // program of its preset is not there, and nothing of it runs.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let text = loop {
+            let _ = window.frame(Vec::new());
+            let (program_ended, text) = {
+                let panel = window.app.board.panel_mut(opened).expect("the panel of the mark");
+                let ended = panel.program_end().is_some();
+                let text = panel
+                    .terminal_mut()
+                    .and_then(|terminal| {
+                        terminal.process_events();
+                        terminal.try_last_lines_text(12)
+                    })
+                    .unwrap_or_default();
+                (ended, text)
+            };
+            if program_ended && text.contains("codex") {
+                break text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the panel of a preset without its program says why it runs nothing: {text:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(
+            text.contains("No such file") || text.contains("not found"),
+            "the line of the panel names the program that this computer lacks: {text:?}"
         );
     }
 
