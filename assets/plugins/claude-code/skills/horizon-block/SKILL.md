@@ -631,7 +631,12 @@ A document holds components in draw order, and only these components:
 
 - `heading`: `text`, optional `subtitle` and optional `badge` with `text` and
   optional `tone`. The badge is drawn on the title row, on the right.
-- `text`: `text`. Body text; the only text that may hold line breaks.
+- `text`: `text`. Body text; the only text that may hold line breaks. The card
+  draws it as plain text, as it draws every other text of a card: it shows
+  `**bold**`, a `#` title, a `-` list and a link in square brackets as the
+  characters that you wrote. Write no markdown in it. Use a `heading` or a
+  `caption` for a title, a `list` or `steps` for items, `mono` of a `kv` row for
+  a command, and `link` for a link.
 - `kv`: `rows` with `label`, `value` and optional `mono`. A `mono` value is
   drawn in the monospace family: use it for an address, a command or a hash. A
   value keeps the lines that its words need, so write the sentence in full and
