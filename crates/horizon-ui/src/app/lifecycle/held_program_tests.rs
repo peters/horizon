@@ -10,13 +10,12 @@ use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::panel_holder;
-use horizon_core::{Config, HorizonHome, PanelId, RuntimeState, SessionStore, StartupDecision, WorkspaceState};
+use horizon_core::{HorizonHome, PanelId, RuntimeState, StartupDecision, WorkspaceState};
 
 use crate::app::HorizonApp;
 use crate::app::test_support::{
-    HELD_PANEL_ID, HELD_PROGRAM_MARKER, held_panel_state, held_program_launch, program_runs,
+    HELD_PANEL_ID, HELD_PROGRAM_MARKER, app_in, held_panel_state, held_program_launch, keep_agents_config, program_runs,
 };
-use crate::input;
 
 /// The longest time that a test waits for one condition.
 const TEST_BOUND: Duration = Duration::from_secs(20);
@@ -37,24 +36,15 @@ fn saved_board() -> RuntimeState {
 /// An app on the home of `folder` with the setting that keeps an agent through a
 /// restart, with every panel of its saved board started.
 fn app_on(folder: &Path, runtime_state: &RuntimeState) -> (Context, HorizonApp) {
-    horizon_core::ui_thread::use_strict_mode();
-    let config_path = folder.join("config.json");
-    let home = HorizonHome::from_root(folder.join(".horizon"));
-    let mut config = Config::default();
-    config.features.keep_agents_through_restart = true;
     let ctx = Context::default();
-    let mut app = HorizonApp::new_with_egui_context(
+    let mut app = app_in(
         &ctx,
-        &config,
-        config_path.clone(),
-        SessionStore::new(home, config_path),
+        folder,
+        &keep_agents_config(),
         StartupDecision::Ephemeral {
             runtime_state: Box::new(runtime_state.clone()),
         },
-        input::ObservedKeyboardInputs::default(),
-        None,
     );
-    app.node_cards.base = folder.join("cards");
     app.settle_panel_starts();
     (ctx, app)
 }

@@ -27,19 +27,26 @@ pub(super) fn test_app_with_config_and_startup(
     config: &Config,
     startup: StartupDecision,
 ) -> (TempDir, Context, HorizonApp) {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let ctx = Context::default();
+    let app = app_in(&ctx, temp.path(), config, startup);
+    (temp, ctx, app)
+}
+
+/// The app of a test on the home of `folder`, which reads its settings from
+/// `config` and starts with `startup`.
+///
+/// A test that starts a holder of a panel names a short folder, because the path
+/// of a socket of a holder is bounded.
+pub(super) fn app_in(ctx: &Context, folder: &std::path::Path, config: &Config, startup: StartupDecision) -> HorizonApp {
     // The whole suite runs under the guard in strict mode, from the start of the
     // window: a test that does work which can wait on the UI thread panics
     // instead of freezing the window of a person.
     horizon_core::ui_thread::use_strict_mode();
-    let temp = tempfile::tempdir().expect("temp dir");
-    let config_path = temp.path().join("config.json");
-    let session_store = SessionStore::new(
-        HorizonHome::from_root(temp.path().join(".horizon")),
-        config_path.clone(),
-    );
-    let ctx = Context::default();
+    let config_path = folder.join("config.json");
+    let session_store = SessionStore::new(HorizonHome::from_root(folder.join(".horizon")), config_path.clone());
     let mut app = HorizonApp::new_with_egui_context(
-        &ctx,
+        ctx,
         config,
         config_path,
         session_store,
@@ -50,8 +57,8 @@ pub(super) fn test_app_with_config_and_startup(
     // The card sockets of a test are bound in the folder of that test: two apps of one
     // process would otherwise share the folder of the process, and the end of one would
     // remove the sockets of the other.
-    app.node_cards.base = temp.path().join("cards");
-    (temp, ctx, app)
+    app.node_cards.base = folder.join("cards");
+    app
 }
 
 pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
@@ -184,6 +191,13 @@ pub(super) fn held_program_launch(local_id: &str) -> horizon_core::panel_holder:
         cell_width: 8,
         cell_height: 17,
     }
+}
+
+/// The settings of a test whose agent programs run in holders.
+pub(super) fn keep_agents_config() -> Config {
+    let mut config = Config::default();
+    config.features.keep_agents_through_restart = true;
+    config
 }
 
 /// The saved panel of an agent that continues its work after a restart, whose

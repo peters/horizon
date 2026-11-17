@@ -5,8 +5,8 @@ use horizon_core::{
 use super::super::HorizonApp;
 use super::super::session_manager::{SessionSwitchShutdownState, session_switch_shutdown_state};
 use super::super::test_support::{
-    HELD_PANEL_ID, editor_workspace_state, held_panel_state, held_program_launch, program_runs, raw_input,
-    run_app_frame_with_input, test_app_with_config_and_startup,
+    HELD_PANEL_ID, editor_workspace_state, held_panel_state, held_program_launch, keep_agents_config, program_runs,
+    raw_input, run_app_frame_with_input, test_app_with_config_and_startup,
 };
 
 fn runtime_with_staggered_workspaces(prefix: &str) -> RuntimeState {
@@ -300,10 +300,13 @@ fn the_session_card_stays_above_the_backdrop_after_a_backdrop_dismissal() {
 /// before that board goes, so no program runs with no panel that shows it.
 #[test]
 fn a_session_switch_ends_the_program_of_a_holder_that_its_board_leaves() {
-    let mut config = Config::default();
-    config.features.keep_agents_through_restart = true;
-    let (temp, ctx, mut app) = test_app_with_config_and_startup(
-        &config,
+    // The path of a socket of a holder is bounded, so this home is short.
+    let folder = crate::app::test_support::short_temp("hz-held-switch");
+    let ctx = egui::Context::default();
+    let mut app = crate::app::test_support::app_in(
+        &ctx,
+        folder.path(),
+        &keep_agents_config(),
         StartupDecision::Ephemeral {
             runtime_state: Box::new(RuntimeState {
                 workspaces: vec![WorkspaceState {
@@ -369,5 +372,4 @@ fn a_session_switch_ends_the_program_of_a_holder_that_its_board_leaves() {
         2,
         "the switch restores the board of the target session"
     );
-    drop(temp);
 }
