@@ -4,7 +4,7 @@
 //! owning agent. [`CardRuntime`] is what the person does with it between
 //! frames: clicks that wait for the agent and the row a list has selected.
 
-use horizon_browser_control::block::{BlockDocument, Component};
+use horizon_browser_control::block::{Badge, BlockDocument, Component};
 use serde::{Deserialize, Serialize};
 
 mod card;
@@ -89,15 +89,15 @@ impl BlockPanelState {
     }
 
     /// The line of a folded card: its heading, or its title without one, and the
-    /// words of the badge of that heading. A frame reads it for every card, so an
-    /// open card looks for no heading.
+    /// badge of that heading. A frame reads it for every card, so an open card
+    /// looks for no heading.
     #[must_use]
-    pub fn folded_line(&self) -> Option<(&str, Option<&str>)> {
+    pub fn folded_line(&self) -> Option<(&str, Option<&Badge>)> {
         if !self.folded() {
             return None;
         }
         let heading = self.document.components.iter().find_map(|component| match component {
-            Component::Heading { text, badge, .. } => Some((text.as_str(), badge.as_ref().map(|badge| &*badge.text))),
+            Component::Heading { text, badge, .. } => Some((text.as_str(), badge.as_ref())),
             _ => None,
         });
         Some(heading.unwrap_or((&self.title, None)))

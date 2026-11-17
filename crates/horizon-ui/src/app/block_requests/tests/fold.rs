@@ -220,3 +220,72 @@ fn the_fold_of_the_person_survives_an_update_and_a_restore() {
         height(&app, &card)
     );
 }
+
+/// The colours of the pill that holds the words `words` in `output`: its ink,
+/// its fill and its outline.
+fn pill(output: &egui::FullOutput, words: &str) -> [egui::Color32; 3] {
+    use egui::epaint::Shape;
+    let ink = drawn_text(output, words);
+    let colour = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(text) if text.galley.text() == words => {
+                text.galley.job.sections.first().map(|section| section.format.color)
+            }
+            _ => None,
+        })
+        .expect("the ink of the words");
+    // The pill is the smallest painted rectangle around the words.
+    let around = |outline: bool| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Rect(rect) if rect.rect.contains_rect(ink) => Some(rect),
+                _ => None,
+            })
+            .filter(|rect| outline == (rect.stroke.width > 0.0))
+            .min_by(|left, right| left.rect.area().total_cmp(&right.rect.area()))
+            .expect("the pill of the words")
+    };
+    [colour, around(false).fill, around(true).stroke.color]
+}
+
+#[test]
+fn the_badge_of_a_folded_card_keeps_the_colours_of_its_tone_in_both_themes() {
+    for light in [false, true] {
+        let (_temp, ctx, mut app) = agent_board(None);
+        let _theme = light.then(|| {
+            let mut config = app.template_config.clone();
+            config.appearance.theme = horizon_core::AppearanceTheme::Light;
+            app.apply_runtime_config(&config);
+            crate::test_egui::with_theme(crate::theme::ResolvedTheme::Light)
+        });
+        // The frames that apply the theme. After them, no fade scales a colour: a
+        // card fades in, and this lane judges the colours themselves.
+        settle(&ctx, &mut app);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+
+        let mut pills = Vec::new();
+        for (words, tone) in [("Failed", "danger"), ("Done", "ok"), ("Waiting", "warn")] {
+            let mut document = job("The server", words, None);
+            document["components"][0]["badge"]["tone"] = tone.into();
+            let (card, open) = draw(&ctx, &mut app, document);
+            let open_pill = pill(&open, words);
+
+            let line = press_fold(&ctx, &mut app, &card);
+            assert!(folded(&app, &card), "the person folds the card of {words}");
+            assert_eq!(
+                pill(&line, words),
+                open_pill,
+                "the folded line paints the badge {words} in the colours of the open card (light {light})"
+            );
+            pills.push(open_pill);
+        }
+        assert!(
+            pills[0] != pills[1] && pills[1] != pills[2] && pills[0] != pills[2],
+            "each tone has its own colours (light {light}): {pills:?}"
+        );
+    }
+}

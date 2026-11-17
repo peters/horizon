@@ -6,12 +6,14 @@
 //! document cannot set it.
 
 use egui::{CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Ui};
+use horizon_browser_control::block::Tone;
 use horizon_core::PanelKind;
 
 use crate::theme;
 
 use super::metrics::{CHIP_DOT, CHIP_DOT_GAP, CHIP_FONT, CHIP_HEIGHT, CHIP_PAD_SIDE, CHIP_TITLE_GAP, RADIUS_CONTROL};
 use super::text;
+use super::tones::{self, ToneColors};
 
 /// What the chip says about the owner of a card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub(crate) enum ChipState {
     OnMachine,
     /// Horizon wrote the card itself, so no agent owns it.
     Horizon,
+    /// The badge of the heading of a folded card, in the tone of that badge.
+    Badge(Tone),
 }
 
 /// The text the chip adds after the agent name while a wait is open.
@@ -69,7 +73,7 @@ impl ChipState {
         match self {
             Self::OpenedBy => Some(OPENED),
             Self::OnMachine => Some(ON),
-            Self::Listening | Self::Present | Self::Gone | Self::Horizon => None,
+            Self::Listening | Self::Present | Self::Gone | Self::Horizon | Self::Badge(_) => None,
         }
     }
 }
@@ -131,7 +135,11 @@ impl<'a> CardChip<'a> {
                     .size()
                     .x;
             }
-            ChipState::Present | ChipState::OpenedBy | ChipState::OnMachine | ChipState::Horizon => {
+            ChipState::Present
+            | ChipState::OpenedBy
+            | ChipState::OnMachine
+            | ChipState::Horizon
+            | ChipState::Badge(_) => {
                 width += text::line(ui.painter(), self.name, &font, theme::FG_SOFT(), f32::INFINITY)
                     .size()
                     .x;
@@ -156,7 +164,7 @@ impl<'a> CardChip<'a> {
     pub(crate) fn spoken(&self) -> (&'static str, &'static str, &'a str) {
         match self.state {
             ChipState::Listening => ("", LISTENS, self.name),
-            ChipState::Present => ("", "", self.name),
+            ChipState::Present | ChipState::Badge(_) => ("", "", self.name),
             ChipState::Gone => ("", "", NO_AGENT),
             ChipState::Horizon => ("", "", HORIZON),
             ChipState::OpenedBy => (OPENED, "", self.name),
@@ -166,14 +174,18 @@ impl<'a> CardChip<'a> {
 
     /// Paint the chip inside `rect`.
     pub(crate) fn paint(&self, painter: &Painter, rect: Rect) {
+        // The badge of a folded card keeps the colours that the open card gives it.
+        let colours = match self.state {
+            ChipState::Badge(tone) => tones::badge(tone),
+            _ => ToneColors {
+                text: theme::FG_SOFT(),
+                fill: theme::BG_ELEVATED(),
+                outline: theme::BORDER_SUBTLE(),
+            },
+        };
         let radius = CornerRadius::same(RADIUS_CONTROL);
-        painter.rect_filled(rect, radius, theme::BG_ELEVATED());
-        painter.rect_stroke(
-            rect,
-            radius,
-            Stroke::new(1.0, theme::BORDER_SUBTLE()),
-            StrokeKind::Inside,
-        );
+        painter.rect_filled(rect, radius, colours.fill);
+        painter.rect_stroke(rect, radius, Stroke::new(1.0, colours.outline), StrokeKind::Inside);
         let font = FontId::monospace(CHIP_FONT);
         let center = rect.center();
         let dot = Pos2::new(rect.min.x + CHIP_PAD_SIDE + CHIP_DOT * 0.5, center.y);
@@ -181,16 +193,19 @@ impl<'a> CardChip<'a> {
             ChipState::Listening => {
                 painter.circle_filled(dot, CHIP_DOT * 0.5, theme::PALETTE_GREEN());
             }
-            ChipState::Present | ChipState::Gone | ChipState::OpenedBy | ChipState::OnMachine | ChipState::Horizon => {
-                painter.circle_stroke(dot, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, theme::FG_SOFT()));
+            ChipState::Badge(tone) if tones::badge_has_dot(tone) => {
+                painter.circle_filled(dot, CHIP_DOT * 0.5, colours.text);
+            }
+            _ => {
+                painter.circle_stroke(dot, CHIP_DOT * 0.5 - 0.75, Stroke::new(1.5, colours.text));
             }
         }
         let mut x = rect.min.x + CHIP_PAD_SIDE + CHIP_DOT + CHIP_DOT_GAP;
         for part in self.parts().into_iter().filter(|part| !part.is_empty()) {
-            let galley = text::line(painter, part, &font, theme::FG_SOFT(), f32::INFINITY);
+            let galley = text::line(painter, part, &font, colours.text, f32::INFINITY);
             let height = galley.size().y;
             let width = galley.size().x;
-            painter.galley(Pos2::new(x, center.y - height * 0.5), galley, theme::FG_SOFT());
+            painter.galley(Pos2::new(x, center.y - height * 0.5), galley, colours.text);
             x += width;
         }
     }

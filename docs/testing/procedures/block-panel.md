@@ -1295,8 +1295,10 @@ points.
    ```
 
    Result: The card is one line at the width of its column. The line shows
-   `Server ready` and `Done`. It shows no text of the body and no button. The
-   card under it stands directly under the line.
+   `Server ready` and `Done`. `Done` stands in a chip with the colours of its
+   tone: green words and a green dot on a light green fill. The line shows no
+   text of the body and no button. The card under it stands directly under the
+   line.
 
 2. Press the line.
 
@@ -1338,6 +1340,15 @@ points.
 10. In client A, create a card with `"finished": "yes"`.
 
     Result: The answer is `invalid_document`, and no card is created.
+
+11. In client A, create a card with `"finished": true` whose heading has the
+    badge `{"text": "Failed", "tone": "danger"}`. Then press the line, and look
+    at the badge of the open card. Do this step in the dark theme and in the
+    light theme.
+
+    Result: The chip of the folded line shows `Failed` in red, with a red dot, a
+    red outline and a light red fill. The badge of the open card has the same
+    colours. A badge without a tone keeps the neutral chip with a ring.
 
 ### 5.34 B34 — The last buttons of a card that scrolls stay at its foot
 
@@ -1554,7 +1565,9 @@ Horizon, in a workspace of its own, with an agent panel that can call
   the ceiling scrolls in its body, shows `More below`, and keeps the buttons at
   its end in its foot. A card that grows moves the
   cards under it. A card that the person resized keeps its size.
-- B33: A finished card is one line with its heading and its badge. A press on
+- B33: A finished card is one line with its heading and its badge, and the chip
+  of the badge has the colours that the open card gives the tone of that badge,
+  in both themes. A press on
   the line opens it, and the arrow in its title bar folds and opens every card.
   An update folds only a card that becomes finished, and never a card that the
   person opened after it was finished. The fold returns after a restart. A value

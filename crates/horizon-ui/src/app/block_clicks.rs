@@ -100,10 +100,12 @@ impl HorizonApp {
     pub(in crate::app) fn card_titlebar_chip(&self, panel_id: PanelId) -> Option<CardChip<'_>> {
         let panel = self.board.panel(panel_id)?;
         let card = panel.block()?;
-        // A folded card keeps the words of the badge of its heading on its one line.
+        // A folded card keeps the badge of its heading on its one line, in its tone.
         if let Some((_, badge)) = card.folded_line() {
-            let state = ChipState::Present;
-            return badge.map(|name| CardChip { name, state });
+            return badge.map(|badge| CardChip {
+                name: &badge.text,
+                state: ChipState::Badge(badge.tone),
+            });
         }
         let owned_by_an_agent = card.owner_actor.is_some();
         // A card that Horizon wrote itself names Horizon, not an agent that is
