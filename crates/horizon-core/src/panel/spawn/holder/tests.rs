@@ -11,6 +11,7 @@ use crate::{Board, HorizonHome, Panel, PanelId, PanelKind, PanelOptions, PanelRe
 
 use super::super::start::{StartRequest, finish_restart, prepare_panel_start, prepare_restart};
 use super::super::terminal::spawn_started_terminal;
+use super::{CLEAR_BOUND, started_within};
 
 /// The marker that the stand-in program of these tests prints.
 const MARKER: &str = "held marker";
@@ -432,5 +433,45 @@ fn the_end_of_horizon_lets_the_program_of_a_holder_run() {
     assert!(
         progress.wait_for_completion(Duration::from_secs(1)),
         "the end of Horizon counts the panel of a holder and waits for no program"
+    );
+}
+
+/// The wait of a start for the holder of the program before has a deadline, and
+/// the bound is a value of the call: a bound of the test ends the wait there.
+#[test]
+fn a_start_waits_for_the_holder_before_it_only_to_the_bound_of_its_caller() {
+    let (_folder, home) = temp_home();
+    panel_holder::serve_on_a_thread(&home, &stand_in("waited-panel")).expect("the holder of a test");
+    let client = panel_holder::linked(&home, "waited-panel")
+        .expect("the link of the holder")
+        .expect("a holder answers");
+    wait_until("the holder to serve another client", || {
+        matches!(panel_holder::probe(&home, "waited-panel"), Err(HolderError::Busy))
+    });
+
+    // A holder answers for the panel, so the wait of the start runs to its bound.
+    let bound = Duration::from_millis(300);
+    let started = Instant::now();
+    let (link, notice) = started_within(&home, &stand_in("waited-panel"), bound);
+    let waited = started.elapsed();
+    drop(client);
+
+    assert!(
+        link.is_none(),
+        "no link answers while the holder of the program before stands"
+    );
+    assert!(
+        notice
+            .as_deref()
+            .is_some_and(|line| line.contains("serves another client")),
+        "the line of the start says why no holder serves the panel: {notice:?}"
+    );
+    assert!(
+        waited >= bound,
+        "the start waits for the holder before it until its bound: {waited:?}"
+    );
+    assert!(
+        waited < CLEAR_BOUND,
+        "the bound of the caller ends the wait, and not the five seconds of a start: {waited:?}"
     );
 }

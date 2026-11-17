@@ -57,7 +57,12 @@ pub(in crate::panel) fn started(
 /// The link to the new holder that starts `launch`, once the holder of the program
 /// before is gone. The caller judged that this panel runs its program in a holder.
 pub(in crate::panel) fn started_here(home: &HorizonHome, launch: &Launch) -> (Option<Linked>, Option<String>) {
-    let deadline = Instant::now() + CLEAR_BOUND;
+    started_within(home, launch, CLEAR_BOUND)
+}
+
+/// The same link once the holder of the program before is gone, or `bound` passed.
+fn started_within(home: &HorizonHome, launch: &Launch, bound: Duration) -> (Option<Linked>, Option<String>) {
+    let deadline = Instant::now() + bound;
     while !matches!(panel_holder::probe(home, &launch.local_id), Ok(None)) && Instant::now() < deadline {
         thread::sleep(WAIT_PAUSE);
     }
