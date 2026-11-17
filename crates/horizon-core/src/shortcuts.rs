@@ -302,34 +302,39 @@ macro_rules! app_shortcuts {
 #[must_use]
 const fn platform_default_fullscreen_panel(on_mac_os: bool) -> ShortcutBinding {
     if on_mac_os {
-        ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Enter)
+        ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Enter)
     } else {
-        ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11))
+        ShortcutBinding::new(NONE, ShortcutKey::Function(11))
     }
 }
 
+// The modifiers of the defaults, short so that one shortcut stays one line.
+const PRIMARY: ShortcutModifiers = ShortcutModifiers::PRIMARY;
+const PRIMARY_SHIFT: ShortcutModifiers = ShortcutModifiers::PRIMARY_SHIFT;
+const NONE: ShortcutModifiers = ShortcutModifiers::NONE;
+
 app_shortcuts! {
-    command_palette "Command Palette" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('K'));
-    new_terminal "New Terminal" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('N'));
-    focus_active_workspace "Focus Workspace" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('W'));
-    fit_active_workspace "Fit Workspace" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Digit(9));
-    open_remote_hosts "Remote Hosts" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('H'));
-    toggle_sessions "Sessions" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('J'));
-    toggle_sidebar "Toggle Sidebar" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('B'));
-    toggle_hud "Toggle HUD" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('U'));
-    toggle_minimap "Toggle Minimap" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('M'));
-    align_workspaces_horizontally "Align Workspaces" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('A'));
-    toggle_settings "Toggle Settings" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Comma);
-    zoom_reset "Reset Zoom" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0));
-    zoom_in "Zoom In" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus);
-    zoom_out "Zoom Out" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus);
+    command_palette "Command Palette" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('K'));
+    new_terminal "New Terminal" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('N'));
+    focus_active_workspace "Focus Workspace" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('W'));
+    fit_active_workspace "Fit Workspace" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Digit(9));
+    open_remote_hosts "Remote Hosts" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('H'));
+    toggle_sessions "Sessions" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('J'));
+    toggle_sidebar "Toggle Sidebar" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('B'));
+    toggle_hud "Toggle HUD" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('U'));
+    toggle_minimap "Toggle Minimap" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('M'));
+    align_workspaces_horizontally "Align Workspaces" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('A'));
+    toggle_settings "Toggle Settings" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Comma);
+    zoom_reset "Reset Zoom" => ShortcutBinding::new(PRIMARY, ShortcutKey::Digit(0));
+    zoom_in "Zoom In" => ShortcutBinding::new(PRIMARY, ShortcutKey::Plus);
+    zoom_out "Zoom Out" => ShortcutBinding::new(PRIMARY, ShortcutKey::Minus);
     fullscreen_panel "Fullscreen Panel" => platform_default_fullscreen_panel(cfg!(target_os = "macos"));
-    exit_fullscreen_panel "Exit Fullscreen" => ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape);
-    fullscreen_window "Fullscreen Window" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Function(11));
-    save_editor "Save Editor" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('S'));
-    search "Search Terminals" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('F'));
+    exit_fullscreen_panel "Exit Fullscreen" => ShortcutBinding::new(NONE, ShortcutKey::Escape);
+    fullscreen_window "Fullscreen Window" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Function(11));
+    save_editor "Save Editor" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('S'));
+    search "Search Terminals" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('F'));
     /// Go to the next agent panel that waits for the person.
-    next_attention "Next Agent That Needs You" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('G'));
+    next_attention "Next Agent That Needs You" => ShortcutBinding::new(PRIMARY_SHIFT, ShortcutKey::Letter('G'));
 }
 
 fn push_unique_modifier(values: &mut Vec<ShortcutModifiers>, modifier: ShortcutModifiers) {
