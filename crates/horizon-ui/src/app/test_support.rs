@@ -61,6 +61,25 @@ pub(super) fn app_in(ctx: &Context, folder: &std::path::Path, config: &Config, s
     app
 }
 
+/// The settings list of a first start, with the program of each agent
+/// preset in the folder of the test.
+pub(super) fn presets_of(folder: &std::path::Path) -> Vec<horizon_core::PresetConfig> {
+    let preset = |name: &str, kind: horizon_core::PanelKind, program: Option<&str>| horizon_core::PresetConfig {
+        name: name.to_owned(),
+        alias: None,
+        kind,
+        command: program.map(|program| folder.join(program).display().to_string()),
+        args: Vec::new(),
+        resume: horizon_core::PanelResume::Fresh,
+        ssh_connection: None,
+    };
+    vec![
+        preset("Shell", horizon_core::PanelKind::Shell, None),
+        preset("Codex", horizon_core::PanelKind::Codex, Some("codex")),
+        preset("Claude Code", horizon_core::PanelKind::Claude, Some("claude")),
+    ]
+}
+
 pub(super) fn run_app_frame(ctx: &Context, app: &mut HorizonApp) {
     run_app_frame_with_input(ctx, app, RawInput::default());
 }

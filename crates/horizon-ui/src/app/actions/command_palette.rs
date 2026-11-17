@@ -49,12 +49,12 @@ impl HorizonApp {
         );
     }
 
+    /// The chord of the palette closes an open palette and opens a closed one as
+    /// every other press does, with the search of the programs of its presets.
     fn toggle_command_palette(&mut self) {
-        self.command_palette = if self.command_palette.is_some() {
-            None
-        } else {
-            Some(CommandPalette::new())
-        };
+        if self.command_palette.take().is_none() {
+            self.open_command_palette();
+        }
     }
 
     pub(in crate::app) fn render_command_palette(&mut self, ctx: &Context) {

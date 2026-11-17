@@ -89,6 +89,8 @@ pub(crate) mod setup;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
+#[cfg(test)]
+mod small_window_tests;
 mod speech;
 mod ssh_hosts;
 mod ssh_upload;
