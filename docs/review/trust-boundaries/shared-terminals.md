@@ -144,7 +144,8 @@ panels a computer shares and whether typing is on.
   `crates/horizon-sync/src/server.rs` ends each open link of that computer with
   `removed`, and the live link is one of them. `LiveHub::close` then removes its
   panels from the list, and its followers get `ended` with `offline`. The
-  handle makes no more attempt after `removed`.
+  handle makes no more attempt after `removed`. A computer of the Unix socket
+  can open a live link again after a new start, because `ssh` is its login.
 - **One live link for each device name.** `LiveHub::open` ends an older live
   link of the same device name with `live_replaced`.
 - **A terminal that no computer follows copies nothing.** `ShareOutlet::copy` of

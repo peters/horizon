@@ -470,6 +470,10 @@ The follower:
 - **The size of the panel of a follower.** The grid of a follower is the grid of
   the owner, and the person cannot change it. A grid above 240 columns or 80
   rows opens at that size, and the panel clips what does not fit in its body.
+- **A grid above the bounds.** The server sets the grid of a `screen` to at
+  most 1000 columns and rows, and the feed sets at most 500 rows. The bytes of
+  a screen draw the grid of the owner. A follower of a larger grid draws them
+  on a smaller grid.
 - **The history starts at the newest screen.** Each screen starts with a reset
   that clears the history of the follower. The server relays a screen to each
   follower of the panel. A new follower, a refresh, a resize of the owner and
