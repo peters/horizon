@@ -22,10 +22,8 @@ The server and its sync link are in [`horizon-server.md`](horizon-server.md).
 | The live link of a computer | `crates/horizon-sync/src/supervisor/live.rs` | `LiveSupervisor` opens the link and opens it again. `LiveHandle` is the interface of the application. |
 | The owner side | `crates/horizon-pty-tap/src/share.rs`, `crates/horizon-core/src/terminal/share.rs` | The outlet copies the output of a terminal. A screen draws its grid and sets its modes. |
 | The follow panel | `crates/horizon-core/src/terminal/follow.rs`, `crates/horizon-core/src/panel/follow.rs`, `crates/horizon-core/src/board/follow.rs` | A terminal that shows a stream, keeps the bytes of the person for the stream, and starts no program. |
-
-The application does not join these parts yet.
-[The join in the application](#the-join-in-the-application) gives that state and
-the rules of the join.
+| The join | `crates/horizon-ui/src/app/shared_terminals.rs`, `crates/horizon-ui/src/app/shared_terminals/` | The application lists the terminals of this computer, sends their screens and output, and runs the follow panels of its window. |
+| The settings and the window | `crates/horizon-core/src/config/server.rs`, `crates/horizon-ui/src/app/settings/server/sharing.rs`, `crates/horizon-ui/src/app/sidebar/computers.rs` | The name and the two switches of a computer, and the section **Computers** of the sidebar. |
 
 ## The live link
 
@@ -63,7 +61,7 @@ at most 256 KiB. A computer sends `live` frames, and the server sends
 
 ```json
 {"live":{"open":{"label":"Computer A"}}}
-{"live":{"panels":{"panels":[{"id":"p1","title":"build","kind":"shell","state":"idle","workspace":"work","cols":80,"rows":24,"typing":true}]}}}
+{"live":{"panels":{"panels":[{"id":"p1","title":"build","kind":"shell","state":"","workspace":"work","cols":80,"rows":24,"typing":true}]}}}
 {"live":{"follow":{"owner":"computer-a","panel":"p1"}}}
 {"live":{"screen":{"panel":"p1","cols":80,"rows":24}}}
 {"live":{"output":{"panel":"p1","data":"aGk="}}}
@@ -122,7 +120,7 @@ bound before it keeps or relays it. The bound is a number of characters.
 | The `id` of a panel | 64 |
 | The `title` of a panel | 120 |
 | The `kind` of a panel, such as `claude` or `shell` | 24 |
-| The `state` of a panel: `working`, `blocked`, `done`, `idle` or empty | 24 |
+| The `state` of a panel, such as `working` or `blocked` | 24 |
 | The `workspace` of a panel | 80 |
 
 A panel with an empty identifier leaves the list, and so does a second panel
@@ -412,40 +410,185 @@ update. The reset clears the screen, the history and the modes of the follower.
 
 ## The join in the application
 
-The application does not join the parts yet. No code outside the tests starts a
-`LiveSupervisor`, calls `Terminal::share_screen` or opens a follow panel. No
-setting and no control of the window belongs to shared terminals. A follow panel
-has no mark of the other computer, because nothing opens one.
+The join is `crates/horizon-ui/src/app/shared_terminals.rs` with its modules
+`link.rs`, `owner.rs` and `follower.rs`. `HorizonApp::poll_shared_terminals`
+runs it one time in each frame, after the panels took the keys of that frame:
 
-The parts set these rules for the code that joins them.
+1. It takes the events of the link.
+2. It gives the link the list and the output of this computer.
+3. It runs the follow panels of this window.
 
-The owner:
+Each call of the handle, of a feed and of an outlet returns at once, so the UI
+thread does the full join.
 
-1. Give `set_panels` the terminal panels that this computer shares. Do not list
-   a follow panel (`Panel::is_follower`): it shows a terminal of another
-   computer.
-2. Call `ShareOutlet::set_wanted(true)` when `watchers` names a follower, and
-   `set_wanted(false)` when it names none.
-3. At `refresh: true`, and when `take` says `overflowed`, send a screen: call
-   `share_screen`, then `LiveHandle::screen`, then `LiveHandle::output` one time
-   with all the bytes of the screen.
-4. In each other case, send the bytes of `take` with `LiveHandle::output`.
-5. If `screen` or `output` answers `false`, the followers do not have a correct
-   screen. Send a new screen later, and never output alone.
-6. Call `LiveHandle::ended` when a shared panel closes. A panel that starts a
-   new terminal has a new outlet, so call `set_wanted` again.
-7. A `typed` event holds bytes for the terminal of its panel
-   (`Terminal::write_input`). `LiveHandle` gives the event as the server sent
-   it and examines nothing of it. The join decides whether it obeys the event.
+### The settings of a computer
 
-The follower:
+Three fields of the settings section `server` belong to shared terminals
+(`crates/horizon-core/src/config/server.rs`). That section stays with one
+computer, so no other computer changes them.
 
-1. Open the panel with `Board::create_follow_panel`, and call
-   `LiveHandle::follow`.
-2. Give each `screen`, `output` and `ended` event to the feed of its panel.
-3. Send the bytes of `take_typed` with `LiveHandle::typed`.
-4. Call `LiveHandle::refresh` when `take_lost` answers `true`.
-5. Call `LiveHandle::unfollow` when `closed` answers `true`.
+| Field | Default | What it sets |
+|---|---|---|
+| `computer_name` | Empty | The name that the other computers show for this computer. An empty name is the host name. The name is one line of at most 60 characters. |
+| `share_terminals` | `true` | The other computers see the terminals of this computer. |
+| `remote_typing` | `true` | The other computers type in those terminals. It has no effect while `share_terminals` is `false`. |
+
+A computer that follows a server therefore shares its terminals, with typing
+on, until its person clears a switch. The store writes a field only when it
+differs from its default, and a store without the fields gives the defaults.
+
+The **Server** tab of the Settings window shows the section **Shared
+terminals** for a computer that follows a server
+(`crates/horizon-ui/src/app/settings/server/sharing.rs`). The section holds one
+sentence, the field **Name of this computer** and the two switches. The second
+switch is disabled while the first one is off. The sentence is
+`SHARED_TERMINALS_NOTICE`:
+
+> The other computers that you link to this server can see the terminals of
+> this computer and type in them. Anyone who gets into one of those computers,
+> or into the server, can then run commands here.
+
+The same sentence is in the section **Join with a link** of a computer that
+follows no server. It is also on the card of a request that names a server
+(`crates/horizon-ui/src/app/settings_request.rs`). A change in the Settings
+window applies to the join at once, before **Save**, as each setting of that
+window does.
+
+### The live link of the window
+
+- **It starts with the sync link.** The first frame after the sync link of this
+  computer exists starts a `LiveSupervisor` with the settings of that link. The
+  label is `ServerConfig::computer_label`: the name of the settings, or the host
+  name.
+- **It ends with the sync link.** A stop of the sync link stops the live link
+  (`HorizonApp::stop_shared_terminals`), and so does the start of a new sync
+  link.
+- **It starts again in two cases.** The first case is a sync link that was
+  `away` in one frame and is not `away` in the next frame. The live link has no
+  keepalive, so the return of the sync link is the sign that the live link can
+  be dead. The second case is a new value of `computer_name`.
+- **The old link stops on a thread of its own.** The stop of a `LiveSupervisor`
+  waits for the thread of the link, so no frame does it.
+- **A lost link forgets what only an open link holds.** This occurs at the
+  states `Down` and `Unsupported` and at each new start. The join then ends
+  each watch of this computer, empties the list of the other computers and ends
+  the stream of each follow panel. A new link gets the list and the follows
+  again.
+
+### The owner side
+
+`owner.rs` holds the list of this computer, the watch of each panel that another
+computer follows, and the check of the typed bytes.
+
+- **The list holds each terminal panel of the board.** A terminal panel is a
+  panel with a terminal of its own, such as a shell, an agent, a command or an
+  `ssh` panel. The list holds no follow panel, no card, no editor, no browser
+  panel and no device panel. It holds at most 64 panels, and it is empty while
+  `share_terminals` is `false`.
+- **Each entry has eight fields.**
+  - `id`: the local identifier of the panel, which a saved session keeps.
+  - `title`: the title of the title bar.
+  - `kind`: the name of the panel kind, such as `shell` or `claude`.
+  - `state`: `working`, `background`, `done`, `blocked` or empty.
+  - `workspace`: the name of the workspace.
+  - `cols` and `rows`: the grid.
+  - `typing`: the value of `remote_typing`.
+- **A trigger asks for a new list.** There are four triggers:
+  - terminal output in the frame;
+  - a new count of panels or of workspaces;
+  - a new version of the attention states;
+  - a change of one of the two switches.
+
+  One more build occurs each 2 seconds, for a new title and for a resize that
+  printed nothing.
+- **The list has two bounds.** The join builds it at most one time in 250 ms.
+  It gives the list to the link only when the list differs from the last one.
+- **Only a panel of the list has a watch.** A `watchers` event for another
+  panel changes nothing, whatever the server names. A watch ends when its panel
+  closed, left the list or has no follower. A watched panel that closed leaves
+  the list of the link at once (`LiveHandle::ended`).
+- **A watched panel is drained in each frame.** The window asks for a frame
+  each 50 ms while a panel has a watch. Each drain calls `set_wanted(true)`, so
+  a panel that started a new terminal continues its share with the new outlet.
+- **A screen is due in five cases.**
+  - A new follower came.
+  - A `watchers` event says `refresh: true`.
+  - A take says `overflowed`.
+  - 250 ms went by after a new follower came.
+  - 250 ms went by after the link refused a screen or output.
+
+  The second screen of a new follower repairs a first screen that started in
+  the middle of an escape sequence.
+- **No output goes out while a screen is due.** The screen holds that output.
+- **The owner checks a typed event.** `HorizonApp::shared_typed` writes the
+  bytes into the program of the panel only when four conditions are true:
+  1. `share_terminals` is `true`.
+  2. `remote_typing` is `true`.
+  3. The identifier of the event is in the list that the link has.
+  4. A panel of the board has that identifier.
+
+  It does not read the sender of the event.
+
+### The follower side
+
+`follower.rs` holds the other computers of the list and the follow panels of
+this window.
+
+- **The list of this window holds the other computers.** The join removes the
+  entry of this computer.
+- **A press on a row opens one follow panel.**
+  `HorizonApp::open_shared_terminal` makes the panel in the active workspace
+  with `Board::create_follow_panel`, and it calls `LiveHandle::follow`. A
+  second press on the same row goes to the open panel. The kind of the list
+  selects the keyboard protocol, and a kind that is no terminal kind is a
+  shell.
+- **The events of a stream go to the feed.** A `screen`, an `output` and an
+  `ended` event go to the feed of the panel that follows that panel of that
+  computer.
+- **Typed bytes go out with their frame.** The join runs after the panels took
+  the keys, so `take_typed` gives the bytes of that frame to
+  `LiveHandle::typed`.
+- **A follower asks for a new screen in two cases.** The first case is
+  `take_lost`. The second case is a terminal that leaves the alternate screen
+  on which its newest screen started, because the screen under it did not
+  travel. The follower asks again each 1.2 seconds until a screen arrives.
+- **A stream that ended keeps its panel.** The panel keeps its last screen and
+  shows one line with the cause under the grid. The feed drops the bytes of the
+  person. The panel follows again by itself when a later list names its panel.
+  The cause `limit` is the exception: such a panel does not follow again.
+- **A lost link ends each stream.** The cause is `this computer has no link to
+  its server`. Each follow panel follows again when the list of a new link
+  names its panel.
+- **A closed follow panel ends its follow.** The join calls
+  `LiveHandle::unfollow`.
+- **`typing` is the value at the open of the panel.** A panel that the person
+  opened while the owner had typing off drops the bytes of the person, also
+  after the owner turns typing on.
+
+### What the person sees
+
+- **The section Computers of the sidebar.**
+  `crates/horizon-ui/src/app/sidebar/computers.rs` draws it under the machines.
+  It shows while the list holds another computer, and while the live link is
+  down. Each computer has its name and one row for each panel that it shares,
+  with the mark of its state. A press on a row opens its follow panel. The
+  hover text of a row says whether the person can type in it.
+- **The line of a link that is down.** The section shows
+  `Shared terminals: no link · <reason>` from the state `Down` until the link
+  opens or starts again. An older server gives the state `Unsupported`, which
+  shows no line and no section.
+- **The chip of a watched panel.** Its title bar says `seen by <name>` for one
+  follower, and `seen by <n> computers` for more than one.
+- **The chip of a follow panel.** Its title bar says `on <name>`. It says
+  `on <name> · view only` while the list says that typing is off, and when the
+  panel was opened without typing.
+- **A panel shows one chip.** The chip of a shared terminal takes the place of
+  two other chips. They are the chip of the agent that opened the panel and the
+  chip of its machine (`crates/horizon-ui/src/app/panels.rs`).
+- **Each text of another computer is cut.** The window shows a name, a title
+  and a reason without control characters, at 80 characters at most (`shown`).
+  The hover text of the name of a computer is the exception: it is the device
+  name as the list gave it.
 
 ## The limits that are known
 
@@ -461,12 +604,14 @@ The follower:
   When the program is on the alternate screen, a screen does not hold the
   screen under it. After the program leaves the alternate screen, the follower
   shows an empty screen, and its cursor can be on another row, until the next
-  screen.
+  screen. The follower asks for that screen when its terminal leaves the
+  alternate screen on which its newest screen started.
 - **A sequence that is not complete.** The parser of the reader is not
   accessible. A screen can start while the parser holds part of an escape
   sequence or a synchronized update. The follower then gets the end without the
   start, and it can draw wrong text until the next screen. No code finds this
-  condition.
+  condition. The second screen of a new follower repairs it for a join, and
+  the other screens have no second screen.
 - **The size of the panel of a follower.** The grid of a follower is the grid of
   the owner, and the person cannot change it. A grid above 240 columns or 80
   rows opens at that size, and the panel clips what does not fit in its body.
@@ -491,8 +636,31 @@ The follower:
   - Hyperlinks, and the style and the colour of an underline.
 - **A screen has no fixed bound.** Its bytes increase with the cells of the
   grid. One call of `LiveHandle::output` refuses bytes that do not fit under
-  the ceiling of 1 MiB. A screen that does not fit in what is free of the 1 MiB
+  the ceiling of 1 MiB. The join then makes the screen again each 250 ms, and
+  no bound ends that. A screen that does not fit in what is free of the 1 MiB
   of a follower at the server puts that follower behind again.
+- **One switch for all terminals.** `share_terminals` shares each terminal
+  panel of the computer or none. No setting shares one panel or keeps one panel
+  out, and the list also holds the agent panels and the `ssh` panels.
+- **Typing that was off at the open.** A follow panel keeps the `typing` value
+  of its open. The person closes the panel and opens the row again to type
+  after the owner turned typing on.
+- **The owner does not see who types.** `shared_typed` does not read the sender
+  of a `typed` event, and the window shows no mark while another computer
+  types. The chip of the panel names the followers, not the computer that
+  types.
+- **The name field starts the link again at each change.** A change of the
+  field **Name of this computer** applies before **Save**. Each new value
+  starts the live link again, so the followers of this computer lose their
+  streams for a moment at each change.
+- **A short loss of the sync link.** The join reads the state of the sync link
+  one time in each frame. It does not see a sync link that is away for less
+  than one frame, and the live link does not start again then.
+- **An older server shows nothing.** The state `Unsupported` shows no line and
+  no section, so the person cannot tell an older server from a server with no
+  other computer.
+- **The list is built each 2 seconds.** That build reads each panel of the
+  board, also when nothing changed.
 
 ## The constants
 
@@ -517,3 +685,10 @@ The follower:
 | Typed bytes that wait in the feed | 1 MiB | `MAX_TYPED` |
 | The grid of a follower | 1000 columns, 500 rows | `MAX_FOLLOW_COLS`, `MAX_FOLLOW_ROWS` |
 | One text of a follower | 200 characters | `MAX_TEXT` |
+| The name of a computer in the settings | 60 characters | `MAX_COMPUTER_NAME_CHARS` |
+| The shortest time between two builds of the list | 250 ms | `LIST_EVERY` |
+| The longest time without a build of the list | 2 seconds | `LIST_CHECK` |
+| The frames of a window with a watched panel | Each 50 ms | `DRAIN_EVERY` |
+| The second screen of a new follower, and the next screen after a refused frame | 250 ms | `NEXT_SCREEN` |
+| The next request of a follower for a screen | 1.2 seconds | `ASK_AGAIN` |
+| One text of another computer in the window | 80 characters | `SHOWN_CHARS` |
