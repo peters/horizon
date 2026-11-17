@@ -65,7 +65,12 @@ pub(crate) fn serve<R: Read>(
                 );
                 break Ok(());
             }
-            Ok(None) => break Ok(()),
+            Ok(None) => {
+                // The computer ended the link, so nothing more is for it: a frame
+                // that is still being written to it must not hold the link open.
+                ticket.shut();
+                break Ok(());
+            }
             Err(error) => break Err(error),
         }
     };
