@@ -118,7 +118,8 @@ machine out of every network.
 ### 2. One steps card for each machine
 
 After the press, rent each machine and give each one a card of its own, titled
-with its name. The card shows the six steps of the machine, and one step more
+with its name. That card is the machine card of the machine: update it to the
+ready card, and draw no second card for that machine. The card shows the six steps of the machine, and one step more
 when the machine joins a network:
 
 1. `Prepare the system`: the packages of the recipe, with the package manager of

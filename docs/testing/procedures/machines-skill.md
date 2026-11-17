@@ -328,7 +328,34 @@ provider whose firewall this run can change.
    Result: A terminal opens on the machine over the network, with the tmux
    session `build-1`, and its public address is no longer used.
 
-### 6.8 M7 — Delete a machine of a network
+### 6.8 M8 — One machine card and one work card
+
+Use the machine of M6, before its delete in M7. This task rents nothing.
+
+1. Count the cards of the agent in the workspace, and read where they stand.
+
+   Result: The agent drew one card for `build-1`: its machine card. The join of
+   M6 is on one more card, the work card `build-1 work`. The agent drew no
+   overview card after M2 unless you asked what is rented. The cards of the
+   agent stand in one column at the right of its panel.
+
+2. Read the work card.
+
+   Result: The join of M6 is done, so the work card is one line with the name of
+   that job and its result. A press on the line opens it.
+
+3. Press `Exact agent state` on the machine card, and follow the card until the
+   agent says what happened.
+
+   Result: The work card opens and shows the new job. The agent draws no third
+   card for `build-1`. When the job is done, the work card folds to one line
+   again.
+
+4. Count the cards of the agent.
+
+   Result: Two cards for `build-1`: the machine card and the work card.
+
+### 6.9 M7 — Delete a machine of a network
 
 Use the machine of M6.
 
@@ -359,6 +386,10 @@ Use the machine of M6.
   each machine and no card for one machine alone.
 - `Refresh` removes the row of a deleted machine, and `Connect` from the
   overview opens a terminal.
+- A machine has one machine card and one work card. Each job that a button of
+  the machine card starts changes the work card, and a job that is done folds
+  that card to one line. The agent draws an overview only when the person asks
+  what is rented.
 - A machine without a key shows `no key here`, and `Connect` on that row opens
   no terminal.
 - Every rent uses both tags, and each task ends with the delete of its machine.

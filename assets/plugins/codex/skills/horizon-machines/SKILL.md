@@ -28,12 +28,17 @@ contract, and `open_terminal` gives the shell.
 - Connect is `open_terminal` with a machine key that Horizon makes and keeps.
 - The same key lets you run your own `ssh` for the commands that prepare the
   machine, with the one form in step 5.
-- Every machine that is rented appears in one overview card, with one row for
-  each machine. The overview rents nothing.
+- **A machine has one machine card and one work card.** Read
+  [Two cards for one machine](#two-cards-for-one-machine) before you draw a card
+  for a machine.
+- When the person asks what is rented, one overview card shows every machine
+  that is rented, with one row for each machine. The overview rents nothing.
+  Draw no overview that the person did not ask for: the Machines section of the
+  sidebar lists the machines of this Horizon.
 - Every machine that you finish setting up is also a record of this Horizon,
   written with `machine_set`: the person sees it in the Machines section of the
   sidebar and connects with one click, without you. The same machines are in the
-  overview card and in the sidebar.
+  sidebar and in an overview card that the person asks for.
 - The person can put a workspace on a machine from the sidebar, and the new
   terminals of that workspace then run there in tmux. You do nothing for it.
 - Horizon watches the agents that run on each machine of your list, with no
@@ -55,6 +60,38 @@ contract, and `open_terminal` gives the shell.
   its command again after 3, 6, 12 and 24 seconds, then every 30 seconds, until
   it reaches the session again. You do nothing for it, and a terminal that the
   person closed tries nothing.
+
+## Two cards for one machine
+
+A machine has one machine card and at most one work card. Draw no other card for
+it.
+
+- **The machine card** is the card of step 6. It holds the state and the buttons
+  of the machine. The card of the rent becomes the machine card: update it, and
+  keep its `panel_id`.
+- **The work card** shows the job that a button of the machine card started:
+  `Put the Horizon server here`, `Add a browser`, `Join a network`,
+  `Exact agent state` and `Horizon cards for agents here`. A handoff of your
+  task to the machine is such a job too. Create the work card at the first such
+  job, with the title `<machine> work`, and keep its `panel_id`.
+- For each later job of that machine, update the work card with the document of
+  the new job. Do not create a card for the next job.
+- When a job is done and no button of its document needs a press, send its last
+  document with `"finished": true`. Horizon folds the work card to one line with
+  its heading and its badge, so the heading of the last document names the job
+  and the badge says its result. A document that asks the person something is
+  not finished.
+- The next job sends a document without `finished`, and the work card opens
+  again.
+- A run of `horizon-setup` has its Set up card. That card is the work card of the
+  machine of the run, so the run draws no second work card.
+- The cards that Horizon draws itself stay as they are: the card of a server
+  entry and the card of a browser host are cards of Horizon, and you draw none
+  for them.
+- Draw the overview card only when the person asks what is rented. No step of a
+  rent, a stop, a start or a delete needs a list of machines.
+- Give no position and no size. Horizon places the cards of your panel in one
+  column at its right.
 
 ## The flow
 
@@ -138,7 +175,8 @@ the spirit of a machine list in a sidebar. It rents nothing and deletes nothing.
 - The overview is your reading at the time, not Horizon state. A press on
   `Refresh` runs the find-again command of every signed-in provider again and
   updates the card. Run the same read after each rent, stop, start and delete
-  that you do, and update the card.
+  that you do, and update the overview card when one is open. Draw no overview
+  for that read.
 - Call `machine_keys` with the overview. A machine without a key of its name in
   this workspace gets `, no key here` added to its subtitle. `Connect` on that
   row answers with a `text` line that says that no key of this machine is in
@@ -409,17 +447,17 @@ program in the repository folder, and the row of the agent in the sidebar opens
 it. Do not copy a login file, a token, a keyring, a cookie or `~/.ssh` of this
 computer to a machine.
 
-`Join a network` draws the network card of
-[tailscale](references/tailscale.md). The card holds the stored networks as pills
-and no field for a secret. A machine that is already in a network shows its rows
+`Join a network` shows the network card of
+[tailscale](references/tailscale.md) on the work card of this machine. The card
+holds the stored networks as pills and no field for a secret. A machine that is already in a network shows its rows
 on the machine card and the same button says which network it joined.
 
-`Exact agent state` opens the card of
+`Exact agent state` shows, on the work card of this machine, the card of
 [the exact state](#the-exact-state-of-an-agent-on-a-machine): it writes the hook
 entries of Claude Code into the settings of the machine, so the row of an agent
 says its exact state.
 
-`Horizon cards for agents here` opens the card of
+`Horizon cards for agents here` shows, on the work card of this machine, the card of
 [the cards of an agent](#the-cards-of-an-agent-on-a-machine): it writes one MCP
 entry in the settings of the agent program of the machine, so an agent that runs
 there draws a card in the workspace of that machine.
@@ -430,8 +468,9 @@ with that goal and this machine as its place:
 - `Put the Horizon server here` continues with the goal `server` on this machine.
 - `Add a browser` continues with the goal `browser` on this machine.
 
-Read that skill before you draw them, and let it write the cards of those flows.
-Tell the person in a `text` line that the two buttons belong to Set up.
+Read that skill before you draw them, and let it write the documents of those
+flows on the work card of this machine. Tell the person in a `text` line that the
+two buttons belong to Set up.
 
 ### 7. Listen
 
@@ -668,8 +707,9 @@ machine.
 
 When the person asks you to continue your task on a machine, read
 [continue on a machine](references/handoff-machine.md). It gives the branch, the
-note `HANDOFF.md`, the three bundle steps of the page above, and the one card
-that says what moved and what did not. The conversation stays in your panel, and
+note `HANDOFF.md`, the three bundle steps of the page above, and the one document
+that says what moved and what did not, which you draw on the work card of that
+machine. The conversation stays in your panel, and
 the new agent on the machine starts a new one.
 
 ## The logins and the private files of a repository on a machine
@@ -838,8 +878,9 @@ network` and before `Stop`, and it belongs to the work that prepares a machine.
 
 ### 1. Show the card of the change
 
-Step 2 reads the file on the machine. The card says what the change does and
-what it keeps:
+Draw this card on the work card of the machine: update that card, or create it
+when the machine has none. Step 2 reads the file on the machine. The card says
+what the change does and what it keeps:
 
 - The heading is `Exact agent state` and the subtitle is the name of the machine.
 - One `text` line names the file: `~/.claude/settings.json` of the SSH user of the
@@ -974,12 +1015,15 @@ BLOCK='<the block of this step, in one line>'
   the two files hold no entry of Horizon. Prefer `python3`, and use `jq` only when
   the person asks for it.
 - **The file exists and the machine has neither tool.** Change nothing. Show the
-  block of this step in one `text` component, or in a second card, for the person
+  block of this step in one `text` component of the same card, for the person
   to add by hand, and say that Horizon changes no file of this machine.
 
 ### 4. Say what happened
 
-Update the card; do not close it until the person reads it.
+Update the work card; do not close it. Send this last document with
+`"finished": true`: the job is done and no button of it needs a press, so the
+card folds to its heading and its badge, and the person opens it to read the
+lines below.
 
 - One `text` line names the file that changed and its backup, for example
   `Wrote ~/.claude/settings.json; the old file is settings.json.horizon-bak.`
@@ -1038,7 +1082,8 @@ prepares a machine.
 
 ### 1. Show the card of the change
 
-The card says what the change does and what it keeps:
+Draw this card on the work card of the machine: update that card, or create it
+when the machine has none. The card says what the change does and what it keeps:
 
 - The heading is `Horizon cards for agents here` and the subtitle is the name of
   the machine.
@@ -1270,7 +1315,10 @@ carries one socket for each session, also a session that runs no agent program.
 
 ### 5. Say what happened
 
-Update the card; do not close it until the person reads it.
+Update the work card; do not close it. Send this last document with
+`"finished": true`: the job is done and no button of it needs a press, so the
+card folds to its heading and its badge, and the person opens it to read the
+lines below.
 
 - One `text` line names the entry and the file that holds it, for example
   `Wrote mcpServers.horizon-cards in ~/.claude.json.`

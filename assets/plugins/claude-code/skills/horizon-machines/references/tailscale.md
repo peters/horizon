@@ -452,8 +452,10 @@ tag in the panel, and never take one from the conversation.
 
 ### 8.2 The join card
 
-The button `Join a network` of a machine card draws this card. The pills are the
-stored networks of section 4.1, and the row `network.none` is first.
+The button `Join a network` of a machine card shows this document on the work
+card of that machine: update that card, or create it when the machine has none.
+The pills are the stored networks of section 4.1, and the row `network.none` is
+first.
 
 ```json
 {"components": [

@@ -47,6 +47,17 @@ card that changes, not a pile of cards. Two exceptions:
   stays after the Set up card closes.
 - A step that finishes the flow closes the Set up card.
 
+The Set up card is the work card of the machine of this run, as the skill
+`horizon-machines` names it. A goal that a button of a machine card starts runs
+on that one card: the server, the browser, the network, the exact agent state
+and the cards for agents. Update the card for each goal, and draw no new card for
+the next goal. In a session that holds no Set up card, create one work card,
+titled `<machine> work`, and use it in the same way. Send the last document of a
+goal with `"finished": true` when the goal is done and no button of it needs a
+press: Horizon folds the card to one line with its heading and its badge. Draw
+no card that only lists machines, unless the person asks for the list. The cards
+that Horizon draws itself, for the server entry and for the browser host, stay.
+
 A card of this skill is a document as `horizon-block` defines it. Every document
 below is a full value of `document` for `create` and `update`.
 
@@ -394,15 +405,16 @@ of this goal holds no repository folder, so its card holds no such button.
 - `Put the Horizon server here` continues with the goal `server` and this machine
   as its place.
 - `Add a browser` continues with the goal `browser` and this machine as its place.
-- `Join a network` draws the card of the network of this machine, which the page
-  `references/tailscale.md` of the skill `horizon-machines` gives. The card
-  offers the stored networks as pills and no field for a secret.
-- `Exact agent state` opens the card of the exact state of an agent on this
-  machine, which `horizon-machines` gives. It writes the hook entries of Claude
-  Code into the settings of the machine.
-- `Horizon cards for agents here` opens the card of the cards of an agent on
-  this machine, which `horizon-machines` gives. It writes one MCP entry in the
-  settings of the agent program of the machine.
+- `Join a network` shows, on the work card, the card of the network of this
+  machine, which the page `references/tailscale.md` of the skill
+  `horizon-machines` gives. The card offers the stored networks as pills and no
+  field for a secret.
+- `Exact agent state` shows, on the work card, the card of the exact state of an
+  agent on this machine, which `horizon-machines` gives. It writes the hook
+  entries of Claude Code into the settings of the machine.
+- `Horizon cards for agents here` shows, on the work card, the card of the cards
+  of an agent on this machine, which `horizon-machines` gives. It writes one MCP
+  entry in the settings of the agent program of the machine.
 - `Stop` stops the machine, and `Start` starts it again, as `horizon-machines`
   says. `Delete` asks before it deletes, as that skill says, and the record and
   the key go with the machine.
@@ -936,4 +948,5 @@ credential in the panel.
   press, and no start of Horizon is needed. A panel that is open keeps its
   browser until the person closes it and opens another one.
 - One card holds the flow. An agent owns at most eight cards in one workspace, so
-  keep the flow in the Set up card and the card of the machine that stays.
+  keep the flow in the Set up card and the card of the machine that stays: one
+  machine card and one work card for a machine, and no card for each job.

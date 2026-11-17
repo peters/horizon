@@ -22,6 +22,23 @@ panel gets `caller_unavailable`.
 `machine_keys`, `delete_machine_key`, `server_status`, `browser_host_status`,
 `server_link_request` and `browser_host_request`.
 
+## One card for one job
+
+Draw one card for one job, and keep its `panel_id`. When the job moves on, change
+that card with `update`. Do not draw a new card for each step: the person reads
+one card that changes, not a pile of cards.
+
+- A job is one thing that the person follows: one machine, one plan, one
+  set-up, one question.
+- When the job is done and no button of the card needs a press, send its last
+  document with `"finished": true`, as [Finish a card](#finish-a-card) says.
+  Horizon folds the card to one line.
+- A later job of the same kind uses the same card: update it with the document
+  of the new job, without `finished`, and the card opens again.
+- Never give a position or a size. Horizon places a card, and no field of a
+  request or of a document moves it or sizes it.
+- Close a card that the person does not need any more.
+
 ## Create a card
 
 The card is drawn in the caller's workspace. It does not take keyboard focus.
