@@ -167,6 +167,11 @@ impl Terminal {
         holder: Option<UnixStream>,
     ) -> Result<Self> {
         let program_status = pty.inbox();
+        let share = match output {
+            PtyOutput::Shown => pty.share(),
+            // A snapshot shows none of the output of its process, so no follower gets it.
+            PtyOutput::Discarded => horizon_pty_tap::ShareOutlet::default(),
+        };
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
         let scrollback_limit = options.scrollback_limit.max(1);
@@ -232,6 +237,7 @@ impl Terminal {
             scrollback_limit,
             title: replay_restore.title,
             program_status,
+            share,
             pending_clipboard: PendingClipboard::default(),
             pending_pty_resize: None,
             pty_resized: false,

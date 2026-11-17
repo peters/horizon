@@ -33,10 +33,17 @@ impl Terminal {
 /// The bytes that draw the viewport of `term` again, as
 /// [`Terminal::screen_replay_bytes`] describes them.
 pub(super) fn screen_replay_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
-    let grid = term.grid();
+    let mut out = String::new();
+    draw_rows(term.grid(), &mut out, false);
+    out.into_bytes()
+}
+
+/// Draws the rows of the viewport of `grid` from the first cell of an empty
+/// screen. With `in_place` every cell keeps its column, as [`push_cell`] says.
+pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
     let rows = grid.screen_lines();
     let columns = grid.columns();
-    let mut out = String::with_capacity(rows * (columns + 2));
+    out.reserve(rows * (columns + 2));
     let mut painted = Style::default();
     let last_row = last_painted_row(grid, rows);
     for row in 0..=last_row {
@@ -50,22 +57,33 @@ pub(super) fn screen_replay_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
                 {
                     continue;
                 }
-                if cell.flags.contains(Flags::HIDDEN) {
+                if cell.flags.contains(Flags::HIDDEN) && !in_place {
                     continue;
                 }
-                painted.paint(&mut out, cell);
-                out.push(cell.c);
-                if let Some(extra) = cell.zerowidth() {
-                    out.extend(extra.iter());
-                }
+                painted.paint(out, cell);
+                push_cell(out, cell, in_place);
             }
         }
-        painted = painted.reset(&mut out);
+        painted = painted.reset(out);
         if row < last_row {
             out.push_str("\r\n");
         }
     }
-    out.into_bytes()
+}
+
+/// Writes the text of `cell`. The grid keeps a tab in the first cell that the
+/// tab passed, and it keeps hidden text. `in_place` draws both as a blank: a tab
+/// would move the cursor past its cell, and the replay of a restart skips
+/// hidden text, so either moves the rest of its row.
+pub(super) fn push_cell(out: &mut String, cell: &Cell, in_place: bool) {
+    if in_place && (cell.c == '\t' || cell.flags.contains(Flags::HIDDEN)) {
+        out.push(' ');
+        return;
+    }
+    out.push(cell.c);
+    if let Some(extra) = cell.zerowidth() {
+        out.extend(extra.iter());
+    }
 }
 
 /// The last row of the viewport that paints anything, so the replay ends at the
@@ -92,7 +110,7 @@ fn last_painted_column(line: &Row<Cell>, columns: usize) -> Option<usize> {
 /// The colours and the attributes of the run that a replay has drawn so far, so
 /// a run keeps them and only a change writes an escape sequence.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-struct Style {
+pub(super) struct Style {
     fg: Option<Wanted>,
     bg: Option<Wanted>,
     attributes: u16,
@@ -125,7 +143,7 @@ impl Style {
 
     /// Writes the escape sequence that makes this style the current one, when it
     /// is not already current.
-    fn paint(&mut self, out: &mut String, cell: &Cell) {
+    pub(super) fn paint(&mut self, out: &mut String, cell: &Cell) {
         let style = Self::of(cell);
         if style == *self {
             return;

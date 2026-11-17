@@ -138,7 +138,8 @@ pub use ssh::{
 /// The browser has its switch at the same path, so the window names both alike.
 pub use terminal::latency;
 pub use terminal::{
-    ClipboardTarget, ClipboardWrite, CwdReader, OutputWake, PROGRAM_BOUND, Terminal, open_url, read_cwd,
+    ClipboardTarget, ClipboardWrite, CwdReader, OutputWake, PROGRAM_BOUND, ShareOutlet, ShareScreen, ShareTake,
+    Terminal, open_url, read_cwd,
 };
 pub use transcript::PanelTranscript;
 pub use transcript::warm_script_support;

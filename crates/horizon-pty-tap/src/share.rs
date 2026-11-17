@@ -43,13 +43,25 @@ impl Shared {
     }
 }
 
-/// The end that the reader of one panel fills.
-#[derive(Default)]
-pub(crate) struct ShareTap {
+/// The end where the owner of one panel takes the output for its followers. The
+/// reader of the panel holds the same value and fills it.
+#[derive(Clone, Default)]
+pub struct ShareOutlet {
     shared: Arc<Shared>,
 }
 
-impl ShareTap {
+/// What one take of a [`ShareOutlet`] gives.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ShareTake {
+    /// The output since the take before, in the order of the program.
+    pub bytes: Vec<u8>,
+    /// Somebody follows and the outlet holds nothing that continues a screen:
+    /// more than the bound waited, or no screen started it. The owner sends a
+    /// new screen, which starts the outlet again.
+    pub overflowed: bool,
+}
+
+impl ShareOutlet {
     /// Copies `bytes` of one read while a follower follows a screen.
     pub(crate) fn copy(&self, bytes: &[u8]) {
         if !self.shared.copying.load(Ordering::Acquire) {
@@ -68,32 +80,6 @@ impl ShareTap {
         }
     }
 
-    /// The other end of this tap.
-    pub(crate) fn outlet(&self) -> ShareOutlet {
-        ShareOutlet {
-            shared: Arc::clone(&self.shared),
-        }
-    }
-}
-
-/// The end where the owner of one panel takes the output for its followers.
-#[derive(Clone)]
-pub struct ShareOutlet {
-    shared: Arc<Shared>,
-}
-
-/// What one take of a [`ShareOutlet`] gives.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct ShareTake {
-    /// The output since the take before, in the order of the program.
-    pub bytes: Vec<u8>,
-    /// Somebody follows and the outlet holds nothing that continues a screen:
-    /// more than the bound waited, or no screen started it. The owner sends a
-    /// new screen, which starts the outlet again.
-    pub overflowed: bool,
-}
-
-impl ShareOutlet {
     /// Says whether somebody follows this panel. A change empties the outlet,
     /// and it copies nothing until a screen starts it.
     pub fn set_wanted(&self, wanted: bool) {
@@ -110,6 +96,12 @@ impl ShareOutlet {
         let mut state = self.shared.state();
         let wanted = state.wanted;
         self.shared.restart(&mut state, wanted);
+    }
+
+    /// Drops what waits and copies nothing until the next screen, because the
+    /// screen that this output continues no longer fits. A take then asks for one.
+    pub fn stop(&self) {
+        self.shared.restart(&mut self.shared.state(), false);
     }
 
     /// The output since the take before, and whether a new screen is due.

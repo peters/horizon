@@ -36,6 +36,7 @@ impl Terminal {
             return;
         }
 
+        let new_grid = rows != self.rows || cols != self.cols;
         self.rows = rows;
         self.cols = cols;
         self.cell_width = cell_width;
@@ -43,6 +44,10 @@ impl Terminal {
 
         // Resize the terminal grid immediately for smooth visual feedback.
         self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
+        if new_grid {
+            // A follower draws the grid of its screen, so the next take asks for a new one.
+            self.share.stop();
+        }
 
         if immediate || !should_debounce_pty_resize(self.pty_resized, mode) {
             self.send_pty_resize();

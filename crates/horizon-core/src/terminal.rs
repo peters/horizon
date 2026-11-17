@@ -8,6 +8,7 @@ mod replay;
 mod resize;
 mod screen_replay;
 mod selection;
+mod share;
 mod support;
 mod wake;
 
@@ -38,6 +39,7 @@ pub(crate) use self::lifecycle::open_pty;
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
 use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
+pub use self::share::{ShareOutlet, ShareScreen, ShareTake};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
@@ -249,6 +251,9 @@ pub struct Terminal {
     /// The reports of the program status of this panel's program, written by the
     /// reader of the PTY and read by the frame that shows the panel.
     program_status: horizon_pty_tap::StatusInbox,
+    /// The output of this terminal for a follower, which the reader of the PTY
+    /// copies only while one follows a screen.
+    share: ShareOutlet,
     pending_clipboard: PendingClipboard,
     pending_pty_resize: Option<std::time::Instant>,
     pty_resized: bool,
