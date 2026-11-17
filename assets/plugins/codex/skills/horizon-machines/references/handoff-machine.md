@@ -19,10 +19,17 @@ never commit a change that the person did not name.
 2. Write `HANDOFF.md` at the root of the repository on that branch. It holds
    five parts: what the task is, what is done, what is next, the first command to
    run, and the check of the repository.
-3. Bring the branch to the machine with the three steps of
-   [repository-machine](repository-machine.md): `git bundle create` with the
-   branch, `scp -p` of the bundle, and `git clone` of the bundle into the folder
-   of the field `folder` of the record of the machine.
+3. Bring the branch to the machine. Make the bundle with `git bundle create` and
+   the branch, and copy it with `scp -p`, as
+   [repository-machine](repository-machine.md) shows. Then read the folder of the
+   field `folder` of the record of the machine:
+   - The machine holds no such folder: `git clone` the bundle into it.
+   - The machine holds the folder: do not move, rename or replace it. A program
+     or a terminal of the person can run in it. Stop when
+     `git -C <folder> status --porcelain` prints a line, and tell the person.
+     If it prints nothing, run `git -C <folder> fetch <bundle> <branch>:<branch>`
+     and `git -C <folder> switch <branch>`.
+   Remove the bundle file from the machine after the step.
 4. Draw one card. Never draw a second card for the same work.
 
 ## The card
