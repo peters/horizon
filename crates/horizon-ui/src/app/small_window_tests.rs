@@ -246,7 +246,13 @@ const AGENT_PROGRAM: &str = "printf 'synthetic line of the screen\\n'; exec cat\
 /// A window of 800 by 600 points with one agent panel of a long name, which
 /// the keyboard is not in.
 fn window_with_an_agent() -> (Window, horizon_core::PanelId) {
-    let mut window = Window::new([800.0, 600.0], Vec::new());
+    agent_window([800.0, 600.0])
+}
+
+/// A window of `size` points with one agent panel of a long name and of the
+/// default size of a panel, which the keyboard is not in.
+fn agent_window(size: [f32; 2]) -> (Window, horizon_core::PanelId) {
+    let mut window = Window::new(size, Vec::new());
     // A program that stays until the panel closes, so the state of the row is
     // the state of the ledger and not the end of a program.
     let program = horizon_core::stand_in_program_in(window.temp.path(), "claude", AGENT_PROGRAM)
@@ -345,7 +351,8 @@ fn the_minimap_leaves_a_small_canvas_and_comes_back_on_a_large_one() {
         ([800.0, 600.0], false),
         ([1280.0, 800.0], true),
         ([800.0, 600.0], false),
-        ([1024.0, 640.0], true),
+        ([1024.0, 640.0], false),
+        ([1206.0, 640.0], true),
     ] {
         window.size = size;
         let _ = window.frame(Vec::new());
@@ -360,6 +367,60 @@ fn the_minimap_leaves_a_small_canvas_and_comes_back_on_a_large_one() {
             window.app.minimap_overlay_rect(&window.ctx).is_some(),
             shows,
             "the room that the canvas keeps free for the minimap at {size:?}"
+        );
+    }
+}
+
+/// The rectangle of `panel` in the window.
+fn panel_rect(window: &Window, panel: horizon_core::PanelId) -> Rect {
+    let layout = &window.app.board.panel(panel).expect("the panel").layout;
+    let canvas = window.app.canvas_rect(&window.ctx);
+    let min = window.app.canvas_to_screen(canvas, Pos2::from(layout.position));
+    Rect::from_min_size(min, window.app.canvas_size_to_screen(egui::Vec2::from(layout.size)))
+}
+
+#[test]
+fn the_minimap_leaves_a_canvas_with_no_room_for_a_panel_beside_it() {
+    for size in [[1024.0, 640.0], [1100.0, 700.0]] {
+        let (mut window, panel) = agent_window(size);
+        // The person moved the canvas: the panel stands whole in the lower right
+        // corner of the canvas, which is the corner of the minimap.
+        let canvas = window.app.canvas_rect(&window.ctx);
+        let layout = window.app.board.panel(panel).expect("the panel").layout;
+        window.app.canvas_view.set_zoom(1.0);
+        window.app.canvas_view.set_pan_offset([
+            canvas.width() - 24.0 - layout.position[0] - layout.size[0],
+            canvas.height() - 24.0 - layout.position[1] - layout.size[1],
+        ]);
+        let _ = window.frame(Vec::new());
+        let output = window.frame(Vec::new());
+        let (canvas, shown) = (window.app.canvas_rect(&window.ctx), panel_rect(&window, panel));
+        assert!(
+            canvas.contains_rect(shown),
+            "the panel {shown:?} stands whole in the canvas {canvas:?} at {size:?}"
+        );
+        let map = window.app.minimap_overlay_rect(&window.ctx);
+        assert!(
+            !draws_the_minimap(&output) && map.is_none(),
+            "the minimap {map:?} covers the panel {shown:?} on the canvas {canvas:?} at {size:?}"
+        );
+    }
+    // A canvas of three maps has the room of a jump for a panel of the default
+    // size beside the map: the map shows, and a jump puts the panel clear of it.
+    for size in [[1206.0, 640.0], [1280.0, 800.0]] {
+        let (mut window, panel) = agent_window(size);
+        let ctx = window.ctx.clone();
+        window.app.reveal_selected_panel(&ctx, panel);
+        let _ = window.frame(Vec::new());
+        let output = window.frame(Vec::new());
+        let (canvas, shown) = (window.app.canvas_rect(&window.ctx), panel_rect(&window, panel));
+        let map = window
+            .app
+            .minimap_overlay_rect(&window.ctx)
+            .unwrap_or_else(|| panic!("the canvas {canvas:?} of {size:?} shows the minimap"));
+        assert!(
+            draws_the_minimap(&output) && canvas.contains_rect(shown) && !map.intersects(shown),
+            "a jump shows the panel {shown:?} whole and clear of the minimap {map:?} at {size:?}"
         );
     }
 }
