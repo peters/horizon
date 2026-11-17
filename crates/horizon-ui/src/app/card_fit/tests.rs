@@ -453,6 +453,12 @@ fn taller_than_the_view_document() -> serde_json::Value {
     })
 }
 
+/// The ceiling of a card of the default width that is fitted in the window of
+/// `app` now: the height of its canvas, between 560 and 900 points.
+fn ceiling_of_the_window(app: &HorizonApp, ctx: &Context) -> f32 {
+    app.canvas_rect(ctx).height().clamp(CARD_HEIGHT_LIMITS[1], 900.0)
+}
+
 /// The room that the canvas view of this moment shows, in canvas points.
 fn room_of_the_view(app: &HorizonApp, ctx: &Context) -> f32 {
     app.canvas_rect(ctx).height() / app.canvas_view.zoom
@@ -524,15 +530,15 @@ fn a_card_that_grows_by_an_update_stops_at_the_ceiling_of_a_card_in_a_tall_view(
 
     let grown = card_height(&app, &card);
     assert!(
-        grown > opened && (grown - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON && room > grown,
+        grown > opened && (grown - ceiling_of_the_window(&app, &ctx)).abs() < f32::EPSILON && room > grown,
         "the card grew to the ceiling of a card and not to the room of the view: {opened} to {grown} of {room}"
     );
     let panel = card_panel(&app, &ctx, &card);
     let body = card_body(panel, app.canvas_view.zoom);
     let ink = drawn_text(&output, "Delete");
     assert!(
-        ink.min.y > body.max.y && drew_text(&output, "More below"),
-        "the body scrolls the last button and says so: {ink:?} in {body:?}"
+        ink.max.y > body.max.y && drew_text(&output, "More below"),
+        "the body cuts the last button and says so: {ink:?} in {body:?}"
     );
 }
 
@@ -566,8 +572,8 @@ fn a_card_that_is_taller_than_the_ceiling_of_a_card_scrolls_in_its_body() {
 
     let height = card_height(&app, &card);
     assert!(
-        (height - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON,
-        "a content above the ceiling keeps a card at the ceiling: {height}"
+        (height - ceiling_of_the_window(&app, &ctx)).abs() < f32::EPSILON && (height - 900.0).abs() < f32::EPSILON,
+        "a content above the ceiling keeps a card at the ceiling of a tall window: {height}"
     );
     let panel = card_panel(&app, &ctx, &card);
     let body = card_body(panel, app.canvas_view.zoom);
@@ -696,11 +702,13 @@ fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
     let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
 
     // The body of the document needs more room than the ceiling of a card gives
-    // it, so the card rests at the ceiling and the view cuts its foot.
+    // it in this window, which is the height of its canvas. The card rests at
+    // that ceiling, and the view cuts its foot.
     let canvas = app.canvas_rect(&ctx);
     let panel = card_panel(&app, &ctx, &card);
     assert!(
-        (panel.height() - CARD_HEIGHT_LIMITS[1]).abs() < f32::EPSILON,
+        (panel.height() - ceiling_of_the_window(&app, &ctx)).abs() < 0.01
+            && (panel.height() - canvas.height()).abs() < 0.01,
         "the card holds the ceiling of its height: {panel:?}"
     );
     assert!(
@@ -739,12 +747,8 @@ fn a_card_that_the_view_cuts_brings_its_foot_into_the_view() {
         "the press scrolled the body: {after:?} from {before:?}"
     );
 
-    // The body of a card at its ceiling is short, so a second page shows its end.
-    let mark = drawn_text(&output, "More below");
-    press_at(&ctx, &mut app, PERSON_WINDOW, mark.center());
-    let output = run_app_frame_with_input(&ctx, &mut app, raw_input(PERSON_WINDOW, None));
-
-    // The body shows its end, so the next press brings the foot of the card into
+    // The card is as high as the canvas of this window, so the page of that press
+    // reached the end of its body. The next press brings the foot of the card into
     // the view at the zoom of the moment, which takes the top of a taller card out
     // of it, and the mark goes with the foot.
     let zoom = app.canvas_view.zoom;

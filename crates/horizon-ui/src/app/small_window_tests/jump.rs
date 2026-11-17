@@ -1,10 +1,11 @@
 //! A jump to a card from its row of the sidebar: the card stands whole in the
 //! canvas while the canvas holds it, and it shows its top while it does not.
 //!
-//! A card of the default width stops at a ceiling that the smallest window
-//! holds, so a jump shows it whole. The cards that reach the edge of the canvas
-//! are the wide card, which may take the height of the view, and a card that the
-//! person made taller by hand.
+//! A card of the default width stops at the height of the canvas of its window,
+//! between 560 and 900 points, so a jump at the least zoom of a Fit shows it
+//! whole. The cards that reach the edge of the canvas are the wide card, which
+//! may take the height of the view, and a card that the person made taller by
+//! hand.
 
 use egui::{Event, Pos2, Rect};
 use horizon_core::browser::manifest::{
@@ -199,9 +200,10 @@ fn a_press_on_the_row_of_a_card_taller_than_the_canvas_shows_its_top() {
     );
 }
 
-/// A card of the default width takes the ceiling of its height at the most, and
-/// it stands in the column at the right of its agent panel. A jump shows it whole
-/// in every window, and it shows the one line of the card when the card is folded.
+/// A card of the default width takes the ceiling of its window at the most, which
+/// is the height of the canvas between 560 and 900 points, and it stands in the
+/// column at the right of its agent panel. A jump shows it whole in every window,
+/// and it shows the one line of the card when the card is folded.
 #[test]
 fn a_press_on_the_row_of_a_card_of_a_column_shows_that_card_open_and_folded() {
     for size in [[800.0, 600.0], [1280.0, 900.0]] {
@@ -217,6 +219,11 @@ fn a_press_on_the_row_of_a_card_of_a_column_shows_that_card_open_and_folded() {
                 && layout.position[0] > agent.position[0] + agent.size[0]
                 && (layout.position[1] - agent.position[1]).abs() < 0.5,
             "the card {layout:?} stands in the column at the right of its agent panel {agent:?}: {place:?}"
+        );
+        let ceiling = window.app.canvas_rect(&window.ctx).height().clamp(560.0, 900.0);
+        assert!(
+            (layout.size[1] - ceiling).abs() < 0.01,
+            "the card {layout:?} has the ceiling {ceiling} of a window of {size:?}"
         );
 
         let _ = press_the_row(&mut window);

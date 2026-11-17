@@ -305,7 +305,7 @@ fn a_new_card_is_four_hundred_and_twenty_wide_and_as_tall_as_its_content() {
     let [_, height] = default_card_size(&huge, 0.0);
     assert!(
         (height - 560.0).abs() < f32::EPSILON,
-        "a long card stops at the ceiling"
+        "a long card opens at the ceiling of the smallest window, before its fit reads the window"
     );
 }
 

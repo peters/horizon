@@ -18,8 +18,9 @@ use super::metrics::{
     CAPTION_TRACKING, CARD_MAX_HEIGHT, CARD_MIN_HEIGHT, CARD_WIDTH, COMPONENT_GAP, FOOTER_HEIGHT, HEADING_FONT,
     HEADING_SUBTITLE_FONT, HEADING_SUBTITLE_GAP, HEADING_SUBTITLE_LINE_HEIGHT, KV_ROW_HEIGHT, KV_ROW_PAD_Y,
     KV_VALUE_FONT, LINE_FACTOR, LIST_LINE_GAP, LIST_ROW_GAP, LIST_ROW_PAD_Y, LIST_SUBTITLE_FONT, LIST_TITLE_FONT,
-    LOG_ROW_GAP, LOG_TEXT_FONT, PILL_HEIGHT, PILL_LINE_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT, TEXT_FONT,
-    TEXT_LINE_HEIGHT, WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH, WIDE_CARD_MIN_WIDTH, WIDE_HEADING_FONT, count,
+    LOG_ROW_GAP, LOG_TEXT_FONT, PILL_HEIGHT, PILL_LINE_GAP, STEP_FONT, STEP_GAP, STEP_MARK, STEP_TIME_FONT,
+    TALL_CARD_MAX_HEIGHT, TEXT_FONT, TEXT_LINE_HEIGHT, WIDE_CARD_MAX_HEIGHT, WIDE_CARD_MAX_WIDTH, WIDE_CARD_MIN_WIDTH,
+    WIDE_HEADING_FONT, count,
 };
 use crate::app::{PANEL_PADDING, PANEL_TITLEBAR_HEIGHT};
 
@@ -54,8 +55,9 @@ const CALLOUT_CHARS_PER_LINE: usize = 34;
 /// titlebar, the panel padding above and below the body, and the footer.
 pub(crate) const CARD_CHROME_HEIGHT: f32 = PANEL_TITLEBAR_HEIGHT + 2.0 * PANEL_PADDING + FOOTER_HEIGHT;
 
-/// The bounds of a card height that fits its content, which only the tests
-/// judge on their own: the height of a card follows its document.
+/// The bounds of a card height that fits its content in the smallest window,
+/// which only the tests judge on their own: the height of a card follows its
+/// document and the room of its window.
 #[cfg(test)]
 pub(crate) const CARD_HEIGHT_LIMITS: [f32; 2] = [CARD_MIN_HEIGHT, CARD_MAX_HEIGHT];
 
@@ -64,15 +66,22 @@ fn asks_wide(document: &BlockDocument) -> bool {
     document.width == Some(Width::Wide)
 }
 
-/// The bounds of the height of a card that draws `document`. A card of the
-/// default width keeps one ceiling in every window. The wide card may grow
-/// taller, because a board grows with its waves, and it may take `view_room`,
-/// the height that the canvas view shows, when that is more.
-pub(crate) fn card_height_limits(document: &BlockDocument, view_room: f32) -> [f32; 2] {
+/// The bounds of the height of a card that draws `document`, at the fit of the
+/// card: `window_room` is the height of the canvas of the window, and
+/// `view_room` is the height that the canvas view shows at its zoom.
+///
+/// The ceiling of a card of the default width follows the room of the window
+/// between 560 and 900 points: the smallest window keeps a card that it can
+/// show, and a tall window shows a tall card whole. The zoom of the view takes no
+/// part, so a card has one ceiling in one window. The wide card may grow taller,
+/// because a board grows with its waves, and it takes the room of the view when
+/// that is more. The rooms are read when a card is fitted, at a new document and
+/// at an unfold: a window that changes its size changes no card.
+pub(crate) fn card_height_limits(document: &BlockDocument, window_room: f32, view_room: f32) -> [f32; 2] {
     let ceiling = if asks_wide(document) {
         WIDE_CARD_MAX_HEIGHT.max(view_room)
     } else {
-        CARD_MAX_HEIGHT
+        window_room.clamp(CARD_MAX_HEIGHT, TALL_CARD_MAX_HEIGHT)
     };
     [CARD_MIN_HEIGHT, ceiling]
 }
@@ -161,7 +170,7 @@ pub(crate) fn default_card_size(document: &BlockDocument, canvas_width: f32) -> 
     let form = Form::of(body_width);
     let body = components_height(document, form, body_width);
     let padding = f32::from(BODY_PAD_TOP) + f32::from(BODY_PAD_BOTTOM);
-    let limits = card_height_limits(document, 0.0);
+    let limits = card_height_limits(document, 0.0, 0.0);
     let height = (CARD_CHROME_HEIGHT + padding + body).clamp(limits[0], limits[1]);
     [width, height]
 }

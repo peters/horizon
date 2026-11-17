@@ -1,5 +1,6 @@
 //! A card has the height of its content, between the least and the greatest
-//! height of a card, in a workspace that a preset arranges too.
+//! height of a card, in a workspace that a preset arranges too. The greatest
+//! height follows the room of the window at the fit of the card.
 
 use egui::{Event, Vec2};
 use horizon_core::WorkspaceLayout;
@@ -10,8 +11,10 @@ use crate::app::test_support::{card_body, card_panel, drawn_text, drew_text, edi
 
 /// The smallest window that the build opens.
 const SMALL_WINDOW: [f32; 2] = [800.0, 600.0];
-/// The greatest height of a card of the default width.
+/// The greatest height of a card of the default width in the smallest window.
 const GREATEST: f32 = 560.0;
+/// The greatest height of a card of the default width in a tall window.
+const TALLEST: f32 = 900.0;
 /// The least height of a card.
 const LEAST: f32 = 140.0;
 
@@ -63,20 +66,20 @@ fn a_card_of_two_lines_is_lower_than_a_card_of_twenty_rows_in_the_grid_of_a_new_
 
     let (short_height, long_height) = (height(&app, &short), height(&app, &long));
     assert!(
-        (LEAST..240.0).contains(&short_height) && long_height > 2.0 * short_height && long_height <= GREATEST,
+        (LEAST..240.0).contains(&short_height) && long_height > 2.0 * short_height && long_height <= TALLEST,
         "each card has the height of its own content: {short_height} and {long_height}"
     );
 }
 
 #[test]
-fn a_card_above_the_greatest_height_keeps_that_height_in_every_window_and_scrolls_to_its_buttons() {
-    for window in [SMALL_WINDOW, WINDOW, [5120.0, 1400.0]] {
+fn a_card_above_the_greatest_height_of_its_window_keeps_that_height_and_scrolls_to_its_buttons() {
+    for (window, greatest) in [(SMALL_WINDOW, GREATEST), (WINDOW, TALLEST), ([5120.0, 1400.0], TALLEST)] {
         let (_temp, ctx, mut app) = started(workspace(None, vec![editor_panel_state(AGENT, [20.0, 20.0])]));
         app.template_config.canvas.fit_floor_zoom = 1.0;
         let card = draw_in(&ctx, &mut app, window, rows_and_button("tall", 24));
 
         assert!(
-            (height(&app, &card) - GREATEST).abs() < f32::EPSILON,
+            (height(&app, &card) - greatest).abs() < f32::EPSILON,
             "the card has the greatest height of a card in a window of {window:?}: {}",
             height(&app, &card)
         );
@@ -130,6 +133,64 @@ fn a_card_above_the_greatest_height_keeps_that_height_in_every_window_and_scroll
             "the mark goes at the end of a body that the view shows whole ({window:?})"
         );
     }
+}
+
+/// The same document in the smallest window and in a tall one: the card of the
+/// small window stops at 560 points and scrolls, and the card of the tall window
+/// takes the height of its content. The card under it in the column stands under
+/// the height that the card took.
+#[test]
+fn the_greatest_height_of_a_card_follows_the_room_of_the_window_at_its_fit() {
+    let mut heights = Vec::new();
+    for window in [SMALL_WINDOW, [2400.0, 1300.0]] {
+        let (_temp, ctx, mut app) = agent_board(None);
+        let under = draw_in(&ctx, &mut app, window, rows_and_button("under", 2));
+        let card = draw_in(&ctx, &mut app, window, rows_and_button("tall", 16));
+        // The person looks at the card, so only a body that holds more than it
+        // shows draws the mark.
+        let id = app.board.panel_id_by_local_id(&card).expect("the card");
+        app.reveal_panel_visible(&ctx, id);
+        let output = frames(&ctx, &mut app, window);
+        let (card_place, under_place) = (place(&app, &card), place(&app, &under));
+        assert!(
+            (under_place[1] - (card_place[3] + GAP)).abs() < 0.5,
+            "the card under it stands under the card of {window:?}: {card_place:?} then {under_place:?}"
+        );
+        heights.push((height(&app, &card), drew_text(&output, "More below")));
+    }
+    let [(small, small_scrolls), (tall, tall_scrolls)] = heights[..] else {
+        panic!("two windows");
+    };
+    assert!(
+        (small - GREATEST).abs() < f32::EPSILON && small_scrolls,
+        "the card of the smallest window stops at {GREATEST} points and scrolls: {small}"
+    );
+    assert!(
+        tall > GREATEST + 40.0 && tall <= TALLEST && !tall_scrolls,
+        "the card of the tall window takes the height of its content and scrolls nothing: {tall}"
+    );
+
+    // A window that changes its size alone changes no card. The next document of
+    // the card is fitted in the window of that moment.
+    let (_temp, ctx, mut app) = agent_board(None);
+    let card = draw_in(&ctx, &mut app, [2400.0, 1300.0], rows_and_button("tall", 16));
+    let _ = frames(&ctx, &mut app, SMALL_WINDOW);
+    assert!(
+        (height(&app, &card) - tall).abs() < f32::EPSILON,
+        "the card keeps its height in the window that became small: {}",
+        height(&app, &card)
+    );
+    let update = Operation::Update {
+        panel_id: card.clone(),
+        document: rows_and_button("tall", 17),
+    };
+    let _ = app.apply_block_request(&request(&app, update), &ctx);
+    let _ = frames(&ctx, &mut app, SMALL_WINDOW);
+    assert!(
+        (height(&app, &card) - GREATEST).abs() < f32::EPSILON,
+        "the next document of the card is fitted in the small window: {}",
+        height(&app, &card)
+    );
 }
 
 #[test]

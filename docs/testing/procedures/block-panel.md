@@ -1154,9 +1154,11 @@ stop the server in step 8.
 
 ### 5.30 B30 — The mark brings the foot of a card that the view cuts
 
-The document of the scenario `tall` needs more room than the ceiling of a card,
-560 points, gives it. The card rests at the ceiling, and the view of a window of
-900 points cuts the foot of a card that starts at 620 points.
+The document of the scenario `tall` needs more room than the ceiling of a card
+gives it. The ceiling is the height of the canvas of the window, not less than
+560 points and not more than 900 points. The card rests at the ceiling, and the
+view of a window of 900 points cuts the foot of a card that starts at 620
+points.
 
 1. Write this panel list to `<work>/tall-panels.json`:
 
@@ -1256,15 +1258,23 @@ The document of the scenario `tall` needs more room than the ceiling of a card,
 3. In client A, create a card whose document holds one `heading`, a `kv`
    component of 24 rows and one `buttons` component with the button `Delete`.
 
-   Result: The card is 560 points high in a window of every size. Its body shows
-   the mark `More below`, and the button `Delete` is not in the body.
+   Result: The card is as high as the canvas of the window, not less than 560
+   points and not more than 900 points: 560 points in a window of 800 x 600, and
+   900 points in a window that is 1000 points high or more. Its body shows the
+   mark `More below`, and the button `Delete` is not in the body.
 
-4. Put the pointer on the body of that card and turn the wheel down.
+4. Change the height of the window, and look at the card again.
+
+   Result: The card keeps its height. A change of the window size changes no
+   card. The next document of the card takes the ceiling of the window of that
+   moment.
+
+5. Put the pointer on the body of that card and turn the wheel down.
 
    Result: The body scrolls. The button `Delete` comes into the body and takes
    a press.
 
-5. Drag the corner grip of that card until the card is 300 points high. Then
+6. Drag the corner grip of that card until the card is 300 points high. Then
    update the card with a document of ten rows.
 
    Result: The card keeps the size that you dragged.
@@ -1450,9 +1460,11 @@ Horizon, in a workspace of its own, with an agent panel that can call
   that holds the place at the right of the agent panel puts the column at its own
   right. The column moves with its agent panel. A card that the person drags
   stays where the person put it, also after a restart.
-- B32: A card has the height of its content, from 140 points to 560 points, in a
-  workspace with a preset too. A card above 560 points scrolls in its body, shows
-  `More below`, and gives its buttons to the wheel. A card that grows moves the
+- B32: A card has the height of its content, from 140 points to the ceiling of
+  its window, in a workspace with a preset too. The ceiling is the height of the
+  canvas, not less than 560 points and not more than 900 points. A card above
+  the ceiling scrolls in its body, shows `More below`, and gives its buttons to
+  the wheel. A card that grows moves the
   cards under it. A card that the person resized keeps its size.
 - B33: A finished card is one line with its heading and its badge. A press on
   the line opens it, and the arrow in its title bar folds and opens every card.

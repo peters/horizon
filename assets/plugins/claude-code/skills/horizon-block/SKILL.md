@@ -74,8 +74,9 @@ A document may ask for a wide card: `"width": "wide"` beside `components`. A
 wide card opens at half of the width of the canvas view, between 1100 and 2400
 points. A card fits its content: it takes the height that the content needs,
 from 140 points up to its ceiling. The ceiling of a card of the default width is
-560 points in every window. The ceiling of a wide card is 1200 points, or the
-room that the canvas view shows when that is more. A card that is taller than
+the height of the canvas of the window of the person when Horizon fits the card,
+not less than 560 points and not more than 900 points. The ceiling of a wide
+card is 1200 points, or the room that the canvas view shows when that is more. A card that is taller than
 its ceiling scrolls: Horizon fades its last rows and marks its lower edge with
 `More below`, so put the buttons that matter in the first rows. A person who
 resizes the card by hand keeps that size, since the size of the person outranks

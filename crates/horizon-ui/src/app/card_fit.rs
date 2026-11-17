@@ -8,10 +8,13 @@
 //! than its content scrolls its body above a footer that stays put. One repaint
 //! settles a new size, so no frame loop starts.
 //!
-//! The height of a card of the default width is bounded by one ceiling in every
-//! window, so a card has one size on every screen, and a card above the ceiling
-//! scrolls in its body. A wide card may also take the room that the canvas view
-//! shows at the zoom of the moment, because a board grows with its waves.
+//! The height of a card of the default width is bounded by a ceiling that
+//! follows the height of the canvas of the window at the moment of the fit,
+//! between 560 and 900 points, and a card above the ceiling scrolls in its body.
+//! A wide card may take the room that the canvas view shows at the zoom of that
+//! moment, because a board grows with its waves. A window that changes its size
+//! alone fits no card again: the next document of a card, or its unfold, reads
+//! the room of that moment.
 //!
 //! The width follows the document too: a wide document takes the width that its
 //! board asks for at every update, and a document that is narrow again takes the
@@ -49,7 +52,8 @@ impl HorizonApp {
             .map(|panel| panel.id)
             .collect();
         // The room of the canvas decides how wide a wide card may be, and how tall
-        // it may grow: the visible height of the view at the zoom of this moment.
+        // a card may grow: the height of the canvas for a card of the default width,
+        // and the visible height of the view at the zoom of this moment for a wide one.
         let canvas = self.canvas_rect(ctx);
         let canvas_width = canvas.width();
         let canvas_height = canvas.height() / self.canvas_view.zoom;
@@ -79,7 +83,7 @@ impl HorizonApp {
             let Some((limits, width, current, workspace_id, tile)) = self.board.panel(id).and_then(|panel| {
                 let card = panel.block()?;
                 Some((
-                    card_height_limits(&card.document, canvas_height),
+                    card_height_limits(&card.document, canvas.height(), canvas_height),
                     card_width(&card.document, canvas_width),
                     panel.layout.size,
                     panel.workspace_id,

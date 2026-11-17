@@ -992,13 +992,15 @@ the rules from the modules beside it.
   with an ellipsis and shows whole while the pointer rests on the item.
 - A new card opens 420 wide and, once the body has measured its content, as
   tall as that content needs, between 140 points and the ceiling of the card.
-  The ceiling of a narrow card is 900 points and the ceiling of a wide card is
-  1200 points, and the room that the canvas view shows at the zoom of the moment
-  beats the ceiling while it is larger, so the card of a window that shows 1150
-  points may take 1150 points and no part of its content hides under its footer.
-  A card that the person resized by hand keeps that size, a card of an arranged
-  workspace keeps the size of its preset, and a card that is taller than its
-  ceiling and than the room of the view scrolls its body above a footer that
+  The ceiling of a narrow card is the height of the canvas of the window at the
+  fit of the card, not less than 560 points and not more than 900 points: the
+  smallest window keeps a card that it can show, and a tall window shows a tall
+  card whole. The ceiling of a wide card is 1200 points, or the room that the
+  canvas view shows at the zoom of the moment when that is more. A window that
+  changes its size changes no card; the next document of a card reads the room
+  of that moment. A card that the person resized by hand keeps that size, a card
+  that is a tile of an arranged workspace keeps the size of its preset, and a
+  card that is taller than its ceiling scrolls its body above a footer that
   stays at the bottom. The status frames are part of what the content needs: the
   card fits again when one appears or goes, such as the frame of an agent that
   left and the frame of a refused click.
