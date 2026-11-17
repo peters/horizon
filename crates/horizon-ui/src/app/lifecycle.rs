@@ -126,6 +126,7 @@ impl HorizonApp {
         let panel_output = self.board.process_output();
         let mut on_screen_terminal_output = false;
         if panel_output.activity.terminal {
+            self.shared_terminals.note_output();
             // Output can arrive while a panel is culled. Invalidate now, before
             // the next quiet poll clears its one-frame activity flag.
             for panel in &self.board.panels {

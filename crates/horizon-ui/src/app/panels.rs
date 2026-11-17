@@ -829,6 +829,7 @@ impl HorizonApp {
                     fold: (snapshot.kind == PanelKind::Block).then_some(rects.mic),
                     card: self
                         .card_titlebar_chip(panel_id)
+                        .or_else(|| self.shared_terminals.chip(panel_id))
                         .or_else(|| opened_by.map(CardChip::opened_by))
                         .or_else(|| on_machine.map(CardChip::on_machine)),
                 };

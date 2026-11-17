@@ -1,3 +1,4 @@
+mod computers;
 mod list;
 pub(in crate::app) mod machines;
 mod menus;
@@ -73,6 +74,9 @@ struct SidebarActions {
     connect_machine: Option<String>,
     /// A click on the row of an agent of a machine: go to its terminal, or open one.
     open_machine_agent: Option<horizon_core::machine_watch::MachineAgent>,
+    /// A click on the row of a terminal of another computer: the computer and
+    /// the panel that the follow panel shows.
+    open_shared_terminal: Option<(String, String)>,
     /// A confirmed "Forget this machine" on the row of this machine.
     forget_machine: Option<String>,
     remove_empty_workspace: Option<WorkspaceId>,
@@ -239,6 +243,7 @@ impl HorizonApp {
 
                 self.render_sidebar_workspaces(ui, workspace_data, actions, &mut drag_state);
                 self.render_sidebar_machines(ui, actions);
+                self.render_sidebar_computers(ui, actions);
             });
 
         if drag_state.drop_requested {
@@ -543,6 +548,9 @@ impl HorizonApp {
         }
         if let Some(agent) = actions.open_machine_agent.clone() {
             self.open_machine_agent(&agent, ctx);
+        }
+        if let Some((device, panel)) = &actions.open_shared_terminal {
+            self.open_shared_terminal(device, panel, ctx);
         }
     }
 

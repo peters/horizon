@@ -85,6 +85,9 @@ pub(in crate::app) struct ServerSync {
     generation: u64,
     /// A read of the list is on the coordination worker.
     reloading: bool,
+    /// The settings of this link, until the live link of the shared terminals
+    /// takes them. A link of a test has none, so it starts no live link.
+    pub(in crate::app) live: Option<SupervisorConfig>,
 }
 
 impl ServerSync {
@@ -103,6 +106,7 @@ impl ServerSync {
             token: false,
             generation,
             reloading: false,
+            live: None,
         }
     }
 
@@ -353,10 +357,12 @@ pub(in crate::app) fn load(
     }
     let holds_token = token.is_some();
     drop(token);
+    let live = config.clone();
     match Supervisor::start(config, wake) {
         Ok(supervisor) => {
             let mut sync = ServerSync::new(supervisor, secrets.credentials);
             sync.token = holds_token;
+            sync.live = Some(live);
             match Machines::from_store(&registry, sync.store()) {
                 Ok(machines) => Ok(MachineLoad {
                     machines,
@@ -541,6 +547,7 @@ impl HorizonApp {
         // The old link ends before the new one starts, so one computer never holds
         // two writers of one queue.
         self.server_sync = None;
+        self.stop_shared_terminals();
         self.settings_request.link_failure = None;
         self.settings_io.set_link(None);
         self.load_machines(ctx);

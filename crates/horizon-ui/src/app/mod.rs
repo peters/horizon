@@ -87,6 +87,7 @@ mod settings;
 mod settings_io;
 mod settings_request;
 pub(crate) mod setup;
+mod shared_terminals;
 pub(crate) mod shortcut_inventory;
 pub(crate) mod shortcuts;
 mod sidebar;
@@ -385,6 +386,9 @@ pub struct HorizonApp {
     machine_load_rx: Option<Receiver<Result<server_sync::MachineLoad, horizon_core::MachineError>>>,
     /// The link of this Horizon to its server, when the settings name one.
     pub(in crate::app) server_sync: Option<server_sync::ServerSync>,
+    /// The terminals that this computer shares with the other computers of the
+    /// person, and the ones of those computers that this window follows.
+    pub(in crate::app) shared_terminals: shared_terminals::SharedTerminals,
     /// The child program of a link that this Horizon starts. `None` runs `ssh`;
     /// a test of a path that starts a link names a program that ends at once,
     /// because a unit test starts no `ssh`.
@@ -632,6 +636,9 @@ impl HorizonApp {
             }
         }
         self.render_active_view(ui, block_root_interaction);
+        // After the panels took the keys of this frame, so what the person typed
+        // in a follow panel leaves with this frame.
+        self.poll_shared_terminals(ctx);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
