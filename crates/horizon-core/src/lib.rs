@@ -129,7 +129,7 @@ pub use session_store::{
 pub use setup::{
     SETUP_SKILL, SetupAgent, SetupGoal, first_installed, first_message_args, setup_agents, takes_first_message,
 };
-pub use shortcuts::{AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers};
+pub use shortcuts::{APP_SHORTCUTS, AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers, ShortcutSpec};
 pub use ssh::{
     DiscoveredSshHost, MachineKey, MachineKeyError, MachineKeyRef, MachineKeys, SshConnection, SshConnectionStatus,
     discover_ssh_hosts,

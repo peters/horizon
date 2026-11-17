@@ -359,9 +359,9 @@ mod tests {
     #[test]
     fn a_hotkey_of_a_global_shortcut_and_a_bare_key_are_refused() {
         let mut speech = SpeechConfig::default();
-        let fullscreen = crate::shortcuts::platform_default_fullscreen_panel_config(cfg!(target_os = "macos"));
+        let fullscreen = crate::Config::default().shortcuts.fullscreen_panel;
         for (hotkey, expected) in [
-            (fullscreen, "fullscreen_panel"),
+            (fullscreen.as_str(), "fullscreen_panel"),
             ("Ctrl+Shift+K", "command_palette"),
             ("Escape", "Escape"),
             ("Ctrl+Escape", "Escape"),

@@ -1,5 +1,5 @@
 use egui::{Color32, Ui};
-use horizon_core::{Config, ShortcutBinding, ShortcutsConfig};
+use horizon_core::{APP_SHORTCUTS, Config, ShortcutBinding};
 
 use crate::app::shortcut_inventory::{
     copy_selection_shortcut_label, paste_shortcut_label, ssh_reconnect_shortcut_conflicts,
@@ -10,105 +10,6 @@ use crate::theme;
 
 const LABEL_WIDTH: f32 = 130.0;
 const ERROR_INDICATOR_WIDTH: f32 = 20.0;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EditableShortcut {
-    CommandPalette,
-    NewTerminal,
-    FocusWorkspace,
-    FitWorkspace,
-    RemoteHosts,
-    Sessions,
-    ToggleSidebar,
-    ToggleHud,
-    ToggleMinimap,
-    AlignWorkspaces,
-    ToggleSettings,
-    ResetZoom,
-    ZoomIn,
-    ZoomOut,
-    FullscreenPanel,
-    ExitFullscreen,
-    FullscreenWindow,
-    SaveEditor,
-    SearchTerminals,
-    NextAttention,
-}
-
-impl EditableShortcut {
-    const ALL: [Self; 20] = [
-        Self::CommandPalette,
-        Self::NewTerminal,
-        Self::FocusWorkspace,
-        Self::FitWorkspace,
-        Self::RemoteHosts,
-        Self::Sessions,
-        Self::ToggleSidebar,
-        Self::ToggleHud,
-        Self::ToggleMinimap,
-        Self::AlignWorkspaces,
-        Self::ToggleSettings,
-        Self::ResetZoom,
-        Self::ZoomIn,
-        Self::ZoomOut,
-        Self::FullscreenPanel,
-        Self::ExitFullscreen,
-        Self::FullscreenWindow,
-        Self::SaveEditor,
-        Self::SearchTerminals,
-        Self::NextAttention,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::CommandPalette => "Command Palette",
-            Self::NewTerminal => "New Terminal",
-            Self::FocusWorkspace => "Focus Workspace",
-            Self::FitWorkspace => "Fit Workspace",
-            Self::RemoteHosts => "Remote Hosts",
-            Self::Sessions => "Sessions",
-            Self::ToggleSidebar => "Toggle Sidebar",
-            Self::ToggleHud => "Toggle HUD",
-            Self::ToggleMinimap => "Toggle Minimap",
-            Self::AlignWorkspaces => "Align Workspaces",
-            Self::ToggleSettings => "Toggle Settings",
-            Self::ResetZoom => "Reset Zoom",
-            Self::ZoomIn => "Zoom In",
-            Self::ZoomOut => "Zoom Out",
-            Self::FullscreenPanel => "Fullscreen Panel",
-            Self::ExitFullscreen => "Exit Fullscreen",
-            Self::FullscreenWindow => "Fullscreen Window",
-            Self::SaveEditor => "Save Editor",
-            Self::SearchTerminals => "Search Terminals",
-            Self::NextAttention => "Next Agent That Needs You",
-        }
-    }
-
-    fn value_mut(self, shortcuts: &mut ShortcutsConfig) -> &mut String {
-        match self {
-            Self::CommandPalette => &mut shortcuts.command_palette,
-            Self::NewTerminal => &mut shortcuts.new_terminal,
-            Self::FocusWorkspace => &mut shortcuts.focus_active_workspace,
-            Self::FitWorkspace => &mut shortcuts.fit_active_workspace,
-            Self::RemoteHosts => &mut shortcuts.open_remote_hosts,
-            Self::Sessions => &mut shortcuts.toggle_sessions,
-            Self::ToggleSidebar => &mut shortcuts.toggle_sidebar,
-            Self::ToggleHud => &mut shortcuts.toggle_hud,
-            Self::ToggleMinimap => &mut shortcuts.toggle_minimap,
-            Self::AlignWorkspaces => &mut shortcuts.align_workspaces_horizontally,
-            Self::ToggleSettings => &mut shortcuts.toggle_settings,
-            Self::ResetZoom => &mut shortcuts.zoom_reset,
-            Self::ZoomIn => &mut shortcuts.zoom_in,
-            Self::ZoomOut => &mut shortcuts.zoom_out,
-            Self::FullscreenPanel => &mut shortcuts.fullscreen_panel,
-            Self::ExitFullscreen => &mut shortcuts.exit_fullscreen_panel,
-            Self::FullscreenWindow => &mut shortcuts.fullscreen_window,
-            Self::SaveEditor => &mut shortcuts.save_editor,
-            Self::SearchTerminals => &mut shortcuts.search,
-            Self::NextAttention => &mut shortcuts.next_attention,
-        }
-    }
-}
 
 /// Render the Shortcuts settings tab. Each configurable keyboard binding is
 /// shown as an editable text field with inline validation. Returns `true`
@@ -122,10 +23,10 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config) -> bool {
         super::dim_label(ui, "Key bindings use modifier+key syntax (e.g. Ctrl+K, Ctrl+Shift+A).");
         ui.add_space(8.0);
 
-        for shortcut in EditableShortcut::ALL {
+        for shortcut in APP_SHORTCUTS {
             changed |= shortcut_row(
                 ui,
-                shortcut.label(),
+                shortcut.label,
                 shortcut.value_mut(&mut config.shortcuts),
                 &mut all_valid,
             );
@@ -267,19 +168,24 @@ fn static_shortcut_row(ui: &mut Ui, label: &str, value: &str, note: Option<&str>
 
 #[cfg(test)]
 mod tests {
-    use horizon_core::ShortcutsConfig;
-
-    use super::EditableShortcut;
+    use horizon_core::{APP_SHORTCUTS, ShortcutsConfig};
 
     #[test]
-    fn editable_shortcuts_include_search_terminals() {
-        assert!(EditableShortcut::ALL.contains(&EditableShortcut::SearchTerminals));
+    fn the_keys_tab_offers_the_search_terminals_row() {
+        assert!(
+            APP_SHORTCUTS.iter().any(|row| row.label == "Search Terminals"),
+            "the Keys tab shows the search shortcut"
+        );
     }
 
     #[test]
     fn editable_shortcut_rows_update_the_expected_config_field() {
         let mut shortcuts = ShortcutsConfig::default();
-        *EditableShortcut::SearchTerminals.value_mut(&mut shortcuts) = "Alt+F".to_string();
+        let row = APP_SHORTCUTS
+            .iter()
+            .find(|row| row.label == "Search Terminals")
+            .expect("the search row of the Keys tab");
+        *row.value_mut(&mut shortcuts) = "Alt+F".to_string();
 
         assert_eq!(shortcuts.search, "Alt+F");
     }

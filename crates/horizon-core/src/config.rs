@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::notify::NotificationSetting;
 use crate::panel::{PanelKind, PanelResume};
-use crate::shortcuts::{AppShortcuts, ShortcutBinding};
+use crate::shortcuts::{APP_SHORTCUTS, AppShortcuts, ShortcutBinding, default_shortcut_settings};
 use crate::ssh::{DiscoveredSshHost, SshConnection, discover_ssh_hosts};
 
 mod browser_host;
@@ -177,29 +177,7 @@ pub struct ShortcutsConfig {
 
 impl Default for ShortcutsConfig {
     fn default() -> Self {
-        Self {
-            command_palette: "Ctrl+Shift+K".to_string(),
-            new_terminal: "Ctrl+Shift+N".to_string(),
-            focus_active_workspace: "Ctrl+Shift+W".to_string(),
-            fit_active_workspace: "Ctrl+Shift+9".to_string(),
-            open_remote_hosts: "Ctrl+Shift+H".to_string(),
-            toggle_sessions: "Ctrl+Shift+J".to_string(),
-            toggle_sidebar: "Ctrl+Shift+B".to_string(),
-            toggle_hud: "Ctrl+Shift+U".to_string(),
-            toggle_minimap: "Ctrl+Shift+M".to_string(),
-            align_workspaces_horizontally: "Ctrl+Shift+A".to_string(),
-            toggle_settings: "Ctrl+Shift+Comma".to_string(),
-            zoom_reset: "Ctrl+0".to_string(),
-            zoom_in: "Ctrl+Plus".to_string(),
-            zoom_out: "Ctrl+Minus".to_string(),
-            fullscreen_panel: crate::shortcuts::platform_default_fullscreen_panel_config(cfg!(target_os = "macos"))
-                .to_string(),
-            exit_fullscreen_panel: "Escape".to_string(),
-            fullscreen_window: "Ctrl+Shift+F11".to_string(),
-            save_editor: "Ctrl+Shift+S".to_string(),
-            search: "Ctrl+Shift+F".to_string(),
-            next_attention: "Ctrl+Shift+G".to_string(),
-        }
+        default_shortcut_settings()
     }
 }
 
@@ -210,31 +188,10 @@ impl ShortcutsConfig {
     ///
     /// Returns an error if any shortcut string is invalid or duplicated.
     pub fn resolve(&self) -> Result<AppShortcuts> {
-        let shortcuts = AppShortcuts {
-            command_palette: parse_shortcut("command_palette", &self.command_palette)?,
-            new_terminal: parse_shortcut("new_terminal", &self.new_terminal)?,
-            focus_active_workspace: parse_shortcut("focus_active_workspace", &self.focus_active_workspace)?,
-            fit_active_workspace: parse_shortcut("fit_active_workspace", &self.fit_active_workspace)?,
-            open_remote_hosts: parse_shortcut("open_remote_hosts", &self.open_remote_hosts)?,
-            toggle_sessions: parse_shortcut("toggle_sessions", &self.toggle_sessions)?,
-            toggle_sidebar: parse_shortcut("toggle_sidebar", &self.toggle_sidebar)?,
-            toggle_hud: parse_shortcut("toggle_hud", &self.toggle_hud)?,
-            toggle_minimap: parse_shortcut("toggle_minimap", &self.toggle_minimap)?,
-            align_workspaces_horizontally: parse_shortcut(
-                "align_workspaces_horizontally",
-                &self.align_workspaces_horizontally,
-            )?,
-            toggle_settings: parse_shortcut("toggle_settings", &self.toggle_settings)?,
-            zoom_reset: parse_shortcut("zoom_reset", &self.zoom_reset)?,
-            zoom_in: parse_shortcut("zoom_in", &self.zoom_in)?,
-            zoom_out: parse_shortcut("zoom_out", &self.zoom_out)?,
-            fullscreen_panel: parse_shortcut("fullscreen_panel", &self.fullscreen_panel)?,
-            exit_fullscreen_panel: parse_shortcut("exit_fullscreen_panel", &self.exit_fullscreen_panel)?,
-            fullscreen_window: parse_shortcut("fullscreen_window", &self.fullscreen_window)?,
-            save_editor: parse_shortcut("save_editor", &self.save_editor)?,
-            search: parse_shortcut("search", &self.search)?,
-            next_attention: parse_shortcut("next_attention", &self.next_attention)?,
-        };
+        let mut shortcuts = AppShortcuts::default();
+        for spec in APP_SHORTCUTS {
+            *(spec.binding_mut)(&mut shortcuts) = parse_shortcut(spec.setting, (spec.stored)(self))?;
+        }
 
         validate_distinct_shortcuts(shortcuts.named_bindings())?;
 

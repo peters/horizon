@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::config::ShortcutsConfig;
 use crate::error::{Error, Result};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -213,88 +214,84 @@ impl fmt::Display for ShortcutBinding {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AppShortcuts {
-    pub command_palette: ShortcutBinding,
-    pub new_terminal: ShortcutBinding,
-    pub focus_active_workspace: ShortcutBinding,
-    pub fit_active_workspace: ShortcutBinding,
-    pub open_remote_hosts: ShortcutBinding,
-    pub toggle_sessions: ShortcutBinding,
-    pub toggle_sidebar: ShortcutBinding,
-    pub toggle_hud: ShortcutBinding,
-    pub toggle_minimap: ShortcutBinding,
-    pub align_workspaces_horizontally: ShortcutBinding,
-    pub toggle_settings: ShortcutBinding,
-    pub zoom_reset: ShortcutBinding,
-    pub zoom_in: ShortcutBinding,
-    pub zoom_out: ShortcutBinding,
-    pub fullscreen_panel: ShortcutBinding,
-    pub exit_fullscreen_panel: ShortcutBinding,
-    pub fullscreen_window: ShortcutBinding,
-    pub save_editor: ShortcutBinding,
-    pub search: ShortcutBinding,
-    /// Go to the next agent panel that waits for the person.
-    pub next_attention: ShortcutBinding,
+/// One global shortcut: the setting that stores it, the row that the Settings
+/// tab shows, and the binding that a dispatcher reads.
+pub struct ShortcutSpec {
+    /// The field of the shortcut settings, as the settings store writes it.
+    pub(crate) setting: &'static str,
+    /// The name of this shortcut in the Settings tab.
+    pub label: &'static str,
+    /// The text of the setting, which the rule of the settings parses.
+    pub(crate) stored: fn(&ShortcutsConfig) -> &str,
+    stored_mut: fn(&mut ShortcutsConfig) -> &mut String,
+    /// The resolved shortcut, to fill a store that was never set.
+    pub(crate) binding_mut: fn(&mut AppShortcuts) -> &mut ShortcutBinding,
+    /// The binding of a store that was never set.
+    pub(crate) default: ShortcutBinding,
 }
 
-impl AppShortcuts {
-    /// Every global shortcut with the name of its setting, so a rule that reports
-    /// an overlap names the shortcut and a second list cannot drift from the
-    /// fields.
+impl ShortcutSpec {
+    /// The text of this shortcut in the shortcut settings, which the Settings
+    /// tab edits.
     #[must_use]
-    pub fn named_bindings(&self) -> [(&'static str, ShortcutBinding); 20] {
-        [
-            ("command_palette", self.command_palette),
-            ("new_terminal", self.new_terminal),
-            ("focus_active_workspace", self.focus_active_workspace),
-            ("fit_active_workspace", self.fit_active_workspace),
-            ("open_remote_hosts", self.open_remote_hosts),
-            ("toggle_sessions", self.toggle_sessions),
-            ("toggle_sidebar", self.toggle_sidebar),
-            ("toggle_hud", self.toggle_hud),
-            ("toggle_minimap", self.toggle_minimap),
-            ("align_workspaces_horizontally", self.align_workspaces_horizontally),
-            ("toggle_settings", self.toggle_settings),
-            ("zoom_reset", self.zoom_reset),
-            ("zoom_in", self.zoom_in),
-            ("zoom_out", self.zoom_out),
-            ("fullscreen_panel", self.fullscreen_panel),
-            ("exit_fullscreen_panel", self.exit_fullscreen_panel),
-            ("fullscreen_window", self.fullscreen_window),
-            ("save_editor", self.save_editor),
-            ("search", self.search),
-            ("next_attention", self.next_attention),
-        ]
+    pub fn value_mut<'a>(&self, config: &'a mut ShortcutsConfig) -> &'a mut String {
+        (self.stored_mut)(config)
     }
 }
 
-impl Default for AppShortcuts {
-    fn default() -> Self {
-        let ps = ShortcutModifiers::PRIMARY_SHIFT;
-        Self {
-            command_palette: ShortcutBinding::new(ps, ShortcutKey::Letter('K')),
-            new_terminal: ShortcutBinding::new(ps, ShortcutKey::Letter('N')),
-            focus_active_workspace: ShortcutBinding::new(ps, ShortcutKey::Letter('W')),
-            fit_active_workspace: ShortcutBinding::new(ps, ShortcutKey::Digit(9)),
-            open_remote_hosts: ShortcutBinding::new(ps, ShortcutKey::Letter('H')),
-            toggle_sessions: ShortcutBinding::new(ps, ShortcutKey::Letter('J')),
-            toggle_sidebar: ShortcutBinding::new(ps, ShortcutKey::Letter('B')),
-            toggle_hud: ShortcutBinding::new(ps, ShortcutKey::Letter('U')),
-            toggle_minimap: ShortcutBinding::new(ps, ShortcutKey::Letter('M')),
-            align_workspaces_horizontally: ShortcutBinding::new(ps, ShortcutKey::Letter('A')),
-            toggle_settings: ShortcutBinding::new(ps, ShortcutKey::Comma),
-            zoom_reset: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0)),
-            zoom_in: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus),
-            zoom_out: ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus),
-            fullscreen_panel: default_fullscreen_panel(),
-            exit_fullscreen_panel: ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape),
-            fullscreen_window: ShortcutBinding::new(ps, ShortcutKey::Function(11)),
-            save_editor: ShortcutBinding::new(ps, ShortcutKey::Letter('S')),
-            search: ShortcutBinding::new(ps, ShortcutKey::Letter('F')),
-            next_attention: ShortcutBinding::new(ps, ShortcutKey::Letter('G')),
+/// The one list of the global shortcuts: the setting that stores each one, the
+/// label of its row in the Settings tab, and its default binding. It generates
+/// the fields of [`AppShortcuts`], their defaults, [`AppShortcuts::named_bindings`]
+/// and [`APP_SHORTCUTS`], so a shortcut cannot work in one view and be missing
+/// from another.
+macro_rules! app_shortcuts {
+    ($( $(#[$meta:meta])* $setting:ident $label:literal => $default:expr; )*) => {
+        /// The global shortcuts of the application, as the dispatchers read them.
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct AppShortcuts {
+            $( $(#[$meta])* pub $setting: ShortcutBinding, )*
         }
-    }
+
+        impl AppShortcuts {
+            /// Every global shortcut with the name of its setting, so a rule that
+            /// reports an overlap names the shortcut.
+            #[must_use]
+            pub fn named_bindings(&self) -> [(&'static str, ShortcutBinding); app_shortcuts!(@count $($setting)*)] {
+                [ $( (stringify!($setting), self.$setting), )* ]
+            }
+        }
+
+        impl Default for AppShortcuts {
+            fn default() -> Self {
+                Self { $( $setting: $default, )* }
+            }
+        }
+
+        /// Every global shortcut, in the order of the Settings tab.
+        pub const APP_SHORTCUTS: [ShortcutSpec; app_shortcuts!(@count $($setting)*)] = [
+            $( ShortcutSpec {
+                setting: stringify!($setting),
+                label: $label,
+                stored: |config| config.$setting.as_str(),
+                stored_mut: |config| &mut config.$setting,
+                binding_mut: |shortcuts| &mut shortcuts.$setting,
+                default: $default,
+            }, )*
+        ];
+
+        /// The shortcut settings of a store that was never set: the default
+        /// binding of every shortcut, as the settings store writes it.
+        #[must_use]
+        pub(crate) fn default_shortcut_settings() -> ShortcutsConfig {
+            let mut config = ShortcutsConfig { $( $setting: String::new(), )* };
+            for spec in APP_SHORTCUTS {
+                *spec.value_mut(&mut config) = spec.default.to_string();
+            }
+            config
+        }
+    };
+    (@count) => { 0 };
+    (@count $head:ident $($tail:ident)*) => { 1 + app_shortcuts!(@count $($tail)*) };
 }
 
 /// The default of the panel fullscreen on a system.
@@ -311,15 +308,28 @@ const fn platform_default_fullscreen_panel(on_mac_os: bool) -> ShortcutBinding {
     }
 }
 
-fn default_fullscreen_panel() -> ShortcutBinding {
-    platform_default_fullscreen_panel(cfg!(target_os = "macos"))
-}
-
-/// The default of the panel fullscreen, as the settings file writes it. The
-/// value and [`platform_default_fullscreen_panel`] must name one binding.
-#[must_use]
-pub const fn platform_default_fullscreen_panel_config(on_mac_os: bool) -> &'static str {
-    if on_mac_os { "Ctrl+Shift+Enter" } else { "F11" }
+app_shortcuts! {
+    command_palette "Command Palette" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('K'));
+    new_terminal "New Terminal" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('N'));
+    focus_active_workspace "Focus Workspace" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('W'));
+    fit_active_workspace "Fit Workspace" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Digit(9));
+    open_remote_hosts "Remote Hosts" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('H'));
+    toggle_sessions "Sessions" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('J'));
+    toggle_sidebar "Toggle Sidebar" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('B'));
+    toggle_hud "Toggle HUD" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('U'));
+    toggle_minimap "Toggle Minimap" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('M'));
+    align_workspaces_horizontally "Align Workspaces" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('A'));
+    toggle_settings "Toggle Settings" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Comma);
+    zoom_reset "Reset Zoom" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Digit(0));
+    zoom_in "Zoom In" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus);
+    zoom_out "Zoom Out" => ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus);
+    fullscreen_panel "Fullscreen Panel" => platform_default_fullscreen_panel(cfg!(target_os = "macos"));
+    exit_fullscreen_panel "Exit Fullscreen" => ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape);
+    fullscreen_window "Fullscreen Window" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Function(11));
+    save_editor "Save Editor" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('S'));
+    search "Search Terminals" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('F'));
+    /// Go to the next agent panel that waits for the person.
+    next_attention "Next Agent That Needs You" => ShortcutBinding::new(ShortcutModifiers::PRIMARY_SHIFT, ShortcutKey::Letter('G'));
 }
 
 fn push_unique_modifier(values: &mut Vec<ShortcutModifiers>, modifier: ShortcutModifiers) {
@@ -506,8 +516,8 @@ fn key_name(key: ShortcutKey) -> std::result::Result<&'static str, fmt::Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers, platform_default_fullscreen_panel,
-        platform_default_fullscreen_panel_config,
+        APP_SHORTCUTS, AppShortcuts, ShortcutBinding, ShortcutKey, ShortcutModifiers, ShortcutsConfig,
+        platform_default_fullscreen_panel,
     };
 
     #[test]
@@ -601,11 +611,49 @@ mod tests {
             ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Function(11)),
             "plain F11 is Show Desktop on macOS"
         );
-        for on_mac_os in [false, true] {
+        assert_eq!(
+            ShortcutsConfig::default()
+                .resolve()
+                .expect("the default shortcuts")
+                .fullscreen_panel,
+            platform_default_fullscreen_panel(cfg!(target_os = "macos")),
+            "the settings string and the binding name one shortcut"
+        );
+    }
+
+    #[test]
+    fn the_one_list_names_every_shortcut_of_every_view() {
+        // A field of the shortcut settings without a row of the list is a
+        // shortcut that works but cannot be seen or changed.
+        let config = ShortcutsConfig::default();
+        let store = serde_json::to_value(&config).expect("the shortcut settings");
+        let mut stored: Vec<&str> = store
+            .as_object()
+            .expect("the settings of the shortcuts")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        stored.sort_unstable();
+        let mut listed: Vec<&str> = APP_SHORTCUTS.iter().map(|spec| spec.setting).collect();
+        listed.sort_unstable();
+        assert_eq!(listed, stored, "each shortcut setting has a row of the list");
+
+        // The struct is generated from the list, so a named binding and a row are
+        // one shortcut, and neither can outlive the other.
+        let defaults = AppShortcuts::default();
+        let named = defaults.named_bindings();
+        assert_eq!(APP_SHORTCUTS.len(), named.len());
+        for spec in &APP_SHORTCUTS {
+            assert!(
+                named.iter().any(|(name, _)| *name == spec.setting),
+                "the list names shortcuts.{}",
+                spec.setting
+            );
             assert_eq!(
-                ShortcutBinding::parse(platform_default_fullscreen_panel_config(on_mac_os)).expect("the default"),
-                platform_default_fullscreen_panel(on_mac_os),
-                "the settings string and the binding name one shortcut"
+                ShortcutBinding::parse((spec.stored)(&config)).expect("the text of the settings store"),
+                spec.default,
+                "shortcuts.{}",
+                spec.setting
             );
         }
     }
