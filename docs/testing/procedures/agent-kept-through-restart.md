@@ -104,18 +104,25 @@ with `--reuse-state --resume-session` in that state path, so the second run show
 the board of the first run.
 
 1. Quit Horizon with the close request of its window, as the close button of the
-   window manager sends it:
+   window manager sends it. Give the window the focus and send the close key of
+   the window manager of the fixture:
 
    ```bash
-   DISPLAY=<display> xdotool search --pid <candidate pid> --name '^Horizon$' windowquit
+   DISPLAY=<display> xdotool search --onlyvisible --name Horizon
+   DISPLAY=<display> xdotool windowfocus <window id>
+   DISPLAY=<display> xdotool key --window <window id> alt+F4
    ```
+
+   The first command prints the window id. The `xdotool` of Ubuntu has no
+   `windowquit` command.
 
    Do not use `xdotool windowclose`: it destroys the window, and the candidate
    ends with an error of its window library instead of the path of this test.
 
-   Result: Horizon ends. The holder process and the program of the panel still
-   run, and the socket of the holder is still in the folder `panel-holders` of
-   the private home.
+   Result: The candidate and the fixture end. The holder process and the program
+   of the panel still run, and the socket of the holder is still in the folder
+   `panel-holders` of the private home. The log of the candidate has a `SIGTERM`
+   line only for the panels that are not agent panels.
 
 2. Start the fixture again in the same state path, without `--keep-agents`:
 
@@ -207,6 +214,7 @@ integrations, and a private Horizon home of this task.
 1. Close every agent panel of the fixture, or quit the fixture and start it again
    in the same state path without `--keep-agents`. The start ends the programs of
    the holders that no panel shows, and one line of the sidebar names the count.
+   The line stays until you close it.
 
    Result: The folder `panel-holders` holds no socket.
 

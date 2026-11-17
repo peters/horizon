@@ -72,9 +72,12 @@ of the earlier run.
 1. Start the fixture with `--saved-session`, `--reuse-state` and a state path that
    this task owns. An ephemeral run writes no session file, so a later run has no
    board to open.
-2. Quit the candidate with the close button of the window manager.
-   The close request of the window manager sends it, for example:
-   `DISPLAY=<display> xdotool search --pid <pid> --name '^Horizon$' windowquit`.
+2. Quit the candidate with the close request of the window manager. Give the
+   window the focus and send the close key of the window manager of the fixture:
+   `DISPLAY=<display> xdotool search --onlyvisible --name Horizon` prints the
+   window id, then `DISPLAY=<display> xdotool windowfocus <id>` and
+   `DISPLAY=<display> xdotool key --window <id> alt+F4`.
+   The `xdotool` of Ubuntu has no `windowquit` command.
    Do not use `xdotool windowclose`: it destroys the window, and the candidate
    ends with an error of its window library instead of the path of a test.
    Result: The candidate exits. The harness also exits, and it keeps the private
