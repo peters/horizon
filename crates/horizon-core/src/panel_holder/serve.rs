@@ -110,8 +110,7 @@ pub(crate) fn serve_watched(
     let mut ring: VecDeque<u8> = VecDeque::new();
     let mut client: Option<Client> = None;
     let mut generation = 0u64;
-    let mut output_ended = false;
-    let mut close = false;
+    let (mut output_ended, mut close) = (false, false);
     let mut ended: Option<ChildEnd> = None;
     let mut ended_at: Option<Instant> = None;
     let mut exit_sent_at: Option<Instant> = None;

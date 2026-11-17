@@ -21,6 +21,9 @@ use crate::app::test_support::{
 /// The id of the one panel of a board that does not show a held panel.
 const OTHER_PANEL_ID: &str = "0e4f2a41-6d68-4c1c-9d95-5c8d3f2f7c11";
 
+/// The line of a start that ended the program of one holder that no panel showed.
+const SENTENCE: &str = "Horizon ended 1 agent program that no panel showed.";
+
 /// The longest time that a test waits for one condition.
 const TEST_BOUND: Duration = Duration::from_secs(20);
 
@@ -127,7 +130,6 @@ fn a_start_that_ends_the_program_of_an_unshown_holder_says_so_in_the_sidebar() {
     let mut app = app_in(&ctx, folder.path(), &config, startup);
     app.settle_panel_starts();
 
-    const SENTENCE: &str = "Horizon ended 1 agent program that no panel showed.";
     let says = |app: &HorizonApp| {
         [&app.sidebar_notice, &app.sidebar_sticky_notice]
             .into_iter()
