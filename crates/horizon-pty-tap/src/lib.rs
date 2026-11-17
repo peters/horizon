@@ -8,7 +8,7 @@
 //!
 //! [`PanelPty`] wraps a PTY or the socket of a holder: every call the terminal
 //! event loop makes reaches the source that the wrapper owns, and the reader shows
-//! every byte unchanged while a [`StatusReader`] scanner looks at it. Each complete
+//! every byte unchanged while a [`reader::StatusReader`] scanner looks at it. Each complete
 //! payload reaches a [`StatusInbox`] that the event loop thread never waits on, and
 //! a frame reads the newest one.
 //!
@@ -29,12 +29,10 @@ mod scanner;
 mod share;
 mod socket;
 
-pub use inbox::{QUERY_PAYLOAD, QUEUE_DEPTH, StatusInbox, StatusTap};
-pub use panel::{PanelPty, PanelReader, PanelWriter};
-pub use reader::StatusReader;
-pub use scanner::{MAX_PAYLOAD_BYTES, Payload, Scanner};
-pub use share::{SHARE_BUFFER_BYTES, ShareOutlet, ShareTake};
-pub use socket::{LinkReader, LinkWriter};
+pub use inbox::StatusInbox;
+pub use panel::PanelPty;
+pub use scanner::Payload;
+pub use share::{ShareOutlet, ShareTake};
 
 #[cfg(test)]
 mod cost_tests;
