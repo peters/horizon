@@ -210,13 +210,8 @@ fn show_panel_body_contents(
             }
             false
         }
-        // A folded card of the canvas is its title bar alone.
-        PanelKind::Block
-            if panel.block().is_some_and(horizon_core::BlockPanelState::folded)
-                && !body_context.browser_fullscreen_active =>
-        {
-            false
-        }
+        // A folded card is its title bar alone.
+        PanelKind::Block if panel.block().is_some_and(horizon_core::BlockPanelState::folded) => false,
         PanelKind::Block => {
             let (Some(block), Some(card)) = (panel.block(), body_context.card_runtime) else {
                 ui.centered_and_justified(|ui| ui.label("Card state unavailable"));

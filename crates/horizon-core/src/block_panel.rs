@@ -88,15 +88,19 @@ impl BlockPanelState {
         self.fold.unwrap_or(self.document.finished)
     }
 
-    /// The one line of a folded card: its heading, or its title when it has no
-    /// heading, and the words of the badge of that heading.
+    /// The line of a folded card: its heading, or its title without one, and the
+    /// words of the badge of that heading. A frame reads it for every card, so an
+    /// open card looks for no heading.
     #[must_use]
     pub fn folded_line(&self) -> Option<(&str, Option<&str>)> {
+        if !self.folded() {
+            return None;
+        }
         let heading = self.document.components.iter().find_map(|component| match component {
             Component::Heading { text, badge, .. } => Some((text.as_str(), badge.as_ref().map(|badge| &*badge.text))),
             _ => None,
         });
-        self.folded().then(|| heading.unwrap_or((&self.title, None)))
+        Some(heading.unwrap_or((&self.title, None)))
     }
 
     /// Whether the card stands in the column of the cards of the agent `actor`.
