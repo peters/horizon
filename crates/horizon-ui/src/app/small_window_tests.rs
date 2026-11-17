@@ -358,3 +358,56 @@ fn the_minimap_leaves_a_small_canvas_and_comes_back_on_a_large_one() {
         );
     }
 }
+
+#[test]
+fn the_foot_line_of_the_first_page_wraps_in_a_small_window() {
+    for size in [[800.0, 600.0], [1000.0, 700.0], [1280.0, 800.0]] {
+        let mut window = Window::new(size, Vec::new());
+        let drawn = texts(&window.frame(Vec::new()));
+        let ctx = window.ctx.clone();
+        let canvas = window.app.canvas_rect(&ctx);
+        let (block_height, _) = window.app.welcome_block_heights_for_test(&ctx);
+        // The block of the page keeps 60 points to each edge of the canvas.
+        let (left, right) = (canvas.left() + 60.0, canvas.right() - 60.0);
+        let heading = text_of(&drawn, "What do you want to do?");
+        let primary = super::util::primary_shortcut_label();
+        let shortcuts = window.app.shortcuts.clone();
+        let mut last = text_of(&drawn, "You know Horizon already?").rect;
+        for (label, binding) in [
+            ("New terminal", shortcuts.new_terminal),
+            ("Quick Nav", shortcuts.command_palette),
+            ("Machines you have", shortcuts.open_remote_hosts),
+        ] {
+            let keys = binding.display_label(primary);
+            let (label, keys) = (text_of(&drawn, label), text_of(&drawn, &keys));
+            for part in [label, keys] {
+                assert!(
+                    part.rect.left() >= left - 0.6 && part.rect.right() <= right + 0.6,
+                    "the foot line keeps {:?} inside the block {left}..{right} at {size:?}: {:?}",
+                    part.text,
+                    part.rect
+                );
+                // A part stands after the part before it on its row, or on a row
+                // under it.
+                assert!(
+                    part.rect.left() > last.right() || part.rect.top() > last.bottom() - 4.0,
+                    "the foot line puts {:?} after {last:?} at {size:?}: {:?}",
+                    part.text,
+                    part.rect
+                );
+                last = part.rect;
+            }
+            assert!(
+                (label.rect.center().y - keys.rect.center().y).abs() < 4.0,
+                "a key stays on the row of its name at {size:?}: {label:?} {keys:?}"
+            );
+        }
+        // The block of the page holds every row of the line, so a page that
+        // scrolls shows the last row above its lower pad.
+        assert!(
+            last.bottom() <= heading.rect.top() - 8.0 + block_height + 0.6,
+            "the block of {block_height} points from {} holds the last row {last:?} at {size:?}",
+            heading.rect.top() - 8.0
+        );
+    }
+}

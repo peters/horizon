@@ -264,9 +264,11 @@ Horizon before they write anything.
     the wheel of the mouse and for a scroll of a touchpad. The two side notches
     and the Ctrl notches move no pixel of the window, and the board behind the
     page never moves sideways or changes its zoom. At the largest scroll, the
-    last row of the page, which starts with `You know Horizon already?`, is whole
-    inside the canvas. At the top of the page, the heading is whole and no part
-    of it stands under the titlebar.
+    line of the page that starts with `You know Horizon already?` is whole
+    inside the canvas. At a window of 800 x 600 that line takes two rows: a name
+    and its key start the second row together, and no part of the line is cut at
+    the right edge of the block. At the top of the page, the heading is whole and
+    no part of it stands under the titlebar.
 
 13. Make the window 1600 x 1000, where the page is whole inside the canvas.
     Put the pointer on the middle of the page and roll the wheel down three
