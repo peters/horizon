@@ -228,16 +228,8 @@ impl HorizonApp {
     pub(super) fn apply_panel_transitions(&mut self) {
         let panels_to_close = std::mem::take(&mut self.panels_to_close);
         for panel_id in panels_to_close {
-            self.close_panel(panel_id);
-            self.panel_screen_rects.remove(&panel_id);
-            self.terminal_body_screen_rects.remove(&panel_id);
-            self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
-            self.panel_render_caches.editor_preview_cache.remove(&panel_id);
-            self.panel_render_caches.browser_ui_state.remove(&panel_id);
-            self.panel_render_caches.device_ui_state.remove(&panel_id);
-            if self.renaming_panel == Some(panel_id) {
-                self.clear_panel_rename();
-            }
+            // The close of the title bar or of the notice of one panel asks first.
+            self.request_close_panel(panel_id);
         }
         let panels_to_restart = std::mem::take(&mut self.panels_to_restart);
         for panel_id in panels_to_restart {

@@ -299,3 +299,197 @@ fn quitting_horizon_ends_no_session_of_a_machine() {
         "the sessions of a machine outlive the window, which is the point of a place"
     );
 }
+
+// The close of one panel of a machine asks first, in the words of the close of a
+// whole workspace. These cases run frames of the window, so the press that a
+// person makes is the press that the title bar and the ask answer.
+
+use horizon_core::PanelId;
+
+use crate::app::PANEL_TITLEBAR_HEIGHT;
+use crate::app::test_support::{raw_input, run_app_frame_with_input};
+
+/// One frame of the window, as eframe runs it, with `events` as its input.
+fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<egui::Event>) -> egui::FullOutput {
+    let mut input = raw_input([1400.0, 900.0], None);
+    input.events = events;
+    run_app_frame_with_input(ctx, app, input)
+}
+
+fn pointer(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// One press of `pos`: the frame that takes it down and the frame that lets it up.
+fn press(ctx: &egui::Context, app: &mut HorizonApp, pos: egui::Pos2) -> egui::FullOutput {
+    frame(ctx, app, vec![pointer(pos, true)]);
+    frame(ctx, app, vec![pointer(pos, false)])
+}
+
+/// `frames` frames of the window with no input, and the output of the last one.
+fn settle(ctx: &egui::Context, app: &mut HorizonApp, frames: usize) -> egui::FullOutput {
+    let mut output = frame(ctx, app, Vec::new());
+    for _ in 1..frames {
+        output = frame(ctx, app, Vec::new());
+    }
+    output
+}
+
+/// The drawn texts of `output` with their centre.
+fn texts(output: &egui::FullOutput) -> impl Iterator<Item = (&str, egui::Pos2)> {
+    output.shapes.iter().filter_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) => Some((text.galley.text(), text.pos + text.galley.size() * 0.5)),
+        _ => None,
+    })
+}
+
+/// The line of the ask that the frame drew, when it drew one.
+fn ask_line(output: &egui::FullOutput) -> Option<&str> {
+    texts(output)
+        .map(|(text, _)| text)
+        .find(|text| text.starts_with("End the tmux session"))
+}
+
+/// The centre of the button `label` of the ask: the one nearest to its line,
+/// because the line under the grid of a panel whose program ended says `Close` too.
+fn ask_button(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+    let line = texts(output)
+        .find(|(text, _)| text.starts_with("End the tmux session"))
+        .map(|(_, centre)| centre)
+        .expect("the ask names the machine before it offers a button");
+    texts(output)
+        .filter(|(text, _)| *text == label)
+        .map(|(_, centre)| centre)
+        .min_by(|a, b| a.distance(line).total_cmp(&b.distance(line)))
+        .unwrap_or_else(|| panic!("the ask offers {label}"))
+}
+
+/// The centre of the close control of the title bar of `panel`.
+fn close_control(app: &HorizonApp, panel: PanelId) -> egui::Pos2 {
+    let rect = app
+        .panel_screen_rects
+        .get(&panel)
+        .copied()
+        .expect("the panel is on screen");
+    egui::Pos2::new(rect.max.x - 18.0, rect.min.y + PANEL_TITLEBAR_HEIGHT * 0.5)
+}
+
+/// A window that shows one panel of `place`, after the frames that settle it.
+fn window_in(place: WorkspacePlace) -> (tempfile::TempDir, egui::Context, HorizonApp, PanelId) {
+    let (temp, mut app, workspace) = app_in(place);
+    let panel = app
+        .create_panel_with_options(harmless(PanelOptions::default()), workspace)
+        .expect("a terminal of the place");
+    let ctx = egui::Context::default();
+    for _ in 0..3 {
+        frame(&ctx, &mut app, Vec::new());
+    }
+    (temp, ctx, app, panel)
+}
+
+#[test]
+fn the_close_control_of_a_panel_of_a_machine_asks_before_the_session_ends() {
+    let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
+
+    let close = close_control(&app, panel);
+    press(&ctx, &mut app, close);
+    // The close that a press of the control queues is applied on the next frame,
+    // and the ask is drawn there.
+    let output = settle(&ctx, &mut app, 2);
+    assert!(
+        app.board.panel(panel).is_some(),
+        "the first press ends nothing: it asks"
+    );
+    assert_eq!(app.close_panel_confirm, Some(panel), "the press of the close asks");
+    assert!(
+        app.session_kills.is_empty(),
+        "no tmux session ends before the person answers"
+    );
+    assert_eq!(
+        ask_line(&output),
+        Some("End the tmux session of this panel on build-1?"),
+        "the ask uses the words of the close of a whole workspace"
+    );
+
+    let cancel = ask_button(&output, "Cancel");
+    press(&ctx, &mut app, cancel);
+    settle(&ctx, &mut app, 1);
+    assert!(app.board.panel(panel).is_some(), "Cancel keeps the panel");
+    assert_eq!(app.close_panel_confirm, None, "the ask is answered");
+    assert!(
+        app.panel_screen_rects.contains_key(&panel),
+        "the panel that stays keeps its place on the canvas"
+    );
+    assert!(
+        app.session_kills.is_empty(),
+        "Cancel keeps the tmux session of the panel"
+    );
+
+    let close = close_control(&app, panel);
+    press(&ctx, &mut app, close);
+    let output = settle(&ctx, &mut app, 2);
+    assert!(app.board.panel(panel).is_some(), "the next close asks again");
+    let close = ask_button(&output, "Close");
+    // The frame of the release runs the answered close, so the test reads the kill
+    // before the next frame hands it to the worker that runs ssh.
+    press(&ctx, &mut app, close);
+    assert!(app.board.panel(panel).is_none(), "the red Close ends the panel");
+    assert_eq!(
+        app.session_kills
+            .iter()
+            .map(|kill| kill.session.as_str())
+            .collect::<Vec<_>>(),
+        ["hz-c8dfe3af-1"],
+        "the answered close ends the one session that the panel held"
+    );
+    // The test reads the kill instead of letting the next frame hand it to the
+    // worker that runs ssh, so the frame after the answer costs no connection.
+    app.session_kills.clear();
+    let output = settle(&ctx, &mut app, 1);
+    assert_eq!(ask_line(&output), None, "the answered ask leaves no line on the canvas");
+}
+
+#[test]
+fn a_panel_of_this_computer_closes_at_once_with_no_ask() {
+    let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Local);
+
+    let close = close_control(&app, panel);
+    press(&ctx, &mut app, close);
+    let output = settle(&ctx, &mut app, 2);
+    assert!(app.board.panel(panel).is_none(), "a local panel closes at once");
+    assert_eq!(app.close_panel_confirm, None, "a local panel asks nothing");
+    assert_eq!(ask_line(&output), None, "a local panel draws no ask");
+    assert!(app.session_kills.is_empty(), "a local panel holds no session");
+}
+
+#[test]
+fn the_notice_of_a_panel_of_a_machine_asks_before_the_session_ends() {
+    let (_temp, mut app, workspace) = app_in(WorkspacePlace::Machine("build-1".to_owned()));
+    let panel = app
+        .create_panel_with_options(harmless(PanelOptions::default()), workspace)
+        .expect("a terminal of the machine");
+
+    // The line under the grid of a panel whose program ended queues its close, as
+    // the close control of the title bar does, and the frame applies the queue.
+    app.run_panel_notice_action(panel, crate::terminal_widget::PanelNoticeAction::ClosePanel);
+    app.apply_panel_transitions();
+    assert!(app.board.panel(panel).is_some(), "the notice asks before it ends work");
+    assert_eq!(app.close_panel_confirm, Some(panel), "the notice of the close asks");
+    assert!(app.session_kills.is_empty(), "the ask comes before the end");
+
+    app.answer_close_panel(panel, true);
+    assert!(app.board.panel(panel).is_none(), "the answered close ends the panel");
+    assert_eq!(
+        app.session_kills
+            .iter()
+            .map(|kill| kill.session.as_str())
+            .collect::<Vec<_>>(),
+        ["hz-c8dfe3af-1"],
+        "the answered close ends the session of the panel"
+    );
+}

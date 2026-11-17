@@ -378,6 +378,8 @@ pub struct HorizonApp {
     /// A workspace whose panels the person asked to close, waiting for the line
     /// that says the tmux sessions of its machine end with them.
     pub(in crate::app) close_workspace_confirm: Option<WorkspaceId>,
+    /// A panel whose close asks first, in the line that its one session ends.
+    pub(in crate::app) close_panel_confirm: Option<PanelId>,
     /// Counts the writes of the machine list, so a read asked for before a write
     /// never replaces it.
     machine_epoch: u64,
@@ -657,6 +659,11 @@ impl eframe::App for HorizonApp {
         // the panel; the worker runs it here, and never on the UI thread.
         self.dispatch_session_kills();
         self.update_ui(ui);
+        // A window of its own draws the ask of the close of its own panel.
+        let asked = self.close_panel_confirm.and_then(|panel_id| self.board.panel(panel_id));
+        if !asked.is_some_and(|panel| self.workspace_is_detached(panel.workspace_id)) {
+            self.show_close_panel_confirm(ui.ctx());
+        }
         self.render_saved_session_deletion_notice(ui.ctx());
         self.record_root_device_presentation(ui.ctx());
         // Immediate detached viewports have finished too. Reconcile once, even

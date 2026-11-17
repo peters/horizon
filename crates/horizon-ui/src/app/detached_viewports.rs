@@ -489,6 +489,11 @@ impl HorizonApp {
 
         self.apply_panel_transitions();
         self.apply_pending_workspace_changes();
+        // The ask of a close appears in the window that holds the panel.
+        let asked = self.close_panel_confirm;
+        if asked.is_some_and(|panel_id| self.board.panel_workspace_id(panel_id) == Some(workspace_id)) {
+            self.show_close_panel_confirm(ctx);
+        }
     }
 
     /// The mark of a take of this window, when this window drew the panel of the
