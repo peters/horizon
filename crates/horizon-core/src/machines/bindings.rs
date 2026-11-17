@@ -7,10 +7,7 @@
 //! rules: it is written to a temporary file, synced and renamed, so no frame ever
 //! waits for the disk.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::Path};
 
 use super::{MachineError, file_error, unavailable};
 use crate::AtomicFile;
@@ -30,23 +27,12 @@ pub struct MachineBindings {
 }
 
 impl MachineBindings {
-    /// The bindings of `home`, as `machines/keys.json`.
-    #[must_use]
-    pub fn from_home(home: &crate::horizon_home::HorizonHome) -> Self {
-        Self::in_directory(&home.machines_dir())
-    }
-
-    /// The bindings in the directory that holds the machine list.
+    /// The bindings in the directory that holds the machine list, with no file
+    /// read.
     #[must_use]
     pub fn in_directory(directory: &Path) -> Self {
-        Self::at(directory.join(FILE_NAME))
-    }
-
-    /// The bindings at `path`, with no file read.
-    #[must_use]
-    pub fn at(path: PathBuf) -> Self {
         Self {
-            file: AtomicFile::new(path),
+            file: AtomicFile::new(directory.join(FILE_NAME)),
             names: BTreeMap::new(),
         }
     }
