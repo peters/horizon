@@ -476,8 +476,9 @@ The follower:
   on a smaller grid.
 - **The history starts at the newest screen.** Each screen starts with a reset
   that clears the history of the follower. The server relays a screen to each
-  follower of the panel. A new follower, a refresh, a resize of the owner and
-  too much output therefore clear the history of each follower of that panel.
+  follower of the panel that is not behind. A new follower, a refresh, a resize
+  of the owner and too much output therefore clear the history of those
+  followers.
 - **The stack of the keyboard flags.** A screen sets the flags that are active.
   It does not hold the flags under them. After the program removes the active
   flags, the follower has no flags until the next screen. The owner has the
