@@ -100,6 +100,23 @@ a kind that this protocol does not know, loses its link and the program continue
     attaches in that hour gets the hello, the replay and the status. After one hour
     the holder removes its socket and exits.
 
+## The attach of a terminal
+
+A terminal that attaches reads the hello and the replay, and its grid reads the
+replay before the live output (`Terminal::spawn_attached`). Two rules apply:
+
+1. The program still runs, so it owns the alternate screen, the mouse reports and
+   the other modes that the replay sets. The replay of an attach ends none of
+   them (`replay_live_bytes`). The replay of a saved screen of a program that
+   ended ends all of them (`replay_terminal_bytes`), and that rule gave an empty
+   grid for a program on the alternate screen.
+2. The link sends the size two times: one row less than the panel, and then the
+   size of the panel (`horizon-pty-tap/src/socket.rs`, `attach`). The system sends
+   the window-change signal only for a size that changed, and a restored panel
+   has the size from before the restart. A program that draws with cursor moves
+   repaints its screen at that signal, as it does after an attach of a terminal
+   multiplexer.
+
 ## The loop of a holder waits
 
 The loop of a holder blocks in one channel and makes a turn only for a happening:

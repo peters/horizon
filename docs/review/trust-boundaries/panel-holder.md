@@ -119,6 +119,10 @@ The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/hor
 - **The replay is a byte tail, not a screen.** A program that painted once and
   then wrote differences can come back with a partial screen. A terminal of the
   client redraws what the tail holds, and the tail is cut at a byte, not at a line.
+  The attach asks the program for a repaint with a size that changes, and a
+  program that repaints at the window-change signal shows its full screen. The
+  attach cannot give back a mode, such as the alternate screen or the mouse
+  reports, that the program set before the first byte of the tail.
 - **A holder that outlives its home.** If the Horizon home is deleted or moved
   while a holder runs, the holder keeps the program with a socket that no client
   reaches. The next start of Horizon cannot attach to it, and the program stays

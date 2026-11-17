@@ -59,6 +59,13 @@ pub(crate) fn attach(stream: UnixStream, window_size: WindowSize) -> io::Result<
     let source = stream.try_clone()?;
     let watch = stream.try_clone()?;
     let mut writer = LinkWriter::of(stream.try_clone()?);
+    // One row less and then the size of the panel, as a terminal multiplexer does
+    // at an attach: the system tells a program only a size that changed, and a
+    // program that draws with cursor moves repaints its screen at that signal.
+    writer.resize(WindowSize {
+        num_lines: window_size.num_lines.saturating_sub(1).max(1),
+        ..window_size
+    });
     writer.resize(window_size);
     let (tap, inbox) = StatusTap::new();
     Ok(AttachedLink {

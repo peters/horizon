@@ -229,3 +229,78 @@ fn the_end_of_a_holder_with_no_exit_frame_ends_the_terminal_without_spinning() {
     );
     holder.join().expect("the thread of the stand-in holder");
 }
+
+/// The ids of real panels: 36 characters, as the app gives them.
+const ALTERNATE_SCREEN: &str = "2e8d5f71-9a3c-4b60-8d1e-7f4a6c0b9d25";
+const REPAINTS: &str = "b4a1c6e9-0d37-4f52-9e8a-3c5d7f1b2a60";
+
+/// A program that draws on the alternate screen and asks for the mouse still owns
+/// both after an attach: the replay must not end them, as the replay of a program
+/// that ended does.
+#[test]
+fn an_attached_terminal_keeps_the_alternate_screen_and_the_modes_of_a_live_program() {
+    use alacritty_terminal::term::TermMode;
+
+    let (_folder, home) = temp_home();
+    let serving = Serving::start(
+        &home,
+        &launch(
+            ALTERNATE_SCREEN,
+            "printf '\\033[?1049h\\033[?1000h\\033[2J\\033[3;5Hthe alternate screen'; exec cat",
+        ),
+        4096,
+    );
+    let mut first = attach(&home, ALTERNATE_SCREEN);
+    wait_for_text(&mut first, "the alternate screen");
+    drop(first);
+
+    let second = attach(&home, ALTERNATE_SCREEN);
+    let text = second.try_last_lines_text(40).unwrap_or_default();
+    assert!(
+        text.contains("the alternate screen"),
+        "the grid after the attach shows the screen of the program: {text:?}"
+    );
+    assert!(
+        second
+            .mode()
+            .contains(TermMode::ALT_SCREEN | TermMode::MOUSE_REPORT_CLICK),
+        "the program still owns its screen and its mouse mode: {:?}",
+        second.mode()
+    );
+
+    drop(second);
+    let (mut client, _hello) = attach_when_free(&serving.socket);
+    close(&mut client, serving);
+}
+
+/// A program that draws with cursor moves repaints at a window-change signal. The
+/// ring of this holder is too short for its screen, and the size of the second
+/// terminal is the size of the first one, so only an attach that asks for a repaint
+/// shows the screen.
+#[test]
+fn an_attach_asks_a_program_that_draws_with_cursor_moves_to_repaint() {
+    let (_folder, home) = temp_home();
+    let serving = Serving::start(
+        &home,
+        &launch(
+            REPAINTS,
+            "draw() { printf '\\033[2J\\033[3;5Hscreen of %s.' \"$(stty size)\"; }; trap draw WINCH; draw; \
+             while :; do sleep 30 & wait $!; done",
+        ),
+        8,
+    );
+    let mut first = attach(&home, REPAINTS);
+    wait_for_text(&mut first, "screen of 24 80.");
+    drop(first);
+
+    let mut second = attach(&home, REPAINTS);
+    let text = wait_for_text(&mut second, "screen of 24 80.");
+    assert!(
+        text.contains("screen of 24 80."),
+        "the program repainted for the terminal that attached: {text:?}"
+    );
+
+    drop(second);
+    let (mut client, _hello) = attach_when_free(&serving.socket);
+    close(&mut client, serving);
+}

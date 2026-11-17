@@ -47,15 +47,19 @@ pub(super) fn default_terminal_rgb(index: usize) -> Rgb {
     }
 }
 
+/// Replays the saved output of a program that ended, and ends the modes that it
+/// left on, because no program owns them any more.
 pub(super) fn replay_terminal_bytes(term: &Arc<FairMutex<Term<TerminalEventProxy>>>, bytes: &[u8]) {
-    let mut parser = ansi::Processor::<ansi::StdSyncHandler>::default();
+    replay_live_bytes(term, bytes);
     let mut terminal = term.lock();
-    parser.advance(&mut *terminal, bytes);
-
     let reset_bytes = replay_mode_reset_bytes(*terminal.mode());
-    if !reset_bytes.is_empty() {
-        parser.advance(&mut *terminal, &reset_bytes);
-    }
+    ansi::Processor::<ansi::StdSyncHandler>::default().advance(&mut *terminal, &reset_bytes);
+}
+
+/// Replays the output of a program that still runs in a holder. That program owns
+/// its alternate screen and its modes, so the replay ends none of them.
+pub(super) fn replay_live_bytes(term: &Arc<FairMutex<Term<TerminalEventProxy>>>, bytes: &[u8]) {
+    ansi::Processor::<ansi::StdSyncHandler>::default().advance(&mut *term.lock(), bytes);
 }
 
 fn replay_mode_reset_bytes(mode: TermMode) -> Vec<u8> {

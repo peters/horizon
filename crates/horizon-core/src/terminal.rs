@@ -41,7 +41,7 @@ use self::resize::{queue_debounced_pty_resize, should_debounce_pty_resize};
 #[cfg(test)]
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
-use self::support::{ColorLookup, replay_terminal_bytes};
+use self::support::{ColorLookup, replay_live_bytes, replay_terminal_bytes};
 pub use self::wake::OutputWake;
 use self::wake::OutputWakeState;
 

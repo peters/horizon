@@ -4,7 +4,7 @@ use super::{
     Arc, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
     PendingClipboard, PtyOptions, ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions,
     TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc,
-    replay_terminal_bytes, term, tty,
+    replay_live_bytes, replay_terminal_bytes, term, tty,
 };
 
 use horizon_pty_tap::frames::{self, Frame, Hello};
@@ -189,7 +189,12 @@ impl Terminal {
         let replay_restore = if replay_bytes.is_empty() {
             ReplayRestoreState::default()
         } else {
-            replay_terminal_bytes(&term, &replay_bytes);
+            let replay = if holder.is_some() {
+                replay_live_bytes
+            } else {
+                replay_terminal_bytes
+            };
+            replay(&term, &replay_bytes);
             drain_replay_events(&event_rx)
         };
         let pty_term = match output {
