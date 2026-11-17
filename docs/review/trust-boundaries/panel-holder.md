@@ -60,8 +60,9 @@ The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/hor
 - **The document is one JSON object, bounded at 1 MiB, with no unknown field.** A
   document above the bound or with a field that this build does not know ends the
   holder with one typed error and starts no program.
-- **The identity of the panel is encoded, not trusted.** The holder names its
-  socket with `safe_local_id` of the identity, so an identity is never a path part.
+- **The identity of the panel is not trusted.** The holder names its socket with
+  the first 32 hexadecimal characters of the SHA-256 of the identity, so an
+  identity is never a path part and the name has one length.
   A socket path above 100 bytes is refused with one typed error and is not cut: a
   cut path would name another panel.
 - **The program, its arguments, its folder and its environment are the launch of

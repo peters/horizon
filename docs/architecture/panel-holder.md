@@ -28,7 +28,7 @@ holds secret values, and the arguments of a process are public to the computer.
 
 | Field | Meaning |
 |---|---|
-| `local_id` | The identity of the panel in the Horizon home. It names the socket, encoded with `safe_local_id`. |
+| `local_id` | The identity of the panel in the Horizon home. The first 32 hexadecimal characters of its SHA-256 name the socket. |
 | `program` | The program to start. |
 | `args` | The arguments of the program. |
 | `cwd` | The folder of the program, or none. |
