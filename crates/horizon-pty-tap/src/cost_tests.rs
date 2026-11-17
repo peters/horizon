@@ -5,6 +5,10 @@
 //! next escape byte. This compares that pass with the plain reader over the same
 //! bytes, for plain output and for output with one escape byte in every 64, which
 //! is the worst case of a program that draws colour or cursor movement.
+//!
+//! The same reader copies the output for a follower. Every pass above runs with
+//! nobody following, so its bound is also the bound of that tap at rest; the last
+//! test measures the copy itself.
 
 use std::io::{self, Read};
 use std::time::{Duration, Instant};
@@ -200,4 +204,71 @@ fn the_scan_costs_a_small_part_of_the_parse_of_the_same_bytes() {
             "the scan of the same bytes must cost less than their parse: {scanned:?} against {parsed:?}"
         );
     }
+}
+
+/// The reads between two takes of the follower of a pass: 512 KiB, half the bound
+/// of the outlet.
+const TAKE_EVERY: usize = 64;
+
+/// A pass over text through a reader whose follower `follows` or not: the time,
+/// the bytes that the panel read and the bytes that the follower took.
+fn shared_pass(follows: bool) -> (Duration, usize, usize) {
+    let (status_tap, _inbox) = StatusTap::new();
+    let mut reader = StatusReader::new(Repeating::new(chunk(false)), status_tap);
+    let outlet = reader.share();
+    outlet.set_wanted(follows);
+    outlet.start();
+    let mut buffer = vec![0u8; READ];
+    let (mut total, mut taken, mut reads) = (0, 0, 0usize);
+    let started = Instant::now();
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(count) => total += count,
+        }
+        reads += 1;
+        if reads.is_multiple_of(TAKE_EVERY) {
+            let take = outlet.take();
+            assert!(!take.overflowed, "the follower of the pass keeps up");
+            taken += take.bytes.len();
+        }
+    }
+    taken += outlet.take().bytes.len();
+    (started.elapsed(), total, taken)
+}
+
+/// The least of five passes of `shared_pass`, for the reason of `least_of_five`.
+fn least_shared(follows: bool) -> (Duration, usize, usize) {
+    let _ = shared_pass(follows);
+    (0..5)
+        .map(|_| shared_pass(follows))
+        .min_by_key(|run| run.0)
+        .unwrap_or_default()
+}
+
+/// A panel that nobody follows pays one atomic load for each read, so its pass
+/// costs what the scan alone costs. A panel that somebody follows pays one copy
+/// of its output, which must stay below the parse of the same bytes.
+#[test]
+fn the_copy_for_a_follower_costs_nothing_at_rest_and_less_than_the_parse_when_on() {
+    let (scanned, _bytes) = least_of_five(false, true);
+    let (resting, resting_bytes, resting_taken) = least_shared(false);
+    let (copying, copying_bytes, copying_taken) = least_shared(true);
+    let parsed = parse(false);
+    eprintln!(
+        "64 MiB of text: scan {scanned:?}, with a follower at rest {resting:?}, with a follower {copying:?}, parse {parsed:?}"
+    );
+
+    assert_eq!(resting_bytes, BYTES, "the panel read every byte");
+    assert_eq!(resting_taken, 0, "no byte is copied while nobody follows");
+    assert_eq!(copying_bytes, BYTES, "the panel read every byte");
+    assert_eq!(copying_taken, BYTES, "the follower took every byte");
+    assert!(
+        resting <= scanned.saturating_mul(2).saturating_add(Duration::from_millis(250)),
+        "the tap at rest must cost what the scan costs: {resting:?} against {scanned:?}"
+    );
+    assert!(
+        copying.saturating_sub(resting) <= parsed.saturating_add(Duration::from_millis(50)),
+        "the copy must cost less than the parse of the same bytes: {copying:?} against {parsed:?}"
+    );
 }

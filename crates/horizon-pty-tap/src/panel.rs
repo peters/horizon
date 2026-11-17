@@ -23,6 +23,7 @@ use polling::{Event, PollMode, Poller};
 
 use crate::inbox::{StatusInbox, StatusTap};
 use crate::reader::StatusReader;
+use crate::share::ShareOutlet;
 use crate::socket::{self, AttachedLink, LinkReader, LinkWriter};
 
 /// The PTY of a panel, whose program runs in this process or in a holder.
@@ -90,6 +91,16 @@ impl PanelPty {
     #[must_use]
     pub fn inbox(&self) -> StatusInbox {
         self.inbox.clone()
+    }
+
+    /// The output of the program of this panel for a follower, which costs one
+    /// atomic load for each read while nobody follows.
+    #[must_use]
+    pub fn share(&self) -> ShareOutlet {
+        match &self.reader {
+            PanelReader::Local(reader) => reader.share(),
+            PanelReader::Attached(reader) => reader.share(),
+        }
     }
 }
 

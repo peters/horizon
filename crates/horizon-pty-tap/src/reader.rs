@@ -4,6 +4,7 @@ use std::io::{self, Read};
 
 use crate::inbox::StatusTap;
 use crate::scanner::Scanner;
+use crate::share::{ShareOutlet, ShareTap};
 
 /// A reader over another reader that hands every byte on unchanged.
 ///
@@ -13,6 +14,8 @@ use crate::scanner::Scanner;
 pub struct StatusReader<R> {
     source: R,
     scanner: Scanner,
+    /// The copy of the output for a follower, which a read asks with one load.
+    share: ShareTap,
 }
 
 impl<R> StatusReader<R> {
@@ -21,7 +24,14 @@ impl<R> StatusReader<R> {
         Self {
             source,
             scanner: Scanner::new(tap),
+            share: ShareTap::default(),
         }
+    }
+
+    /// The end where the owner of the panel takes the output for its followers.
+    #[must_use]
+    pub fn share(&self) -> ShareOutlet {
+        self.share.outlet()
     }
 }
 
@@ -41,6 +51,7 @@ impl<R: Read> Read for StatusReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let read = self.source.read(buffer)?;
         self.scanner.feed(&buffer[..read]);
+        self.share.copy(&buffer[..read]);
         Ok(read)
     }
 }

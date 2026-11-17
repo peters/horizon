@@ -16,6 +16,9 @@
 //! scanner is bounded: it keeps at most [`scanner::MAX_PAYLOAD_BYTES`] bytes of one
 //! payload, it drops a longer one whole, it allocates nothing, and it cannot block
 //! or panic on any byte of a stream.
+//!
+//! The same reader copies the output for a follower of the panel into a bounded
+//! [`ShareOutlet`], and only while one follows a screen.
 #![deny(unsafe_code)]
 
 pub mod frames;
@@ -23,12 +26,14 @@ mod inbox;
 mod panel;
 mod reader;
 mod scanner;
+mod share;
 mod socket;
 
 pub use inbox::{QUERY_PAYLOAD, QUEUE_DEPTH, StatusInbox, StatusTap};
 pub use panel::{PanelPty, PanelReader, PanelWriter};
 pub use reader::StatusReader;
 pub use scanner::{MAX_PAYLOAD_BYTES, Payload, Scanner};
+pub use share::{SHARE_BUFFER_BYTES, ShareOutlet, ShareTake};
 pub use socket::{LinkReader, LinkWriter};
 
 #[cfg(test)]
