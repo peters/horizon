@@ -80,6 +80,13 @@ the `PATH` of a non-interactive `ssh` does not hold the binary. Without
 `ssh_target` the entry names no server, and the machine list of the computer is
 one file as before.
 
+The same entry holds three fields of the shared terminals of this computer:
+`computer_name`, `share_terminals` and `remote_typing`. The two switches are on
+when the entry does not hold them, so a computer that follows a server shares
+its terminals with typing on.
+[The page of the shared terminals](shared-terminals.md#the-settings-of-a-computer)
+gives the fields.
+
 ## The supervisor of the link
 
 One worker thread of a computer owns one transport at a time: one `ssh` child, or
@@ -149,7 +156,9 @@ of a secret, so it can leave the log; the words of the child stay in the log.
 
 The link of this page is the sync link: it carries the store. The crate holds a
 second link, the live link, which carries the shared terminals of a computer.
-The application does not start a live link yet.
+The application starts the live link with the sync link and stops it with the
+sync link. It starts the live link again when the sync link was `away` and came
+back, and when the name of this computer changes.
 
 - **It is a second transport.** `LiveSupervisor` opens a second `ssh` child, or
   a second socket to the listener, with the settings and the `hello` of the
