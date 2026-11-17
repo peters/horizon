@@ -91,6 +91,9 @@ const CHEVRON: f32 = 5.0;
 const CHEVRON_GAP: f32 = 8.0;
 /// The space between two parts of the row of shortcuts.
 const SHORTCUT_GAP: f32 = 18.0;
+/// The distance from one row of shortcuts to the row under it, on a page that
+/// is too narrow for one row.
+const SHORTCUT_ROW: f32 = 26.0;
 /// The corner radius of the chip of one key.
 const KEY_RADIUS: u8 = 6;
 /// The font of a key.
@@ -122,13 +125,16 @@ impl HorizonApp {
             Order::Background,
             Id::unique("welcome_page_measure"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
+        let shortcut_lines = self.shortcut_lines();
+        let foot_rows = shortcut_rows(&measure, width, &shortcut_lines);
+        let metrics = self
+            .welcome
+            .metrics(&measure, width, pickup.len(), foot_rows, canvas.height());
         let top = page_top(canvas.height(), metrics.block_height) + canvas.min.y;
         // A canvas that is wider than the reading width of the page keeps the same
         // air on both sides of the block.
         let left = canvas.min.x + (canvas.width() - width) * 0.5;
         let inner = Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + width, canvas.max.y));
-        let shortcut_lines = self.shortcut_lines();
         let mut pressed = None;
         let mut pickup_press = None;
 
@@ -354,12 +360,8 @@ fn paint_page(
     } else {
         None
     };
-    paint_shortcuts(
-        &painter,
-        content,
-        below_tiles + metrics.pickup_height + SHORTCUTS_GAP,
-        shortcuts,
-    );
+    let foot = below_tiles + metrics.pickup_height + SHORTCUTS_GAP;
+    let _ = paint_shortcuts(&painter, content, foot, shortcuts);
     WelcomePagePress {
         tile: pressed,
         pickup: pickup_press,
@@ -524,26 +526,41 @@ fn action_colour() -> Color32 {
     theme::blend(theme::ACCENT(), theme::FG(), 0.30)
 }
 
-/// Paints the row of shortcuts under the tiles.
-fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String, String)]) {
+/// The rows that the shortcuts take on a page `width` wide. The painter of the
+/// measure is not visible, so the measure paints nothing.
+fn shortcut_rows(measure: &Painter, width: f32, lines: &[(String, String)]) -> usize {
+    let mut unseen = measure.clone();
+    unseen.set_invisible();
+    let page = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 0.0));
+    paint_shortcuts(&unseen, page, 0.0, lines)
+}
+
+/// Paints the shortcuts under the tiles, and answers the rows that they take.
+///
+/// A name and its key that do not fit the width of the page start the next row,
+/// so a narrow window cuts no part of the line at its right edge.
+fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String, String)]) -> usize {
     let lead = painter.layout_no_wrap(
         SHORTCUTS_LEAD.to_owned(),
         FontId::proportional(SHORTCUTS_FONT),
         theme::FG_SOFT(),
     );
     let height = lead.size().y;
-    let mut x = content.min.x;
-    painter.galley(Pos2::new(x, top), lead.clone(), theme::FG_SOFT());
+    let (mut x, mut y, mut rows) = (content.min.x, top, 1);
+    painter.galley(Pos2::new(x, y), lead.clone(), theme::FG_SOFT());
     x += lead.size().x + SHORTCUT_GAP;
     for (label, keys) in lines {
         let text = painter.layout_no_wrap(label.clone(), FontId::proportional(SHORTCUTS_FONT), theme::FG_SOFT());
-        painter.galley(Pos2::new(x, top), text.clone(), theme::FG_SOFT());
-        x += text.size().x + 6.0;
         let key = painter.layout_no_wrap(keys.clone(), FontId::monospace(KEY_FONT), theme::FG_SOFT());
-        let chip = Rect::from_min_size(
-            Pos2::new(x, top + (height - key.size().y) * 0.5 - 1.0),
-            key.size() + Vec2::new(12.0, 4.0),
-        );
+        let chip_size = key.size() + Vec2::new(12.0, 4.0);
+        if x > content.min.x && x + text.size().x + 6.0 + chip_size.x > content.max.x {
+            x = content.min.x;
+            y += SHORTCUT_ROW;
+            rows += 1;
+        }
+        painter.galley(Pos2::new(x, y), text.clone(), theme::FG_SOFT());
+        x += text.size().x + 6.0;
+        let chip = Rect::from_min_size(Pos2::new(x, y + (height - key.size().y) * 0.5 - 1.0), chip_size);
         painter.rect_filled(chip, CornerRadius::same(KEY_RADIUS), theme::PANEL_BG());
         painter.rect_stroke(
             chip,
@@ -554,6 +571,7 @@ fn paint_shortcuts(painter: &Painter, content: Rect, top: f32, lines: &[(String,
         painter.galley(chip.min + Vec2::new(6.0, 2.0), key, theme::FG_SOFT());
         x = chip.max.x + SHORTCUT_GAP;
     }
+    rows
 }
 
 #[cfg(test)]
@@ -568,7 +586,10 @@ impl HorizonApp {
             Order::Background,
             Id::unique("welcome_page_measure_test"),
         ));
-        let metrics = self.welcome.metrics(&measure, width, pickup.len(), canvas.height());
+        let foot_rows = shortcut_rows(&measure, width, &self.shortcut_lines());
+        let metrics = self
+            .welcome
+            .metrics(&measure, width, pickup.len(), foot_rows, canvas.height());
         (metrics.block_height, metrics.pickup_height)
     }
 }

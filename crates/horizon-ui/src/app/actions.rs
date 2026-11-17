@@ -142,9 +142,8 @@ mod tests {
         DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, inherit_workspace_cwd,
         workspace_cwd,
     };
-    use crate::app::TOOLBAR_HEIGHT;
-    use crate::app::root_chrome::effective_sidebar_width;
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
+    use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
     #[test]
     fn inherit_workspace_cwd_populates_missing_panel_cwd() {
@@ -251,22 +250,22 @@ mod tests {
 
     #[test]
     fn estimated_settings_panel_rect_uses_default_wide_fallback() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(2000.0, 800.0));
 
         let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
 
-        assert_eq!(rect.min, Pos2::new(840.0, TOOLBAR_HEIGHT));
-        assert_eq!(rect.max, Pos2::new(1200.0, 752.0));
+        assert_eq!(rect.min, Pos2::new(1400.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(2000.0, 752.0));
     }
 
     #[test]
     fn estimated_settings_panel_rect_clamps_narrow_fallback_width() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(700.0, 800.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 800.0));
 
         let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
 
-        assert_eq!(rect.min, Pos2::new(360.0, TOOLBAR_HEIGHT));
-        assert_eq!(rect.max, Pos2::new(700.0, 752.0));
+        assert_eq!(rect.min, Pos2::new(356.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(800.0, 752.0));
     }
 
     #[test]
@@ -292,7 +291,7 @@ mod tests {
         let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
         let settings_panel = Rect::from_min_max(Pos2::new(840.0, TOOLBAR_HEIGHT), Pos2::new(1200.0, 752.0));
         let settings_bar = Rect::from_min_max(Pos2::new(0.0, 800.0 - SETTINGS_BAR_HEIGHT), Pos2::new(1200.0, 800.0));
-        let sidebar_width = effective_sidebar_width(viewport.width());
+        let sidebar_width = SIDEBAR_WIDTH;
 
         let rect = canvas_rect_for_layout(viewport, sidebar_width, Some(settings_panel), Some(settings_bar));
 

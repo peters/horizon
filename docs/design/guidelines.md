@@ -613,7 +613,7 @@ Fixed metrics:
 |---|---|
 | Root toolbar height | 46 |
 | Toolbar buttons | 30 high, 8 gap, 14 horizontal padding |
-| Sidebar width | 210 default, 168 minimum |
+| Sidebar width | 210 at every window size |
 | Panel titlebar height | 34 |
 | Panel padding | 8 |
 | Panel resize handle | 32 screen points, independent of canvas zoom (bounded by panel extent). The painted mark is six dots in the corner. Those dots keep the same screen size when the corner can hold them. The square is the hit target and has no fill. A terminal scrollbar stops above this square, so the foot of its track stays reachable. A panel too short for both keeps a 24 point track and gives the gap up. On a card panel the hit target stops above the footer: its height is the on-screen height of the footer and the panel padding under it, at most 32 and at least 10 screen points, so a button of the card never loses its press to a resize grab. |
@@ -1067,9 +1067,11 @@ The page that shows while the board is empty answers the size of the window.
   corner of the tile with a 2 px ring in the surface color. An idle workspace
   has no badge, so activity stands out.
 - The workspace name is Inter 13.5 at weight 620 (`FG`, or a blend toward
-  `FG_SOFT` for an idle, inactive row). The status line is 12, in `FG_SOFT`
-  blended 0.14 toward `BG_ELEVATED`, with terminal padding folded to single
-  spaces. The panel count is JetBrains Mono 11 in a fixed right column.
+  `FG_SOFT` for an idle, inactive row). The second line is 12, in `FG_SOFT`
+  blended 0.14 toward `BG_ELEVATED`. It holds facts about the workspace only:
+  the count of the agents that wait, then the machine. It never holds text of
+  the screen of a panel. The panel count is JetBrains Mono 11 in a fixed right
+  column.
 - Group headers are sentence case, Inter 12 at weight 620 in `FG_SOFT`, with the
   count in JetBrains Mono 11 `FG_DIM` and the summary at the right.
 - Panel rows hang from a 1 px tree guide (`BORDER_STRONG` alpha 200) under the
@@ -1118,13 +1120,13 @@ The page that shows while the board is empty answers the size of the window.
   shows `No tmux on this machine.`, and a refusal shows its typed reason. A
   machine with no agent shows no row and no line, and its row paints no chevron.
   The row menu of a machine is the one it had.
-- A workspace that lives on a machine says so on the second line of its row,
-  before the status text: `on <machine> · <status text>`, or `on <machine>`
-  when the workspace has no status text yet. The name line is unchanged, so a
-  long name cannot cut the machine off the row. The line is the same low-emphasis
-  color and Inter 12 weight 400 as the status line, is cached with the other row
-  texts, and is read again at once when the place of the workspace changes. A
-  workspace on this computer shows the status text alone, with no prefix.
+- A workspace that lives on a machine says so on the second line of its row:
+  `on <machine>`, after the count of the agents that wait, as in
+  `1 needs you · on <machine>`. The name line is unchanged, so a long name
+  cannot cut the machine off the row. The line is low-emphasis Inter 12 weight
+  400, is cached with the other row texts, and is read again at once when the
+  place of the workspace changes. A workspace on this computer shows the count
+  alone, and no second line while no agent waits.
 - The workspace menu holds a `Place` section, between `Arrange Panels` and
   `Move to Main Window`/`Open in New Window`: the group label `Place` in 11
   `FG_DIM` with the hint "A new terminal of this workspace opens there. The

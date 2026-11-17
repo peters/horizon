@@ -274,7 +274,7 @@ fn assert_no_word_lies_under_a_button(shapes: &[egui::epaint::ClippedShape]) {
 
 /// One link whose child ends at once, one open invitation and three computers of
 /// the server, so the Server tab draws its plate, its link and its list.
-fn seed_server_tab(app: &mut crate::app::HorizonApp, directory: &std::path::Path) {
+pub(super) fn seed_server_tab(app: &mut crate::app::HorizonApp, directory: &std::path::Path) {
     use std::sync::Arc;
 
     use horizon_core::secret::SecretVault;
@@ -472,7 +472,7 @@ fn run_settings_frame(ctx: &egui::Context, app: &mut crate::app::HorizonApp, vie
 
 /// Checks one tab against the panel and the canvas, and answers the rectangle of
 /// the panel that it paints.
-fn assert_tab_fits_the_panel(
+pub(super) fn assert_tab_fits_the_panel(
     ctx: &egui::Context,
     app: &mut crate::app::HorizonApp,
     viewport: [f32; 2],

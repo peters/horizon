@@ -14,8 +14,8 @@ use super::pickup;
 use super::tiles::WelcomeTile;
 use super::{
     ACTION_FONT, ACTION_LINE_HEIGHT, HEADING_BLOCK_GAP, HEADING_FONT, HEADING_GAP, HEADING_LINE_HEIGHT,
-    HEADING_MAX_WIDTH, LEAD_FONT, PAGE_PAD_TOP, SENTENCE_FONT, SENTENCE_LINE_HEIGHT, SHORTCUTS_FONT, SHORTCUTS_GAP,
-    TILE_INNER_GAP, TILE_PAD, TITLE_FONT, TITLE_LINE_HEIGHT, tile_title_job,
+    HEADING_MAX_WIDTH, LEAD_FONT, PAGE_PAD_TOP, SENTENCE_FONT, SENTENCE_LINE_HEIGHT, SHORTCUT_ROW, SHORTCUTS_FONT,
+    SHORTCUTS_GAP, TILE_INNER_GAP, TILE_PAD, TITLE_FONT, TITLE_LINE_HEIGHT, tile_title_job,
 };
 use crate::theme;
 use crate::typeface::Weight;
@@ -30,8 +30,9 @@ pub(in crate::app) struct WelcomeCache {
 }
 
 impl WelcomeCache {
-    /// The metrics of the page for `width`, `pickup_rows` rows of the section and
-    /// a canvas `canvas_height` tall, measured with `painter`.
+    /// The metrics of the page for `width`, `pickup_rows` rows of the section,
+    /// `foot_rows` rows of shortcuts and a canvas `canvas_height` tall, measured
+    /// with `painter`.
     ///
     /// The height of the canvas is part of the key because it decides the form of
     /// the page: a window that a person makes short first gives the drawings a
@@ -41,6 +42,7 @@ impl WelcomeCache {
         painter: &Painter,
         width: f32,
         pickup_rows: usize,
+        foot_rows: usize,
         canvas_height: f32,
     ) -> WelcomeMetrics {
         let key = WelcomeKey {
@@ -48,14 +50,15 @@ impl WelcomeCache {
             canvas: canvas_height.to_bits(),
             theme: theme::current_theme(),
             pickup_rows,
+            foot_rows,
         };
         if self.key != Some(key) {
-            let metrics = WelcomeMetrics::measure(painter, width, pickup_rows, canvas_height);
             self.key = Some(key);
-            self.metrics = Some(metrics);
+            self.metrics = None;
         }
-        self.metrics
-            .unwrap_or_else(|| WelcomeMetrics::measure(painter, width, pickup_rows, canvas_height))
+        *self
+            .metrics
+            .get_or_insert_with(|| WelcomeMetrics::measure(painter, width, pickup_rows, foot_rows, canvas_height))
     }
 }
 
@@ -73,6 +76,9 @@ struct WelcomeKey {
     /// The rows of the section **Pick up where you left off**, which add their
     /// height to the block of the page.
     pickup_rows: usize,
+    /// The rows of the shortcuts under the tiles: a narrow page takes more than
+    /// one.
+    foot_rows: usize,
 }
 
 /// Where every part of the page stands, for one width and one theme.
@@ -103,7 +109,7 @@ impl WelcomeMetrics {
     /// Measures the page that `width` and `pickup_rows` rows of the section give,
     /// with the wrapped texts laid out once, in the tallest form that a canvas
     /// `canvas_height` tall holds whole.
-    fn measure(painter: &Painter, width: f32, pickup_rows: usize, canvas_height: f32) -> Self {
+    fn measure(painter: &Painter, width: f32, pickup_rows: usize, foot_rows: usize, canvas_height: f32) -> Self {
         let columns = welcome_columns(width);
         let tile = tile_width(width, columns);
         let inner_width = (tile - 2.0 * TILE_PAD).max(1.0);
@@ -156,7 +162,8 @@ impl WelcomeMetrics {
             HEADING_MAX_WIDTH.min(width.max(1.0)),
         );
         let lead_height = lead.size().y;
-        let shortcuts_height = SHORTCUTS_FONT * 1.45;
+        #[allow(clippy::cast_precision_loss)]
+        let shortcuts_height = SHORTCUTS_FONT * 1.45 + foot_rows.saturating_sub(1) as f32 * SHORTCUT_ROW;
         let pickup_height = if pickup_rows == 0 {
             0.0
         } else {

@@ -5,10 +5,9 @@ use egui::containers::panel::PanelState;
 use egui::{Context, Id, Pos2, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
-use crate::app::root_chrome::effective_sidebar_width;
 use crate::app::settings::{SETTINGS_BAR_HEIGHT, SETTINGS_BAR_ID, settings_panel_default_width};
 use crate::app::util::{OverlayExclusion, viewport_local_rect};
-use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, TOOLBAR_HEIGHT};
+use crate::app::{HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
 pub(super) fn panel_focus_target_at_pointer_press(
     panel_order: &[PanelId],
@@ -49,11 +48,7 @@ impl HorizonApp {
         let viewport = viewport_local_rect(ctx);
         let settings_panel_rect = self.settings_panel_rect_for_layout(viewport);
         let settings_bar_rect = self.settings_bar_rect(ctx, viewport);
-        let sidebar_width = if self.sidebar_visible {
-            effective_sidebar_width(viewport.width())
-        } else {
-            0.0
-        };
+        let sidebar_width = if self.sidebar_visible { SIDEBAR_WIDTH } else { 0.0 };
         canvas_rect_for_layout(viewport, sidebar_width, settings_panel_rect, settings_bar_rect)
     }
 
@@ -83,11 +78,7 @@ impl HorizonApp {
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
         let viewport = viewport_local_rect(ctx);
         let mut zones: Vec<_> = self.preset_picker_rect(ctx).into_iter().collect();
-        let sidebar_width = if self.sidebar_visible {
-            effective_sidebar_width(viewport.width())
-        } else {
-            0.0
-        };
+        let sidebar_width = if self.sidebar_visible { SIDEBAR_WIDTH } else { 0.0 };
 
         if sidebar_width > 0.0 {
             zones.push(Rect::from_min_max(
@@ -121,10 +112,8 @@ impl HorizonApp {
         let overlays = &self.template_config.overlays;
         let size = Vec2::new(overlays.minimap_width.max(120.0), overlays.minimap_height.max(120.0))
             + Vec2::splat(MINIMAP_PAD * 2.0);
-        Some(Rect::from_min_size(
-            viewport.max - Vec2::splat(MINIMAP_MARGIN) - size,
-            size,
-        ))
+        crate::app::minimap::minimap_fits(self.canvas_rect(ctx), size)
+            .then(|| Rect::from_min_size(viewport.max - Vec2::splat(MINIMAP_MARGIN) - size, size))
     }
 
     pub(in crate::app) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {

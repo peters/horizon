@@ -244,8 +244,8 @@ Horizon before they write anything.
     | 5120 x 1348 | Four in one row | 92 points high | No | 1480 points |
     | 2560 x 1300 | Four in one row | 92 points high | No | 1480 points |
     | 1280 x 800 | Four in one row | 92 points high | No | 950 points |
-    | 1000 x 700 | Two in two rows | 30 points high | No | 700 points |
-    | 800 x 600 | One in one column | None | Yes | 512 points |
+    | 1000 x 700 | Two in two rows | 30 points high | No | 670 points |
+    | 800 x 600 | One in one column | None | Yes | 470 points |
 
     Result: The page answers each size as the table says. The size of a row of
     the section **Pick up where you left off** follows the block. After each
@@ -264,9 +264,11 @@ Horizon before they write anything.
     the wheel of the mouse and for a scroll of a touchpad. The two side notches
     and the Ctrl notches move no pixel of the window, and the board behind the
     page never moves sideways or changes its zoom. At the largest scroll, the
-    last row of the page, which starts with `You know Horizon already?`, is whole
-    inside the canvas. At the top of the page, the heading is whole and no part
-    of it stands under the titlebar.
+    line of the page that starts with `You know Horizon already?` is whole
+    inside the canvas. At a window of 800 x 600 that line takes two rows: a name
+    and its key start the second row together, and no part of the line is cut at
+    the right edge of the block. At the top of the page, the heading is whole and
+    no part of it stands under the titlebar.
 
 13. Make the window 1600 x 1000, where the page is whole inside the canvas.
     Put the pointer on the middle of the page and roll the wheel down three
@@ -325,6 +327,23 @@ Horizon before they write anything.
 
     Result: The press opens a panel of that preset, as before the mark: the mark
     tells the person that the program is not here, and it stops nothing.
+
+21. Make the window 800 x 600. Push Ctrl+Shift+K. Then push Escape, click
+    `+ Panel` on the line of a workspace, and push Escape again.
+
+    Result: At a window of 800 x 600 the whole card of each list stands inside
+    the window. Its title, `Command Palette` or `Presets`, and its search field
+    show whole at the top of the card. The list is shorter than in a large
+    window, and it scrolls under the search field.
+
+22. With a workspace that holds one panel, look at the lower right corner of the
+    canvas at 800 x 600. Then make the window 1280 x 800.
+
+    Result: At a window of 800 x 600 the canvas shows no minimap, and nothing
+    covers the line of the workspace or the title of a panel. At 1280 x 800 the
+    minimap shows in the lower right corner again. The minimap shows only on a
+    canvas that is two times as wide and two times as high as the minimap with
+    its frame, or larger: 664 x 384 points with the default settings.
 
 ### 6.2 F02 — The three entry points of Set up
 

@@ -19,10 +19,9 @@ use horizon_core::{PanelId, PanelKind, WorkspaceDockSide, WorkspaceId, Workspace
 
 use crate::theme;
 
-use super::root_chrome::effective_sidebar_width;
 use super::util;
 use super::workspace::WorkspaceLayoutCapabilities;
-use super::{HorizonApp, TOOLBAR_HEIGHT};
+use super::{HorizonApp, SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
@@ -120,7 +119,7 @@ impl HorizonApp {
 
         let viewport = util::viewport_local_rect(ctx);
         let sidebar_origin = Pos2::new(viewport.min.x, viewport.min.y + TOOLBAR_HEIGHT);
-        let sidebar_width = effective_sidebar_width(viewport.width());
+        let sidebar_width = SIDEBAR_WIDTH;
         let sidebar_size = Vec2::new(sidebar_width, viewport.height() - TOOLBAR_HEIGHT);
         self.refresh_sidebar_rows(std::time::Instant::now());
         self.refresh_machine_rows();

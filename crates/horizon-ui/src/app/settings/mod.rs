@@ -18,6 +18,8 @@ mod remote_usage;
 mod secrets;
 pub(in crate::app) mod server;
 mod shortcuts;
+#[cfg(test)]
+mod small_window_tests;
 mod speech;
 #[cfg(test)]
 mod tests;
@@ -26,9 +28,9 @@ mod tests;
 pub(super) use tests::{at, frame_of, texts_hold};
 
 use egui::{Color32, Margin, Rect, Stroke, Vec2};
-use horizon_core::Config;
 use horizon_core::named_secrets::NamedSecretWorkbench;
 use horizon_core::remote_browser_credential::{CredentialWorkbench, KeyringImport};
+use horizon_core::{Config, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
 use super::settings_io::SettingsReply;
 use super::util;
@@ -214,6 +216,17 @@ impl HorizonApp {
         // tab before it draws, so a frame with nothing to read allocates nothing.
         if let Some(editor) = self.settings.as_mut() {
             editor.server.poll();
+        }
+        // Escape does what Close does: the panel closes and its draft is dropped.
+        // A dialog above the panel and an open list of the panel take the key first.
+        if self.no_window_above_the_canvas()
+            && !egui::Popup::is_any_open(ui.ctx())
+            && ui.input(|input| input.key_pressed(egui::Key::Escape))
+        {
+            self.close_settings();
+            let escape = ShortcutBinding::new(ShortcutModifiers::NONE, ShortcutKey::Escape);
+            self.consume_navigation_key(ui.ctx(), escape);
+            return;
         }
         let view = self.server_view();
         let Some(editor) = self.settings.as_mut() else {
@@ -559,8 +572,14 @@ impl HorizonApp {
     }
 }
 
+/// The narrowest panel: the panel of a window of 1480 points, which holds the
+/// tab row on one line and the widest row of every tab. A narrower panel is
+/// narrower than its tabs, and egui then draws the tabs past the right edge of
+/// the window and its own edge line across them.
+const SETTINGS_PANEL_MIN_WIDTH: f32 = 444.0;
+
 pub(super) fn settings_panel_default_width(viewport_width: f32) -> f32 {
-    (viewport_width * 0.3).clamp(340.0, 900.0)
+    (viewport_width * 0.3).clamp(SETTINGS_PANEL_MIN_WIDTH, 900.0)
 }
 
 /// The rectangle that the Settings panel takes from `ui`, before any tab draws.

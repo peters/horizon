@@ -4,7 +4,7 @@ use egui::{Context, CursorIcon, Id, Order, PopupAnchor, Pos2, Rect, Sense, Toolt
 use horizon_core::{Board, Panel, PanelId, WorkspaceId};
 
 use super::{
-    HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, MinimapHitTarget, MinimapModel, MinimapScope, minimap_model,
+    HorizonApp, MINIMAP_MARGIN, MINIMAP_PAD, MinimapHitTarget, MinimapModel, MinimapScope, minimap_fits, minimap_model,
     paint_minimap_contents, panel_minimap_screen_rect, workspace_minimap_screen_rect,
 };
 
@@ -23,6 +23,9 @@ pub(super) fn render_scoped_minimap(
     let Some(model) = minimap_model(app, canvas_rect, workspace_bounds, scope) else {
         return;
     };
+    if !minimap_fits(canvas_rect, model.outer_size) {
+        return;
+    }
 
     let response = egui::Area::new(overlay_id)
         .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-MINIMAP_MARGIN, -MINIMAP_MARGIN))

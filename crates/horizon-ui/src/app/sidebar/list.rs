@@ -1,12 +1,12 @@
-//! The rows of the sidebar's workspace list. A row reads its status line from a
-//! terminal's screen, so the rows are read again at most once a second, or at once
-//! when workspaces come or go.
+//! The rows of the sidebar's workspace list. A row is read from the panels of its
+//! workspace, so the rows are read again at most once a second, or at once when
+//! workspaces come or go or a state of attention changes.
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use horizon_core::Attention;
 use horizon_core::WorkspaceId;
-use horizon_core::workspace_list::{self, Row, Waiting};
+use horizon_core::workspace_list::{Row, Waiting};
 
 use super::super::HorizonApp;
 use super::{SidebarActions, SidebarWorkspaceDragState, WorkspaceSidebarEntry};
@@ -67,7 +67,7 @@ impl HorizonApp {
     }
 
     /// The row of each workspace now: the heaviest attention state of its
-    /// panels, how many of them wait for the person, and its status line.
+    /// panels, how many of them wait for the person, and its machine.
     pub(in crate::app) fn read_sidebar_rows(&self) -> HashMap<WorkspaceId, Row> {
         self.board
             .workspaces
@@ -86,12 +86,7 @@ impl HorizonApp {
                         .filter(|panel| panel.kind.is_agent())
                         .map(|panel| self.panel_attention_of(panel)),
                 );
-                let line =
-                    workspace_list::primary_panel(panels, self.board.focused).and_then(workspace_list::panel_line);
-                (
-                    workspace.id,
-                    Row::placed(attention, waiting, line.as_deref(), workspace.place.machine()),
-                )
+                (workspace.id, Row::placed(attention, waiting, workspace.place.machine()))
             })
             .collect()
     }
@@ -116,7 +111,7 @@ impl HorizonApp {
             .rows
             .get(&workspace)
             .cloned()
-            .unwrap_or_else(|| Row::local(Attention::Idle, None))
+            .unwrap_or_else(|| Row::local(Attention::Idle))
     }
 }
 
@@ -216,7 +211,11 @@ mod tests {
         let start = std::time::Instant::now();
         app.refresh_sidebar_rows(start);
 
-        assert_eq!(app.sidebar_row(workspace).line, "", "a new row has no status text yet");
+        assert_eq!(
+            app.sidebar_row(workspace).line,
+            "",
+            "a row of this computer has no line yet"
+        );
         assert_eq!(app.sidebar_row(here).line, "");
 
         // A workspace that moves to a machine reads its rows again at once,

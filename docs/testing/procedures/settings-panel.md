@@ -64,8 +64,9 @@ None of the steps deletes data, rents compute or changes access.
 
 2. Read the left edge of the panel.
 
-   Result: The panel takes about 30 percent of the window width. The canvas
-   keeps the rest.
+   Result: In a window that is 1480 points wide or wider, the panel takes
+   about 30 percent of the window width. In a narrower window the panel is 444
+   points wide. The canvas keeps the rest.
 
 ### 6.2 S2 — Every tab keeps the panel width
 
@@ -193,6 +194,28 @@ None of the steps deletes data, rents compute or changes access.
    saved, and `Saving` and then `Saved` after the click. The panel width does
    not change.
 
+3. Resize the window to 800 x 600 pixels. Select each tab in turn.
+
+   Result: At a window of 800 x 600 the panel is 444 points wide and its right
+   edge is the right edge of the window. The eight tabs are on one row. No row
+   of a tab is cut at the right edge, and no vertical line crosses the panel.
+
+4. Click an empty area of the canvas. Push Escape.
+
+   Result: The panel closes, as `Close` closes it.
+
+5. Open Settings, set `Height` to a new value and push Escape. Open Settings
+   again and read `Height`.
+
+   Result: The panel closes, as `Close` closes it. `Height` shows the saved
+   value: the value that was not saved is gone.
+
+6. Open Settings, open the list of the theme and push Escape. Then push
+   Ctrl+Shift+K and push Escape.
+
+   Result: The first Escape closes the list, and the second Escape closes the
+   command palette. The panel stays open after each of them.
+
 ## 7. Cleanup
 
 1. Close the Horizon window through its normal close path.
@@ -211,3 +234,7 @@ None of the steps deletes data, rents compute or changes access.
   canvas covers the tab row, a heading, a row of the Secrets tab, or a field.
 - Wide content scrolls inside the panel in both directions.
 - The canvas stays visible beside the panel at every window size.
+- At a window of 800 x 600 the panel stands inside the window on every tab, and
+  no vertical line crosses it.
+- Escape closes the panel as `Close` does. A list or a dialog above the panel
+  takes Escape first.

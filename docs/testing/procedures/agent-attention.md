@@ -539,7 +539,7 @@ nothing.
 
 - Each of the four states appears in the panel row and in the workspace badge as
   the tasks say.
-- The count at the front of the status line names the agents that need the person.
+- The count at the front of the second line names the agents that need the person.
 - A look clears a finished turn and a failed turn. An open question stays.
 - A typed word reaches the sidebar while the timer of the fixture runs.
 - `Ctrl+Shift+G` goes to an agent that waits, across workspaces, and says one line

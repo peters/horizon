@@ -365,13 +365,18 @@ impl CanvasGesture {
 
 impl HorizonApp {
     pub(super) fn canvas_gesture_enabled(&self) -> bool {
+        self.settings.is_none() && self.no_window_above_the_canvas()
+    }
+
+    /// Whether no dialog, list or search field stands above the canvas and the
+    /// Settings panel, so a key of the window belongs to them.
+    pub(super) fn no_window_above_the_canvas(&self) -> bool {
         self.fullscreen_panel.is_none()
             && self.shutdown_progress.is_none()
             && self.pending_session_switch.is_none()
             && self.startup_receiver.is_none()
             && self.startup_bootstrap_failure.is_none()
             && !self.host_dialog_open()
-            && self.settings.is_none()
             && self.session_manager.is_none()
             && self.startup_chooser.is_none()
             && self.command_palette.is_none()

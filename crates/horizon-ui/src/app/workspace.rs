@@ -444,7 +444,7 @@ mod tests {
 
     use crate::app::HorizonApp;
     use crate::app::test_support::{
-        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+        editor_workspace_state, presets_of, raw_input, run_app_frame_with_input, test_app_with_startup,
     };
     const ADD_PANEL: &str = "+ Panel";
 
@@ -646,25 +646,6 @@ mod tests {
             panels_before + 1,
             "one panel joined the board"
         );
-    }
-
-    /// The settings list of a first start, with the program of each agent
-    /// preset in the folder of the test.
-    fn presets_of(folder: &std::path::Path) -> Vec<horizon_core::PresetConfig> {
-        let preset = |name: &str, kind: horizon_core::PanelKind, program: Option<&str>| horizon_core::PresetConfig {
-            name: name.to_owned(),
-            alias: None,
-            kind,
-            command: program.map(|program| folder.join(program).display().to_string()),
-            args: Vec::new(),
-            resume: horizon_core::PanelResume::Fresh,
-            ssh_connection: None,
-        };
-        vec![
-            preset("Shell", horizon_core::PanelKind::Shell, None),
-            preset("Codex", horizon_core::PanelKind::Codex, Some("codex")),
-            preset("Claude Code", horizon_core::PanelKind::Claude, Some("claude")),
-        ]
     }
 
     #[test]

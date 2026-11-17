@@ -1,6 +1,6 @@
 use egui::{Pos2, Rect, Vec2};
 
-use super::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
+use super::TOOLBAR_HEIGHT;
 
 pub(super) const ROOT_TOOLBAR_BUTTON_HEIGHT: f32 = 30.0;
 pub(super) const ROOT_TOOLBAR_BUTTON_GAP: f32 = 8.0;
@@ -14,10 +14,6 @@ pub(super) const ROOT_TOOLBAR_FPS_WIDTH: f32 = 72.0;
 pub(super) const ROOT_TOOLBAR_MENU_WIDTH: f32 = 82.0;
 const ROOT_TOOLBAR_NAME_WIDTH: f32 = 72.0;
 const ROOT_TOOLBAR_TAGLINE_WIDTH: f32 = 152.0;
-const SIDEBAR_WIDTH_RATIO: f32 = 0.18;
-
-pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
-
 /// The actions the toolbar's Menu carries out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ToolbarAction {
@@ -57,10 +53,6 @@ pub(super) struct RootToolbarLayout {
 struct RootToolbarCandidate {
     layout: RootToolbarLayout,
     search_available: f32,
-}
-
-pub(super) fn effective_sidebar_width(viewport_width: f32) -> f32 {
-    (viewport_width * SIDEBAR_WIDTH_RATIO).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH)
 }
 
 pub(super) fn root_toolbar_layout(viewport: Rect) -> RootToolbarLayout {
@@ -147,15 +139,8 @@ fn visible_items_width(items: &[ToolbarItem]) -> f32 {
 mod tests {
     use egui::{Pos2, Rect};
 
-    use super::{ToolbarItem, effective_sidebar_width, root_toolbar_layout};
-    use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
-
-    #[test]
-    fn sidebar_width_shrinks_on_narrow_desktop_viewports() {
-        assert!((effective_sidebar_width(1600.0) - SIDEBAR_WIDTH).abs() <= f32::EPSILON);
-        assert!(effective_sidebar_width(1024.0) < SIDEBAR_WIDTH);
-        assert!((effective_sidebar_width(800.0) - super::SIDEBAR_MIN_WIDTH).abs() <= f32::EPSILON);
-    }
+    use super::{ToolbarItem, root_toolbar_layout};
+    use crate::app::TOOLBAR_HEIGHT;
 
     #[test]
     fn toolbar_keeps_short_tagline_when_search_still_fits() {

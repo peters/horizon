@@ -1,8 +1,8 @@
 //! The workspace rows of the sidebar's workspace list: a tile in the workspace
-//! color with its initials and a status badge, the name and one status line.
+//! color with its initials and a status badge, the name and one line of facts.
 //!
-//! The status line names the place of the workspace first, `on <machine>`, so a
-//! long name cannot cut the machine off the row.
+//! The line stands under the name, so a long name cannot cut the count of the
+//! agents that wait, or the machine, off the row.
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use horizon_core::Attention;
 
@@ -123,7 +123,7 @@ pub(super) fn paint_workspace_row_contents(
     surface: Color32,
 ) -> egui::Response {
     let card = card(row);
-    let line = (!workspace.row.line.is_empty()).then(|| text::fold_whitespace(&workspace.row.line));
+    let line = (!workspace.row.line.is_empty()).then_some(workspace.row.line.as_str());
     let first_line_y = if line.is_some() {
         card.min.y + 17.0
     } else {
@@ -163,7 +163,7 @@ pub(super) fn paint_workspace_row_contents(
     if let Some(line) = line {
         let galley = text::line(
             ui,
-            &line,
+            line,
             12.0,
             text::REGULAR,
             text::secondary(),
@@ -171,7 +171,7 @@ pub(super) fn paint_workspace_row_contents(
         );
         let line_rect = Rect::from_min_size(pos2(text_left, name_rect.max.y + 2.0), galley.size());
         ui.painter().galley(line_rect.min, galley, text::secondary());
-        hover_text(ui, line_rect, ("sidebar_ws_line", workspace.id.0), &line);
+        hover_text(ui, line_rect, ("sidebar_ws_line", workspace.id.0), line);
     }
     tile_response
 }

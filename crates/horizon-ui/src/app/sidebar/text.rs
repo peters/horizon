@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn a_status_line_loses_its_terminal_padding() {
+    fn a_title_loses_its_terminal_padding() {
         assert_eq!(fold_whitespace("lane-876          Fix sync"), "lane-876 Fix sync");
     }
 
