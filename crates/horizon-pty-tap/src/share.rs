@@ -9,9 +9,18 @@
 //! [`ShareOutlet::start`] on, which the owner calls at the instant of a screen,
 //! until more than [`SHARE_BUFFER_BYTES`] wait or nobody follows any more. So a
 //! take continues the newest screen, or it says that the follower needs a new one.
+//!
+//! A screen and the takes that continue it come from one thread. Each start
+//! empties the outlet, so a take on another thread would answer with the output
+//! that follows that screen and drop the bytes between its own last take and the
+//! screen, which no follower of that thread drew. A debug build asserts the rule
+//! on every take; a release build tells the thread from no take, so a second
+//! thread loses those bytes in silence. A take on a second thread is safe while
+//! that thread also starts the screen, which one owner does.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::{self, ThreadId};
 
 /// The bytes that wait for a take at most: 1 MiB.
 pub const SHARE_BUFFER_BYTES: usize = 1024 * 1024;
@@ -28,6 +37,8 @@ struct Shared {
 struct State {
     wanted: bool,
     bytes: Vec<u8>,
+    /// The thread of the screen that the outlet copies after, while one follows.
+    screen_on: Option<ThreadId>,
 }
 
 impl Shared {
@@ -95,6 +106,7 @@ impl ShareOutlet {
     pub fn start(&self) {
         let mut state = self.shared.state();
         let wanted = state.wanted;
+        state.screen_on = Some(thread::current().id());
         self.shared.restart(&mut state, wanted);
     }
 
@@ -108,6 +120,10 @@ impl ShareOutlet {
     #[must_use]
     pub fn take(&self) -> ShareTake {
         let mut state = self.shared.state();
+        debug_assert!(
+            state.screen_on.is_none_or(|started| started == thread::current().id()),
+            "a take runs on the thread of the screen that it continues"
+        );
         ShareTake {
             bytes: std::mem::take(&mut state.bytes),
             overflowed: state.wanted && !self.shared.copying.load(Ordering::Acquire),

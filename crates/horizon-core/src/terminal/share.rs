@@ -11,9 +11,12 @@
 //! [`Terminal::share_screen`] starts the outlet while it holds that lease and
 //! keeps the grid locked until the screen is written. So the grid holds every byte
 //! that the reader read before, and the outlet holds every byte that it reads
-//! after. The owner calls `share_screen` and `take` on one thread and sends what
-//! they give in the order of the calls. A take says `overflowed` when the outlet
-//! lost its screen or had none, and the owner answers it with a new screen.
+//! after. The owner calls `share_screen` and the takes that continue it on one
+//! thread and sends what they give in the order of the calls: a take on a second
+//! thread would answer with the output after that screen and drop the bytes
+//! between its own last take and the screen, and `horizon_pty_tap::share` asserts
+//! the rule in a debug build. A take says `overflowed` when the outlet lost its
+//! screen or had none, and the owner answers it with a new screen.
 //!
 //! The parser of the reader is out of reach. A sequence that it has not finished,
 //! or a synchronized update that it still holds back, reaches the follower

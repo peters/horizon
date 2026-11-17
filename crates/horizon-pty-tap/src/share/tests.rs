@@ -191,11 +191,15 @@ fn a_read_takes_no_lock_while_the_outlet_copies_nothing() {
 fn a_take_on_another_thread_loses_no_byte_and_keeps_the_order() {
     const LENGTH: usize = 4 * 1024 * 1024;
     let (mut source, outlet) = reader(stream(LENGTH));
-    outlet.set_wanted(true);
-    outlet.start();
     let (done_tx, done_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
     let follower = outlet.clone();
+    // The screen and the takes that continue it belong to one thread, so the
+    // taker of the test starts the screen of the stream before it reads.
     let taking = std::thread::spawn(move || {
+        follower.set_wanted(true);
+        follower.start();
+        started_tx.send(()).expect("the screen of the taker of the test");
         let mut taken = Vec::new();
         let mut done = false;
         // The last take runs after the reader ended, so it holds the tail.
@@ -208,6 +212,9 @@ fn a_take_on_another_thread_loses_no_byte_and_keeps_the_order() {
         taken
     });
 
+    started_rx
+        .recv()
+        .expect("the screen of the taker, before the first read");
     // The reader waits for the taker when the outlet is nearly full, as a slow
     // program would: the test proves the order and not the overflow rule.
     let mut buffer = vec![0u8; 8 * 1024];
@@ -224,4 +231,27 @@ fn a_take_on_another_thread_loses_no_byte_and_keeps_the_order() {
 
     assert_eq!(taken.len(), LENGTH);
     assert!(taken == stream(LENGTH), "the takes hold the stream once and in order");
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn a_take_on_a_thread_that_started_no_screen_is_reported() {
+    let (_source, outlet) = reader(stream(64));
+    outlet.set_wanted(true);
+    outlet.start();
+    let other = outlet.clone();
+    let reported =
+        std::thread::spawn(move || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| other.take())).is_err())
+            .join()
+            .expect("the second thread of the test");
+
+    assert!(
+        reported,
+        "a take on another thread than the screen of the outlet is a panic of a debug build"
+    );
+    assert_eq!(
+        outlet.take(),
+        nothing(false),
+        "the thread of the screen still takes what follows it"
+    );
 }
