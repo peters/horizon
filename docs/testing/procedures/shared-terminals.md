@@ -59,10 +59,10 @@ Keep that evidence private.
   build, with their SHA-256, as the fixture page says. `$smoke_bin` names their
   folder below.
 - The server computer: a Linux or macOS login that the test computer reaches
-  with `ssh` and no prompt. The server computer can be the test computer, with
-  an `sshd` on a loopback port. The fixture page gives two commands that unpack
-  an `sshd` into a folder of your own.
-- One folder of this run for the SSH files, `<ssh folder>` below. It holds the
+  with `ssh` and no prompt. The server computer can be the test computer:
+  [section 4.1](#41-a-server-computer-on-the-test-computer) starts an `sshd` for
+  that.
+- One folder of this run for the SSH files, `$SSH_DIR` below. It holds the
   identity `fixture_key`, whose public key the login of the server computer
   accepts, and the file `config` with this text:
 
@@ -102,6 +102,63 @@ These names apply in this procedure:
 Send each click and each key to a candidate with the `horizon-device` program.
 Give it the file `target.json` of the state path of that candidate, as the
 fixture page says. Take a new screenshot before each click.
+
+### 4.1 A server computer on the test computer
+
+Do this section only if you have no second computer. The commands make the SSH
+files of this run and start an `sshd` of your own user on a loopback port. The
+configuration is the one that the fixture writes for the `sshd` of its machine
+lane. It needs OpenSSH 9.8 or later, which has the two session programs.
+
+1. Unpack an `sshd` into a folder of this run, and make the two keys:
+
+   ```sh
+   export SSH_DIR=/var/tmp/hz-shared-ssh
+   mkdir -m 700 "$SSH_DIR"
+   cd "$SSH_DIR"
+   apt-get download openssh-server
+   dpkg-deb -x openssh-server_*.deb "$SSH_DIR/openssh-server"
+   ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/host_key"
+   ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/fixture_key"
+   cp "$SSH_DIR/fixture_key.pub" "$SSH_DIR/authorized_keys"
+   ```
+
+   Result: `$SSH_DIR` holds the program `openssh-server/usr/sbin/sshd`, two key
+   pairs and `authorized_keys`.
+
+2. Write the configuration of the `sshd`, with a port that no process uses:
+
+   ```sh
+   cat > "$SSH_DIR/sshd_config" <<EOF
+   Port 17872
+   ListenAddress 127.0.0.1
+   HostKey $SSH_DIR/host_key
+   AuthorizedKeysFile $SSH_DIR/authorized_keys
+   PidFile $SSH_DIR/sshd.pid
+   UsePAM no
+   PasswordAuthentication no
+   KbdInteractiveAuthentication no
+   StrictModes no
+   SshdSessionPath $SSH_DIR/openssh-server/usr/lib/openssh/sshd-session
+   SshdAuthPath $SSH_DIR/openssh-server/usr/lib/openssh/sshd-auth
+   EOF
+   ```
+
+   Result: The file `$SSH_DIR/sshd_config` exists.
+
+3. Start the `sshd` in a terminal and keep it there:
+
+   ```sh
+   "$SSH_DIR/openssh-server/usr/sbin/sshd" -D -f "$SSH_DIR/sshd_config" -E "$SSH_DIR/sshd.log"
+   ```
+
+   Result: The file `$SSH_DIR/sshd.log` says that the server listens on
+   `127.0.0.1` and the port.
+
+4. Write `$SSH_DIR/config` with the text above. Use the address `127.0.0.1`,
+   the port of step 2 and your own user name.
+
+   Result: The folder `$SSH_DIR` holds `config` and `fixture_key`.
 
 ## 5. Setup
 
@@ -147,7 +204,7 @@ fixture page says. Take a new screenshot before each click.
    ```sh
    python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
      --native-view --state /var/tmp/hz-shared-a --saved-session --reuse-state \
-     --ssh-config <ssh folder>/config --ssh-identity <ssh folder>/fixture_key \
+     --ssh-config "$SSH_DIR/config" --ssh-identity "$SSH_DIR/fixture_key" \
      --server-target shared-test-server \
      --server-command "env HORIZON_SERVER_HOME=$SERVER_STATE/server-home $SERVER_STATE/horizon --server-link"
    ```
@@ -821,10 +878,11 @@ Do this task only if you have the older build. If not, record `not run`.
    Result: The private homes and the evidence of the run are gone.
 
 6. On the server computer, remove the public key of `fixture_key` from the
-   login that accepted it.
+   login that accepted it. If you started the `sshd` of section 4.1, stop it
+   with Ctrl-C and remove `$SSH_DIR`.
 
-   > **CAUTION:** REMOVE ONLY THE KEY OF THIS RUN. Another line of that file is
-   > the login of another person or of another task.
+   > **CAUTION:** REMOVE ONLY THE KEY AND THE FOLDER OF THIS RUN. Another line of
+   > a key file is the login of another person or of another task.
 
    Result: The identity of this run opens no login.
 
