@@ -10,8 +10,9 @@ live link to the server, and the server relays the frames. The server writes
 nothing of a terminal to a file. A screen, the output and the typed bytes go
 through its memory only.
 
-This page gives the design of the parts. The server and its sync link are in
-[`horizon-server.md`](horizon-server.md).
+This page gives the design of the parts. The trust boundary is in
+[`docs/review/trust-boundaries/shared-terminals.md`](../review/trust-boundaries/shared-terminals.md).
+The server and its sync link are in [`horizon-server.md`](horizon-server.md).
 
 ## The parts
 

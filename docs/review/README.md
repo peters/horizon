@@ -68,8 +68,10 @@ gives the untrusted input, the guarantee and the limit of each boundary.
    person's workspace, and it asks Horizon to open a terminal for the person.
    Boundaries: `block-panel`, `agent-terminal-open`, `named-secrets`.
 4. **Another computer** — a link carries every byte of a computer that the
-   transport let in, and the server stores what that computer says. Boundaries:
-   `server-link`.
+   transport let in, and the server stores what that computer says. A live link
+   carries the terminals that a computer shares, and the server relays them to
+   the other computers of that server with the bytes that their persons type.
+   Boundaries: `server-link`, `shared-terminals`.
 
 ## Checks
 
