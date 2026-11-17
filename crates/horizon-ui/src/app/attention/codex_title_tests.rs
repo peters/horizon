@@ -106,6 +106,21 @@ impl StandIn {
         );
     }
 
+    /// Waits until the launch of the program is ready for the first word of the
+    /// person.
+    ///
+    /// The stand-in writes the plain title of its folder at the end of its launch
+    /// and keeps it until a word arrives, so this wait ends on that title and not
+    /// on a time. A word that a test types before a frame read the title reaches a
+    /// launch that never became ready, and its turn claims nothing.
+    fn ready(&mut self) {
+        let id = self.id;
+        assert!(
+            self.wait_until(move |app| { app.board.panel(id).is_some_and(|panel| panel.terminal_title == FOLDER) }),
+            "the launch of the stand-in writes the plain title of its folder"
+        );
+    }
+
     /// Runs the frames of the window until its panel shows `word`.
     fn wait_for(&mut self, word: Attention) -> bool {
         let local_id = self.local_id.clone();
@@ -159,6 +174,7 @@ fn the_title_of_a_codex_panel_takes_the_sidebar_through_its_turn() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(
         stand_in.wait_for(Attention::Working),
@@ -225,6 +241,7 @@ fn a_plain_title_between_two_parts_of_a_turn_does_not_end_it() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
 
@@ -249,6 +266,7 @@ fn a_thousand_spinner_frames_of_one_state_do_no_work() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     let version = stand_in.app.attention.version();
@@ -388,6 +406,7 @@ fn the_name_of_a_codex_panel_stands_still_while_its_state_changes() {
         names.insert(app.sidebar_panel_label(panel, &title));
     };
 
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     // The spinner of a working turn is a new title ten times a second, and the name
@@ -429,6 +448,7 @@ fn a_denied_approval_ends_the_turn_as_an_interrupted_one() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     stand_in.word("ask");

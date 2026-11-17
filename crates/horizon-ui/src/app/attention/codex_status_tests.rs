@@ -113,6 +113,21 @@ impl StandIn {
         );
     }
 
+    /// Waits until the launch of the program is ready for the first word of the
+    /// person.
+    ///
+    /// The stand-in writes the plain title of its folder at the end of its launch
+    /// and keeps it until a word arrives, so this wait ends on that title and not
+    /// on a time. A word that a test types before a frame read the title reaches a
+    /// launch that never became ready, and its turn claims nothing.
+    fn ready(&mut self) {
+        let id = self.id;
+        assert!(
+            self.wait_until(move |app| { app.board.panel(id).is_some_and(|panel| panel.terminal_title == FOLDER) }),
+            "the launch of the stand-in writes the plain title of its folder"
+        );
+    }
+
     /// Runs the frames of the window until its panel shows `word`.
     fn wait_for(&mut self, word: Attention) -> bool {
         let local_id = self.local_id.clone();
@@ -156,6 +171,7 @@ fn the_reports_of_a_codex_panel_take_the_sidebar_through_its_turn() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(
         stand_in.wait_for(Attention::Working),
@@ -231,6 +247,7 @@ fn a_report_of_another_program_changes_nothing() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     let version = stand_in.app.attention.version();
@@ -253,6 +270,7 @@ fn a_thousand_repeated_reports_of_one_state_do_no_work() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     let version = stand_in.app.attention.version();
@@ -301,6 +319,7 @@ fn a_codex_panel_without_the_protocol_keeps_the_path_of_its_titles() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(
         stand_in.wait_for(Attention::Working),
@@ -355,6 +374,7 @@ fn a_denied_approval_is_an_interrupted_turn() {
         eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
         return;
     };
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     stand_in.word("ask");
@@ -395,6 +415,7 @@ fn the_idle_of_a_denial_clears_the_wait_of_a_panel_that_the_person_watches() {
     // The real program wrote `blocked:kind=permission` when it asked for the
     // approval, and one `idle` when the person denied it: no working and no done
     // are between the two reports, so the idle alone must clear the wait.
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     stand_in.word("ask");
@@ -441,6 +462,7 @@ fn an_approval_that_the_person_answers_and_then_stops_is_an_interrupted_turn() {
     };
     // The reports of the approval, of the answer to it and of a turn that an idle
     // ends: `blocked`, then `working`, then `idle`, with no done between them.
+    stand_in.ready();
     stand_in.word("start");
     assert!(stand_in.wait_for(Attention::Working));
     stand_in.word("ask");
