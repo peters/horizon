@@ -590,10 +590,6 @@ fn the_open_of_a_row_starts_the_program_of_the_row_with_exactly_its_session() {
         keep_agents_through_restart: false,
     });
 
-    assert!(
-        start.working_directory_is_usable(),
-        "the folder of the session starts the panel"
-    );
     let (program, args) = start.launch_command().expect("the launch of the program");
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     assert_eq!(

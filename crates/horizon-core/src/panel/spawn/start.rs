@@ -51,15 +51,6 @@ impl PanelStart {
             .as_ref()
             .map(|launch| (launch.program.as_str(), launch.args.as_slice()))
     }
-
-    /// Whether the panel can start its process in its own directory.
-    ///
-    /// A panel whose directory was renamed or deleted cannot: it reports the
-    /// directory instead of running in the directory of Horizon.
-    #[must_use]
-    pub fn working_directory_is_usable(&self) -> bool {
-        self.working_directory.is_none()
-    }
 }
 
 /// The launch of the process of a panel, resolved off the frame.
