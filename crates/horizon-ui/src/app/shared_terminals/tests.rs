@@ -344,8 +344,13 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     let id = window.id(owner);
     let follow = window.follow(owner);
 
-    // The list names the owner panel and never the panel that follows it.
+    // The list names the owner panel and never the panel that follows it,
+    // also after the build that the new count of panels asked for.
     window.shows(follow, "READY");
+    let opened = Instant::now();
+    window.until("the build of the list after the new panel", move |_| {
+        opened.elapsed() >= Duration::from_millis(600)
+    });
     let listed = window.link.relay().panels.clone();
     assert_eq!(listed.len(), 1, "a follow panel is not shared: {listed:?}");
     let panel = &listed[0];

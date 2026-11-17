@@ -62,9 +62,25 @@ fn memory() -> Arc<SecretStore> {
     SecretStore::in_memory().expect("a store in memory")
 }
 
+/// The stand-in `ssh` of every computer of a test, which relays to `socket`.
+///
+/// It is written once and before any link starts: a link forks its child, and a
+/// fork while another thread writes a script keeps that script busy.
+fn stand_in(directory: &Path, socket: &Path) -> String {
+    std::fs::write(directory.join("relay.py"), RELAY).expect("the relay of the stand-in");
+    let script = format!(
+        "exec /usr/bin/env python3 '{}' '{}'",
+        directory.join("relay.py").display(),
+        socket.display()
+    );
+    let program = horizon_core::stand_in_program_in(directory, "ssh", &script).expect("the stand-in ssh");
+    program.to_string_lossy().into_owned()
+}
+
 /// One window with the name `label`, whose computer is `device` on the server
-/// behind `socket`. Its live link starts with its sync link, as in a real start.
-fn computer(socket: &Path, device: &str, label: &str) -> (tempfile::TempDir, Context, HorizonApp) {
+/// that `program` reaches. Its live link starts with its sync link, as in a
+/// real start.
+fn computer(program: &str, device: &str, label: &str) -> (tempfile::TempDir, Context, HorizonApp) {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -75,13 +91,6 @@ fn computer(socket: &Path, device: &str, label: &str) -> (tempfile::TempDir, Con
     let directory = temp.path().join("link");
     std::fs::create_dir_all(&directory).expect("the directory of the link");
     horizon_sync::write_device_name(&directory, device).expect("the name of this computer");
-    std::fs::write(directory.join("relay.py"), RELAY).expect("the relay of the stand-in");
-    let script = format!(
-        "exec /usr/bin/env python3 '{}' '{}'",
-        directory.join("relay.py").display(),
-        socket.display()
-    );
-    let program = horizon_core::stand_in_program_in(&directory, "ssh", &script).expect("the stand-in ssh");
 
     let credentials = Arc::new(CredentialVault::new(Box::new(memory())));
     credentials.register(&horizon_browser::remote::RemoteBrowserConfig::default());
@@ -90,7 +99,7 @@ fn computer(socket: &Path, device: &str, label: &str) -> (tempfile::TempDir, Con
     let secrets = Arc::new(SecretVault::new(keys, Arc::clone(&credentials), named));
     let mut config = SupervisorConfig::for_server("server-vm", "/opt/horizon --server-link", &directory, secrets)
         .expect("the settings of the link");
-    config.program = program.to_string_lossy().into_owned();
+    config.program = program.to_owned();
     let supervisor = Supervisor::start(config.clone(), || {}).expect("the sync link");
     let mut sync = ServerSync::for_test(supervisor, credentials);
     sync.live = Some(config);
@@ -122,8 +131,9 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     let store = Store::open(&home.path().join("server.sqlite")).expect("the store");
     let server = run_server_on_unix_socket(&socket, store.clone(), &ServerInfo::default()).expect("the socket");
 
-    let (_temp_a, ctx_a, mut a) = computer(&socket, "desk-a", "Desk A");
-    let (_temp_b, ctx_b, mut b) = computer(&socket, "desk-b", "Desk B");
+    let program = stand_in(home.path(), &socket);
+    let (_temp_a, ctx_a, mut a) = computer(&program, "desk-a", "Desk A");
+    let (_temp_b, ctx_b, mut b) = computer(&program, "desk-b", "Desk B");
     let panel = owner(&mut a);
     let id = a.board.panel(panel).expect("the owner panel").local_id.clone();
 
