@@ -172,7 +172,9 @@ impl HorizonApp {
         let (board, shared) = (&self.board, &mut self.shared_terminals);
         let (chips, sent) = (&mut shared.chips, &mut shared.owner.sent);
         shared.owner.watched.retain(|id, watch| {
-            let terminal = board.panel(watch.panel).and_then(Panel::terminal);
+            // A board that replaced the old one can give its number to another panel.
+            let panel = board.panel(watch.panel).filter(|panel| panel.local_id == *id);
+            let terminal = panel.and_then(Panel::terminal);
             let listed = sent.iter().any(|panel| panel.id == *id);
             if let Some(terminal) = terminal.filter(|_| listed && !watch.devices.is_empty()) {
                 watch.drain(link, id, terminal, now);

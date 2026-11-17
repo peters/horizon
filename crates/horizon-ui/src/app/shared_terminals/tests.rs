@@ -515,6 +515,34 @@ fn a_follower_that_joined_on_the_alternate_screen_asks_for_a_screen_when_it_leav
 }
 
 #[test]
+fn the_share_of_a_panel_goes_on_after_a_restart_of_its_terminal() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    let follow = window.follow(owner);
+    window.write(owner, b"before\n");
+    window.shows(follow, "GOT:before");
+    let link = window.link.clone();
+    window.until("the second screen of the join", move |_| link.relay().screens >= 2);
+
+    // The new terminal has a new outlet, which nobody asked for output yet.
+    let screens = window.link.relay().screens;
+    window.app.queue_panel_restart(owner);
+    let link = window.link.clone();
+    window.until("the screen of the new terminal", move |app| {
+        link.relay().screens > screens && !text(app, follow).contains("GOT:before")
+    });
+    window.shows(follow, "READY");
+    window.write(follow, b"after\n");
+    window.shows(owner, "GOT:after");
+    window.shows(follow, "GOT:after");
+    assert_eq!(
+        window.app.shared_terminals.chip(owner).map(|chip| chip.name),
+        Some("seen by Here"),
+        "the panel is still watched"
+    );
+}
+
+#[test]
 fn a_closed_owner_panel_leaves_the_list_and_ends_the_stream() {
     let mut window = Window::new();
     let owner = window.owner(OFFSCREEN);
