@@ -10,7 +10,7 @@ fn report(marker: u8) -> Payload {
 fn the_newest_report_wins_and_an_older_one_is_not_read_later() {
     let (tap, inbox) = StatusTap::new();
     for marker in 1..=3 {
-        tap.report(report(marker));
+        tap.report(&report(marker));
     }
 
     let newest = inbox.take_report().expect("the newest report");
@@ -24,7 +24,7 @@ fn a_queue_that_is_full_drops_the_oldest_report() {
     let (tap, inbox) = StatusTap::new();
     let last = u8::try_from(QUEUE_DEPTH).unwrap_or(u8::MAX).saturating_add(3);
     for marker in 1..=last {
-        tap.report(report(marker));
+        tap.report(&report(marker));
     }
 
     let newest = inbox.take_report().expect("the newest report");
@@ -36,7 +36,7 @@ fn a_queue_that_is_full_drops_the_oldest_report() {
 #[test]
 fn a_query_waits_for_one_frame_and_is_taken_once() {
     let (tap, inbox) = StatusTap::new();
-    tap.report(Payload::for_tests(super::QUERY_PAYLOAD));
+    tap.report(&Payload::for_tests(super::QUERY_PAYLOAD));
 
     assert!(inbox.take_report().is_none(), "the query is no report of a state");
     assert!(inbox.take_query());

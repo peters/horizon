@@ -56,7 +56,7 @@ impl StatusTap {
     }
 
     /// Records one complete payload of a status sequence.
-    pub fn report(&self, payload: Payload) {
+    pub fn report(&self, payload: &Payload) {
         if payload.as_bytes() == QUERY_PAYLOAD {
             self.shared.query.store(true, Ordering::Release);
             return;
@@ -65,7 +65,7 @@ impl StatusTap {
         if reports.len() >= QUEUE_DEPTH {
             reports.pop_front();
         }
-        reports.push_back(payload);
+        reports.push_back(*payload);
     }
 }
 

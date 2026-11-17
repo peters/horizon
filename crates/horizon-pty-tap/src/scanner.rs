@@ -218,7 +218,7 @@ impl Scanner {
             self.payload.clear();
             return;
         }
-        self.tap.report(self.payload);
+        self.tap.report(&self.payload);
         self.payload.clear();
     }
 }
