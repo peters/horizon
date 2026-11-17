@@ -9,12 +9,6 @@ use crate::app::sidebar::rich_menu;
 use crate::app::util;
 use crate::theme;
 
-/// What a Menu row does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MenuChoice {
-    Action(ToolbarAction),
-}
-
 struct MenuEntry {
     /// A caption that starts a new group above this row.
     group: Option<&'static str>,
@@ -22,7 +16,8 @@ struct MenuEntry {
     detail: &'static str,
     /// The toolbar action whose shortcut the row shows.
     action: Option<ToolbarAction>,
-    choice: MenuChoice,
+    /// What the row does when the person picks it.
+    choice: ToolbarAction,
 }
 
 const MENU: &[MenuEntry] = &[
@@ -31,42 +26,42 @@ const MENU: &[MenuEntry] = &[
         title: "Quick Nav",
         detail: "Jump to any workspace, panel or command",
         action: Some(ToolbarAction::QuickNav),
-        choice: MenuChoice::Action(ToolbarAction::QuickNav),
+        choice: ToolbarAction::QuickNav,
     },
     MenuEntry {
         group: None,
         title: "Sessions",
         detail: "Switch between saved boards",
         action: Some(ToolbarAction::Sessions),
-        choice: MenuChoice::Action(ToolbarAction::Sessions),
+        choice: ToolbarAction::Sessions,
     },
     MenuEntry {
         group: None,
         title: MENU_TITLE,
         detail: MENU_DETAIL,
         action: None,
-        choice: MenuChoice::Action(ToolbarAction::RecentSessions),
+        choice: ToolbarAction::RecentSessions,
     },
     MenuEntry {
         group: None,
         title: "Remote Hosts",
         detail: "Open a terminal or desktop on another machine",
         action: Some(ToolbarAction::RemoteHosts),
-        choice: MenuChoice::Action(ToolbarAction::RemoteHosts),
+        choice: ToolbarAction::RemoteHosts,
     },
     MenuEntry {
         group: Some("Get started"),
         title: "Set up",
         detail: "Rent a machine, add the Horizon server, or a browser that stays signed in",
         action: None,
-        choice: MenuChoice::Action(ToolbarAction::SetUp),
+        choice: ToolbarAction::SetUp,
     },
     MenuEntry {
         group: Some("Horizon"),
         title: "Settings",
         detail: "Theme, shortcuts, agents and features",
         action: Some(ToolbarAction::Settings),
-        choice: MenuChoice::Action(ToolbarAction::Settings),
+        choice: ToolbarAction::Settings,
     },
 ];
 
@@ -107,13 +102,7 @@ impl HorizonApp {
                 .memory_mut(|memory| memory.areas_mut().set_sublayer(button.layer_id, popup_layer));
         }
         if let Some(choice) = chosen {
-            self.perform_menu_choice(ui.ctx(), choice);
-        }
-    }
-
-    fn perform_menu_choice(&mut self, ctx: &egui::Context, choice: MenuChoice) {
-        match choice {
-            MenuChoice::Action(action) => self.perform_toolbar_action(ctx, action),
+            self.perform_toolbar_action(ui.ctx(), choice);
         }
     }
 
