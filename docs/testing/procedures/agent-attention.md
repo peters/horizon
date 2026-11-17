@@ -80,8 +80,13 @@ the sidebar reads them.
 
    The canvas also shows the card **Review work before continuing (1)** with the
    line `Automatic continuation is not verified for this session.` and the button
-   **Resume work**. The card is expected and it is no defect of the stand-in. A
-   panel of the fixture comes from the config of the run, so Horizon restores it,
+   **Resume work**. The card has one row for each panel that waits: the name of
+   the panel, the line and the button stand on that row at each window size. A
+   line that the row cuts ends with `…`, and the pointer on it shows the full
+   line. The card is as high as its heading and its rows.
+
+   The card is expected and it is no defect of the stand-in. A panel of the
+   fixture comes from the config of the run, so Horizon restores it,
    and this private home holds no saved work for the conversation of the panel,
    so Horizon asks before it continues. That decision comes from the launch of
    the panel and not from its program, so a real agent panel shows the same card

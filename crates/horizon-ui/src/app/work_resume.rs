@@ -50,20 +50,25 @@ impl HorizonApp {
     }
 
     pub(super) fn work_resume_overlay_rect(&self, ctx: &Context) -> Option<egui::Rect> {
-        if !self.fixed_overlays_visible()
-            || !self.board.panels.iter().any(|panel| {
-                panel.work_resume.enabled
-                    && panel
-                        .terminal()
-                        .is_some_and(|terminal| terminal.pending_work_resume().is_some())
-            })
-        {
+        if !self.fixed_overlays_visible() {
             return None;
         }
+        let rows: f32 = self
+            .board
+            .panels
+            .iter()
+            .filter(|panel| waits_for_review(panel).is_some())
+            .map(|_| BANNER_ROW)
+            .sum();
+        if rows <= 0.0 {
+            return None;
+        }
+        // The banner takes the height of its head and of one row for each session.
+        let height = (BANNER_HEAD + rows).min(BANNER_MAX_HEIGHT);
         let canvas = self.canvas_rect(ctx).shrink(8.0);
         Some(egui::Rect::from_min_size(
             canvas.min,
-            egui::vec2(canvas.width().clamp(0.0, 620.0), canvas.height().clamp(0.0, 160.0)),
+            egui::vec2(canvas.width().clamp(0.0, 620.0), canvas.height().clamp(0.0, height)),
         ))
     }
 
@@ -83,41 +88,23 @@ impl HorizonApp {
                     .corner_radius(8)
                     .show(ui, |ui| {
                         ui.set_width((rect.width() - 16.0).max(0.0));
-                        ui.set_height((rect.height() - 16.0).max(0.0));
-                        let count = self
-                            .board
-                            .panels
-                            .iter()
-                            .filter(|panel| {
-                                panel.work_resume.enabled
-                                    && panel
-                                        .terminal()
-                                        .is_some_and(|terminal| terminal.pending_work_resume().is_some())
-                            })
-                            .count();
+                        let panels = &self.board.panels;
+                        let count = panels.iter().filter(|panel| waits_for_review(panel).is_some()).count();
                         ui.strong(format!("Review work before continuing ({count})"));
                         egui::ScrollArea::vertical()
-                            .max_height((rect.height() - 42.0).max(0.0))
+                            .max_height(BANNER_MAX_HEIGHT - 42.0)
                             .show(ui, |ui| {
-                                for panel in &self.board.panels {
-                                    if !panel.work_resume.enabled {
-                                        continue;
-                                    }
-                                    let Some(reason) =
-                                        panel.terminal().and_then(horizon_core::Terminal::pending_work_resume)
-                                    else {
+                                for panel in panels {
+                                    let Some(reason) = waits_for_review(panel) else {
                                         continue;
                                     };
-                                    ui.horizontal_wrapped(|ui| {
-                                        if ui.link(&panel.title).clicked() {
-                                            reveal = Some(panel.id);
-                                        }
-                                        ui.label(reason_text(reason));
-                                        let refusal = panel.check_work_resume().err();
-                                        if resume_button(ui, refusal.as_ref()).clicked() {
-                                            resume = Some(panel.id);
-                                        }
-                                    });
+                                    let (revealed, resumed) = review_row(ui, panel, reason);
+                                    if revealed {
+                                        reveal = Some(panel.id);
+                                    }
+                                    if resumed {
+                                        resume = Some(panel.id);
+                                    }
                                 }
                             });
                     });
@@ -143,6 +130,46 @@ impl HorizonApp {
             None => {}
         }
     }
+}
+
+/// The largest height of the banner, which scrolls its rows above it.
+const BANNER_MAX_HEIGHT: f32 = 160.0;
+/// The height of the banner without its rows: its two margins, its head and the
+/// gap under the head.
+const BANNER_HEAD: f32 = 35.0;
+/// The height of one row of the banner, with the gap to the next row.
+const BANNER_ROW: f32 = 23.0;
+
+/// Why the session of `panel` waits for a review of the person, or `None` for a
+/// panel that does not continue its work or that waits for nothing.
+fn waits_for_review(panel: &horizon_core::Panel) -> Option<AskReason> {
+    if !panel.work_resume.enabled {
+        return None;
+    }
+    panel.terminal().and_then(horizon_core::Terminal::pending_work_resume)
+}
+
+/// The row of one session that waits: the name of its panel, the reason and the
+/// control, on one line at every width of the banner. Answers whether the person
+/// pressed the name and whether they pressed the control.
+///
+/// The control keeps the end of the row, and the name and the reason take the
+/// room that is left of it. A text that this room cuts ends with an ellipsis and
+/// shows whole as its hover text.
+fn review_row(ui: &mut egui::Ui, panel: &horizon_core::Panel, reason: AskReason) -> (bool, bool) {
+    let (mut revealed, mut resumed) = (false, false);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let refusal = panel.check_work_resume().err();
+            resumed = resume_button(ui, refusal.as_ref()).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                revealed = ui.link(&panel.title).clicked();
+                ui.label(reason_text(reason));
+            });
+        });
+    });
+    (revealed, resumed)
 }
 
 fn reason_text(reason: AskReason) -> &'static str {
