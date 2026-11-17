@@ -91,8 +91,7 @@ fn kind_code(kind: PanelKind) -> String {
     code.as_str().unwrap_or_default().to_owned()
 }
 
-/// The states of a panel with the names that the list gives them. An idle
-/// panel names none.
+/// The states of a panel as the list names them. An idle panel names none.
 pub(super) const STATES: [(Attention, &str); 4] = [
     (Attention::Working, "working"),
     (Attention::Background, "background"),

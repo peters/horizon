@@ -1,11 +1,9 @@
 //! The section `Computers` of the sidebar: the other computers of the person
 //! that hold a live link to the server of this one, and the terminal panels
 //! that each one shares. A press on a row opens the panel that follows it, or
-//! goes to the one that is open.
-//!
-//! The section is there only while another computer is listed, or while the
-//! live link is down, which its one line then says. Its rows are the list that
-//! the link gave, so a frame that does not draw the sidebar does no work for it.
+//! goes to the one that is open. The section is there only while another
+//! computer is listed, or while the live link is down, which its line says.
+//! A frame that does not draw the sidebar does no work for it.
 
 use egui::{Color32, CursorIcon, Sense, Vec2};
 use horizon_sync::LivePanel;
