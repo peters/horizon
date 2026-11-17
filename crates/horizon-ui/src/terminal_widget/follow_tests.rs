@@ -181,6 +181,70 @@ fn a_press_reports_the_cell_of_the_grid_of_the_stream() {
     assert_eq!(follower.grid(), GRID);
 }
 
+/// The grid of the stream in a window that shows only a part of it: the pointer
+/// maps to the cell of the grid under it, a press beside the rows of the window
+/// types nothing, and the scrollbar of that window stands inside it.
+#[test]
+fn a_window_smaller_than_the_grid_of_the_stream_keeps_its_pointer_and_scrollbar_in_it() {
+    let mut follower = Follower::new();
+    follower.show(b"\x1b[?1000h\x1b[?1006hready", "ready");
+    // The first frame gives the context its fonts, and the size of a cell.
+    let wide = Rect::from_min_size(Pos2::new(40.0, 30.0), Vec2::new(900.0, 600.0));
+    follower.frame(wide, Vec::new());
+    let metrics = grid_metrics(&follower.ctx);
+    // A window of ten columns and two rows of a grid of thirty by six.
+    let available = Rect::from_min_size(
+        Pos2::new(40.0, 30.0),
+        Vec2::new(10.0 * metrics.char_width, 2.0 * metrics.line_height),
+    );
+    let layout = super::layout::terminal_layout(available.size(), metrics.char_width, metrics.line_height, 0.0);
+    assert!(
+        layout.scrollbar.max.x <= available.width() && layout.scrollbar.max.y <= available.height(),
+        "the scrollbar of a window smaller than the grid stands inside the window: {:?} in {available:?}",
+        layout.scrollbar
+    );
+    assert!(
+        layout.body.width() < f32::from(GRID.0) * metrics.char_width,
+        "the window shows a part of the grid: {:?}",
+        layout.body
+    );
+
+    follower.frame(available, Vec::new());
+    assert_eq!(
+        follower.grid(),
+        GRID,
+        "a window of ten columns keeps the grid of the stream"
+    );
+
+    // The middle of the cell in column 3 and row 2 of the stream, which this
+    // window shows.
+    let cell = available.min + Vec2::new(2.5 * metrics.char_width, 1.5 * metrics.line_height);
+    follower.frame(available, vec![Event::PointerMoved(cell)]);
+    follower.frame(available, vec![press(cell, true)]);
+    follower.frame(available, vec![press(cell, false)]);
+    let typed = String::from_utf8(follower.feed.take_typed()).expect("mouse reports are text");
+    assert_eq!(
+        typed, "\x1b[<0;3;2M\x1b[<0;3;2m",
+        "the press reports the cell of the grid of the stream under it"
+    );
+
+    // The column of the scrollbar is no part of the grid, so a press there is no
+    // cell of the stream.
+    let margin = available.min
+        + Vec2::new(
+            available.width() - 0.5 * layout.scrollbar.width(),
+            1.5 * metrics.line_height,
+        );
+    follower.frame(available, vec![Event::PointerMoved(margin)]);
+    follower.frame(available, vec![press(margin, true)]);
+    follower.frame(available, vec![press(margin, false)]);
+    assert!(
+        follower.feed.take_typed().is_empty(),
+        "a press in the column of the scrollbar types nothing"
+    );
+    assert_eq!(follower.grid(), GRID, "no press resizes the grid of the stream");
+}
+
 #[test]
 fn a_stream_that_ended_says_so_under_the_grid() {
     let mut follower = Follower::new();
