@@ -17,6 +17,15 @@ X11_SOCKET_DIR = Path('/tmp/.X11-unix')
 SSH_FOLDER = '.ssh'
 SSH_CONFIG_NAME = 'config'
 SSH_SYSTEM_INCLUDE = '/etc/ssh/ssh_config.d'
+# The private network of the person. Horizon lists the machines of Tailscale in
+# the overlay of the remote hosts, with the `tailscale` program and its local
+# socket, so a recording of a fixture could show them.
+TAILSCALE_PROGRAM = 'tailscale'
+TAILSCALE_SOCKET_DIRS = ('/run/tailscale', '/var/run/tailscale')
+# The program that takes the place of `tailscale` in the namespace: it answers a
+# network with no machine, so the overlay lists only what the fixture seeds.
+NO_TAILSCALE_NAME = 'tailscale-of-no-network'
+NO_TAILSCALE_TEXT = "#!/bin/sh\necho '{}'\n"
 HOST_SESSION_KEYS = (
     'DBUS_SESSION_BUS_ADDRESS',
     'DBUS_STARTER_ADDRESS',
@@ -89,6 +98,43 @@ def host_audio_socket(environ=None):
         return None
     socket = Path(runtime) / HOST_AUDIO_SOCKET_NAME
     return socket if socket.exists() else None
+
+
+def tailscale_programs(environ):
+    """The real file of each `tailscale` in the folders of the `PATH` of `environ`.
+
+    A link to a program with another name, such as the launcher of a package
+    system, is left out: a file in its place would replace that launcher for
+    every program of the fixture.
+    """
+    found = []
+    for folder in (environ.get('PATH') or os.defpath).split(os.pathsep):
+        program = Path(folder or '.') / TAILSCALE_PROGRAM
+        if not program.is_file():
+            continue
+        real = program.resolve()
+        if real.name == TAILSCALE_PROGRAM and str(real) not in found:
+            found.append(str(real))
+    return found
+
+
+def hide_tailscale(data, environ):
+    """The mounts that hide the Tailscale network of the person from the candidate.
+
+    An empty folder takes the place of each folder of the local socket, and a
+    program that answers a network with no machine takes the place of each
+    `tailscale` on the `PATH`. Without the second part the real program fails
+    without its socket, and Horizon then shows one error and no host at all.
+    """
+    stand_in = Path(data) / NO_TAILSCALE_NAME
+    stand_in.write_text(NO_TAILSCALE_TEXT)
+    stand_in.chmod(0o755)
+    mounts = []
+    for folder in sorted({str(Path(folder).resolve()) for folder in TAILSCALE_SOCKET_DIRS if Path(folder).is_dir()}):
+        mounts += ['--tmpfs', folder]
+    for program in tailscale_programs(environ):
+        mounts += ['--ro-bind', str(stand_in), program]
+    return mounts
 
 
 def diagnose_apparmor(bound):
@@ -332,6 +378,7 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=(), re
     # has nothing to hide, and bwrap cannot create one under a read-only root.
     if Path(SSH_SYSTEM_INCLUDE).is_dir():
         namespace += ['--tmpfs', SSH_SYSTEM_INCLUDE]
+    namespace += hide_tailscale(data, environ if environ is not None else os.environ)
     namespace += access_bind
     namespace += ['--chdir', str(data), '--']
     base = without_inherited_horizon(environ if environ is not None else os.environ)

@@ -57,6 +57,11 @@ state folder and never writes a link into the checkout. The programs are
 names. The fixture replaces the path of the checkout in that entry with the path
 of the copy, so a procedure writes the path of its checkout.
 
+The sandbox also hides the Tailscale network of the computer: an empty folder
+replaces the folder of the local socket, and a program that reports a network
+with no machine replaces each `tailscale` on the `PATH`. The overlay of the
+remote hosts therefore lists only the hosts that the fixture seeds.
+
 ### Restart the candidate in the same state
 
 A procedure that quits the candidate and starts it again needs `--reuse-state`
