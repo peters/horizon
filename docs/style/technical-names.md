@@ -98,11 +98,27 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | generation | A number that the UI increases when a request starts or its context changes. A result with an older generation is dropped. | epoch, version |
 | fence | A value that tells a worker thread to wait for earlier work, or to write nothing when its board was replaced. | barrier |
 
+## Shared terminals
+
+| Name | Meaning | Do not use |
+|---|---|---|
+| shared terminal | A terminal panel of one computer that the other computers of the same server can show and type in. | remote terminal, mirrored terminal |
+| owner | The computer that runs the program of a shared terminal. | host, source |
+| follower | A computer that shows a shared terminal of another computer. | viewer, watcher, client |
+| follow panel | The panel of a follower that shows a shared terminal. It starts no program. | mirror panel, remote panel |
+| sync link | The link of a computer to its server that carries the machine list, the secrets and the settings. | store link |
+| live link | The second link of a computer to its server. It carries the shared terminals. | terminal link, stream link |
+| screen | For a shared terminal: the bytes that draw the grid of the terminal and set its modes. The output after a screen continues it. | snapshot, replay |
+| hub | The part of the server that relays the frames of the live links. | broker, router |
+
 ## Technical verbs
 
 | Verb | Meaning |
 |---|---|
 | poll | Send the same read request at intervals until a state changes. |
+| share | Put a terminal panel in the list that the other computers of the server get. |
+| follow | Show a shared terminal of another computer in a follow panel, and get its screens and its output. |
+| relay | Give the bytes or the frames of one link to another link, and store none of them. |
 | squash-merge | Merge a pull request as one commit. |
 | freeze | Copy a candidate to a task-owned directory and record its hash. |
 | bind | Make a host path available at a path inside the fixture. |
