@@ -5,6 +5,10 @@ computer, the files that it keeps, the frames of its link, and what happens when
 it is away. The crate is `crates/horizon-sync`. The trust boundary of the same
 code is [`docs/review/trust-boundaries/server-link.md`](../review/trust-boundaries/server-link.md).
 
+The same server relays the shared terminals of its computers on a second link,
+the live link. [`shared-terminals.md`](shared-terminals.md) gives that part, and
+[the live link](#the-live-link) gives what it changes on this page.
+
 A computer talks to the server through the stdio of one child process,
 `ssh <host> horizon --server-link`. The child carries bytes only, so the protocol
 below runs over any pair of byte streams. The store and the frames reached the
@@ -140,6 +144,28 @@ not the key that this computer knows.`, `The server refused the login of this
 computer.`, `The server has no such command for the link.` and `The server
 program did not answer.` A reason names no address, no device name and no part
 of a secret, so it can leave the log; the words of the child stay in the log.
+
+## The live link
+
+The link of this page is the sync link: it carries the store. The crate holds a
+second link, the live link, which carries the shared terminals of a computer.
+The application does not start a live link yet.
+
+- **It is a second transport.** `LiveSupervisor` opens a second `ssh` child, or
+  a second socket to the listener, with the settings and the `hello` of the
+  sync link. It has a thread of its own.
+- **`open` makes it.** The first request after the greeting is `open`. The link
+  then carries live requests only, and the sync link carries none.
+- **The version of the server decides.** A computer sends a live frame only to
+  a server that answered version 6 or higher in `hello_ok`. With an older
+  server, the live link reports `Unsupported` and the sync link does not
+  change.
+- **It has no bound of a request.** The bounds of the section above are the
+  bounds of the sync link. No timer ends a live link that is silent.
+- **The server stores no frame of it.** The frames of a live link go through
+  the memory of the server process, and none reaches the store or a file of the
+  server home. Its greeting writes the row of its computer, as the greeting of
+  each link does.
 
 ## The machine list of a computer
 
@@ -306,7 +332,8 @@ code, and one token for each computer after that.
   keeps running.
 - **A removal ends the links of that computer.** `device_remove { device }`
   deletes the row and the token of that computer and ends its open links with
-  `error { code: "removed" }`, after the error frame reached them. The server keeps
+  `error { code: "removed" }`, after the error frame reached them. Its live link
+  is one of those links. The server keeps
   the name and the hash of that token in its `removed` table for 30 days, pruned at
   the next removal or join, so a computer that greets the server after its removal
   reads `removed` instead of `not_logged_in`: one act of a person has one answer. A
@@ -419,7 +446,7 @@ one frame.
 
 ```json
 {"hello":{"protocol":4,"device":"mbp-7c1","store":"6f1c…"}}
-{"hello_ok":{"protocol":4,"store":"6f1c…","now_millis":1760000000000}}
+{"hello_ok":{"protocol":6,"store":"6f1c…","now_millis":1760000000000}}
 {"join":{"code":"ABCD-EFGH-JKMN","device":"laptop-b"}}
 {"joined":{"device":"laptop-b","token":"n7Qd…"}}
 {"hello":{"protocol":4,"device":"laptop-b","token":"n7Qd…"}}
@@ -434,6 +461,8 @@ one frame.
 {"pull":{"since":118,"tip":"9f2c1d…"}}
 {"changes":{"index":121,"reset":false,"rows":[{"kind":"machine","id":"build-1","body":{"name":"build-1"},"version":119,"deleted":false}]}}
 {"wait":{"since":121}}
+{"live":{"open":{"label":"Computer A"}}}
+{"live_event":{"computers":{"computers":[{"device":"mbp-7c1","label":"Computer A","panels":[]}]}}}
 {"error":{"code":"protocol_version","message":"the computer speaks protocol 2, and this server speaks protocol 1"}}
 ```
 
@@ -455,7 +484,9 @@ one frame.
 | `device_list` | server | The rows of the computers, and the time of the server. |
 | `device_remove` | computer | The name of the computer to remove. |
 | `device_removed` | server | That name, and whether the server held it. |
-| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits`, `store_failed`, `no_listener`, `wrong_code`, `join_locked`, `name_taken`, `not_logged_in` or `removed`. |
+| `live` | computer | One request of a live link. [The page of the shared terminals](shared-terminals.md#the-frames) gives the requests. |
+| `live_event` | server | One event of a live link. The same page gives the events. |
+| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits`, `store_failed`, `no_listener`, `wrong_code`, `join_locked`, `name_taken`, `not_logged_in`, `removed`, `not_live`, `live_link`, `live_replaced` or `live_limit`. |
 
 A refusal of one intent is not a link error. It is the `outcome` of that intent:
 `changed_since_seen`, `already_answered`, `too_many`, `invalid_record`,
@@ -468,13 +499,25 @@ computer is gone.
 
 A broken frame, an oversize frame, a higher protocol version, a device name that
 breaks its rule, a second hello and a push of more than 256 intents end the link.
+A live request on a link that is not a live link ends it with `not_live`, and a
+frame of the store on a live link ends it with `live_link`.
 A wait above the maximum and a store that could not answer keep the link.
 
 The limits are: 64 machines, 64 settings, 64 internal probe objects, 256 secrets,
 16 KiB of one secret body, 64 KiB of one setting, 256 intents and 8 secrets in one
-push, 256 KiB in one frame and 32 open waits for each link. The protocol version
-is 4: version 1 has no secret row and no `secrets_lost`, version 2 has no `join`,
-no token and no invitation, and version 3 has no `setting` object.
+push, 256 KiB in one frame and 32 open waits for each link. The limits of a live
+link are in [the page of the shared terminals](shared-terminals.md#the-constants).
+
+A link has two version numbers. The `hello` of a computer names version 4.
+Version 1 has no secret row and no `secrets_lost`. Version 2 has no `join`, no
+token and no invitation. Version 3 has no `setting` object.
+
+The server answers version 6 in `hello_ok`, and it refuses a `hello` above 6.
+Version 5 changes no frame: a server from that version holds an idle wait for
+15 seconds. Version 6 adds the `live` and the `live_event` frames. The `hello`
+stays at version 4, so a server of version 4 or 5 greets a computer of this
+build. A computer sends a live frame only to a server that answered 6 or
+higher.
 
 ## The secrets, and what the server holds
 
@@ -534,10 +577,13 @@ comparison is never against a value that the computer assumes.
 ### What never goes to the server
 
 The server holds no ssh login key of the person, no provider CLI login (az, gcloud,
-hcloud, aws), no browser profile, no session cookie, no agent token, no terminal
-content, no transcript and no setting that stays with one computer. The shared
-settings are on the server on purpose: they are the rules of every computer of the
-person, and some of them name a command or a path. Their boundary is stated in
+hcloud, aws), no browser profile, no session cookie, no agent token, no
+transcript and no setting that stays with one computer. The content of a shared
+terminal goes through the memory of the server, and the server stores none of
+it. [The page of the shared terminals](shared-terminals.md) gives that part.
+
+The shared settings are on the server on purpose: they are the rules of every
+computer of the person, and some of them name a command or a path. Their boundary is stated in
 [the boundary of the link](../review/trust-boundaries/server-link.md#untrusted-the-settings-of-a-person). A named secret is the one value
 that the person names for their own tools: they ask the server to hold it, and it is
 sealed like the other two kinds. `secret.key` itself never leaves the server home.

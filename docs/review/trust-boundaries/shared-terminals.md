@@ -133,7 +133,9 @@ panels a computer shares and whether typing is on.
   of the panel is the shell, so no agent rule applies to it.
 - **Nothing stored.** The hub and the outbox hold memory only, and they open no
   file. The handle of a computer holds memory only. A log line of the hub names
-  a device and a count. `LiveBytes` prints its count and never its bytes.
+  a device and a count. `LiveBytes` prints its count and never its bytes. The
+  greeting of a live link writes the row of its computer in the store, as the
+  greeting of each link does.
 - **A removal of a computer ends its live link.** `remove_device` of
   `crates/horizon-sync/src/server.rs` ends each open link of that computer with
   `removed`, and the live link is one of them. `LiveHub::close` then removes its

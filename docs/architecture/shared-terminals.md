@@ -142,9 +142,10 @@ The hub is `crates/horizon-sync/src/live/hub.rs`. It is one value of the server
 process, in the registry of the links. It holds the live link of each device
 name, the list of each computer and the follows.
 
-1. **The server stores nothing.** The hub opens no file. A frame that waits for
-   a link waits in memory. A log line of the hub names a device and a count, and
-   never a title or a byte of a panel.
+1. **The server stores nothing of a terminal.** The hub opens no file. A frame
+   that waits for a link waits in memory. A log line of the hub names a device
+   and a count, and never a title or a byte of a panel. The greeting of a live
+   link writes the row of its computer in the store, as each greeting does.
 2. **No request waits for another link.** The hub puts a frame into the outbox
    of its link and returns. One thread for each live link writes the frames of
    that outbox, one at a time.
