@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/panel/spawn/holder.rs,crates/horizon-core/src/panel/spawn/start.rs,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/terminal/content.rs,crates/horizon-pty-tap/src/socket.rs,crates/horizon-pty-tap/src/panel.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,docs/architecture/panel-holder.md"
+applyTo: "crates/horizon-core/src/panel_holder/**,crates/horizon-core/src/panel/spawn/holder.rs,crates/horizon-core/src/panel/spawn/start.rs,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/terminal/content.rs,crates/horizon-pty-tap/src/socket.rs,crates/horizon-pty-tap/src/panel.rs,crates/horizon-ui/src/cli.rs,crates/horizon-ui/src/main.rs,crates/horizon-ui/src/plugin_install/mod.rs,docs/architecture/panel-holder.md"
 ---
 
 # Trust boundary of the holder of a panel
