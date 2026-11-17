@@ -167,6 +167,17 @@ impl LiveHandle {
         }
     }
 
+    /// Asks the owner of a panel that this computer follows for a new screen. The
+    /// server passes one request a second for one panel and drops the rest, and
+    /// nothing is asked while the link is away or does not have the follow.
+    pub fn refresh(&self, owner: &str, panel: &str) {
+        let follow = (owner.to_owned(), clean(panel, ID_CHARS));
+        if self.shared.lock().sent.contains(&follow) {
+            let (owner, panel) = follow;
+            let _ = self.queue(vec![LiveRequest::Refresh { owner, panel }], 0);
+        }
+    }
+
     /// The events that arrived since the last call, in their order.
     #[must_use]
     pub fn take_events(&self) -> Vec<LiveEvent> {

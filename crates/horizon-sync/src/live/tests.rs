@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::hub::MAX_LIVE_LINKS;
+use super::hub::{MAX_LIVE_LINKS, REFRESH_EVERY};
 use super::outbox::{CEILING_BYTES, Next, Outbox, Push, RESUME_BYTES, Tag};
 use super::protocol::{
     DEVICE_CHARS, ID_CHARS, LABEL_CHARS, LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest,
@@ -77,6 +77,13 @@ fn follow(panel: &str) -> LiveRequest {
     }
 }
 
+fn refresh() -> LiveRequest {
+    LiveRequest::Refresh {
+        owner: text(OWNER),
+        panel: text("p1"),
+    }
+}
+
 #[test]
 fn terminal_bytes_travel_as_base64_and_never_print() {
     let frame = Frame::Live(LiveRequest::Output {
@@ -115,6 +122,7 @@ fn every_live_frame_round_trips_through_its_json() {
             owner: owner.clone(),
             panel: name.clone(),
         }),
+        Frame::Live(refresh()),
         Frame::Live(LiveRequest::Screen {
             panel: name.clone(),
             cols: 80,
@@ -446,6 +454,68 @@ fn a_follower_that_does_not_read_falls_behind_and_its_owner_is_asked_again_when_
         matches!(&taken[..], [LiveEvent::Screen { cols: 100, .. }, LiveEvent::Output { data, .. }] if data.0.len() == 5),
         "{taken:?}"
     );
+}
+
+#[test]
+fn a_follower_asks_the_owner_for_a_new_screen_at_most_once_a_second() {
+    let registry = LinkRegistry::default();
+    let owner = computer(&registry, OWNER);
+    let follower = computer(&registry, "laptop-b");
+    let stranger = computer(&registry, "laptop-c");
+    let panels = vec![panel("p1", true)];
+    owner.ask(&registry, LiveRequest::Panels { panels });
+    follower.ask(&registry, follow("p1"));
+    owner.take(&registry);
+    follower.take(&registry);
+
+    // A computer that does not follow the panel asks nothing. A follower asks
+    // once: the second request and the follow that it has already come inside
+    // the same second, and they are dropped.
+    stranger.ask(&registry, refresh());
+    assert_eq!(owner.take(&registry), Vec::new(), "a stranger asks nothing");
+    follower.ask(&registry, refresh());
+    follower.ask(&registry, refresh());
+    follower.ask(&registry, follow("p1"));
+    assert_eq!(owner.take(&registry), vec![watchers(&["laptop-b"], true)]);
+
+    // The request does not stop the relay: the follower still takes the output
+    // that comes before the new screen.
+    let (name, data) = (text("p1"), bytes(3));
+    let screen = LiveRequest::Screen {
+        panel: name.clone(),
+        cols: 80,
+        rows: 24,
+    };
+    owner.ask(&registry, screen);
+    owner.ask(&registry, LiveRequest::Output { panel: name, data });
+    follower.ask(&registry, refresh());
+    assert_eq!(follower.take(&registry).len(), 2, "a screen and its output");
+    assert_eq!(owner.take(&registry), Vec::new(), "still inside the second");
+
+    // Each follower has a second of its own, and after it a follower asks again.
+    stranger.ask(&registry, follow("p1"));
+    let both = watchers(&["laptop-b", "laptop-c"], true);
+    assert_eq!(owner.take(&registry), vec![both.clone()], "the set grew");
+    stranger.ask(&registry, refresh());
+    assert_eq!(
+        owner.take(&registry),
+        vec![both.clone()],
+        "the first request of a follower"
+    );
+    std::thread::sleep(REFRESH_EVERY + Duration::from_millis(50));
+    follower.ask(&registry, refresh());
+    follower.ask(&registry, refresh());
+    assert_eq!(owner.take(&registry), vec![both], "one request after the second passed");
+    stranger.ask(
+        &registry,
+        LiveRequest::Unfollow {
+            owner: text(OWNER),
+            panel: text("p1"),
+        },
+    );
+    owner.take(&registry);
+    stranger.ask(&registry, refresh());
+    assert_eq!(owner.take(&registry), Vec::new(), "a computer that left asks nothing");
 }
 
 #[test]

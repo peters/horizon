@@ -721,6 +721,13 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
         lines
     };
     until_followed(&mut a);
+    handle.refresh(A, "p1");
+    handle.refresh(B, "q1");
+    assert_eq!(
+        a.next(),
+        "watchers p1 [laptop-b] refresh=true",
+        "a follower asks the owner for a new screen"
+    );
     a.send(follow(B, "q1"));
     wait_for(handle, woken, |event| {
         show(event) == "watchers q1 [laptop-a] refresh=true"

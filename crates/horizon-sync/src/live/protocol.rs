@@ -137,6 +137,12 @@ pub enum LiveRequest {
         owner: String,
         panel: String,
     },
+    /// Asks the owner of a panel that this computer follows for a new screen. The
+    /// server passes one such request a second for one follower and one panel.
+    Refresh {
+        owner: String,
+        panel: String,
+    },
     /// A new screen of a panel of this computer. The output that follows draws it.
     Screen {
         panel: String,

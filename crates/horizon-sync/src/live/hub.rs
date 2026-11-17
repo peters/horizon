@@ -11,6 +11,7 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, PoisonError},
     thread,
+    time::{Duration, Instant},
 };
 
 use super::outbox::{Outbox, Push, Tag};
@@ -28,6 +29,9 @@ pub(crate) const MAX_LIVE_LINKS: usize = 32;
 /// stays one frame. Each computer has an equal part, and the frame cuts a longer
 /// list of panels.
 const LIST_BYTES: usize = 192 * 1024;
+/// How long one follower waits before the owner of one panel is asked again
+/// for a new screen for it.
+pub(crate) const REFRESH_EVERY: Duration = Duration::from_secs(1);
 
 struct Link {
     id: u64,
@@ -52,6 +56,8 @@ struct Follow {
     owner: String,
     panel: String,
     relay: Relay,
+    /// When this follower last asked the owner for a new screen.
+    refreshed: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -310,6 +316,7 @@ impl State {
                     self.watchers(&owner, &panel, false);
                 }
             }
+            LiveRequest::Refresh { owner, panel } => self.refresh(device, &owner, &panel),
             LiveRequest::Screen { panel, cols, rows } => {
                 let (cols, rows) = (cols.clamp(1, MAX_GRID), rows.clamp(1, MAX_GRID));
                 self.stream(&LiveEvent::Screen {
@@ -336,13 +343,11 @@ impl State {
         let shares = |link: &Link| link.panels.iter().any(|listed| listed.id == panel);
         let listed = owner != device && self.links.get(&owner).is_some_and(shares);
         let mine = |follow: &&Follow| follow.follower == device;
-        let again = |follow: &&mut Follow| follow.follower == device && follow.owner == owner && follow.panel == panel;
         let refused = if !listed {
             Some(LiveEndReason::NotFound)
-        } else if let Some(follow) = self.follows.iter_mut().find(again) {
+        } else if self.followers(&owner, &panel).any(|follow| mine(&follow)) {
             // A follow that is asked again asks the owner for a new screen.
-            follow.relay = Relay::Waiting;
-            None
+            return self.refresh(device, &owner, &panel);
         } else if self.follows.iter().filter(mine).count() >= MAX_LIVE_FOLLOWS
             || self.followers(&owner, &panel).count() >= MAX_LIVE_WATCHERS
         {
@@ -353,12 +358,30 @@ impl State {
                 owner: owner.clone(),
                 panel: panel.clone(),
                 relay: Relay::Waiting,
+                refreshed: None,
             });
             None
         };
         match refused {
             Some(reason) => self.send(device, LiveEvent::Ended { owner, panel, reason }, Tag::Kept),
             None => self.watchers(&owner, &panel, true),
+        }
+    }
+
+    /// Asks the owner for a new screen for one follower of its panel, at most
+    /// once in [`REFRESH_EVERY`]. A request that comes sooner, and one of a
+    /// computer that does not follow the panel, is dropped.
+    fn refresh(&mut self, device: &str, owner: &str, panel: &str) {
+        let now = Instant::now();
+        let due = |follow: &&mut Follow| {
+            let asked = follow
+                .refreshed
+                .is_some_and(|at| now.duration_since(at) < REFRESH_EVERY);
+            follow.follower == device && follow.owner == owner && follow.panel == panel && !asked
+        };
+        if let Some(follow) = self.follows.iter_mut().find(due) {
+            follow.refreshed = Some(now);
+            self.watchers(owner, panel, true);
         }
     }
 
