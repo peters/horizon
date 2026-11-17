@@ -79,11 +79,13 @@ impl Board {
             .map(|panel| panel_rect(panel.layout.position, panel.layout.size))
             .collect();
         let mut left = right + TILE_GAP;
-        // Every pass leaves one panel at the left of the column, so the walk ends.
-        while let Some(holder) = others
-            .iter()
-            .find(|other| rects_overlap([left, top, left + width, top + height], **other))
-        {
+        // Each pass leaves one more panel at the left of the column, so the walk
+        // is as long as the panels at most, also for a coordinate that is no number.
+        for _ in 0..others.len() {
+            let column = [left, top, left + width, top + height];
+            let Some(holder) = others.iter().find(|other| rects_overlap(column, **other)) else {
+                break;
+            };
             left = holder[2] + TILE_GAP;
         }
         let mut place = [left, top];

@@ -41,7 +41,6 @@ pub struct BlockPanelState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_callout: Option<Component>,
     /// Where the card stands among the panels of its workspace.
-    #[serde(default, skip_serializing_if = "CardPlace::is_tile")]
     pub place: CardPlace,
     /// The fold that the person chose. Without one, a finished card is folded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -60,12 +59,6 @@ pub enum CardPlace {
     Column,
     /// Where the person put it. No preset and no column moves it.
     Free,
-}
-
-impl CardPlace {
-    fn is_tile(&self) -> bool {
-        *self == Self::Tile
-    }
 }
 
 impl BlockPanelState {

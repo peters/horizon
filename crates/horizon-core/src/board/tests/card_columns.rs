@@ -169,3 +169,17 @@ fn a_tile_card_that_leaves_the_tiles_leaves_no_hole_in_the_preset() {
     );
     assert_eq!(rect(&board, other)[0], rect(&board, agent)[2] + TILE_GAP);
 }
+
+#[test]
+fn a_panel_at_a_place_that_is_no_number_ends_the_walk_of_a_column() {
+    let (mut board, workspace, agent) = agent_board(None);
+    let other = board.create_panel(editor_panel_options(), workspace).expect("a panel");
+    board
+        .panel_mut(other)
+        .expect("the panel")
+        .move_to([f32::NAN, f32::INFINITY]);
+
+    let first = card(&mut board, agent, CardPlace::Column, 200.0);
+
+    assert!(board.panel(first).is_some(), "the layout of the column ended");
+}

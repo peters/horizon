@@ -4,16 +4,16 @@
 //! card with the control of its title bar, and a press on a folded line opens it.
 
 use egui::{Context, Rect, Sense, Stroke, Ui, Vec2, WidgetInfo};
-use horizon_core::{CardPlace, Panel, PanelId};
+use horizon_core::{BlockPanelState, CardPlace, Panel, PanelId};
 
 use super::{HorizonApp, PANEL_TITLEBAR_HEIGHT};
 use crate::{block_widget::default_card_size, theme};
 
 impl HorizonApp {
     /// Shows the fold control of the card `id` in `rect`, an arrow. Returns whether
-    /// the person pressed it, or pressed the folded line, which `line` says.
-    pub(super) fn show_card_fold(&self, ui: &Ui, id: PanelId, rect: Rect, live: bool, line: bool) -> bool {
-        let Some(folded) = self.board.panel(id).and_then(Panel::block).map(|card| card.folded()) else {
+    /// the person pressed it, or pressed the folded line, which `on_title` says.
+    pub(super) fn show_card_fold(&self, ui: &Ui, id: PanelId, rect: Rect, live: bool, on_title: bool) -> bool {
+        let Some(folded) = self.board.panel(id).and_then(Panel::block).map(BlockPanelState::folded) else {
             return false;
         };
         let words = ["Fold the card to one line", "Unfold the card"][usize::from(folded)];
@@ -25,7 +25,7 @@ impl HorizonApp {
         let points = down.map(|point| rect.center() + if folded { point.yx() } else { point });
         let colour = [theme::FG_DIM(), theme::FG()][usize::from(response.hovered())];
         ui.painter().line(points.to_vec(), Stroke::new(1.5, colour));
-        response.clicked() || folded && line
+        response.clicked() || folded && on_title
     }
 
     /// Gives the card `id` the height of its fold when the fold changed, after the

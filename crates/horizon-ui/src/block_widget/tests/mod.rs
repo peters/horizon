@@ -538,9 +538,8 @@ pub(super) fn every_component() -> BlockDocument {
     ];
     components.extend(pills_and_steps());
     BlockDocument {
-        width: None,
-        finished: false,
         components,
+        ..horizon_core::BlockPanelState::empty_document()
     }
 }
 

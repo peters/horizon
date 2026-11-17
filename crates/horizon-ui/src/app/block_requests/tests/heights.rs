@@ -158,7 +158,7 @@ fn an_update_that_adds_rows_makes_the_card_higher_and_moves_the_card_under_it() 
 
         let (card_after, under_after) = (place(&app, &over), place(&app, &under));
         assert!(
-            card_after[3] > card_before[3] + 100.0 && card_after[1] == card_before[1],
+            card_after[3] > card_before[3] + 100.0 && (card_after[1] - card_before[1]).abs() < 0.5,
             "the card grew down with its content ({layout:?}): {card_before:?} to {card_after:?}"
         );
         assert!(

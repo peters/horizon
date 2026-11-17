@@ -212,7 +212,8 @@ fn show_panel_body_contents(
         }
         // A folded card of the canvas is its title bar alone.
         PanelKind::Block
-            if panel.block().is_some_and(|card| card.folded()) && !body_context.browser_fullscreen_active =>
+            if panel.block().is_some_and(horizon_core::BlockPanelState::folded)
+                && !body_context.browser_fullscreen_active =>
         {
             false
         }
