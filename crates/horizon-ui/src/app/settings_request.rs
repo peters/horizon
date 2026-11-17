@@ -325,11 +325,14 @@ impl HorizonApp {
             ServerEntry::Target(target) => (Some(target.clone()), None),
             ServerEntry::Machine(machine) => (None, Some(machine.clone())),
         };
+        // The name of this computer and its two sharing switches are not part of
+        // the entry that the card stated, so they stay as they are.
         stored.server = ServerConfig {
             ssh_target,
             machine,
             command: Some(command.to_owned()),
             address: None,
+            ..before.server.clone()
         };
         stored.validate().map_err(|error| error.to_string())?;
         self.save_setting(&before, stored);
@@ -530,7 +533,7 @@ fn card_of(operation: &Operation) -> Result<(Asked, &'static str, BlockDocument)
                 ssh_target: ssh_target.map(str::to_owned),
                 machine: machine_name.map(str::to_owned),
                 command: Some(command.to_owned()),
-                address: None,
+                ..ServerConfig::default()
             };
             entry
                 .validate()

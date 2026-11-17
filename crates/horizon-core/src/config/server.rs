@@ -33,8 +33,16 @@ pub const MAX_COMMAND_LEN: usize = 200;
 /// because a path such as `/Users/x/my_tools/horizon` is a normal path.
 const COMMAND_CHARS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._:/=@+-";
 
+/// The longest name of this computer for the other computers of the person.
+pub const MAX_COMPUTER_NAME_CHARS: usize = 60;
+
+/// What the Server tab and the first link of a computer say about its terminals.
+pub const SHARED_TERMINALS_NOTICE: &str = "The other computers that you link to this server can see the terminals \
+    of this computer and type in them. Anyone who gets into one of those computers, or into the server, can then \
+    run commands here.";
+
 /// The server that the machines of this Horizon follow.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ServerConfig {
     /// SSH target of the computer that runs `horizon --server`. It is the name
@@ -58,6 +66,32 @@ pub struct ServerConfig {
     /// `ssh`. A successful join writes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// The name of this computer for the other computers of the person. Empty
+    /// means the host name.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub computer_name: String,
+    /// Whether the other computers of the person see the terminals of this one.
+    /// The store writes it only when it is off, as it does for the next field.
+    #[serde(skip_serializing_if = "Clone::clone")]
+    pub share_terminals: bool,
+    /// Whether those computers type in the terminals that they see. It has no
+    /// effect while this computer shares none.
+    #[serde(skip_serializing_if = "Clone::clone")]
+    pub remote_typing: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            ssh_target: None,
+            machine: None,
+            command: None,
+            address: None,
+            computer_name: String::new(),
+            share_terminals: true,
+            remote_typing: true,
+        }
+    }
 }
 
 /// The server of this Horizon process, read once from the settings store at
@@ -131,12 +165,29 @@ impl ServerConfig {
             .unwrap_or(DEFAULT_LINK_COMMAND)
     }
 
+    /// The name that the other computers of the person read for this one: the
+    /// name of the entry, or the host name of this computer.
+    #[must_use]
+    pub fn computer_label(&self) -> String {
+        match self.computer_name.trim() {
+            "" => crate::session_store::hostname(),
+            name => name.to_owned(),
+        }
+    }
+
     /// # Errors
     /// Rejects an SSH target that `ssh` would read as an option or that holds a
     /// control character, a command that holds a character outside the allowed set
-    /// or is too long, a machine name that breaks the rule of a machine, and an
-    /// entry that names both a machine and an SSH target.
+    /// or is too long, a machine name that breaks the rule of a machine, an
+    /// entry that names both a machine and an SSH target, and a computer name
+    /// that is too long or holds a control character.
     pub fn validate(&self) -> Result<()> {
+        let name = &self.computer_name;
+        if name.chars().count() > MAX_COMPUTER_NAME_CHARS || name.chars().any(char::is_control) {
+            return Err(Error::Config(format!(
+                "server.computer_name must be one line of at most {MAX_COMPUTER_NAME_CHARS} characters"
+            )));
+        }
         if let Some(machine) = self.machine() {
             crate::machines::machine_name(machine)
                 .map_err(|error| Error::Config(format!("server.machine: {error}")))?;
@@ -197,8 +248,7 @@ mod tests {
         ServerConfig {
             ssh_target: ssh_target.map(str::to_string),
             command: command.map(str::to_string),
-            address: None,
-            machine: None,
+            ..ServerConfig::default()
         }
     }
 
@@ -371,6 +421,40 @@ mod tests {
             }
             let error = config.validate().expect_err(bad);
             assert!(error.to_string().contains("server.address"), "{error}");
+        }
+    }
+
+    #[test]
+    fn the_sharing_fields_default_to_on_and_round_trip() {
+        // An older store holds none of the three fields, and reads as the defaults.
+        let older: ServerConfig = serde_json::from_str(r#"{"ssh_target": "server-vm"}"#).expect("an older section");
+        assert!(older.share_terminals && older.remote_typing, "both switches start on");
+        assert!(!older.computer_label().is_empty(), "an empty name means the host name");
+        let document = serde_json::to_string(&older).expect("serialize");
+        assert_eq!(document, r#"{"ssh_target":"server-vm"}"#, "the defaults write no field");
+
+        let config = Config {
+            server: ServerConfig {
+                computer_name: " Study desk ".to_owned(),
+                share_terminals: false,
+                remote_typing: false,
+                ..entry(Some("server-vm"), None)
+            },
+            ..Config::default()
+        };
+        assert!(config.server.validate().is_ok());
+        assert_eq!(config.server.computer_label(), "Study desk");
+        let document = config.to_json().expect("serialize");
+        assert!(document.contains("\"share_terminals\": false"), "{document}");
+        assert_eq!(Config::from_json(&document).expect("parse").server, config.server);
+
+        for bad in ["a".repeat(super::MAX_COMPUTER_NAME_CHARS + 1), "two\nlines".to_owned()] {
+            let config = ServerConfig {
+                computer_name: bad.clone(),
+                ..ServerConfig::default()
+            };
+            let error = config.validate().expect_err(&bad);
+            assert!(error.to_string().contains("server.computer_name"), "{error}");
         }
     }
 

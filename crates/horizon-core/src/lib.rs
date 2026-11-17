@@ -77,9 +77,9 @@ pub use bounded_program::ProgramEnvironment;
 pub use config::{
     AppearanceConfig, AppearanceTheme, BrowserHostConfig, BrowserHostEngine, Config, DEFAULT_LINK_COMMAND,
     DEFAULT_SPEECH_ENDPOINT, DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL, FeaturesConfig,
-    MAX_LANGUAGE_CHARS, OverlaysConfig, PresetConfig, RemoteHostsConfig, ServerConfig, ShortcutsConfig, SpeechConfig,
-    TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig, browser_mcp_args,
-    configure_server, language_hint, preset_named, server,
+    MAX_LANGUAGE_CHARS, OverlaysConfig, PresetConfig, RemoteHostsConfig, SHARED_TERMINALS_NOTICE, ServerConfig,
+    ShortcutsConfig, SpeechConfig, TerminalConfig, TranscriberConfig, TranscriberKind, WindowConfig, WorkspaceConfig,
+    browser_mcp_args, configure_server, language_hint, preset_named, server,
 };
 pub use device::{DeviceInput, DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};

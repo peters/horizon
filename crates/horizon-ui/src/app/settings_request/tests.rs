@@ -215,6 +215,7 @@ fn a_server_link_draws_a_card_of_horizon_that_states_the_entry() {
 fn a_press_on_link_writes_the_store_and_starts_the_link_without_a_restart() {
     let (_temp, ctx, mut app) = app();
     let before = stored(&mut app).server;
+    app.template_config.server.remote_typing = false;
     assert!(
         app.apply_block_request_waiting(&request(&app, link("server-vm")), &ctx)
             .is_none()
@@ -232,6 +233,10 @@ fn a_press_on_link_writes_the_store_and_starts_the_link_without_a_restart() {
     let after = stored(&mut app);
     assert_eq!(after.server.ssh_target.as_deref(), Some("server-vm"));
     assert_eq!(after.server.command.as_deref(), Some("/opt/horizon --server-link"));
+    assert!(
+        after.server.share_terminals && !after.server.remote_typing,
+        "the entry of the card keeps the sharing switches of this computer"
+    );
     assert!(!before.names_server(), "the store named no server before the press");
     assert!(
         app.template_config.server.names_server(),

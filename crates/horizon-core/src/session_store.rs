@@ -793,7 +793,7 @@ fn current_unix_millis() -> i64 {
     i64::try_from(millis).unwrap_or(i64::MAX)
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()
         .filter(|value| !value.is_empty())

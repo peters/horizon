@@ -32,7 +32,7 @@ pub(crate) use presets::{
 };
 pub use remote_hosts::RemoteHostsConfig;
 pub use secrets::SecretsConfig;
-pub use server::{DEFAULT_LINK_COMMAND, ServerConfig, configure_server, server};
+pub use server::{DEFAULT_LINK_COMMAND, SHARED_TERMINALS_NOTICE, ServerConfig, configure_server, server};
 pub use speech::{
     DEFAULT_SPEECH_ENDPOINT, DEFAULT_SPEECH_HOTKEY, DEFAULT_SPEECH_KEY_SECRET, DEFAULT_SPEECH_MODEL,
     MAX_LANGUAGE_CHARS, SpeechConfig, TranscriberConfig, TranscriberKind, language_hint,
