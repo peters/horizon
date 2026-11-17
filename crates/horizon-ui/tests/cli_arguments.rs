@@ -258,8 +258,15 @@ fn answer_as_the_window(
 }
 
 /// One start of this home, with its session and its lease, as a window that runs
-/// leaves them.
-fn home_with_a_running_window(temp: &tempfile::TempDir) -> horizon_core::HorizonHome {
+/// leaves them, and the store of that window.
+///
+/// A window that runs holds its store. The writer of a store writes the index of
+/// the sessions on its own worker, and a store that is let go closes its files
+/// there, so both change the home after the call that asked for them. The store
+/// comes back quiet, with every write that it queued on the disk, and the test
+/// holds it until its end: the window of the test writes nothing while a second
+/// start runs.
+fn home_with_a_running_window(temp: &tempfile::TempDir) -> (horizon_core::HorizonHome, horizon_core::SessionStore) {
     use std::os::unix::fs::PermissionsExt as _;
 
     let root = temp.path().join(".horizon");
@@ -273,7 +280,11 @@ fn home_with_a_running_window(temp: &tempfile::TempDir) -> horizon_core::Horizon
         .create_session_from_runtime(horizon_core::RuntimeState::from_config(&horizon_core::Config::default()))
         .expect("a session of this home");
     store.acquire_lease(&session.session_id).expect("the lease of a window");
-    horizon_home
+    assert!(
+        store.flush_runtime_states(BOUND),
+        "the window of this test wrote its session and the index of the sessions"
+    );
+    (horizon_home, store)
 }
 
 /// A second `horizon <folder>` of a home whose Horizon runs reaches that window
@@ -282,7 +293,7 @@ fn home_with_a_running_window(temp: &tempfile::TempDir) -> horizon_core::Horizon
 fn a_folder_of_a_second_start_reaches_the_window_that_runs() {
     let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
     let temp = tempfile::tempdir().expect("the home of the test");
-    let horizon_home = home_with_a_running_window(&temp);
+    let (horizon_home, _window_store) = home_with_a_running_window(&temp);
     let folder = temp.path().join("repo");
     std::fs::create_dir(&folder).expect("the folder");
     let folder = horizon_core::folder_identity(&folder);
@@ -323,7 +334,7 @@ fn a_folder_of_a_second_start_reaches_the_window_that_runs() {
 fn a_folder_of_a_second_start_that_no_window_answers_ends_with_one_sentence() {
     let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
     let temp = tempfile::tempdir().expect("the home of the test");
-    let horizon_home = home_with_a_running_window(&temp);
+    let (horizon_home, _window_store) = home_with_a_running_window(&temp);
     let folder = temp.path().join("repo");
     std::fs::create_dir(&folder).expect("the folder");
     let folder = horizon_core::folder_identity(&folder);
@@ -393,22 +404,6 @@ fn home_listing(root: &Path, skip: &Path) -> Vec<String> {
     out
 }
 
-/// The listing of a home once the writes of this test have settled: the store of
-/// the window of this test writes on its own worker, so the test waits until two
-/// listings a moment apart are the same.
-fn settled_home_listing(root: &Path, skip: &Path) -> Vec<String> {
-    let mut last = home_listing(root, skip);
-    for _ in 0..50 {
-        std::thread::sleep(Duration::from_millis(40));
-        let next = home_listing(root, skip);
-        if next == last {
-            return next;
-        }
-        last = next;
-    }
-    last
-}
-
 /// A start that names a folder while a window of this home runs is a client of
 /// that window: it writes its request, prints one sentence, and changes no file of
 /// the home of the person.
@@ -416,7 +411,7 @@ fn settled_home_listing(root: &Path, skip: &Path) -> Vec<String> {
 fn a_folder_of_a_second_start_writes_nothing_but_its_request() {
     let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
     let temp = tempfile::tempdir().expect("the home of the test");
-    let horizon_home = home_with_a_running_window(&temp);
+    let (horizon_home, _window_store) = home_with_a_running_window(&temp);
     let folder = temp.path().join("repo");
     std::fs::create_dir(&folder).expect("the folder");
     let folder = horizon_core::folder_identity(&folder);
@@ -432,7 +427,9 @@ fn a_folder_of_a_second_start_writes_nothing_but_its_request() {
         .parent()
         .expect("the folder of the requests of a home")
         .to_path_buf();
-    let before = settled_home_listing(temp.path(), &requests);
+    // The window of this test is quiet and the second start has ended when the
+    // second picture is taken, so the two pictures need no wait.
+    let before = home_listing(temp.path(), &requests);
     let outcome = start_like_a_person(
         binary,
         temp.path(),
@@ -458,7 +455,7 @@ fn a_folder_of_a_second_start_writes_nothing_but_its_request() {
         outcome.stderr
     );
     assert_eq!(
-        settled_home_listing(temp.path(), &requests),
+        home_listing(temp.path(), &requests),
         before,
         "a start that only asks a window changes no file of the home of the person"
     );
