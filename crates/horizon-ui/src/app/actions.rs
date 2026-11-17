@@ -251,22 +251,22 @@ mod tests {
 
     #[test]
     fn estimated_settings_panel_rect_uses_default_wide_fallback() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1200.0, 800.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(2000.0, 800.0));
 
         let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
 
-        assert_eq!(rect.min, Pos2::new(840.0, TOOLBAR_HEIGHT));
-        assert_eq!(rect.max, Pos2::new(1200.0, 752.0));
+        assert_eq!(rect.min, Pos2::new(1400.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(2000.0, 752.0));
     }
 
     #[test]
     fn estimated_settings_panel_rect_clamps_narrow_fallback_width() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(700.0, 800.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 800.0));
 
         let rect = estimated_settings_panel_rect(viewport, true, None).expect("settings rect");
 
-        assert_eq!(rect.min, Pos2::new(360.0, TOOLBAR_HEIGHT));
-        assert_eq!(rect.max, Pos2::new(700.0, 752.0));
+        assert_eq!(rect.min, Pos2::new(356.0, TOOLBAR_HEIGHT));
+        assert_eq!(rect.max, Pos2::new(800.0, 752.0));
     }
 
     #[test]

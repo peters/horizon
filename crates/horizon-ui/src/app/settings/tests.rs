@@ -784,9 +784,12 @@ fn a_drag_of_a_panel_over_the_pane_keeps_moving_the_panel_until_the_release() {
     let (_temp, ctx, mut app, panel) = app_with_a_terminal_under_the_pane();
     let pane = pane_rect(&app);
     // The canvas shows only what the pane leaves of it, so the panel keeps its
-    // room there while the drag moves it to the right.
+    // room there while the drag moves it to the right. The panel stood whole
+    // under the pane, so it takes a press from its second frame beside the pane.
     app.board.move_panel(panel, [100.0, 60.0]);
-    let _ = window_frame(&ctx, &mut app, Vec::new());
+    for _ in 0..2 {
+        let _ = window_frame(&ctx, &mut app, Vec::new());
+    }
     let screen = *app.panel_screen_rects.get(&panel).expect("the panel is on screen");
     let start = egui::Pos2::new(screen.max.x - 10.0, screen.min.y + 17.0);
     assert!(!pane.contains(start), "the drag starts beside the pane");
