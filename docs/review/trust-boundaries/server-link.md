@@ -33,6 +33,12 @@ frames:
   of an invitation, and a computer that is logged in sends a `hello` with the
   token of its device. The listener is off without `--listen`.
 
+A computer can hold a second link on the same transport: the live link of its
+shared terminals. A link becomes a live link with the request `open`, and then
+it carries no frame of the store. This page states the transport, the greeting
+and the login of that link. [`shared-terminals.md`](shared-terminals.md) states
+the boundary of its frames.
+
 Programs touch the boundary. The server is `horizon --server`: it holds the store
 and the socket of one server home and starts no other process. The first
 computer of a server is `horizon --server-invite`: it sends one request over the
@@ -45,6 +51,16 @@ never on the UI thread.
 - **The stream is one computer.** The first frame must be a `hello`. A frame
   before it, a second `hello`, a frame that is not one document of the protocol,
   and a frame above 256 KiB end the link with a typed error frame.
+- **The version is one number of each side.** The `hello` of a computer of this
+  build names version 4. The server of this build answers version 6, and a
+  `hello` above 6 ends the link with `protocol_version`. Version 5 changed no
+  frame: a server from that version holds an idle wait for 15 seconds. Version
+  6 adds the two frames of a live link.
+- **A link carries the store or the shared terminals, not the two.** A link
+  whose first request after the greeting is `open` is a live link. A live
+  request on another link ends that link with `not_live`. A frame of the store
+  on a live link ends it with `live_link`. A computer sends a live frame only to
+  a server that answered version 6 or higher.
 - **The device name is a claim.** It is 1 to 40 characters of `a-z`, `0-9` and
   `-`, and a name that breaks the rule ends the link. The transport does not prove
   the name: whatever `ssh` let in may claim any device name.
@@ -123,7 +139,9 @@ the network that carries it, because Horizon encrypts nothing on it.
   refuses it, so no server can send a token and no link sends one, and no token
   reaches a queue file, a mirror file or a line of the log.
 - **A removal ends a link and nothing else.** `device_remove` deletes the token row
-  of that device and ends its open links with `error{code: "removed"}`. The server
+  of that device and ends its open links with `error{code: "removed"}`. The live
+  link of that device is one of those links, and the computers that follow its
+  terminals read that it is offline. The server
   keeps the name and the hash of the token of that device for 30 days, so a
   computer that comes back after its removal reads the same answer, and the kept
   hash is the hash of a token that no longer works: it proves the name of a removed
@@ -305,7 +323,9 @@ before that link; they are no proof of who wrote a value.
   `tracing` line, no error text and no refusal quote.
 - **The server holds no other secret.** It holds no ssh login key of the person,
   no provider CLI login (az, gcloud, hcloud, aws), no browser profile, no session
-  cookie, no agent token, no terminal content and no transcript. It holds the
+  cookie, no agent token and no transcript. It stores no terminal content. The
+  screens, the output and the typed bytes of a shared terminal go through its
+  memory only. It holds the
   shared settings of the person, which are the rules of every computer of that
   server; the section above states what they may contain. The one value that a person names for their own tools is a named secret,
   which they asked the server to hold and which its boundary page states. A
@@ -337,7 +357,8 @@ before that link; they are no proof of who wrote a value.
   keeps the 65-second bound of the computer. A link that reaches its bound is
   killed, reaped and reported `away`, and the next attempt starts on the delays
   of a lost link. A byte stream that stays open and answers nothing is therefore
-  not a link that a computer keeps.
+  not a link that a computer keeps. These bounds are the bounds of the sync
+  link. A live link has no request with a bound.
 - **The relay of a link ends with its socket.** `horizon --server-link` returns
   as soon as the socket of the server ends or its read or write fails, and its
   entry ends the process there. A server that stops therefore ends the mode of
@@ -355,7 +376,17 @@ before that link; they are no proof of who wrote a value.
   the server may read or write.
 - **Availability.** A computer that never closes its link holds one thread of the
   server, and the store answers one push at a time. Another process of the same
-  server user can open the file, and nothing here prevents that.
+  server user can open the file, and nothing here prevents that. A live link
+  holds one more thread for the frames that wait for it, and one server opens
+  at most 32 live links.
+- **The content of a shared terminal.** The server process holds each byte of a
+  shared terminal that it relays, so a person who controls the server can read
+  it. That person can also type in each terminal that a computer shares with
+  typing on.
+  [`shared-terminals.md`](shared-terminals.md) states that boundary.
+- **A live link that went silent.** A live link has no keepalive of its own. A
+  computer that went away stays in the list of the shared terminals until its
+  transport fails or its device opens a new live link.
 - **The content of a body of an internal object.** The `probe` kind is bounded in
   number and in frame size, and its body is JSON that the server does not read.
   No person or agent sees it: a later slice replaces it with the kinds that a UI
