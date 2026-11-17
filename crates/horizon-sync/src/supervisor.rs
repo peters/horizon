@@ -37,7 +37,7 @@ use std::{
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -62,6 +62,7 @@ use view::records_of;
 mod connect;
 mod files;
 mod link;
+mod live;
 mod machine_login;
 mod pull;
 mod questions;
@@ -71,6 +72,7 @@ mod settings;
 mod state;
 mod view;
 
+pub use live::{LiveHandle, LiveSupervisor};
 pub use machine_login::machine_login;
 pub use questions::{ServerReply, ServerRequest};
 pub use settings::SyncedSettings;
@@ -549,8 +551,8 @@ struct Greeted {
     server_protocol: u32,
 }
 
-/// Starts one transport and its reader, sends the hello, and answers the two
-/// halves of the link once the server greeted this computer.
+/// Opens the sync link: the greeting of [`greet`] with the hello of the queue of
+/// this computer, whose state keeps the answer.
 fn connect(
     config: &SupervisorConfig,
     handle: &SyncHandle,
@@ -558,6 +560,29 @@ fn connect(
     halt_slot: &Arc<Mutex<Option<Halt>>>,
     refusal: &RefusalCell,
 ) -> Result<Greeted, FailedLink> {
+    let hello = |token: Option<&str>| handle.lock().client.hello_frame(token);
+    let logged_out = |code| logged_out(config, handle, code);
+    let (greeted, answer) = greet(config, stop, halt_slot, refusal, hello, logged_out)?;
+    accept_hello(handle, &answer)?;
+    Ok(greeted)
+}
+
+/// The frames of the server that may wait for the loop of a link. The reader of
+/// the link waits with the next one, so a link holds a bounded number of them.
+const ANSWER_DEPTH: usize = 32;
+
+/// Starts one transport and its reader, sends the hello that `hello` makes with
+/// the token of this computer, and answers the two halves of the link and the
+/// greeting of the server once the server greeted this computer. `logged_out`
+/// hears the code of a refusal that no later attempt can repeat.
+fn greet(
+    config: &SupervisorConfig,
+    stop: &AtomicBool,
+    halt_slot: &Arc<Mutex<Option<Halt>>>,
+    refusal: &RefusalCell,
+    hello: impl FnOnce(Option<&str>) -> Frame,
+    logged_out: impl FnOnce(crate::protocol::LinkErrorCode),
+) -> Result<(Greeted, crate::protocol::HelloOk), FailedLink> {
     // A TCP link reads the token row of this computer, and an `ssh` link leaves
     // the program to the machine terminal of the person. Both run here, on the
     // worker thread of the link.
@@ -580,16 +605,13 @@ fn connect(
     } = opened;
     *halt_slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(handle_halt);
 
-    let (frames, incoming) = mpsc::channel();
+    let (frames, incoming) = mpsc::sync_channel(ANSWER_DEPTH);
     thread::Builder::new()
         .name("horizon-sync-reader".to_owned())
         .spawn(move || read_answers(answers, &frames))
         .map_err(|error| format!("the reader thread: {error}"))?;
 
-    let hello = {
-        let mut state = handle.lock();
-        state.client.hello_frame(token.as_deref())
-    };
+    let hello = hello(token.as_deref());
     let mut input = writer;
     write_frame(&mut input, &hello).map_err(|error| format!("the hello was not sent: {error}"))?;
     let deadline = Instant::now() + HELLO_BOUND;
@@ -599,12 +621,12 @@ fn connect(
         }
         match incoming.recv_timeout(LINK_SLICE) {
             Ok(Frame::HelloOk(answer)) => {
-                accept_hello(handle, &answer)?;
-                return Ok(Greeted {
+                let greeted = Greeted {
                     input,
                     answers: incoming,
                     server_protocol: answer.protocol,
-                });
+                };
+                return Ok((greeted, answer));
             }
             Ok(Frame::Error(error)) => {
                 let code = error.code;
@@ -613,7 +635,7 @@ fn connect(
                     code,
                     crate::protocol::LinkErrorCode::Removed | crate::protocol::LinkErrorCode::NotLoggedIn
                 ) {
-                    logged_out(config, handle, code);
+                    logged_out(code);
                     return Err(FailedLink::logged_out(&reason, code));
                 }
                 return Err(FailedLink {
@@ -655,7 +677,7 @@ pub(super) fn logged_out(config: &SupervisorConfig, handle: &SyncHandle, code: c
 /// longer holds is dropped with one line, because the intent names a value that
 /// the server cannot be given; the local value itself is untouched.
 /// Reads the frames of the transport into `answers` until the link ends.
-fn read_answers(mut output: impl std::io::Read, answers: &Sender<Frame>) {
+fn read_answers(mut output: impl std::io::Read, answers: &mpsc::SyncSender<Frame>) {
     loop {
         match read_frame(&mut output) {
             Ok(Some(frame)) => {

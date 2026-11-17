@@ -95,8 +95,8 @@ pub use store::{
     UNJOINED_GRACE_MILLIS, WRONG_CODE_WINDOW_MILLIS,
 };
 pub use supervisor::{
-    LEGACY_WAIT_ANSWER_BOUND, LinkBounds, LinkSnapshot, REQUEST_BOUND, ServerReply, ServerRequest, SettingsSyncView,
-    Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings, WAIT_ANSWER_BOUND,
-    WAIT_ANSWER_MARGIN, machine_login, proposed_device_name, stored_device_name, write_device_name,
+    LEGACY_WAIT_ANSWER_BOUND, LinkBounds, LinkSnapshot, LiveHandle, LiveSupervisor, REQUEST_BOUND, ServerReply,
+    ServerRequest, SettingsSyncView, Supervisor, SupervisorConfig, SyncHandle, SyncedMachineStore, SyncedSettings,
+    WAIT_ANSWER_BOUND, WAIT_ANSWER_MARGIN, machine_login, proposed_device_name, stored_device_name, write_device_name,
 };
 pub use tip::tip;
