@@ -260,3 +260,6 @@ impl Write for LinkWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
