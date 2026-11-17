@@ -554,7 +554,8 @@ this window.
   on which its newest screen started, because the screen under it did not
   travel. The follower asks again each 1.2 seconds until a screen arrives.
 - **A stream that ended keeps its panel.** The panel keeps its last screen and
-  shows one line with the cause under the grid. The feed drops the bytes of the
+  shows the cause under the grid, wrapped over at most four rows, with the whole
+  line as hover text. The feed drops the bytes of the
   person. The panel follows again by itself when a later list names its panel.
   The cause `limit` is the exception: such a panel does not follow again.
 - **A lost link ends each stream.** The cause is `this computer has no link to
@@ -575,9 +576,10 @@ this window.
   with the mark of its state. A press on a row opens its follow panel. The
   hover text of a row says whether the person can type in it.
 - **The line of a link that is down.** The section shows
-  `Shared terminals: no link · <reason>` from the state `Down` until the link
-  opens or starts again. An older server gives the state `Unsupported`, which
-  shows no line and no section.
+  `Shared terminals: no link` from the state `Down` until the link opens or
+  starts again, and the reason of the state under it in at most three rows, with
+  the whole reason as hover text. An older server gives the state `Unsupported`,
+  which shows no line and no section.
 - **The chip of a watched panel.** Its title bar says `seen by <name>` for one
   follower, and `seen by <n> computers` for more than one.
 - **The chip of a follow panel.** Its title bar says `on <name>`. It says

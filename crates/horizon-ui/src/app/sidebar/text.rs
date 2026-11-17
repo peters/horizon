@@ -35,6 +35,20 @@ pub(super) fn paragraph(
     layout(ui, text, format(size, weight, color), max_width, ANY_ROW)
 }
 
+/// [`paragraph`] in at most `max_rows` rows: the rows that do not fit end with an
+/// ellipsis.
+pub(super) fn paragraph_rows(
+    ui: &egui::Ui,
+    text: &str,
+    size: f32,
+    weight: f32,
+    color: Color32,
+    max_width: f32,
+    max_rows: usize,
+) -> Arc<Galley> {
+    layout(ui, text, format(size, weight, color), max_width, max_rows)
+}
+
 /// The format of one run of sidebar text at `size` and `weight`.
 fn format(size: f32, weight: f32, color: Color32) -> TextFormat {
     let mut format = TextFormat {

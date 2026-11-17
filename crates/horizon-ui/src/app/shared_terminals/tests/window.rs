@@ -61,6 +61,14 @@ fn texts(output: &egui::FullOutput) -> Vec<&str> {
         .collect()
 }
 
+/// The galley that a frame drew for the text `text`.
+fn galley_of(output: &egui::FullOutput, text: &str) -> Option<std::sync::Arc<egui::Galley>> {
+    output.shapes.iter().find_map(|clipped| match &clipped.shape {
+        egui::epaint::Shape::Text(drawn) if drawn.galley.text() == text => Some(drawn.galley.clone()),
+        _ => None,
+    })
+}
+
 /// Runs frames until one of them draws `words`, and answers that frame.
 fn until_drawn(window: &mut Window, words: &str) -> egui::FullOutput {
     let deadline = Instant::now() + PATIENCE;
@@ -141,15 +149,23 @@ fn the_sidebar_lists_the_other_computers_and_a_press_opens_the_follow_panel() {
         assert!(!drew_text(&menu, entry), "a follow panel has no {entry} entry");
     }
 
-    // A link that is down says why in the section, and lists no computer.
+    // A link that is down says why in the section, and lists no computer. The
+    // reason is a text of its own under the line, so the sidebar shows all of it.
     let reason = "live_replaced: another link took this name";
     window
         .link
         .relay()
         .events
         .push(LiveEvent::State(LiveState::Down(reason.to_owned())));
-    let line = format!("Shared terminals: no link \u{00b7} {reason}");
-    let output = until_drawn(&mut window, &line);
+    let output = until_drawn(&mut window, "Shared terminals: no link");
+    let galley = galley_of(&output, reason).expect("the reason of the down link is drawn under the line");
+    assert!(!galley.elided, "the person reads the whole reason in the sidebar");
+    assert_eq!(galley.rows.len(), 2, "the reason wraps under its own line");
+    assert!(
+        galley.rect.width() <= crate::app::SIDEBAR_WIDTH,
+        "the reason stays inside the sidebar: {:?}",
+        galley.rect
+    );
     assert!(drew_text(&output, "Computers") && !drew_text(&output, "build"));
     let ended = window.app.board.panel(follow).and_then(Panel::follow_ended_line);
     assert!(ended.is_some(), "the follow panel says that its stream ended");
