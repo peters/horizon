@@ -1,7 +1,6 @@
-//! The part of the Server tab about the terminals of this computer: the name
-//! that the other computers of the person read for it, and the two switches of
-//! what those computers may do. The section `server` stays with this computer,
-//! so no other computer changes them.
+//! The part of the Server tab about the terminals of this computer: its name
+//! for the other computers of the person, and the two switches of what they may
+//! do. The section `server` stays with this computer, so no other one changes them.
 
 use egui::Ui;
 use horizon_core::{SHARED_TERMINALS_NOTICE, ServerConfig};

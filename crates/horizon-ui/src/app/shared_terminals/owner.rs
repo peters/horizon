@@ -60,8 +60,7 @@ impl Watched {
     fn drain(&mut self, link: &dyn LiveLink, id: &str, terminal: &Terminal, now: Instant) {
         let due = |at: Option<Instant>| at.is_some_and(|at| at <= now);
         let outlet = terminal.share_outlet();
-        // A terminal that a restart started has a new outlet, which nobody
-        // wanted yet. Its first take then asks for a screen.
+        // A restarted terminal has a new outlet, whose first take asks for a screen.
         outlet.set_wanted(true);
         let take = outlet.take();
         if take.overflowed {
@@ -78,8 +77,7 @@ impl Watched {
                 self.screen_at = Some(now + NEXT_SCREEN);
             }
         } else if self.screen_at.is_none() && !take.bytes.is_empty() && !link.output(id, &take.bytes) {
-            // The link is full, so the followers miss these bytes: only a new
-            // screen continues their stream, and no output goes out before it.
+            // The link is full: only a new screen continues the stream of the followers.
             self.screen_at = Some(now + NEXT_SCREEN);
         }
     }
@@ -211,27 +209,27 @@ impl HorizonApp {
             screen_at: None,
             second_at: None,
         });
-        let joined = watchers.iter().any(|watcher| !watch.devices.contains(&watcher.device));
+        let devices: Vec<String> = watchers.iter().map(|watcher| shown(&watcher.device)).collect();
+        let joined = devices.iter().any(|device| !watch.devices.contains(device));
         if refresh || joined {
             watch.screen_at = Some(now);
         }
         if joined {
             watch.second_at = Some(now + NEXT_SCREEN);
         }
-        watch.devices = watchers.iter().map(|watcher| watcher.device.clone()).collect();
+        watch.devices = devices;
         shared.chips.insert(panel, watched_chip(watchers));
     }
 
-    /// Writes what another computer typed into the program of the panel `id`,
-    /// while this computer lets the others type and the panel is in its list.
+    /// Writes what another computer typed into the program of the panel `id`. The
+    /// link gives the event as the server sent it, so this is the last guard: both
+    /// switches are on, the list names the panel now, and it follows no other one.
     pub(super) fn shared_typed(&mut self, id: &str, bytes: &[u8]) {
         let server = &self.template_config.server;
+        let allowed = server.share_terminals && server.remote_typing;
         let listed = self.shared_terminals.owner.sent.iter().any(|panel| panel.id == id);
-        if server.share_terminals
-            && server.remote_typing
-            && listed
-            && let Some(panel) = self.board.panels.iter_mut().find(|panel| panel.local_id == id)
-        {
+        let panel = self.board.panels.iter_mut().find(|panel| panel.local_id == id);
+        if let Some(panel) = panel.filter(|panel| allowed && listed && !panel.is_follower()) {
             panel.write_input(bytes);
             // The frame that drains the echo follows it at once, as for a key.
             if let Some(terminal) = panel.terminal() {

@@ -1,14 +1,14 @@
 //! The follower side of shared terminals: the other computers and the panels
 //! that they share, and the follow panels of this window. Every text, grid and
 //! byte here comes from another computer: the feed of a follow panel bounds the
-//! stream, the server bounds the list, and this module shows a text only cut.
+//! stream, and the texts of a list are cut and cleaned where they enter.
 
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use egui::Context;
 use horizon_core::{Attention, FollowFeed, FollowSpec, Panel, PanelId, PanelKind};
-use horizon_sync::{LiveComputer, LiveEndReason, LiveEvent, LivePanel};
+use horizon_sync::{LiveComputer, LiveEndReason, LiveEvent, LivePanel, MAX_LIVE_PANELS};
 
 use super::super::HorizonApp;
 use super::owner::STATES;
@@ -19,6 +19,8 @@ const ALT_SCREEN_START: &[u8] = b"\x1bc\x1b[?1049h";
 /// The wait for a screen that this computer asked for before it asks again.
 /// The server passes one request a second and drops the rest.
 const ASK_AGAIN: Duration = Duration::from_millis(1200);
+/// The most computers of a list that this window keeps. A server lists 32.
+const MAX_COMPUTERS: usize = 64;
 
 #[derive(Default)]
 pub(in crate::app) struct Follower {
@@ -62,8 +64,7 @@ pub(in crate::app) fn computer_name(computer: &LiveComputer) -> &str {
     label.unwrap_or(&computer.device)
 }
 
-/// The kind that a list names, which decides the keyboard protocol of the
-/// follow panel. A name of no terminal kind reads as a shell.
+/// The kind that a list names, for the keyboard protocol. No terminal kind reads as a shell.
 pub(in crate::app) fn kind_of(code: &str) -> PanelKind {
     let kind = serde_json::from_value(serde_json::Value::String(code.to_owned())).unwrap_or_default();
     match kind {
@@ -78,8 +79,7 @@ pub(in crate::app) fn attention_of(code: &str) -> Attention {
     named.map_or(Attention::Idle, |(state, _)| *state)
 }
 
-/// The chip of a follow panel: the computer that runs the terminal, and that
-/// the person only looks while they may not type.
+/// The chip of a follow panel: its computer, and that the person only looks.
 fn follow_chip(computer: &LiveComputer, typing: bool) -> String {
     let view = if typing { "" } else { " \u{00b7} view only" };
     format!("on {}{view}", shown(computer_name(computer)))
@@ -93,6 +93,18 @@ fn ended_text(reason: LiveEndReason) -> &'static str {
         LiveEndReason::NotFound => "the other computer does not share this terminal",
         LiveEndReason::Limit => "too many computers follow this terminal, or this computer follows too many",
     }
+}
+
+/// A computer of a list as it enters the state of this window: every text cut
+/// and cleaned, and no more panels than one computer shares.
+fn cleaned(mut computer: LiveComputer) -> LiveComputer {
+    computer.panels.truncate(MAX_LIVE_PANELS);
+    (computer.device, computer.label) = (shown(&computer.device), shown(&computer.label));
+    for panel in &mut computer.panels {
+        (panel.id, panel.title, panel.kind) = (shown(&panel.id), shown(&panel.title), shown(&panel.kind));
+        (panel.state, panel.workspace) = (shown(&panel.state), shown(&panel.workspace));
+    }
+    computer
 }
 
 /// The computer `device` and its panel `id` in a list.
@@ -165,7 +177,8 @@ impl HorizonApp {
     /// follows again when the list names its panel, and its chip is read again.
     pub(super) fn shared_computers(&mut self, link: &dyn LiveLink, computers: Vec<LiveComputer>) {
         let shared = &mut self.shared_terminals;
-        shared.follower.computers = computers.into_iter().filter(|computer| !computer.own).collect();
+        let others = computers.into_iter().filter(|computer| !computer.own);
+        shared.follower.computers = others.take(MAX_COMPUTERS).map(cleaned).collect();
         for follow in &mut shared.follower.follows {
             let Some((computer, panel)) = listed(&shared.follower.computers, &follow.device, &follow.id) else {
                 continue;
@@ -193,8 +206,7 @@ impl HorizonApp {
         else {
             return;
         };
-        // The frame that shows these bytes follows the first of them, as the
-        // frame of an echo does.
+        // The frame that shows these bytes follows them, as the frame of an echo does.
         if let Some(terminal) = self.board.panel(follow.panel).and_then(Panel::terminal) {
             terminal.arm_output_wake();
         }

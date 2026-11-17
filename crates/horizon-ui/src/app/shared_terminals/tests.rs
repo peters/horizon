@@ -492,6 +492,165 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
     });
 }
 
+/// Queues a `Typed` event as a server gives it that checks nothing: the link
+/// hands it on as it is, so the owner side is the last guard.
+fn typed_event(link: &StandIn, panel: &str, bytes: &[u8]) {
+    link.relay().events.push(LiveEvent::Typed {
+        panel: panel.to_owned(),
+        from: "desk-unknown".to_owned(),
+        label: "Unknown".to_owned(),
+        data: LiveBytes(bytes.into()),
+    });
+}
+
+#[test]
+fn typed_bytes_reach_a_program_only_through_the_four_checks_of_the_owner() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    let id = window.id(owner);
+    let follow = window.follow(owner);
+    window.shows(follow, "READY");
+    let listed = |link: &StandIn, count: usize| {
+        let relay = link.relay();
+        relay.panels.len() == count && relay.panels.iter().all(|panel| panel.typing)
+    };
+
+    // 1. This computer lets nobody type. The panel is shared and in the list.
+    window.app.template_config.server.remote_typing = false;
+    typed_event(&window.link, &id, b"typing-off\n");
+    window.frames(4);
+    window.app.template_config.server.remote_typing = true;
+
+    // 2. This computer shares no terminal. The frame takes the event before it
+    // builds the empty list, so only the switch refuses the bytes.
+    window.app.template_config.server.share_terminals = false;
+    typed_event(&window.link, &id, b"sharing-off\n");
+    window.frames(4);
+    window.app.template_config.server.share_terminals = true;
+    let link = window.link.clone();
+    window.until("the list is back", move |_| listed(&link, 1));
+
+    // 3. A panel that the list of this computer does not name yet. Its program
+    // would read the bytes when it starts.
+    let workspace = window.app.board.active_workspace.expect("the workspace of the test");
+    let options = PanelOptions {
+        kind: PanelKind::Command,
+        command: Some("/bin/sh".to_owned()),
+        args: vec!["-c".to_owned(), PROGRAM.to_owned()],
+        position: Some([OFFSCREEN[0], OFFSCREEN[1] + 1_000.0]),
+        size: Some([600.0, 300.0]),
+        ..PanelOptions::default()
+    };
+    let late = window
+        .app
+        .board
+        .create_panel(options, workspace)
+        .expect("a second terminal");
+    let late_id = window.id(late);
+    typed_event(&window.link, &late_id, b"not-listed\n");
+    window.frames(1);
+
+    // 4. A follow panel. Its bytes would travel on to the terminal that it follows.
+    let follow_id = window.id(follow);
+    typed_event(&window.link, &follow_id, b"follow-panel\n");
+    typed_event(&window.link, "no-such-panel", b"no-panel\n");
+    window.frames(4);
+
+    // The same events reach both programs when every check passes.
+    window.shows(late, "READY");
+    let link = window.link.clone();
+    window.until("the list names both panels", move |_| listed(&link, 2));
+    typed_event(&window.link, &id, b"kept\n");
+    typed_event(&window.link, &late_id, b"kept\n");
+    window.shows(owner, "GOT:kept");
+    window.shows(late, "GOT:kept");
+    let seen = format!("{}{}", text(&window.app, owner), text(&window.app, late));
+    let refused = ["typing-off", "sharing-off", "not-listed", "follow-panel", "no-panel"];
+    let reached: Vec<&str> = refused.into_iter().filter(|words| seen.contains(words)).collect();
+    assert!(reached.is_empty(), "{reached:?} reached a program: {seen}");
+}
+
+#[test]
+fn the_texts_of_another_computer_are_cut_and_cleaned_where_they_enter_the_window() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    let id = window.id(owner);
+    let link = window.link.clone();
+    window.until("the list names the owner panel", move |_| {
+        link.relay().panels.len() == 1
+    });
+
+    // A server that cuts nothing: every text is long and holds control characters.
+    let dirty = |text: &str| format!("{text}\u{1b}[31m\n{}", "x".repeat(500));
+    let panel = |index: usize| LivePanel {
+        id: dirty(&format!("p{index}")),
+        title: dirty("title"),
+        kind: dirty("shell"),
+        state: dirty("working"),
+        workspace: dirty("work"),
+        cols: 80,
+        rows: 24,
+        typing: true,
+    };
+    let computer = |index: usize| LiveComputer {
+        device: dirty(&format!("desk-{index}")),
+        label: dirty("There"),
+        panels: (0..200).map(panel).collect(),
+        own: false,
+    };
+    let computers = (0..100).map(computer).collect();
+    let watcher = LiveWatcher {
+        device: dirty("desk-0"),
+        label: dirty("There"),
+    };
+    let mut relay = window.link.relay();
+    relay.events.push(LiveEvent::Computers { computers });
+    relay.events.push(LiveEvent::Watchers {
+        panel: id,
+        watchers: vec![watcher],
+        refresh: false,
+    });
+    relay
+        .events
+        .push(LiveEvent::State(horizon_sync::LiveState::Down(dirty("down"))));
+    drop(relay);
+    // The watcher is read on this frame, and the end of the link on the same
+    // frame takes the list and the watch away again, so each is read alone.
+    let clean = |text: &str| text.chars().count() <= 80 && !text.chars().any(char::is_control);
+    let (mut listed, mut chipped) = (false, false);
+    let events = std::mem::take(&mut window.link.relay().events);
+    for event in events {
+        window.link.relay().events.push(event);
+        window.frames(1);
+        let shared = &window.app.shared_terminals;
+        let computers = &shared.follower.computers;
+        assert!(computers.len() <= 64, "the list keeps a bounded count of computers");
+        for computer in computers {
+            assert!(clean(&computer.device) && clean(&computer.label), "{computer:?}");
+            assert_eq!(computer.panels.len(), 64, "one computer shares 64 panels at most");
+            for panel in &computer.panels {
+                let texts = [&panel.id, &panel.title, &panel.kind, &panel.state, &panel.workspace];
+                assert!(texts.iter().all(|text| clean(text)), "{panel:?}");
+            }
+        }
+        // The chip holds its own words in front of the name that it cut.
+        let chip = shared.chip(owner).and_then(|chip| chip.name.strip_prefix("seen by "));
+        assert!(chip.is_none_or(clean), "the chip of a watched panel: {chip:?}");
+        assert!(
+            shared.down.as_deref().is_none_or(clean),
+            "the line of a link that is down"
+        );
+        listed |= computers.len() == 64;
+        chipped |= chip.is_some();
+    }
+    assert!(listed && chipped, "one frame kept the list and one showed the watcher");
+    let down = window.app.shared_terminals.down.as_deref();
+    assert!(
+        down.is_some_and(|line| line.starts_with("down")),
+        "the last event ended the link"
+    );
+}
+
 #[test]
 fn a_follower_that_joined_on_the_alternate_screen_asks_for_a_screen_when_it_leaves() {
     let mut window = Window::new();

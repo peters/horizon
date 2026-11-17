@@ -11,7 +11,7 @@ use horizon_sync::LivePanel;
 use crate::theme;
 
 use super::super::HorizonApp;
-use super::super::shared_terminals::{attention_of, computer_name, kind_of, shown};
+use super::super::shared_terminals::{attention_of, computer_name, kind_of};
 use super::panel_rows::{self, PANEL_ROW_HEIGHT, PanelRowLook, PanelRowState};
 use super::{SidebarActions, rows, text};
 
@@ -31,11 +31,11 @@ impl HorizonApp {
         }
         for computer in computers {
             ui.add_space(4.0);
-            let name = shown(computer_name(computer));
-            line(ui, &name, (13.0, text::MEDIUM, theme::FG()), Some(&computer.device));
+            let name = computer_name(computer);
+            line(ui, name, (13.0, text::MEDIUM, theme::FG()), Some(&computer.device));
             let last = computer.panels.len().saturating_sub(1);
             for (index, panel) in computer.panels.iter().enumerate() {
-                if render_panel(ui, &name, panel, index == last) {
+                if render_panel(ui, name, panel, index == last) {
                     actions.open_shared_terminal = Some((computer.device.clone(), panel.id.clone()));
                 }
             }
@@ -44,8 +44,7 @@ impl HorizonApp {
     }
 }
 
-/// One line of the section in a size, a weight and a colour, with the text
-/// that its hover says.
+/// One line of the section in a size, a weight and a colour, with its hover text.
 fn line(ui: &mut egui::Ui, words: &str, (size, weight, color): (f32, f32, Color32), hover: Option<&str>) {
     ui.horizontal(|ui| {
         ui.add_space(18.0);
@@ -57,15 +56,14 @@ fn line(ui: &mut egui::Ui, words: &str, (size, weight, color): (f32, f32, Color3
     });
 }
 
-/// The row of one shared panel of the computer `computer`, with the mark of
-/// its state as the row of an agent of a machine shows it. Answers whether the
-/// person pressed it, which asks for its follow panel.
+/// The row of one shared panel of `computer`, with the state mark of an agent
+/// row. Answers whether the person pressed it, which asks for its follow panel.
 fn render_panel(ui: &mut egui::Ui, computer: &str, panel: &LivePanel, last: bool) -> bool {
     let rect = ui.allocate_space(Vec2::new(ui.available_width(), PANEL_ROW_HEIGHT)).1;
     let hovered = ui.rect_contains_pointer(rect);
     let (kind, attention) = (kind_of(&panel.kind), attention_of(&panel.state));
-    let title = Some(shown(&panel.title)).filter(|title| !title.is_empty());
-    let label = title.as_deref().unwrap_or(kind.display_name());
+    let title = Some(panel.title.as_str()).filter(|title| !title.is_empty());
+    let label = title.unwrap_or(kind.display_name());
     let look = PanelRowLook {
         guide_x: panel_rows::guide_x(rows::card(rect)),
         accent: theme::ACCENT(),

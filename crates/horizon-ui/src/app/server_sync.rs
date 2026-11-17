@@ -85,8 +85,7 @@ pub(in crate::app) struct ServerSync {
     generation: u64,
     /// A read of the list is on the coordination worker.
     reloading: bool,
-    /// The settings of this link, until the live link of the shared terminals
-    /// takes them. A link of a test has none, so it starts no live link.
+    /// The settings of this link for the live link. A link of a test has none.
     pub(in crate::app) live: Option<SupervisorConfig>,
 }
 

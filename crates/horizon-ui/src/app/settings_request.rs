@@ -325,8 +325,7 @@ impl HorizonApp {
             ServerEntry::Target(target) => (Some(target.clone()), None),
             ServerEntry::Machine(machine) => (None, Some(machine.clone())),
         };
-        // The name of this computer and its two sharing switches are not part of
-        // the entry that the card stated, so they stay as they are.
+        // The card stated the entry alone, so the name and the sharing switches stay.
         stored.server = ServerConfig {
             ssh_target,
             machine,

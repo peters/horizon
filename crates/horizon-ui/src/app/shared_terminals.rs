@@ -68,12 +68,11 @@ impl SharedTerminals {
 }
 
 /// A text of another computer as one bounded line.
-pub(in crate::app) fn shown(text: &str) -> String {
+fn shown(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).take(SHOWN_CHARS).collect()
 }
 
-/// Stops a live link on a thread of its own, because the stop waits for the
-/// thread of the link. A thread that cannot start drops the link here.
+/// Stops a live link on a thread of its own, because the stop joins a thread.
 fn retire(supervisor: LiveSupervisor) {
     let stop = std::thread::Builder::new().name("live-link-stop".to_owned());
     let _ = stop.spawn(move || supervisor.stop());
@@ -149,8 +148,7 @@ impl HorizonApp {
         let Some(config) = shared.config.clone() else {
             return;
         };
-        // The new link has nothing of the old one: the list, the watchers and
-        // the follows of this window go to it again.
+        // The new link has nothing of the old one, so the list and the follows go again.
         self.shared_link_lost(None);
         let server = &self.template_config.server;
         let shared = &mut self.shared_terminals;
