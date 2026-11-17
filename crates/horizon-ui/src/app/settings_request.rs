@@ -689,6 +689,9 @@ fn server_document(entry: &ServerEntry, command: &str) -> BlockDocument {
             Component::Text {
                 text: SERVER_KEPT.to_owned(),
             },
+            Component::Text {
+                text: horizon_core::SHARED_TERMINALS_NOTICE.to_owned(),
+            },
             Component::Buttons {
                 items: vec![
                     Button {

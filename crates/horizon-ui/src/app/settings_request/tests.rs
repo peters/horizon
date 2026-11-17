@@ -195,6 +195,8 @@ fn a_server_link_draws_a_card_of_horizon_that_states_the_entry() {
         "Link this computer to the Horizon server on server-vm?",
         SERVER_SENT,
         SERVER_KEPT,
+        // The first link of a computer starts to share its terminals.
+        horizon_core::SHARED_TERMINALS_NOTICE,
         "Link",
         "Not now",
     ] {
@@ -206,8 +208,8 @@ fn a_server_link_draws_a_card_of_horizon_that_states_the_entry() {
     );
     assert_eq!(
         document.components.len(),
-        5,
-        "the heading, the two stored values, the two statements and the buttons"
+        6,
+        "the heading, the two stored values, the three statements and the buttons"
     );
 }
 

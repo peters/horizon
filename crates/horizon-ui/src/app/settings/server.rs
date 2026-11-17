@@ -19,6 +19,8 @@ use horizon_sync::{DeviceLogin, DeviceRow, Invited, ServerReply};
 
 use crate::theme;
 
+mod sharing;
+
 /// How often the window reads the list of the computers while an invitation is
 /// open, so it learns that another computer used that invitation.
 const REFRESH: Duration = Duration::from_secs(2);
@@ -346,6 +348,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, state: &mut ServerTabStat
     if view.linked {
         render_invitation_section(ui, state);
         render_devices_section(ui, state);
+        changed |= sharing::render(ui, &mut config.server);
     }
     // A computer that is not logged in, and one that the server removed, join
     // again from this tab: the join is the only way back to a link.
@@ -466,6 +469,10 @@ fn render_join_section(ui: &mut Ui, state: &mut ServerTabState, view: &ServerVie
             "A computer that is logged in to a server shows a link for this one. Paste it here with a \
              name for this computer.",
         );
+        if !view.linked {
+            // The first link of this computer starts to share its terminals.
+            super::dim_label(ui, horizon_core::SHARED_TERMINALS_NOTICE);
+        }
         ui.add_space(8.0);
         let mut link = state.link.clone();
         let response = ui.add(
