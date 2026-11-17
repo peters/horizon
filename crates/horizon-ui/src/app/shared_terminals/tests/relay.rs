@@ -66,7 +66,7 @@ fn memory() -> Arc<SecretStore> {
 ///
 /// It is written once and before any link starts: a link forks its child, and a
 /// fork while another thread writes a script keeps that script busy.
-fn stand_in(directory: &Path, socket: &Path) -> String {
+pub(super) fn stand_in(directory: &Path, socket: &Path) -> String {
     std::fs::write(directory.join("relay.py"), RELAY).expect("the relay of the stand-in");
     let script = format!(
         "exec /usr/bin/env python3 '{}' '{}'",
@@ -80,7 +80,7 @@ fn stand_in(directory: &Path, socket: &Path) -> String {
 /// One window with the name `label`, whose computer is `device` on the server
 /// that `program` reaches. Its live link starts with its sync link, as in a
 /// real start.
-fn computer(program: &str, device: &str, label: &str) -> (tempfile::TempDir, Context, HorizonApp) {
+pub(super) fn computer(program: &str, device: &str, label: &str) -> (tempfile::TempDir, Context, HorizonApp) {
     let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
         runtime_state: Box::new(RuntimeState::default()),
     });
@@ -110,7 +110,7 @@ fn computer(program: &str, device: &str, label: &str) -> (tempfile::TempDir, Con
 }
 
 /// A terminal panel of `app` that runs the program of the join tests.
-fn owner(app: &mut HorizonApp) -> PanelId {
+pub(super) fn owner(app: &mut HorizonApp) -> PanelId {
     let workspace = app.board.active_workspace.expect("the workspace of the test");
     let options = horizon_core::PanelOptions {
         kind: horizon_core::PanelKind::Command,
@@ -142,7 +142,7 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
         "B lists the panel of A",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
         |apps| {
-            let computers = &apps[1].shared_terminals.follower.computers;
+            let computers = &apps[1].shared_terminals.found.computers;
             computers.iter().any(|computer| {
                 computer.device == "desk-a"
                     && computer.label == "Desk A"
@@ -151,11 +151,7 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
         },
     );
     assert!(
-        b.shared_terminals
-            .follower
-            .computers
-            .iter()
-            .all(|computer| !computer.own),
+        b.shared_terminals.found.computers.iter().all(|computer| !computer.own),
         "B does not list itself"
     );
 
@@ -180,7 +176,7 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     );
 
     // Each side says in the title bar what the other one does.
-    let chip = |app: &HorizonApp, panel| app.shared_terminals.chip(panel).map(|chip| chip.name.to_owned());
+    let chip = super::chip_of;
     assert_eq!(chip(&a, panel).as_deref(), Some("seen by Desk B"));
     assert_eq!(chip(&b, follow).as_deref(), Some("on Desk A"));
 
@@ -218,7 +214,7 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
                 .board
                 .panel(follow)
                 .and_then(horizon_core::Panel::follow_ended_line);
-            let computers = &apps[1].shared_terminals.follower.computers;
+            let computers = &apps[1].shared_terminals.found.computers;
             ended.is_some() && computers.iter().all(|computer| computer.panels.is_empty())
         },
     );

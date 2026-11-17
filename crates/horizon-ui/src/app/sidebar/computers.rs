@@ -19,14 +19,14 @@ impl HorizonApp {
     /// Draws the section under the machines.
     pub(super) fn render_sidebar_computers(&self, ui: &mut egui::Ui, actions: &mut SidebarActions) {
         let shared = &self.shared_terminals;
-        let computers = &shared.follower.computers;
-        if computers.is_empty() && shared.down.is_none() {
+        let (computers, down) = (&shared.found.computers, &shared.found.down);
+        if computers.is_empty() && down.is_none() {
             return;
         }
         ui.add_space(4.0);
         line(ui, "Computers", (13.0, text::SEMIBOLD, theme::FG_SOFT()), None);
         let note = (11.0, text::REGULAR, text::secondary());
-        if let Some(reason) = &shared.down {
+        if let Some(reason) = down {
             line(ui, "Shared terminals: no link", note, None);
             paragraph(ui, reason, note);
         }

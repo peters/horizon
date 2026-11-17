@@ -1,18 +1,15 @@
-//! The follower side of shared terminals: the other computers and the panels
-//! that they share, and the follow panels of this window. Every text, grid and
-//! byte here comes from another computer: the feed of a follow panel bounds the
-//! stream, and the texts of a list are cut and cleaned where they enter.
+//! The follower side of the pump: the other computers and the panels that they
+//! share, and the streams of the follow panels of this window. Every text, grid
+//! and byte here comes from another computer: the feed of a follow panel bounds
+//! the stream, and the texts of a list are cut and cleaned where they enter.
 
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::term::TermMode;
-use egui::Context;
-use horizon_core::{Attention, FollowFeed, FollowSpec, Panel, PanelId, PanelKind};
 use horizon_sync::{LiveComputer, LiveEndReason, LiveEvent, LivePanel, MAX_LIVE_PANELS};
 
-use super::super::HorizonApp;
-use super::owner::STATES;
-use super::{LiveLink, shown};
+use super::list::computer_name;
+use super::pump::{FollowPanel, Run};
+use super::shown;
 
 /// The first bytes of a screen that its owner took on the alternate screen.
 const ALT_SCREEN_START: &[u8] = b"\x1bc\x1b[?1049h";
@@ -21,23 +18,12 @@ const ALT_SCREEN_START: &[u8] = b"\x1bc\x1b[?1049h";
 const ASK_AGAIN: Duration = Duration::from_millis(1200);
 /// The most computers of a list that this window keeps. A server lists 32.
 const MAX_COMPUTERS: usize = 64;
+/// Why every stream ends when the live link of this computer does.
+pub(super) const NO_LINK: &str = "this computer has no link to its server";
 
-#[derive(Default)]
-pub(in crate::app) struct Follower {
-    /// The other computers that hold a live link, with the panels they share.
-    pub(in crate::app) computers: Vec<LiveComputer>,
-    follows: Vec<Follow>,
-}
-
-/// One follow panel of this window.
-struct Follow {
-    panel: PanelId,
-    /// The computer and the panel that it follows, as the list names them.
-    device: String,
-    id: String,
-    feed: FollowFeed,
-    /// Whether the person may type, as the panel was opened.
-    typing: bool,
+/// The stream of one follow panel of this window.
+pub(super) struct Follow {
+    panel: FollowPanel,
     /// The stream ended. A list that names the panel starts it again.
     ended: bool,
     /// The next output is the first of a screen.
@@ -56,27 +42,6 @@ enum Alt {
     /// The screen started there, and the terminal has not drawn it yet.
     Joined,
     Entered,
-}
-
-/// The name of a computer for the person: its label, or its device name.
-pub(in crate::app) fn computer_name(computer: &LiveComputer) -> &str {
-    let label = Some(computer.label.as_str()).filter(|label| !label.is_empty());
-    label.unwrap_or(&computer.device)
-}
-
-/// The kind that a list names, for the keyboard protocol. No terminal kind reads as a shell.
-pub(in crate::app) fn kind_of(code: &str) -> PanelKind {
-    let kind = serde_json::from_value(serde_json::Value::String(code.to_owned())).unwrap_or_default();
-    match kind {
-        PanelKind::Editor | PanelKind::Browser | PanelKind::Device | PanelKind::Block => PanelKind::Shell,
-        kind => kind,
-    }
-}
-
-/// The state that a list names, for the mark of a row.
-pub(in crate::app) fn attention_of(code: &str) -> Attention {
-    let named = STATES.iter().find(|(_, name)| *name == code);
-    named.map_or(Attention::Idle, |(state, _)| *state)
 }
 
 /// The chip of a follow panel: its computer, and that the person only looks.
@@ -108,121 +73,101 @@ fn cleaned(mut computer: LiveComputer) -> LiveComputer {
 }
 
 /// The computer `device` and its panel `id` in a list.
-fn listed<'a>(computers: &'a [LiveComputer], device: &str, id: &str) -> Option<(&'a LiveComputer, &'a LivePanel)> {
+pub(super) fn listed<'a>(
+    computers: &'a [LiveComputer],
+    device: &str,
+    id: &str,
+) -> Option<(&'a LiveComputer, &'a LivePanel)> {
     let computer = computers.iter().find(|computer| computer.device == device)?;
     let panel = computer.panels.iter().find(|panel| panel.id == id)?;
     Some((computer, panel))
 }
 
-impl HorizonApp {
-    /// Opens the panel that follows the panel `id` of the computer `device` in
-    /// the active workspace, or goes to the one that is open.
-    pub(in crate::app) fn open_shared_terminal(&mut self, device: &str, id: &str, ctx: &Context) {
-        let follower = &self.shared_terminals.follower;
-        let open = follower
-            .follows
-            .iter()
-            .find(|follow| follow.device == device && follow.id == id);
-        if let Some(panel) = open.map(|follow| follow.panel) {
-            self.reveal_selected_panel(ctx, panel);
-            return;
+impl Run {
+    /// Starts the follow of each follow panel that the window opened. A panel
+    /// that the person closed is unfollowed first, so a new panel of the same
+    /// terminal follows after it.
+    pub(super) fn start_follows(&mut self) {
+        self.drop_closed();
+        for wanted in &self.wanted.follows {
+            let known = self.follows.iter().any(|follow| follow.panel.local == wanted.local);
+            if known || wanted.feed.closed() {
+                continue;
+            }
+            self.link.follow(&wanted.device, &wanted.id);
+            if let Some((computer, panel)) = listed(&self.found.computers, &wanted.device, &wanted.id) {
+                let chip = follow_chip(computer, panel.typing && wanted.typing);
+                self.found.chips.insert(wanted.local.clone(), chip);
+                self.changed = true;
+            }
+            self.follows.push(Follow {
+                panel: wanted.clone(),
+                ended: false,
+                screen_start: false,
+                alt: Alt::No,
+                ask_at: None,
+            });
         }
-        let Some((computer, shared)) = listed(&follower.computers, device, id) else {
-            return;
-        };
-        let (chip, typing) = (follow_chip(computer, shared.typing), shared.typing);
-        let spec = FollowSpec {
-            device: device.to_owned(),
-            label: computer_name(computer).to_owned(),
-            panel: id.to_owned(),
-            title: shared.title.clone(),
-            kind: kind_of(&shared.kind),
-            cols: shared.cols,
-            rows: shared.rows,
-            typing,
-        };
-        let workspace = match self.board.active_workspace {
-            Some(workspace) => workspace,
-            None => self.ensure_workspace_visible(ctx),
-        };
-        let created = self.board.create_follow_panel(workspace, spec);
-        let feed = created
-            .as_ref()
-            .ok()
-            .and_then(|panel| self.board.panel(*panel)?.follow_feed());
-        let (Ok(panel), Some(feed)) = (created, feed) else {
-            self.set_sidebar_notice("This terminal of another computer did not open.".to_owned());
-            return;
-        };
-        let shared = &mut self.shared_terminals;
-        if let Some(link) = &shared.link {
-            link.follow(device, id);
-        }
-        shared.chips.insert(panel, chip);
-        shared.follower.follows.push(Follow {
-            panel,
-            device: device.to_owned(),
-            id: id.to_owned(),
-            feed,
-            typing,
-            ended: shared.link.is_none(),
-            screen_start: false,
-            alt: Alt::No,
-            ask_at: None,
+    }
+
+    /// Unfollows each panel that the person closed.
+    fn drop_closed(&mut self) {
+        let (link, chips, changed) = (self.link.as_ref(), &mut self.found.chips, &mut self.changed);
+        self.follows.retain(|Follow { panel, .. }| {
+            let closed = panel.feed.closed();
+            if closed {
+                link.unfollow(&panel.device, &panel.id);
+                *changed |= chips.remove(&panel.local).is_some();
+            }
+            !closed
         });
-        self.reveal_selected_panel(ctx, panel);
     }
 
     /// Takes the list of the computers. A follow panel whose stream ended
     /// follows again when the list names its panel, and its chip is read again.
-    pub(super) fn shared_computers(&mut self, link: &dyn LiveLink, computers: Vec<LiveComputer>) {
-        let shared = &mut self.shared_terminals;
+    pub(super) fn computers(&mut self, computers: Vec<LiveComputer>) {
         let others = computers.into_iter().filter(|computer| !computer.own);
-        shared.follower.computers = others.take(MAX_COMPUTERS).map(cleaned).collect();
-        for follow in &mut shared.follower.follows {
-            let Some((computer, panel)) = listed(&shared.follower.computers, &follow.device, &follow.id) else {
+        self.found.computers = others.take(MAX_COMPUTERS).map(cleaned).collect();
+        self.changed = true;
+        for Follow { panel, ended, .. } in &mut self.follows {
+            let Some((computer, shared)) = listed(&self.found.computers, &panel.device, &panel.id) else {
                 continue;
             };
-            if std::mem::take(&mut follow.ended) {
-                link.follow(&follow.device, &follow.id);
+            if std::mem::take(ended) {
+                self.link.follow(&panel.device, &panel.id);
             }
-            let chip = follow_chip(computer, panel.typing && follow.typing);
-            shared.chips.insert(follow.panel, chip);
+            let chip = follow_chip(computer, shared.typing && panel.typing);
+            self.found.chips.insert(panel.local.clone(), chip);
         }
     }
 
     /// Gives one event of a stream to the feed of the panel that follows it.
-    pub(super) fn follow_event(&mut self, event: LiveEvent) {
+    /// The feed asks the window for the frame that shows the bytes.
+    pub(super) fn stream(&mut self, event: LiveEvent) {
         let (LiveEvent::Screen { owner, panel, .. }
         | LiveEvent::Output { owner, panel, .. }
         | LiveEvent::Ended { owner, panel, .. }) = &event
         else {
             return;
         };
-        let follows = &mut self.shared_terminals.follower.follows;
-        let Some(follow) = follows
-            .iter_mut()
-            .find(|follow| follow.device == *owner && follow.id == *panel)
-        else {
+        let of = |follow: &&mut Follow| follow.panel.device == *owner && follow.panel.id == *panel;
+        let Some(follow) = self.follows.iter_mut().find(of) else {
             return;
         };
-        // The frame that shows these bytes follows them, as the frame of an echo does.
-        if let Some(terminal) = self.board.panel(follow.panel).and_then(Panel::terminal) {
-            terminal.arm_output_wake();
-        }
+        let feed = &follow.panel.feed;
         match event {
             LiveEvent::Screen { cols, rows, .. } => {
-                follow.feed.screen(cols, rows);
+                feed.screen(cols, rows);
                 (follow.ended, follow.screen_start, follow.alt, follow.ask_at) = (false, true, Alt::No, None);
             }
             LiveEvent::Output { data, .. } => {
                 if std::mem::take(&mut follow.screen_start) && data.0.starts_with(ALT_SCREEN_START) {
                     follow.alt = Alt::Joined;
                 }
-                follow.feed.output(&data.0);
+                feed.output(&data.0);
             }
             LiveEvent::Ended { reason, .. } => {
-                follow.feed.ended(ended_text(reason));
+                feed.ended(ended_text(reason));
                 // A stream over a limit would end again with every list.
                 (follow.ended, follow.ask_at) = (reason != LiveEndReason::Limit, None);
             }
@@ -230,50 +175,38 @@ impl HorizonApp {
         }
     }
 
-    /// Runs every follow panel for one frame: what the person typed goes out, a
+    /// Runs every follow panel for one pass: what the person typed goes out, a
     /// stream that lost output or left its first alternate screen asks for a
     /// new screen, and a panel that the person closed is unfollowed.
-    pub(super) fn pump_follows(&mut self, link: &dyn LiveLink, ctx: &Context, now: Instant) {
-        let (board, shared) = (&self.board, &mut self.shared_terminals);
-        let chips = &mut shared.chips;
-        shared.follower.follows.retain_mut(|follow| {
-            if follow.feed.closed() {
-                link.unfollow(&follow.device, &follow.id);
-                chips.remove(&follow.panel);
-                return false;
-            }
-            let typed = follow.feed.take_typed();
+    pub(super) fn pump_follows(&mut self, now: Instant) {
+        self.drop_closed();
+        for follow in &mut self.follows {
+            let FollowPanel { device, id, feed, .. } = &follow.panel;
+            let typed = feed.take_typed();
             if !typed.is_empty() {
-                link.typed(&follow.device, &follow.id, &typed);
+                self.link.typed(device, id, &typed);
             }
-            if follow.feed.take_lost() {
+            if feed.take_lost() {
                 follow.ask_at.get_or_insert(now);
             }
-            if follow.alt != Alt::No
-                && let Some(terminal) = board.panel(follow.panel).and_then(Panel::terminal)
-            {
-                if terminal.mode().contains(TermMode::ALT_SCREEN) {
-                    follow.alt = Alt::Entered;
-                } else if follow.alt == Alt::Entered {
-                    follow.alt = Alt::No;
-                    follow.ask_at.get_or_insert(now);
-                }
+            if follow.alt != Alt::No && feed.on_alternate_screen() {
+                follow.alt = Alt::Entered;
+            } else if follow.alt == Alt::Entered {
+                follow.alt = Alt::No;
+                follow.ask_at.get_or_insert(now);
             }
             if follow.ask_at.is_some_and(|at| at <= now) {
-                link.refresh(&follow.device, &follow.id);
+                self.link.refresh(device, id);
                 follow.ask_at = Some(now + ASK_AGAIN);
-                ctx.request_repaint_after(ASK_AGAIN);
             }
-            true
-        });
+        }
     }
 
     /// Ends every stream, as the end of the link does. The follow panels stay.
     pub(super) fn follows_lost(&mut self) {
-        let follower = &mut self.shared_terminals.follower;
-        follower.computers.clear();
-        for follow in &mut follower.follows {
-            follow.feed.ended("this computer has no link to its server");
+        self.found.computers.clear();
+        for follow in &mut self.follows {
+            follow.panel.feed.ended(NO_LINK);
             (follow.ended, follow.ask_at) = (true, None);
         }
     }

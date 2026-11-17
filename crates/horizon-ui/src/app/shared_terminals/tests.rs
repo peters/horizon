@@ -3,17 +3,19 @@
 //! panel that follows it.
 
 mod name;
+mod no_frame;
 mod relay;
 mod window;
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::{Panel, PanelId, PanelKind, PanelOptions, RuntimeState, StartupDecision};
 use horizon_sync::{LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveWatcher};
 
-use super::LiveLink;
+use super::{LiveLink, pump};
 use crate::app::HorizonApp;
 use crate::app::test_support::{run_app_frame, test_app_with_startup};
 
@@ -42,10 +44,18 @@ esac; done"#;
 /// that computer is a watcher of this window, and the screens, the output and
 /// the typed bytes travel between the two sides of the one window.
 #[derive(Clone, Default)]
-struct StandIn(Arc<Mutex<Relay>>);
+struct StandIn(Arc<(Mutex<Relay>, Condvar)>);
 
 #[derive(Default)]
 struct Relay {
+    /// The pump of the window, which a new event wakes as the link of a server does.
+    pump: Option<Arc<pump::Shared>>,
+    /// Holds the pump in its next call of the link, as a call that does not
+    /// return: every call, or only one that sends a screen or output. And
+    /// whether the pump waits in such a call now.
+    held: bool,
+    held_sends: bool,
+    waiting: bool,
     events: Vec<LiveEvent>,
     panels: Vec<LivePanel>,
     followed: Vec<String>,
@@ -113,9 +123,64 @@ impl Relay {
     }
 }
 
+/// The relay of a stand-in under its lock. An event that was added under the
+/// lock wakes the pump when the lock goes back, as the link of a server does.
+struct Waking<'a> {
+    relay: MutexGuard<'a, Relay>,
+    /// The count of the events when the lock was taken.
+    before: usize,
+}
+
+impl Deref for Waking<'_> {
+    type Target = Relay;
+
+    fn deref(&self) -> &Relay {
+        &self.relay
+    }
+}
+
+impl DerefMut for Waking<'_> {
+    fn deref_mut(&mut self) -> &mut Relay {
+        &mut self.relay
+    }
+}
+
+impl Drop for Waking<'_> {
+    fn drop(&mut self) {
+        if self.relay.events.len() > self.before
+            && let Some(pump) = &self.relay.pump
+        {
+            pump.notify();
+        }
+    }
+}
+
 impl StandIn {
-    fn relay(&self) -> MutexGuard<'_, Relay> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    fn relay(&self) -> Waking<'_> {
+        let relay = self.0.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = relay.events.len();
+        Waking { relay, before }
+    }
+
+    /// The relay for a call of the pump that a test can hold: it waits while
+    /// the test holds the link. `sends` is a call with a screen or output.
+    fn gated(&self, sends: bool) -> Waking<'_> {
+        let mut relay = self.0.0.lock().unwrap_or_else(PoisonError::into_inner);
+        while relay.held || (sends && relay.held_sends) {
+            relay.waiting = true;
+            relay = self.0.1.wait(relay).unwrap_or_else(PoisonError::into_inner);
+        }
+        relay.waiting = false;
+        let before = relay.events.len();
+        Waking { relay, before }
+    }
+
+    /// Lets the calls of the pump return again.
+    fn release(&self) {
+        let mut relay = self.relay();
+        (relay.held, relay.held_sends) = (false, false);
+        drop(relay);
+        self.0.1.notify_all();
     }
 }
 
@@ -158,7 +223,7 @@ impl LiveLink for StandIn {
     }
 
     fn screen(&self, panel: &str, cols: u16, rows: u16) -> bool {
-        let mut relay = self.relay();
+        let mut relay = self.gated(true);
         if relay.full {
             return false;
         }
@@ -175,7 +240,7 @@ impl LiveLink for StandIn {
     }
 
     fn output(&self, panel: &str, bytes: &[u8]) -> bool {
-        let mut relay = self.relay();
+        let mut relay = self.gated(true);
         if relay.full {
             return false;
         }
@@ -209,7 +274,7 @@ impl LiveLink for StandIn {
     }
 
     fn take_events(&self) -> Vec<LiveEvent> {
-        std::mem::take(&mut self.relay().events)
+        std::mem::take(&mut self.gated(false).events)
     }
 }
 
@@ -219,6 +284,8 @@ struct Window {
     ctx: Context,
     app: HorizonApp,
     link: StandIn,
+    /// The pump of the window, for a test that counts its passes.
+    pump: Arc<pump::Shared>,
 }
 
 impl Window {
@@ -230,12 +297,16 @@ impl Window {
         let workspace = app.board.create_workspace("Work");
         app.board.focus_workspace(workspace);
         let link = StandIn::default();
-        app.shared_terminals.link = Some(Box::new(link.clone()));
+        let pump = Arc::new(pump::Shared::default());
+        link.relay().pump = Some(Arc::clone(&pump));
+        app.shared_terminals
+            .start_pump(Arc::clone(&pump), Box::new(link.clone()), &ctx);
         Self {
             _temp: temp,
             ctx,
             app,
             link,
+            pump,
         }
     }
 
@@ -265,11 +336,49 @@ impl Window {
         frames_until(what, &mut [(&self.ctx, &mut self.app)], |apps| done(apps[0]));
     }
 
-    /// Runs `count` frames, so what one frame queued reaches the other side.
+    /// Runs `count` frames, so what one frame queued reaches the other side:
+    /// the pump finishes what each frame and the link queued, and one more
+    /// frame takes what the pump found.
     fn frames(&mut self, count: usize) {
         for _ in 0..count {
             run_app_frame(&self.ctx, &mut self.app);
+            self.settle();
         }
+        run_app_frame(&self.ctx, &mut self.app);
+    }
+
+    /// Holds the pump in a call of the link, as a link call that does not
+    /// return, until [`StandIn::release`].
+    fn hold_pump(&self) {
+        self.link.relay().held = true;
+        let deadline = Instant::now() + PATIENCE;
+        while !self.link.relay().waiting {
+            self.pump.notify();
+            assert!(Instant::now() < deadline, "the pump reaches no call of the link");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Waits until the pump finished what the window and the link queued: two
+    /// passes, of which the second one started after this call, with no event
+    /// left for a third one.
+    fn settle(&self) {
+        let deadline = Instant::now() + PATIENCE;
+        let mut passes = 0;
+        while passes < 2 || !self.link.relay().events.is_empty() {
+            let before = self.passes();
+            self.pump.notify();
+            while self.passes() == before {
+                assert!(Instant::now() < deadline, "the pump makes no pass");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            passes += 1;
+        }
+    }
+
+    /// The count of the passes of the pump.
+    fn passes(&self) -> u64 {
+        self.pump.passes.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// The id of `panel` in the list of this window.
@@ -281,7 +390,7 @@ impl Window {
     fn follow(&mut self, owner: PanelId) -> PanelId {
         let id = self.id(owner);
         self.until("the list names the owner panel", |app| {
-            let computers = &app.shared_terminals.follower.computers;
+            let computers = &app.shared_terminals.found.computers;
             computers
                 .iter()
                 .any(|computer| computer.panels.iter().any(|panel| panel.id == id))
@@ -325,6 +434,12 @@ fn text(app: &HorizonApp, panel: PanelId) -> String {
     terminal
         .map(|terminal| terminal.last_lines_text(60))
         .unwrap_or_default()
+}
+
+/// The text of the chip in the title bar of `panel`.
+fn chip_of(app: &HorizonApp, panel: PanelId) -> Option<String> {
+    let local = &app.board.panel(panel)?.local_id;
+    app.shared_terminals.chip(local).map(|chip| chip.name.to_owned())
 }
 
 /// The first follow panel of a window.
@@ -397,8 +512,10 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     window.write(owner, b"three\n");
     window.shows(follow, "GOT:three");
 
-    // More output than the outlet holds, while no frame takes it, gives a new screen.
+    // More output than the outlet holds, while the pump takes none of it, gives
+    // a new screen. A link call that does not return holds the pump.
     let screens = window.link.relay().screens;
+    window.hold_pump();
     window.write(owner, b"big\n");
     let deadline = Instant::now() + PATIENCE;
     while !text(&window.app, owner).contains("BIG-DONE") {
@@ -406,6 +523,7 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
         assert!(Instant::now() < deadline, "the owner program prints its long output");
         std::thread::sleep(Duration::from_millis(5));
     }
+    window.link.release();
     window.shows(follow, "BIG-DONE");
     assert!(
         window.link.relay().screens > screens,
@@ -446,17 +564,13 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
         link.relay().panels.first().is_some_and(|panel| !panel.typing)
     });
     window.until("the chip of the follow panel", |app| {
-        app.shared_terminals
-            .chip(follow)
-            .is_some_and(|chip| chip.name == "on There \u{00b7} view only")
+        chip_of(app, follow).as_deref() == Some("on There \u{00b7} view only")
     });
     window.write(follow, b"dropped\n");
     window.frames(4);
     window.app.template_config.server.remote_typing = true;
     window.until("the chip of the follow panel", |app| {
-        app.shared_terminals
-            .chip(follow)
-            .is_some_and(|chip| chip.name == "on There")
+        chip_of(app, follow).as_deref() == Some("on There")
     });
     window.write(follow, b"kept\n");
     window.shows(owner, "GOT:kept");
@@ -467,8 +581,9 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
     let link = window.link.clone();
     window.until("the empty list", move |_| link.relay().panels.is_empty());
     window.until("the end of the stream", |app| ended(app).is_some());
+    window.frames(1);
     assert!(
-        window.app.shared_terminals.chip(owner).is_none(),
+        chip_of(&window.app, owner).is_none(),
         "nobody watches a panel that is not shared"
     );
     let sentence = ended(&window.app).expect("the line of the ended stream");
@@ -479,18 +594,14 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
     window.until("the stream is back", |app| ended(app).is_none());
     window.write(owner, b"back\n");
     window.shows(follow, "GOT:back");
-    assert_eq!(
-        window.app.shared_terminals.chip(owner).map(|chip| chip.name),
-        Some("seen by Here")
-    );
+    window.frames(1);
+    assert_eq!(chip_of(&window.app, owner).as_deref(), Some("seen by Here"));
 
     // The person closes the follow panel: nobody watches the owner any more.
     window.app.close_panel(follow);
     let link = window.link.clone();
     window.until("the unfollow", move |_| link.relay().followed.is_empty());
-    window.until("the chip of the owner goes", |app| {
-        app.shared_terminals.chip(owner).is_none()
-    });
+    window.until("the chip of the owner goes", |app| chip_of(app, owner).is_none());
 }
 
 /// Queues a `Typed` event as a server gives it that checks nothing: the link
@@ -517,22 +628,38 @@ fn typed_bytes_reach_a_program_only_through_the_four_checks_of_the_owner() {
     };
 
     // 1. This computer lets nobody type. The panel is shared and in the list.
+    // A person clears a switch in a frame, so a frame tells the pump.
     window.app.template_config.server.remote_typing = false;
+    window.frames(1);
     typed_event(&window.link, &id, b"typing-off\n");
-    window.frames(4);
+    window.frames(1);
     window.app.template_config.server.remote_typing = true;
+    window.frames(1);
 
-    // 2. This computer shares no terminal. The frame takes the event before it
-    // builds the empty list, so only the switch refuses the bytes.
+    // 2. This computer shares no terminal. The pump takes the event with the
+    // new switch before it takes the panel out of the list of the link, so only
+    // the switch refuses the bytes.
+    window.hold_pump();
     window.app.template_config.server.share_terminals = false;
+    run_app_frame(&window.ctx, &mut window.app);
     typed_event(&window.link, &id, b"sharing-off\n");
-    window.frames(4);
+    window.link.release();
+    window.frames(1);
+    assert!(window.link.relay().panels.is_empty(), "the list of the link is empty");
+
+    // 3. The list of the link does not name the panel yet. The pump takes the
+    // event with the switch on before it gives the link the list again, so only
+    // the list refuses the bytes.
+    window.hold_pump();
     window.app.template_config.server.share_terminals = true;
+    run_app_frame(&window.ctx, &mut window.app);
+    typed_event(&window.link, &id, b"not-listed\n");
+    window.link.release();
     let link = window.link.clone();
     window.until("the list is back", move |_| listed(&link, 1));
 
-    // 3. A panel that the list of this computer does not name yet. Its program
-    // would read the bytes when it starts.
+    // A panel that this window did not tell the pump yet. Its program would
+    // read the bytes when it starts.
     let workspace = window.app.board.active_workspace.expect("the workspace of the test");
     let options = PanelOptions {
         kind: PanelKind::Command,
@@ -548,8 +675,8 @@ fn typed_bytes_reach_a_program_only_through_the_four_checks_of_the_owner() {
         .create_panel(options, workspace)
         .expect("a second terminal");
     let late_id = window.id(late);
-    typed_event(&window.link, &late_id, b"not-listed\n");
-    window.frames(1);
+    typed_event(&window.link, &late_id, b"not-known\n");
+    window.settle();
 
     // 4. A follow panel. Its bytes would travel on to the terminal that it follows.
     let follow_id = window.id(follow);
@@ -566,7 +693,14 @@ fn typed_bytes_reach_a_program_only_through_the_four_checks_of_the_owner() {
     window.shows(owner, "GOT:kept");
     window.shows(late, "GOT:kept");
     let seen = format!("{}{}", text(&window.app, owner), text(&window.app, late));
-    let refused = ["typing-off", "sharing-off", "not-listed", "follow-panel", "no-panel"];
+    let refused = [
+        "typing-off",
+        "sharing-off",
+        "not-listed",
+        "not-known",
+        "follow-panel",
+        "no-panel",
+    ];
     let reached: Vec<&str> = refused.into_iter().filter(|words| seen.contains(words)).collect();
     assert!(reached.is_empty(), "{reached:?} reached a program: {seen}");
 }
@@ -604,27 +738,24 @@ fn the_texts_of_another_computer_are_cut_and_cleaned_where_they_enter_the_window
         device: dirty("desk-0"),
         label: dirty("There"),
     };
-    let mut relay = window.link.relay();
-    relay.events.push(LiveEvent::Computers { computers });
-    relay.events.push(LiveEvent::Watchers {
-        panel: id,
-        watchers: vec![watcher],
-        refresh: false,
-    });
-    relay
-        .events
-        .push(LiveEvent::State(horizon_sync::LiveState::Down(dirty("down"))));
-    drop(relay);
-    // The watcher is read on this frame, and the end of the link on the same
-    // frame takes the list and the watch away again, so each is read alone.
+    let events = [
+        LiveEvent::Computers { computers },
+        LiveEvent::Watchers {
+            panel: id,
+            watchers: vec![watcher],
+            refresh: false,
+        },
+        LiveEvent::State(horizon_sync::LiveState::Down(dirty("down"))),
+    ];
+    // The end of the link takes the list and the watch away again, so the
+    // window is read after each event alone.
     let clean = |text: &str| text.chars().count() <= 80 && !text.chars().any(char::is_control);
     let (mut listed, mut chipped) = (false, false);
-    let events = std::mem::take(&mut window.link.relay().events);
     for event in events {
         window.link.relay().events.push(event);
         window.frames(1);
-        let shared = &window.app.shared_terminals;
-        let computers = &shared.follower.computers;
+        let found = &window.app.shared_terminals.found;
+        let computers = &found.computers;
         assert!(computers.len() <= 64, "the list keeps a bounded count of computers");
         for computer in computers {
             assert!(clean(&computer.device) && clean(&computer.label), "{computer:?}");
@@ -635,17 +766,18 @@ fn the_texts_of_another_computer_are_cut_and_cleaned_where_they_enter_the_window
             }
         }
         // The chip holds its own words in front of the name that it cut.
-        let chip = shared.chip(owner).and_then(|chip| chip.name.strip_prefix("seen by "));
+        let chip = chip_of(&window.app, owner);
+        let chip = chip.as_deref().and_then(|chip| chip.strip_prefix("seen by "));
         assert!(chip.is_none_or(clean), "the chip of a watched panel: {chip:?}");
         assert!(
-            shared.down.as_deref().is_none_or(clean),
+            found.down.as_deref().is_none_or(clean),
             "the line of a link that is down"
         );
         listed |= computers.len() == 64;
         chipped |= chip.is_some();
     }
     assert!(listed && chipped, "one frame kept the list and one showed the watcher");
-    let down = window.app.shared_terminals.down.as_deref();
+    let down = window.app.shared_terminals.found.down.as_deref();
     assert!(
         down.is_some_and(|line| line.starts_with("down")),
         "the last event ended the link"
@@ -701,7 +833,7 @@ fn the_share_of_a_panel_goes_on_after_a_restart_of_its_terminal() {
     window.shows(owner, "GOT:after");
     window.shows(follow, "GOT:after");
     assert_eq!(
-        window.app.shared_terminals.chip(owner).map(|chip| chip.name),
+        chip_of(&window.app, owner).as_deref(),
         Some("seen by Here"),
         "the panel is still watched"
     );
