@@ -80,6 +80,14 @@ impl HorizonApp {
     }
 }
 
+/// Whether a canvas shows a map of `outer` points with its frame: the map takes
+/// at most half of the width and half of the height of the canvas. On a smaller
+/// canvas the map covers the workspace line and the panels that it is a map of,
+/// so it leaves, and it comes back when the canvas grows.
+pub(in crate::app) fn minimap_fits(canvas: Rect, outer: Vec2) -> bool {
+    canvas.width() >= 2.0 * outer.x && canvas.height() >= 2.0 * outer.y
+}
+
 fn minimap_model(
     app: &HorizonApp,
     canvas_rect: Rect,

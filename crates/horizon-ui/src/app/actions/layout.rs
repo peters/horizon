@@ -112,10 +112,8 @@ impl HorizonApp {
         let overlays = &self.template_config.overlays;
         let size = Vec2::new(overlays.minimap_width.max(120.0), overlays.minimap_height.max(120.0))
             + Vec2::splat(MINIMAP_PAD * 2.0);
-        Some(Rect::from_min_size(
-            viewport.max - Vec2::splat(MINIMAP_MARGIN) - size,
-            size,
-        ))
+        crate::app::minimap::minimap_fits(self.canvas_rect(ctx), size)
+            .then(|| Rect::from_min_size(viewport.max - Vec2::splat(MINIMAP_MARGIN) - size, size))
     }
 
     pub(in crate::app) fn sync_panel_focus_from_pointer_press(&mut self, ctx: &Context) {

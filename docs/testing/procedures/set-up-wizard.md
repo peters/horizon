@@ -334,6 +334,15 @@ Horizon before they write anything.
     show whole at the top of the card. The list is shorter than in a large
     window, and it scrolls under the search field.
 
+22. With a workspace that holds one panel, look at the lower right corner of the
+    canvas at 800 x 600. Then make the window 1280 x 800.
+
+    Result: At a window of 800 x 600 the canvas shows no minimap, and nothing
+    covers the line of the workspace or the title of a panel. At 1280 x 800 the
+    minimap shows in the lower right corner again. The minimap shows only on a
+    canvas that is two times as wide and two times as high as the minimap with
+    its frame, or larger: 664 x 384 points with the default settings.
+
 ### 6.2 F02 — The three entry points of Set up
 
 1. Examine the machine section of the sidebar before the first machine.

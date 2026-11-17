@@ -319,3 +319,42 @@ fn a_panel_row_of_a_small_window_holds_its_whole_state_word() {
         );
     }
 }
+
+/// Whether `output` holds the minimap, by the name that it tells a reader.
+fn draws_the_minimap(output: &egui::FullOutput) -> bool {
+    let update = output
+        .platform_output
+        .accesskit_update
+        .as_ref()
+        .expect("the window tells its controls");
+    update
+        .nodes
+        .iter()
+        .any(|(_, node)| node.label() == Some("Workspace minimap"))
+}
+
+#[test]
+fn the_minimap_leaves_a_small_canvas_and_comes_back_on_a_large_one() {
+    let mut window = Window::new([800.0, 600.0], vec![editor_workspace_state("beta", [520.0, 80.0])]);
+    for (size, shows) in [
+        ([800.0, 600.0], false),
+        ([1280.0, 800.0], true),
+        ([800.0, 600.0], false),
+        ([1024.0, 640.0], true),
+    ] {
+        window.size = size;
+        let _ = window.frame(Vec::new());
+        let output = window.frame(Vec::new());
+        assert_eq!(
+            draws_the_minimap(&output),
+            shows,
+            "the minimap of a window of {size:?} on the canvas {:?}",
+            window.app.canvas_rect(&window.ctx)
+        );
+        assert_eq!(
+            window.app.minimap_overlay_rect(&window.ctx).is_some(),
+            shows,
+            "the room that the canvas keeps free for the minimap at {size:?}"
+        );
+    }
+}
