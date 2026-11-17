@@ -438,7 +438,7 @@ on, until its person clears a switch. The store writes a field only when it
 differs from its default, and a store without the fields gives the defaults.
 
 The **Server** tab of the Settings window shows the section **Shared
-terminals** for a computer that follows a server
+terminals** for a computer that follows a server and has its login there
 (`crates/horizon-ui/src/app/settings/server/sharing.rs`). The section holds one
 sentence, the field **Name of this computer** and the two switches. The second
 switch is disabled while the first one is off. The sentence is
@@ -448,8 +448,9 @@ switch is disabled while the first one is off. The sentence is
 > this computer and type in them. Anyone who gets into one of those computers,
 > or into the server, can then run commands here.
 
-The same sentence is in the section **Join with a link** of a computer that
-follows no server. It is also on the card of a request that names a server
+The same sentence is in the section **Join with a link** of each other
+computer. Such a computer follows no server, or the server removed it. The
+sentence is also on the card of a request that names a server
 (`crates/horizon-ui/src/app/settings_request.rs`). A change in the Settings
 window applies to the join at once, before **Save**, as each setting of that
 window does.
