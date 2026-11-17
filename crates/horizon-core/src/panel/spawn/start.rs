@@ -484,7 +484,8 @@ impl Panel {
             browser.relaunch();
             return Ok(None);
         }
-        if !matches!(self.content, PanelContent::Terminal(_) | PanelContent::Editor(_)) {
+        // A follow panel has no program of this computer to start again.
+        if !matches!(self.content, PanelContent::Terminal(_) | PanelContent::Editor(_)) || self.is_follower() {
             return Ok(None);
         }
         let work_brief = self.requested_work_brief()?;

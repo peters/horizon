@@ -440,7 +440,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     }
 }
 
-pub(super) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
+pub(crate) fn kitty_keyboard_for_kind(kind: PanelKind) -> bool {
     agent_definition(kind).is_none_or(|definition| definition.kitty_keyboard)
 }
 

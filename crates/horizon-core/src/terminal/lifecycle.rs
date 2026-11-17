@@ -15,7 +15,7 @@ use crate::panel_shutdown::PanelCompletion;
 const HELLO_BOUND: Duration = Duration::from_secs(2);
 
 /// The size of the terminal that `options` names.
-fn window_size_of(options: &TerminalSpawnOptions) -> WindowSize {
+pub(super) fn window_size_of(options: &TerminalSpawnOptions) -> WindowSize {
     WindowSize {
         num_lines: options.rows.max(1),
         num_cols: options.cols.max(2),
@@ -157,7 +157,7 @@ impl Terminal {
 
     /// Starts the event loop of a terminal on `pty`, with the replay of `options`,
     /// and answers that terminal.
-    fn on_pty(
+    pub(super) fn on_pty(
         options: TerminalSpawnOptions,
         trust: TerminalSshTrust,
         output: PtyOutput,
@@ -246,6 +246,7 @@ impl Terminal {
             child_exit_status: None,
             snapshot: matches!(output, PtyOutput::Discarded),
             holder,
+            follow: None,
         };
         terminal.process_events();
         Ok(terminal)
@@ -257,6 +258,9 @@ impl Terminal {
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
+        if self.follow_typed(bytes) {
+            return;
+        }
         self.work_continuation.note_input(bytes);
         if let Some(owner) = &self.work_owner {
             owner.note_input(bytes);
@@ -266,7 +270,9 @@ impl Terminal {
 
     /// Forward pointer motion without treating a hover as a user decision.
     pub fn write_pointer_motion(&self, bytes: &[u8]) {
-        self.write_protocol(bytes);
+        if !self.follow_typed(bytes) {
+            self.write_protocol(bytes);
+        }
     }
 
     /// Takes the callback that asks the window for the frame which shows new
@@ -310,7 +316,9 @@ impl Terminal {
     }
 
     pub(super) fn write_protocol(&self, bytes: &[u8]) {
-        if bytes.is_empty() {
+        // A follower writes nothing to its link: the bytes of the person go to
+        // its feed, and the terminal of the owner answers the program.
+        if bytes.is_empty() || self.follow.is_some() {
             return;
         }
 
@@ -383,7 +391,11 @@ impl Terminal {
     /// detaches from that program and signals nothing to it.
     #[must_use]
     pub(crate) fn hanging_child(&self) -> Option<crate::process::HangingChild> {
-        if self.holder.is_some() || self.child_exited || self.shutdown_complete.load(Ordering::Acquire) {
+        if self.holder.is_some()
+            || self.follow.is_some()
+            || self.child_exited
+            || self.shutdown_complete.load(Ordering::Acquire)
+        {
             return None;
         }
         Some(crate::process::HangingChild::new(
@@ -420,7 +432,7 @@ impl Terminal {
         // The program of an attached panel keeps running, so its conversation is
         // neither suspended nor sealed: the work ledger of the panel stays as the
         // running program left it, and the next start attaches to that program.
-        if self.holder.is_some() || self.event_loop_handle.is_none() {
+        if self.holder.is_some() || self.follow.is_some() || self.event_loop_handle.is_none() {
             return false;
         }
         // A launch that only reports the state of its panel continues nothing:
@@ -499,7 +511,7 @@ impl Terminal {
 
 /// Where the PTY output of a terminal goes.
 #[derive(Clone, Copy)]
-enum PtyOutput {
+pub(super) enum PtyOutput {
     /// Into the grid the panel shows.
     Shown,
     /// Into a scratch grid nobody sees; only the process's exit is reported.

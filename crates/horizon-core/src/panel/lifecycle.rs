@@ -73,6 +73,10 @@ impl Panel {
     ///
     /// Returns the refusal of the pre-flight, or the error of the process start.
     pub fn apply_restart(&mut self, start: PanelStart) -> Result<()> {
+        // A follow panel has no program, so an answer for it starts nothing.
+        if self.is_follower() {
+            return Ok(());
+        }
         if let PanelContent::Browser(browser) = &mut self.content {
             browser.relaunch();
             return Ok(());

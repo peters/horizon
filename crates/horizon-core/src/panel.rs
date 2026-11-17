@@ -1,6 +1,7 @@
 mod agent_status;
 mod cwd;
 mod echo;
+mod follow;
 mod lifecycle;
 mod metrics;
 mod program_end;
@@ -649,7 +650,7 @@ impl Panel {
         previous: Option<&std::path::Path>,
         directory: &std::path::Path,
     ) {
-        if !panel_runs_a_local_process(self.kind) || self.launch_cwd.as_deref() != previous {
+        if !panel_runs_a_local_process(self.kind) || self.is_follower() || self.launch_cwd.as_deref() != previous {
             return;
         }
         tracing::info!(
@@ -849,7 +850,7 @@ impl Panel {
 
     /// The title of the terminal of this panel, as the name of the panel shows it.
     fn shown_terminal_title(&self) -> &str {
-        title_name(self.kind, &self.terminal_title).unwrap_or(&self.terminal_title)
+        title_name(self.claims_kind(), &self.terminal_title).unwrap_or(&self.terminal_title)
     }
 
     #[must_use]

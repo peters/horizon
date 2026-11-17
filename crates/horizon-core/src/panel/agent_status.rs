@@ -52,10 +52,10 @@ impl Panel {
         };
         if self.terminal_title != terminal.title() {
             self.terminal_title = terminal.title().to_string();
-            self.title_state = crate::agent_work::title_state(self.kind, &self.terminal_title);
+            self.title_state = crate::agent_work::title_state(self.claims_kind(), &self.terminal_title);
         }
         if let Some(payload) = terminal.take_program_payload() {
-            self.program_status = crate::agent_work::program_status(self.kind, payload.as_bytes());
+            self.program_status = crate::agent_work::program_status(self.claims_kind(), payload.as_bytes());
         }
     }
 

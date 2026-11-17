@@ -51,6 +51,7 @@ impl Terminal {
     /// Drain pending PTY events. Returns `true` if any events were processed.
     #[profiling::function]
     pub fn process_events(&mut self) -> bool {
+        self.sync_follow();
         let mut had_events = false;
         while let Ok(event) = self.event_rx.try_recv() {
             self.handle_event(event);
@@ -86,6 +87,10 @@ impl Terminal {
     }
 
     fn answer_query(&mut self, bytes: &[u8]) {
+        // A follower answers no question of the program and reports no answer.
+        if self.follow_spec().is_some() {
+            return;
+        }
         self.write_protocol(bytes);
         self.answered_query = true;
     }
@@ -147,6 +152,9 @@ impl Terminal {
         match event {
             Event::Title(title) => self.title.apply_incoming(&title),
             Event::ResetTitle => self.title.reset(),
+            // The clipboard of this computer takes no copy that a program of
+            // another computer asked for.
+            Event::ClipboardStore(..) if self.follow_spec().is_some() => {}
             Event::ClipboardStore(clipboard, contents) => self.pending_clipboard.store(clipboard, contents),
             // OSC 52 reads are denied by the emulator config, and a program
             // running in the terminal must not read the system clipboard.

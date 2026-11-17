@@ -61,7 +61,8 @@ impl Panel {
     /// program of a shell, a command or an agent, whose end nothing else
     /// reports.
     fn reports_its_program_end(&self) -> bool {
-        if self.kind == PanelKind::Ssh {
+        // A follow panel has no program: its feed says when its stream ended.
+        if self.kind == PanelKind::Ssh || self.is_follower() {
             return false;
         }
         match &self.content {

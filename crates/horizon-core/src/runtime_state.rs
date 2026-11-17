@@ -299,6 +299,9 @@ impl RuntimeState {
                     .panels
                     .iter()
                     .filter_map(|panel_id| board.panel(*panel_id))
+                    // A follow panel shows a terminal of another computer, which no
+                    // start of this computer can restore.
+                    .filter(|panel| !panel.is_follower())
                     .map(|panel| {
                         let terminal = panel.terminal();
                         let editor = panel.editor();
@@ -381,6 +384,7 @@ impl RuntimeState {
             focused_panel_local_id: board
                 .focused
                 .and_then(|panel_id| board.panel(panel_id))
+                .filter(|panel| !panel.is_follower())
                 .map(|panel| panel.local_id.clone()),
             detached_workspaces,
             workspaces,

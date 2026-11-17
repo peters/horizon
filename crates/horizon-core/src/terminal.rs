@@ -1,6 +1,7 @@
 mod content;
 mod cwd;
 mod events;
+mod follow;
 pub mod latency;
 mod lifecycle;
 pub(crate) use self::lifecycle::holder_hello;
@@ -35,6 +36,7 @@ use crate::error::{Error, Result};
 pub use self::cwd::{CwdReader, PROGRAM_BOUND, read_cwd};
 use self::events::PendingClipboard;
 pub use self::events::{ClipboardTarget, ClipboardWrite};
+pub use self::follow::{FollowFeed, FollowSpec, MAX_FOLLOW_COLS, MAX_FOLLOW_ROWS, MAX_TYPED, MAX_WAITING_OUTPUT};
 pub(crate) use self::lifecycle::open_pty;
 use self::replay::{ReplayRestoreState, drain_replay_events};
 #[cfg(test)]
@@ -266,6 +268,9 @@ pub struct Terminal {
     /// The link to the holder of this panel, for the one frame that ends its
     /// program. A terminal of a program of this process has none.
     holder: Option<std::os::unix::net::UnixStream>,
+    /// The stream that this terminal shows instead of a program of this
+    /// computer. Such a terminal never writes to its link and never resizes.
+    follow: Option<follow::Follower>,
 }
 
 #[cfg(test)]

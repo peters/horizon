@@ -1,6 +1,7 @@
 mod agent_status;
 mod arrangement;
 mod empty_workspace;
+mod follow;
 mod geometry;
 mod shutdown;
 mod workspaces;
@@ -434,6 +435,9 @@ impl Board {
             .iter_mut()
             .find(|p| p.id == id)
             .ok_or_else(|| Error::Pty(format!("panel {} not found", id.0)))?;
+        if panel.is_follower() {
+            return Ok(());
+        }
         let terminal = panel
             .terminal_mut()
             .ok_or_else(|| Error::State("No terminal to restart".into()))?;

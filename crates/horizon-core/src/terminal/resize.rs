@@ -21,6 +21,11 @@ impl Terminal {
     }
 
     fn resize_with_policy(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16, immediate: bool) {
+        // The grid of a follower is the grid of its stream: only a new screen
+        // of the stream changes it, and the program never hears of this panel.
+        if self.follow_spec().is_some() {
+            return;
+        }
         let rows = rows.max(1);
         let cols = cols.max(2);
         let cell_width = cell_width.max(1);
