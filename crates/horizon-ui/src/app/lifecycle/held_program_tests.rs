@@ -14,8 +14,12 @@ use horizon_core::{HorizonHome, PanelId, RuntimeState, StartupDecision, Workspac
 
 use crate::app::HorizonApp;
 use crate::app::test_support::{
-    HELD_PANEL_ID, HELD_PROGRAM_MARKER, app_in, held_panel_state, held_program_launch, keep_agents_config, program_runs,
+    HELD_PANEL_ID, HELD_PROGRAM_MARKER, app_in, editor_panel_state, held_panel_state, held_program_launch,
+    keep_agents_config, program_runs, run_app_frame,
 };
+
+/// The id of the one panel of a board that does not show a held panel.
+const OTHER_PANEL_ID: &str = "0e4f2a41-6d68-4c1c-9d95-5c8d3f2f7c11";
 
 /// The longest time that a test waits for one condition.
 const TEST_BOUND: Duration = Duration::from_secs(20);
@@ -84,6 +88,75 @@ fn wait_for_text(app: &mut HorizonApp, panel: PanelId, wanted: &str) -> String {
         assert!(Instant::now() < deadline, "waited for {wanted:?}, read {text:?}");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// The board of one editor panel, which does not show the panel of a holder.
+fn board_without_the_held_panel() -> RuntimeState {
+    RuntimeState {
+        workspaces: vec![WorkspaceState {
+            local_id: "workspace".to_owned(),
+            name: "workspace".to_owned(),
+            panels: vec![editor_panel_state(OTHER_PANEL_ID, [40.0, 40.0])],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    }
+}
+
+/// A start on a board that does not show the panel of a running holder ends its
+/// program, and the sidebar says so: the person reads what the start took away.
+#[test]
+fn a_start_that_ends_the_program_of_an_unshown_holder_says_so_in_the_sidebar() {
+    let folder = crate::app::test_support::short_temp("hz-held-unshown");
+    let home = HorizonHome::from_root(folder.path().join(".horizon"));
+    let hello =
+        panel_holder::serve_on_a_thread(&home, &held_program_launch(HELD_PANEL_ID)).expect("the holder of a test");
+    assert!(
+        program_runs(hello.pid),
+        "the program of the holder runs before the start"
+    );
+    // The start of the application: it reads the board of the last run from the
+    // store, as `prepare_startup` does for the window.
+    let config = horizon_core::Config::default();
+    let store = horizon_core::SessionStore::new(home.clone(), folder.path().join("config.json"));
+    store
+        .create_session_from_runtime(board_without_the_held_panel())
+        .expect("the session of the last run");
+    let startup = store.prepare_startup(&config).expect("the decision of a start");
+    let ctx = Context::default();
+    let mut app = app_in(&ctx, folder.path(), &config, startup);
+    app.settle_panel_starts();
+
+    const SENTENCE: &str = "Horizon ended 1 agent program that no panel showed.";
+    let says = |app: &HorizonApp| {
+        [&app.sidebar_notice, &app.sidebar_sticky_notice]
+            .into_iter()
+            .flatten()
+            .any(|line| line.contains(SENTENCE))
+    };
+    let deadline = Instant::now() + TEST_BOUND;
+    while !says(&app) {
+        assert!(
+            Instant::now() < deadline,
+            "the sidebar says nothing about the holder that the start ended: {:?} {:?}",
+            app.sidebar_notice,
+            app.sidebar_sticky_notice
+        );
+        run_app_frame(&ctx, &mut app);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !program_runs(hello.pid),
+        "the start ends the program of the unshown holder"
+    );
+    // The person looks at the window some time after the start, as the live run
+    // did: 15 seconds later the line must still be there.
+    app.notice_clock.ahead += Duration::from_secs(15);
+    run_app_frame(&ctx, &mut app);
+    assert!(
+        says(&app),
+        "the line is gone 15 seconds after the start, before a person read it"
+    );
 }
 
 /// The end of Horizon detaches from the program of a holder and signals nothing:

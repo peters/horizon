@@ -490,7 +490,10 @@ impl HorizonApp {
         }
     }
 
-    /// Shows the line of the holders that a worker ended, once.
+    /// Shows the line of the holders that a worker ended, once. The answer comes in
+    /// the first frames of a start, before a person looks at the window, and it
+    /// names programs that are gone for good: the line stays until the person
+    /// closes it, after the line of the panels that the session left out.
     pub(super) fn poll_unshown_holders(&mut self) {
         let Some(receiver) = self.session_catalog_refresh.unshown_holders.take() else {
             return;
@@ -498,7 +501,9 @@ impl HorizonApp {
         match receiver.try_recv() {
             Ok(found) => {
                 if let Some(line) = super::board_notice::unshown_holders_notice(found) {
-                    self.set_sidebar_plain_notice(line);
+                    tracing::info!(ended = found.ended, alive = found.alive, "a start ended agent programs");
+                    let lines = self.sidebar_sticky_notice.take().into_iter().chain([line]);
+                    self.set_sidebar_sticky_notice(lines.collect::<Vec<_>>().join(" "));
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
