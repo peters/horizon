@@ -29,8 +29,10 @@ Prove these results:
 
 - Candidate: a build that holds the setting `features.keep_agents_through_restart`.
 - Platforms: Linux. The holder is not proven on macOS.
-- This procedure does not test: the tools of the agent program after the restart,
-  a panel of a machine, and an ssh panel. No panel of these kinds uses a holder.
+- This procedure does not test a panel of a machine and an ssh panel. No panel
+  of these kinds uses a holder.
+- Task K5 needs a real agent program and a Horizon that installs its agent
+  integrations. The stand-in program has no hooks and no tools.
 
 ## 3. Safety
 
@@ -157,12 +159,47 @@ the board of the first run.
 > **CAUTION:** A HOLDER OF A PANEL THAT THIS STEP LEAVES OPEN KEEPS RUNNING AFTER
 > HORIZON ENDS. DO STEP 8 BEFORE YOU END THE TASK.
 
+### 6.5 K5 — The hooks and the tools of a real agent after a restart
+
+Do this task with a real agent program, a Horizon that installs its agent
+integrations, and a private Horizon home of this task.
+
+1. Open a Claude panel and send it one message. Read the folder
+   `runtime/agent-plugins` of the Horizon home.
+
+   Result: The folder holds one host folder, its `.lock` file and its `.held`
+   file.
+
+2. Quit Horizon as in step 6.2.1, and read the folder again.
+
+   Result: The host folder and its files are there, because the holder of the
+   panel runs.
+
+3. Start Horizon again in the same session. Read the folder and the log.
+
+   Result: The folder holds the same host folder and no second one. The log has
+   the line `agent programs of an earlier Horizon run on in holders` with
+   `taken=true`.
+
+4. Send the agent one message.
+
+   Result: The panel shows no `hook error` line.
+
+5. Tell the agent to call `block_panel` with the operation `list`.
+
+   Result: The call returns in less than 10 seconds.
+
+6. Close the panel and quit Horizon. Read the folder again.
+
+   Result: The folder holds no host folder, because no holder runs.
+
 ## 7. Pass criteria
 
 - K1 proves that the program of a new agent panel is a child of a holder.
 - K2 proves the same pid and the same text after the quit.
 - K3 proves that a closed panel leaves no holder and no program.
 - K4 proves that a restart starts a new program.
+- K5 proves that the hooks and the tools of a real agent work after a restart.
 - No holder of the task is left after the cleanup.
 
 ## 8. Cleanup

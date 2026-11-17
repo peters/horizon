@@ -246,6 +246,17 @@ pub fn safe_local_id(local_id: &str) -> String {
     encoded
 }
 
+/// The identifier that [`safe_local_id`] encoded as `encoded`, or `None` for a
+/// name that it did not write.
+#[must_use]
+pub fn local_id_of(encoded: &str) -> Option<String> {
+    let pairs = encoded.strip_prefix('%')?.as_bytes().chunks(2);
+    let bytes: Option<Vec<u8>> = pairs
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok().filter(|id| safe_local_id(id) == encoded)
+}
+
 #[cfg(test)]
 mod home_tests {
     use std::ffi::OsString;
@@ -279,6 +290,16 @@ mod home_tests {
             PathBuf::from("relative"),
             "a set override never falls back to the user home"
         );
+    }
+
+    #[test]
+    fn an_encoded_identifier_reads_back_and_no_other_name_does() {
+        for id in ["", "9bc6f6c5-175a-4f16-a55a-1619bb1a93b1", "Ünïcode/../x"] {
+            assert_eq!(super::local_id_of(&super::safe_local_id(id)).as_deref(), Some(id));
+        }
+        for name in ["plain", "%4", "%zz", "%4A", "%ff"] {
+            assert_eq!(super::local_id_of(name), None, "{name}");
+        }
     }
 
     /// The guard of the suite: a private home passes, and the home of the person

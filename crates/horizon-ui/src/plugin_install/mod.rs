@@ -477,9 +477,17 @@ fn install_agent_plugins_for(
     path: Option<&OsStr>,
 ) -> Option<AgentPluginHostLease> {
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
+    let kept = kept_host(horizon_home).and_then(|(host, lease)| {
+        let taken = manifest::configure_host_instance(&host);
+        tracing::info!(
+            taken = taken.is_ok(),
+            "agent programs of an earlier Horizon run on in holders"
+        );
+        taken.is_ok().then_some(lease)
+    });
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
-    let mut lease = match AgentPluginHostLease::acquire(host_dir.clone()) {
+    let mut lease = match kept.map_or_else(|| AgentPluginHostLease::acquire(host_dir.clone()), Ok) {
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
@@ -617,6 +625,19 @@ fn held_path(lock_path: &Path) -> PathBuf {
 /// Whether a holder runs a program of the host of `lock_path`.
 fn held_by_a_holder(lock_path: &Path) -> bool {
     open_lock_file(&held_path(lock_path)).is_ok_and(|held| matches!(held.try_lock(), Err(TryLockError::WouldBlock)))
+}
+
+/// The lease of a Horizon of this home that ended while its agent programs run on
+/// in holders, with its identity. The tools of those programs carry that identity,
+/// so the Horizon that takes it answers them. A Horizon that still runs holds its
+/// lease, and a folder that no holder reads is removed here as the prune removes it.
+fn kept_host(horizon_home: &HorizonHome) -> Option<(String, AgentPluginHostLease)> {
+    let hosts = std::fs::read_dir(horizon_home.agent_plugin_hosts_dir()).ok()?;
+    hosts.flatten().find_map(|entry| {
+        let host = horizon_browser_control::paths::local_id_of(entry.file_name().to_str()?)?;
+        let lease = AgentPluginHostLease::acquire(entry.path()).ok()?;
+        held_by_a_holder(&lease.lock_path).then_some((host, lease))
+    })
 }
 
 fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {

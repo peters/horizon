@@ -95,6 +95,13 @@ The socket idiom follows [`crates/horizon-sync/src/link.rs`](../../../crates/hor
   the link, for at most 64 sockets, on a worker thread. A process that serves a
   socket and does not end the link costs that time and one line in the sidebar.
   It cannot stop a frame. The start does not remove a socket that accepts a link.
+- **A Horizon takes the identity of a Horizon that ended only with its lease.**
+  The tools of a held program send the identity of the Horizon that started the
+  program, and a Horizon answers only its own identity. A start takes the
+  identity of a host folder that a holder locks, and only after it has the
+  exclusive lease of that folder. A Horizon that runs keeps its lease, so no
+  second Horizon answers its agents. The name of the folder is read back with
+  `local_id_of`, which refuses each name that `safe_local_id` did not write.
 - **The socket folder is private and the holder makes it so.** The folder is
   0700 and the socket is 0600, whatever the umask of the process is.
 - **The holder serves a socket of this computer only.** It opens no port, starts no

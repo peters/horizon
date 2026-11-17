@@ -1,19 +1,20 @@
-//! The plugin folder of a Horizon whose agent program runs on in a holder.
+//! The plugin folder and the identity of a Horizon whose agent program runs on in
+//! a holder.
 //!
-//! The program was started with the path of that folder, so the folder must stay
-//! after that Horizon ended. The lane runs the functions that the application runs
-//! at its end and at its next start.
+//! The program was started with the path of that folder, and its tools carry the
+//! identity of that Horizon, so both must hold after that Horizon ended. The lanes
+//! run the functions that the application runs at its end and at its next start.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use horizon_core::browser::manifest::{HOST_INSTANCE_ENV, host_instance};
+use horizon_core::browser::manifest::{AgentIdentity, HOST_INSTANCE_ENV, block, host_instance};
 use horizon_core::{HorizonHome, panel_holder};
 
 use super::{
-    AgentPluginHostLease, held_agent_plugin_lease, install_agent_plugins_for, release_held_agent_plugin_host,
-    work_hooks,
+    AgentPluginHostLease, held_agent_plugin_lease, install_agent_plugins_for, kept_host,
+    release_held_agent_plugin_host, work_hooks,
 };
 
 /// The id of a real panel, and the identity of the Horizon that started its program.
@@ -103,4 +104,60 @@ fn the_plugin_folder_of_a_held_program_stays_until_its_panel_closes() {
     });
     assert!(removed.is_some(), "no holder names the folder, so a start removes it");
     assert!(!held.exists(), "the file of the holders goes with the folder");
+}
+
+/// The tools of a held program carry the identity of the Horizon that started it,
+/// and only a Horizon with that identity claims their requests. The next Horizon
+/// finds that identity while the program runs, and no Horizon takes the identity
+/// of one that still runs.
+#[test]
+fn the_next_horizon_finds_the_identity_of_a_held_program() {
+    let (folder, home) = short_home();
+    let first_dir = home.agent_plugin_host_dir(FIRST_HORIZON);
+    let plugin = home.agent_work_plugin_dir_for_host(FIRST_HORIZON);
+    let first = AgentPluginHostLease::acquire(first_dir.clone()).expect("the first lease");
+    panel_holder::serve_on_a_thread(&home, &launch_that_names(&plugin)).expect("the holder of the program");
+    assert!(kept_host(&home).is_none(), "a Horizon that runs keeps its identity");
+
+    drop(first);
+    let (host, lease) = soon(|| kept_host(&home)).expect("the identity of the Horizon of the held program");
+    assert_eq!(host, FIRST_HORIZON);
+    assert!(
+        first_dir.is_dir(),
+        "the Horizon that takes the identity takes its folder"
+    );
+
+    // The request of a tool of the held program, as its tool server writes it.
+    let root = folder.path().join("requests");
+    let actor = horizon_core::browser_actor(HELD_PANEL);
+    let asks = |host: &str| {
+        block::enqueue_at(
+            &root,
+            AgentIdentity::new(&actor, Some(host)),
+            block::Operation::List,
+            Duration::from_secs(60),
+        )
+    };
+    asks(FIRST_HORIZON).expect("the request of the held program");
+    let other = "0d9c7b5a-4e3f-4a21-8b6c-5d4e3f2a1b09";
+    assert!(
+        block::claim_at(&root, other).expect("the queue").is_empty(),
+        "a Horizon with another identity never claims the request, so the tool waits"
+    );
+    assert_eq!(
+        block::claim_at(&root, &host).expect("the queue").len(),
+        1,
+        "the Horizon that took the identity claims the request"
+    );
+
+    // The panel closes: no holder names the identity, and no start takes it.
+    drop(lease);
+    assert!(first_dir.is_dir(), "the folder stays while the program runs");
+    let ends = panel_holder::close_unshown(&home, &BTreeSet::new()).expect("the holders of the home");
+    assert_eq!((ends.ended, ends.alive), (1, 0), "the close ends the program");
+    let removed = soon(|| (kept_host(&home).is_none() && !first_dir.exists()).then_some(()));
+    assert!(
+        removed.is_some(),
+        "no program runs under the identity, and its folder is removed"
+    );
 }

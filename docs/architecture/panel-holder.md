@@ -173,3 +173,66 @@ The end of Horizon, a crash of it and a session that replaces the board send no
 `Close` frame, so the program continues in its holder. A start of Horizon then
 finds the holder of every panel of the restored board and attaches to it, and it
 ends the program of a holder that no panel shows.
+
+## What a held program keeps from the Horizon that started it
+
+A program that a holder runs was started by one Horizon process. Its arguments,
+its environment and the tool server that it started name things of that process.
+The table gives each of them and what it names after that Horizon ended.
+
+`<host>` is the identity of one Horizon process, a random value. `<host folder>`
+is `runtime/agent-plugins/<encoded host>` in the Horizon home.
+
+| Value | Who gets it | After a restart of Horizon |
+|---|---|---|
+| `--plugin-dir <host folder>/claude-code` | Claude | The folder stays. The next Horizon uses the same folder and writes its files again. |
+| `--plugin-dir <host folder>/work-resume` | Claude, when the panel continues its work | The folder stays, so the hooks of the program run. |
+| `-e <host folder>/work-report/pi-report.mjs` | pi | The file stays. |
+| `HORIZON_BROWSER_HOST_INSTANCE=<host>` | Each agent, and the tool server that it starts | The next Horizon takes the same identity, so it answers the tools of the program. |
+| `HORIZON_BROWSER_ACTOR` | Each agent | It names the panel, and it does not change. |
+| `HORIZON_WORK_ROOT`, `HORIZON_WORK_PANEL`, `HORIZON_WORK_OWNER`, `HORIZON_WORK_KIND` | Claude and pi, when the panel continues its work | They name the home, the panel and the owner in the work ledger of the home. They do not change, and an attach writes no new owner. |
+| `HORIZON_WORK_EXECUTABLE` | The same panels | The path of the program file of Horizon. It is correct while that file is on the disk. |
+| `HORIZON_EXECUTABLE`, and `HORIZON_BROWSER_MCP_EXECUTABLE` of Grok | Each agent | On Linux it is `/proc/<pid>/exe` of the Horizon that ended, which names no file. On macOS it is the path of the program file. |
+| `-c mcp_servers.horizon-browser.command=...` | Codex | The same value as `HORIZON_EXECUTABLE`. The tool server that Codex started continues. Codex cannot start it again on Linux. |
+| `command` in `<host folder>/claude-code/.mcp.json` | Claude | The next Horizon writes the file again with its own program, so Claude can start its tool server again. |
+| The named secrets of the computer | Each agent | The values of the start. A changed secret reaches only a new program. |
+
+The rule has two parts, and one file gives the two of them:
+
+1. **The folder of a held program stays while its holder lives.** A Horizon makes
+   the file `<encoded host>.held` beside its host folder. Each holder that this
+   Horizon starts keeps a shared lock on that file
+   (`panel_holder/serve.rs`, `plugin_folder_lease`). The end of a Horizon and the
+   prune of a later start remove a host folder only when no holder has that lock
+   (`crates/horizon-ui/src/plugin_install/`, `held_by_a_holder`). A start after the
+   last holder of that Horizon ended removes the folder, its lease and that file.
+2. **The next Horizon takes the identity of a held program.** A start looks for a
+   host folder that a holder locks and that no Horizon has the lease of
+   (`kept_host`). It takes that lease and that identity before any part of it
+   reads its identity. The lease is exclusive, so two Horizons that run at the
+   same time never have the same identity.
+
+### What a kept agent can do after a restart
+
+- It continues its conversation in the same process, and it gets the keys of the
+  panel.
+- Its hooks run, because the folders of its `--plugin-dir` arguments stay.
+- Its Horizon tools (`browser_*`, `block_panel`, `device_panel` and the others)
+  reach the new Horizon, because the new Horizon has the identity that the tool
+  server sends.
+
+### What a kept agent cannot do after a restart
+
+- A tool call that the old Horizon held when it ended gets no answer. An example
+  is a `block_panel` call with the operation `next_click` that waits for a click.
+  The call ends at its own time limit, and the next call works.
+- On Linux, `HORIZON_EXECUTABLE` names no file, and Codex cannot start its tool
+  server again. A restart of the panel repairs the two.
+- If two Horizons of one home ended and each left held programs, the next Horizon
+  takes the identity of one of them. The tools of the programs of the other get no
+  answer, and their folder stays until their holders end.
+- A Horizon with `HORIZON_AGENT_INTEGRATIONS=off` makes no host folder, so the
+  next Horizon does not take its identity, and the tools of its held programs get
+  no answer after a restart.
+- No test of this repository starts the real Claude or Codex program. The live
+  procedure proves the hooks and the tool calls.
