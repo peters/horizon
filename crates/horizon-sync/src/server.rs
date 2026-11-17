@@ -18,6 +18,10 @@
 //! open waits. The first two close the link with a typed error, because the frame
 //! breaks the contract of the protocol; the third answers that one wait and keeps
 //! the link.
+//!
+//! A link whose first request is the `open` of [`crate::live`] is a live link
+//! from then on, and the loop of that module serves it. No live frame travels on
+//! a link that carries the store.
 
 use std::{
     collections::BTreeMap,
@@ -162,17 +166,17 @@ impl LinkTransport for NoTransport {
 }
 
 /// One frame that the writing thread of a link must write.
-struct Outgoing {
-    frame: Frame,
+pub(crate) struct Outgoing {
+    pub(crate) frame: Frame,
     /// Told when the frame reached the transport, so a removal can wait for its
     /// error frame before it closes the link.
-    written: Option<mpsc::SyncSender<()>>,
+    pub(crate) written: Option<mpsc::SyncSender<()>>,
 }
 
 /// One open link of one device, so the server can end it.
 pub struct LinkTicket {
-    id: u64,
-    device: String,
+    pub(crate) id: u64,
+    pub(crate) device: String,
     frames: mpsc::Sender<Outgoing>,
     closed: Arc<AtomicBool>,
     transport: Arc<dyn LinkTransport>,
@@ -206,17 +210,25 @@ impl LinkTicket {
         {
             let _ = waiting.recv_timeout(END_FLUSH);
         }
+        self.shut();
+    }
+
+    /// Closes this link at once and without an error frame, for a link whose
+    /// writing side failed.
+    pub(crate) fn shut(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.transport.shutdown();
     }
 }
 
 /// The links of one server that are open now, so a removal ends the links of the
-/// computer that it removes.
+/// computer that it removes, and the hub of its live links, which every link of
+/// the server shares.
 #[derive(Default)]
 pub struct LinkRegistry {
     next: AtomicU64,
     open: Mutex<BTreeMap<u64, Arc<LinkTicket>>>,
+    pub(crate) live: crate::live::LiveHub,
 }
 
 impl std::fmt::Debug for LinkRegistry {
@@ -242,7 +254,7 @@ impl LinkRegistry {
     }
 
     /// Registers one open link, and answers a ticket that ends it.
-    fn add(
+    pub(crate) fn add(
         &self,
         device: &str,
         frames: mpsc::Sender<Outgoing>,
@@ -449,11 +461,16 @@ fn converse<R: Read>(
     ticket: &Arc<LinkTicket>,
 ) -> Result<(), FrameError> {
     let waits = Arc::new(AtomicUsize::new(0));
+    let mut fresh = true;
     loop {
         let Some(frame) = next_frame(reader, frames)? else {
             return Ok(());
         };
+        let first = std::mem::replace(&mut fresh, false);
         match frame {
+            Frame::Live(request) => {
+                return crate::live::serve(reader, frames, &info.registry, ticket, request, first);
+            }
             Frame::Push(push) => {
                 if push.intents.len() > MAX_INTENTS_PER_PUSH {
                     post(
@@ -497,6 +514,7 @@ fn converse<R: Read>(
             | Frame::DeviceRemoved(_)
             | Frame::Pushed(_)
             | Frame::Changes(_)
+            | Frame::LiveEvent(_)
             | Frame::Error(_) => {
                 post(frames, error_frame(LinkErrorCode::BadFrame, not_a_request()));
                 return Ok(());
@@ -840,7 +858,10 @@ fn join_locked_text() -> &'static str {
 
 /// Reads one frame, and answers a frame that the server cannot read with the typed
 /// error of the protocol before the link ends.
-fn next_frame<R: Read>(reader: &mut R, frames: &mpsc::Sender<Outgoing>) -> Result<Option<Frame>, FrameError> {
+pub(crate) fn next_frame<R: Read>(
+    reader: &mut R,
+    frames: &mpsc::Sender<Outgoing>,
+) -> Result<Option<Frame>, FrameError> {
     match read_frame(reader) {
         Ok(Some(frame)) => Ok(Some(frame)),
         Ok(None) => Ok(None),
@@ -920,10 +941,10 @@ fn wait_for_change(
 }
 
 /// Sends one frame to the writing thread of this link.
-fn post(frames: &mpsc::Sender<Outgoing>, frame: Frame) {
+pub(crate) fn post(frames: &mpsc::Sender<Outgoing>, frame: Frame) {
     let _ = frames.send(Outgoing { frame, written: None });
 }
 
-fn error_frame(code: LinkErrorCode, message: &str) -> Frame {
+pub(crate) fn error_frame(code: LinkErrorCode, message: &str) -> Frame {
     Frame::Error(LinkError::new(code, message))
 }

@@ -989,6 +989,8 @@ fn frame_name(frame: &Frame) -> &'static str {
         Frame::Changes(_) => "changes",
         Frame::Wait(_) => "wait",
         Frame::Error(_) => "error",
+        Frame::Live(_) => "live",
+        Frame::LiveEvent(_) => "live_event",
     }
 }
 

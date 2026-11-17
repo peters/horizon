@@ -133,8 +133,8 @@ impl LinkBounds {
     /// The bounds of one link whose server answered `server_protocol` in its
     /// greeting.
     ///
-    /// A server of [`crate::protocol::SERVER_PROTOCOL_VERSION`] or later answers an
-    /// idle wait at its own short bound, so this computer may treat a silent answer
+    /// A server of [`crate::protocol::SHORT_WAIT_PROTOCOL_VERSION`] or later answers
+    /// an idle wait at its own short bound, so this computer may treat a silent answer
     /// as a lost link then. A server of an older version holds an idle wait for
     /// fifty seconds, and a shorter bound here would end a healthy link for ever:
     /// such a server keeps [`LEGACY_WAIT_ANSWER_BOUND`].
@@ -142,7 +142,7 @@ impl LinkBounds {
     pub fn of_server(self, server_protocol: u32) -> Self {
         Self {
             request: self.request,
-            wait: if server_protocol >= crate::protocol::SERVER_PROTOCOL_VERSION {
+            wait: if server_protocol >= crate::protocol::SHORT_WAIT_PROTOCOL_VERSION {
                 self.wait
             } else {
                 LEGACY_WAIT_ANSWER_BOUND
@@ -937,6 +937,13 @@ mod tests {
                 "a server of protocol {older} holds its wait for fifty seconds"
             );
         }
+        assert_eq!(
+            LinkBounds::STANDARD
+                .of_server(crate::protocol::SHORT_WAIT_PROTOCOL_VERSION)
+                .wait,
+            WAIT_ANSWER_BOUND,
+            "a server of the version before the live link holds its wait for fifteen seconds"
+        );
         assert_eq!(
             modern.request, REQUEST_BOUND,
             "the bound of a push and a pull does not depend on the server"

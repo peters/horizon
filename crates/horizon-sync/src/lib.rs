@@ -46,6 +46,7 @@ mod invite;
 mod join;
 mod link;
 mod listener;
+mod live;
 mod login;
 mod lookup;
 mod protocol;
@@ -73,12 +74,16 @@ pub use invite::{InviteError, SERVER_DEVICE, ask, first_invitation, greet, invit
 pub use join::{JoinBounds, JoinError, join, join_with, join_with_lookup};
 pub use link::{SocketError, SocketServer, relay, run_link_stdio_to_unix_socket, run_server_on_unix_socket};
 pub use listener::{ListenError, ListenerInfo, TcpServer, run_server_on_tcp};
+pub use live::{
+    LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest, LiveState, LiveWatcher,
+    MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS,
+};
 pub use login::{hash_code, hash_token, new_code, new_token};
 pub use lookup::LinkLookup;
 pub use protocol::{
     Changes, DeviceList, DeviceLogin, DeviceRemove, DeviceRemoved, DeviceRow, Devices, Frame, Hello, HelloOk, Invite,
-    Invited, Join, Joined, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row, SERVER_PROTOCOL_VERSION, Wait,
-    check_device_name,
+    Invited, Join, Joined, LIVE_PROTOCOL_VERSION, LinkError, LinkErrorCode, PROTOCOL_VERSION, Pull, Push, Row,
+    SERVER_PROTOCOL_VERSION, SHORT_WAIT_PROTOCOL_VERSION, Wait, check_device_name,
 };
 pub use refusal::{LinkRefusal, of_exit_code, of_ssh_line};
 pub use server::{

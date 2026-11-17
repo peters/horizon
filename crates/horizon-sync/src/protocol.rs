@@ -8,13 +8,16 @@
 //! The two numbers of a link are not the same one. [`PROTOCOL_VERSION`] is the
 //! frames that a computer sends, and [`SERVER_PROTOCOL_VERSION`] is what a server
 //! of this Horizon answers: version 5 changes no frame, only the time that a
-//! server holds an idle wait. A computer reads the answer of the greeting and keeps
-//! its own longer bound for a server of an older version, so the two sides of a
-//! link may be of different versions without a frame that either cannot read.
+//! server holds an idle wait, and version 6 adds the frames of a live link, which
+//! a computer sends only to a server that answered 6. A computer reads the answer
+//! of the greeting and keeps its own longer bound for a server of an older
+//! version, so the two sides of a link may be of different versions without a
+//! frame that either cannot read.
 
 use serde::{Deserialize, Serialize};
 
 use crate::intent::{Intent, PushReply};
+use crate::live::{LiveEvent, LiveRequest};
 pub use crate::store::{Changes, Row};
 
 /// The version of the frames that this Horizon speaks.
@@ -38,7 +41,18 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// link is alive within about twenty seconds. A computer of version 4 reads the
 /// same answer at its own bound of sixty-five seconds and is unaffected, and a
 /// computer of this build keeps that longer bound for a server that answers 4.
-pub const SERVER_PROTOCOL_VERSION: u32 = 5;
+///
+/// Version 6 adds the two frames of a live link. The hello of a computer stays at
+/// [`PROTOCOL_VERSION`], so an older server still greets it, and the computer
+/// sends a live frame only to a server that answered [`LIVE_PROTOCOL_VERSION`]:
+/// an older server cannot read one and would end the link.
+pub const SERVER_PROTOCOL_VERSION: u32 = 6;
+
+/// The first version of a server that holds an idle wait for fifteen seconds.
+pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
+
+/// The first version of a server that relays the shared terminals of a live link.
+pub const LIVE_PROTOCOL_VERSION: u32 = 6;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;
@@ -259,6 +273,10 @@ pub enum Frame {
     Changes(Changes),
     Wait(Wait),
     Error(LinkError),
+    /// One request of a live link, from a computer.
+    Live(LiveRequest),
+    /// One event of a live link, from the server.
+    LiveEvent(LiveEvent),
 }
 
 /// An error of the link itself, as opposed to a refused intent.
@@ -314,6 +332,15 @@ pub enum LinkErrorCode {
     NotLoggedIn,
     /// This computer was removed from the server, and its link ends.
     Removed,
+    /// A live request arrived on a link that is not a live link.
+    NotLive,
+    /// A frame that is not a live request arrived on a live link.
+    LiveLink,
+    /// Another live link of the same computer opened, so this one ends.
+    LiveReplaced,
+    /// The server holds the most live links, or this link did not read the frames
+    /// that waited for it.
+    LiveLimit,
 }
 
 impl LinkErrorCode {
@@ -335,6 +362,10 @@ impl LinkErrorCode {
             Self::NameTaken => "name_taken",
             Self::NotLoggedIn => "not_logged_in",
             Self::Removed => "removed",
+            Self::NotLive => "not_live",
+            Self::LiveLink => "live_link",
+            Self::LiveReplaced => "live_replaced",
+            Self::LiveLimit => "live_limit",
         }
     }
 }
@@ -503,6 +534,10 @@ mod tests {
             (LinkErrorCode::NameTaken, "name_taken"),
             (LinkErrorCode::NotLoggedIn, "not_logged_in"),
             (LinkErrorCode::Removed, "removed"),
+            (LinkErrorCode::NotLive, "not_live"),
+            (LinkErrorCode::LiveLink, "live_link"),
+            (LinkErrorCode::LiveReplaced, "live_replaced"),
+            (LinkErrorCode::LiveLimit, "live_limit"),
         ] {
             assert_eq!(code.as_str(), name);
             assert_eq!(

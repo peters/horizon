@@ -12,6 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
 chacha20poly1305.workspace = true
 horizon-browser.workspace = true
 horizon-browser-control.workspace = true
