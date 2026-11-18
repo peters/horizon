@@ -447,7 +447,7 @@ fn the_pass_reaches_the_application_through_the_bridge_of_the_window() {
         .and_then(horizon_core::Terminal::share_source)
         .expect("the source");
     let shows = |words: &str| {
-        let screen = source.screen();
+        let screen = source.screen(true);
         screen.is_some_and(|screen| String::from_utf8_lossy(&screen.bytes).contains(words))
     };
 

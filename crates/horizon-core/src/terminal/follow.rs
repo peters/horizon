@@ -46,6 +46,9 @@ const CAN: u8 = 0x18;
 /// update, then reset the terminal, which clears the screen, the history and
 /// the modes.
 const SCREEN_START: &[u8] = b"\x18\x1b[?2026l\x1bc";
+/// The start of a screen that a follower takes while it keeps its history: it
+/// ends what was open and leaves the screen and the history as they are.
+const SCREEN_AGAIN: &[u8] = b"\x18\x1b[?2026l";
 
 /// The terminal that a follower shows, and how the person may use it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,15 +156,17 @@ pub struct FollowFeed {
 }
 
 impl FollowFeed {
-    /// A new screen starts with this grid: the terminal forgets its screen, its
-    /// history and its modes, and the output that follows draws the new screen.
+    /// A new screen starts with this grid: the terminal takes the grid, and the
+    /// output that follows draws the new screen. A `fresh` screen makes the
+    /// terminal forget its screen, its history and its modes first; one that is
+    /// not fresh keeps its history, and the screen draws each row at its place.
     ///
     /// The grid changes here, in this call and under the lock of the grid, and
     /// only then the link gets the first byte of the new screen. So the event
     /// loop can parse no byte of the new screen on the old grid. Output of the
-    /// old screen that the link still holds is parsed before the reset that
-    /// starts the new screen, and output that waited for the link is dropped.
-    pub fn screen(&self, cols: u16, rows: u16) {
+    /// old screen that the link still holds is parsed before the start that
+    /// begins the new screen, and output that waited for the link is dropped.
+    pub fn screen(&self, fresh: bool, cols: u16, rows: u16) {
         let Some(term) = self.shared.term.upgrade() else {
             return;
         };
@@ -176,7 +181,7 @@ impl FollowFeed {
         term.lock().resize(TerminalDimensions::new(rows, cols));
         self.shared.wake.arm();
         let mut state = self.shared.state();
-        state.queue(SCREEN_START);
+        state.queue(if fresh { SCREEN_START } else { SCREEN_AGAIN });
         state.flush();
     }
 

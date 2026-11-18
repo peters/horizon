@@ -49,6 +49,7 @@ fn output(panel: &str, count: usize) -> (LiveEvent, Tag) {
         owner: text(OWNER),
         panel: text(panel),
         data: bytes(count),
+        replay: false,
     };
     (event, Tag::Stream(text(OWNER), text(panel)))
 }
@@ -70,6 +71,40 @@ fn typed(count: usize) -> LiveEvent {
     }
 }
 
+/// A screen of one panel of the owner with its grid and its two facts.
+fn send_screen(panel: &str, fresh: bool, everyone: bool) -> LiveRequest {
+    LiveRequest::Screen {
+        panel: text(panel),
+        cols: 80,
+        rows: 24,
+        fresh,
+        everyone,
+    }
+}
+
+/// Output of the owner: the replay that draws a screen, or the live output.
+fn send_output(panel: &str, words: &str, replay: bool) -> LiveRequest {
+    LiveRequest::Output {
+        panel: text(panel),
+        data: LiveBytes(words.as_bytes().into()),
+        replay,
+    }
+}
+
+/// The frames of one follower as one word each, so a test reads the order of a
+/// screen, its replay and the live output.
+fn stream_of(events: &[LiveEvent]) -> Vec<String> {
+    let word = |event: &LiveEvent| match event {
+        LiveEvent::Screen { fresh, everyone, .. } => format!("screen fresh={fresh} everyone={everyone}"),
+        LiveEvent::Output { data, replay, .. } => {
+            let kind = if *replay { "replay" } else { "output" };
+            format!("{kind} {}", String::from_utf8_lossy(&data.0))
+        }
+        other => format!("{other:?}"),
+    };
+    events.iter().map(word).collect()
+}
+
 fn follow(panel: &str) -> LiveRequest {
     LiveRequest::Follow {
         owner: text(OWNER),
@@ -89,9 +124,10 @@ fn terminal_bytes_travel_as_base64_and_never_print() {
     let frame = Frame::Live(LiveRequest::Output {
         panel: text("p1"),
         data: LiveBytes(b"\x1b[1mhi\xff"[..].into()),
+        replay: false,
     });
     let json = serde_json::to_string(&frame).expect("a frame is JSON");
-    assert_eq!(json, r#"{"live":{"output":{"panel":"p1","data":"G1sxbWhp/w=="}}}"#);
+    assert_eq!(json, r#"{"live":{"output":{"panel":"p1","data":"G1sxbWhp/w==","replay":false}}}"#);
     assert_eq!(serde_json::from_str::<Frame>(&json).expect("it reads back"), frame);
     let printed = format!("{frame:?}");
     assert!(printed.contains("7 bytes") && !printed.contains("hi"), "{printed}");
@@ -127,6 +163,8 @@ fn every_live_frame_round_trips_through_its_json() {
             panel: name.clone(),
             cols: 80,
             rows: 24,
+            fresh: true,
+            everyone: false,
         }),
         Frame::Live(LiveRequest::Ended { panel: name.clone() }),
         Frame::Live(LiveRequest::Typed {
@@ -152,6 +190,8 @@ fn every_live_frame_round_trips_through_its_json() {
             panel: name,
             cols: 80,
             rows: 24,
+            fresh: true,
+            everyone: false,
         }),
         Frame::LiveEvent(output("p1", 3).0),
         Frame::LiveEvent(typed(3)),
@@ -410,10 +450,16 @@ fn a_follower_that_does_not_read_falls_behind_and_its_owner_is_asked_again_when_
         panel: text("p1"),
         cols,
         rows: 24,
+        fresh: false,
+        everyone: false,
     };
     let send = |count| {
         let (panel, data) = (text("p1"), bytes(count));
-        owner.ask(&registry, LiveRequest::Output { panel, data });
+        owner.ask(&registry, LiveRequest::Output {
+            panel,
+            data,
+            replay: false,
+        });
     };
     owner.ask(&registry, screen(80));
     assert!(matches!(follower.outbox.next(), Next::Event(LiveEvent::Screen { .. })));
@@ -456,6 +502,224 @@ fn a_follower_that_does_not_read_falls_behind_and_its_owner_is_asked_again_when_
     );
 }
 
+/// One owner, two followers of one panel, and the frames that each one takes.
+struct Two {
+    registry: LinkRegistry,
+    owner: Computer,
+    first: Computer,
+    second: Computer,
+}
+
+impl Two {
+    /// An owner that shares `p1`, and two followers that took their first screen
+    /// and are relaying.
+    fn new() -> Self {
+        let registry = LinkRegistry::default();
+        let owner = computer(&registry, OWNER);
+        let (first, second) = (computer(&registry, "laptop-b"), computer(&registry, "laptop-c"));
+        for link in [&owner, &first, &second] {
+            link.take(&registry);
+        }
+        owner.ask(&registry, LiveRequest::Panels {
+            panels: vec![panel("p1", true)],
+        });
+        for link in [&owner, &first, &second] {
+            link.take(&registry);
+        }
+        let two = Self {
+            registry,
+            owner,
+            first,
+            second,
+        };
+        two.join(&two.first);
+        two.join(&two.second);
+        // The second screen of a join reaches the first follower as output alone.
+        assert_eq!(
+            stream_of(&two.first.take(&two.registry)),
+            ["output one"],
+            "the first follower skips the replay of the screen of the second"
+        );
+        two
+    }
+
+    /// One follower joins and takes its screen, the replay that draws it and the
+    /// output after it.
+    fn join(&self, follower: &Computer) {
+        follower.ask(&self.registry, follow("p1"));
+        self.owner.take(&self.registry);
+        self.owner.ask(&self.registry, send_screen("p1", true, false));
+        self.owner.ask(&self.registry, send_output("p1", "grid", true));
+        self.owner.ask(&self.registry, send_output("p1", "one", false));
+        assert_eq!(
+            stream_of(&follower.take(&self.registry)),
+            [
+                "screen fresh=true everyone=false".to_owned(),
+                "replay grid".to_owned(),
+                "output one".to_owned()
+            ]
+        );
+    }
+}
+
+#[test]
+fn a_screen_for_one_follower_reaches_that_one_and_leaves_the_other_stream_whole() {
+    let two = Two::new();
+    let (first, second) = (&two.first, &two.second);
+
+    // A third follower joins. Its screen, its replay and the output after it
+    // reach it alone, and the stream of the two that relay goes on with the live
+    // output: no frame of the join reaches them, and none of theirs is lost.
+    let late = computer(&two.registry, "laptop-d");
+    // The new link is a change of the list for every link, and the join is no
+    // frame for the two followers that read on.
+    late.take(&two.registry);
+    for follower in [first, second] {
+        follower.take(&two.registry);
+    }
+    late.ask(&two.registry, follow("p1"));
+    two.owner.take(&two.registry);
+    two.owner.ask(&two.registry, send_screen("p1", true, false));
+    two.owner.ask(&two.registry, send_output("p1", "join-grid", true));
+    two.owner.ask(&two.registry, send_output("p1", "two", false));
+    assert_eq!(
+        stream_of(&late.take(&two.registry)),
+        [
+            "screen fresh=true everyone=false".to_owned(),
+            "replay join-grid".to_owned(),
+            "output two".to_owned()
+        ]
+    );
+    for follower in [first, second] {
+        assert_eq!(
+            stream_of(&follower.take(&two.registry)),
+            ["output two"],
+            "a follower that relays skips the whole replay and takes the live output"
+        );
+    }
+}
+
+#[test]
+fn a_screen_for_everyone_reaches_the_followers_that_relay_and_the_one_that_waits() {
+    let two = Two::new();
+    let (first, second) = (&two.first, &two.second);
+
+    // The second follower asks for a new screen, so it waits for one.
+    second.ask(&two.registry, refresh());
+    two.owner.take(&two.registry);
+    two.owner.ask(&two.registry, send_output("p1", "half", false));
+    assert_eq!(
+        stream_of(&first.take(&two.registry)),
+        ["output half"],
+        "the follower that relays keeps its output"
+    );
+    assert_eq!(
+        stream_of(&second.take(&two.registry)),
+        Vec::<String>::new(),
+        "the follower that waits takes none of it"
+    );
+
+    // A screen for everyone reaches each of them, with its replay.
+    two.owner.ask(&two.registry, send_screen("p1", false, true));
+    two.owner.ask(&two.registry, send_output("p1", "all-grid", true));
+    for follower in [first, second] {
+        assert_eq!(
+            stream_of(&follower.take(&two.registry)),
+            [
+                "screen fresh=false everyone=true".to_owned(),
+                "replay all-grid".to_owned()
+            ]
+        );
+    }
+}
+
+#[test]
+fn a_screen_that_one_follower_asked_for_reaches_that_one_alone() {
+    let two = Two::new();
+    let (first, second) = (&two.first, &two.second);
+
+    // The first follower asks for a new screen. It waits for one, and the screen
+    // that answers it reaches it alone.
+    first.ask(&two.registry, refresh());
+    two.owner.take(&two.registry);
+    two.owner.ask(&two.registry, send_screen("p1", false, false));
+    two.owner.ask(&two.registry, send_output("p1", "asked-grid", true));
+    assert_eq!(
+        stream_of(&first.take(&two.registry)),
+        [
+            "screen fresh=false everyone=false".to_owned(),
+            "replay asked-grid".to_owned()
+        ]
+    );
+    assert_eq!(
+        stream_of(&second.take(&two.registry)),
+        Vec::<String>::new(),
+        "a screen for one follower does not reach the other"
+    );
+
+    // Now every follower relays, so a screen that is not for everyone reaches
+    // nobody, and the live output after it reaches both.
+    two.owner.ask(&two.registry, send_screen("p1", false, false));
+    two.owner.ask(&two.registry, send_output("p1", "shared", false));
+    for follower in [first, second] {
+        assert_eq!(
+            stream_of(&follower.take(&two.registry)),
+            ["output shared"],
+            "the replay of a screen reaches the follower that took that screen alone"
+        );
+    }
+}
+
+#[test]
+fn a_follower_that_fell_behind_waits_for_the_screen_that_its_owner_sends() {
+    let two = Two::new();
+    let (first, behind) = (&two.first, &two.second);
+
+    // Every frame over the ceiling drops what waits, and the follower that lost
+    // its output waits for a new screen while the other one reads on.
+    for _ in 0..40 {
+        let (panel, data) = (text("p1"), bytes(48 * 1024));
+        two.owner.ask(&two.registry, LiveRequest::Output {
+            panel,
+            data,
+            replay: false,
+        });
+        first.take(&two.registry);
+    }
+    assert!(
+        behind.outbox.waiting().0 < CEILING_BYTES,
+        "the ceiling dropped the output of the follower that did not read"
+    );
+    two.owner.ask(&two.registry, send_output("p1", "lost", false));
+    assert_eq!(
+        stream_of(&behind.take(&two.registry)),
+        Vec::<String>::new(),
+        "a follower that fell behind takes no output, and its next read asks for a screen"
+    );
+    assert_eq!(
+        two.owner.take(&two.registry),
+        vec![watchers(&["laptop-b", "laptop-c"], true)],
+        "the owner is asked for a screen when the follower reads again"
+    );
+
+    // The screen that answers that request and the output after it reach the
+    // follower that waited, and not the one that read on.
+    two.owner.ask(&two.registry, send_screen("p1", false, false));
+    two.owner.ask(&two.registry, send_output("p1", "back", false));
+    assert_eq!(
+        stream_of(&behind.take(&two.registry)),
+        [
+            "screen fresh=false everyone=false".to_owned(),
+            "output back".to_owned()
+        ]
+    );
+    assert_eq!(
+        stream_of(&first.take(&two.registry)),
+        ["output lost", "output back"],
+        "the follower that read on takes the live output and no screen"
+    );
+}
+
 #[test]
 fn a_follower_asks_the_owner_for_a_new_screen_at_most_once_a_second() {
     let registry = LinkRegistry::default();
@@ -478,18 +742,20 @@ fn a_follower_asks_the_owner_for_a_new_screen_at_most_once_a_second() {
     follower.ask(&registry, follow("p1"));
     assert_eq!(owner.take(&registry), vec![watchers(&["laptop-b"], true)]);
 
-    // The request does not stop the relay: the follower still takes the output
-    // that comes before the new screen.
+    // The follower that asked waits for its screen, and takes that screen and
+    // the output after it. The next request is still inside the second.
     let (name, data) = (text("p1"), bytes(3));
-    let screen = LiveRequest::Screen {
-        panel: name.clone(),
-        cols: 80,
-        rows: 24,
-    };
-    owner.ask(&registry, screen);
-    owner.ask(&registry, LiveRequest::Output { panel: name, data });
-    follower.ask(&registry, refresh());
-    assert_eq!(follower.take(&registry).len(), 2, "a screen and its output");
+    owner.ask(&registry, send_screen("p1", false, false));
+    owner.ask(&registry, LiveRequest::Output {
+        panel: name,
+        data,
+        replay: false,
+    });
+    assert_eq!(
+        stream_of(&follower.take(&registry)),
+        ["screen fresh=false everyone=false", "output xxx"],
+        "the screen that the follower asked for, and the output after it"
+    );
     assert_eq!(owner.take(&registry), Vec::new(), "still inside the second");
 
     // Each follower has a second of its own, and after it a follower asks again.

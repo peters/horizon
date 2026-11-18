@@ -224,7 +224,7 @@ impl LiveLink for StandIn {
         }
     }
 
-    fn screen(&self, panel: &str, cols: u16, rows: u16) -> bool {
+    fn screen(&self, panel: &str, cols: u16, rows: u16, fresh: bool, everyone: bool) -> bool {
         let mut relay = self.gated(true);
         if relay.full {
             relay.refused += 1;
@@ -237,12 +237,14 @@ impl LiveLink for StandIn {
                 panel: panel.to_owned(),
                 cols,
                 rows,
+                fresh,
+                everyone,
             });
         }
         true
     }
 
-    fn output(&self, panel: &str, bytes: &[u8]) -> bool {
+    fn output(&self, panel: &str, bytes: &[u8], replay: bool) -> bool {
         let mut relay = self.gated(true);
         if relay.full {
             relay.refused += 1;
@@ -253,6 +255,7 @@ impl LiveLink for StandIn {
                 owner: THERE.to_owned(),
                 panel: panel.to_owned(),
                 data: LiveBytes(bytes.into()),
+                replay,
             });
         }
         true

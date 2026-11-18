@@ -17,12 +17,38 @@ use super::{LiveLink, shown};
 /// the next screen after the link refused one.
 const NEXT_SCREEN: Duration = Duration::from_millis(250);
 
+/// Why the next screen of a watched panel goes out, which decides what it holds
+/// and who takes it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Why {
+    /// A new follower: a full reset and the lines above the viewport, for that
+    /// follower alone.
+    Join,
+    /// A follower asked for a new screen: no history, for that follower alone.
+    Asked,
+    /// The second screen of a join, a new grid of the owner, too much output or a
+    /// frame that the link refused: no history, and for every follower.
+    All,
+}
+
+impl Why {
+    /// Whether the follower forgets its screen, its history and its modes.
+    fn fresh(self) -> bool {
+        self == Self::Join
+    }
+
+    /// Whether every follower of the panel takes this screen.
+    fn everyone(self) -> bool {
+        self == Self::All
+    }
+}
+
 /// One panel of this computer that another computer watches.
 pub(super) struct Watched {
     /// The computers that watch it. An empty list ends the watch.
     devices: Vec<String>,
-    /// When the next screen goes out, and the second one of a new follower.
-    screen_at: Option<Instant>,
+    /// When the next screen goes out, and why it is due.
+    screen_at: Option<(Instant, Why)>,
     second_at: Option<Instant>,
 }
 
@@ -34,23 +60,33 @@ impl Watched {
         let outlet = source.outlet();
         // A restarted terminal has a new outlet, whose first take asks for a screen.
         outlet.set_wanted(true);
-        let second = due(self.second_at);
-        let mut output = Vec::new();
-        if self.screen_at.is_none() && !second {
-            let take = outlet.take();
-            output = take.bytes;
-            self.screen_at = take.overflowed.then_some(now);
-        }
-        if due(self.screen_at) || second {
-            // The screen holds the output that waits in the outlet, so that is dropped.
-            let screen = source.screen();
-            let sent = screen
-                .is_some_and(|screen| link.screen(id, screen.cols, screen.rows) && link.output(id, &screen.bytes));
-            self.screen_at = (!sent).then_some(now + NEXT_SCREEN);
-            self.second_at = self.second_at.filter(|_| !(sent && second));
-        } else if !output.is_empty() && !link.output(id, &output) {
-            // The link is full: only a new screen continues the stream of the followers.
-            self.screen_at = Some(now + NEXT_SCREEN);
+        let pending = self.screen_at.filter(|(at, _)| *at <= now).map(|(_, why)| why);
+        let why = match pending {
+            Some(why) => why,
+            // The second screen of a join repairs a first one that started in the
+            // middle of an escape sequence.
+            None if due(self.second_at) => Why::All,
+            None => {
+                let take = outlet.take();
+                if !take.overflowed {
+                    if !take.bytes.is_empty() && !link.output(id, &take.bytes, false) {
+                        // The link is full: only a new screen continues the stream.
+                        self.screen_at = Some((now + NEXT_SCREEN, Why::All));
+                    }
+                    return;
+                }
+                Why::All
+            }
+        };
+        // The screen holds the output that waits in the outlet, so that is dropped.
+        let screen = source.screen(why.fresh());
+        let sent = screen.is_some_and(|screen| {
+            link.screen(id, screen.cols, screen.rows, why.fresh(), why.everyone())
+                && link.output(id, &screen.bytes, true)
+        });
+        self.screen_at = if sent { None } else { Some((now + NEXT_SCREEN, Why::All)) };
+        if sent {
+            self.second_at = self.second_at.filter(|_| !why.everyone());
         }
     }
 }
@@ -104,11 +140,12 @@ impl Run {
         });
         let devices: Vec<String> = watchers.iter().map(|watcher| shown(&watcher.device)).collect();
         let joined = devices.iter().any(|device| !watch.devices.contains(device));
-        if refresh || joined {
-            watch.screen_at = Some(now);
-        }
         if joined {
+            // A new follower reads what the program wrote before it came.
+            watch.screen_at = Some((now, Why::Join));
             watch.second_at = Some(now + NEXT_SCREEN);
+        } else if refresh {
+            watch.screen_at = Some((now, Why::Asked));
         }
         watch.devices = devices;
         self.found.chips.insert(id.to_owned(), watched_chip(watchers));

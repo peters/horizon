@@ -196,8 +196,9 @@ fn show(event: &LiveEvent) -> String {
             panel,
             cols,
             rows,
+            ..
         } => format!("screen {owner}/{panel} {cols}x{rows}"),
-        LiveEvent::Output { owner, panel, data } => format!("output {owner}/{panel} {}", text(data)),
+        LiveEvent::Output { owner, panel, data, .. } => format!("output {owner}/{panel} {}", text(data)),
         LiveEvent::Ended { owner, panel, reason } => format!("ended {owner}/{panel} {reason:?}"),
         LiveEvent::Typed {
             panel,
@@ -240,12 +241,22 @@ fn unfollow(owner: &str, panel: &str) -> LiveRequest {
 
 fn screen(panel: &str, cols: u16) -> LiveRequest {
     let panel = panel.to_owned();
-    LiveRequest::Screen { panel, cols, rows: 24 }
+    LiveRequest::Screen {
+        panel,
+        cols,
+        rows: 24,
+        fresh: false,
+        everyone: true,
+    }
 }
 
 fn output(panel: &str, bytes: &[u8]) -> LiveRequest {
     let (panel, data) = (panel.to_owned(), LiveBytes(bytes.into()));
-    LiveRequest::Output { panel, data }
+    LiveRequest::Output {
+        panel,
+        data,
+        replay: false,
+    }
 }
 
 fn typed(owner: &str, panel: &str, bytes: &[u8]) -> LiveRequest {
@@ -416,6 +427,8 @@ fn a_frame_over_its_bound_is_dropped_and_the_link_stays() {
         panel: "p1".to_owned(),
         cols: 0,
         rows: u16::MAX,
+        fresh: false,
+        everyone: true,
     });
     a.send(output("p1", &vec![b'x'; 48 * 1024 + 1]));
     a.send(output("p1", b""));
@@ -683,13 +696,13 @@ fn the_handle_of_a_computer_follows_a_panel_types_in_it_and_shares_its_own() {
     wait_for(handle, woken, |event| {
         show(event) == "watchers q1 [laptop-a] refresh=true"
     });
-    assert!(handle.screen("q1", 120, 40));
-    assert!(handle.output("q1", &vec![b'z'; 100 * 1024]));
+    assert!(handle.screen("q1", 120, 40, false, true));
+    assert!(handle.output("q1", &vec![b'z'; 100 * 1024], false));
     assert!(
-        !handle.output("q1", &vec![b'z'; 1024 * 1024]),
+        !handle.output("q1", &vec![b'z'; 1024 * 1024], false),
         "bytes that would pass the ceiling of the queue are refused, and none is sent"
     );
-    assert!(handle.output("q1", b"end"));
+    assert!(handle.output("q1", b"end", false));
     let sizes = [a.next(), a.next(), a.next(), a.next(), a.next()].map(|line| line.len());
     let head = "output laptop-b/q1 ".len();
     assert_eq!(
@@ -741,7 +754,7 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
         woken,
         |event| matches!(event, LiveEvent::State(LiveState::Down(reason)) if reason.starts_with("live_replaced")),
     );
-    assert!(!handle.output("q1", b"away"), "nothing is sent while the link is away");
+    assert!(!handle.output("q1", b"away", false), "nothing is sent while the link is away");
     let list = wait_for(handle, woken, |event| show(event) == "list laptop-a[p1] laptop-b[q1]");
     assert!(
         matches!(&list, LiveEvent::Computers { computers } if computers[1].label == "Laptop B"),
@@ -763,7 +776,7 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
     a.settle("list laptop-a[] laptop-b[]");
     joined.supervisor.stop();
     assert_eq!(a.next(), "list laptop-a[]");
-    assert!(!handle.screen("q1", 80, 24), "nothing is sent after a stop");
+    assert!(!handle.screen("q1", 80, 24, false, true), "nothing is sent after a stop");
 }
 
 #[test]
@@ -803,7 +816,7 @@ fn an_older_server_reads_no_live_frame_and_the_handle_says_that_it_is_unsupporte
         *event == LiveEvent::State(LiveState::Unsupported)
     });
     assert_eq!(handle.state(), LiveState::Unsupported);
-    assert!(!handle.output("q1", b"nothing"));
+    assert!(!handle.output("q1", b"nothing", false));
 
     let (hello, rest) = serving.join().expect("the older server");
     assert!(

@@ -28,18 +28,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use alacritty_terminal::event_loop::{EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::Column;
+use alacritty_terminal::grid::{Dimensions, Grid};
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle};
 pub use horizon_pty_tap::{ShareOutlet, ShareTake};
 
-use super::screen_replay::{Style, draw_rows, push_cell};
+use super::screen_replay::{Style, draw_rows, draw_rows_in_place, push_cell, push_row};
 use super::wake::OutputWakeState;
 use super::{Terminal, TerminalEventProxy};
 use crate::agent_work::WorkOwner;
+
+/// The most lines above the viewport that a fresh screen carries, and the most
+/// bytes that they take.
+const HISTORY_LINES: usize = 1_000;
+const HISTORY_BYTES: usize = 256 * 1024;
 
 /// One screen of a terminal, as a follower draws it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,29 +52,30 @@ pub struct ShareScreen {
     pub cols: u16,
     pub rows: u16,
     /// The bytes that draw the screen and set its modes in a terminal of this
-    /// grid. They start with a full reset, so a terminal that showed an older
-    /// screen draws the same as a new one.
+    /// grid. A fresh screen starts with a full reset, so a terminal that showed
+    /// an older screen draws the same as a new one, and it starts with the lines
+    /// above the viewport. A screen that is not fresh starts with none of them:
+    /// the follower keeps its history, and it takes the grid in place.
     pub bytes: Vec<u8>,
 }
 
-/// Each mode with the sequence that takes it away from its state in a new
-/// terminal. The origin mode is not here, because it moves the cursor.
-const MODES: [(TermMode, &str); 15] = [
-    (TermMode::SHOW_CURSOR, "\x1b[?25l"),
-    (TermMode::APP_CURSOR, "\x1b[?1h"),
-    (TermMode::APP_KEYPAD, "\x1b="),
-    (TermMode::MOUSE_REPORT_CLICK, "\x1b[?1000h"),
-    (TermMode::MOUSE_DRAG, "\x1b[?1002h"),
-    (TermMode::MOUSE_MOTION, "\x1b[?1003h"),
-    (TermMode::UTF8_MOUSE, "\x1b[?1005h"),
-    (TermMode::SGR_MOUSE, "\x1b[?1006h"),
-    (TermMode::FOCUS_IN_OUT, "\x1b[?1004h"),
-    (TermMode::BRACKETED_PASTE, "\x1b[?2004h"),
-    (TermMode::ALTERNATE_SCROLL, "\x1b[?1007l"),
-    (TermMode::URGENCY_HINTS, "\x1b[?1042l"),
-    (TermMode::LINE_WRAP, "\x1b[?7l"),
-    (TermMode::INSERT, "\x1b[4h"),
-    (TermMode::LINE_FEED_NEW_LINE, "\x1b[20h"),
+/// Each mode with the sequence that sets it and the one that takes it away.
+const MODES: [(TermMode, &str, &str); 15] = [
+    (TermMode::SHOW_CURSOR, "\x1b[?25h", "\x1b[?25l"),
+    (TermMode::APP_CURSOR, "\x1b[?1h", "\x1b[?1l"),
+    (TermMode::APP_KEYPAD, "\x1b=", "\x1b>"),
+    (TermMode::MOUSE_REPORT_CLICK, "\x1b[?1000h", "\x1b[?1000l"),
+    (TermMode::MOUSE_DRAG, "\x1b[?1002h", "\x1b[?1002l"),
+    (TermMode::MOUSE_MOTION, "\x1b[?1003h", "\x1b[?1003l"),
+    (TermMode::UTF8_MOUSE, "\x1b[?1005h", "\x1b[?1005l"),
+    (TermMode::SGR_MOUSE, "\x1b[?1006h", "\x1b[?1006l"),
+    (TermMode::FOCUS_IN_OUT, "\x1b[?1004h", "\x1b[?1004l"),
+    (TermMode::BRACKETED_PASTE, "\x1b[?2004h", "\x1b[?2004l"),
+    (TermMode::ALTERNATE_SCROLL, "\x1b[?1007h", "\x1b[?1007l"),
+    (TermMode::URGENCY_HINTS, "\x1b[?1042h", "\x1b[?1042l"),
+    (TermMode::LINE_WRAP, "\x1b[?7h", "\x1b[?7l"),
+    (TermMode::INSERT, "\x1b[4h", "\x1b[4l"),
+    (TermMode::LINE_FEED_NEW_LINE, "\x1b[20h", "\x1b[20l"),
 ];
 
 /// The flags of the keyboard protocol with the numbers that a program pushes.
@@ -104,8 +110,8 @@ impl ShareSource {
 
     /// The screen of the terminal now, as [`Terminal::share_screen`] gives it.
     #[must_use]
-    pub fn screen(&self) -> Option<ShareScreen> {
-        Some(screen_of(&*self.term.upgrade()?, &self.outlet))
+    pub fn screen(&self, fresh: bool) -> Option<ShareScreen> {
+        Some(screen_of(&*self.term.upgrade()?, &self.outlet, fresh))
     }
 
     /// Writes the keys of a person at another computer into the program, as
@@ -138,10 +144,12 @@ impl Terminal {
     }
 
     /// The screen of this terminal now. The outlet starts at the same instant,
-    /// so what it gives after this call continues this screen.
+    /// so what it gives after this call continues this screen. A `fresh` screen
+    /// holds the lines above the viewport; one that is not fresh draws the grid
+    /// in place and leaves the history of the follower alone.
     #[must_use]
-    pub fn share_screen(&self) -> ShareScreen {
-        screen_of(&self.term, &self.share)
+    pub fn share_screen(&self, fresh: bool) -> ShareScreen {
+        screen_of(&self.term, &self.share, fresh)
     }
 
     /// The source that shares this terminal from another thread, or `None` for
@@ -160,7 +168,7 @@ impl Terminal {
 }
 
 /// The screen of `term` now, with `outlet` started at the same instant.
-fn screen_of(term: &FairMutex<Term<TerminalEventProxy>>, outlet: &ShareOutlet) -> ShareScreen {
+fn screen_of(term: &FairMutex<Term<TerminalEventProxy>>, outlet: &ShareOutlet, fresh: bool) -> ShareScreen {
     // The reader is between two passes while this holds the lease, and the
     // grid lock is taken before the lease goes back. The module says why
     // that leaves no byte out and none twice.
@@ -171,22 +179,44 @@ fn screen_of(term: &FairMutex<Term<TerminalEventProxy>>, outlet: &ShareOutlet) -
     ShareScreen {
         cols: u16::try_from(term.columns()).unwrap_or(u16::MAX),
         rows: u16::try_from(term.screen_lines()).unwrap_or(u16::MAX),
-        bytes: share_screen_bytes(&term),
+        bytes: share_screen_bytes(&term, fresh),
     }
 }
 
 /// The bytes of a [`ShareScreen`] of `term`.
-pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
+pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>, fresh: bool) -> Vec<u8> {
     let (grid, mode) = (term.grid(), *term.mode());
-    let mut out = String::from("\x1bc");
-    if mode.contains(TermMode::ALT_SCREEN) {
-        out.push_str("\x1b[?1049h");
+    let mut out = String::new();
+    if fresh {
+        out.push_str("\x1bc");
+        if mode.contains(TermMode::ALT_SCREEN) {
+            out.push_str("\x1b[?1049h");
+        } else {
+            // The program is on the primary screen, so the lines that it scrolled
+            // off are there to read, and a new follower gets them above its
+            // viewport. The alternate screen of a program holds no history.
+            draw_history(grid, &mut out);
+        }
+        // The rows are drawn with the modes of a new terminal, and every mode
+        // that changes how output is drawn is set after them.
+        draw_rows(grid, &mut out, true);
+    } else {
+        // The follower keeps its history, so the screen may not start with a full
+        // reset and may not scroll: each row goes to its own place. The alternate
+        // screen comes first, because the rows belong on the screen that it names.
+        out.push_str(if mode.contains(TermMode::ALT_SCREEN) {
+            "\x1b[?1049h"
+        } else {
+            "\x1b[?1049l"
+        });
+        draw_rows_in_place(grid, &mut out);
     }
-    // The rows are drawn with the modes of a new terminal, and every mode that
-    // changes how output is drawn is set after them.
-    draw_rows(grid, &mut out);
     if mode.contains(TermMode::ORIGIN) {
         out.push_str("\x1b[?6h");
+    } else if !fresh {
+        // The origin mode moves the cursor, so it is no mode of the table below,
+        // and a follower that keeps its modes must be taken out of it.
+        out.push_str("\x1b[?6l");
     }
     let cursor = &grid.cursor;
     let row = &grid[cursor.point.line];
@@ -200,21 +230,26 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
         // The cursor waits behind the last column for the next character. The
         // cell under it, drawn once more, leaves the cursor of the follower there.
         pen.paint(&mut out, &row[column]);
-        push_cell(&mut out, &row[column]);
+        push_cell(&mut out, &row[column], true);
     }
     pen.paint(&mut out, &cursor.template);
-    for (flag, sequence) in MODES {
-        if (mode ^ TermMode::default()).contains(flag) {
-            out.push_str(sequence);
+    for (flag, set, unset) in MODES {
+        let on = mode.contains(flag);
+        if on == TermMode::default().contains(flag) && fresh {
+            // The reset at the start of a fresh screen already set this mode.
+            continue;
         }
+        out.push_str(if on { set } else { unset });
     }
     let keyboard: u8 = KEYBOARD
         .iter()
         .filter(|key| mode.contains(key.0))
         .map(|key| key.1)
         .sum();
-    if keyboard != 0 {
-        let _ = write!(out, "\x1b[>{keyboard}u");
+    if keyboard != 0 || !fresh {
+        // A fresh screen starts with no flag. One that is not fresh replaces the
+        // flags that the follower has, without pushing a level of its stack.
+        let _ = write!(out, "\x1b[{}{keyboard}u", if fresh { '>' } else { '=' });
     }
     let style = term.cursor_style();
     let shape = match style.shape {
@@ -225,8 +260,33 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
     };
     if shape != 0 && style != CursorStyle::default() {
         let _ = write!(out, "\x1b[{} q", shape - u8::from(style.blinking));
+    } else if !fresh {
+        let _ = write!(out, "\x1b[0 q");
     }
     out.into_bytes()
+}
+
+/// The lines above the viewport of `grid`, oldest first, as rows that a fresh
+/// screen draws before the viewport: they scroll into the scrollback of the
+/// follower, and its viewport ends under them.
+fn draw_history(grid: &Grid<Cell>, out: &mut String) {
+    let mut painted = Style::default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut bytes = 0;
+    for line in (1..=grid.history_size().min(HISTORY_LINES)).map(|above| Line(-i32::try_from(above).unwrap_or(i32::MAX))) {
+        let mut drawn = String::new();
+        push_row(&mut drawn, &grid[line], &mut painted, grid.columns(), true);
+        if bytes + drawn.len() > HISTORY_BYTES {
+            break;
+        }
+        bytes += drawn.len() + 2;
+        lines.push(drawn);
+    }
+    // The lines closest to the viewport are the ones that a person scrolls to.
+    for line in lines.iter().rev() {
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
 }
 
 #[cfg(test)]

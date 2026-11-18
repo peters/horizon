@@ -45,14 +45,17 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// Version 6 adds the two frames of a live link. The hello of a computer stays at
 /// [`PROTOCOL_VERSION`], so an older server still greets it, and the computer
 /// sends a live frame only to a server that answered [`LIVE_PROTOCOL_VERSION`]:
-/// an older server cannot read one and would end the link.
-pub const SERVER_PROTOCOL_VERSION: u32 = 6;
+/// an older server cannot read one and would end the link. Version 7 adds the
+/// facts of a screen that say whether a follower keeps its history and who takes
+/// the screen, and the mark of the replay of a screen: a computer of this build
+/// sends no live frame to a server that answered 6.
+pub const SERVER_PROTOCOL_VERSION: u32 = 7;
 
 /// The first version of a server that holds an idle wait for fifteen seconds.
 pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
 
 /// The first version of a server that relays the shared terminals of a live link.
-pub const LIVE_PROTOCOL_VERSION: u32 = 6;
+pub const LIVE_PROTOCOL_VERSION: u32 = 7;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;

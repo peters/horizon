@@ -122,23 +122,34 @@ impl LiveHandle {
         self.with(|inner| inner.follows.remove(&(owner.to_owned(), clean(panel, ID_CHARS))));
     }
 
-    /// Starts a new screen of a panel of this computer. `false` says that the
-    /// link is away or full: nothing was sent, and the caller sends a new screen
-    /// later.
+    /// Starts a new screen of a panel of this computer. `fresh` says that the
+    /// follower forgets its screen, its history and its modes, and `everyone`
+    /// says whether every follower of the panel takes this screen. `false` says
+    /// that the link is away or full: nothing was sent, and the caller sends a
+    /// new screen later.
     #[must_use]
-    pub fn screen(&self, panel: &str, cols: u16, rows: u16) -> bool {
+    pub fn screen(&self, panel: &str, cols: u16, rows: u16, fresh: bool, everyone: bool) -> bool {
         let panel = panel.to_owned();
-        self.queue(vec![LiveRequest::Screen { panel, cols, rows }], 0)
+        let screen = LiveRequest::Screen {
+            panel,
+            cols,
+            rows,
+            fresh,
+            everyone,
+        };
+        self.queue(vec![screen], 0)
     }
 
-    /// Sends output bytes of a panel of this computer, split into frames. `false`
+    /// Sends output bytes of a panel of this computer, split into frames.
+    /// `replay` says that they draw the screen that came before them. `false`
     /// says that the link is away or that the bytes would pass the ceiling of the
     /// queue: nothing was sent, and the caller sends a new screen later.
     #[must_use]
-    pub fn output(&self, panel: &str, bytes: &[u8]) -> bool {
+    pub fn output(&self, panel: &str, bytes: &[u8], replay: bool) -> bool {
         let frame = |chunk: &[u8]| LiveRequest::Output {
             panel: panel.to_owned(),
             data: LiveBytes(chunk.into()),
+            replay,
         };
         self.queue(bytes.chunks(MAX_LIVE_OUTPUT_BYTES).map(frame).collect(), bytes.len())
     }

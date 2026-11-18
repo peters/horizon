@@ -92,7 +92,7 @@ fn only_the_sizes_of_the_attach(frames: &[Frame]) -> bool {
 fn a_screen_and_its_output_draw_the_grid() {
     let (mut terminal, feed) = follower(80, 24);
 
-    feed.screen(40, 10);
+    feed.screen(true, 40, 10);
     feed.output(b"first line\r\nsecond");
 
     wait_for_screen(&mut terminal, &["first line", "second"]);
@@ -104,7 +104,7 @@ fn a_screen_and_its_output_draw_the_grid() {
 #[test]
 fn a_second_screen_replaces_the_screen_the_history_and_the_modes() {
     let (mut terminal, feed) = follower(80, 24);
-    feed.screen(80, 5);
+    feed.screen(true, 80, 5);
     let old: String = (0..40).fold(String::new(), |text, line| format!("{text}old {line}\r\n"));
     feed.output(old.as_bytes());
     feed.output(b"\x1b[?1h\x1b[?2004h");
@@ -118,7 +118,7 @@ fn a_second_screen_replaces_the_screen_the_history_and_the_modes() {
     // also when it ends inside a synchronized update and inside a sequence.
     feed.output(old.as_bytes());
     feed.output(b"\x1b[?2026h\x1b]0;a title that the stream cut");
-    feed.screen(30, 8);
+    feed.screen(true, 30, 8);
     feed.output(b"new");
 
     wait_for_screen(&mut terminal, &["new"]);
@@ -142,7 +142,7 @@ fn no_byte_of_a_new_screen_is_parsed_on_the_old_grid() {
     let (mut terminal, feed) = follower(20, 5);
     for round in 0..100u16 {
         let (cols, rows) = (60 + round % 7, 20 + round % 5);
-        feed.screen(cols, rows);
+        feed.screen(true, cols, rows);
         assert_eq!(
             grid_of(&terminal),
             (usize::from(cols), usize::from(rows)),
@@ -159,7 +159,7 @@ fn no_byte_of_a_new_screen_is_parsed_on_the_old_grid() {
             "the mark stands in the last cell of the new grid",
         );
         // The next round starts while the event loop may still parse this.
-        feed.screen(20, 5);
+        feed.screen(true, 20, 5);
         feed.output(b"small screen\r\nwith two rows");
     }
 }
@@ -223,7 +223,7 @@ fn a_stream_that_ended_keeps_its_screen_until_a_new_screen() {
     assert!(feed.take_typed().is_empty(), "a stream that ended takes no typed text");
     wait_for_screen(&mut terminal, &["last words"]);
 
-    feed.screen(80, 24);
+    feed.screen(true, 80, 24);
     feed.output(b"back");
     wait_for_screen(&mut terminal, &["back"]);
     assert_eq!(terminal.follow_ended(), None);
@@ -263,7 +263,7 @@ fn the_feed_knows_that_the_person_closed_the_panel() {
 
     assert!(feed.closed());
     // A stream that still sends reaches nothing and breaks nothing.
-    feed.screen(10, 10);
+    feed.screen(true, 10, 10);
     feed.output(b"late");
     feed.ended("closed");
     assert!(feed.take_typed().is_empty());
@@ -294,9 +294,9 @@ fn the_grid_and_the_texts_of_a_stream_are_bounded() {
     assert_eq!(title.chars().count(), 200);
     assert!(title.starts_with("title]0;x") && !title.contains(char::is_control));
 
-    feed.screen(0, 0);
+    feed.screen(true, 0, 0);
     assert_eq!(grid_of(&terminal), (2, 1));
-    feed.screen(u16::MAX, u16::MAX);
+    feed.screen(true, u16::MAX, u16::MAX);
     assert_eq!(grid_of(&terminal), bound);
     terminal.process_events();
     assert_eq!((terminal.cols(), terminal.rows()), (MAX_FOLLOW_COLS, MAX_FOLLOW_ROWS));
@@ -354,7 +354,7 @@ fn the_feed_knows_the_alternate_screen_and_asks_for_the_frame_of_its_stream() {
     terminal.attach_output_wake(&wake);
 
     // No frame drew the terminal, so its stream asks for none.
-    feed.screen(20, 4);
+    feed.screen(true, 20, 4);
     feed.output(b"\x1b[?1049hALT");
     wait_for_screen(&mut terminal, &["ALT"]);
     assert!(feed.on_alternate_screen(), "the stream entered the alternate screen");

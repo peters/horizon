@@ -47,7 +47,7 @@ fn followed(rows: u16, cols: u16, output: &[u8]) -> (Screen, Screen) {
 
 /// Hands the screen of `owner` to `follower`, which may have shown another one.
 fn follow(owner: &Screen, follower: &Screen) {
-    let bytes = share_screen_bytes(&owner.lock());
+    let bytes = share_screen_bytes(&owner.lock(), true);
     replay_live_bytes(follower, &bytes);
 }
 

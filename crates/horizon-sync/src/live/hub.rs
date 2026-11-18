@@ -56,6 +56,9 @@ struct Follow {
     owner: String,
     panel: String,
     relay: Relay,
+    /// Whether the newest screen of this follower is still being drawn: the
+    /// replay of that screen goes to this follower alone.
+    replay: bool,
     /// When this follower last asked the owner for a new screen.
     refreshed: Option<Instant>,
 }
@@ -143,7 +146,7 @@ impl LiveHub {
             let behind = |follow: &&mut Follow| follow.follower == device && follow.relay == Relay::Behind;
             let open = state.links.get(device).is_some_and(|link| link.id == id);
             for follow in state.follows.iter_mut().filter(behind).filter(|_| open) {
-                follow.relay = Relay::Waiting;
+                (follow.relay, follow.replay) = (Relay::Waiting, false);
                 ready.push((follow.owner.clone(), follow.panel.clone()));
             }
             for (owner, panel) in ready {
@@ -317,17 +320,32 @@ impl State {
                 }
             }
             LiveRequest::Refresh { owner, panel } => self.refresh(device, &owner, &panel),
-            LiveRequest::Screen { panel, cols, rows } => {
+            LiveRequest::Screen {
+                panel,
+                cols,
+                rows,
+                fresh,
+                everyone,
+            } => {
                 let (cols, rows) = (cols.clamp(1, MAX_GRID), rows.clamp(1, MAX_GRID));
                 self.stream(&LiveEvent::Screen {
                     owner,
                     panel,
                     cols,
                     rows,
+                    fresh,
+                    everyone,
                 });
             }
-            LiveRequest::Output { panel, data } if (1..=MAX_LIVE_OUTPUT_BYTES).contains(&data.0.len()) => {
-                self.stream(&LiveEvent::Output { owner, panel, data });
+            LiveRequest::Output { panel, data, replay }
+                if (1..=MAX_LIVE_OUTPUT_BYTES).contains(&data.0.len()) =>
+            {
+                self.stream(&LiveEvent::Output {
+                    owner,
+                    panel,
+                    data,
+                    replay,
+                });
             }
             LiveRequest::Typed { owner, panel, data } if (1..=MAX_LIVE_TYPED_BYTES).contains(&data.0.len()) => {
                 self.typed(device, &owner, panel, data);
@@ -358,6 +376,7 @@ impl State {
                 owner: owner.clone(),
                 panel: panel.clone(),
                 relay: Relay::Waiting,
+                replay: false,
                 refreshed: None,
             });
             None
@@ -369,33 +388,51 @@ impl State {
     }
 
     /// Asks the owner for a new screen for one follower of its panel, at most
-    /// once in [`REFRESH_EVERY`]. A request that comes sooner, and one of a
-    /// computer that does not follow the panel, is dropped.
+    /// once in [`REFRESH_EVERY`]. The follower then waits for that screen: the
+    /// output that still waits for it leaves, because the screen holds it. A
+    /// request that comes sooner, and one of a computer that does not follow the
+    /// panel, is dropped.
     fn refresh(&mut self, device: &str, owner: &str, panel: &str) {
         let now = Instant::now();
-        let due = |follow: &&mut Follow| {
+        let due = |follow: &Follow| {
             let asked = follow
                 .refreshed
                 .is_some_and(|at| now.duration_since(at) < REFRESH_EVERY);
             follow.follower == device && follow.owner == owner && follow.panel == panel && !asked
         };
-        if let Some(follow) = self.follows.iter_mut().find(due) {
-            follow.refreshed = Some(now);
-            self.watchers(owner, panel, true);
+        let Some(index) = self.follows.iter().position(due) else {
+            return;
+        };
+        let follow = &mut self.follows[index];
+        follow.refreshed = Some(now);
+        (follow.relay, follow.replay) = (Relay::Waiting, false);
+        if let Some(link) = self.links.get(device) {
+            link.outbox.drop_stream(owner, panel);
         }
+        self.watchers(owner, panel, true);
     }
 
     /// Relays a screen or output of an owner to the followers of that panel. A
-    /// follower takes output only after a screen, and a follower whose link
-    /// would pass its ceiling falls behind.
+    /// screen for everyone reaches each follower, one that is not for everyone
+    /// reaches the followers that wait for a screen alone, and the replay of a
+    /// screen reaches the followers that took it. A follower whose link would
+    /// pass its ceiling falls behind.
     fn stream(&mut self, event: &LiveEvent) {
-        let (LiveEvent::Screen { owner, panel, .. } | LiveEvent::Output { owner, panel, .. }) = event else {
-            return;
+        let (owner, panel) = match event {
+            LiveEvent::Screen { owner, panel, .. } | LiveEvent::Output { owner, panel, .. } => (owner, panel),
+            _ => return,
         };
-        let starts = matches!(event, LiveEvent::Screen { .. });
+        let screen = matches!(event, LiveEvent::Screen { .. });
+        let replay = matches!(event, LiveEvent::Output { replay: true, .. });
+        let everyone = matches!(event, LiveEvent::Screen { everyone: true, .. });
         for follow in &mut self.follows {
-            let takes = follow.relay == Relay::Relaying || (starts && follow.relay == Relay::Waiting);
-            if follow.owner != *owner || follow.panel != *panel || !takes {
+            let (waiting, relaying) = (follow.relay == Relay::Waiting, follow.relay == Relay::Relaying);
+            let takes = match (screen, replay) {
+                (true, _) => everyone || waiting,
+                (false, true) => relaying && follow.replay,
+                (false, false) => relaying,
+            };
+            if !takes || follow.relay == Relay::Behind || follow.owner != *owner || follow.panel != *panel {
                 continue;
             }
             let Some(link) = self.links.get(&follow.follower) else {
@@ -406,6 +443,7 @@ impl State {
                 Push::Full => Relay::Behind,
                 Push::Queued | Push::Evicted => Relay::Relaying,
             };
+            follow.replay = (screen || replay) && follow.relay == Relay::Relaying;
         }
     }
 

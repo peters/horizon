@@ -156,8 +156,8 @@ impl Run {
         };
         let feed = &follow.panel.feed;
         match event {
-            LiveEvent::Screen { cols, rows, .. } => {
-                feed.screen(cols, rows);
+            LiveEvent::Screen { cols, rows, fresh, .. } => {
+                feed.screen(fresh, cols, rows);
                 (follow.ended, follow.screen_start, follow.alt, follow.ask_at) = (false, true, Alt::No, None);
             }
             LiveEvent::Output { data, .. } => {

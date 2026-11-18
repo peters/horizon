@@ -148,10 +148,19 @@ pub enum LiveRequest {
         panel: String,
         cols: u16,
         rows: u16,
+        /// The follower forgets its screen, its history and its modes before it
+        /// draws this screen, which holds the lines above the viewport.
+        fresh: bool,
+        /// Every follower of the panel takes this screen, not only a follower
+        /// that waits for one.
+        everyone: bool,
     },
     Output {
         panel: String,
         data: LiveBytes,
+        /// These bytes draw the screen that came before them: a follower that
+        /// did not take that screen skips them and the live output goes on.
+        replay: bool,
     },
     /// A panel of this computer is gone.
     Ended {
@@ -184,17 +193,23 @@ pub enum LiveEvent {
         watchers: Vec<LiveWatcher>,
         refresh: bool,
     },
-    /// To a follower: a new screen of the panel starts with this grid.
+    /// To a follower: a new screen of the panel starts with this grid. `fresh`
+    /// says that the follower forgets its screen, its history and its modes, and
+    /// `everyone` says who the screen is for.
     Screen {
         owner: String,
         panel: String,
         cols: u16,
         rows: u16,
+        fresh: bool,
+        everyone: bool,
     },
     Output {
         owner: String,
         panel: String,
         data: LiveBytes,
+        /// The bytes draw the screen that came before them.
+        replay: bool,
     },
     Ended {
         owner: String,

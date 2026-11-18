@@ -34,46 +34,80 @@ impl Terminal {
 /// [`Terminal::screen_replay_bytes`] describes them.
 pub(super) fn screen_replay_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
     let mut out = String::new();
-    draw_rows(term.grid(), &mut out);
+    draw_rows(term.grid(), &mut out, false);
     out.into_bytes()
 }
 
 /// Draws the rows of the viewport of `grid` from the first cell of an empty
-/// screen, with every cell in the column that it had, as [`push_cell`] says.
-pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String) {
+/// screen. With `in_place` every cell keeps its column, as [`push_cell`] says.
+pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
     let rows = grid.screen_lines();
     let columns = grid.columns();
     out.reserve(rows * (columns + 2));
     let mut painted = Style::default();
     let last_row = last_painted_row(grid, rows);
     for row in 0..=last_row {
-        let line = &grid[Line(i32::try_from(row).unwrap_or(i32::MAX))];
-        if let Some(last_column) = last_painted_column(line, columns) {
-            for column in 0..=last_column {
-                let cell = &line[Column(column)];
-                if cell
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    continue;
-                }
-                painted.paint(out, cell);
-                push_cell(out, cell);
-            }
-        }
-        painted = painted.reset(out);
+        push_row(out, &grid[line_of(row)], &mut painted, columns, in_place);
         if row < last_row {
             out.push_str("\r\n");
         }
     }
 }
 
+/// Draws the rows of the viewport of `grid` at their own places, so that a
+/// follower that keeps its history and its screen takes the grid without a full
+/// reset and without a scroll. The modes that change how a row is drawn go off
+/// first: a screen sets them again after the rows, and one that is not fresh
+/// carries the modes of the owner itself.
+pub(super) fn draw_rows_in_place(grid: &Grid<Cell>, out: &mut String) {
+    out.push_str("\x1b[4l\x1b[?6l\x1b[?7l\x1b[20l");
+    let mut painted = Style::default();
+    for row in 0..grid.screen_lines() {
+        let _ = write!(out, "\x1b[{};1H\x1b[2K", row + 1);
+        push_row(out, &grid[line_of(row)], &mut painted, grid.columns(), true);
+    }
+}
+
+/// Draws the cells of `line` from the column that the cursor stands on, and
+/// gives the default pen back. `in_place` is the rule of [`push_cell`].
+pub(super) fn push_row(
+    out: &mut String,
+    line: &Row<Cell>,
+    painted: &mut Style,
+    columns: usize,
+    in_place: bool,
+) {
+    if let Some(last_column) = last_painted_column(line, columns) {
+        for column in 0..=last_column {
+            let cell = &line[Column(column)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            if cell.flags.contains(Flags::HIDDEN) && !in_place {
+                continue;
+            }
+            painted.paint(out, cell);
+            push_cell(out, cell, in_place);
+        }
+    }
+    *painted = painted.reset(out);
+}
+
+/// One row of a grid, as the history numbers them: a row above the viewport has
+/// a negative line.
+fn line_of(row: usize) -> Line {
+    Line(i32::try_from(row).unwrap_or(i32::MAX))
+}
+
 /// Writes the text of `cell`. The grid keeps a tab in the first cell that the
-/// tab passed, and it keeps hidden text. Both are drawn as a blank: a tab would
-/// move the cursor past its cell, and hidden text is none of what a reader of
-/// the screen sees, so either would move the rest of its row.
-pub(super) fn push_cell(out: &mut String, cell: &Cell) {
-    if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) {
+/// tab passed, and it keeps hidden text. `in_place` draws both as a blank: a tab
+/// would move the cursor past its cell, and the replay of a restart skips
+/// hidden text, so either moves the rest of its row.
+pub(super) fn push_cell(out: &mut String, cell: &Cell, in_place: bool) {
+    if in_place && (cell.c == '\t' || cell.flags.contains(Flags::HIDDEN)) {
         out.push(' ');
         return;
     }

@@ -86,7 +86,7 @@ fn the_outlet_of_a_terminal_is_empty_until_somebody_follows_and_then_gives_its_p
     let outlet = terminal.share_outlet();
     wait_for(&mut terminal, "ready");
     // A screen that nobody follows starts nothing.
-    let _unfollowed = terminal.share_screen();
+    let _unfollowed = terminal.share_screen(true);
     assert_eq!(
         outlet.take(),
         ShareTake::default(),
@@ -95,7 +95,7 @@ fn the_outlet_of_a_terminal_is_empty_until_somebody_follows_and_then_gives_its_p
 
     outlet.set_wanted(true);
     assert!(outlet.take().overflowed, "a follower needs a screen first");
-    let shared = terminal.share_screen();
+    let shared = terminal.share_screen(true);
     assert_eq!((shared.rows, shared.cols), (24, 80));
     assert_eq!(outlet.take(), ShareTake::default(), "the program wrote nothing since");
 
@@ -123,7 +123,7 @@ fn output_that_nobody_takes_in_time_is_dropped_and_a_new_screen_starts_the_outle
     let outlet = terminal.share_outlet();
     outlet.set_wanted(true);
     wait_for(&mut terminal, "ready");
-    let _first = terminal.share_screen();
+    let _first = terminal.share_screen(true);
 
     terminal.write_input(b"\n");
     wait_for(&mut terminal, "more");
@@ -136,7 +136,7 @@ fn output_that_nobody_takes_in_time_is_dropped_and_a_new_screen_starts_the_outle
         "more than the bound waited, so the outlet holds nothing and asks for a screen"
     );
 
-    let shared = terminal.share_screen();
+    let shared = terminal.share_screen(true);
     let follower = follower_of(&shared);
     terminal.write_input(b"\n");
     let output = taken(&mut terminal, &outlet, b"after\r\n".len());
@@ -153,7 +153,7 @@ fn a_resize_of_the_terminal_asks_for_a_new_screen_of_the_new_grid() {
     let outlet = terminal.share_outlet();
     outlet.set_wanted(true);
     wait_for(&mut terminal, "ready");
-    let _first = terminal.share_screen();
+    let _first = terminal.share_screen(true);
     assert!(!outlet.take().overflowed);
 
     terminal.resize(24, 80, 9, 18);
@@ -161,7 +161,7 @@ fn a_resize_of_the_terminal_asks_for_a_new_screen_of_the_new_grid() {
     terminal.resize(30, 100, 9, 18);
 
     assert!(outlet.take().overflowed, "the screen of the old grid is over");
-    let shared = terminal.share_screen();
+    let shared = terminal.share_screen(true);
     assert_eq!((shared.rows, shared.cols), (30, 100));
     assert!(!outlet.take().overflowed);
     assert_same(&terminal.term, &follower_of(&shared));
@@ -178,7 +178,7 @@ fn a_follower_of_a_snapshot_gets_its_screen_and_none_of_the_output_of_its_proces
     let mut terminal = Terminal::spawn_snapshot(options).expect("a snapshot");
     let outlet = terminal.share_outlet();
     outlet.set_wanted(true);
-    let shared = terminal.share_screen();
+    let shared = terminal.share_screen(true);
 
     let deadline = Instant::now() + PATIENCE;
     while !terminal.child_exited() {
@@ -277,7 +277,7 @@ fn the_output_after_a_screen_continues_it_with_no_gap_and_no_repeat() {
         // A new follower joins when the outlet asks for a screen, and after
         // every take that brought output.
         if take.overflowed || got > 0 || following.is_none() {
-            let shared = terminal.share_screen();
+            let shared = terminal.share_screen(true);
             let follower = follower_of(&shared);
             let start = drawn_bytes(&follower, &starts);
             joins += 1;
@@ -315,7 +315,7 @@ fn a_share_source_gives_another_thread_the_screen_the_output_and_the_way_to_the_
     let other = source.clone();
     let pump = std::thread::spawn(move || {
         other.outlet().set_wanted(true);
-        let shared = other.screen().expect("the terminal is there");
+        let shared = other.screen(true).expect("the terminal is there");
         other.write_input(b"hello\n");
         let deadline = Instant::now() + PATIENCE;
         let mut output = Vec::new();
@@ -343,7 +343,7 @@ fn a_share_source_gives_another_thread_the_screen_the_output_and_the_way_to_the_
     assert!(terminal.shutdown_with_timeout(PATIENCE));
     drop(terminal);
     let deadline = Instant::now() + PATIENCE;
-    while source.screen().is_some() {
+    while source.screen(true).is_some() {
         assert!(
             Instant::now() < deadline,
             "the source of a terminal that is gone gives no screen"
