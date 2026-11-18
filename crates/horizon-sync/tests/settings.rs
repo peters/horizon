@@ -834,7 +834,13 @@ fn a_theme_change_of_one_computer_reaches_the_other_and_is_applied() {
     );
     assert_eq!(a.stored().shortcuts.search, Config::default().shortcuts.search);
     assert!(server.setting("appearance").is_some(), "the server holds the section");
-    assert!(a.queued_settings().is_empty(), "a committed intent is not queued");
+    // The link writes the queue file after it publishes the state that a frame
+    // reads, and a busy computer writes that file in a second or more: 1.2 s and
+    // 2.4 s with eight of these files at work on a macOS computer. The file is
+    // waited for, and not read at the instant of the state.
+    eventually("the queue of the first computer without the committed intent", || {
+        a.queued_settings().is_empty().then_some(())
+    });
     assert!(
         a.settings().view().in_step(),
         "the settings of the first computer are in step"
@@ -1072,6 +1078,13 @@ fn a_row_of_another_computer_that_comes_before_the_answer_of_a_push_keeps_its_ve
     arm_answer(&b);
     b.save(&config_with_theme(AppearanceTheme::Dark));
     held_answer(&b);
+    // A row of another computer reaches this computer before that answer does, and
+    // the save of this computer names the version of that row: the test waits for
+    // the row that the push of the other computer wrote, because the computer that
+    // writes it reads it through its own link.
+    eventually("the row of the push that waits on the server", || {
+        (a.theme() == AppearanceTheme::Dark).then_some(())
+    });
     a.save(&config_with_theme(AppearanceTheme::Light));
     eventually("the light theme of the computer whose answer waits", || {
         (b.theme() == AppearanceTheme::Light).then_some(())
@@ -1703,10 +1716,14 @@ fn a_save_while_the_server_is_away_starts_an_attempt_at_once() {
     );
 
     let attempts = a.attempts();
-    let saved_at = Instant::now();
     let mut config = a.stored();
     config.appearance.theme = AppearanceTheme::Light;
     a.save(&config);
+    // The save tells the link at its end: its own write of the store and of the
+    // queue takes a second or more on a busy computer (measured: 1.2 s with eight
+    // of these files at work on a macOS computer), so the wait of the link is
+    // measured from the end of the save and not from its start.
+    let saved_at = Instant::now();
     // A loaded computer starts a program and answers a hello at no bound, so the
     // test waits for the transport of the next attempt and not for the link that
     // follows it.
