@@ -123,7 +123,9 @@ use horizon_core::{
 
 use self::browser_requests::BrowserCreateHostState;
 use self::canvas::CanvasGridCache;
-pub(crate) use self::device_request_pump::{BridgeApp, DeviceRequestBridge, is_device_queue_wake};
+pub(crate) use self::device_request_pump::{
+    BridgeApp, DEVICE_QUEUE_WAKE_PASS, DeviceRequestBridge, TERMINAL_WAKE_PASS, is_wake,
+};
 use super::command_palette::CommandPalette;
 use super::command_registry::CommandEntry;
 use super::dir_picker::DirPicker;

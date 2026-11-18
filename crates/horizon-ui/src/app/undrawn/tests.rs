@@ -468,3 +468,214 @@ fn the_pass_reaches_the_application_through_the_bridge_of_the_window() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// A program that asks its terminal what it is for each line that it reads,
+/// takes the answer of five bytes, and prints the line.
+const ASKS_AGAIN: &str = r#"stty -echo -icanon min 1 time 0; printf 'READY'; while read -r line; do
+printf '\033[c'; dd bs=1 count=5 >/dev/null 2>&1; printf ' A%s' "$line"; done"#;
+
+/// The stand-in of the proxy of the event loop: it counts the calls that ask
+/// the UI thread for the pass at once.
+fn proxy_stand_in(app: &HorizonApp) -> Arc<AtomicUsize> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&calls);
+    app.pass_at_once(Arc::new(move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    calls
+}
+
+/// Does what the UI thread does with the calls of the stand-in, until `done`
+/// holds: one pass for the calls that arrived, as the window runs it.
+fn serve_until(
+    ctx: &Context,
+    app: &mut HorizonApp,
+    calls: &AtomicUsize,
+    served: &mut usize,
+    done: impl Fn(&HorizonApp) -> bool,
+) -> bool {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let asked = calls.load(Ordering::Relaxed);
+        if asked != *served {
+            *served = asked;
+            let _frame = horizon_core::ui_thread::FrameScope::enter();
+            app.pass_now(ctx);
+        }
+        if done(app) || Instant::now() >= deadline {
+            return done(app);
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+}
+
+#[test]
+fn an_event_of_a_terminal_asks_the_ui_thread_for_the_pass_at_once() {
+    let (_temp, ctx, mut app) = window();
+    let calls = proxy_stand_in(&app);
+    // The wake of the window, with a count of the events that reach it.
+    let events = Arc::new(AtomicUsize::new(0));
+    let (count, wake) = (Arc::clone(&events), Arc::clone(&app.output_wake));
+    app.output_wake = Arc::new(move |cause| {
+        count.fetch_add(usize::from(cause == Wake::Event), Ordering::Relaxed);
+        wake(cause);
+    });
+    let panel = terminal(&mut app, ASKS_AGAIN);
+    frames_until(&ctx, &mut app, "the program is ready", |app| {
+        text(app, panel).contains("READY")
+    });
+    // From here no frame runs, and the window knows that it draws nothing.
+    run_logic_pass(&ctx, &mut app);
+    let events_before = events.load(Ordering::Relaxed);
+    let mut served = calls.load(Ordering::Relaxed);
+    let mut fastest = Duration::MAX;
+    for round in 1..=3 {
+        // The calls of the round before are free again.
+        std::thread::sleep(Duration::from_millis(200));
+        let before = calls.load(Ordering::Relaxed);
+        let asked = Instant::now();
+        write(&mut app, panel, format!("{round}\n").as_bytes());
+        assert!(
+            waits(|| calls.load(Ordering::Relaxed) > before),
+            "the question asks the UI thread for the pass at once"
+        );
+        let shown = format!(" A{round}");
+        let answered = serve_until(&ctx, &mut app, &calls, &mut served, |app| {
+            text(app, panel).contains(&shown)
+        });
+        assert!(answered, "the pass of that call answers the program");
+        fastest = fastest.min(asked.elapsed());
+        // The line of the program is an event too, and its pass reads it.
+        assert!(serve_until(&ctx, &mut app, &calls, &mut served, |app| !unread(
+            app, panel
+        )));
+    }
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        events.load(Ordering::Relaxed) - events_before,
+        "each event asked the UI thread at once, and none waited for eframe"
+    );
+    eprintln!("the fastest question and answer took {fastest:?}");
+    assert!(
+        fastest < Duration::from_millis(250),
+        "a question and its answer take less than the wait of eframe: {fastest:?}"
+    );
+}
+
+#[test]
+fn a_window_that_draws_frames_gets_no_call_from_its_terminals() {
+    let (_temp, ctx, mut app) = window();
+    let calls = proxy_stand_in(&app);
+    let panel = terminal(&mut app, ASKS_AGAIN);
+    frames_until(&ctx, &mut app, "the program is ready", |app| {
+        text(app, panel).contains("READY")
+    });
+    write(&mut app, panel, b"1\n");
+    frames_until(&ctx, &mut app, "a frame answers the program", |app| {
+        text(app, panel).contains(" A1")
+    });
+    assert_eq!(calls.load(Ordering::Relaxed), 0, "the poll of a frame reads the events");
+
+    // A pass drew nothing, and then a frame draws again and takes the events back.
+    run_logic_pass(&ctx, &mut app);
+    run_app_frame(&ctx, &mut app);
+    write(&mut app, panel, b"2\n");
+    frames_until(&ctx, &mut app, "a frame answers the program again", |app| {
+        text(app, panel).contains(" A2")
+    });
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "a window that draws frames gets no call"
+    );
+
+    // A call that was on its way when the frame ran finds nothing to do.
+    {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
+        app.pass_now(&ctx);
+    }
+    assert!(!worked(&app), "the pass of a late call does no work after a frame");
+}
+
+#[test]
+fn a_program_that_prints_ten_thousand_lines_gets_a_bounded_number_of_passes() {
+    let prints = r#"stty -echo; printf 'READY'; read -r line; i=0
+while [ $i -lt 10000 ]; do echo "line $i"; i=$((i+1)); done; echo DONE; sleep 60"#;
+    let (_temp, ctx, mut app) = window();
+    let calls = proxy_stand_in(&app);
+    let panel = terminal(&mut app, prints);
+    frames_until(&ctx, &mut app, "the program is ready", |app| {
+        text(app, panel).contains("READY")
+    });
+    run_logic_pass(&ctx, &mut app);
+    // Eight calls go at once, and one more each 16 ms.
+    let bound = |since: Instant| 8 + usize::try_from(since.elapsed().as_millis() / 16).expect("a short test") + 2;
+
+    // The test is the UI thread: a pass for the calls that arrived, and each
+    // 50 ms the pass of eframe for the events that got no call.
+    let (before, started) = (calls.load(Ordering::Relaxed), Instant::now());
+    let mut served = before;
+    write(&mut app, panel, b"go\n");
+    let deadline = Instant::now() + PATIENCE;
+    while !text(&app, panel).contains("DONE") || unread(&app, panel) {
+        let _ = serve_until(&ctx, &mut app, &calls, &mut served, |_| true);
+        if started.elapsed().as_millis() % 50 == 0 {
+            run_logic_pass(&ctx, &mut app);
+        }
+        assert!(Instant::now() < deadline, "the program prints its lines");
+        std::thread::sleep(Duration::from_micros(200));
+    }
+    let passes = calls.load(Ordering::Relaxed) - before;
+    eprintln!(
+        "ten thousand lines asked for {passes} passes in {:?}",
+        started.elapsed()
+    );
+    assert!(passes >= 1, "the output asked for a pass at once");
+    assert!(
+        passes <= bound(started),
+        "the calls of a fast program are bounded: {passes}"
+    );
+
+    // Ten thousand events with no time between them, as the reads of a
+    // program that prints with no end: the calls stay in the same bound.
+    std::thread::sleep(Duration::from_millis(200));
+    let wake = Arc::clone(&app.output_wake);
+    let (before, started) = (calls.load(Ordering::Relaxed), Instant::now());
+    for _ in 0..10_000 {
+        wake(Wake::Event);
+    }
+    let asked = calls.load(Ordering::Relaxed) - before;
+    assert!(
+        (1..=bound(started)).contains(&asked),
+        "ten thousand events made {asked} calls"
+    );
+}
+
+#[test]
+fn the_call_of_a_terminal_reaches_the_pass_through_the_bridge_of_the_window() {
+    let (temp, ctx, mut app) = window();
+    let panel = terminal(&mut app, ASKS);
+    frames_until(&ctx, &mut app, "the program is ready", |app| {
+        text(app, panel).contains("READY")
+    });
+    run_logic_pass(&ctx, &mut app);
+    let terminal = app.board.panel(panel).and_then(Panel::terminal);
+    let source = terminal
+        .and_then(horizon_core::Terminal::share_source)
+        .expect("the source");
+    let shows = |words: &str| {
+        let screen = source.screen();
+        screen.is_some_and(|screen| String::from_utf8_lossy(&screen.bytes).contains(words))
+    };
+
+    // The window gives the wake of a terminal to this call of the bridge.
+    let bridge = crate::app::DeviceRequestBridge::with_root(temp.path().join("requests"));
+    bridge.install(app, ctx.clone());
+    source.write_input(b"go\n");
+    let deadline = Instant::now() + PATIENCE;
+    while !shows("ANS:E[1;6R") {
+        bridge.pass_on_ui_thread();
+        assert!(Instant::now() < deadline, "the pass of the call answers the program");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

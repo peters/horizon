@@ -25,6 +25,8 @@ use super::HorizonApp;
 /// Pass number that cannot match a real egui pass. eframe then ignores the
 /// wake instead of scheduling a redraw Wayland would drop.
 pub(crate) const DEVICE_QUEUE_WAKE_PASS: u64 = u64::MAX;
+/// The wake of a terminal for the pass of a window that draws no frame.
+pub(crate) const TERMINAL_WAKE_PASS: u64 = u64::MAX - 1;
 
 const IDLE_WAIT: Duration = Duration::from_millis(100);
 const PENDING_WAIT: Duration = Duration::from_millis(50);
@@ -41,6 +43,8 @@ struct InstalledHost {
 
 pub(crate) struct DeviceRequestBridge {
     installed: Mutex<Option<InstalledHost>>,
+    /// The proxy of the event loop, for the wake of a terminal.
+    proxy: Mutex<Option<EventLoopProxy<UserEvent>>>,
     /// `None` follows the process runtime root. Tests pin a directory.
     root_override: Option<PathBuf>,
     stop: Arc<AtomicBool>,
@@ -82,6 +86,7 @@ impl DeviceRequestBridge {
     fn build(root_override: Option<PathBuf>) -> Self {
         Self {
             installed: Mutex::new(None),
+            proxy: Mutex::new(None),
             root_override,
             stop: Arc::new(AtomicBool::new(false)),
             persist_pending: Arc::new(AtomicBool::new(false)),
@@ -99,7 +104,18 @@ impl DeviceRequestBridge {
         // the watcher wakes.
         let mut app = app;
         app.folder_requests.waiting = Arc::clone(&self.folder_request_pending);
+        if let Some(proxy) = lock(&self.proxy).clone() {
+            app.pass_at_once(Arc::new(move || drop(proxy.send_event(wake_event(TERMINAL_WAKE_PASS)))));
+        }
         *lock(&self.installed) = Some(InstalledHost { app, ctx });
+    }
+
+    /// Runs the pass that a terminal asked for with [`TERMINAL_WAKE_PASS`].
+    pub(crate) fn pass_on_ui_thread(&self) {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
+        if let Some(installed) = lock(&self.installed).as_mut() {
+            installed.app.pass_now(&installed.ctx);
+        }
     }
 
     /// Asks the coordination worker for waiting Device requests, applies the
@@ -179,6 +195,7 @@ impl DeviceRequestBridge {
     }
 
     pub(crate) fn start_watcher(&self, proxy: EventLoopProxy<UserEvent>) {
+        *lock(&self.proxy) = Some(proxy.clone());
         let mut watcher = lock(&self.watcher);
         if watcher.is_some() || self.stop.load(Ordering::Relaxed) {
             return;
@@ -278,14 +295,21 @@ impl eframe::App for BridgeApp {
     }
 }
 
-pub(crate) fn is_device_queue_wake(event: &UserEvent) -> bool {
+/// The event of a wake that is no repaint, with the pass number `pass`.
+fn wake_event(pass: u64) -> UserEvent {
+    UserEvent::RequestRepaint {
+        viewport_id: ViewportId::ROOT,
+        when: Instant::now(),
+        cumulative_pass_nr: pass,
+    }
+}
+
+/// Whether `event` is the wake with the pass number `pass`.
+pub(crate) fn is_wake(event: &UserEvent, pass: u64) -> bool {
     matches!(
         event,
-        UserEvent::RequestRepaint {
-            cumulative_pass_nr: DEVICE_QUEUE_WAKE_PASS,
-            viewport_id,
-            ..
-        } if *viewport_id == ViewportId::ROOT
+        UserEvent::RequestRepaint { cumulative_pass_nr, viewport_id, .. }
+            if *cumulative_pass_nr == pass && *viewport_id == ViewportId::ROOT
     )
 }
 
@@ -325,15 +349,7 @@ fn watch_device_requests(
         let pending = files_pending || claims || folder_pending;
         let persist = persist_pending.load(Ordering::Relaxed);
         let click_wait = click_wait_pending.load(Ordering::Relaxed);
-        if (pending || persist || click_wait)
-            && proxy
-                .send_event(UserEvent::RequestRepaint {
-                    viewport_id: ViewportId::ROOT,
-                    when: Instant::now(),
-                    cumulative_pass_nr: DEVICE_QUEUE_WAKE_PASS,
-                })
-                .is_err()
-        {
+        if (pending || persist || click_wait) && proxy.send_event(wake_event(DEVICE_QUEUE_WAKE_PASS)).is_err() {
             return;
         }
         let (wait, next_persist_wait) = next_pump_wait(pending, persist, click_wait, persist_wait);
@@ -392,18 +408,15 @@ mod tests {
 
     #[test]
     fn only_the_sentinel_pass_is_a_device_queue_wake() {
-        let wake = UserEvent::RequestRepaint {
-            viewport_id: ViewportId::ROOT,
-            when: Instant::now(),
-            cumulative_pass_nr: DEVICE_QUEUE_WAKE_PASS,
-        };
-        assert!(is_device_queue_wake(&wake));
+        let wake = wake_event(DEVICE_QUEUE_WAKE_PASS);
+        assert!(is_wake(&wake, DEVICE_QUEUE_WAKE_PASS) && !is_wake(&wake, TERMINAL_WAKE_PASS));
+        assert!(is_wake(&wake_event(TERMINAL_WAKE_PASS), TERMINAL_WAKE_PASS));
         let repaint = UserEvent::RequestRepaint {
             viewport_id: ViewportId::ROOT,
             when: Instant::now(),
             cumulative_pass_nr: 3,
         };
-        assert!(!is_device_queue_wake(&repaint));
+        assert!(!is_wake(&repaint, DEVICE_QUEUE_WAKE_PASS) && !is_wake(&repaint, TERMINAL_WAKE_PASS));
     }
 
     #[test]

@@ -9,8 +9,8 @@
 //! returns at once. Nothing in the pass draws, measures text, reads the
 //! pointer or waits.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use egui::Context;
@@ -25,6 +25,34 @@ const READ_TAKES: Duration = Duration::from_millis(100);
 /// the last output of that turn. It is longer than the time between two reads.
 const HOOK_TAKES: Duration = Duration::from_millis(600);
 
+/// A call for the pass books this many milliseconds, and no call goes out
+/// while the book is that far ahead of the clock. So eight calls go at once,
+/// and about sixty a second after them: the frames of a window that draws.
+const CALL_MS: i64 = 16;
+const AHEAD_MS: i64 = 8 * CALL_MS;
+
+/// The way from the wake of a terminal to the pass with no wait for eframe,
+/// which runs the pass of a repaint request 250 ms late on Wayland.
+#[derive(Default)]
+struct AtOnce {
+    /// The call of the bridge of the window, which asks the UI thread.
+    call: OnceLock<Arc<dyn Fn() + Send + Sync>>,
+    /// The time up to which the calls are booked, in milliseconds.
+    booked: AtomicI64,
+}
+
+impl AtOnce {
+    /// Asks the UI thread for the pass now, unless the window has no call or
+    /// its calls are booked too far ahead: eframe then runs the pass.
+    fn ask(&self) -> bool {
+        let now = horizon_core::current_unix_millis();
+        let booked = self.booked.load(Ordering::Relaxed).max(now);
+        let free = booked - now < AHEAD_MS;
+        self.booked.store(booked + i64::from(free) * CALL_MS, Ordering::Relaxed);
+        self.call.get().filter(|_| free).inspect(|call| call()).is_some()
+    }
+}
+
 /// What the application knows about the frames of its window.
 #[derive(Default)]
 pub(in crate::app) struct Undrawn {
@@ -34,6 +62,7 @@ pub(in crate::app) struct Undrawn {
     /// Whether the last pass drew nothing. Then an event of a terminal asks for
     /// the next pass, because no poll of a frame reads it.
     asks: Arc<AtomicBool>,
+    at_once: Arc<AtOnce>,
     /// Whether the last pass asked for the pass that takes the read of the
     /// agent states, so one read brings one more pass and no chain of them.
     follows: bool,
@@ -46,11 +75,12 @@ fn mark(ctx: &Context) -> (u64, u64) {
 impl Undrawn {
     /// The callback of the terminals of this window. The echo of a key press
     /// asks for a frame. An event of a program asks for a pass only while the
-    /// window draws nothing: the poll of a frame reads it sooner.
+    /// window draws nothing: the UI thread at once, or else eframe.
     pub(in crate::app) fn wake(&self, ctx: &Context) -> horizon_core::OutputWake {
-        let (ctx, asks) = (ctx.clone(), Arc::clone(&self.asks));
+        let (ctx, asks, at_once) = (ctx.clone(), Arc::clone(&self.asks), Arc::clone(&self.at_once));
         Arc::new(move |wake| {
-            if wake == Wake::Echo || asks.load(Ordering::Acquire) {
+            let undrawn = wake == Wake::Event && asks.load(Ordering::Acquire);
+            if wake == Wake::Echo || (undrawn && !at_once.ask()) {
                 ctx.request_repaint();
             }
         })
@@ -75,6 +105,18 @@ impl Undrawn {
 }
 
 impl HorizonApp {
+    /// Takes the call that asks the UI thread for [`Self::pass_now`].
+    pub(in crate::app) fn pass_at_once(&self, call: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.undrawn.at_once.call.set(call);
+    }
+
+    /// The pass that a terminal asked for at once, unless a frame ran since.
+    pub(in crate::app) fn pass_now(&mut self, ctx: &Context) {
+        if self.undrawn.asks.load(Ordering::Acquire) {
+            self.logic_pass(ctx);
+        }
+    }
+
     /// The pass of eframe before a frame and in place of one. It does the work
     /// only in place of one: the answers of the terminals go out, a panel that
     /// a request opened starts its program, the other computers get the new

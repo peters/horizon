@@ -389,9 +389,12 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         self.drain_pinch(event_loop);
         // Not a repaint. Claiming here runs while Wayland is withholding
         // `RedrawRequested` for an unpresented surface.
-        if crate::app::is_device_queue_wake(&event) {
+        if crate::app::is_wake(&event, crate::app::DEVICE_QUEUE_WAKE_PASS) {
             self.device_requests.poll_on_ui_thread();
             return;
+        }
+        if crate::app::is_wake(&event, crate::app::TERMINAL_WAKE_PASS) {
+            return self.device_requests.pass_on_ui_thread();
         }
         self.inner.user_event(event_loop, event);
     }
