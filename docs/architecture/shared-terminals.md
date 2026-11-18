@@ -473,23 +473,29 @@ panels took the keys of that frame. It does the work that needs the board:
    each frame, so the keys of that frame go out at once.
 4. It takes `Found` for the section of the sidebar and for the chips.
 
-### What waits for a frame
+### What a window with no frame does
 
-A window that gets no frame continues each stream. These things wait for the
-next frame of that window:
+A window that gets no frame continues each stream on the pump. The part of the
+window runs in the pass that eframe calls in place of a frame:
+[the UI thread guide](ui-thread.md#the-pass-of-a-window-that-draws-no-frame)
+gives its rules. A repaint request wakes that pass. An event of a terminal asks
+for one, and so does the pump when `Found` changed. On Wayland, the pass comes
+250 ms after the request. Thus, these things need no frame:
 
-- The list: a panel that opened or closed, a panel that started a new
-  terminal, a new title, a new state and a new grid.
+- The list: a panel that a request opened or closed, a panel that started a
+  new terminal, a new title, a new state and a new grid.
+- The new start of the live link after the sync link came back, when the
+  worker of the sync link asks for a repaint.
+- The answers of a terminal to the questions of its program, such as the
+  position of the cursor. This is true for each terminal of the window, shared
+  or not.
+
+These things wait for the next frame of that window:
+
 - A changed switch and a new name of the computer. A person changes them in
   the window.
-- The start of the live link, and its new start after the sync link came back.
+- The start of the sync link, which `poll_server_sync` makes in a frame.
 - The section of the sidebar and the chips.
-- The answers of a terminal to the questions of its program, such as the
-  position of the cursor. `Terminal::process_events` writes them in a frame.
-  This is true for each terminal of the window, shared or not.
-
-A watched panel that closed, or that started a new terminal, gives no screen
-and no output until that frame.
 
 ### The settings of a computer
 
@@ -740,10 +746,10 @@ and the follow panels of this window.
 - **A short loss of the sync link.** The join reads the state of the sync link
   one time in each frame. It does not see a sync link that is away for less
   than one frame, and the live link does not start again then.
-- **A window with no frame starts no live link.** A frame starts the live link
-  and builds the list, as [What waits for a frame](#what-waits-for-a-frame)
-  says. A window that gets no frame after its sync link came back shares
-  nothing and follows nothing until its next frame.
+- **A window with no frame is 250 ms late on Wayland.** The pass that builds
+  the list and writes the answers of a terminal comes 250 ms after its repaint
+  request, as [What a window with no frame does](#what-a-window-with-no-frame-does)
+  says. eframe sets that time.
 - **An older server shows nothing.** The state `Unsupported` shows no line and
   no section, so the person cannot tell an older server from a server with no
   other computer.

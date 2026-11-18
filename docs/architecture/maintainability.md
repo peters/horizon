@@ -47,6 +47,7 @@ when it names one of those kinds.
   like an SSH panel, in which case the target is the endpoint as seen from that
   host. Restored panels require manual reconnect.
 - Device panel requests are claimed on the UI thread by `app/device_request_pump.rs` when a request file appears. Wayland does not deliver `RedrawRequested` while a frame callback is outstanding and the compositor is not presenting the surface, and it reports neither visibility nor minimization, so the queue cannot wait for `App::ui`.
+- `app/undrawn.rs` is the pass of a window that draws no frame. eframe calls `App::logic` in place of a frame, and the pass does there the work that needs no drawing: the events of the terminals, the start of a panel that a request opened, the window part of the shared terminals and the states of the agent panels. [The UI thread guide](ui-thread.md#the-pass-of-a-window-that-draws-no-frame) gives its rules and the list of the work that still waits for a frame.
 - `horizon-ui::device_widget` owns presentation and, only while a person has Interact on, event capture in `capture.rs` and the egui key, button and position mapping in `keys.rs`; agents never get that path. The creator of a viewer sets `DevicePanelState::input`. RFB cannot report a server that ignores input, so a `ViewOnly` viewer disables Interact and shows the reason. `details` renders
   labelled connection facts, while core selects and bounds the displayed name.
   `device_widget/session.rs` connects the viewer to a `horizon-vnc` session: it

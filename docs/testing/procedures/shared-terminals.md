@@ -847,14 +847,24 @@ must move each byte then.
 
    Result: The follow panel shows the command and the line `hidden-b`.
 
-6. On computer B, close the follow panel of `Live render heartbeat` with the
+6. On computer B, run this command in the same follow panel. The program asks
+   the terminal of computer A for the position of the cursor:
+
+   ```sh
+   printf '\033[6n'; read -r -s -d R -t 5 answer; echo "position ${answer#*[}"
+   ```
+
+   Result: In 5 seconds at most, the follow panel shows `position` and two
+   numbers with `;` between them.
+
+7. On computer B, close the follow panel of `Live render heartbeat` with the
    close button of its title bar. Then click the row `Live render heartbeat` of
    `Computer A`.
 
    Result: A follow panel opens. It shows lines that start with
    `Live frame heartbeat:`, and a new line each second.
 
-7. Show the window of computer A again:
+8. Show the window of computer A again:
 
    ```sh
    DISPLAY=<display of A> xdotool windowmap "$WINDOW"
@@ -895,7 +905,8 @@ must move each byte then.
   comes back.
 - ST17: no text is drawn on another text at the two window sizes.
 - ST18: while the window of the owner is minimized, the follower gets the
-  output, its keys go to the program, and a new follow panel gets a screen.
+  output, its keys go to the program, the terminal of the owner answers the
+  question of a program, and a new follow panel gets a screen.
 
 ## 8. Cleanup
 

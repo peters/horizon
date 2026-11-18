@@ -6,7 +6,7 @@ how to move it to a worker thread. Use it when you write or review code in
 
 ## How eframe and egui run
 
-Horizon draws its window with eframe and egui 0.36 (see `Cargo.lock`). The
+Horizon draws its window with eframe and egui 0.37 (see `Cargo.lock`). The
 facts below come from the source of that version.
 
 - One thread runs the window. `main` calls `run_native_with_keyboard_observer`
@@ -16,10 +16,12 @@ facts below come from the source of that version.
   is one call of `Context::run_ui`. It usually has one pass. When code calls
   `request_discard`, egui discards the pass and runs one more, up to
   `Options::max_passes` (2 by default). Thus, one frame can call `App::ui` two
-  times. In eframe 0.36, `App::update` is replaced by `App::logic` and
-  `App::ui`. Horizon does not implement `logic`. eframe runs `BridgeApp`
+  times. eframe calls `App::logic` before each call of `App::ui`. It also
+  calls `logic` alone for a window that draws nothing:
+  [the pass of such a window](#the-pass-of-a-window-that-draws-no-frame) is
+  below. eframe runs `BridgeApp`
   ([`device_request_pump.rs`](../../crates/horizon-ui/src/app/device_request_pump.rs)),
-  which locks a mutex and calls `ui` of `HorizonApp`
+  which locks a mutex and calls `logic` and `ui` of `HorizonApp`
   ([`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs)).
 - egui is an immediate mode library. Each frame lays out, reads input for and
   paints the full interface again. egui keeps no widget objects between frames.
@@ -37,6 +39,86 @@ facts below come from the source of that version.
 - `egui::Context` is cheap to clone: each clone refers to the same data. It is
   `Send + Sync`. A worker thread can keep a clone and call
   `request_repaint()`. eframe then wakes the UI thread.
+
+## The pass of a window that draws no frame
+
+A window that the desktop does not show gets no frame. On Wayland, a redraw
+waits for a frame callback, and the compositor sends none for a surface that it
+does not present. winit does not report that state there. A minimized window on
+X11 gets no frame either. The work below needs no drawing, so Horizon does it
+in `App::logic` (`HorizonApp::logic_pass` in
+[`app/undrawn.rs`](../../crates/horizon-ui/src/app/undrawn.rs)).
+
+- **eframe calls `logic` in place of a frame.** When code asked for a repaint
+  and no frame comes, eframe runs a pass that calls only `logic`. On Wayland,
+  that pass comes 250 ms after the request (`MISSED_REDRAW_TIMEOUT` of eframe).
+  For a window that winit reports as minimized or as not visible, the pass
+  comes at once, and at most each 100 ms.
+- **Each repaint request leads to that pass.** `ctx.request_repaint()` and
+  `ctx.request_repaint_after(duration)` of each thread do. Thus, a worker
+  thread wakes the pass as it wakes a frame.
+- **The pass before a frame does nothing.** `logic` also runs before each
+  `ui`. `logic_pass` does its work only in place of a frame. It reads two
+  values of egui for this. The count of the complete frames is higher than at
+  the last `ui`, and the time of the input is the same. Thus, no work runs two
+  times in one frame.
+- **The pass does five things.**
+  1. It gives the wake to each terminal that has none.
+  2. It starts the program of a panel that a request opened, and it applies
+     the answers of the coordination worker.
+  3. It reads the events of each terminal that has one. The answers to the
+     questions of a program go out. The title, the status and the end of the
+     program are read.
+  4. It runs the window part of the
+     [shared terminals](shared-terminals.md#what-a-window-with-no-frame-does).
+  5. It reads the states of the agent panels, and it sends a desktop notice
+     that is due.
+- **The pass costs nothing when nothing asks for it.** It has no timer. A
+  terminal asks for it with the first event after the window read that
+  terminal (`Wake::Event`), and only while the window draws nothing. While
+  frames run, the poll of a frame reads the events. In the pass, a terminal
+  with no event costs one atomic load.
+- **One pass can ask for two more.** After a pass that took output, one pass
+  follows 600 ms later: the hook of an agent writes the state of a turn after
+  the last output of that turn. After a pass that asked for a read of the
+  agent states, one pass follows 100 ms later and takes the answer. A pass
+  that took no output and asked for no read asks for no pass.
+- **The rules of a frame apply.** The pass runs in a `FrameScope`, and it must
+  not wait. It must not draw, measure text or read the pointer. egui runs no
+  pass of its own then, so `ctx.input` holds the input of the last frame. Only
+  the focus and the viewports are new, in `input.raw`.
+- **A copy to the clipboard waits for a frame.** A copy that a program asked
+  for with OSC 52 stays with its terminal until a frame hands it over.
+
+The pump of the device requests
+([`device_request_pump.rs`](../../crates/horizon-ui/src/app/device_request_pump.rs))
+is older than `App::logic`. It wakes the UI thread through the proxy of the
+event loop when a request file appears, and it needs no repaint request.
+
+### What waits for a frame
+
+The work below runs only in a frame (`update_ui` in
+[`app/mod.rs`](../../crates/horizon-ui/src/app/mod.rs)). A window that draws
+nothing does not do it:
+
+- All drawing, and all input of a person: keys, the pointer, shortcuts, dropped
+  files and speech.
+- The copy of a program to the clipboard.
+- The server sync (`poll_server_sync`): the machine list, the secrets and the
+  settings of the sync link. Also the settings that another computer changed
+  (`apply_settings_io`, `poll_config_reload`).
+- The machines: their load, their watch and the SSH hosts.
+- The browser panels: their events, and the create requests of an agent.
+- The upkeep of a panel: the SSH reconnect, the read of the working directory,
+  a close or a restart that a person asked for, the save of an editor and the
+  start of a device video.
+- The session: the switch, the catalog, the pickup, the lease and the save of
+  the runtime state. The pump of the device requests saves the state that a
+  request changed.
+- The close request of the window (`exit_on_close_request`).
+- The folder of a second `horizon <folder>`.
+- The idle state of an agent whose program reports no state. The screen of its
+  terminal is read only in a pass that took output.
 
 ## Work that must not run on the UI thread
 
