@@ -23,6 +23,8 @@ mod small_window_tests;
 mod speech;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_close_tests;
 
 #[cfg(test)]
 pub(super) use tests::{at, frame_of, texts_hold};
@@ -229,6 +231,7 @@ impl HorizonApp {
             return;
         }
         let view = self.server_view();
+        let window_cannot_hide = !self.holds_session_lease();
         let Some(editor) = self.settings.as_mut() else {
             return;
         };
@@ -245,6 +248,7 @@ impl HorizonApp {
         let missing_notification_program = self.notifications.missing_program_sentence();
         let general_view = general::GeneralView {
             missing_notification_program: missing_notification_program.as_deref(),
+            window_cannot_hide,
         };
         let speech_view = speech::SpeechView {
             answer: self.speech.try_answer(),

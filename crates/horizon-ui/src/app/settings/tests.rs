@@ -456,6 +456,7 @@ fn the_row_of_desktop_notifications_says_when_this_computer_cannot_show_one() {
     let mut config = Config::default();
     let view = super::general::GeneralView {
         missing_notification_program: Some("notify-send is not installed"),
+        ..super::general::GeneralView::default()
     };
     let (_changed, texts) = frame_of(|ui| super::general::render(ui, &mut config, view));
     assert!(

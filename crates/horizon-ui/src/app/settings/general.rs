@@ -10,7 +10,14 @@ pub(super) struct GeneralView<'a> {
     /// The sentence of the row of desktop notifications while this computer has
     /// no program that shows one, and `None` while it has that program.
     pub(super) missing_notification_program: Option<&'a str>,
+    /// Whether this window holds no session lease: no second start can show it
+    /// again, so it cannot keep running behind a hidden window.
+    pub(super) window_cannot_hide: bool,
 }
+
+/// The line of the row of the close in a window that cannot hide.
+pub(super) const CANNOT_HIDE: &str =
+    "This window cannot be shown again by a new start, so it cannot keep running hidden.";
 
 /// Render the General settings tab: window dimensions, feature toggles,
 /// the machine entries and overlay sizes.  Returns `true` when any value was
@@ -482,7 +489,7 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
         );
 
         ui.add_space(10.0);
-        changed |= render_window_close_row(ui, config);
+        changed |= render_window_close_row(ui, config, view.window_cannot_hide);
 
         ui.add_space(10.0);
         changed |= render_notification_row(ui, config, view);
@@ -491,8 +498,9 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
 }
 
 /// The row of what a close of the main window does: the three values of the
-/// setting, and the sentence of each one.
-fn render_window_close_row(ui: &mut Ui, config: &mut Config) -> bool {
+/// setting, and the sentence of each one. A window that cannot hide shows the
+/// value that hides it and takes no press on it; the stored value stays.
+fn render_window_close_row(ui: &mut Ui, config: &mut Config, cannot_hide: bool) -> bool {
     let mut changed = false;
     ui.label(
         egui::RichText::new("When the window is closed")
@@ -500,19 +508,22 @@ fn render_window_close_row(ui: &mut Ui, config: &mut Config) -> bool {
             .size(12.0),
     );
     for setting in WindowCloseSetting::VALUES {
-        changed |= ui
-            .radio_value(
-                &mut config.features.when_window_closes,
-                setting,
-                egui::RichText::new(setting.label()).color(theme::FG()).size(12.0),
-            )
-            .changed();
+        let label = egui::RichText::new(setting.label()).color(theme::FG()).size(12.0);
+        let chosen = &mut config.features.when_window_closes;
+        if cannot_hide && setting == WindowCloseSetting::KeepRunning {
+            ui.add_enabled(false, egui::RadioButton::new(*chosen == setting, label));
+        } else {
+            changed |= ui.radio_value(chosen, setting, label).changed();
+        }
     }
     super::dim_label(
         ui,
         "Ask shows a question while a program of this computer runs. Keep Horizon running hides the window, and a start \
          shows it again. Quit Horizon ends every program of this computer.",
     );
+    if cannot_hide {
+        super::dim_label(ui, CANNOT_HIDE);
+    }
     changed
 }
 

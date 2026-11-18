@@ -283,12 +283,12 @@ A start of Horizon finds the window of a Horizon that runs through the session
 that the window holds. A window that Horizon starts with `--ephemeral` holds no
 session, so no start can show it again.
 
-> **CAUTION:** THE STEP THAT SELECTS "END THEM AND QUIT" ENDS EVERY TERMINAL AND
-> AGENT PROGRAM OF THAT WINDOW. Do it only when the terminals hold no work that
-> you need.
+> **CAUTION:** THE STEPS THAT SELECT "END THEM AND QUIT" AND "QUIT HORIZON" END
+> EVERY TERMINAL AND AGENT PROGRAM OF THAT WINDOW. Do them only when the
+> terminals hold no work that you need.
 
 1. Start Horizon with `--ephemeral` and the mark at "Ask". In a fixture run,
-   start the fixture without `--saved-session`.
+   start the fixture with `--reuse-state` and without `--saved-session`.
 
    Result: The main window of Horizon shows.
 
@@ -316,17 +316,65 @@ session, so no start can show it again.
 
    Result: The dialog goes away, and the window stays.
 
-7. Select "Keep Horizon running" in the row "When the window is closed".
+7. Open Settings, and find the row "When the window is closed".
 
-   Result: The mark is at "Keep Horizon running".
+   Result: The row shows three values. "Keep Horizon running" is dim. One line
+   under the row says that a new start cannot show this window again.
 
-8. Close the main window of Horizon.
+8. Select "Keep Horizon running".
 
-   Result: The window stays, and the dialog of step 4 shows.
+   Result: The mark stays at "Ask".
 
-9. Select "End them and quit".
+9. Close the Settings window.
 
-   Result: Horizon ends, and the program of the panel ends.
+   Result: The board of Horizon shows.
+
+10. Close the main window of Horizon.
+
+    Result: The window stays, and the dialog of step 4 shows.
+
+11. Select "End them and quit".
+
+    Result: Horizon ends, and the program of the panel ends.
+
+12. Start Horizon with the same home and without `--ephemeral`. In a fixture
+    run, use `--reuse-state` and `--saved-session` with the same state folder.
+
+    Result: The main window of Horizon shows.
+
+13. Select "Keep Horizon running" in the row "When the window is closed".
+
+    Result: The mark is at "Keep Horizon running", and that value is not dim.
+
+14. Open the Menu, and select "Quit Horizon".
+
+    Result: Horizon ends.
+
+15. Start Horizon with the same home and `--ephemeral`. In a fixture run, use
+    `--reuse-state` without `--saved-session`.
+
+    Result: The main window of Horizon shows.
+
+16. Open a terminal panel that runs a program.
+
+    Result: The program runs.
+
+17. Open Settings, and read the row "When the window is closed".
+
+    Result: The mark is at "Keep Horizon running", and that value is dim.
+
+18. Close the Settings window.
+
+    Result: The board of Horizon shows.
+
+19. Close the main window of Horizon.
+
+    Result: The window stays, and the dialog of step 4 shows. The window does
+    not go away.
+
+20. Select "End them and quit".
+
+    Result: Horizon ends, and the program of the panel ends.
 
 ## 7. Pass criteria
 
@@ -346,6 +394,8 @@ session, so no start can show it again.
   computer writes no work off.
 - A window that holds no session never goes away while a program runs in it: its
   dialog offers only "End them and quit" and "Cancel", and Enter does nothing.
+- The Settings window of a window that holds no session shows "Keep Horizon
+  running" as a value that you cannot select, and it changes no stored value.
 
 ## 8. Cleanup
 
