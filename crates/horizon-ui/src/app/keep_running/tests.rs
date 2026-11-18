@@ -390,6 +390,16 @@ fn the_ask_counts_the_programs_here_and_the_panels_of_a_machine() {
             .is_some_and(|output| !output.commands.contains(&ViewportCommand::Visible(false))),
         "the window stays while the ask shows"
     );
+
+    // A second close request while the ask shows changes nothing.
+    let sent = commands(&ctx, &mut app, close_request());
+    assert!(
+        sent.contains(&ViewportCommand::CancelClose),
+        "the ask holds its window: {sent:?}"
+    );
+    assert!(app.keep_running.ask.is_some(), "the ask still waits for the person");
+    assert!(app.shutdown_progress.is_none(), "a second close ends nothing");
+    assert!(!app.keep_running.hidden, "a second close hides nothing");
     app.board.shutdown_terminal_panels();
 }
 
