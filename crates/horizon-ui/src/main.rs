@@ -53,6 +53,10 @@ use horizon_core::{
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
+    // Every mode below opens files: a terminal its PTY, a link to a server the
+    // pipes of its `ssh` child, a browser panel more. macOS gives this process 256
+    // of them, so the limit is raised once here, before the first mode opens one.
+    horizon_core::raise_limit();
     // Every argument of this start is judged before anything of this computer is
     // touched: no Horizon home, no tracing writer, no plugin, no settings, no
     // session and no lock. An argument that this build does not know ends the

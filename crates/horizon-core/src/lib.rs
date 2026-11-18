@@ -26,6 +26,7 @@ pub mod machines;
 pub mod named_secrets;
 pub mod node_cards;
 pub mod notify;
+mod open_files;
 mod opencode_paths;
 mod panel;
 pub mod panel_holder;
@@ -92,6 +93,7 @@ pub use machines::{
     MachineRegistry, MachineStore, Machines, check_record,
 };
 pub use notify::{Change, ChangeKind, Notice, NotificationSetting};
+pub use open_files::{OpenFileLimit, raise_limit};
 pub use panel::{
     AFTER_HANGUP, AFTER_TERM, DEFAULT_DEVICE_PANEL_SIZE, DEFAULT_PANEL_SIZE, PANEL_SCROLLBACK_LIMIT, Panel, PanelId,
     PanelKind, PanelLayout, PanelOptions, PanelResume, PanelStart, PendingRestart, ProgramEnd, RestartPreflight,

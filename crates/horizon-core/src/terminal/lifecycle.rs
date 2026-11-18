@@ -69,6 +69,8 @@ pub(crate) fn open_pty(
     window_size: WindowSize,
     window_id: u64,
 ) -> Result<tty::Pty> {
+    // A terminal holds files, so the limit allows one before it starts.
+    crate::open_files::raise_limit();
     tty::setup_env();
     let pty_options = PtyOptions {
         shell: Some(Shell::new(program, args)),
