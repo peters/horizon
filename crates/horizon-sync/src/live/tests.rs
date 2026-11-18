@@ -11,12 +11,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::alive::{Alive, Limits};
 use super::hub::{MAX_LIVE_LINKS, REFRESH_EVERY};
 use super::outbox::{CEILING_BYTES, Next, Outbox, Push, RESUME_BYTES, Tag};
 use super::protocol::{
     DEVICE_CHARS, ID_CHARS, LABEL_CHARS, LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest,
     LiveState, LiveWatcher, MAX_LIVE_FOLLOWS, MAX_LIVE_PANELS, MAX_LIVE_WATCHERS, clean, clean_panels,
 };
+use super::relay::sign_of_life;
 use crate::frame::MAX_FRAME_BYTES;
 use crate::protocol::{Frame, LinkErrorCode};
 use crate::server::{LinkRegistry, LinkTicket, NoTransport, Outgoing};
@@ -950,4 +952,72 @@ fn the_list_of_the_computers_stays_one_frame_and_the_live_links_have_a_limit() {
             .open(&ticket, "one too many", &Arc::new(Outbox::default())),
         "the server holds {MAX_LIVE_LINKS} live links"
     );
+}
+
+/// The sign of life of one link, in a test: a heartbeat while it has nothing else
+/// to say, and the end of a link whose computer sent nothing for the bound.
+#[test]
+fn a_live_link_that_reads_nothing_ends_and_an_idle_one_sends_a_heartbeat() {
+    let registry = LinkRegistry::default();
+    let quiet = computer(&registry, "laptop-a");
+    let limits = Limits {
+        tick: Duration::from_millis(5),
+        heartbeat: Duration::from_millis(20),
+        silence: Duration::from_millis(120),
+    };
+    let alive = Arc::new(Alive::new(limits));
+    let sign = {
+        let (alive, outbox, ticket) = (Arc::clone(&alive), Arc::clone(&quiet.outbox), Arc::clone(&quiet.ticket));
+        std::thread::spawn(move || sign_of_life(&alive, &outbox, &ticket))
+    };
+
+    // The link says nothing, so the server says that it is there.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut beats = 0;
+    while beats == 0 {
+        let events = quiet.take(&registry);
+        beats = events.iter().filter(|event| **event == LiveEvent::Heartbeat).count();
+        assert!(Instant::now() < deadline, "the server sends no heartbeat");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    // Then the computer stays quiet, and the link ends with its own reason.
+    let ending = quiet
+        .frames
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the error frame of a quiet link");
+    match ending.frame {
+        Frame::Error(error) => assert_eq!(error.code, LinkErrorCode::LiveSilent),
+        other => panic!("not an error frame: {other:?}"),
+    }
+    if let Some(written) = ending.written {
+        let _ = written.send(());
+    }
+    sign.join().expect("the thread of the sign of life");
+    assert!(
+        quiet.closed.load(Ordering::SeqCst),
+        "the transport of a quiet link is closed"
+    );
+
+    // A computer that keeps saying something keeps its link.
+    let registry = LinkRegistry::default();
+    let busy = computer(&registry, "laptop-b");
+    let limits = Limits {
+        tick: Duration::from_millis(5),
+        heartbeat: Duration::from_millis(20),
+        silence: Duration::from_millis(60),
+    };
+    let alive = Arc::new(Alive::new(limits));
+    let sign = {
+        let (alive, outbox, ticket) = (Arc::clone(&alive), Arc::clone(&busy.outbox), Arc::clone(&busy.ticket));
+        std::thread::spawn(move || sign_of_life(&alive, &outbox, &ticket))
+    };
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < deadline {
+        alive.read();
+        assert!(!busy.closed.load(Ordering::SeqCst), "a link that answers stays");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    busy.outbox.close();
+    sign.join().expect("the thread of the sign of life");
 }

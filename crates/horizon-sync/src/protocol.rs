@@ -47,15 +47,18 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// sends a live frame only to a server that answered [`LIVE_PROTOCOL_VERSION`]:
 /// an older server cannot read one and would end the link. Version 7 adds the
 /// facts of a screen that say whether a follower keeps its history and who takes
-/// the screen, and the mark of the replay of a screen: a computer of this build
-/// sends no live frame to a server that answered 6.
-pub const SERVER_PROTOCOL_VERSION: u32 = 7;
+/// the screen, and the mark of the replay of a screen. Version 8 adds the
+/// heartbeat of a live link in both directions, so a computer that went away
+/// without closing its transport leaves the list of the others. A computer of
+/// this build sends no live frame to a server that answered 7 or 6.
+pub const SERVER_PROTOCOL_VERSION: u32 = 8;
 
 /// The first version of a server that holds an idle wait for fifteen seconds.
 pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
 
-/// The first version of a server that relays the shared terminals of a live link.
-pub const LIVE_PROTOCOL_VERSION: u32 = 7;
+/// The first version of a server that relays the shared terminals of a live link,
+/// which is [version 8](SERVER_PROTOCOL_VERSION) with the heartbeat of a link.
+pub const LIVE_PROTOCOL_VERSION: u32 = 8;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;
@@ -344,6 +347,9 @@ pub enum LinkErrorCode {
     /// The server holds the most live links, or this link did not read the frames
     /// that waited for it.
     LiveLimit,
+    /// The computer of a live link sent nothing for thirty seconds, so the link
+    /// ended. Its computer was gone without closing the transport.
+    LiveSilent,
 }
 
 impl LinkErrorCode {
@@ -369,6 +375,7 @@ impl LinkErrorCode {
             Self::LiveLink => "live_link",
             Self::LiveReplaced => "live_replaced",
             Self::LiveLimit => "live_limit",
+            Self::LiveSilent => "live_silent",
         }
     }
 }

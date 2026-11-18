@@ -7,6 +7,11 @@
 //! for another link. The frames for this computer wait in its outbox, and one
 //! thread hands them to the writing thread of the link one at a time, so the
 //! frames that wait are counted in one place.
+//!
+//! A third thread is the sign of life of the link ([`Alive`]): it sends a
+//! heartbeat while the link has nothing else to say, and it ends a link whose
+//! computer sent nothing for the bound, so a computer that went away without
+//! closing its transport leaves the list of the other computers.
 
 use std::{
     io::Read,
@@ -14,8 +19,9 @@ use std::{
     thread,
 };
 
-use super::outbox::{Next, Outbox};
-use super::protocol::LiveRequest;
+use super::alive::Alive;
+use super::outbox::{Next, Outbox, Tag};
+use super::protocol::{LiveEvent, LiveRequest};
 use crate::frame::FrameError;
 use crate::protocol::{Frame, LinkErrorCode};
 use crate::server::{LinkRegistry, LinkTicket, Outgoing, error_frame, next_frame, post};
@@ -55,9 +61,19 @@ pub(crate) fn serve<R: Read>(
         end(LinkErrorCode::LiveLimit, "This server cannot open one more live link.");
         return Ok(());
     }
+    let alive = Arc::new(Alive::default());
+    let sign = {
+        let (alive, outbox, ticket) = (Arc::clone(&alive), Arc::clone(&outbox), Arc::clone(ticket));
+        thread::Builder::new()
+            .name("horizon-sync-live-sign".to_owned())
+            .spawn(move || sign_of_life(&alive, &outbox, &ticket))
+    };
     let result = loop {
         match next_frame(reader, frames) {
-            Ok(Some(Frame::Live(request))) => registry.live.request(&ticket.device, ticket.id, request),
+            Ok(Some(Frame::Live(request))) => {
+                alive.read();
+                registry.live.request(&ticket.device, ticket.id, request);
+            }
             Ok(Some(_)) => {
                 end(
                     LinkErrorCode::LiveLink,
@@ -76,7 +92,33 @@ pub(crate) fn serve<R: Read>(
     };
     registry.live.close(&ticket.device, ticket.id);
     outbox.close();
+    if let Ok(sign) = sign {
+        // The sign of life ends within one tick of the closed outbox.
+        let _ = sign.join();
+    }
     result
+}
+
+/// Keeps the sign of life of one live link: a heartbeat frame while the link has
+/// nothing else to send, and the end of a link whose computer sent nothing for
+/// the bound. The `end` waits for the error frame, so this has a thread of its
+/// own, as the end of a link that the hub names has.
+pub(crate) fn sign_of_life(alive: &Alive, outbox: &Outbox, ticket: &Arc<LinkTicket>) {
+    loop {
+        thread::sleep(alive.tick());
+        if outbox.closed() {
+            return;
+        }
+        if alive.quiet() {
+            let message = "This computer sent no frame for thirty seconds.";
+            ticket.end(LinkErrorCode::LiveSilent, message);
+            return;
+        }
+        if alive.beat_due() {
+            let _ = outbox.push(LiveEvent::Heartbeat, Tag::Kept);
+            alive.sent();
+        }
+    }
 }
 
 /// Hands the frames that wait for one live link to its writing thread, one at a

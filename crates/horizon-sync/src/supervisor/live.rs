@@ -29,7 +29,7 @@ use crate::error::SyncError;
 use crate::frame::write_frame;
 use crate::live::protocol::{ID_CHARS, LABEL_CHARS, clean, clean_panels};
 use crate::live::{
-    LiveBytes, LiveEvent, LivePanel, LiveRequest, LiveState, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS,
+    Alive, LiveBytes, LiveEvent, LivePanel, LiveRequest, LiveState, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS,
     MAX_LIVE_TYPED_BYTES,
 };
 use crate::protocol::{Frame, Hello, LIVE_PROTOCOL_VERSION, LinkErrorCode, PROTOCOL_VERSION};
@@ -103,6 +103,9 @@ struct Shared {
     /// Told when the writer has work, when events were taken and at a stop.
     changed: Condvar,
     stop: AtomicBool,
+    /// The sign of life of the open link: a heartbeat frame each 10 seconds and
+    /// no link that reads nothing for 30 seconds.
+    alive: Alive,
     wake: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -291,6 +294,9 @@ impl Inner {
                 self.follows.remove(&follow);
                 self.sent.remove(&follow);
             }
+            // A heartbeat is the sign of life of the server, and no event of the
+            // application.
+            LiveEvent::Heartbeat => return,
             _ => {}
         }
         self.event(event);
@@ -390,7 +396,14 @@ impl Shared {
             if !batch.is_empty() {
                 return Some(batch);
             }
-            inner = self.changed.wait(inner).unwrap_or_else(PoisonError::into_inner);
+            if self.alive.beat_due() {
+                return Some(vec![LiveRequest::Heartbeat]);
+            }
+            inner = self
+                .changed
+                .wait_timeout(inner, self.alive.tick())
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
     }
 
@@ -439,6 +452,7 @@ impl LiveSupervisor {
             inner: Mutex::new(inner),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
+            alive: Alive::default(),
             wake: Box::new(wake),
         });
         let halt = Arc::new(Mutex::new(None));
@@ -562,22 +576,29 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
             let end = loop {
                 match answers.recv_timeout(LINK_SLICE) {
                     Ok(frame) => {
+                        shared.alive.read();
                         if let Some(end) = shared.receive(frame) {
                             break Some(end);
                         }
                     }
-                    Err(RecvTimeoutError::Timeout) if shared.lock().up => {}
+                    Err(RecvTimeoutError::Timeout) if shared.lock().up => {
+                        if shared.alive.quiet() {
+                            break Some((shared.alive.quiet_reason(), Again::Soon));
+                        }
+                    }
                     Err(_) => break None,
                 }
             };
             shared.link_down(end);
         });
         let mut sent = write_frame(&mut input, &open).is_ok();
+        shared.alive.sent();
         while sent {
             let Some(batch) = shared.next_batch() else { break };
             sent = batch
                 .into_iter()
                 .all(|request| write_frame(&mut input, &Frame::Live(request)).is_ok());
+            shared.alive.sent();
         }
         shared.link_down(None);
         super::halt(halt_slot);
@@ -589,14 +610,18 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
 #[cfg(test)]
 mod tests {
     use super::{Again, REPLACED_RETRY, REPLACED_RETRY_LONG, Shared};
+    use crate::live::alive::Limits;
+    use crate::live::{Alive, LiveRequest};
     use crate::protocol::{Frame, LinkError, LinkErrorCode};
     use std::sync::{Condvar, Mutex, atomic::AtomicBool};
+    use std::time::Duration;
 
     fn shared() -> Shared {
         Shared {
             inner: Mutex::default(),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
+            alive: Alive::default(),
             wake: Box::new(|| {}),
         }
     }
@@ -626,5 +651,23 @@ mod tests {
             shared.receive(Frame::Error(failed)).expect("the link ends").1,
             Again::Soon
         );
+    }
+
+    #[test]
+    fn an_idle_live_link_sends_a_heartbeat_frame() {
+        let shared = Shared {
+            alive: Alive::new(Limits {
+                tick: Duration::from_millis(5),
+                heartbeat: Duration::from_millis(20),
+                silence: Duration::from_secs(30),
+            }),
+            ..shared()
+        };
+        {
+            let mut inner = shared.lock();
+            (inner.up, inner.panels_sent) = (true, true);
+        }
+        let batch = shared.next_batch().expect("a batch of an open link");
+        assert_eq!(batch, vec![LiveRequest::Heartbeat], "the sign of life of an idle link");
     }
 }

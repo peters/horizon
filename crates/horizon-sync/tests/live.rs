@@ -128,10 +128,17 @@ impl Link {
         self.write(&Frame::Live(request));
     }
 
+    /// The next frame of this link that is not the heartbeat of an idle link: a
+    /// heartbeat comes on any link that waits, so it is no answer of the server.
     fn frame(&mut self) -> Frame {
-        read_frame(&mut self.stream)
-            .expect("the frame reads")
-            .expect("one frame")
+        loop {
+            let frame = read_frame(&mut self.stream)
+                .expect("the frame reads")
+                .expect("one frame");
+            if frame != Frame::LiveEvent(LiveEvent::Heartbeat) {
+                return frame;
+            }
+        }
     }
 
     fn event(&mut self) -> LiveEvent {
@@ -207,6 +214,7 @@ fn show(event: &LiveEvent) -> String {
             data,
         } => format!("typed {panel} from {from} ({label}) {}", text(data)),
         LiveEvent::State(state) => format!("state {state:?}"),
+        LiveEvent::Heartbeat => "heartbeat".to_owned(),
     }
 }
 
@@ -717,8 +725,11 @@ fn the_handle_of_a_computer_follows_a_panel_types_in_it_and_shares_its_own() {
     );
 }
 
+/// A second program of one device name ends the link of the first. The first one
+/// says so, sends nothing, and makes no attempt for a minute: two programs of one
+/// computer therefore do not replace each other for ever.
 #[test]
-fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_away() {
+fn the_handle_says_when_another_horizon_holds_its_link_and_stays_away() {
     let server = Server::start();
     let mut a = server.live(A);
     a.send(panels(&[("p1", true)]));
@@ -746,39 +757,39 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
         show(event) == "watchers q1 [laptop-a] refresh=true"
     });
 
-    // Another live link of this device ends the link of the handle. The handle
-    // opens a new link, and the server has its label, its panel and its follow again.
-    let mut other = server.live(B);
-    wait_for(
-        handle,
-        woken,
-        |event| matches!(event, LiveEvent::State(LiveState::Down(reason)) if reason.starts_with("live_replaced")),
-    );
-    assert!(
-        !handle.output("q1", b"away", false),
-        "nothing is sent while the link is away"
-    );
-    let list = wait_for(handle, woken, |event| show(event) == "list laptop-a[p1] laptop-b[q1]");
-    assert!(
-        matches!(&list, LiveEvent::Computers { computers } if computers[1].label == "Laptop B"),
-        "{list:?}"
-    );
-    assert_eq!(other.error(), "live_replaced");
-    let lines = until_followed(&mut a);
-    assert!(
-        lines.contains(&"ended laptop-b/q1 Offline".to_owned()),
-        "the follow of the panel of the older link ended: {lines:?}"
-    );
-    assert_eq!(lines[lines.len() - 2], "list laptop-a[p1] laptop-b[q1]");
-
     // The follow of this computer ends with its panel, and a panel of this
     // computer that is gone leaves the list.
     a.send(panels(&[]));
     wait_for(handle, woken, |event| show(event) == "ended laptop-a/p1 Closed");
     handle.ended("q1");
+    let mut lines = Vec::new();
+    while lines.last().map(String::as_str) != Some("ended laptop-b/q1 Closed") {
+        lines.push(a.next());
+    }
     a.settle("list laptop-a[] laptop-b[]");
+
+    // Another live link of this device ends the link of the handle. The handle
+    // says that another Horizon of this computer holds it, and it sends nothing:
+    // it tries again in a minute, so the two programs do not flap the lists of
+    // the other computers.
+    let mut other = server.live(B);
+    wait_for(
+        handle,
+        woken,
+        |event| matches!(event, LiveEvent::State(LiveState::Down(reason)) if reason.contains("another Horizon of this computer")),
+    );
+    assert!(
+        !handle.output("q1", b"away", false),
+        "nothing is sent while the link is away"
+    );
+    a.settle("list laptop-a[] laptop-b[]");
+    other.send(panels(&[("q2", false)]));
+    assert_eq!(
+        other.next(),
+        "list laptop-a[] laptop-b[q2]",
+        "the other Horizon holds the link of this computer"
+    );
     joined.supervisor.stop();
-    assert_eq!(a.next(), "list laptop-a[]");
     assert!(
         !handle.screen("q1", 80, 24, false, true),
         "nothing is sent after a stop"

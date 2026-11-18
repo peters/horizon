@@ -348,9 +348,12 @@ impl State {
             LiveRequest::Typed { owner, panel, data } if (1..=MAX_LIVE_TYPED_BYTES).contains(&data.0.len()) => {
                 self.typed(device, &owner, panel, data);
             }
-            // A second `open` changes nothing, and a frame over its bound is
-            // dropped, not obeyed.
-            LiveRequest::Open { .. } | LiveRequest::Output { .. } | LiveRequest::Typed { .. } => {}
+            // A second `open` changes nothing, a heartbeat only says that the
+            // computer is there, and a frame over its bound is dropped, not obeyed.
+            LiveRequest::Open { .. }
+            | LiveRequest::Heartbeat
+            | LiveRequest::Output { .. }
+            | LiveRequest::Typed { .. } => {}
         }
     }
 

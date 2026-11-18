@@ -6,6 +6,7 @@
 //! of a panel to the computers that follow it and what they type to its owner,
 //! and it keeps all of that in memory only.
 
+pub(crate) mod alive;
 mod hub;
 mod outbox;
 pub(crate) mod protocol;
@@ -13,6 +14,7 @@ mod relay;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use alive::Alive;
 pub(crate) use hub::LiveHub;
 pub use protocol::{
     LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest, LiveState, LiveWatcher,

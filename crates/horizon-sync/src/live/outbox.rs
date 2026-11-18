@@ -122,6 +122,11 @@ impl Outbox {
         self.ready.notify_all();
     }
 
+    /// Whether this outbox takes no more frames, because its link ended.
+    pub(crate) fn closed(&self) -> bool {
+        self.lock().closed
+    }
+
     /// Waits for the next step of the thread of this link.
     pub(crate) fn next(&self) -> Next {
         let mut state = self.lock();
