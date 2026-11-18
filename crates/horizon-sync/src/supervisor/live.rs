@@ -46,6 +46,34 @@ const FRAME_BYTES: usize = 64;
 const BATCH_FRAMES: usize = 32;
 /// How long this computer waits before it asks an older server again.
 const UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
+/// How long this computer waits before it tries again after the server ended its
+/// live link for another Horizon of the same computer, and the wait after that:
+/// the two programs never make progress while each one replaces the other.
+const REPLACED_RETRY: Duration = Duration::from_secs(60);
+const REPLACED_RETRY_LONG: Duration = Duration::from_secs(300);
+
+/// Whether another attempt follows a live link that ended, and how long it waits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Again {
+    /// No attempt follows: the server removed this computer or logged it out.
+    Never,
+    /// The delays of the sync link.
+    Soon,
+    /// A long wait: another Horizon of this computer holds the live link.
+    Held,
+}
+
+impl Again {
+    /// The wait before the next attempt. `held` counts the links that another
+    /// Horizon of this computer ended, since this link started its attempts.
+    fn wait(self, attempt: u32, held: u32) -> Duration {
+        match self {
+            Self::Held if held <= 1 => REPLACED_RETRY,
+            Self::Held => REPLACED_RETRY_LONG,
+            Self::Never | Self::Soon => horizon_core::reconnect_delay(attempt),
+        }
+    }
+}
 
 type Follow = (String, String);
 
@@ -63,7 +91,7 @@ struct Inner {
     /// Whether a link is open for frames, and why the last one ended, with
     /// whether another attempt follows.
     up: bool,
-    end: Option<(String, bool)>,
+    end: Option<(String, Again)>,
     queue: VecDeque<LiveRequest>,
     queued: usize,
     events: VecDeque<LiveEvent>,
@@ -284,7 +312,7 @@ impl Shared {
     }
 
     /// Ends the frames of the open link. The first reason of a link stays.
-    fn link_down(&self, end: Option<(String, bool)>) {
+    fn link_down(&self, end: Option<(String, Again)>) {
         let mut inner = self.lock();
         inner.up = false;
         inner.end = inner.end.take().or(end);
@@ -293,17 +321,26 @@ impl Shared {
 
     /// Takes one frame of the server. Answers why the link ends, when it does,
     /// and whether another attempt follows.
-    fn receive(&self, frame: Frame) -> Option<(String, bool)> {
+    fn receive(&self, frame: Frame) -> Option<(String, Again)> {
         let event = match frame {
             Frame::LiveEvent(event) => event,
             Frame::Error(error) => {
-                let again = !matches!(error.code, LinkErrorCode::Removed | LinkErrorCode::NotLoggedIn);
-                return Some((format!("{}: {}", error.code.as_str(), error.message), again));
+                let (reason, again) = match error.code {
+                    LinkErrorCode::Removed | LinkErrorCode::NotLoggedIn => {
+                        (format!("{}: {}", error.code.as_str(), error.message), Again::Never)
+                    }
+                    LinkErrorCode::LiveReplaced => (
+                        "another Horizon of this computer holds the live link".to_owned(),
+                        Again::Held,
+                    ),
+                    _ => (format!("{}: {}", error.code.as_str(), error.message), Again::Soon),
+                };
+                return Some((reason, again));
             }
             _ => {
                 return Some((
                     "the server sent a frame that a live link does not carry".to_owned(),
-                    true,
+                    Again::Soon,
                 ));
             }
         };
@@ -451,6 +488,7 @@ impl Drop for LiveSupervisor {
 /// or until the server does not accept the login of this computer.
 fn run(config: &SupervisorConfig, shared: &Shared, halt_slot: &Arc<Mutex<Option<Halt>>>) {
     let mut attempt: u32 = 1;
+    let mut held: u32 = 0;
     while !shared.stopped() {
         shared.set_state(LiveState::Connecting);
         let started = Instant::now();
@@ -464,26 +502,37 @@ fn run(config: &SupervisorConfig, shared: &Shared, halt_slot: &Arc<Mutex<Option<
         };
         let greeted = super::greet(config, &shared.stop, halt_slot, &RefusalCell::default(), hello, |_| {});
         let (state, again) = match greeted {
-            Ok((_, answer)) if answer.protocol < LIVE_PROTOCOL_VERSION => (LiveState::Unsupported, true),
+            Ok((_, answer)) if answer.protocol < LIVE_PROTOCOL_VERSION => (LiveState::Unsupported, Again::Soon),
             Ok((greeted, _)) => {
                 let (reason, again) = serve(shared, greeted, halt_slot);
                 (LiveState::Down(reason), again)
             }
-            Err(failed) => (LiveState::Down(failed.reason), failed.end != End::LoggedOut),
+            Err(failed) => {
+                let again = if failed.end == End::LoggedOut {
+                    Again::Never
+                } else {
+                    Again::Soon
+                };
+                (LiveState::Down(failed.reason), again)
+            }
         };
         super::halt(halt_slot);
         super::reap(halt_slot);
-        if shared.stopped() || !again {
+        if shared.stopped() || again == Again::Never {
             shared.set_state(state);
             return;
         }
         tracing::info!(?state, "the live link of this computer is not open");
         if started.elapsed() >= horizon_core::RECONNECT_RESET_AFTER {
-            attempt = 1;
+            (attempt, held) = (1, 0);
         }
-        let delay = match state {
-            LiveState::Unsupported => UNSUPPORTED_RETRY,
-            _ => horizon_core::reconnect_delay(attempt),
+        if again == Again::Held {
+            held = held.saturating_add(1);
+        }
+        let delay = if matches!(state, LiveState::Unsupported) {
+            UNSUPPORTED_RETRY
+        } else {
+            again.wait(attempt, held)
         };
         attempt = attempt.saturating_add(1);
         shared.set_state(state);
@@ -494,7 +543,7 @@ fn run(config: &SupervisorConfig, shared: &Shared, halt_slot: &Arc<Mutex<Option<
 /// Serves one greeted link until it ends: this thread writes, and a second one
 /// takes the frames of the server. Answers why the link ended, and whether
 /// another attempt follows.
-fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>) -> (String, bool) {
+fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>) -> (String, Again) {
     let Greeted { mut input, answers, .. } = greeted;
     // A new link has nothing of this computer: the wanted state goes again, and
     // what waited for the last link is not for this one.
@@ -534,5 +583,48 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
         super::halt(halt_slot);
     });
     let end = shared.lock().end.take();
-    end.unwrap_or_else(|| ("the live link ended".to_owned(), true))
+    end.unwrap_or_else(|| ("the live link ended".to_owned(), Again::Soon))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Again, REPLACED_RETRY, REPLACED_RETRY_LONG, Shared};
+    use crate::protocol::{Frame, LinkError, LinkErrorCode};
+    use std::sync::{Condvar, Mutex, atomic::AtomicBool};
+
+    fn shared() -> Shared {
+        Shared {
+            inner: Mutex::default(),
+            changed: Condvar::new(),
+            stop: AtomicBool::new(false),
+            wake: Box::new(|| {}),
+        }
+    }
+
+    #[test]
+    fn a_link_that_another_horizon_replaced_says_so_and_waits_long() {
+        let shared = shared();
+        let error = LinkError::new(
+            LinkErrorCode::LiveReplaced,
+            "Another live link of this computer opened.",
+        );
+        let (reason, again) = shared.receive(Frame::Error(error)).expect("the link ends");
+        assert_eq!(again, Again::Held, "{reason}");
+        assert!(reason.contains("another Horizon of this computer"), "{reason}");
+        assert_eq!(again.wait(1, 1), REPLACED_RETRY);
+        assert_eq!(again.wait(2, 2), REPLACED_RETRY_LONG);
+        assert_eq!(again.wait(3, 9), REPLACED_RETRY_LONG);
+        // A computer that the server removed makes no attempt, and one that fell
+        // away keeps the delays of the sync link.
+        let removed = LinkError::new(LinkErrorCode::Removed, "gone");
+        assert_eq!(
+            shared.receive(Frame::Error(removed)).expect("the link ends").1,
+            Again::Never
+        );
+        let failed = LinkError::new(LinkErrorCode::StoreFailed, "busy");
+        assert_eq!(
+            shared.receive(Frame::Error(failed)).expect("the link ends").1,
+            Again::Soon
+        );
+    }
 }
