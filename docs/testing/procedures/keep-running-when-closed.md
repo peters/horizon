@@ -14,7 +14,8 @@ owner: peters
 
 This procedure proves what the close of the main window does with the three
 values of the setting. It proves the ask of a close, the ask of "Quit Horizon",
-the programs that the ask counts, and the lines that the ask shows.
+the programs that the ask counts, and the lines that the ask shows. It also
+proves that a window that no start of Horizon can show again does not hide.
 
 ## 2. Applicability
 
@@ -41,6 +42,9 @@ the programs that the ask counts, and the lines that the ask shows.
   script enters the sandbox and the private home of the fixture and prints the
   line and the status of that start. Every step that starts Horizon again uses
   this command in a fixture run.
+- In a fixture run, start the fixture with `--saved-session` for tasks KR-1 to
+  KR-10. Without it, the fixture starts Horizon with `--ephemeral`. That window
+  holds no session, and task KR-11 tests it.
 - A terminal panel in Horizon that runs a program, for example `sleep 600`.
 - An agent panel that is in the working state, for task KR-2.
 - A workspace that a machine runs, with one terminal panel in it, for task KR-2.
@@ -273,6 +277,57 @@ Run this task on each platform of section 2.
    Result: Horizon ends, and no dialog shows. This platform cannot hide a
    window.
 
+### 6.11 KR-11 — A window that holds no session
+
+A start of Horizon finds the window of a Horizon that runs through the session
+that the window holds. A window that Horizon starts with `--ephemeral` holds no
+session, so no start can show it again.
+
+> **CAUTION:** THE STEP THAT SELECTS "END THEM AND QUIT" ENDS EVERY TERMINAL AND
+> AGENT PROGRAM OF THAT WINDOW. Do it only when the terminals hold no work that
+> you need.
+
+1. Start Horizon with `--ephemeral` and the mark at "Ask". In a fixture run,
+   start the fixture without `--saved-session`.
+
+   Result: The main window of Horizon shows.
+
+2. Open a terminal panel that runs a program.
+
+   Result: The program runs.
+
+3. Close the main window of Horizon.
+
+   Result: The window stays, and one dialog shows the heading "Close Horizon?"
+   and the count of the programs.
+
+4. Examine the actions of the dialog.
+
+   Result: The dialog shows "End them and quit" in red and "Cancel" in the plain
+   color. It does not show "Keep running in the background", the help line of
+   that action, or the box "Remember this choice".
+
+5. Press Enter.
+
+   Result: The dialog keeps waiting, the window stays, and the program of the
+   panel runs.
+
+6. Select "Cancel".
+
+   Result: The dialog goes away, and the window stays.
+
+7. Select "Keep Horizon running" in the row "When the window is closed".
+
+   Result: The mark is at "Keep Horizon running".
+
+8. Close the main window of Horizon.
+
+   Result: The window stays, and the dialog of step 4 shows.
+
+9. Select "End them and quit".
+
+   Result: Horizon ends, and the program of the panel ends.
+
 ## 7. Pass criteria
 
 - Each step shows the result that the step names.
@@ -289,6 +344,8 @@ Run this task on each platform of section 2.
   Horizon", and the next close does not ask.
 - The workspace of the board is on the disk after the hide, and a restart of the
   computer writes no work off.
+- A window that holds no session never goes away while a program runs in it: its
+  dialog offers only "End them and quit" and "Cancel", and Enter does nothing.
 
 ## 8. Cleanup
 

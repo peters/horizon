@@ -500,7 +500,10 @@ when it names one of those kinds.
     hidden window that keeps every program. `keep_running/ask.rs` draws the ask,
     and the three values of `features.when_window_closes` come from
     `horizon_core::WindowCloseSetting`. The pass of `undrawn.rs` writes the
-    heartbeat of the lease of a hidden window each 2 seconds.
+    heartbeat of the lease of a hidden window each 2 seconds. A window that holds
+    no session lease does not hide, because no second start finds it:
+    `holds_session_lease` in `folder_requests.rs` gives that fact to the close
+    and to the pump of the folder requests.
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI
