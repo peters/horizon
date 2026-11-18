@@ -9,7 +9,7 @@ pub(in crate::app) mod support;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use horizon_core::{DEFAULT_PANEL_SIZE, PanelOptions, PresetConfig, WorkspaceAlignment, WorkspaceId};
+use horizon_core::{DEFAULT_PANEL_SIZE, PresetConfig, WorkspaceAlignment, WorkspaceId};
 
 use self::support::detached_workspace_ids;
 use super::{DetachedWorkspaceViewportState, HorizonApp};

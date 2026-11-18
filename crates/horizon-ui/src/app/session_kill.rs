@@ -126,3 +126,31 @@ impl HorizonApp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::{PanelId, RuntimeState, WorkspaceId};
+
+    use crate::app::test_support::test_app;
+
+    #[test]
+    fn a_board_that_goes_takes_its_unanswered_close_questions_with_it() {
+        let (_temp, mut app) = test_app();
+        let workspace: WorkspaceId = app.board.create_workspace("work");
+        app.close_panel_confirm = Some(PanelId(1));
+        app.close_workspace_confirm = Some(workspace);
+
+        app.activate_ephemeral_session(&RuntimeState::default());
+
+        // A panel id and a workspace id name an item of the board that stands
+        // now, so a question of the board before would ask about another panel.
+        assert_eq!(
+            app.close_panel_confirm, None,
+            "no question names a panel of the board before"
+        );
+        assert_eq!(
+            app.close_workspace_confirm, None,
+            "no question names a workspace of the board before"
+        );
+    }
+}

@@ -180,8 +180,7 @@ impl HorizonApp {
         // The board this state restores carries its panels again: mark them
         // before any coordination job can remove their transcripts.
         self.keep_transcripts_of_saved_board(runtime_state);
-        // Coordination work asked for on the board this replaces no longer applies to a board.
-        self.browser_create_host.io.replace_board();
+        self.replace_the_board();
         // The kept panels of the previous board do not stand on this one.
         self.forget_kept_browser_failures();
         self.reset_native_file_input();
@@ -448,9 +447,19 @@ impl HorizonApp {
         self.startup_receiver = None;
     }
 
+    /// The board that stands now is not the board of the moment before: a
+    /// coordination job of the old one applies as retiring it, and an
+    /// unanswered question about a panel or a workspace of it goes with it,
+    /// because the id of a panel names a panel of the board that stands now.
+    pub(super) fn replace_the_board(&mut self) {
+        self.browser_create_host.io.replace_board();
+        self.close_panel_confirm = None;
+        self.close_workspace_confirm = None;
+    }
+
     pub(in crate::app) fn restore_startup_runtime_state(&mut self, runtime_state: &horizon_core::RuntimeState) {
         self.reset_native_file_input();
-        self.browser_create_host.io.replace_board();
+        self.replace_the_board();
         // Restore browser panels with the *current* browser config: a
         // persisted state predating the `browser` field carries none, and
         // `--config <path>` users' settings must always win.

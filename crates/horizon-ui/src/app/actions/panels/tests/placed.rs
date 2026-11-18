@@ -493,3 +493,34 @@ fn the_notice_of_a_panel_of_a_machine_asks_before_the_session_ends() {
         "the answered close ends the session of the panel"
     );
 }
+
+#[test]
+fn the_window_of_a_detached_workspace_draws_the_ask_of_its_own_close() {
+    let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
+    let workspace = app.board.panel(panel).expect("panel").workspace_id;
+    app.detach_workspace(workspace);
+    app.request_close_panel(panel);
+    assert_eq!(
+        app.close_panel_confirm,
+        Some(panel),
+        "the close of a machine panel asks"
+    );
+
+    // The canvas of the root window draws no ask of a panel of a detached
+    // workspace, so the window of that workspace owes the person the answer.
+    let output = settle(&ctx, &mut app, 2);
+
+    let asked = texts(&output)
+        .filter(|(text, _)| text.starts_with("End the tmux session"))
+        .count();
+    assert_eq!(asked, 1, "the window that holds the panel draws its own ask once");
+    assert_eq!(
+        ask_line(&output),
+        Some("End the tmux session of this panel on build-1?"),
+        "the ask uses the words of the close of a whole workspace"
+    );
+    assert!(
+        app.board.panel(panel).is_some(),
+        "the ask ends no panel before the person answers"
+    );
+}
