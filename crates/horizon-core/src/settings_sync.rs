@@ -253,7 +253,10 @@ impl std::fmt::Display for SectionFault {
 /// The fields of a shared section that stay with this computer, and the section of
 /// each one: they say how this computer runs its programs, so the server never
 /// carries them.
-const LOCAL_FIELDS: &[(&str, &str)] = &[("features", "keep_agents_through_restart")];
+const LOCAL_FIELDS: &[(&str, &str)] = &[
+    ("features", "keep_agents_through_restart"),
+    ("features", "keep_running_when_closed"),
+];
 
 /// `value` of the section `name` with its local-only fields taken from `row`, or with them taken out when `row` is none.
 #[must_use]

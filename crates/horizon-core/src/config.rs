@@ -223,6 +223,10 @@ pub struct FeaturesConfig {
     pub sidebar_accordion: bool,
     /// Whether the program of an agent panel runs in a holder that outlives a restart of Horizon.
     pub keep_agents_through_restart: bool,
+    /// Whether the close of the main window hides it and keeps every terminal,
+    /// agent program and link of this Horizon running. It says how this computer
+    /// runs its programs, so it stays with this computer.
+    pub keep_running_when_closed: bool,
     /// Which change of an agent panel a desktop notification tells, while no
     /// window of Horizon has the focus. A store of an older build has no such
     /// row, and it reads as the default that speaks of both changes.
@@ -1117,6 +1121,12 @@ mod tests {
     fn keep_agents_through_restart_defaults_disabled() {
         assert!(!FeaturesConfig::default().keep_agents_through_restart);
         assert!(!Config::default().features.keep_agents_through_restart);
+    }
+
+    #[test]
+    fn keep_running_when_closed_defaults_disabled() {
+        assert!(!FeaturesConfig::default().keep_running_when_closed);
+        assert!(!Config::default().features.keep_running_when_closed);
     }
 
     /// A settings file of an older Horizon may hold keys of features that this

@@ -482,6 +482,21 @@ fn render_features_section(ui: &mut Ui, config: &mut Config, view: GeneralView<'
         );
 
         ui.add_space(10.0);
+        changed |= ui
+            .checkbox(
+                &mut config.features.keep_running_when_closed,
+                egui::RichText::new("Keep Horizon running when its window is closed")
+                    .color(theme::FG())
+                    .size(12.0),
+            )
+            .changed();
+        super::dim_label(
+            ui,
+            "A closed window keeps the terminals, the agent programs and the links of this computer. Start Horizon again \
+             to show its window, and choose Quit Horizon in the menu to end Horizon.",
+        );
+
+        ui.add_space(10.0);
         changed |= render_notification_row(ui, config, view);
     });
     changed
