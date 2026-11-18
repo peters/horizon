@@ -199,7 +199,7 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>, fresh: bool) -
         }
         // The rows are drawn with the modes of a new terminal, and every mode
         // that changes how output is drawn is set after them.
-        draw_rows(grid, &mut out, true);
+        draw_rows(grid, &mut out);
         // `draw_rows` ends at the last row that paints anything. The rows below
         // that one take their place too, so that the viewport of the follower
         // ends at the bottom row, directly under the lines above it.
@@ -236,7 +236,7 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>, fresh: bool) -
         // The cursor waits behind the last column for the next character. The
         // cell under it, drawn once more, leaves the cursor of the follower there.
         pen.paint(&mut out, &row[column]);
-        push_cell(&mut out, &row[column], true);
+        push_cell(&mut out, &row[column]);
     }
     pen.paint(&mut out, &cursor.template);
     for (flag, set, unset) in MODES {
@@ -283,7 +283,7 @@ fn draw_history(grid: &Grid<Cell>, out: &mut String) {
         (1..=grid.history_size().min(HISTORY_LINES)).map(|above| Line(-i32::try_from(above).unwrap_or(i32::MAX)))
     {
         let mut drawn = String::new();
-        push_row(&mut drawn, &grid[line], &mut painted, grid.columns(), true);
+        push_row(&mut drawn, &grid[line], &mut painted, grid.columns());
         if bytes + drawn.len() > HISTORY_BYTES {
             break;
         }

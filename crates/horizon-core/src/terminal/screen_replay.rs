@@ -34,20 +34,20 @@ impl Terminal {
 /// [`Terminal::screen_replay_bytes`] describes them.
 pub(super) fn screen_replay_bytes(term: &Term<TerminalEventProxy>) -> Vec<u8> {
     let mut out = String::new();
-    draw_rows(term.grid(), &mut out, false);
+    draw_rows(term.grid(), &mut out);
     out.into_bytes()
 }
 
 /// Draws the rows of the viewport of `grid` from the first cell of an empty
-/// screen. With `in_place` every cell keeps its column, as [`push_cell`] says.
-pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
+/// screen. Every cell keeps its column, as [`push_cell`] says.
+pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String) {
     let rows = grid.screen_lines();
     let columns = grid.columns();
     out.reserve(rows * (columns + 2));
     let mut painted = Style::default();
     let last_row = last_painted_row(grid, rows);
     for row in 0..=last_row {
-        push_row(out, &grid[line_of(row)], &mut painted, columns, in_place);
+        push_row(out, &grid[line_of(row)], &mut painted, columns);
         if row < last_row {
             out.push_str("\r\n");
         }
@@ -66,13 +66,13 @@ pub(super) fn draw_rows_in_place(grid: &Grid<Cell>, out: &mut String) {
     let mut painted = Style::default();
     for row in 0..grid.screen_lines() {
         let _ = write!(out, "\x1b[{};1H\x1b[2K", row + 1);
-        push_row(out, &grid[line_of(row)], &mut painted, grid.columns(), true);
+        push_row(out, &grid[line_of(row)], &mut painted, grid.columns());
     }
 }
 
 /// Draws the cells of `line` from the column that the cursor stands on, and
-/// gives the default pen back. `in_place` is the rule of [`push_cell`].
-pub(super) fn push_row(out: &mut String, line: &Row<Cell>, painted: &mut Style, columns: usize, in_place: bool) {
+/// gives the default pen back.
+pub(super) fn push_row(out: &mut String, line: &Row<Cell>, painted: &mut Style, columns: usize) {
     if let Some(last_column) = last_painted_column(line, columns) {
         for column in 0..=last_column {
             let cell = &line[Column(column)];
@@ -82,11 +82,8 @@ pub(super) fn push_row(out: &mut String, line: &Row<Cell>, painted: &mut Style, 
             {
                 continue;
             }
-            if cell.flags.contains(Flags::HIDDEN) && !in_place {
-                continue;
-            }
             painted.paint(out, cell);
-            push_cell(out, cell, in_place);
+            push_cell(out, cell);
         }
     }
     *painted = painted.reset(out);
@@ -99,11 +96,11 @@ fn line_of(row: usize) -> Line {
 }
 
 /// Writes the text of `cell`. The grid keeps a tab in the first cell that the
-/// tab passed, and it keeps hidden text. `in_place` draws both as a blank: a tab
-/// would move the cursor past its cell, and the replay of a restart skips
-/// hidden text, so either moves the rest of its row.
-pub(super) fn push_cell(out: &mut String, cell: &Cell, in_place: bool) {
-    if in_place && (cell.c == '\t' || cell.flags.contains(Flags::HIDDEN)) {
+/// tab passed, and it keeps hidden text. Both are drawn as a blank: a tab would
+/// move the cursor past its cell, and hidden text that is left out would move
+/// the rest of its row, so every character keeps its column.
+pub(super) fn push_cell(out: &mut String, cell: &Cell) {
+    if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) {
         out.push(' ');
         return;
     }
