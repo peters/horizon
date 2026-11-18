@@ -5,6 +5,8 @@
 mod name;
 mod no_frame;
 mod relay;
+mod screen;
+mod typing;
 mod window;
 
 use std::ops::{Deref, DerefMut};
@@ -713,44 +715,6 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
     window.until("the chip of the owner goes", |app| chip_of(app, owner).is_none());
 }
 
-#[test]
-fn a_follow_panel_takes_the_typing_of_the_newest_list_in_both_directions() {
-    let mut window = Window::new();
-    let owner = window.owner(OFFSCREEN);
-    // The owner lets nobody type when the person opens the panel.
-    window.app.template_config.server.remote_typing = false;
-    let link = window.link.clone();
-    window.until("the list says that nobody types", move |_| {
-        link.relay().panels.first().is_some_and(|panel| !panel.typing)
-    });
-    let follow = window.follow(owner);
-    window.shows(follow, "READY");
-    let view_only = "on There \u{00b7} view only";
-    window.until("the chip of the follow panel", |app| {
-        chip_of(app, follow).as_deref() == Some(view_only)
-    });
-
-    // The owner turns typing on: the open panel takes it, with its chip.
-    window.app.template_config.server.remote_typing = true;
-    window.until("the chip of the follow panel", |app| {
-        chip_of(app, follow).as_deref() == Some("on There")
-    });
-    window.write(follow, b"typed now\n");
-    window.shows(owner, "GOT:typed now");
-
-    // And it loses it again when the owner turns typing off.
-    window.app.template_config.server.remote_typing = false;
-    window.until("the chip of the follow panel", |app| {
-        chip_of(app, follow).as_deref() == Some(view_only)
-    });
-    window.write(follow, b"no longer\n");
-    window.frames(4);
-    assert!(
-        !text(&window.app, owner).contains("GOT:no longer"),
-        "the panel drops the bytes after the owner turned typing off"
-    );
-}
-
 /// Queues a `Typed` event as a server gives it that checks nothing: the link
 /// hands it on as it is, so the owner side is the last guard.
 fn typed_event(link: &StandIn, panel: &str, bytes: &[u8]) {
@@ -759,34 +723,6 @@ fn typed_event(link: &StandIn, panel: &str, bytes: &[u8]) {
         from: "desk-unknown".to_owned(),
         label: "Unknown".to_owned(),
         data: LiveBytes(bytes.into()),
-    });
-}
-
-#[test]
-fn the_chip_of_a_watched_panel_says_who_types_and_goes_back_after_two_seconds() {
-    let mut window = Window::new();
-    let owner = window.owner(OFFSCREEN);
-    let follow = window.follow(owner);
-    window.shows(follow, "READY");
-    let id = window.id(owner);
-    window.until("the chip of the owner panel", |app| {
-        chip_of(app, owner).as_deref() == Some("seen by Here")
-    });
-    assert!(
-        window.app.shared_terminals.found.chips.contains_key(&id),
-        "the owner panel is watched"
-    );
-
-    // The bytes of another computer reach the program, and the chip says who.
-    typed_event(&window.link, &id, b"who\n");
-    window.shows(owner, "GOT:who");
-    window.until("the chip of the typed bytes", |app| {
-        chip_of(app, owner).as_deref() == Some("typed by Unknown")
-    });
-
-    // Two seconds after the last bytes the chip names the followers again.
-    window.until("the chip of the followers", |app| {
-        chip_of(app, owner).as_deref() == Some("seen by Here")
     });
 }
 
@@ -1030,58 +966,5 @@ fn a_closed_owner_panel_leaves_the_list_and_ends_the_stream() {
     assert!(
         window.app.board.panel(follow).is_some(),
         "the follow panel keeps its last screen"
-    );
-}
-
-/// A screen that does not fit the room of the link goes in parts, in the order of
-/// its bytes, and the output of the program follows the whole screen.
-#[test]
-fn a_screen_that_does_not_fit_the_room_of_the_link_goes_in_parts_before_its_output() {
-    let mut window = Window::new();
-    let owner = window.owner(OFFSCREEN);
-    // The program writes enough rows that its screen is much larger than the room
-    // of the link below.
-    let lines: String = (1..=40).fold(String::new(), |text, line| format!("{text}line {line}\n"));
-    assert!(
-        window
-            .app
-            .board
-            .panel_mut(owner)
-            .expect("the owner")
-            .write_input(lines.as_bytes()),
-        "the panel takes the lines"
-    );
-    window.shows(owner, "GOT:line 40");
-
-    // A new follower joins with a small room: the parts of its screen are refused
-    // until the pump offers a part that fits.
-    window.link.relay().room = 512;
-    let follow = window.follow(owner);
-    let link = window.link.clone();
-    window.until("the screen of the join in parts", move |_| link.relay().refused > 0);
-
-    // The program writes after the screen was taken, so its echo is the live
-    // output that may not pass the parts of that screen.
-    assert!(
-        window
-            .app
-            .board
-            .panel_mut(owner)
-            .expect("the owner")
-            .write_input(b"after\n"),
-        "the panel takes the line"
-    );
-    window.shows(follow, "GOT:after");
-    let shows = text(&window.app, follow);
-    assert!(shows.contains("GOT:line 40"), "the screen of the join arrived in parts");
-
-    // The second screen of the join goes in parts too, and the output after the
-    // first one stays on the screen of the follower.
-    let link = window.link.clone();
-    window.until("the second screen of the join", move |_| link.relay().screens >= 2);
-    let shows = text(&window.app, follow);
-    assert!(
-        shows.contains("GOT:after"),
-        "the output stays after the screen: {shows}"
     );
 }
