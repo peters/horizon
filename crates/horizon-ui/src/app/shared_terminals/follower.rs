@@ -181,7 +181,6 @@ impl Run {
                 // A screen that does not bring the grid that this computer asked
                 // for ends that hold, so the next key press asks again.
                 follow.grid = (cols, rows);
-                follow.asked = follow.asked.filter(|asked| *asked == (cols, rows));
             }
             LiveEvent::Output { data, .. } => {
                 let head = &data.0[..data.0.len().min(ALT_SCREEN_ENTER.len() + 2)];
@@ -250,7 +249,7 @@ impl Run {
 fn ask_grid(link: &dyn LiveLink, follow: &mut Follow, typed: bool, now: Instant) {
     let (fit, holds) = (follow.panel.feed.fit(), follow.asked == Some(follow.grid));
     let due = follow.grid_at.is_none_or(|at| at <= now);
-    if !due || fit == follow.grid || follow.asked == Some(fit) || !(typed || holds) {
+    if !due || fit == follow.grid || !(typed || holds) {
         return;
     }
     let FollowPanel { device, id, .. } = &follow.panel;

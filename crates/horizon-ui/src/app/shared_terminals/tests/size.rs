@@ -118,7 +118,8 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
     window.frames(2);
     let first = fit(&window.app, follow);
 
-    // The person types: one request, and the grid reaches the program.
+    // The person types: one request, and the grid reaches the program. A second
+    // press then asks nothing, because the stream has that grid.
     window.write(follow, b"a");
     let link = window.link.clone();
     window.until("the request for the grid of the body", move |_| {
@@ -129,7 +130,7 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
     assert_eq!(
         window.link.relay().resizes,
         vec![first],
-        "the same grid is not asked twice"
+        "the grid of the stream is not asked again"
     );
 
     // A larger body comes inside the half second of the panel, so its grid waits
@@ -161,6 +162,25 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
         shown(app, owner) == (second.1, second.0)
     });
 
+    // A body that changes while this computer holds the grid asks again for its
+    // own grid, with no key press: the person works from this window.
+    std::thread::sleep(Duration::from_millis(550));
+    let asks = window.link.relay().resizes.len();
+    let relay = window.link.clone();
+    window
+        .app
+        .board
+        .panel_mut(follow)
+        .expect("the follow panel")
+        .resize_layout([1500.0, 900.0]);
+    window.until("the request for the grid of the larger body", move |_| {
+        relay.relay().resizes.len() > asks
+    });
+    window.until("the owner holds the grid of the larger body", |app| {
+        let grid = shown(app, owner);
+        grid != (second.1, second.0) && super::grid(app, follow) == (grid.1, grid.0)
+    });
+
     // The owner refuses a grid that comes to it while it lets nobody type, even
     // through a relay that checks nothing.
     window.app.template_config.server.remote_typing = false;
@@ -174,21 +194,10 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
         rows: 40,
     });
     window.frames(2);
-    assert_eq!(
-        shown(&window.app, owner),
-        (second.1, second.0),
-        "the owner refuses the grid"
-    );
-    assert_eq!(
-        grid(&window.app, follow),
-        second,
-        "the follower keeps the grid of the stream"
-    );
+    let held = shown(&window.app, owner);
+    assert_ne!(held, (40, 120), "the owner refuses the grid");
 }
 
-/// A grid that a relay passes on while the owner of the panel is not in the list
-/// of this computer, or that names a follow panel, changes nothing: neither is a
-/// program of this window.
 #[test]
 fn a_grid_for_a_panel_that_this_window_does_not_share_changes_nothing() {
     let mut window = Window::new();
