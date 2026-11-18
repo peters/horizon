@@ -62,8 +62,10 @@ struct Relay {
     /// How many screens the owner side sent, and how many the follower asked for.
     screens: usize,
     refreshes: usize,
-    /// Refuses screens and output, as a link whose queue is full does.
+    /// Refuses screens and output, as a link whose queue is full does, and
+    /// counts what it refused.
     full: bool,
+    refused: usize,
 }
 
 impl Relay {
@@ -225,6 +227,7 @@ impl LiveLink for StandIn {
     fn screen(&self, panel: &str, cols: u16, rows: u16) -> bool {
         let mut relay = self.gated(true);
         if relay.full {
+            relay.refused += 1;
             return false;
         }
         relay.screens += 1;
@@ -242,6 +245,7 @@ impl LiveLink for StandIn {
     fn output(&self, panel: &str, bytes: &[u8]) -> bool {
         let mut relay = self.gated(true);
         if relay.full {
+            relay.refused += 1;
             return false;
         }
         if relay.follows(panel) {
@@ -535,6 +539,10 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     window.link.relay().full = true;
     window.write(owner, b"four\n");
     window.shows(owner, "GOT:four");
+    // The pump takes the output on its own time, so the link stays full until
+    // it refused that output.
+    let link = window.link.clone();
+    window.until("the link refuses the output", move |_| link.relay().refused > 0);
     window.link.relay().full = false;
     window.shows(follow, "GOT:four");
     assert!(

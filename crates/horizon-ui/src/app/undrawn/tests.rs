@@ -113,14 +113,22 @@ fn write(app: &mut HorizonApp, panel: PanelId, bytes: &[u8]) {
     assert!(written, "the panel takes the bytes");
 }
 
-/// Runs frames until `done` holds: the setup of a test.
+/// Runs frames until `done` holds: the setup of a test. At least one frame
+/// runs, because the pass does its work only after a frame.
 fn frames_until(ctx: &Context, app: &mut HorizonApp, what: &str, done: impl Fn(&HorizonApp) -> bool) {
     let deadline = Instant::now() + PATIENCE;
-    while !done(app) {
+    loop {
         run_app_frame(ctx, app);
+        if done(app) {
+            break;
+        }
         assert!(Instant::now() < deadline, "{what}: it did not happen");
         std::thread::sleep(Duration::from_millis(5));
     }
+    // The programs of a test wait for input now. One last frame reads the
+    // events that they sent before, so none of them arrives after the setup.
+    std::thread::sleep(Duration::from_millis(100));
+    run_app_frame(ctx, app);
 }
 
 /// Waits until `done` holds, and runs nothing of the window.
