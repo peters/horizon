@@ -67,6 +67,10 @@ pub const FOLDER_GONE: &str = "folder_gone";
 /// The reason of an answer that names a window that cannot show a folder.
 pub const WINDOW_BUSY: &str = "window_busy";
 
+/// The reason of an answer of a window that ends with its window, so the start
+/// that named no folder opens its own window.
+pub const KEEP_RUNNING_OFF: &str = "keep_running_off";
+
 /// Why the channel cannot continue.
 #[derive(Debug, thiserror::Error)]
 pub enum FolderRequestError {
@@ -100,6 +104,8 @@ pub enum Answer {
         /// The name of the new workspace.
         workspace: String,
     },
+    /// The window showed itself and raised itself, for a start that named no folder.
+    Window,
     /// The window took the request and showed nothing, for `reason`.
     Refused {
         /// One word of this module, never text of a request.
@@ -111,7 +117,9 @@ pub enum Answer {
 #[derive(Clone, Debug)]
 pub struct FolderRequest {
     id: String,
-    folder: PathBuf,
+    /// The folder that the request names, and `None` for a start that only asks
+    /// the window to show itself.
+    folder: Option<PathBuf>,
 }
 
 impl FolderRequest {
@@ -123,8 +131,8 @@ impl FolderRequest {
 
     /// The folder that the request names, resolved as the board names a folder.
     #[must_use]
-    pub fn folder(&self) -> &Path {
-        &self.folder
+    pub fn folder(&self) -> Option<&Path> {
+        self.folder.as_deref()
     }
 }
 
@@ -154,12 +162,37 @@ pub fn ask(home_root: &Path, folder: &Path) -> Result<Option<Answer>, FolderRequ
 ///
 /// Returns why the request folder or one of its files cannot be used.
 pub fn ask_with(home_root: &Path, folder: &Path, wait: Duration) -> Result<Option<Answer>, FolderRequestError> {
+    ask_record(home_root, Some(folder), wait)
+}
+
+/// Asks a window of the home at `home_root` to show itself and raise itself, and
+/// waits [`CALLER_WAIT`] for its answer. The answer is `None` when no window
+/// answers in time.
+///
+/// # Errors
+///
+/// Returns why the request folder or one of its files cannot be used.
+pub fn ask_window(home_root: &Path) -> Result<Option<Answer>, FolderRequestError> {
+    ask_window_with(home_root, CALLER_WAIT)
+}
+
+/// [`ask_window`] with an explicit wait, so a test needs no five seconds.
+///
+/// # Errors
+///
+/// Returns why the request folder or one of its files cannot be used.
+pub fn ask_window_with(home_root: &Path, wait: Duration) -> Result<Option<Answer>, FolderRequestError> {
+    ask_record(home_root, None, wait)
+}
+
+/// [`ask_with`] and [`ask_window`]: one record, with or without a folder.
+fn ask_record(home_root: &Path, folder: Option<&Path>, wait: Duration) -> Result<Option<Answer>, FolderRequestError> {
     let directory = private_request_directory(home_root)?;
     let id = Uuid::new_v4().to_string();
     let record = RequestRecord {
         version: RECORD_VERSION,
         verb: VERB_SHOW.to_string(),
-        folder: folder.to_string_lossy().into_owned(),
+        folder: folder.map_or_else(String::new, |folder| folder.to_string_lossy().into_owned()),
         requested_at_millis: now_millis(),
     };
     let encoded = serde_json::to_vec(&record).map_err(|error| FolderRequestError::Io {
@@ -271,7 +304,7 @@ pub fn claim(home_root: &Path, now_millis: i64) -> Result<Vec<FolderRequest>, Fo
             remove(&path)?;
             continue;
         }
-        if !request.is_dir() {
+        if request.folder().is_some_and(|folder| !folder.is_dir()) {
             write_refusal(&directory, &request, FOLDER_GONE)?;
             remove(&path)?;
             continue;
@@ -325,12 +358,6 @@ struct AnswerRecord {
     workspace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
-}
-
-impl FolderRequest {
-    fn is_dir(&self) -> bool {
-        self.folder.is_dir()
-    }
 }
 
 fn is_fresh(at: i64, now_millis: i64) -> bool {
@@ -433,19 +460,24 @@ fn read_request(path: &Path, id: &str, now_millis: i64) -> Option<FolderRequest>
     if record.version != RECORD_VERSION || record.verb != VERB_SHOW {
         return None;
     }
-    if record.folder.len() > MAX_FOLDER_BYTES
-        || record.folder.chars().any(char::is_control)
-        || !Path::new(&record.folder).is_absolute()
-    {
-        return None;
-    }
+    let folder = match record.folder.as_str() {
+        "" => None,
+        folder => {
+            if folder.len() > MAX_FOLDER_BYTES
+                || folder.chars().any(char::is_control)
+                || !Path::new(folder).is_absolute()
+            {
+                return None;
+            }
+            Some(crate::folder_identity(Path::new(folder)))
+        }
+    };
     if !is_fresh(record.requested_at_millis, now_millis) {
         return None;
     }
-    let folder = PathBuf::from(record.folder);
     Some(FolderRequest {
         id: id.to_owned(),
-        folder: crate::folder_identity(&folder),
+        folder,
     })
 }
 
@@ -480,6 +512,7 @@ fn write_answer(directory: &Path, id: &str, answer: &Answer) -> Result<(), Folde
     let (outcome, workspace, reason) = match answer {
         Answer::Shown { workspace } => ("shown", Some(workspace.clone()), None),
         Answer::Made { workspace } => ("made", Some(workspace.clone()), None),
+        Answer::Window => ("window", None, None),
         Answer::Refused { reason } => ("refused", None, Some(reason.clone())),
     };
     let record = AnswerRecord {
@@ -554,6 +587,7 @@ fn read_answer(directory: &Path, id: &str) -> Option<Answer> {
     match (record.outcome.as_str(), record.workspace) {
         ("shown", Some(workspace)) => Some(Answer::Shown { workspace }),
         ("made", Some(workspace)) => Some(Answer::Made { workspace }),
+        ("window", _) => Some(Answer::Window),
         ("refused", _) => Some(Answer::Refused {
             reason: reason.unwrap_or_else(|| FOLDER_GONE.to_string()),
         }),
@@ -762,6 +796,35 @@ mod tests {
         assert_eq!(entries(&root), vec![format!("{}.answer", id(3))], "the request is gone");
     }
 
+    /// A start that names no folder asks the window to show itself: the record
+    /// carries no folder, a window claims it, and the caller reads the answer of
+    /// a window that showed itself.
+    #[test]
+    fn a_request_without_a_folder_asks_the_window_to_show_itself() {
+        let (_temp, root) = home();
+        let asking_root = root.clone();
+        let caller = std::thread::spawn(move || super::ask_window(&asking_root));
+
+        let window_root = root.clone();
+        let window = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + super::CALLER_WAIT;
+            while std::time::Instant::now() < deadline {
+                let claimed: Vec<FolderRequest> = claim(&window_root, now_millis()).expect("a claim");
+                if let Some(request) = claimed.first() {
+                    assert_eq!(request.folder(), None, "the request names no folder");
+                    return answer_in(&window_root, request, &Answer::Window);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the window of the test claimed no request");
+        });
+
+        let answer = caller.join().expect("the caller").expect("a caller of the channel");
+        window.join().expect("the window of the test");
+
+        assert_eq!(answer, Some(Answer::Window), "the window showed itself");
+    }
+
     /// A record of the form of this module is claimed, and it names the folder
     /// that its caller asked for.
     #[test]
@@ -775,7 +838,7 @@ mod tests {
 
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].id(), id(4));
-        assert_eq!(claimed[0].folder(), crate::folder_identity(&folder));
+        assert_eq!(claimed[0].folder(), Some(crate::folder_identity(&folder).as_path()));
         assert!(
             entries(&root).contains(&format!("{}.claim", id(4))),
             "the claim stays for the answer"

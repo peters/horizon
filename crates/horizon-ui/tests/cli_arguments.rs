@@ -328,6 +328,30 @@ fn a_folder_of_a_second_start_reaches_the_window_that_runs() {
     assert!(left.is_empty(), "the start removes its files: {left:?}");
 }
 
+/// A second `horizon` that names no folder asks the window of this home to show
+/// itself, and ends with the line of that window instead of opening a second one.
+#[test]
+fn a_second_start_that_names_no_folder_shows_the_window_that_runs() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_horizon"));
+    let temp = tempfile::tempdir().expect("the home of the test");
+    let (horizon_home, _window_store) = home_with_a_running_window(&temp);
+
+    let window = answer_as_the_window(
+        horizon_home.root(),
+        horizon_core::folder_requests::Answer::Window,
+    );
+    let outcome = start_with_home(binary, temp.path(), Some(horizon_home.root()), &[]);
+    window.join().expect("the window of this test");
+
+    assert_eq!(outcome.code, 0, "{:?}", outcome.stderr);
+    assert_eq!(outcome.first_stdout_line(), "Horizon shows its window.");
+    assert_eq!(outcome.stdout.lines().count(), 1, "{:?}", outcome.stdout);
+    let left: Vec<std::ffi::OsString> = std::fs::read_dir(request_folder(horizon_home.root()))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "the start removes its files: {left:?}");
+}
+
 /// A home whose Horizon runs but answers nothing leaves one sentence and the
 /// status of a request that was served, because a busy window is no error.
 #[test]

@@ -140,6 +140,11 @@ impl DeviceRequestBridge {
             self.persist_pending
                 .store(installed.app.runtime_is_dirty(), Ordering::Relaxed);
         }
+        // A hidden window draws no frame, so the request of a second start that
+        // shows it reaches the pass of a window that draws nothing.
+        if self.folder_request_pending.load(Ordering::Relaxed) {
+            installed.ctx.request_repaint();
+        }
         installed.app.settle_device_reveals_without_frame();
         self.sync_held_reveals(&installed.app);
         self.sync_claim_pending(&installed.app);

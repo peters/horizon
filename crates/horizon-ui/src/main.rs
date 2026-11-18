@@ -557,8 +557,9 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
 }
 
 /// Asks a Horizon of this home that runs to show the folder of `horizon <folder>`,
-/// and answers the status that this start ends with; `None` says that no window of
-/// this home runs, so the start opens its own.
+/// or to show its window for a start that names no folder, and answers the status
+/// that this start ends with; `None` says that no window of this home answers, so
+/// the start opens its own.
 ///
 /// A running Horizon keeps a lease with a heartbeat for each session that it
 /// holds, so this start can see it through the files of the home alone. It then
@@ -567,20 +568,36 @@ fn run_remote_profile_command(config_path: &std::path::Path, command: &RemotePro
 /// and starts no plugin, because a start that only asks a window is a client, not a
 /// window of its own.
 fn ask_the_running_window(horizon_home: &horizon_core::HorizonHome, cli_args: &CliArgs) -> Option<i32> {
-    let folder = cli_args.folder.as_deref()?;
+    let folder = cli_args.folder.as_deref();
     let config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
     let session_store = SessionStore::new(horizon_home.clone(), config_path);
     if !a_horizon_already_runs(&session_store) {
         return None;
     }
-    let (line, status) = match horizon_core::folder_requests::ask(horizon_home.root(), folder) {
+    let requested = match folder {
+        Some(folder) => horizon_core::folder_requests::ask(horizon_home.root(), folder),
+        None => horizon_core::folder_requests::ask_window(horizon_home.root()),
+    };
+    // A window that ends with its window shows no window of its own: this start
+    // opens its own, as it did before the request channel existed.
+    let answers_this_start = |answer: &horizon_core::folder_requests::Answer| {
+        folder.is_some()
+            || !matches!(
+                answer,
+                horizon_core::folder_requests::Answer::Refused { reason }
+                    if reason == horizon_core::folder_requests::KEEP_RUNNING_OFF
+            )
+    };
+    let (line, status) = match requested {
+        Ok(Some(answer)) if answers_this_start(&answer) => folder_answer_line(folder, &answer),
+        Ok(Some(_)) | Ok(None) if folder.is_none() => return None,
         Ok(Some(answer)) => folder_answer_line(folder, &answer),
         Ok(None) => (folder_no_answer_sentence(folder), 0),
         Err(error) => (
             format!(
-                "Horizon runs for this home, but the folder {} was not sent to it: {error}",
-                folder.display()
+                "Horizon runs for this home, but {} was not sent to it: {error}",
+                shown_thing(folder)
             ),
             2,
         ),
@@ -592,21 +609,24 @@ fn ask_the_running_window(horizon_home: &horizon_core::HorizonHome, cli_args: &C
     Some(status)
 }
 
-/// The one line of a window that answered the request of `folder`, and the status
-/// of the start.
-fn folder_answer_line(folder: &std::path::Path, answer: &horizon_core::folder_requests::Answer) -> (String, i32) {
+/// The one line of a window that answered the request, and the status of the
+/// start.
+fn folder_answer_line(
+    folder: Option<&std::path::Path>,
+    answer: &horizon_core::folder_requests::Answer,
+) -> (String, i32) {
     use horizon_core::folder_requests::Answer;
     match answer {
-        Answer::Shown { .. } => (format!("Horizon shows the folder {}.", folder.display()), 0),
-        Answer::Made { .. } => (
-            format!("Horizon made a workspace for the folder {}.", folder.display()),
-            0,
-        ),
-        Answer::Refused { reason } => (
-            format!("Horizon did not show the folder {}: {reason}", folder.display()),
-            2,
-        ),
+        Answer::Window => ("Horizon shows its window.".to_owned(), 0),
+        Answer::Shown { .. } => (format!("Horizon shows {}.", shown_thing(folder)), 0),
+        Answer::Made { .. } => (format!("Horizon made a workspace for {}.", shown_thing(folder)), 0),
+        Answer::Refused { reason } => (format!("Horizon did not show {}: {reason}", shown_thing(folder)), 2),
     }
+}
+
+/// What a start asked the running Horizon to show: its window, or a folder.
+fn shown_thing(folder: Option<&std::path::Path>) -> String {
+    folder.map_or_else(|| "its window".to_owned(), |folder| format!("the folder {}", folder.display()))
 }
 
 /// Whether a Horizon of this home holds a session now.
@@ -622,10 +642,10 @@ fn a_horizon_already_runs(session_store: &SessionStore) -> bool {
 
 /// The one line of `horizon <folder>` when a Horizon of this home runs and
 /// answers nothing in time.
-fn folder_no_answer_sentence(folder: &std::path::Path) -> String {
+fn folder_no_answer_sentence(folder: Option<&std::path::Path>) -> String {
     format!(
-        "Horizon runs for this home, but it did not answer, so the folder {} was not opened there.",
-        folder.display()
+        "Horizon runs for this home, but it did not answer, so {} was not opened there.",
+        shown_thing(folder)
     )
 }
 
@@ -1006,14 +1026,14 @@ mod tests {
                 ),
             ),
         ] {
-            let (line, code) = super::folder_answer_line(&folder, &answer);
+            let (line, code) = super::folder_answer_line(Some(&folder), &answer);
             assert_eq!((line.as_str(), code), (expected.as_str(), status));
             assert_eq!(line.lines().count(), 1, "one line, not a usage: {line}");
         }
 
         // A window that answers nothing says so in one line too, and the start
         // is no error: the window may be busy.
-        let sentence = super::folder_no_answer_sentence(&folder);
+        let sentence = super::folder_no_answer_sentence(Some(&folder));
         assert_eq!(
             sentence,
             format!(

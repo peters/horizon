@@ -99,9 +99,25 @@ impl HorizonApp {
             return;
         }
         let request = self.folder_requests.pending.remove(0);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        let Some(folder) = request.folder().map(std::path::Path::to_path_buf) else {
+            // The start named no folder: it asks for the window itself, and this
+            // window shows and raises it, or says that it ends with its window.
+            if self.template_config.features.keep_running_when_closed {
+                self.show_main_window(ctx);
+                self.answer_folder_request(request, horizon_core::folder_requests::Answer::Window);
+            } else {
+                self.answer_folder_request(
+                    request,
+                    horizon_core::folder_requests::Answer::Refused {
+                        reason: horizon_core::folder_requests::KEEP_RUNNING_OFF.to_owned(),
+                    },
+                );
+            }
+            return;
+        };
+        self.show_main_window(ctx);
         self.startup_folder = Some(super::startup_folder::StartupFolder {
-            folder: request.folder().to_path_buf(),
+            folder,
             request: Some(request),
         });
     }
@@ -140,7 +156,7 @@ mod tests {
     use horizon_core::{PresetConfig, RuntimeState, StartupDecision};
 
     use crate::app::HorizonApp;
-    use crate::app::test_support::{run_app_frame, test_app_with_startup};
+    use crate::app::test_support::{run_app_frame, run_app_frame_with_input, test_app_with_startup};
 
     /// The window holds a session and writes its lease, which is what a caller
     /// of the channel sees before it asks.
@@ -244,6 +260,81 @@ mod tests {
         assert_eq!(app.board.workspaces.len(), 1, "no second workspace of that folder");
         assert_eq!(app.board.panels.len(), panels_before, "the folder adds no panel");
         assert_eq!(app.board.active_workspace, Some(workspace));
+        app.board.shutdown_terminal_panels();
+    }
+
+    /// A start that names no folder asks the window of this home to show itself:
+    /// the frame sends the show and the focus, and the caller reads the answer.
+    #[test]
+    fn a_frame_shows_the_window_for_a_second_start_that_names_no_folder() {
+        let (_temp, ctx, mut app) = waiting_app();
+        let root = app.session_store.home().root().to_path_buf();
+        holds_a_lease(&mut app);
+        app.template_config.features.keep_running_when_closed = true;
+
+        let asking_root = root.clone();
+        let caller = std::thread::spawn(move || horizon_core::folder_requests::ask_window(&asking_root));
+        let mut sent = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !caller.is_finished() {
+            app.folder_requests
+                .waiting
+                .store(true, std::sync::atomic::Ordering::Release);
+            sent.extend(
+                run_app_frame_with_input(&ctx, &mut app, egui::RawInput::default())
+                    .viewport_output
+                    .get(&egui::ViewportId::ROOT)
+                    .map(|output| output.commands.clone())
+                    .unwrap_or_default(),
+            );
+            assert!(Instant::now() < deadline, "the window showed itself");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answer = caller.join().expect("the caller").expect("a caller of the channel");
+
+        assert_eq!(answer, Some(Answer::Window), "the window showed itself");
+        assert!(sent.contains(&egui::ViewportCommand::Visible(true)), "{sent:?}");
+        assert!(sent.contains(&egui::ViewportCommand::Focus), "{sent:?}");
+        app.board.shutdown_terminal_panels();
+    }
+
+    /// A window that ends with its window answers the start that names no folder
+    /// with the reason, so that start opens its own window as it did.
+    #[test]
+    fn a_window_that_ends_with_its_window_shows_nothing_for_a_second_start() {
+        let (_temp, ctx, mut app) = waiting_app();
+        let root = app.session_store.home().root().to_path_buf();
+        holds_a_lease(&mut app);
+
+        let asking_root = root.clone();
+        let caller = std::thread::spawn(move || {
+            horizon_core::folder_requests::ask_window_with(&asking_root, Duration::from_millis(1500))
+        });
+        let mut sent = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !caller.is_finished() {
+            app.folder_requests
+                .waiting
+                .store(true, std::sync::atomic::Ordering::Release);
+            sent.extend(
+                run_app_frame_with_input(&ctx, &mut app, egui::RawInput::default())
+                    .viewport_output
+                    .get(&egui::ViewportId::ROOT)
+                    .map(|output| output.commands.clone())
+                    .unwrap_or_default(),
+            );
+            assert!(Instant::now() < deadline, "the window answered the request");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let answer = caller.join().expect("the caller").expect("a caller of the channel");
+
+        assert_eq!(
+            answer,
+            Some(Answer::Refused {
+                reason: horizon_core::folder_requests::KEEP_RUNNING_OFF.to_owned()
+            })
+        );
+        assert!(!sent.contains(&egui::ViewportCommand::Visible(true)), "{sent:?}");
         app.board.shutdown_terminal_panels();
     }
 
