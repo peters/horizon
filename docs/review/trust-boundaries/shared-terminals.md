@@ -144,28 +144,36 @@ The sentence is:
   the sender. `Terminal::follow_typed` of
   `crates/horizon-core/src/terminal/follow.rs` drops the bytes of a follower
   without typing.
-- **The check of `typed` at the owner.** `HorizonApp::shared_typed` of
+- **The check of `typed` at the owner.** `Run::typed` of
   `crates/horizon-ui/src/app/shared_terminals/owner.rs` writes the bytes only
   when four conditions are true:
   1. `share_terminals` is `true`.
   2. `remote_typing` is `true`.
   3. The identifier of the event is in the list that the link has.
-  4. A panel of the board has that identifier.
-- **A switch that is off shares nothing.** `HorizonApp::shared_list` of the
-  same file gives an empty list while `share_terminals` is `false`. The server
-  then ends each follow of a panel of this computer.
-- **Only a panel of the list has a watch.** `HorizonApp::shared_watchers` of
-  the same file returns for a panel that is not in the list. No event of a
+  4. A terminal panel of this computer has that identifier.
+
+  The share pump does this check on its thread. It reads the two switches from
+  its copy of what the window wants, and it takes the events of a pass before
+  that copy. A frame gives the pump a changed switch at once.
+- **A switch that is off shares nothing.** `Run::apply_wanted` of
+  `crates/horizon-ui/src/app/shared_terminals/pump.rs` gives the link an empty
+  list while `share_terminals` is `false`. The server then ends each follow of
+  a panel of this computer.
+- **Only a panel of the list has a watch.** `Run::watchers` of `owner.rs`
+  returns for a panel that is not in the list that the link has. No event of a
   server therefore starts the copy of another panel.
-- **A follow panel is never shared.** `shared_list` leaves out each terminal
-  that follows a stream, so two computers do not send one terminal in a circle.
+- **A follow panel is never shared.** `Terminal::share_source` gives no source
+  for a terminal that follows a stream, and `HorizonApp::shared_list` of
+  `crates/horizon-ui/src/app/shared_terminals/list.rs` lists only a terminal
+  with a source. Two computers therefore do not send one terminal in a circle.
 - **A watched panel says so.** The title bar of a panel that another computer
   follows shows `seen by <name>`, or the count of the followers
   (`SharedTerminals::chip` of `crates/horizon-ui/src/app/shared_terminals.rs`).
 - **Each shown text is cut.** `shown` of
   `crates/horizon-ui/src/app/shared_terminals.rs` removes control characters
-  and keeps 80 characters. The section of the sidebar, the chips and the reason
-  of a lost link use it.
+  and keeps 80 characters. The pump uses it where a text of another computer
+  enters what the window reads: the names and the titles of the list, the
+  chips and the reason of a lost link.
 - **No answer of a follower to the program.** `Terminal::write_protocol` of
   `crates/horizon-core/src/terminal/lifecycle.rs` writes nothing for a follower.
   `Terminal::answer_query` of `crates/horizon-core/src/terminal/events.rs`
@@ -205,8 +213,9 @@ The sentence is:
 - **A computer gets only the streams that it asked for.** `Inner::accept` of
   the same file drops a `screen` and `output` of a panel that the application
   did not ask to follow. The mark `own` of a list never comes from a frame.
-- **No call waits for I/O.** No call of `LiveHandle` and no call of `FollowFeed`
-  waits for a link, so the UI thread can call them.
+- **No call waits for I/O.** No call of `LiveHandle`, of `FollowFeed` and of
+  `ShareSource` waits for a link, so the share pump and the UI thread can call
+  them. The pump and the UI thread hold a lock between them for one copy only.
 
 ## What the guarantees do not cover
 

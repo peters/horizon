@@ -17,7 +17,8 @@ the terminals of each other and type in them. It proves the section
 **Computers** of the sidebar, the follow panel and the chips of the title bars.
 It proves the name and the two switches of the **Server** tab. It proves what
 the window shows when a panel, a computer or the server goes away. It also
-proves that a computer with no server shares nothing.
+proves that a computer with no server shares nothing, and that a window that
+the desktop does not show continues its streams.
 
 ## 2. Applicability
 
@@ -809,6 +810,60 @@ Do this task only if you have the older build. If not, record `not run`.
    Result: The chip is in the title bar of the panel `Live render heartbeat` at
    the two sizes, and it does not cover the title.
 
+### 6.18 ST18: An owner window that the desktop does not show
+
+The desktop can give a minimized window no frame. The share pump of computer A
+must move each byte then.
+
+1. On computer B, click the row `Device input test` of `Computer A`.
+
+   Result: Computer B shows a follow panel for `Device input test`, and the
+   follow panel for `Live render heartbeat` of ST17.
+
+2. Record the identifier of the candidate window of computer A:
+
+   ```sh
+   WINDOW=$(DISPLAY=<display of A> xdotool search --onlyvisible --name Horizon | head -n 1)
+   ```
+
+   Result: `WINDOW` holds one number.
+
+3. Minimize that window:
+
+   ```sh
+   DISPLAY=<display of A> xdotool windowminimize "$WINDOW"
+   ```
+
+   Result: The Device panel of computer A shows the desktop with no candidate
+   window.
+
+4. On computer B, read the follow panel of `Live render heartbeat` for ten
+   seconds.
+
+   Result: Each second, the follow panel shows a new line.
+
+5. On computer B, run `echo hidden-b` in the follow panel of `Device input
+   test`.
+
+   Result: The follow panel shows the command and the line `hidden-b`.
+
+6. On computer B, close the follow panel of `Live render heartbeat` with the
+   close button of its title bar. Then click the row `Live render heartbeat` of
+   `Computer A`.
+
+   Result: A follow panel opens. It shows lines that start with
+   `Live frame heartbeat:`, and a new line each second.
+
+7. Show the window of computer A again:
+
+   ```sh
+   DISPLAY=<display of A> xdotool windowmap "$WINDOW"
+   ```
+
+   Result: The Device panel of computer A shows the candidate window. The panel
+   `Device input test` shows the line `hidden-b`. The title bars of the two
+   panels show the chip `seen by Computer B`.
+
 ## 7. Pass criteria
 
 - ST1: a computer with no server shows no section **Computers**, no chip and no
@@ -839,6 +894,8 @@ Do this task only if you have the older build. If not, record `not run`.
 - ST16: the name and the two switches stay after a restart, and no follow panel
   comes back.
 - ST17: no text is drawn on another text at the two window sizes.
+- ST18: while the window of the owner is minimized, the follower gets the
+  output, its keys go to the program, and a new follow panel gets a screen.
 
 ## 8. Cleanup
 

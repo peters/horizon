@@ -286,7 +286,9 @@ when it names one of those kinds.
   Terminal destruction sends shutdown, then a helper thread joins and destroys
   the PTY. A finished thread handle can still own a PTY that waits for its child.
   The bounded regression for this case lives in `terminal/lifecycle/tests.rs`.
-- `terminal/share.rs` writes the screen of a terminal for a follower.
+- `terminal/share.rs` writes the screen of a terminal for a follower. Its
+  `ShareSource` gives a thread that is not the UI thread the outlet, the screen
+  and the way to the program of one terminal.
   `terminal/follow.rs` owns the terminal of a follow panel and its feed.
   `panel/follow.rs` and `board/follow.rs` open the follow panel. A follow panel
   has no program of this computer. The places that act on the program of a
@@ -509,10 +511,15 @@ when it names one of those kinds.
     `sidebar/rich_menu.rs`
   - `settings`: settings editor state and save/apply flows
   - `shared_terminals`: the join of the shared terminals. `shared_terminals.rs`
-    starts and stops the live link and runs the join one time in each frame.
-    `shared_terminals/owner.rs` holds the list, the watched panels and the
-    check of the typed bytes, and `shared_terminals/follower.rs` holds the
-    other computers and the follow panels. `shared_terminals/link.rs` is the
+    starts and stops the live link and its pump, and does in each frame the
+    work that needs the board. `shared_terminals/list.rs` builds the list of
+    this computer. `shared_terminals/pump.rs` is the share pump: the one thread
+    that moves the bytes, so a window that gets no frame shares and follows.
+    `shared_terminals/owner.rs` is its owner side, with the watched panels and
+    the check of the typed bytes, and `shared_terminals/follower.rs` is its
+    follower side, with the other computers and the follow panels. A lock
+    between the window and the pump is held for one copy only, and the pump
+    takes it with `try_lock`. `shared_terminals/link.rs` is the
     trait of the calls of the link, so a test joins without a server. The
     section of the sidebar is `sidebar/computers.rs`, and the fields of the
     Settings window are `settings/server/sharing.rs`. The design page is

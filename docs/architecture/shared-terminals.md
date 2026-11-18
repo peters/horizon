@@ -22,7 +22,7 @@ The server and its sync link are in [`horizon-server.md`](horizon-server.md).
 | The live link of a computer | `crates/horizon-sync/src/supervisor/live.rs` | `LiveSupervisor` opens the link and opens it again. `LiveHandle` is the interface of the application. |
 | The owner side | `crates/horizon-pty-tap/src/share.rs`, `crates/horizon-core/src/terminal/share.rs` | The outlet copies the output of a terminal. A screen draws its grid and sets its modes. |
 | The follow panel | `crates/horizon-core/src/terminal/follow.rs`, `crates/horizon-core/src/panel/follow.rs`, `crates/horizon-core/src/board/follow.rs` | A terminal that shows a stream, keeps the bytes of the person for the stream, and starts no program. |
-| The join | `crates/horizon-ui/src/app/shared_terminals.rs`, `crates/horizon-ui/src/app/shared_terminals/` | The application lists the terminals of this computer, sends their screens and output, and runs the follow panels of its window. |
+| The join | `crates/horizon-ui/src/app/shared_terminals.rs`, `crates/horizon-ui/src/app/shared_terminals/` | The window lists the terminals of this computer. The share pump, a thread of its own, sends their screens and output and runs the follow panels. |
 | The settings and the window | `crates/horizon-core/src/config/server.rs`, `crates/horizon-ui/src/app/settings/server/sharing.rs`, `crates/horizon-ui/src/app/sidebar/computers.rs` | The name and the two switches of a computer, and the section **Computers** of the sidebar. |
 
 ## The live link
@@ -282,8 +282,13 @@ times between a screen and the output after it:
    gives the lease back. It writes the screen while it holds the lock.
 3. The grid then holds every byte that the reader read before that instant. The
    outlet holds every byte that the reader reads after it.
-4. The owner calls `share_screen` and `take` on one thread. It sends their
+4. The owner makes the screen and calls `take` on one thread. It sends their
    results in the order of the calls.
+
+`Terminal::share_source` gives a `ShareSource`: the outlet, the way to the
+screen and the way to the program of one terminal. It goes to another thread,
+and `ShareSource::screen` gives the same screen there. The share pump of the
+application is that one thread. A follower has no source.
 
 The bytes of a screen have this order:
 
@@ -367,6 +372,7 @@ asks for the size of its grid, for 20 to 240 columns and 4 to 80 rows.
 | `take_typed()` | The bytes that the person typed since the last call: keys, pastes and mouse reports. |
 | `take_lost()` | Whether the feed dropped output since the newest screen and the last call. |
 | `closed()` | Whether the person closed the panel. |
+| `on_alternate_screen()` | Whether the terminal shows the alternate screen now. |
 
 - **No call waits.** The link does not block. Output that the link does not
   take waits in the feed. It goes to the link at the next call of `output`,
@@ -378,6 +384,8 @@ asks for the size of its grid, for 20 to 240 columns and 4 to 80 rows.
   bytes.
 - **Typed bytes have two conditions.** The feed drops them when `typing` is
   `false`, and after `ended` until a new screen.
+- **The feed asks for the frame of its stream.** `screen` and `output` arm the
+  output wake of the terminal, so the caller asks the window for nothing.
 
 ### The order rule of a new screen
 
@@ -411,15 +419,77 @@ update. The reset clears the screen, the history and the modes of the follower.
 ## The join in the application
 
 The join is `crates/horizon-ui/src/app/shared_terminals.rs` with its modules
-`link.rs`, `owner.rs` and `follower.rs`. `HorizonApp::poll_shared_terminals`
-runs it one time in each frame, after the panels took the keys of that frame:
+`link.rs`, `list.rs`, `pump.rs`, `owner.rs` and `follower.rs`. It has two
+parts: the share pump and the part of the window.
 
-1. It takes the events of the link.
-2. It gives the link the list and the output of this computer.
-3. It runs the follow panels of this window.
+### The share pump
 
-Each call of the handle, of a feed and of an outlet returns at once, so the UI
-thread does the full join.
+A window that the desktop does not show can get no frame. On Wayland, a redraw
+waits for a frame callback, and the compositor sends none for a surface that it
+does not present. Thus no byte of a shared terminal waits for a frame. One
+thread, the share pump (`pump.rs`), moves each byte.
+
+- **The pump starts and stops with the live link.** Each start of a live link
+  starts a pump, and each stop of a live link stops its pump. The thread of a
+  new pump first ends the pump before it, so two pumps never take the output of
+  one terminal.
+- **One pass does all the work.** A pass does these steps in this order:
+  1. It takes the events of the link.
+  2. It copies what the window wants, if the window wrote a new value.
+  3. It applies the events.
+  4. It gives the link a new list, and it starts each new follow.
+  5. It sends the screens and the output of the watched panels.
+  6. It runs the follow panels.
+  7. It gives the window what it found, and it asks for one frame.
+- **No pass waits.** Each call of the handle, of a feed and of an outlet
+  returns at once.
+- **The pump holds only values that go to another thread.** For a terminal
+  panel of this computer, it holds the identifier and the `ShareSource`. For a
+  follow panel, it holds the identifiers and the `FollowFeed`.
+- **The pump sleeps while it has no stream.** It has a stream while a panel of
+  this computer has a watch, and while a follow panel is open. An event of the
+  link wakes the pump, and so does a notice of the window. While it has a
+  stream, the pump also runs each 25 ms (`PERIOD`). The reader of a terminal
+  fills an outlet with no notice, and so does a person who types in a follow
+  panel.
+- **The window and the pump share two values.** The window writes `Wanted`: the
+  terminal panels of this computer, the follow panels and the two switches.
+  The pump writes `Found`: the other computers, the chip texts and the reason
+  of a link that is down. A lock is held for one copy only. The pump takes a
+  lock only when the lock is free, and it comes back 25 ms later when the
+  window held it. Thus the pump never waits for the window, and a frame waits
+  for one copy at most.
+- **The pump asks for a frame only when `Found` changed.**
+
+### The part of the window
+
+`HorizonApp::poll_shared_terminals` runs one time in each frame, after the
+panels took the keys of that frame. It does the work that needs the board:
+
+1. It starts and stops the live link with the sync link.
+2. It builds the list of the terminal panels of this computer (`list.rs`).
+3. It gives the pump a new list, a changed switch and each follow panel that
+   opened or closed. While a follow panel is open, it also sends a notice in
+   each frame, so the keys of that frame go out at once.
+4. It takes `Found` for the section of the sidebar and for the chips.
+
+### What waits for a frame
+
+A window that gets no frame continues each stream. These things wait for the
+next frame of that window:
+
+- The list: a panel that opened or closed, a panel that started a new
+  terminal, a new title, a new state and a new grid.
+- A changed switch and a new name of the computer. A person changes them in
+  the window.
+- The start of the live link, and its new start after the sync link came back.
+- The section of the sidebar and the chips.
+- The answers of a terminal to the questions of its program, such as the
+  position of the cursor. `Terminal::process_events` writes them in a frame.
+  This is true for each terminal of the window, shared or not.
+
+A watched panel that closed, or that started a new terminal, gives no screen
+and no output until that frame.
 
 ### The settings of a computer
 
@@ -470,24 +540,26 @@ window does.
   be dead. The second case is a new value of `computer_name` in the settings
   store: the label of the link is the saved name, so a key in the name field of
   the Settings window sends nothing and starts no link.
-- **The old link stops on a thread of its own.** The stop of a `LiveSupervisor`
-  waits for the thread of the link, so no frame does it.
+- **The old link and its pump stop on a thread of their own.** The stop of a
+  `LiveSupervisor` and the stop of a pump wait for a thread, so no frame does
+  them. A pump stops in one pass at most.
 - **A lost link forgets what only an open link holds.** This occurs at the
-  states `Down` and `Unsupported` and at each new start. The join then ends
+  states `Down` and `Unsupported` and at each new start. The pump then ends
   each watch of this computer, empties the list of the other computers and ends
   the stream of each follow panel. A new link gets the list and the follows
   again.
 
 ### The owner side
 
-`owner.rs` holds the list of this computer, the watch of each panel that another
-computer follows, and the check of the typed bytes.
+`list.rs` builds the list of this computer in a frame. `owner.rs` is the owner
+side of the pump: the watch of each panel that another computer follows, and
+the check of the typed bytes.
 
 - **The list holds each terminal panel of the board.** A terminal panel is a
   panel with a terminal of its own, such as a shell, an agent, a command or an
   `ssh` panel. The list holds no follow panel, no card, no editor, no browser
-  panel and no device panel. It holds at most 64 panels, and it is empty while
-  `share_terminals` is `false`.
+  panel and no device panel. It holds at most 64 panels. The pump gives the
+  link an empty list while `share_terminals` is `false`.
 - **Each entry has eight fields.**
   - `id`: the local identifier of the panel, which a saved session keeps.
   - `title`: the title of the title bar.
@@ -504,15 +576,16 @@ computer follows, and the check of the typed bytes.
 
   One more build occurs each 2 seconds, for a new title and for a resize that
   printed nothing.
-- **The list has two bounds.** The join builds it at most one time in 250 ms.
-  It gives the list to the link only when the list differs from the last one.
+- **The list has two bounds.** A frame builds it at most one time in 250 ms.
+  The pump gives the list to the link only when the list differs from the last
+  one.
 - **Only a panel of the list has a watch.** A `watchers` event for another
   panel changes nothing, whatever the server names. A watch ends when its panel
   closed, left the list or has no follower. A watched panel that closed leaves
   the list of the link at once (`LiveHandle::ended`).
-- **A watched panel is drained in each frame.** The window asks for a frame
-  each 50 ms while a panel has a watch. Each drain calls `set_wanted(true)`, so
-  a panel that started a new terminal continues its share with the new outlet.
+- **A watched panel is drained in each pass of the pump.** Each drain calls
+  `set_wanted(true)`. A frame gives the pump the source of a panel that started
+  a new terminal, so that panel continues its share with the new outlet.
 - **A screen is due in five cases.**
   - A new follower came.
   - A `watchers` event says `refresh: true`.
@@ -523,34 +596,40 @@ computer follows, and the check of the typed bytes.
   The second screen of a new follower repairs a first screen that started in
   the middle of an escape sequence.
 - **No output goes out while a screen is due.** The screen holds that output.
-- **The owner checks a typed event.** `HorizonApp::shared_typed` writes the
+  The pump also takes nothing from the outlet then, and a watch starts with a
+  screen. Thus each take continues a screen that the same pump made.
+- **The owner checks a typed event.** `Run::typed` of `owner.rs` writes the
   bytes into the program of the panel only when four conditions are true:
   1. `share_terminals` is `true`.
   2. `remote_typing` is `true`.
   3. The identifier of the event is in the list that the link has.
-  4. A panel of the board has that identifier.
+  4. A terminal panel of this computer has that identifier.
 
-  It does not read the sender of the event.
+  It does not read the sender of the event. The pump reads the two switches
+  from its copy of what the window wants. It takes the events of a pass before
+  that copy, so a switch that is off in the copy refuses each event of the
+  pass.
 
 ### The follower side
 
-`follower.rs` holds the other computers of the list and the follow panels of
-this window.
+`follower.rs` is the follower side of the pump: the other computers of the list
+and the follow panels of this window.
 
-- **The list of this window holds the other computers.** The join removes the
+- **The list of this window holds the other computers.** The pump removes the
   entry of this computer.
 - **A press on a row opens one follow panel.**
   `HorizonApp::open_shared_terminal` makes the panel in the active workspace
-  with `Board::create_follow_panel`, and it calls `LiveHandle::follow`. A
+  with `Board::create_follow_panel`, and the pump calls `LiveHandle::follow`. A
   second press on the same row goes to the open panel. The kind of the list
   selects the keyboard protocol, and a kind that is no terminal kind is a
   shell.
 - **The events of a stream go to the feed.** A `screen`, an `output` and an
   `ended` event go to the feed of the panel that follows that panel of that
   computer.
-- **Typed bytes go out with their frame.** The join runs after the panels took
-  the keys, so `take_typed` gives the bytes of that frame to
-  `LiveHandle::typed`.
+- **Typed bytes go out with their frame.** The frame sends the pump a notice
+  after the panels took the keys, so `take_typed` gives the bytes of that frame
+  to `LiveHandle::typed` at once. Bytes that no frame brought go out in 25 ms
+  at most.
 - **A follower asks for a new screen in two cases.** The first case is
   `take_lost`. The second case is a terminal that leaves the alternate screen
   on which its newest screen started, because the screen under it did not
@@ -563,7 +642,7 @@ this window.
 - **A lost link ends each stream.** The cause is `this computer has no link to
   its server`. Each follow panel follows again when the list of a new link
   names its panel.
-- **A closed follow panel ends its follow.** The join calls
+- **A closed follow panel ends its follow.** The pump calls
   `LiveHandle::unfollow`.
 - **`typing` is the value at the open of the panel.** A panel that the person
   opened while the owner had typing off drops the bytes of the person, also
@@ -641,7 +720,7 @@ this window.
   - Hyperlinks, and the style and the colour of an underline.
 - **A screen has no fixed bound.** Its bytes increase with the cells of the
   grid. One call of `LiveHandle::output` refuses bytes that do not fit under
-  the ceiling of 1 MiB. The join then makes the screen again each 250 ms, and
+  the ceiling of 1 MiB. The pump then makes the screen again each 250 ms, and
   no bound ends that. A screen that does not fit in what is free of the 1 MiB
   of a follower at the server puts that follower behind again.
 - **One switch for all terminals.** `share_terminals` shares each terminal
@@ -650,7 +729,7 @@ this window.
 - **Typing that was off at the open.** A follow panel keeps the `typing` value
   of its open. The person closes the panel and opens the row again to type
   after the owner turned typing on.
-- **The owner does not see who types.** `shared_typed` does not read the sender
+- **The owner does not see who types.** `Run::typed` does not read the sender
   of a `typed` event, and the window shows no mark while another computer
   types. The chip of the panel names the followers, not the computer that
   types.
@@ -661,6 +740,10 @@ this window.
 - **A short loss of the sync link.** The join reads the state of the sync link
   one time in each frame. It does not see a sync link that is away for less
   than one frame, and the live link does not start again then.
+- **A window with no frame starts no live link.** A frame starts the live link
+  and builds the list, as [What waits for a frame](#what-waits-for-a-frame)
+  says. A window that gets no frame after its sync link came back shares
+  nothing and follows nothing until its next frame.
 - **An older server shows nothing.** The state `Unsupported` shows no line and
   no section, so the person cannot tell an older server from a server with no
   other computer.
@@ -693,7 +776,7 @@ this window.
 | The name of a computer in the settings | 60 characters | `MAX_COMPUTER_NAME_CHARS` |
 | The shortest time between two builds of the list | 250 ms | `LIST_EVERY` |
 | The longest time without a build of the list | 2 seconds | `LIST_CHECK` |
-| The frames of a window with a watched panel | Each 50 ms | `DRAIN_EVERY` |
+| The passes of the pump while it has a stream | Each 25 ms | `PERIOD` |
 | The second screen of a new follower, and the next screen after a refused frame | 250 ms | `NEXT_SCREEN` |
 | The next request of a follower for a screen | 1.2 seconds | `ASK_AGAIN` |
 | One text of another computer in the window | 80 characters | `SHOWN_CHARS` |
