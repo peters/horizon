@@ -222,9 +222,9 @@ row of `secrets.sqlite`, as the machine list page says.
 
 Two fields of the shared section `features` stay with one computer.
 `features.keep_agents_through_restart` says how this computer runs the programs of
-its agent panels, and `features.keep_running_when_closed` says that a close of the
-main window hides it on this computer. Neither is a value of the server:
-`LOCAL_FIELDS` in `crates/horizon-core/src/settings_sync.rs` names both, the body
+its agent panels, and `features.when_window_closes` says what a close of the main
+window does on this computer: ask, keep running or quit. Neither is a value of the
+server: `LOCAL_FIELDS` in `crates/horizon-core/src/settings_sync.rs` names both, the body
 that this computer sends has no such field, a change of one is no change of a
 shared section, and a section that arrives from the server keeps the value of this
 computer. A field
