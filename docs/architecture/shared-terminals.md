@@ -18,7 +18,7 @@ The server and its sync link are in [`horizon-server.md`](horizon-server.md).
 
 | Part | Code | Function |
 |---|---|---|
-| The frames and the relay | `crates/horizon-sync/src/live/` | The frames of a live link, the hub of the server, and the frames that wait for each link. |
+| The frames and the relay | `crates/horizon-sync/src/live/` | The frames of a live link (`protocol.rs`), the hub of the server (`hub.rs`), the frames that wait for one link (`outbox.rs`), the loop and the sign of life of one link (`relay.rs`, `alive.rs`). |
 | The live link of a computer | `crates/horizon-sync/src/supervisor/live.rs` | `LiveSupervisor` opens the link and opens it again. `LiveHandle` is the interface of the application. |
 | The owner side | `crates/horizon-pty-tap/src/share.rs`, `crates/horizon-core/src/terminal/share.rs` | The outlet copies the output of a terminal. A screen draws its grid and sets its modes. |
 | The follow panel | `crates/horizon-core/src/terminal/follow.rs`, `crates/horizon-core/src/panel/follow.rs`, `crates/horizon-core/src/board/follow.rs` | A terminal that shows a stream, keeps the bytes of the person for the stream, and starts no program. |
@@ -37,8 +37,9 @@ listener.
   the listener. It sends no store id. A TCP link applies the address rule of
   the sync link before it sends one byte.
 - **The answer of the server decides.** A server of this build answers version
-  6 in `hello_ok`. A computer sends a live frame only to a server that answered
-  6 or higher. An older server cannot read a live frame and would end the link.
+  9 in `hello_ok`. A computer sends a live frame only to a server that answered
+  version 9 or higher (`LIVE_PROTOCOL_VERSION`). An older server cannot read a
+  live frame and would end the link.
 - **An older server is not an error.** The computer closes the transport,
   reports the state `Unsupported` and asks again after 5 minutes. Its sync link
   does not change.
@@ -50,7 +51,40 @@ listener.
   `live_link`. A second `open` changes nothing.
 - **One live link for each computer.** A new live link of a device name ends
   the older one with `live_replaced`. The new link starts with an empty list.
+  The program that loses the link shows `another Horizon of this computer holds
+  the live link` and asks again after 60 seconds, and after 5 minutes for each
+  attempt after that.
+- **Each side says that it is alive.** Each side sends a `heartbeat` frame
+  while it has no other frame for 10 seconds, and a link that reads no frame
+  for 30 seconds ends. Thus a computer that goes away leaves the list of the
+  others in about half a minute. [The sign of life](#the-sign-of-life) gives
+  the bounds and the reasons.
 - **At most 32 live links.** The server refuses one more with `live_limit`.
+
+### The sign of life
+
+Each side of a live link keeps the two times of that link: when it last read a
+frame and when it last sent one (`crates/horizon-sync/src/live/alive.rs`,
+`Limits`).
+
+| Bound | Value | What it does |
+|---|---|---|
+| The tick | 1 second | How often a side examines its two times. |
+| The period of a heartbeat | 10 seconds | A side that sent no frame for this time sends `heartbeat`. |
+| The silence that ends a link | 30 seconds | A side that read no frame for this time ends the link. |
+
+The server ends a silent link with `live_silent` and the reason `This computer
+sent no frame for thirty seconds.` The hub then removes the link as it removes
+any link that ended: the panels of that computer leave the list, its followers
+get `ended` with `offline`, and the owners that it followed get `watchers`.
+The program of the silent computer ends its own link with the reason `the
+server sent no frame for 30 seconds` and makes a new attempt on the delays of
+[the handle of a computer](#the-handle-of-a-computer).
+
+`heartbeat` is the sign of life and nothing else. The hub drops one that a
+computer sends, and a computer takes one that the server sends as no event.
+Both times rise at every frame of any kind, so a link that carries a screen or
+a list needs no heartbeat.
 
 ## The frames
 
@@ -63,14 +97,18 @@ at most 256 KiB. A computer sends `live` frames, and the server sends
 {"live":{"open":{"label":"Computer A"}}}
 {"live":{"panels":{"panels":[{"id":"p1","title":"build","kind":"shell","state":"","workspace":"work","cols":80,"rows":24,"typing":true}]}}}
 {"live":{"follow":{"owner":"computer-a","panel":"p1"}}}
-{"live":{"screen":{"panel":"p1","cols":80,"rows":24}}}
-{"live":{"output":{"panel":"p1","data":"aGk="}}}
+{"live":{"resize":{"owner":"computer-a","panel":"p1","cols":132,"rows":43}}}
+{"live":{"screen":{"panel":"p1","cols":80,"rows":24,"fresh":true,"everyone":false}}}
+{"live":{"output":{"panel":"p1","data":"aGk=","replay":false}}}
 {"live":{"typed":{"owner":"computer-a","panel":"p1","data":"bHMN"}}}
+{"live":"heartbeat"}
 {"live_event":{"watchers":{"panel":"p1","watchers":[{"device":"computer-b","label":"Computer B"}],"refresh":true}}}
-{"live_event":{"screen":{"owner":"computer-a","panel":"p1","cols":80,"rows":24}}}
-{"live_event":{"output":{"owner":"computer-a","panel":"p1","data":"aGk="}}}
+{"live_event":{"screen":{"owner":"computer-a","panel":"p1","cols":80,"rows":24,"fresh":true,"everyone":false}}}
+{"live_event":{"output":{"owner":"computer-a","panel":"p1","data":"aGk=","replay":false}}}
 {"live_event":{"typed":{"panel":"p1","from":"computer-b","label":"Computer B","data":"bHMN"}}}
+{"live_event":{"resized":{"panel":"p1","from":"computer-b","label":"Computer B","cols":132,"rows":43}}}
 {"live_event":{"ended":{"owner":"computer-a","panel":"p1","reason":"offline"}}}
+{"live_event":"heartbeat"}
 ```
 
 ### The requests of a computer
@@ -82,10 +120,12 @@ at most 256 KiB. A computer sends `live` frames, and the server sends
 | `follow` | `owner`, `panel` | Start the follow of one panel of the computer `owner`. A follow that the computer already has is a `refresh`. | 8 follows for each computer, and 4 followers for each panel. |
 | `unfollow` | `owner`, `panel` | End that follow. | None. |
 | `refresh` | `owner`, `panel` | Ask the owner for a new screen of a panel that this computer follows. | One in a second for one follower and one panel. |
-| `screen` | `panel`, `cols`, `rows` | A new screen of a panel of this computer starts with this grid. The output that follows draws it. | 1 to 1000 columns and rows. |
-| `output` | `panel`, `data` | Output of that panel. | 1 byte to 48 KiB before base64. |
+| `resize` | `owner`, `panel`, `cols`, `rows` | The person of this computer typed in a panel that it follows, and the body of its panel fits this grid better: the program of the owner takes the grid until its own person types. | 2 to 1000 columns and 1 to 500 rows, and two requests a second for one follower and one panel. |
+| `screen` | `panel`, `cols`, `rows`, `fresh`, `everyone` | A new screen of a panel of this computer starts with this grid. The output that follows draws it. `fresh` says that the follower forgets its screen, its history and its modes. `everyone` says that each follower of the panel takes this screen. | 2 to 1000 columns and 1 to 500 rows. |
+| `output` | `panel`, `data`, `replay` | Output of that panel. `replay: true` says that these bytes draw the screen that came before them. | 1 byte to 48 KiB before base64. |
 | `ended` | `panel` | That panel is gone, and it leaves the list. `LiveHandle` does not send this request: it sends the list without the panel. | None. |
 | `typed` | `owner`, `panel`, `data` | The bytes that the person typed in a panel that this computer follows. | 1 byte to 16 KiB before base64. |
+| `heartbeat` | None | The sign of life of this computer. It says that the link is there, and nothing else. | One in 10 seconds. |
 
 ### The events of the server
 
@@ -94,10 +134,12 @@ at most 256 KiB. A computer sends `live` frames, and the server sends
 | `opened` | `device`, `computers` | The answer to `open`: the device name of this link, and the list. |
 | `computers` | `computers` | The computers that have a live link, each with its label and the panels that it shares. The computer that gets the list is in it. |
 | `watchers` | `panel`, `watchers`, `refresh` | To the owner: the computers that follow this panel now. `refresh: true` asks for a new screen. An empty list says that no computer follows the panel. |
-| `screen` | `owner`, `panel`, `cols`, `rows` | To a follower: a new screen of the panel starts with this grid. |
-| `output` | `owner`, `panel`, `data` | To a follower: output of the panel. |
+| `screen` | `owner`, `panel`, `cols`, `rows`, `fresh`, `everyone` | To a follower: a new screen of the panel starts with this grid. `fresh` says that the follower forgets its screen, its history and its modes, and `everyone` says who takes this screen. |
+| `output` | `owner`, `panel`, `data`, `replay` | To a follower: output of the panel. `replay: true` says that these bytes draw the screen that came before them. |
 | `ended` | `owner`, `panel`, `reason` | To a follower: the follow ended or did not start. |
 | `typed` | `panel`, `from`, `label`, `data` | To the owner: the bytes that the person of the computer `from` typed in the panel. |
+| `resized` | `panel`, `from`, `label`, `cols`, `rows` | To the owner: the person of the computer `from` typed in the panel that it follows, and the body of its panel fits this grid better. The program of the panel takes the grid until the person of the owner types there. |
+| `heartbeat` | None | The sign of life of the server, for a link with nothing else to carry. |
 
 The `reason` of `ended` is one of four values:
 
@@ -125,9 +167,12 @@ bound before it keeps or relays it. The bound is a number of characters.
 
 A panel with an empty identifier leaves the list, and so does a second panel
 with an identifier that the list already has. The server sets `cols` and `rows`
-of a panel to a value from 1 to 1000. The field `typing` of a panel says whether
-the owner lets the other computers type in it. A request that names a computer
-or a panel that the server does not hold changes nothing.
+of a panel to 2 to 1000 columns and 1 to 500 rows, with
+`horizon_core::bounded_screen_grid`, which a follower applies to its own grid
+too. The grid of a `screen` and the grid of a panel therefore have one pair of
+bounds. The field `typing` of a panel says whether the owner lets the other
+computers type in it. A request that names a computer or a panel that the
+server does not hold changes nothing.
 
 A frame with a field that the protocol does not know is not a frame of the
 protocol. A frame whose `data` is not base64 is not one either. The server ends
@@ -158,7 +203,10 @@ name, the list of each computer and the follows.
    follow starts, the owner gets `watchers` with `refresh: true`.
 5. **A screen starts the output.** A follower gets the output of a panel only
    after a `screen` of that panel. The server drops a screen and output of a
-   panel that no computer follows.
+   panel that no computer follows. A screen with `everyone: true` reaches each
+   follower of the panel, and one with `everyone: false` reaches only the
+   followers that wait for a screen. A `fresh: true` screen makes each of them
+   forget its screen, its history and its modes.
 6. **The server names the sender.** The server writes the `owner` of a `screen`
    and of `output` from the link that sent the request. It writes the `from`
    and the `label` of `typed` the same way. A frame cannot name another sender.
@@ -168,7 +216,9 @@ name, the list of each computer and the follows.
 8. **A follower asks for a new screen.** `refresh`, and a `follow` that the
    computer already has, send `watchers` with `refresh: true` to the owner. The
    server relays one such request in a second for one follower and one panel,
-   and drops the others. The follower gets output until the new screen.
+   and drops the others. The request also drops the screen and the output of
+   that panel that wait for the follower, so the follower gets no output until
+   the new screen.
 9. **The end of a follow tells the owner.** `unfollow` drops the screen and the
    output of that panel that wait for the follower. The owner gets `watchers`
    with the followers that stay.
@@ -178,6 +228,17 @@ name, the list of each computer and the follows.
     `computers`.
 11. **A removal ends the live link.** `device_remove` ends each open link of
     that computer with `removed`. The live link is one of them.
+12. **The replay goes to the followers that took the screen.** An `output`
+    frame with `replay: true` draws the screen that came before it. The server
+    relays such a frame only to a follower whose newest screen is still
+    arriving, and live output clears that mark. A follower that missed the
+    screen therefore skips the bytes that would draw it.
+13. **A follower gives the program a grid.** `resize` reaches the owner of a
+    panel that this computer follows while the list of the owner says
+    `typing: true` for that panel. The server cuts the grid at its bounds and
+    passes two requests a second for one follower and one panel. It drops a
+    request that comes sooner, and one of a computer that does not follow the
+    panel. [The grid of the program](#the-grid-of-the-program) gives the rule.
 
 ### The ceiling of one link
 
@@ -232,10 +293,17 @@ settings of the sync link. `LiveHandle` is what the application calls
 - **The state is one of four values.** They are `Connecting`, `Open`,
   `Unsupported` and `Down` with the reason of the last attempt. A change of the
   state is an event.
+- **The handle says that it is alive, and it ends a silent link.** It sends
+  `heartbeat` while it sent no frame for 10 seconds, and it ends the link when
+  the server sent no frame for 30 seconds. [The sign of life](#the-sign-of-life)
+  gives the bounds.
 - **A lost link starts again on the delays of the sync link.** They are 3, 6,
   12 and 24 seconds, and then 30 seconds. An attempt that lasted 10 seconds
-  starts the delays again. After `removed` and `not_logged_in` the handle makes
-  no more attempt.
+  starts the delays again. A link that the server ended with `live_replaced`
+  waits 60 seconds, and 5 minutes for each attempt after that, so the two
+  programs of one device name stop to end the link of each other. A server that
+  answered an older version gets one attempt each 5 minutes. After `removed`
+  and `not_logged_in` the handle makes no more attempt.
 
 ## The owner side
 
@@ -271,10 +339,12 @@ for a terminal of this process and for a terminal of a holder.
 
 ### The screen and its order rule
 
-`Terminal::share_screen` gives one screen: the columns, the rows and the bytes
-that draw the grid and set its modes
-(`crates/horizon-core/src/terminal/share.rs`). No byte is lost or sent two
-times between a screen and the output after it:
+`Terminal::share_screen(fresh)` gives one screen: the columns, the rows and the
+bytes that draw the grid and set its modes
+(`crates/horizon-core/src/terminal/share.rs`). A fresh screen starts with a
+full reset and the history of the terminal; a screen that is not fresh keeps
+the history of its follower and draws the rows in place. No byte is lost or
+sent two times between a screen and the output after it:
 
 1. The reader of the terminal holds the lease of the grid for one full pass. It
    gives every byte of that pass to the parser before it gives the lease back.
@@ -290,21 +360,40 @@ screen and the way to the program of one terminal. It goes to another thread,
 and `ShareSource::screen` gives the same screen there. The share pump of the
 application is that one thread. A follower has no source.
 
-The bytes of a screen have this order:
+The bytes of a fresh screen have this order:
 
 1. `ESC c`, a full reset. A terminal that showed an older screen then draws the
    same as a new terminal.
-2. `CSI ? 1049 h`, when the program is on the alternate screen.
-3. The rows of the screen of the program, with the colours of each cell and the
+2. The alternate screen: `CSI ? 1049 h`, when the program is on it.
+3. The lines above the viewport, oldest first, each one followed by `CR LF`.
+   They scroll into the history of the follower, whose viewport then ends under
+   them. A program on the alternate screen has no such lines.
+4. The rows of the screen of the program, with the colours of each cell and the
    attributes bold, dim, italic, underline, reverse and strikeout. The screen
    draws a tab cell and hidden text as blanks, so each cell keeps its column.
-4. `CSI ? 6 h`, when the origin mode is on.
-5. The position of the cursor. If the cursor waits behind the last column, the
+   `CR LF` takes the viewport to the bottom row when the last rows paint
+   nothing.
+5. `CSI ? 6 h`, when the origin mode is on.
+6. The position of the cursor. If the cursor waits behind the last column, the
    screen draws the cell under it one more time. The cursor of the follower then
    waits at the same place.
-6. The pen: the colours and the attributes of the next output.
-7. The modes of the table below, the flags of the keyboard protocol, and the
+7. The pen: the colours and the attributes of the next output.
+8. The modes of the table below, the flags of the keyboard protocol, and the
    shape of the cursor.
+
+A screen that is not fresh draws only the alternate screen, the rows and the
+modes:
+
+1. `CSI ? 1049 h`, on the alternate screen, or `CSI ? 1049 l` on the primary
+   screen. The rows belong on the screen that this sequence names.
+2. The pen goes to its default, and the modes that change how a row is drawn
+   go off: `CSI 4 l`, `CSI ? 6 l`, `CSI ? 7 l` and `CSI 20 l`. Then each row
+   goes to its own place (`CSI <row> ; 1 H`, `CSI 2 K`, the cells). The history
+   and the screen of the follower stay as they are, so a reset and a scroll are
+   not part of such a screen.
+3. The mode of the origin, the position of the cursor, the pen, every mode of
+   the table below in its set or unset form, the flags of the keyboard
+   protocol, and the shape of the cursor.
 
 The rows are the rows of the program. They do not move when the person of the
 owner reads the history of the terminal.
@@ -312,9 +401,10 @@ owner reads the history of the terminal.
 ### The input modes in a screen
 
 The terminal of the follower makes the bytes of each key, each paste and each
-mouse report. A screen therefore sets the modes that the program asked for. It
-writes one sequence for each mode that differs from the state of a new
-terminal.
+mouse report. A screen therefore sets the modes that the program asked for. A
+fresh screen writes one sequence for each mode that differs from the state of a
+new terminal, and a screen that is not fresh writes one sequence for each mode,
+in its set or unset form, because it replaces the modes of the follower.
 
 | Mode | Sequence |
 |---|---|
@@ -330,8 +420,9 @@ terminal.
 | Line wrap is off | `CSI ? 7 l` |
 | Insert mode | `CSI 4 h` |
 | Line feed and new line mode | `CSI 20 h` |
-| The flags of the keyboard protocol: 1, 2, 4, 8 and 16 | `CSI > <sum> u` |
+| The flags of the keyboard protocol: 1, 2, 4, 8 and 16 | `CSI > <sum> u` on a fresh screen, and `CSI = <sum> u` on one that is not |
 | The shape of the cursor, when it is not the default | `CSI <number> SP q` |
+| The shape of the cursor is the default, on a screen that is not fresh | `CSI 0 SP q` |
 
 The modes that change how output is drawn come after the rows: line wrap,
 insert, line feed and new line, and origin. The vi mode of the owner is not a
@@ -366,13 +457,15 @@ asks for the size of its grid, for 20 to 240 columns and 4 to 80 rows.
 
 | Call | What it does |
 |---|---|
-| `screen(cols, rows)` | A new screen starts with this grid. |
+| `screen(fresh, cols, rows)` | A new screen starts with this grid. A fresh screen makes the terminal forget its screen, its history and its modes. |
 | `output(bytes)` | Output of the stream, which the terminal shows. |
 | `ended(reason)` | The stream ended. The terminal keeps its last screen, and the panel shows one line with the reason under the grid. |
 | `take_typed()` | The bytes that the person typed since the last call: keys, pastes and mouse reports. |
 | `take_lost()` | Whether the feed dropped output since the newest screen and the last call. |
 | `closed()` | Whether the person closed the panel. |
 | `on_alternate_screen()` | Whether the terminal shows the alternate screen now. |
+| `grid()` | The grid of the newest screen of the stream. |
+| `fit()` and `set_fit(cols, rows)` | The grid that the body of the panel fits, which its widget writes and the next ask for a grid reads. |
 
 - **No call waits.** The link does not block. Output that the link does not
   take waits in the feed. It goes to the link at the next call of `output`,
@@ -394,14 +487,18 @@ No byte of a new screen is parsed on the old grid:
 1. `screen` drops the output that waits in the feed.
 2. It changes the grid in the same call, on the thread of the caller, under the
    lock of the grid.
-3. Only then it gives the link the start of the new screen: `CAN`,
-   `CSI ? 2026 l` and `ESC c`.
+3. Only then it gives the link the start of the new screen. A fresh screen
+   starts with `CAN`, `CSI ? 2026 l` and `ESC c`; a screen that is not fresh
+   starts with `CAN` and `CSI ? 2026 l` alone.
 4. Output of the new screen can go to the link only after `screen` returned.
    Output of the old screen that the link still holds is parsed before the
    reset.
 
 `CAN` ends an open sequence, and `CSI ? 2026 l` ends an open synchronized
-update. The reset clears the screen, the history and the modes of the follower.
+update. `ESC c` is the full reset that clears the screen, the history and the
+modes of the follower, so only a fresh screen has it. A screen that is not
+fresh draws each row at its place and leaves the history of the follower as it
+is.
 
 ### What a follower never does
 
@@ -411,7 +508,7 @@ update. The reset clears the screen, the history and the modes of the follower.
 | Answers no question of the program. Examples are the cursor position, the device attributes, a colour, the size of the text area and a clipboard read. The terminal of the owner answers. | `Terminal::answer_query` in `terminal/events.rs` |
 | Sends no focus report. | `Terminal::set_focused` calls `write_protocol` |
 | Takes no copy request of the program into the clipboard of this computer. | `Terminal::handle_event` in `terminal/events.rs` |
-| Changes no grid. A resize returns at once, and the widget asks for none. Only a new screen changes the grid. | `terminal/resize.rs`, `crates/horizon-ui/src/terminal_widget/mod.rs` |
+| Changes no grid of its own terminal. A resize returns at once, and a new screen of the stream sets the grid. The follower asks the owner for the grid of its own body. | `terminal/resize.rs`, `FollowFeed::screen`, `FollowFeed::set_fit` |
 | Restarts no program, and reports no end of a program. | `Panel::restart_request`, `Panel::apply_restart`, `Board::begin_restart`, `panel/program_end.rs` |
 | Signals no process at a close, and the exit of Horizon waits for no program of it. | `Terminal::hanging_child`, `Terminal::begin_work_shutdown` |
 | Is in no saved session, so no start restores it. | `crates/horizon-core/src/runtime_state.rs` |
@@ -542,11 +639,10 @@ window does.
   (`HorizonApp::stop_shared_terminals`), and so does the start of a new sync
   link.
 - **It starts again in two cases.** The first case is a sync link that was
-  `away` in one frame and is not `away` in the next frame. The live link has no
-  keepalive, so the return of the sync link is the sign that the live link can
-  be dead. The second case is a new value of `computer_name` in the settings
-  store: the label of the link is the saved name, so a key in the name field of
-  the Settings window sends nothing and starts no link.
+  `away` in one frame and is not `away` in the next frame. The second case is a
+  new value of `computer_name` in the settings store: the label of the link is
+  the saved name, so a key in the name field of the Settings window sends
+  nothing and starts no link.
 - **The old link and its pump stop on a thread of their own.** The stop of a
   `LiveSupervisor` and the stop of a pump wait for a thread, so no frame does
   them. A pump stops in one pass at most.
@@ -612,10 +708,71 @@ the check of the typed bytes.
   3. The identifier of the event is in the list that the link has.
   4. A terminal panel of this computer has that identifier.
 
-  It does not read the sender of the event. The pump reads the two switches
-  from its copy of what the window wants. It takes the events of a pass before
-  that copy, so a switch that is off in the copy refuses each event of the
-  pass.
+  It does not read the sender of the event to decide. The pump reads the two
+  switches from its copy of what the window wants. It takes the events of a
+  pass before that copy, so a switch that is off in the copy refuses each event
+  of the pass. The name of the sender goes to the chip; see
+  [the chip of a watched panel](#what-the-person-sees).
+
+#### The screens of an owner
+
+The pump decides why a screen goes out, which decides what the screen holds
+and who takes it (`Why` in `owner.rs`).
+
+| Why | `fresh` | `everyone` | What it holds | Who takes it |
+|---|---|---|---|---|
+| A new follower came | `true` | `false` | The lines above the viewport, then the rows | The followers that wait for a screen |
+| A follower asked for a screen | `false` | `false` | The rows, in place | The followers that wait for a screen |
+| The second screen of a join, a take that overflowed, a refused screen or output | `false` | `true` | The rows, in place | Each follower of the panel |
+
+A fresh screen carries at most 1000 lines above the viewport, oldest first,
+and at most 256 KiB of them (`HISTORY_LINES`, `HISTORY_BYTES`). A program on
+the alternate screen has no history above its viewport, so its fresh screen
+carries none. A screen that is not fresh keeps the history of each follower and
+draws each row at its place. A new grid of the owner stops the outlet, so the
+next take overflows and asks for the third kind of screen.
+
+The pump keeps the bytes of one screen while the link takes it in parts
+(`Owed`). It gives the link the grid first, then the bytes in parts of at most
+48 KiB, and no output of the panel goes out between them. A part that the link
+refuses waits for the next pass with half of the part. A screen above 8 MiB
+(`KEPT_SCREEN_BYTES`) is not sent at all, so the followers keep the screen that
+they have.
+
+#### The grid of the program
+
+The grid of the program of a panel follows the computer that typed in it last
+(`follower.rs`, `owner.rs`, `ShareSource::hold_grid`).
+
+1. **A follower asks.** On a pass where the feed gives typed bytes, or while
+   the follower holds a grid and the body of its panel fits another one, it
+   sends `resize` with the grid that its widget wrote into the feed
+   (`FollowFeed::set_fit`, `bounded_screen_grid`). It asks for one grid at most
+   each 500 ms (`ASK_GRID`). It holds a grid while the newest screen brought
+   that grid; a screen with another grid ends the hold, so the next key press
+   asks again.
+2. **The server checks the follow.** `resize` reaches the owner only when the
+   computer follows that panel now and the list of the owner says
+   `typing: true` for it. The server passes two requests a second for one
+   follower and one panel, and it drops a third.
+3. **The owner checks the panel.** `Run::resized` holds the grid only when four
+   conditions are true: `share_terminals` is `true`, `remote_typing` is `true`,
+   the list that the link has names the panel, and a terminal panel of this
+   computer has that identifier and is no follow panel.
+4. **The program takes the grid.** `ShareSource::hold_grid` resizes the grid of
+   the terminal, sends the size to the program, and stops the outlet. The next
+   take then overflows, so each follower gets a screen with the new grid, with
+   `fresh: false` and `everyone: true`.
+5. **The panel of the owner holds the grid.** `Terminal::resize_with_policy`
+   returns while the grid is held, so the body of the panel pushes no size. The
+   widget draws `Terminal::shown_grid` from the top left of the body and clips
+   what does not fit (`Terminal::shows_foreign_grid`). The pointer and the
+   scrollbar read that grid.
+6. **The person of the owner takes the grid back.** A key or a mouse report in
+   the panel calls `Terminal::write_input`, which calls `release_grid`: the grid
+   of the body goes to the terminal and to the program again, the pump stops
+   the hold on its next pass, and the chip stops naming the follower. Bytes
+   that another computer sends do not take the grid back.
 
 ### The follower side
 
@@ -651,9 +808,16 @@ and the follow panels of this window.
   names its panel.
 - **A closed follow panel ends its follow.** The pump calls
   `LiveHandle::unfollow`.
-- **`typing` is the value at the open of the panel.** A panel that the person
-  opened while the owner had typing off drops the bytes of the person, also
-  after the owner turns typing on.
+- **`typing` follows the list.** A panel that is open takes the `typing` value
+  of the newest list in both directions (`FollowFeed::set_typing`). It drops
+  the bytes of the person while the owner turns typing off, and it keeps them
+  again when the owner turns typing on. The chip of the panel says which of the
+  two it is.
+- **A follower gives the grid of its body to the program of the panel that the
+  person types at.** A key or a pointer button of the person asks for that
+  grid, and so does the body of the panel that changed while the follower kept
+  its grid. [The grid of the program](#the-grid-of-the-program) gives the rule
+  and the checks.
 
 ### What the person sees
 
@@ -669,10 +833,12 @@ and the follow panels of this window.
   the whole reason as hover text. An older server gives the state `Unsupported`,
   which shows no line and no section.
 - **The chip of a watched panel.** Its title bar says `seen by <name>` for one
-  follower, and `seen by <n> computers` for more than one.
+  follower, and `seen by <n> computers` for more than one. It says
+  `typed by <name>` for 2 seconds after the bytes of that computer arrived, and
+  `sized by <name> · <the rest of the chip>` while the program of the panel
+  holds the grid of that computer.
 - **The chip of a follow panel.** Its title bar says `on <name>`. It says
-  `on <name> · view only` while the list says that typing is off, and when the
-  panel was opened without typing.
+  `on <name> · view only` while the list says that typing is off.
 - **A panel shows one chip.** The chip of a shared terminal takes the place of
   two other chips. They are the chip of the agent that opened the panel and the
   chip of its machine (`crates/horizon-ui/src/app/panels.rs`).
@@ -683,14 +849,17 @@ and the follow panels of this window.
 
 ## The limits that are known
 
-- **The live link has no keepalive.** No request of a live link has a bound. A
-  computer can go away and not close its transport. It then stays in the list
-  until that transport fails or its device opens a new live link. On `ssh`, the
-  keepalive of `ssh` ends a dead transport. On TCP, no timer finds a dead path:
-  the link ends when a read or a write fails.
-- **One device name in two programs.** Two Horizon programs with one device name
-  each end the live link of the other at each attempt, because the newer link
-  wins. The state of each one goes between `Open` and `Down`.
+- **A link that goes quiet ends.** Each side sends a `heartbeat` each 10
+  seconds and ends a link that read nothing for 30 seconds. Thus a computer
+  that loses its network leaves the list of the others in about half a minute.
+  A transport can stay open under a program that went away; the heartbeat ends
+  that link. [The sign of life](#the-sign-of-life) gives the bounds.
+- **One device name in two programs.** Two Horizon programs with one device
+  name each end the live link of the other, because the newer link wins. The
+  program that loses says `another Horizon of this computer holds the live
+  link` and asks again after 60 seconds, and after 5 minutes for each attempt
+  after that. The program that wins keeps its link, so the lists of the other
+  computers stop to flap.
 - **The alternate screen.** A screen holds the grid that the program shows now.
   When the program is on the alternate screen, a screen does not hold the
   screen under it. After the program leaves the alternate screen, the follower
@@ -703,18 +872,23 @@ and the follow panels of this window.
   start, and it can draw wrong text until the next screen. No code finds this
   condition. The second screen of a new follower repairs it for a join, and
   the other screens have no second screen.
-- **The size of the panel of a follower.** The grid of a follower is the grid of
-  the owner, and the person cannot change it. A grid above 240 columns or 80
-  rows opens at that size, and the panel clips what does not fit in its body.
-- **A grid above the bounds.** The server sets the grid of a `screen` to at
-  most 1000 columns and rows, and the feed sets at most 500 rows. The bytes of
-  a screen draw the grid of the owner. A follower of a larger grid draws them
-  on a smaller grid.
-- **The history starts at the newest screen.** Each screen starts with a reset
-  that clears the history of the follower. The server relays a screen to each
-  follower of the panel that is not behind. A new follower, a refresh, a resize
-  of the owner and too much output therefore clear the history of those
-  followers.
+- **The grid of a panel follows the computer that types.** While another
+  computer types in a panel of this computer, the program of that panel has the
+  grid of the body of the other window. The window of the owner draws that grid
+  from the top left of its body and clips what does not fit, until its own
+  person types there. [The grid of the program](#the-grid-of-the-program) gives
+  the rule.
+- **A grid above the bounds.** One pair of bounds holds the grid of a `screen`,
+  of a panel of a list and of the terminal of a follower:
+  `horizon_core::bounded_screen_grid` gives 2 to 1000 columns and 1 to 500
+  rows. The bytes of a screen draw the grid of the owner, so a follower of a
+  larger grid draws them on a smaller grid.
+- **A fresh screen replaces the history, and the other screens keep it.** A
+  fresh screen starts with a reset and the lines above the viewport of the
+  owner, so a follower that joins reads what the program wrote before it came.
+  A screen that is not fresh draws each row at its place and leaves the
+  history of each follower as it is, and each follower of the panel takes such
+  a screen.
 - **The stack of the keyboard flags.** A screen sets the flags that are active.
   It does not hold the flags under them. After the program removes the active
   flags, the follower has no flags until the next screen. The owner has the
@@ -725,21 +899,18 @@ and the follow panels of this window.
   - The saved cursor.
   - A changed palette and the title.
   - Hyperlinks, and the style and the colour of an underline.
-- **A screen has no fixed bound.** Its bytes increase with the cells of the
-  grid. One call of `LiveHandle::output` refuses bytes that do not fit under
-  the ceiling of 1 MiB. The pump then makes the screen again each 250 ms, and
-  no bound ends that. A screen that does not fit in what is free of the 1 MiB
-  of a follower at the server puts that follower behind again.
+- **A screen above 8 MiB is not sent.** The pump keeps the bytes of one screen
+  while the link takes it in parts of 48 KiB, and a refused part halves. A
+  screen above `KEPT_SCREEN_BYTES` is not sent at all, so the followers keep
+  the screen that they have. A screen that does not fit the free room of the
+  1 MiB of a follower at the server puts that follower behind until its link
+  is under 256 KiB again.
 - **One switch for all terminals.** `share_terminals` shares each terminal
   panel of the computer or none. No setting shares one panel or keeps one panel
   out, and the list also holds the agent panels and the `ssh` panels.
-- **Typing that was off at the open.** A follow panel keeps the `typing` value
-  of its open. The person closes the panel and opens the row again to type
-  after the owner turned typing on.
-- **The owner does not see who types.** `Run::typed` does not read the sender
-  of a `typed` event, and the window shows no mark while another computer
-  types. The chip of the panel names the followers, not the computer that
-  types.
+- **The owner sees who types, for 2 seconds.** The chip of a watched panel
+  says `typed by <name>` for 2 seconds after the bytes of that computer
+  arrived, and then `seen by` again. The panel itself shows no other mark.
 - **The name field starts the link again at each change.** A change of the
   field **Name of this computer** applies before **Save**. Each new value
   starts the live link again, so the followers of this computer lose their
@@ -780,7 +951,16 @@ and the follow panels of this window.
 | Output that waits in the outlet | 1 MiB | `SHARE_BUFFER_BYTES` |
 | Output that waits in the feed | 8 MiB | `MAX_WAITING_OUTPUT` |
 | Typed bytes that wait in the feed | 1 MiB | `MAX_TYPED` |
-| The grid of a follower | 1000 columns, 500 rows | `MAX_FOLLOW_COLS`, `MAX_FOLLOW_ROWS` |
+| The grid of a screen and of a panel | 2 to 1000 columns, 1 to 500 rows | `bounded_screen_grid` |
+| The lines above the viewport of a fresh screen | 1000 lines, and 256 KiB | `HISTORY_LINES`, `HISTORY_BYTES` |
+| A screen that the pump keeps | 8 MiB | `KEPT_SCREEN_BYTES` |
+| A part of a screen | 48 KiB | `MAX_LIVE_OUTPUT_BYTES` |
+| The tick of the sign of life | 1 second | `Limits::tick` |
+| A heartbeat of a live link | 10 seconds | `Limits::heartbeat` |
+| The silence that ends a live link | 30 seconds | `Limits::silence` |
+| The next attempt of a program that lost its link to another | 60 seconds, then 5 minutes | `REPLACED_RETRY`, `REPLACED_RETRY_LONG` |
+| One grid from a follower | 2 in a second | `RESIZE_EVERY` |
+| The chip of a computer that typed | 2 seconds | `TYPED_CHIP` |
 | One text of a follower | 200 characters | `MAX_TEXT` |
 | The name of a computer in the settings | 60 characters | `MAX_COMPUTER_NAME_CHARS` |
 | The shortest time between two builds of the list | 250 ms | `LIST_EVERY` |
@@ -788,4 +968,5 @@ and the follow panels of this window.
 | The passes of the pump while it has a stream | Each 25 ms | `PERIOD` |
 | The second screen of a new follower, and the next screen after a refused frame | 250 ms | `NEXT_SCREEN` |
 | The next request of a follower for a screen | 1.2 seconds | `ASK_AGAIN` |
+| The next grid that a follower gives to a program | 500 ms | `ASK_GRID` |
 | One text of another computer in the window | 80 characters | `SHOWN_CHARS` |
