@@ -285,3 +285,54 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     server.stop();
     store.close();
 }
+
+/// The live link starts again when the sync link went away and came back: the
+/// server goes away, both sync links read it, and the live links of the windows
+/// follow their lists again when it returns.
+#[test]
+fn the_live_link_starts_again_when_the_sync_link_comes_back() {
+    let home = tempfile::tempdir().expect("the home of the server");
+    let socket = home.path().join("server.sock");
+    let store = Store::open(&home.path().join("server.sqlite")).expect("the store");
+    let server = run_server_on_unix_socket(&socket, store.clone(), &ServerInfo::default()).expect("the socket");
+
+    let program = stand_in(home.path(), &socket);
+    let (_temp_a, ctx_a, mut a) = computer(&program, "desk-a", "Desk A");
+    let (_temp_b, ctx_b, mut b) = computer(&program, "desk-b", "Desk B");
+    let panel = owner(&mut a);
+    let id = a.board.panel(panel).expect("the owner panel").local_id.clone();
+    frames_until(
+        "B lists the panel of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| lists(apps[1], &id),
+    );
+
+    // The server goes away: no live link reads a frame from it any more.
+    server.stop();
+    frames_until(
+        "both live links are down",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| apps.iter().all(|app| app.shared_terminals.found.down.is_some()),
+    );
+
+    // It comes back on the same socket. The sync link of each window comes back
+    // by itself, and the live link of each one starts again with it.
+    let server = run_server_on_unix_socket(&socket, store.clone(), &ServerInfo::default()).expect("the socket again");
+    frames_until(
+        "B lists the panel of A again",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| apps.iter().all(|app| app.shared_terminals.found.down.is_none()) && lists(apps[1], &id),
+    );
+
+    drop((a, b));
+    server.stop();
+    store.close();
+}
+
+/// Whether the list of `app` names the panel `id` of the computer `desk-a`.
+fn lists(app: &HorizonApp, id: &str) -> bool {
+    let computers = &app.shared_terminals.found.computers;
+    computers
+        .iter()
+        .any(|computer| computer.device == "desk-a" && computer.panels.iter().any(|listed| listed.id == id))
+}
