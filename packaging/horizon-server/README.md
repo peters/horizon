@@ -588,8 +588,13 @@ computer holds a copy. The key of a machine is one value under
 `credential/<reference>`.
 
 The server holds no ssh login key of the person, no provider CLI login (az,
-gcloud, hcloud, aws), no browser profile, no session cookie, no agent token, no
-transcript and no setting of the person. It stores no terminal content either:
+gcloud, hcloud, aws), no browser profile, no session cookie, no agent token and
+no transcript. Of the settings of the person it holds the sections that all the
+computers of the server share, one value for each, the appearance and its theme
+among them: a change of one of those sections on one computer reaches the other
+computers. The size and the position of a window, the configuration version, the
+address of the server and the choice to watch the machine list stay on the
+computer that holds them. The server stores no terminal content either:
 when a computer shares its terminals, the server passes what they show and what
 is typed in them on to your other computers, in memory only, and writes none of
 it to a file. `secret.key` itself never leaves the server home.
