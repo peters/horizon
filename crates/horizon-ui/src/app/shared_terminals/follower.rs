@@ -11,8 +11,10 @@ use super::list::computer_name;
 use super::pump::{FollowPanel, Run};
 use super::shown;
 
-/// The first bytes of a screen that its owner took on the alternate screen.
-const ALT_SCREEN_START: &[u8] = b"\x1bc\x1b[?1049h";
+/// The sequence with which the bytes of a screen enter the alternate screen on
+/// which its owner took it: after the reset of a fresh screen, or at the first
+/// byte of a screen that is not fresh.
+const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 /// The wait for a screen that this computer asked for before it asks again.
 /// The server passes one request a second and drops the rest.
 const ASK_AGAIN: Duration = Duration::from_millis(1200);
@@ -161,7 +163,10 @@ impl Run {
                 (follow.ended, follow.screen_start, follow.alt, follow.ask_at) = (false, true, Alt::No, None);
             }
             LiveEvent::Output { data, .. } => {
-                if std::mem::take(&mut follow.screen_start) && data.0.starts_with(ALT_SCREEN_START) {
+                let head = &data.0[..data.0.len().min(ALT_SCREEN_ENTER.len() + 2)];
+                if std::mem::take(&mut follow.screen_start)
+                    && head.windows(ALT_SCREEN_ENTER.len()).any(|window| window == ALT_SCREEN_ENTER)
+                {
                     follow.alt = Alt::Joined;
                 }
                 feed.output(&data.0);

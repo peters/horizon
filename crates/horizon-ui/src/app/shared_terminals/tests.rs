@@ -59,8 +59,14 @@ struct Relay {
     events: Vec<LiveEvent>,
     panels: Vec<LivePanel>,
     followed: Vec<String>,
-    /// How many screens the owner side sent, and how many the follower asked for.
+    /// The panels that the follower of this window waits for a screen of, and
+    /// the panels whose screen it is taking now: the relay of the server.
+    awaiting: Vec<String>,
+    replay: Vec<String>,
+    /// How many screens the owner side sent, how many the follower of this
+    /// window took, and how many it asked for.
     screens: usize,
+    taken: usize,
     refreshes: usize,
     /// Refuses screens and output, as a link whose queue is full does, and
     /// counts what it refused.
@@ -122,6 +128,20 @@ impl Relay {
 
     fn follows(&self, panel: &str) -> bool {
         self.followed.iter().any(|followed| followed == panel)
+    }
+
+    /// Whether the follower of this window takes a frame of `panel` now: a screen
+    /// that is for everyone or for a follower that waits, the replay of a screen
+    /// that it took, and the live output after that replay.
+    fn takes(&self, panel: &str, screen: bool, replay: bool, everyone: bool) -> bool {
+        if !self.follows(panel) {
+            return false;
+        }
+        if screen {
+            return everyone || self.awaiting.iter().any(|waiting| waiting == panel);
+        }
+        let of = |list: &Vec<String>| list.iter().any(|listed| listed == panel);
+        if replay { of(&self.replay) } else { !of(&self.awaiting) }
     }
 }
 
@@ -200,6 +220,7 @@ impl LiveLink for StandIn {
             if !relay.follows(panel) {
                 relay.followed.push(panel.to_owned());
             }
+            relay.awaiting.push(panel.to_owned());
             relay.watchers(panel, true);
         } else {
             relay.events.push(LiveEvent::Ended {
@@ -220,6 +241,7 @@ impl LiveLink for StandIn {
         let mut relay = self.relay();
         relay.refreshes += 1;
         if relay.follows(panel) {
+            relay.awaiting.push(panel.to_owned());
             relay.watchers(panel, true);
         }
     }
@@ -231,7 +253,10 @@ impl LiveLink for StandIn {
             return false;
         }
         relay.screens += 1;
-        if relay.follows(panel) {
+        if relay.takes(panel, true, false, everyone) {
+            relay.taken += 1;
+            relay.awaiting.retain(|waiting| waiting != panel);
+            relay.replay.push(panel.to_owned());
             relay.events.push(LiveEvent::Screen {
                 owner: THERE.to_owned(),
                 panel: panel.to_owned(),
@@ -250,7 +275,10 @@ impl LiveLink for StandIn {
             relay.refused += 1;
             return false;
         }
-        if relay.follows(panel) {
+        if relay.takes(panel, false, replay, false) {
+            if !replay {
+                relay.replay.retain(|drawing| drawing != panel);
+            }
             relay.events.push(LiveEvent::Output {
                 owner: THERE.to_owned(),
                 panel: panel.to_owned(),
@@ -558,6 +586,73 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     window.app.open_shared_terminal(THERE, &id, &window.ctx);
     assert_eq!(window.app.board.panels.len(), panels, "one panel follows one terminal");
     assert_eq!(window.app.board.focused, Some(follow));
+}
+
+/// The lines of `panel` above its viewport, oldest first.
+fn above_the_viewport(app: &HorizonApp, panel: PanelId) -> Vec<String> {
+    let terminal = app.board.panel(panel).and_then(Panel::terminal).expect("a terminal");
+    let (lines, _) = terminal.full_text_lines(2000);
+    let rows = usize::from(terminal.rows());
+    lines[..lines.len().saturating_sub(rows)].to_vec()
+}
+
+#[test]
+fn a_follower_reads_the_lines_that_the_program_wrote_before_it_came() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    // Three hundred lines are written before anybody follows the panel.
+    for line in 1..=300 {
+        window.write(owner, format!("line {line}\n").as_bytes());
+    }
+    window.shows(owner, "GOT:line 300");
+    let follow = window.follow(owner);
+    window.shows(follow, "GOT:line 300");
+
+    // The person scrolls back in a panel that follows: the lines of the program
+    // that ran before the join are there.
+    let above = above_the_viewport(&window.app, follow);
+    assert!(
+        above.iter().any(|line| line == "GOT:line 1"),
+        "the oldest line is above the viewport of the follower: {} lines",
+        above.len()
+    );
+
+    // A second computer follows the same panel. The owner makes the screen of
+    // that computer, and it reaches that computer alone: the follower of this
+    // window takes none of it, so its history and its screen do not change.
+    let sent = window.link.relay().screens;
+    let taken = window.link.relay().taken;
+    let lines = above_the_viewport(&window.app, follow);
+    let other = LiveWatcher {
+        device: "desk-other".to_owned(),
+        label: "Other".to_owned(),
+    };
+    let here = LiveWatcher {
+        device: HERE.to_owned(),
+        label: "Here".to_owned(),
+    };
+    let id = window.id(owner);
+    window.link.relay().events.push(LiveEvent::Watchers {
+        panel: id,
+        watchers: vec![here, other],
+        refresh: true,
+    });
+    window.frames(3);
+    assert_eq!(
+        window.link.relay().screens,
+        sent + 1,
+        "the owner makes a screen for the computer that joined"
+    );
+    assert_eq!(
+        window.link.relay().taken,
+        taken,
+        "a follower that relays takes no screen of another follower"
+    );
+    assert_eq!(
+        above_the_viewport(&window.app, follow),
+        lines,
+        "a follower that relays keeps its history when another follower joins"
+    );
 }
 
 #[test]

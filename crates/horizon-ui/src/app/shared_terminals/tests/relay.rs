@@ -13,7 +13,7 @@ use horizon_core::secret_store::SecretStore;
 use horizon_core::{PanelId, RuntimeState, StartupDecision};
 use horizon_sync::{ServerInfo, Store, Supervisor, SupervisorConfig, run_server_on_unix_socket};
 
-use super::{OFFSCREEN, PROGRAM, follower_of, frames_until, text};
+use super::{OFFSCREEN, PROGRAM, above_the_viewport, follower_of, frames_until, text};
 use crate::app::HorizonApp;
 use crate::app::server_sync::ServerSync;
 use crate::app::test_support::test_app_with_startup;
@@ -122,6 +122,62 @@ pub(super) fn owner(app: &mut HorizonApp) -> PanelId {
         ..horizon_core::PanelOptions::default()
     };
     app.board.create_panel(options, workspace).expect("the owner terminal")
+}
+
+#[test]
+fn a_follower_reads_the_lines_that_the_owner_wrote_before_it_came() {
+    let home = tempfile::tempdir().expect("the home of the server");
+    let socket = home.path().join("server.sock");
+    let store = Store::open(&home.path().join("server.sqlite")).expect("the store");
+    let server = run_server_on_unix_socket(&socket, store.clone(), &ServerInfo::default()).expect("the socket");
+
+    let program = stand_in(home.path(), &socket);
+    let (_temp_a, ctx_a, mut a) = computer(&program, "desk-a", "Desk A");
+    let (_temp_b, ctx_b, mut b) = computer(&program, "desk-b", "Desk B");
+    let panel = owner(&mut a);
+    let id = a.board.panel(panel).expect("the owner panel").local_id.clone();
+    frames_until(
+        "B lists the panel of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| {
+            let computers = &apps[1].shared_terminals.found.computers;
+            computers.iter().any(|computer| computer.device == "desk-a")
+        },
+    );
+
+    // A writes sixty lines before any computer follows the panel.
+    let lines: String = (1..=60).fold(String::new(), |text, line| format!("{text}line {line}\n"));
+    let written = a
+        .board
+        .panel_mut(panel)
+        .expect("the owner panel")
+        .write_input(lines.as_bytes());
+    assert!(written, "the panel takes the lines");
+    frames_until(
+        "A shows the last line",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| text(apps[0], panel).contains("GOT:line 60"),
+    );
+
+    // B follows it: the lines of the program that ran before the join are above
+    // the viewport of the follower, and its viewport shows the newest ones.
+    b.open_shared_terminal("desk-a", &id, &ctx_b);
+    let follow = follower_of(&b).expect("the follow panel of B");
+    frames_until(
+        "B shows the screen of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| text(apps[1], follow).contains("GOT:line 60"),
+    );
+    let above = above_the_viewport(&b, follow);
+    assert!(
+        above.iter().any(|line| line == "GOT:line 1"),
+        "the first line is above the viewport of the follower: {} lines",
+        above.len()
+    );
+
+    drop((a, b));
+    server.stop();
+    store.close();
 }
 
 #[test]
