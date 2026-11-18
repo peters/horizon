@@ -64,7 +64,7 @@ fn requests(current: u64, hard: Option<u64>) -> impl Iterator<Item = u64> {
 mod tests {
     use std::process::Command;
 
-    use rustix::process::{Resource, getrlimit};
+    use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 
     use super::{CEILING, OpenFileLimit, raise_limit, requests};
 
@@ -136,6 +136,44 @@ mod tests {
         }
         assert_eq!(raise_limit(), OpenFileLimit::Unchanged, "a second call changes nothing");
         assert_eq!(limits().0, Some(after), "and the limit stays as it is");
+    }
+
+    /// A soft limit as macOS gives it to a process rises at once, and the process
+    /// keeps at least that value, whatever the answer of the kernel is.
+    #[test]
+    fn a_low_soft_limit_rises_to_the_ceiling() {
+        let limits = getrlimit(Resource::Nofile);
+        let Some(from) = limits.current else {
+            return;
+        };
+        // The runner of the tests already raised the limit, so the value of a
+        // program that a person starts is put back for this one call.
+        let low = 1024.min(from);
+        if low < from {
+            let lowered = Rlimit {
+                current: Some(low),
+                maximum: limits.maximum,
+            };
+            if setrlimit(Resource::Nofile, lowered).is_err() {
+                return;
+            }
+        }
+        let raised = raise_limit();
+        if getrlimit(Resource::Nofile).current == Some(low) && low < from {
+            let mut restore = getrlimit(Resource::Nofile);
+            restore.current = Some(from);
+            let _ = setrlimit(Resource::Nofile, restore);
+        }
+        if low == from {
+            return;
+        }
+        match raised {
+            OpenFileLimit::Raised { from: reported, to } => {
+                assert_eq!(reported, low, "the call reports the limit that it found");
+                assert!(to > low, "the low limit rises: {low} -> {to}");
+            }
+            other => panic!("a low soft limit must rise: {other:?}"),
+        }
     }
 
     /// The program of a panel starts with the limit of this process, which is
