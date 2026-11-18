@@ -17,8 +17,7 @@ use std::{
 use super::outbox::{Outbox, Push, Tag};
 use super::protocol::{
     DEVICE_CHARS, ID_CHARS, LABEL_CHARS, LiveBytes, LiveComputer, LiveEndReason, LiveEvent, LivePanel, LiveRequest,
-    LiveWatcher, MAX_GRID, MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS, clean,
-    clean_panels,
+    LiveWatcher, MAX_LIVE_FOLLOWS, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_TYPED_BYTES, MAX_LIVE_WATCHERS, clean, clean_panels,
 };
 use crate::protocol::LinkErrorCode;
 use crate::server::LinkTicket;
@@ -327,7 +326,7 @@ impl State {
                 fresh,
                 everyone,
             } => {
-                let (cols, rows) = (cols.clamp(1, MAX_GRID), rows.clamp(1, MAX_GRID));
+                let (cols, rows) = horizon_core::bounded_screen_grid(cols, rows);
                 self.stream(&LiveEvent::Screen {
                     owner,
                     panel,

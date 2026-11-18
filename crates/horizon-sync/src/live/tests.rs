@@ -259,7 +259,8 @@ fn a_text_and_a_list_are_cut_at_their_bounds() {
     let first = &cleaned[0];
     let lengths = [&first.id, &first.title, &first.kind, &first.state, &first.workspace].map(String::len);
     assert_eq!(lengths, [ID_CHARS, 120, 24, 24, 80]);
-    assert_eq!((first.cols, first.rows), (1, 1000));
+    // One pair of bounds for the server and a follower: `bounded_screen_grid`.
+    assert_eq!((first.cols, first.rows), (2, 500));
     let ids: Vec<&str> = cleaned.iter().skip(1).map(|panel| panel.id.as_str()).collect();
     assert_eq!(
         ids,

@@ -5,7 +5,8 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
 use horizon_pty_tap::frames::{Frame, Frames};
 
-use super::{FollowFeed, FollowSpec, MAX_FOLLOW_COLS, MAX_FOLLOW_ROWS, MAX_TYPED, MAX_WAITING_OUTPUT};
+use super::super::share::{MAX_SCREEN_COLS, MAX_SCREEN_ROWS};
+use super::{FollowFeed, FollowSpec, MAX_TYPED, MAX_WAITING_OUTPUT};
 use crate::panel::PanelKind;
 use crate::terminal::Terminal;
 
@@ -324,7 +325,7 @@ fn the_grid_and_the_texts_of_a_stream_are_bounded() {
         ..spec(u16::MAX, u16::MAX)
     })
     .expect("a follower starts");
-    let bound = (usize::from(MAX_FOLLOW_COLS), usize::from(MAX_FOLLOW_ROWS));
+    let bound = (usize::from(MAX_SCREEN_COLS), usize::from(MAX_SCREEN_ROWS));
     assert_eq!(grid_of(&terminal), bound);
     let title = &terminal.follow_spec().expect("a follower").title;
     assert_eq!(title.chars().count(), 200);
@@ -335,7 +336,7 @@ fn the_grid_and_the_texts_of_a_stream_are_bounded() {
     feed.screen(true, u16::MAX, u16::MAX);
     assert_eq!(grid_of(&terminal), bound);
     terminal.process_events();
-    assert_eq!((terminal.cols(), terminal.rows()), (MAX_FOLLOW_COLS, MAX_FOLLOW_ROWS));
+    assert_eq!((terminal.cols(), terminal.rows()), (MAX_SCREEN_COLS, MAX_SCREEN_ROWS));
 }
 
 #[test]

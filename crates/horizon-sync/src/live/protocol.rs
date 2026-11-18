@@ -18,12 +18,12 @@ pub const MAX_LIVE_PANELS: usize = 64;
 pub const MAX_LIVE_FOLLOWS: usize = 8;
 /// The most computers that follow one panel.
 pub const MAX_LIVE_WATCHERS: usize = 4;
-/// The most characters of the label of a computer, of a device name and of the
-/// identifier of a panel, and the largest side of the grid of a panel.
+/// The most characters of the label of a computer, of a device name and of an
+/// identifier of a panel. The grid of a screen and of a panel has one pair of
+/// bounds for the server and a follower, in `horizon_core::bounded_screen_grid`.
 pub(crate) const LABEL_CHARS: usize = 60;
 pub(crate) const DEVICE_CHARS: usize = 40;
 pub(crate) const ID_CHARS: usize = 64;
-pub(crate) const MAX_GRID: u16 = 1000;
 
 /// Terminal bytes, which travel as base64 in the JSON of a frame.
 #[derive(Clone, PartialEq, Eq)]
@@ -60,7 +60,8 @@ pub struct LivePanel {
     pub title: String,
     /// What runs in the panel, such as `claude` or `shell`.
     pub kind: String,
-    /// What the panel does now: `working`, `blocked`, `done`, `idle` or empty.
+    /// What the panel does now: `working`, `background`, `done`, `blocked` or
+    /// empty, as the list of the owner names it.
     pub state: String,
     pub workspace: String,
     pub cols: u16,
@@ -259,14 +260,15 @@ pub(crate) fn clean_panels(panels: Vec<LivePanel>) -> Vec<LivePanel> {
     for panel in panels.into_iter().take(MAX_LIVE_PANELS) {
         let id = clean(&panel.id, ID_CHARS);
         if !id.is_empty() && cleaned.iter().all(|kept| kept.id != id) {
+            let (cols, rows) = horizon_core::bounded_screen_grid(panel.cols, panel.rows);
             cleaned.push(LivePanel {
                 id,
                 title: clean(&panel.title, 120),
                 kind: clean(&panel.kind, 24),
                 state: clean(&panel.state, 24),
                 workspace: clean(&panel.workspace, 80),
-                cols: panel.cols.clamp(1, MAX_GRID),
-                rows: panel.rows.clamp(1, MAX_GRID),
+                cols,
+                rows,
                 typing: panel.typing,
             });
         }

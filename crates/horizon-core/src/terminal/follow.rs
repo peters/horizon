@@ -22,15 +22,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use horizon_pty_tap::frames::{self, Frame};
 
 use super::lifecycle::{PtyOutput, window_size_of};
+use super::share::bounded_screen_grid;
 use super::wake::OutputWakeState;
 use super::{
     Error, FairMutex, Result, Term, TermMode, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
 };
 use crate::panel::{DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH, PANEL_SCROLLBACK_LIMIT, PanelKind};
 
-/// The largest grid that a stream can ask for.
-pub const MAX_FOLLOW_COLS: u16 = 1000;
-pub const MAX_FOLLOW_ROWS: u16 = 500;
 /// The output that waits for the link. Output above it drops what waits.
 pub const MAX_WAITING_OUTPUT: usize = 8 * 1024 * 1024;
 /// The bytes of the person that wait for [`FollowFeed::take_typed`]. Bytes above
@@ -170,7 +168,7 @@ impl FollowFeed {
         let Some(term) = self.shared.term.upgrade() else {
             return;
         };
-        let (cols, rows) = bounded_grid(cols, rows);
+        let (cols, rows) = bounded_screen_grid(cols, rows);
         {
             let mut state = self.shared.state();
             state.drop_waiting();
@@ -278,7 +276,7 @@ impl Terminal {
     ///
     /// Returns why the link or the event loop of the terminal cannot start.
     pub fn spawn_follow(mut spec: FollowSpec) -> Result<(Self, FollowFeed)> {
-        (spec.cols, spec.rows) = bounded_grid(spec.cols, spec.rows);
+        (spec.cols, spec.rows) = bounded_screen_grid(spec.cols, spec.rows);
         for text in [&mut spec.device, &mut spec.label, &mut spec.panel, &mut spec.title] {
             *text = plain_text(text);
         }
@@ -379,11 +377,6 @@ impl Terminal {
             (self.cols, self.rows) = state.grid;
         }
     }
-}
-
-/// The grid of a stream inside the bounds of a follower.
-fn bounded_grid(cols: u16, rows: u16) -> (u16, u16) {
-    (cols.clamp(2, MAX_FOLLOW_COLS), rows.clamp(1, MAX_FOLLOW_ROWS))
 }
 
 /// A text of a stream as one bounded line without control characters.

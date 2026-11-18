@@ -442,7 +442,7 @@ fn a_frame_over_its_bound_is_dropped_and_the_link_stays() {
     a.send(output("p1", b""));
     a.send(output("p1", &vec![b'y'; 48 * 1024]));
     a.send(output("p1", b"after"));
-    assert_eq!(b.next(), "screen laptop-a/p1 1x1000", "a grid stays inside its bounds");
+    assert_eq!(b.next(), "screen laptop-a/p1 2x500", "a grid stays inside its bounds");
     assert_eq!(b.next().len(), "output laptop-a/p1 ".len() + 48 * 1024);
     assert_eq!(b.next(), "output laptop-a/p1 after");
 }

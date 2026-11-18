@@ -41,6 +41,24 @@ use super::wake::OutputWakeState;
 use super::{Terminal, TerminalEventProxy};
 use crate::agent_work::WorkOwner;
 
+/// The bounds of the grid of a screen, which the server applies to a `screen` and
+/// to a panel of a list and a follower applies to its own terminal: one pair for
+/// both, so a screen that the server relays always fits the follower.
+/// A terminal holds two columns at the least, so the floor of a screen is 2.
+pub(crate) const MIN_SCREEN_COLS: u16 = 2;
+pub(crate) const MIN_SCREEN_ROWS: u16 = 1;
+pub(crate) const MAX_SCREEN_COLS: u16 = 1000;
+pub(crate) const MAX_SCREEN_ROWS: u16 = 500;
+
+/// The grid of a screen inside those bounds.
+#[must_use]
+pub fn bounded_screen_grid(cols: u16, rows: u16) -> (u16, u16) {
+    (
+        cols.clamp(MIN_SCREEN_COLS, MAX_SCREEN_COLS),
+        rows.clamp(MIN_SCREEN_ROWS, MAX_SCREEN_ROWS),
+    )
+}
+
 /// The most lines above the viewport that a fresh screen carries, and the most
 /// bytes that they take.
 const HISTORY_LINES: usize = 1_000;
