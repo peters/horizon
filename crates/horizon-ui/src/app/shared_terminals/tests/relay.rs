@@ -233,29 +233,20 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
         |apps| text(apps[0], panel).contains("GOT:hello") && text(apps[1], follow).contains("GOT:hello"),
     );
 
-    // Each side says in the title bar what the other one does. The body of the
-    // follow panel of B fits the grid of the panel of A, so the keys of B ask for
-    // no other grid: the chip of the owner names the computer that typed, and no
-    // size that it holds.
-    // The chip is the copy that a frame took of what the pump published, and its
-    // claim lasts two seconds: a frame of a loaded computer can take longer than
-    // that, so the person types again in each round of the wait.
+    // Each side says in the title bar what the other one does. The chip of the
+    // owner names the computer that typed, and the grid that it holds for it. The
+    // chip is the copy that a frame took of what the pump published, and its claim
+    // lasts two seconds: a frame of a loaded computer can take longer than that, so
+    // the person types again in each round of the wait.
     let chip = super::chip_of;
     let deadline = Instant::now() + PATIENCE;
     while chip(&a, panel).as_deref() != Some("typed by Desk B") {
         assert!(
             Instant::now() < deadline,
-            "the chip of the owner names the computer that typed: {:?}",
+            "the chip of the typed bytes: {:?}",
             chip(&a, panel)
         );
-        let typed = b
-            .board
-            .panel_mut(follow)
-            .expect("the follow panel")
-            .write_input(b"hello\n");
-        assert!(typed, "the follow panel takes the keys");
-        run_app_frame(&ctx_a, &mut a);
-        run_app_frame(&ctx_b, &mut b);
+        type_and_frame(&ctx_a, &ctx_b, &mut a, &mut b, follow);
     }
     frames_until(
         "the chip of the owner names the follower again",
@@ -469,4 +460,17 @@ fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
     drop((a, b, c));
     server.stop();
     store.close();
+}
+
+/// Types at the follow panel of `b` and runs a frame of both windows, for a wait
+/// that the two seconds of a chip of typing can end under.
+fn type_and_frame(ctx_a: &Context, ctx_b: &Context, a: &mut HorizonApp, b: &mut HorizonApp, follow: PanelId) {
+    let typed = b
+        .board
+        .panel_mut(follow)
+        .expect("the follow panel")
+        .write_input(b"hello\n");
+    assert!(typed, "the follow panel takes the keys");
+    run_app_frame(ctx_a, a);
+    run_app_frame(ctx_b, b);
 }
