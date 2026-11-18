@@ -319,13 +319,15 @@ fn every_stop_ends_the_pump_within_its_bound_and_leaves_no_thread() {
         "no thread of a pump is left after eleven starts and the stop"
     );
     assert!(stopped.elapsed() < STOP_BOUND, "the stop took {:?}", stopped.elapsed());
-    let ended = window
-        .app
-        .board
-        .panel(follow)
-        .and_then(horizon_core::Panel::follow_ended_line);
+    // The pump ends the streams of its follow panels on its own thread, so the
+    // test waits for the line of the panel and does not read it once.
     assert!(
-        ended.is_some_and(|line| line.contains("no link")),
+        waits(|| window
+            .app
+            .board
+            .panel(follow)
+            .and_then(horizon_core::Panel::follow_ended_line)
+            .is_some_and(|line| line.contains("no link"))),
         "the follow panel says that its stream ended"
     );
 }

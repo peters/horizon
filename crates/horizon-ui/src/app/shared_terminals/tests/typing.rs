@@ -1,7 +1,7 @@
 //! The typing of another computer into a panel of this window: the value of the
 //! newest list, in both directions, and the chip that says who types.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::typed_event;
 use super::{OFFSCREEN, PATIENCE, Window, chip_of, text};
