@@ -256,8 +256,14 @@ fn the_pass_does_its_work_only_in_place_of_a_frame() {
     );
 
     // While frames run, an event of a program asks for no pass: the poll of a
-    // frame reads it. The short wait lets a job of the setup end first.
-    std::thread::sleep(Duration::from_millis(50));
+    // frame reads it. The read of the directory of a panel is a job of a worker,
+    // and the answer of that job asks for a frame: run frames until no panel
+    // waits for the answer of its read, so no job of the setup is left.
+    let deadline = Instant::now() + PATIENCE;
+    while app.cwd_reads.in_flight_count() > 0 {
+        assert!(Instant::now() < deadline, "the panel reads its directory");
+        run_app_frame(&ctx, &mut app);
+    }
     let asked = repaint_requests(&ctx);
     let count = || asked.load(Ordering::Relaxed);
     let wake = Arc::clone(&app.output_wake);

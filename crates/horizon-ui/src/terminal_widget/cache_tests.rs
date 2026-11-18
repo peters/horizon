@@ -78,7 +78,7 @@ impl TerminalHarness {
 
     fn scrollback() -> Self {
         let mut harness = Self::with_child(SCROLLBACK_CHILD_ARGS);
-        harness.wait_until_screen_shows("TAIL-MARKER");
+        harness.wait_for_text("TAIL-MARKER");
         harness
     }
 
@@ -110,17 +110,16 @@ impl TerminalHarness {
         }
     }
 
-    /// Returns after a poll that drained output and saw `text`, so the next frame sees output.
-    /// `alacritty_terminal` parses PTY bytes and queues its wakeup while it holds the grid lock.
-    /// So each poll retries the snapshot until the grid is free: a poll that drains a wakeup then
-    /// sees its text. A poll can also find no output and then see text parsed after that drain.
-    /// The wakeup for that text is still in the queue, so the poll does not count. The next poll
-    /// drains the wakeup and sees the text.
+    /// Returns after a poll that found `text` on the screen and no event that the window did not
+    /// read, so the next frame starts on a quiet terminal. The output can reach the grid before
+    /// this call runs, and then no poll both drains its wakeup and sees it: the unread event says
+    /// whether anything still waits, whatever the speed of the computer.
+    /// `alacritty_terminal` parses PTY bytes and queues its wakeup while it holds the grid lock,
+    /// so each poll retries the snapshot until the grid is free.
     fn wait_for_text(&mut self, text: &str) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             self.panel.process_output();
-            let had_output = self.panel.had_recent_output();
             let lines = loop {
                 if let Some(lines) = self.panel.terminal().expect("terminal").try_last_lines_text(20) {
                     break lines;
@@ -128,29 +127,15 @@ impl TerminalHarness {
                 assert!(Instant::now() < deadline, "terminal grid stayed busy");
                 std::thread::sleep(Duration::from_millis(1));
             };
-            if had_output && lines.contains(text) {
+            let unread = self.panel.terminal().expect("terminal").has_unread_event();
+            if lines.contains(text) && !unread {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "no poll drained output and saw {text}; screen was:\n{}",
+                "the screen never showed {text} with no unread event; screen was:\n{}",
                 self.text()
             );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    /// Polls until the screen shows `text`. Unlike [`Self::wait_for_text`] this
-    /// does not require the poll that drained the output, which matters for a
-    /// fixture that prints everything at once and then waits for input.
-    fn wait_until_screen_shows(&mut self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            self.panel.process_output();
-            if self.text().contains(text) {
-                return;
-            }
-            assert!(Instant::now() < deadline, "the screen never showed {text}");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -251,6 +236,27 @@ impl TerminalHarness {
             })
             .discard_textures();
     }
+}
+
+/// One poll can read the echo of both lines of a burst: the text of the second
+/// line is on the screen with no event left to read. The wait takes that text,
+/// where a wait for a poll that both drains a wakeup and sees the text would wait
+/// for a wakeup that a loaded computer never sends again.
+#[test]
+fn a_wait_takes_the_text_that_the_last_poll_left_on_the_screen() {
+    let mut harness = TerminalHarness::with_child(ECHO_CHILD_ARGS);
+    harness.wait_for_text("READY");
+    harness.panel.terminal().expect("terminal").write_input(b"one\ntwo\n");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let quiet_with = |harness: &TerminalHarness, text: &str| {
+        text_of(harness).contains(text) && !harness.panel.terminal().expect("terminal").has_unread_event()
+    };
+    while !quiet_with(&harness, "two") {
+        harness.panel.process_output();
+        assert!(Instant::now() < deadline, "the program echoes both lines");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.wait_for_text("two");
 }
 
 #[test]
@@ -557,7 +563,7 @@ done
 #[test]
 fn a_panel_that_holds_a_foreign_grid_draws_it_and_keeps_its_pointer_in_it() {
     let mut harness = TerminalHarness::with_child(REPORT_CHILD_ARGS);
-    harness.wait_until_screen_shows("READY");
+    harness.wait_for_text("READY");
     harness.wait_for_mouse_mode();
     let source = harness
         .panel
@@ -591,7 +597,7 @@ fn a_panel_that_holds_a_foreign_grid_draws_it_and_keeps_its_pointer_in_it() {
     harness.frame_shapes(vec![Event::PointerMoved(beyond)]);
     harness.frame_shapes(vec![press(beyond, true)]);
     harness.frame_shapes(vec![press(beyond, false)]);
-    harness.wait_until_screen_shows("0;40;8M");
+    harness.wait_for_text("0;40;8M");
     assert!(
         !text_of(&harness).contains("0;50;12"),
         "no cell of the body reaches the program: {:?}",

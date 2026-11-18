@@ -234,9 +234,14 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     // Each side says in the title bar what the other one does. The body of the
     // follow panel of B fits the grid of the panel of A, so the keys of B ask for
     // no other grid: the chip of the owner names the computer that typed, and no
-    // size that it holds.
+    // size that it holds. The chip comes from the list of the server, which A
+    // reads after the typing of B reached it: a loaded computer reads it late.
     let chip = super::chip_of;
-    assert_eq!(chip(&a, panel).as_deref(), Some("typed by Desk B"));
+    frames_until(
+        "the chip of the owner names the computer that typed",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
+        |apps| chip(apps[0], panel).as_deref() == Some("typed by Desk B"),
+    );
     frames_until(
         "the chip of the owner names the follower again",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],

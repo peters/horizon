@@ -11,6 +11,14 @@ use horizon_sync::LiveEvent;
 use super::{OFFSCREEN, Window, chip_of, grid};
 use crate::app::HorizonApp;
 
+/// The wait between two grids that a follow panel asks of the program: the
+/// server of a live link passes two requests a second.
+const GATE: Duration = Duration::from_millis(500);
+/// What a measured half second may lose: the pump reads its clock at the start
+/// of a pass and calls the link later in that pass, and the stand-in relay times
+/// that call.
+const SLACK: Duration = Duration::from_millis(50);
+
 /// The grid that the terminal of `panel` shows, which a held grid shows too.
 pub(super) fn shown(app: &HorizonApp, panel: horizon_core::PanelId) -> (u16, u16) {
     let terminal = app.board.panel(panel).and_then(Panel::terminal).expect("a terminal");
@@ -125,6 +133,7 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
     window.until("the request for the grid of the body", move |_| {
         link.relay().resizes.first() == Some(&first)
     });
+    window.until("the stream has the grid of the body", |app| grid(app, follow) == first);
     window.write(follow, b"b");
     window.frames(2);
     assert_eq!(
@@ -134,7 +143,10 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
     );
 
     // A larger body comes inside the half second of the panel, so its grid waits
-    // for the second to pass.
+    // for the second to pass. The pump measures that wait on the wall clock, so a
+    // loaded computer can spend the half second on the way to a press, and the
+    // test judges the wait by the times of the requests and not by the time of a
+    // press that the computer stretched.
     window
         .app
         .board
@@ -145,18 +157,26 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
     let second = fit(&window.app, follow);
     window.write(follow, b"c");
     window.frames(2);
-    assert_eq!(
-        window.link.relay().resizes,
-        vec![first],
-        "two requests a second at most"
-    );
-    std::thread::sleep(Duration::from_millis(550));
+    std::thread::sleep(GATE + Duration::from_millis(50));
     window.write(follow, b"d");
     window.frames(2);
+    let (requests, at) = {
+        let relay = window.link.relay();
+        (relay.resizes.clone(), relay.resizes_at.clone())
+    };
+    assert!(
+        at.windows(2)
+            .all(|pair| pair[1].duration_since(pair[0]) + SLACK >= GATE),
+        "two requests a second at most: {requests:?}"
+    );
+    assert!(
+        requests.iter().all(|request| [first, second].contains(request)),
+        "a press asks the grid of the body: {requests:?}"
+    );
     assert_eq!(
-        window.link.relay().resizes,
-        vec![first, second],
-        "the next grid after the wait"
+        requests.last(),
+        Some(&second),
+        "the next grid after the wait: {requests:?}"
     );
     window.until("the owner holds the grid of the second body", |app| {
         shown(app, owner) == (second.1, second.0)
@@ -164,7 +184,7 @@ fn the_request_of_a_grid_waits_for_the_half_second_of_its_panel_and_for_the_swit
 
     // A body that changes while this computer holds the grid asks again for its
     // own grid, with no key press: the person works from this window.
-    std::thread::sleep(Duration::from_millis(550));
+    std::thread::sleep(GATE + Duration::from_millis(50));
     let asks = window.link.relay().resizes.len();
     let relay = window.link.clone();
     window

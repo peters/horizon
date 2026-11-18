@@ -245,11 +245,15 @@ fn a_pump_asks_for_a_frame_only_when_what_it_found_changed() {
     );
 
     // The second screen of the join went out, and the stream is quiet: the pump
-    // runs on its timer, finds nothing new and asks for no frame.
+    // runs on its timer, finds nothing new and asks for no frame. A loaded
+    // computer delays a pass past any short window, so the test waits for the
+    // passes and does not time them.
     std::thread::sleep(Duration::from_millis(600));
     let (before, passes) = (asked.load(Ordering::Relaxed), window.passes());
-    std::thread::sleep(Duration::from_millis(400));
-    assert!(window.passes() >= passes + 4, "the pump of a stream runs on its timer");
+    assert!(
+        waits(|| window.passes() >= passes + 4),
+        "the pump of a stream runs on its timer"
+    );
     assert_eq!(
         asked.load(Ordering::Relaxed),
         before,

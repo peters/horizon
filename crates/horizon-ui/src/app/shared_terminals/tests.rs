@@ -76,6 +76,10 @@ struct Relay {
     refreshes: usize,
     /// The grids that the follower of this window gave the program.
     resizes: Vec<(u16, u16)>,
+    /// The time of each request of a grid, as the test reads the clock of the
+    /// window: a rule of the product that depends on the wall clock is judged
+    /// against these times and not against the time of a step of the test.
+    resizes_at: Vec<Instant>,
     /// The grid of every screen that the relay passed on.
     grids: Vec<(u16, u16)>,
     /// Refuses screens and output, as a link whose queue is full does, and
@@ -266,6 +270,7 @@ impl LiveLink for StandIn {
     fn resize(&self, _owner: &str, panel: &str, cols: u16, rows: u16) {
         let mut relay = self.relay();
         relay.resizes.push((cols, rows));
+        relay.resizes_at.push(Instant::now());
         if relay.follows(panel) && relay.panels.iter().any(|listed| listed.id == panel && listed.typing) {
             relay.events.push(LiveEvent::Resized {
                 panel: panel.to_owned(),
