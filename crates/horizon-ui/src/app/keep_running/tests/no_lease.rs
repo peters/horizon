@@ -4,7 +4,8 @@
 
 use egui::{Context, Key, ViewportCommand, ViewportId};
 use horizon_core::{
-    Config, PanelOptions, RuntimeState, StartupChooser, StartupDecision, StartupPromptReason, WindowCloseSetting,
+    Config, HorizonHome, PanelOptions, RuntimeState, SessionOpenDisposition, SessionStore, StartupChooser,
+    StartupDecision, StartupPromptReason, WindowCloseSetting,
 };
 
 use super::{
@@ -13,7 +14,7 @@ use super::{
 };
 use crate::app::HorizonApp;
 use crate::app::notify::Notifications;
-use crate::app::test_support::test_app_with_config_and_startup;
+use crate::app::test_support::{app_in, test_app_with_config_and_startup, wait_for_lease_writes};
 use crate::theme;
 
 const HEADING: &str = "Close Horizon?";
@@ -177,5 +178,83 @@ fn the_choice_keep_running_hides_no_window_that_took_no_session() {
     assert!(app.keep_running.ask.is_some(), "the person chooses");
     assert!(app.shutdown_progress.is_none(), "the close ends nothing yet");
     assert!(recorder.lines().is_empty(), "nothing is said about a hide");
+    app.board.shutdown_terminal_panels();
+}
+
+/// One frame that writes the heartbeat of the lease, and the answer of the
+/// session writer to it.
+fn heartbeat(ctx: &Context, app: &mut HorizonApp) {
+    app.active_session.as_mut().expect("a session").last_lease_refresh = None;
+    warm_up(ctx, app);
+    wait_for_lease_writes(app);
+}
+
+/// A lease counts from the answer of the session writer that wrote it, and until
+/// a heartbeat of it fails: a second start reads the file, not the window. With
+/// the choice `keep_running`, a window whose heartbeat failed asks and offers no
+/// hide, and it hides again after a heartbeat that the writer wrote.
+#[test]
+fn a_lease_that_the_session_writer_did_not_write_is_no_lease() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let home = HorizonHome::from_root(temp.path().join(".horizon"));
+    let session = SessionStore::new(home.clone(), temp.path().join("config.json"))
+        .create_session_from_runtime(RuntimeState::default())
+        .expect("a saved session");
+    let lease_path = home.session_lease_path(&session.session_id);
+    let mut config = Config::default();
+    config.features.when_window_closes = WindowCloseSetting::KeepRunning;
+    let ctx = Context::default();
+    let startup = StartupDecision::Open {
+        disposition: SessionOpenDisposition::New,
+        session: Box::new(session),
+    };
+    let mut app = app_in(&ctx, temp.path(), &config, startup);
+    app.root_viewport_stabilizer = None;
+
+    assert!(!app.holds_session_lease(), "no answer of the writer yet, so no lease");
+    wait_for_lease_writes(&mut app);
+    assert!(lease_path.exists(), "the writer wrote the lease");
+    assert!(app.holds_session_lease(), "the written lease is held");
+
+    // A folder stands where the writer puts the file before it renames it, so
+    // the heartbeat fails.
+    let blocker = lease_path.with_extension("tmp");
+    std::fs::create_dir(&blocker).expect("the folder that blocks the write");
+    heartbeat(&ctx, &mut app);
+    assert!(!app.holds_session_lease(), "a heartbeat that failed is no lease");
+
+    let workspace = app.board.create_workspace("Session");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    let sent = commands(&ctx, &mut app, close_request());
+    assert!(!sent.contains(&ViewportCommand::Visible(false)), "{sent:?}");
+    assert!(!app.keep_running.hidden, "no window is hidden");
+    let output = ask_frame(&ctx, &mut app);
+    let drawn = texts(&output);
+    assert!(drawn.contains(&"End them and quit"), "the ask: {drawn:?}");
+    assert!(
+        !drawn.iter().any(|text| text.contains("Keep running")),
+        "no action hides a window that no start can find: {drawn:?}"
+    );
+    let _ = press(&ctx, &mut app, button(&output, "Cancel", HEADING));
+    assert!(app.keep_running.ask.is_none(), "the ask is answered");
+
+    std::fs::remove_dir(&blocker).expect("the write is free again");
+    heartbeat(&ctx, &mut app);
+    assert!(
+        app.holds_session_lease(),
+        "the next heartbeat that is written is a lease"
+    );
+    let sent = commands(&ctx, &mut app, close_request());
+    assert!(sent.contains(&ViewportCommand::Visible(false)), "{sent:?}");
+    assert!(app.keep_running.hidden, "the window hides again");
+
+    // The answer of a release is the answer of a lease that is gone.
+    app.release_active_session_lease();
+    wait_for_lease_writes(&mut app);
+    assert!(!lease_path.exists(), "the writer removed the lease");
+    assert!(!app.holds_session_lease(), "a released lease is no lease");
     app.board.shutdown_terminal_panels();
 }

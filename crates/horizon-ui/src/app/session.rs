@@ -156,6 +156,7 @@ impl HorizonApp {
             session_id: session.session_id.clone(),
             lease: Some(lease),
             lease_answers: vec![answer],
+            lease_written: false,
             last_lease_refresh: Some(Instant::now()),
             persistent: true,
         });
@@ -168,6 +169,7 @@ impl HorizonApp {
             session_id: "ephemeral".to_string(),
             lease: None,
             lease_answers: Vec::new(),
+            lease_written: false,
             last_lease_refresh: None,
             persistent: false,
         });
@@ -551,24 +553,35 @@ impl HorizonApp {
     }
 
     /// Applies the answers of the lease writes that the session writer finished.
+    /// The newest answer says whether the lease is in its file: a write or a
+    /// heartbeat that failed leaves a file that no second start reads as live.
     pub(super) fn poll_lease_answers(&mut self) {
         let Some(active_session) = self.active_session.as_mut() else {
             return;
         };
+        // The answer of a release is the answer of a lease that is gone.
+        let kept = active_session.lease.is_some();
+        let mut written = active_session.lease_written;
         active_session
             .lease_answers
             .retain_mut(|answer| match answer.try_recv() {
-                Ok(Ok(())) => false,
+                Ok(Ok(())) => {
+                    written = kept;
+                    false
+                }
                 Ok(Err(reason)) => {
                     tracing::warn!(reason, "the lease of this session was not written");
+                    written = false;
                     false
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => true,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     tracing::warn!("the session writer stopped before it wrote the lease of this session");
+                    written = false;
                     false
                 }
             });
+        active_session.lease_written = written;
     }
 
     pub(super) fn release_active_session_lease(&mut self) {

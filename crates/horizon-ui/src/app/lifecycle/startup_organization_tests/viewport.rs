@@ -38,6 +38,7 @@ fn count_change_during_viewport_stabilization_is_retried_afterward() {
         session_id: "persistent-count-change".to_string(),
         lease: None,
         lease_answers: Vec::new(),
+        lease_written: true,
         last_lease_refresh: None,
         persistent: true,
     });
@@ -234,6 +235,7 @@ fn blocked_runtime_save_retains_the_dirty_marker() {
         session_id: "persistent-save-test".to_string(),
         lease: None,
         lease_answers: Vec::new(),
+        lease_written: true,
         last_lease_refresh: None,
         persistent: true,
     });
@@ -271,6 +273,7 @@ fn non_modal_stabilization_can_save_user_changes() {
         session_id: "persistent-feature-off-save".to_string(),
         lease: None,
         lease_answers: Vec::new(),
+        lease_written: true,
         last_lease_refresh: None,
         persistent: true,
     });
@@ -298,6 +301,7 @@ fn shutdown_during_viewport_stabilization_leaves_the_prior_snapshot_untouched() 
         session_id: "persistent-shutdown-test".to_string(),
         lease: None,
         lease_answers: Vec::new(),
+        lease_written: true,
         last_lease_refresh: None,
         persistent: true,
     });

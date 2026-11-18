@@ -257,6 +257,7 @@ fn app_with(setting: WindowCloseSetting) -> (tempfile::TempDir, Context, Horizon
         session_id: "keep-running".to_string(),
         lease: None,
         lease_answers: Vec::new(),
+        lease_written: true,
         last_lease_refresh: None,
         persistent: true,
     });

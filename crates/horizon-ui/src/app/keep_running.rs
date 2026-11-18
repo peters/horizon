@@ -200,6 +200,9 @@ impl HorizonApp {
     /// The heartbeat of a hidden window, whose lease a second start reads.
     pub(in crate::app) fn keep_lease_of_hidden_window(&mut self, ctx: &Context) {
         self.refresh_active_session_lease();
+        // A hidden window draws no frame, so its pass reads what the session
+        // writer answered.
+        self.poll_lease_answers();
         ctx.request_repaint_after(LEASE_KEEPALIVE);
     }
 }

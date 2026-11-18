@@ -30,6 +30,7 @@ fn settings_of(setting: WindowCloseSetting, lease: bool) -> (tempfile::TempDir, 
             session_id: "settings-of-a-window".to_string(),
             lease: None,
             lease_answers: Vec::new(),
+            lease_written: true,
             last_lease_refresh: None,
             persistent: true,
         });

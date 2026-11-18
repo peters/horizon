@@ -44,9 +44,12 @@ pub(in crate::app) struct FolderRequestPump {
 impl HorizonApp {
     /// Whether this window holds a session lease, which is how a second start of
     /// this computer finds it. A window that took no session, or one that runs
-    /// with `--ephemeral`, writes no lease: no start can ask it for anything.
+    /// with `--ephemeral`, writes no lease: no start can ask it for anything. A
+    /// lease counts from the answer of the session writer that wrote it, and
+    /// until a write of it fails.
     pub(in crate::app) fn holds_session_lease(&self) -> bool {
-        self.active_session.as_ref().is_some_and(|session| session.persistent)
+        let held = |session: &super::ActiveSession| session.persistent && session.lease_written;
+        self.active_session.as_ref().is_some_and(held)
     }
 
     /// Takes the folder requests that wait for this window, and applies one per
@@ -171,6 +174,7 @@ mod tests {
             session_id: "session-of-the-window".to_string(),
             lease: None,
             lease_answers: Vec::new(),
+            lease_written: true,
             last_lease_refresh: None,
             persistent: true,
         });

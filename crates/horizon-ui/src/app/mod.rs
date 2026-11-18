@@ -193,6 +193,10 @@ struct ActiveSession {
     lease: Option<SessionLease>,
     /// The answers of the lease writes that the session writer has not finished.
     lease_answers: Vec<Receiver<std::result::Result<(), String>>>,
+    /// Whether the newest answer of the session writer says that the lease is in
+    /// its file. A second start reads that file, so only then can it find this
+    /// window.
+    lease_written: bool,
     last_lease_refresh: Option<Instant>,
     persistent: bool,
 }
