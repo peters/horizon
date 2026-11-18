@@ -297,6 +297,13 @@ impl Terminal {
         self.output_wake.set_drawn(drawn);
     }
 
+    /// Whether the program sent an event that [`Self::process_events`] did not
+    /// take yet: output, a question, a title, a status report or its end.
+    #[must_use]
+    pub fn has_unread_event(&self) -> bool {
+        self.output_wake.unread()
+    }
+
     /// The time that this frame took a key event, while the latency lines of this
     /// terminal are on.
     #[must_use]

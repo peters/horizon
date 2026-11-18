@@ -232,6 +232,13 @@ impl BridgeApp {
 }
 
 impl eframe::App for BridgeApp {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _frame = horizon_core::ui_thread::FrameScope::enter();
+        if let Some(installed) = lock(&self.bridge.installed).as_mut() {
+            eframe::App::logic(&mut installed.app, ctx, frame);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let _frame = horizon_core::ui_thread::FrameScope::enter();
         let mut installed = lock(&self.bridge.installed);

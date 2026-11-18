@@ -101,6 +101,7 @@ mod startup_session;
 #[cfg(test)]
 mod test_support;
 mod transcript_deletes;
+mod undrawn;
 pub(crate) mod util;
 mod view;
 mod welcome;
@@ -403,6 +404,8 @@ pub struct HorizonApp {
     /// The callback that asks this window for the frame that shows the echo of a
     /// key press in a terminal panel.
     output_wake: horizon_core::OutputWake,
+    /// What the window knows about its frames, for the pass that draws nothing.
+    undrawn: undrawn::Undrawn,
     workspace_screen_rects: Vec<(WorkspaceId, Rect)>,
     fullscreen_panel: Option<PanelId>,
     held_navigation_keys: Vec<horizon_core::ShortcutBinding>,
@@ -623,6 +626,7 @@ impl HorizonApp {
         }
 
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
+        self.undrawn.note_frame(ctx);
         let had_panel_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
@@ -651,6 +655,10 @@ impl HorizonApp {
 }
 
 impl eframe::App for HorizonApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.logic_pass(ctx);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         for state in self.panel_render_caches.device_ui_state.values_mut() {
             state.begin_frame();

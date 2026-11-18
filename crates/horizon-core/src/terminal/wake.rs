@@ -12,14 +12,28 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-/// The callback that asks the window for the frame that shows new output.
-pub type OutputWake = Arc<dyn Fn() + Send + Sync>;
+/// Why a terminal asks for the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wake {
+    /// The echo of a key press of a person arrived, which the next frame shows.
+    Echo,
+    /// The program sent an event that the window reads: output, a question,
+    /// a title, a status or its end. A frame reads it on its poll, so only a
+    /// window that draws no frame needs this wake.
+    Event,
+}
 
-/// One terminal's share of that callback, and whether an echo still waits.
+/// The callback that asks the window for the frame that shows new output, or
+/// for the pass that reads an event.
+pub type OutputWake = Arc<dyn Fn(Wake) + Send + Sync>;
+
+/// One terminal's share of that callback, whether an echo still waits, and
+/// whether an event waits that the window did not read.
 #[derive(Default)]
 pub(crate) struct OutputWakeState {
     drawn: AtomicBool,
     armed: AtomicBool,
+    unread: AtomicBool,
     callback: OnceLock<OutputWake>,
 }
 
@@ -27,9 +41,30 @@ impl OutputWakeState {
     /// Takes the wake of the window. The first callback stays, because a panel
     /// keeps the viewport that drew it.
     pub(crate) fn attach(&self, wake: &OutputWake) {
-        if self.callback.get().is_none() {
-            let _ = self.callback.set(Arc::clone(wake));
+        if self.callback.get().is_none() && self.callback.set(Arc::clone(wake)).is_ok() && self.unread() {
+            // An event arrived before the terminal had a wake to call.
+            wake(Wake::Event);
         }
+    }
+
+    /// The program sent an event that the window reads. The first one since
+    /// the window read the terminal asks, and the later ones wait with it.
+    pub(crate) fn wake_on_event(&self) {
+        if !self.unread.swap(true, Ordering::AcqRel)
+            && let Some(wake) = self.callback.get()
+        {
+            wake(Wake::Event);
+        }
+    }
+
+    /// Whether an event waits that the window did not read.
+    pub(crate) fn unread(&self) -> bool {
+        self.unread.load(Ordering::Acquire)
+    }
+
+    /// The window reads the events now, and says so before it takes them.
+    pub(crate) fn note_read(&self) {
+        self.unread.store(false, Ordering::Release);
     }
 
     /// Whether the frame that just ran drew this terminal. The frame sets it once
@@ -59,7 +94,7 @@ impl OutputWakeState {
             return;
         }
         if let Some(wake) = self.callback.get() {
-            wake();
+            wake(Wake::Echo);
         }
     }
 }
@@ -71,10 +106,10 @@ mod tests {
 
     use super::OutputWakeState;
 
-    fn counting_wake() -> (Arc<AtomicUsize>, Arc<dyn Fn() + Send + Sync>) {
+    fn counting_wake() -> (Arc<AtomicUsize>, super::OutputWake) {
         let count = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&count);
-        let wake = Arc::new(move || {
+        let wake: super::OutputWake = Arc::new(move |_| {
             counter.fetch_add(1, Ordering::Relaxed);
         });
         (count, wake)

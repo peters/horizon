@@ -30,14 +30,6 @@ const FONT_JETBRAINS_MONO: &str = "jetbrains-mono";
 const FONT_NOTO_CJK: &str = "noto-sans-cjk-sc";
 const FONT_NOTO_SYMBOLS: &str = "noto-sans-symbols-2";
 
-/// The callback that asks this window for the frame that shows the echo of a
-/// person's key press in a terminal panel. The window owns it once, so every
-/// terminal panel shares one closure.
-fn terminal_output_wake(ctx: &Context) -> horizon_core::OutputWake {
-    let ctx = ctx.clone();
-    std::sync::Arc::new(move || ctx.request_repaint())
-}
-
 struct AppBootstrap {
     config_path: PathBuf,
     session_store: SessionStore,
@@ -48,6 +40,7 @@ struct AppBootstrap {
     shortcuts: AppShortcuts,
     action_commands_cache: Vec<CommandEntry>,
     output_wake: horizon_core::OutputWake,
+    undrawn: super::undrawn::Undrawn,
 }
 
 impl HorizonApp {
@@ -101,6 +94,7 @@ impl HorizonApp {
         // frame, so the window opens without reading it.
         let config_last_mtime = None;
 
+        let undrawn = super::undrawn::Undrawn::default();
         let bootstrap = AppBootstrap {
             config_path,
             session_store,
@@ -110,7 +104,8 @@ impl HorizonApp {
             config_last_mtime,
             shortcuts,
             action_commands_cache,
-            output_wake: terminal_output_wake(egui_ctx),
+            output_wake: undrawn.wake(egui_ctx),
+            undrawn,
         };
         let mut app = Self::initial_state(config, bootstrap);
         // The folder of a `horizon <folder>` start opens after the board of the
@@ -157,6 +152,7 @@ impl HorizonApp {
             shortcuts,
             action_commands_cache,
             output_wake,
+            undrawn,
         }: AppBootstrap,
     ) -> Self {
         Self {
@@ -185,7 +181,7 @@ impl HorizonApp {
             session_kills: Vec::new(), forget_machine: None, close_workspace_confirm: None, close_panel_confirm: None,
             machine_epoch: 0, machine_load_rx: None, server_sync: None, link_child: None, shared_terminals: super::shared_terminals::SharedTerminals::default(),
             canvas_grid_cache: CanvasGridCache::default(), agent_lines: super::agent_lines::AgentLines::default(),
-            frame_stats: FrameStats::default(), output_wake, workspace_screen_rects: Vec::new(),
+            frame_stats: FrameStats::default(), output_wake, undrawn, workspace_screen_rects: Vec::new(),
             fullscreen_panel: None, held_navigation_keys: Vec::new(),
             sidebar_visible: true, sidebar_drag_workspace: None,
             sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),

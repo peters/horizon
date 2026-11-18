@@ -124,6 +124,12 @@ impl HorizonApp {
     /// for the answer before it sends its next query.
     pub(super) fn drain_panel_output(&mut self) -> bool {
         let panel_output = self.board.process_output();
+        self.note_panel_output(panel_output)
+    }
+
+    /// What follows from the output that the board took, in a frame and in the
+    /// pass of a window that draws none.
+    pub(super) fn note_panel_output(&mut self, panel_output: horizon_core::BoardProcessOutput) -> bool {
         let mut on_screen_terminal_output = false;
         if panel_output.activity.terminal {
             self.shared_terminals.note_output();

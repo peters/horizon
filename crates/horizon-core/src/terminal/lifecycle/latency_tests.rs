@@ -114,8 +114,10 @@ fn a_key_press_writes_no_line_while_its_switch_is_off() {
 fn counting_wake() -> (Arc<AtomicUsize>, crate::OutputWake) {
     let wakes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&wakes);
-    let wake: crate::OutputWake = Arc::new(move || {
-        counter.fetch_add(1, Ordering::Relaxed);
+    // The frames that an echo asks for. An event of the program asks for a pass
+    // of a window that draws nothing, which is not what these tests count.
+    let wake: crate::OutputWake = Arc::new(move |wake| {
+        counter.fetch_add(usize::from(wake == crate::Wake::Echo), Ordering::Relaxed);
     });
     (wakes, wake)
 }
@@ -168,4 +170,83 @@ fn a_panel_that_prints_all_the_time_keeps_the_output_poll_and_asks_for_no_frame(
         0,
         "output that no key press of a person waits for asks for no frame"
     );
+}
+
+/// Counts the events of a program that ask for a window that draws no frame.
+fn counting_event_wake() -> (Arc<AtomicUsize>, crate::OutputWake) {
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    let wake: crate::OutputWake = Arc::new(move |wake| {
+        counter.fetch_add(usize::from(wake == crate::Wake::Event), Ordering::Relaxed);
+    });
+    (wakes, wake)
+}
+
+fn waits(done: impl Fn() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    done()
+}
+
+/// A program that sends, one for each line that it reads: plain output, a
+/// question for the position of the cursor, a title, a status report and a
+/// query of the status protocol. The answer of the terminal to a question
+/// arrives in front of the next line, so each pattern takes any start.
+const SENDS: &str = r"stty -echo; printf 'READY'; while read -r line; do case $line in
+*plain) printf ' PLAIN';;
+*ask) printf '\033[6n';;
+*title) printf '\033]0;built\007';;
+*status) printf '\033]7501;state=working:app=codex\033\\';;
+*query) printf '\033]7501;?\033\\';;
+esac; done";
+
+#[test]
+fn each_event_of_a_program_asks_one_time_for_a_window_that_draws_no_frame() {
+    let mut terminal = spawn("/bin/sh", &["-c", SENDS]);
+    let (wakes, wake) = counting_event_wake();
+    let count = || wakes.load(Ordering::Relaxed);
+    terminal.attach_output_wake(&wake);
+    let shows = |terminal: &Terminal, words: &str| terminal.last_lines_text(4).contains(words);
+    assert!(waits(|| shows(&terminal, "READY")), "the program is ready");
+    // The program waits for a line now, so the read below takes its last event.
+    std::thread::sleep(Duration::from_millis(100));
+    terminal.process_events();
+    assert!(!terminal.has_unread_event(), "the window read the start of the program");
+
+    for (word, what) in [
+        ("plain", "plain output"),
+        ("ask", "a question"),
+        ("title", "a title"),
+        ("status", "a status report"),
+        ("query", "a query of the status protocol"),
+    ] {
+        let before = count();
+        terminal.write_input(format!("{word}\n").as_bytes());
+        assert!(waits(|| count() == before + 1), "{what} asks for the window");
+        assert!(terminal.has_unread_event(), "{what} waits for the window");
+        // An event that arrives before the window read the first one joins it.
+        terminal.write_input(b"title\n");
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(count(), before + 1, "the events that wait ask one time");
+        terminal.process_events();
+        assert!(!terminal.has_unread_event(), "the window read {what}");
+    }
+    assert_eq!(terminal.title(), "built");
+}
+
+#[test]
+fn an_event_that_arrived_before_the_wake_asks_when_the_wake_arrives() {
+    let mut terminal = spawn("/bin/sh", &["-c", r"printf '\033]0;early\007'; sleep 60"]);
+    assert!(waits(|| terminal.has_unread_event()), "the title waits for the window");
+    let (wakes, wake) = counting_event_wake();
+    terminal.attach_output_wake(&wake);
+    assert_eq!(
+        wakes.load(Ordering::Relaxed),
+        1,
+        "the wake hears of the event that waited"
+    );
+    terminal.process_events();
+    assert_eq!(terminal.title(), "early");
 }

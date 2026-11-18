@@ -46,8 +46,8 @@ pub use self::share::{ShareOutlet, ShareScreen, ShareSource, ShareTake};
 use self::support::default_terminal_rgb;
 pub use self::support::open_url;
 use self::support::{ColorLookup, replay_live_bytes, replay_terminal_bytes};
-pub use self::wake::OutputWake;
 use self::wake::OutputWakeState;
+pub use self::wake::{OutputWake, Wake};
 
 /// The PTY of a panel, whose reader reports the program status of its program.
 type TerminalPty = horizon_pty_tap::PanelPty;
@@ -198,6 +198,8 @@ impl EventListener for TerminalEventProxy {
             self.output_wake.wake_on_output();
         }
         let _ = self.event_tx.send(event);
+        // The event is in the channel before the wake that asks for its reader.
+        self.output_wake.wake_on_event();
     }
 }
 

@@ -84,6 +84,11 @@ impl AttentionState {
         self.version
     }
 
+    /// Whether a read of the ledgers runs on the worker now.
+    pub(in crate::app) fn reads(&self) -> bool {
+        self.in_flight
+    }
+
     /// Counts one change of a state.
     fn count_change(&mut self) {
         self.version = self.version.wrapping_add(1);

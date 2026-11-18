@@ -205,9 +205,12 @@ fn the_window_asks_for_its_own_frame_when_the_answer_of_a_key_press_arrives() {
     let counter = Arc::clone(&wakes);
     let wake: horizon_core::OutputWake = {
         let ctx = ctx.clone();
-        Arc::new(move || {
-            counter.fetch_add(1, Ordering::Relaxed);
-            ctx.request_repaint();
+        // As the wake of a window that draws frames: only an echo asks for one.
+        Arc::new(move |wake| {
+            if wake == horizon_core::Wake::Echo {
+                counter.fetch_add(1, Ordering::Relaxed);
+                ctx.request_repaint();
+            }
         })
     };
     app.output_wake = wake;

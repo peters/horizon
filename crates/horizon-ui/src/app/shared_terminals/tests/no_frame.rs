@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
+use horizon_core::{PanelKind, PanelOptions};
 use horizon_sync::{LiveEvent, LiveWatcher, ServerInfo, Store, run_server_on_unix_socket};
 
 use super::super::pump;
@@ -14,6 +15,7 @@ use super::relay::{computer, owner, stand_in};
 use super::{HERE, OFFSCREEN, PATIENCE, Window, follower_of, text};
 use crate::app::HorizonApp;
 use crate::app::test_support::run_app_frame;
+use crate::app::undrawn::tests::passes_until;
 
 /// The longest time that one stop of a pump takes in a test. A pass does no
 /// I/O, so the real time is the rest of one pass.
@@ -124,6 +126,52 @@ fn two_windows_that_get_no_frame_share_and_follow_through_the_real_relay() {
     drop((a, b));
     server.stop();
     store.close();
+}
+
+#[test]
+fn a_panel_that_opens_and_closes_in_a_window_that_draws_nothing_enters_and_leaves_the_list() {
+    let mut window = Window::new();
+    let first = window.owner(OFFSCREEN);
+    let first_id = window.id(first);
+    let listed = |link: &super::StandIn, id: &str| link.relay().panels.iter().any(|panel| panel.id == id);
+    let (link, id) = (window.link.clone(), first_id.clone());
+    window.until("the list names the first panel", move |_| listed(&link, &id));
+
+    // From here no frame runs: the request of an agent opens a panel in a
+    // window that the desktop does not show.
+    let workspace = window.app.board.active_workspace.expect("the workspace of the test");
+    let options = PanelOptions {
+        kind: PanelKind::Command,
+        name: Some("second".to_owned()),
+        command: Some("/bin/sh".to_owned()),
+        args: vec!["-c".to_owned(), super::PROGRAM.to_owned()],
+        position: Some(OFFSCREEN),
+        size: Some([600.0, 300.0]),
+        ..PanelOptions::default()
+    };
+    let second = window
+        .app
+        .board
+        .create_panel(options, workspace)
+        .expect("the second terminal");
+    let second_id = window.id(second);
+    let (link, id) = (window.link.clone(), second_id.clone());
+    assert!(
+        passes_until(&window.ctx, &mut window.app, move |app| {
+            listed(&link, &id) && text(app, second).contains("READY")
+        }),
+        "the other computers get the panel that opened, and its program runs"
+    );
+    assert!(listed(&window.link, &first_id), "the first panel stays in the list");
+
+    // The panel closes, as a request of an agent closes it.
+    window.app.board.close_panel(second);
+    let (link, id) = (window.link.clone(), second_id.clone());
+    assert!(
+        passes_until(&window.ctx, &mut window.app, move |_| !listed(&link, &id)),
+        "the panel that closed leaves the list of the other computers"
+    );
+    assert!(listed(&window.link, &first_id), "the first panel stays in the list");
 }
 
 #[test]

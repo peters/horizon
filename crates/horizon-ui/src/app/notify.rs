@@ -149,7 +149,9 @@ mod tests;
 /// The value is the focus that this frame already holds: no window is polled here.
 pub(in crate::app) fn window_in_front(ctx: &egui::Context) -> bool {
     ctx.input(|input| {
-        input.focused
+        // The raw value: a pass that draws nothing hears the focus of the
+        // window, and the value of the last frame is not it.
+        input.raw.focused
             || input
                 .raw
                 .viewports

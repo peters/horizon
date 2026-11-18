@@ -496,3 +496,68 @@ fn an_approval_that_the_person_answers_and_then_stops_is_an_interrupted_turn() {
     );
     stand_in.word("quit");
 }
+
+/// The sink of a test: it keeps the line that it would show.
+#[derive(Clone, Default)]
+struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl horizon_core::notify::Sink for Recorder {
+    fn send(&self, notice: horizon_core::notify::Notice) {
+        let mut lines = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        lines.push(notice.body);
+    }
+
+    fn available(&self) -> Option<bool> {
+        None
+    }
+}
+
+#[test]
+fn a_report_in_a_window_that_draws_nothing_changes_the_state_and_sends_the_notice() {
+    use crate::app::undrawn::tests::passes_until;
+
+    let Some(mut stand_in) = StandIn::start(true) else {
+        eprintln!("skipped: this computer has no python3 on PATH, and the stand-in is a Python program");
+        return;
+    };
+    let recorder = Recorder::default();
+    stand_in.app.notifications = crate::app::notify::Notifications::with_sink(Box::new(recorder.clone()));
+    // The frames of the setup have the focus of the desktop, and so has the last one.
+    stand_in.ready();
+    stand_in.app.board.focused = None;
+
+    // From here no frame runs, and the window is not in front any more.
+    let (ctx, local_id) = (stand_in.ctx.clone(), stand_in.local_id.clone());
+    stand_in.word("start");
+    let id = local_id.clone();
+    assert!(
+        passes_until(&ctx, &mut stand_in.app, move |app| app.panel_attention(&id)
+            == Attention::Working),
+        "the working report changes the state with no frame, which showed {:?}",
+        stand_in.shown()
+    );
+    stand_in.word("ask");
+    let id = local_id.clone();
+    assert!(
+        passes_until(&ctx, &mut stand_in.app, move |app| app.panel_attention(&id)
+            == Attention::NeedsYou),
+        "the report of an approval that waits changes the state with no frame, which showed {:?}",
+        stand_in.shown()
+    );
+    assert!(stand_in.app.notifications.waiting(), "the change waits for its notice");
+
+    // The pass that the end of the group of changes asks for sends the notice.
+    let lines = move || {
+        recorder
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    };
+    let sent = lines.clone();
+    assert!(
+        passes_until(&ctx, &mut stand_in.app, move |_| !sent().is_empty()),
+        "the notice of the change is sent with no frame"
+    );
+    assert_eq!(lines(), vec!["Codex stand-in needs you"]);
+}

@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 use crate::panel::{Panel, PanelId, PanelKind, PanelOptions, PanelProcessActivity, PanelProcessOutput};
 use crate::panel_shutdown::PanelCompletion;
 use crate::runtime_state::{PanelState, RuntimeState};
-use crate::terminal::OutputWake;
+use crate::terminal::{OutputWake, Terminal};
 use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
@@ -651,21 +651,38 @@ impl Board {
     #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {
         self.sweep_retired_browser_shutdowns();
+        self.process_panels(false)
+    }
+
+    /// Takes the events of the terminals whose program sent one, for a window
+    /// that draws no frame. A panel with no event costs one load. A copy that
+    /// a program asked for stays with its terminal until a frame takes it, so
+    /// nothing reaches the clipboard here.
+    pub fn process_unread_output(&mut self) -> BoardProcessOutput {
+        self.process_panels(true)
+    }
+
+    fn process_panels(&mut self, unread_only: bool) -> BoardProcessOutput {
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
+            if unread_only && !panel.terminal().is_some_and(Terminal::has_unread_event) {
+                continue;
+            }
             let panel_output: PanelProcessOutput = panel.process_output();
             output.activity.terminal |= panel_output.activity.terminal;
             output.activity.browser |= panel.visible && panel_output.activity.browser;
             output.activity.answered_query |= panel_output.activity.answered_query;
             output.persisted_state_changed |= panel_output.persisted_state_changed;
-            if let Some(terminal) = panel.terminal_mut() {
+            if !unread_only && let Some(terminal) = panel.terminal_mut() {
                 self.pending_clipboard_writes.extend(terminal.take_clipboard_writes());
             }
         }
         // Working-status refresh runs every frame: the per-panel check is a
         // cheap timestamp compare for quiet panels, and the screen scan only
         // happens for panels with new output this frame.
-        self.update_agent_status();
+        if !unread_only || output.activity.terminal {
+            self.update_agent_status();
+        }
         output
     }
 

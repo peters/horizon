@@ -348,8 +348,8 @@ fn the_feed_knows_the_alternate_screen_and_asks_for_the_frame_of_its_stream() {
     assert!(terminal.share_source().is_none(), "a follower has no share source");
     let frames = Arc::new(AtomicUsize::new(0));
     let asked = Arc::clone(&frames);
-    let wake: crate::terminal::OutputWake = Arc::new(move || {
-        asked.fetch_add(1, Ordering::Relaxed);
+    let wake: crate::terminal::OutputWake = Arc::new(move |wake| {
+        asked.fetch_add(usize::from(wake == crate::Wake::Echo), Ordering::Relaxed);
     });
     terminal.attach_output_wake(&wake);
 

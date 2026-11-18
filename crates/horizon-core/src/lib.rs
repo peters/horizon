@@ -70,8 +70,8 @@ pub use block_panel::{
     PendingClick, WAKE_LINE, WAKE_LINE_INTERVAL, WakeContext, WakeHold, WakeVerdict, wake_verdict,
 };
 pub use board::{
-    Board, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress, WorkspaceAlignment,
-    WorkspaceDockSide, WorkspaceLayout,
+    Board, BoardProcessOutput, EditorSave, ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress,
+    WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
 };
 pub use bounded_program::ProgramEnvironment;
 pub use config::{
@@ -139,7 +139,7 @@ pub use ssh::{
 pub use terminal::latency;
 pub use terminal::{
     ClipboardTarget, ClipboardWrite, CwdReader, FollowFeed, FollowSpec, MAX_FOLLOW_COLS, MAX_FOLLOW_ROWS, MAX_TYPED,
-    MAX_WAITING_OUTPUT, OutputWake, PROGRAM_BOUND, ShareOutlet, ShareScreen, ShareSource, ShareTake, Terminal,
+    MAX_WAITING_OUTPUT, OutputWake, PROGRAM_BOUND, ShareOutlet, ShareScreen, ShareSource, ShareTake, Terminal, Wake,
     open_url, read_cwd,
 };
 pub use transcript::PanelTranscript;

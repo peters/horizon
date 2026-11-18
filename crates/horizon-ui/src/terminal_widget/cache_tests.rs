@@ -50,8 +50,10 @@ const CHATTY_CHILD_ARGS: &str = "i=0\nwhile :; do printf 'row-%s\\n' \"$i\"; i=$
 fn counting_wake() -> (Arc<AtomicUsize>, horizon_core::OutputWake) {
     let wakes = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&wakes);
-    let wake: horizon_core::OutputWake = Arc::new(move || {
-        counter.fetch_add(1, Ordering::Relaxed);
+    // The frames that an echo asks for. An event of the program asks for a pass
+    // of a window that draws nothing, which is not what these tests count.
+    let wake: horizon_core::OutputWake = Arc::new(move |wake| {
+        counter.fetch_add(usize::from(wake == horizon_core::Wake::Echo), Ordering::Relaxed);
     });
     (wakes, wake)
 }
