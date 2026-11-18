@@ -361,11 +361,16 @@ fn drawn_texts(output: &egui::FullOutput) -> Vec<&str> {
 
 /// The frame of the layout toolbar of a workspace, which stands under the point
 /// `tidy` of its `Tidy` button.
+///
+/// The largest rounded rectangle that stands under that point is the frame: the
+/// buttons of the toolbar and the buttons of an ask over it are rounded too.
 fn toolbar_frame(output: &egui::FullOutput, tidy: Pos2) -> Rect {
     fn walk(shape: &egui::Shape, tidy: Pos2, found: &mut Option<Rect>) {
         match shape {
             egui::epaint::Shape::Rect(rect)
-                if rect.corner_radius == egui::CornerRadius::same(10) && rect.rect.contains(tidy) =>
+                if rect.corner_radius == egui::CornerRadius::same(10)
+                    && rect.rect.contains(tidy)
+                    && found.is_none_or(|found| found.area() < rect.rect.area()) =>
             {
                 *found = Some(rect.rect);
             }

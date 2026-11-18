@@ -14,6 +14,7 @@ use crate::app::root_chrome::ToolbarAction;
 use crate::app::test_support::{
     raw_input, run_app_frame_with_input, test_app_with_config_and_startup, wait_for_session_saves,
 };
+use crate::theme;
 
 /// The sink of a test: it records the notices that Horizon would show.
 #[derive(Clone, Default)]
@@ -127,6 +128,67 @@ fn texts(output: &egui::FullOutput) -> Vec<&str> {
             _ => None,
         })
         .collect()
+}
+
+/// Every shape of the frame, at any depth of a group of shapes.
+fn shapes_of(output: &egui::FullOutput) -> Vec<&egui::Shape> {
+    fn walk<'a>(shape: &'a egui::Shape, found: &mut Vec<&'a egui::Shape>) {
+        found.push(shape);
+        if let egui::Shape::Vec(inner) = shape {
+            for shape in inner {
+                walk(shape, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut found);
+    }
+    found
+}
+
+/// The fill of the action of the ask under `heading` that drew the text `label`:
+/// the smallest filled rectangle of the frame that stands under that text and
+/// around it. The toolbar of the window says some of the words of the ask too.
+fn fill_of(output: &egui::FullOutput, label: &str, heading: &str) -> egui::Color32 {
+    let centre = button(output, label, heading);
+    let shapes = shapes_of(output);
+    let text = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Text(drawn) if drawn.galley.text() == label => {
+                let rect = egui::Rect::from_min_size(drawn.pos, drawn.galley.size());
+                Some((rect, rect.center().distance(centre)))
+            }
+            _ => None,
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or_else(
+            || panic!("the ask under {heading} draws {label}: {:?}", texts(output)),
+            |(rect, _)| rect,
+        );
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.fill.a() != 0 && rect.rect.contains_rect(text) => Some(rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
+        .map_or_else(|| panic!("a fill stands under the text {label}"), |rect| rect.fill)
+}
+
+/// The frame of the ask once its area stopped fading in: a fill that is still
+/// translucent belongs to a frame of that fade, and the area of a question draws
+/// nothing before a frame of its own found its size.
+fn settled_ask(ctx: &Context, app: &mut HorizonApp, heading: &str) -> egui::FullOutput {
+    let mut output = ask_frame(ctx, app);
+    for _ in 0..40 {
+        if fill_of(&output, "Cancel", heading).a() == u8::MAX {
+            return output;
+        }
+        output = frame_with(ctx, app, raw_input([1400.0, 900.0], None));
+    }
+    panic!("the ask under {heading} never reaches the colour of its actions");
 }
 
 /// The drawn texts of the frame with their centre.
@@ -600,4 +662,71 @@ fn the_ask_of_a_close_takes_a_press_under_a_workspace_toolbar() {
         "the press of End them and quit arrives where a workspace toolbar stands"
     );
     assert!(app.keep_running.ask.is_none(), "the ask is answered");
+}
+
+/// The action that Enter takes in the ask of a close is the main action of the
+/// question, which the other questions draw with the accent: the fill of `Save`.
+/// The action that ends the programs keeps the fill of `Delete`, and `Cancel`
+/// keeps the plain one.
+#[test]
+fn the_first_action_of_the_close_ask_is_drawn_as_the_main_action() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+    let workspace = app.board.create_workspace("Ask");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    let _ = close_frame(&ctx, &mut app);
+    let output = settled_ask(&ctx, &mut app, "Close Horizon?");
+
+    let keep = fill_of(&output, "Keep running in the background", "Close Horizon?");
+    let quit = fill_of(&output, "End them and quit", "Close Horizon?");
+    let cancel = fill_of(&output, "Cancel", "Close Horizon?");
+    assert_eq!(cancel, theme::PANEL_BG_ALT(), "Cancel keeps the plain fill");
+    assert_eq!(
+        keep,
+        theme::blend(theme::PANEL_BG_ALT(), theme::ACCENT(), 0.28),
+        "the action that Enter takes is drawn as Save is"
+    );
+    assert_eq!(
+        quit,
+        theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_RED(), 0.22),
+        "the action that ends the programs is drawn as Delete is"
+    );
+    app.board.shutdown_terminal_panels();
+}
+
+/// `Quit Horizon` asks with two actions: the red one ends the programs, and
+/// Enter takes neither of them.
+#[test]
+fn the_action_that_ends_the_programs_of_quit_horizon_is_red_and_enter_takes_it_not() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::KeepRunning);
+    let workspace = app.board.create_workspace("Quit");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    app.perform_toolbar_action(&ctx, ToolbarAction::Quit);
+    let heading = "End 1 program and quit?";
+    let _ = settled_ask(&ctx, &mut app, heading);
+
+    // Enter answers nothing there: the ask waits for a press on one of its two
+    // actions, and no program ends.
+    let _ = press_key(&ctx, &mut app, Key::Enter);
+    assert!(app.keep_running.ask.is_some(), "Enter leaves the ask of Quit Horizon");
+    assert!(app.shutdown_progress.is_none(), "Enter ends no program there");
+
+    let output = ask_frame(&ctx, &mut app);
+    let quit = fill_of(&output, "Quit", heading);
+    assert_eq!(
+        fill_of(&output, "Cancel", heading),
+        theme::PANEL_BG_ALT(),
+        "Cancel keeps the plain fill"
+    );
+    assert_eq!(
+        quit,
+        theme::blend(theme::PANEL_BG_ALT(), theme::PALETTE_RED(), 0.22),
+        "the action that ends the programs is drawn as Delete is"
+    );
+    app.board.shutdown_terminal_panels();
 }

@@ -9,7 +9,7 @@ use egui::{Context, Key, RichText};
 
 use crate::theme;
 
-use super::super::util::ask_modal;
+use super::super::util::{ask_modal, chrome_button, danger_button, primary_button};
 use super::{CloseAnswer, HorizonApp};
 
 const CLOSE_HEADING: &str = "Close Horizon?";
@@ -53,14 +53,14 @@ impl HorizonApp {
                     answer = actions(
                         ui,
                         &[
-                            (QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
-                            (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
+                            (QUIT, Look::Danger, CloseAnswer::Quit),
+                            (CANCEL, Look::Plain, CloseAnswer::Cancel),
                         ],
                     );
                 });
                 return;
             }
-            if action(ui, KEEP_RUNNING, theme::FG()) {
+            if action(ui, KEEP_RUNNING, Look::Primary) {
                 answer = Some(CloseAnswer::KeepRunning);
             }
             ui.label(RichText::new(KEEP_RUNNING_HELP).size(11.5).color(theme::FG_SOFT()));
@@ -69,8 +69,8 @@ impl HorizonApp {
                 answer = actions(
                     ui,
                     &[
-                        (END_AND_QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
-                        (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
+                        (END_AND_QUIT, Look::Danger, CloseAnswer::Quit),
+                        (CANCEL, Look::Plain, CloseAnswer::Cancel),
                     ],
                 );
             });
@@ -91,17 +91,31 @@ impl HorizonApp {
     }
 }
 
-/// Whether the person pressed the action `label`, drawn in `color`.
-fn action(ui: &mut egui::Ui, label: &str, color: egui::Color32) -> bool {
-    ui.add(egui::Button::new(RichText::new(label).color(color).size(12.0)))
-        .clicked()
+/// The look of an action of the ask, as the other questions of the window draw
+/// theirs: the main action that Enter takes, the one that ends the programs, and
+/// the plain one.
+#[derive(Clone, Copy)]
+enum Look {
+    Primary,
+    Danger,
+    Plain,
+}
+
+/// Whether the person pressed the action `label`, drawn with `look`.
+fn action(ui: &mut egui::Ui, label: &str, look: Look) -> bool {
+    let button = match look {
+        Look::Primary => primary_button(label),
+        Look::Danger => danger_button(label),
+        Look::Plain => chrome_button(label),
+    };
+    ui.add(button).clicked()
 }
 
 /// The action of the row of `entries` that the person pressed, if one.
-fn actions(ui: &mut egui::Ui, entries: &[(&str, egui::Color32, CloseAnswer)]) -> Option<CloseAnswer> {
+fn actions(ui: &mut egui::Ui, entries: &[(&str, Look, CloseAnswer)]) -> Option<CloseAnswer> {
     let mut pressed = None;
-    for (label, color, answer) in entries {
-        if action(ui, label, *color) {
+    for (label, look, answer) in entries {
+        if action(ui, label, *look) {
             pressed = Some(*answer);
         }
     }
