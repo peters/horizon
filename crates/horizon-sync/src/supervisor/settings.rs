@@ -26,7 +26,7 @@
 //!    the settings whose content differed.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use horizon_core::config_store::ConfigStore;
 use horizon_core::settings_sync::{self, SectionFault};
@@ -255,97 +255,59 @@ fn store_section(rows: &BTreeMap<String, String>, section: &str, defaults: &Conf
 /// keeps its own value; a row with another content replaces the row and names its
 /// section in one line for the person.
 fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
-    let (arriving, versions, mut faults, decided, lost) = {
+    let arriving = {
         let state = handle.lock();
-        let mut arriving = BTreeMap::new();
-        let mut versions = BTreeMap::new();
-        let mut faults = BTreeMap::new();
-        let mut decided = BTreeSet::new();
-        let mut lost: Vec<String> = Vec::new();
-        for (section, row) in &state.settings {
-            if !settings_sync::is_shared(section) {
-                continue;
-            }
-            // This row is the one that a refusal named, so its content decides
-            // whether this computer lost a value at all. A row that this computer
-            // applied before the refusal came is decided here too: the answer that
-            // carries the row of a refused version can arrive before the refusal
-            // itself, and a section that waits for a row that no answer brings again
-            // would leave the person without the line that says that a value lost.
-            if let Some((refused_at, pushed)) = state.settings_lost_pending.get(section)
-                && row.version >= *refused_at
-            {
-                let held = server_section(section, &row.body);
-                let pushed = server_section(section, pushed);
-                decided.insert(section.clone());
-                if !matches!((held, pushed), (Ok(held), Ok(pushed)) if settings_sync::covers(&held, &pushed)) {
-                    lost.push(section.clone());
-                }
-            }
-            if state.settings_applied.get(section) == Some(&row.version)
-                || state.settings_refused.get(section) == Some(&row.version)
-            {
-                continue;
-            }
-            match server_section(section, &row.body) {
-                Ok(value) => {
-                    arriving.insert(section.clone(), value);
-                    versions.insert(section.clone(), row.version);
-                }
-                Err(fault) => {
-                    faults.insert(section.clone(), (row.version, fault));
-                }
-            }
-        }
-        (arriving, versions, faults, decided, lost)
+        mirror_rows(&state)
     };
-    // A section whose content is the content of this computer is not a change of
-    // this computer: it takes the version of the server and writes no row, so no
-    // editor offers the value of another computer for a value that it already
-    // holds.
-    let local = store.section_rows().unwrap_or_default();
-    let defaults = Config::default();
-    let mut applied: BTreeMap<String, u64> = BTreeMap::new();
-    let mut writing: BTreeMap<String, Value> = BTreeMap::new();
-    for (section, value) in arriving {
-        let own = store_section(&local, &section, &defaults);
-        if own.is_some_and(|own| settings_sync::covers(&value, &own)) {
-            applied.insert(section.clone(), versions[&section]);
-            continue;
-        }
-        writing.insert(section, value);
-    }
-    if !writing.is_empty() {
-        match settings_sync::apply_to_store(store, &writing) {
-            Ok(_) => applied.extend(versions.iter().map(|(section, version)| (section.clone(), *version))),
-            // One section that this build refuses does not keep the others out.
-            Err(_) => {
-                for (section, value) in &writing {
-                    let one = BTreeMap::from([(section.clone(), value.clone())]);
-                    match settings_sync::apply_to_store(store, &one) {
-                        Ok(_) => {
-                            applied.insert(section.clone(), versions[section]);
-                        }
-                        Err(fault) => {
-                            faults.insert(section.clone(), (versions[section], fault));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if applied.is_empty() && faults.is_empty() && decided.is_empty() {
+    let (mut applied, write_faults) = write_rows(store, &arriving);
+    let mut faults = arriving.faults;
+    faults.extend(write_faults);
+    if applied.is_empty() && faults.is_empty() && arriving.decided.is_empty() {
         return;
     }
     let mut lines = Vec::new();
     for (section, (_, fault)) in &faults {
         lines.push(format!("The setting {section}: {fault}"));
     }
+    if !arriving.lost.is_empty() {
+        // The line is written before the state that carries the version of these rows is
+        // published, so a frame or a test that reads the settings as in step reads the
+        // line of the value that lost too. A value that this computer kept until now is
+        // not in the store any more, and the line names it: the person finds it in the
+        // value of the server.
+        for section in &arriving.lost {
+            tracing::info!(
+                section = %section,
+                "the server kept the value of another computer for a setting, so this computer takes that value"
+            );
+        }
+        handle.set_settings_lost(lost_line(&arriving.lost));
+    }
     let mut state = handle.lock();
+    // A row of the server can arrive between the read of the mirror that this write was
+    // built from and the write itself, so the store can hold a row older than the mirror
+    // after the write. That version is no version of this store, and the worker writes
+    // the newer row with one more pass: a store that stayed behind a row of the mirror
+    // would send the value of that older row with the version of the newer one.
+    let behind: Vec<String> = applied
+        .keys()
+        .filter(|section| {
+            state
+                .settings
+                .get(*section)
+                .is_some_and(|row| row.version > applied[*section])
+        })
+        .cloned()
+        .collect();
+    for section in &behind {
+        applied.remove(section);
+        state.settings_applied.remove(section);
+    }
+    let behind = !behind.is_empty();
     state.settings_applied.extend(applied);
     pin_refused(&mut state, &faults);
     // Every row that arrived decided its refusal, so no section waits for one.
-    for section in &decided {
+    for section in &arriving.decided {
         state.settings_lost_pending.remove(section);
     }
     state.settings_refusal = lines.iter().next_back().cloned();
@@ -355,36 +317,115 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
     for line in lines {
         handle.push_notice(line);
     }
-    if !lost.is_empty() {
-        // A value that this computer kept until now is not in the store any more, so
-        // the line names it and the person finds it in the value of the server.
-        for section in &lost {
-            tracing::info!(
-                section = %section,
-                "the server kept the value of another computer for a setting, so this computer takes that value"
-            );
-        }
-        handle.set_settings_lost(lost_line(&lost));
+    if behind {
+        handle.apply_store();
     }
     (handle.wake)();
 }
 
-/// The sections of `written` that the store at `path` holds now. A push answers
-/// after it left, so the store may hold another content by then.
-pub(super) fn held_by_store(path: &Path, written: &[(String, u64, Value)]) -> BTreeSet<String> {
-    let Ok(rows) = ConfigStore::resolve(path).section_rows() else {
-        return BTreeSet::new();
+/// The rows of the mirror that the store may not hold, the refusals that they decide,
+/// and the sections whose value of the person lost.
+struct Arriving {
+    values: BTreeMap<String, Value>,
+    versions: BTreeMap<String, u64>,
+    faults: BTreeMap<String, (u64, SectionFault)>,
+    decided: BTreeSet<String>,
+    lost: Vec<String>,
+}
+
+fn mirror_rows(state: &SyncState) -> Arriving {
+    let mut arriving = Arriving {
+        values: BTreeMap::new(),
+        versions: BTreeMap::new(),
+        faults: BTreeMap::new(),
+        decided: BTreeSet::new(),
+        lost: Vec::new(),
     };
+    for (section, row) in &state.settings {
+        if !settings_sync::is_shared(section) {
+            continue;
+        }
+        // This row is the one that a refusal named, so its content decides whether this
+        // computer lost a value at all. A row that this computer applied before the
+        // refusal came is decided here too: the answer that carries the row of a refused
+        // version can arrive before the refusal itself, and a section that waits for a
+        // row that no answer brings again would leave the person without the line that
+        // says that a value lost.
+        if let Some((refused_at, pushed)) = state.settings_lost_pending.get(section)
+            && row.version >= *refused_at
+        {
+            let held = server_section(section, &row.body);
+            let pushed = server_section(section, pushed);
+            arriving.decided.insert(section.clone());
+            if !matches!((held, pushed), (Ok(held), Ok(pushed)) if settings_sync::covers(&held, &pushed)) {
+                arriving.lost.push(section.clone());
+            }
+        }
+        if state.settings_applied.get(section) == Some(&row.version)
+            || state.settings_refused.get(section) == Some(&row.version)
+        {
+            continue;
+        }
+        match server_section(section, &row.body) {
+            Ok(value) => {
+                arriving.values.insert(section.clone(), value);
+                arriving.versions.insert(section.clone(), row.version);
+            }
+            Err(fault) => {
+                arriving.faults.insert(section.clone(), (row.version, fault));
+            }
+        }
+    }
+    arriving
+}
+
+/// Writes the rows of `arriving` that the store does not hold, and answers the version
+/// of each row that the store holds now and the sections that this build refused. A
+/// section whose content is the content of this computer takes the version of the
+/// server and writes no row, so no editor offers a value that it already holds.
+fn write_rows(
+    store: &ConfigStore,
+    arriving: &Arriving,
+) -> (BTreeMap<String, u64>, BTreeMap<String, (u64, SectionFault)>) {
+    let local = store.section_rows().unwrap_or_default();
     let defaults = Config::default();
-    written
-        .iter()
-        .filter(|(section, _, body)| {
-            store_section(&rows, section, &defaults).is_some_and(|own| {
-                server_section(section, body).is_ok_and(|pushed| settings_sync::covers(&pushed, &own))
-            })
-        })
-        .map(|(section, _, _)| section.clone())
-        .collect()
+    let mut applied: BTreeMap<String, u64> = BTreeMap::new();
+    let mut faults: BTreeMap<String, (u64, SectionFault)> = BTreeMap::new();
+    let mut writing: BTreeMap<String, Value> = BTreeMap::new();
+    for (section, value) in &arriving.values {
+        let own = store_section(&local, section, &defaults);
+        if own.is_some_and(|own| settings_sync::covers(value, &own)) {
+            applied.insert(section.clone(), arriving.versions[section]);
+            continue;
+        }
+        writing.insert(section.clone(), value.clone());
+    }
+    if writing.is_empty() {
+        return (applied, faults);
+    }
+    match settings_sync::apply_to_store(store, &writing) {
+        Ok(_) => applied.extend(
+            arriving
+                .versions
+                .iter()
+                .map(|(section, version)| (section.clone(), *version)),
+        ),
+        // One section that this build refuses does not keep the others out.
+        Err(_) => {
+            for (section, value) in &writing {
+                let one = BTreeMap::from([(section.clone(), value.clone())]);
+                match settings_sync::apply_to_store(store, &one) {
+                    Ok(_) => {
+                        applied.insert(section.clone(), arriving.versions[section]);
+                    }
+                    Err(fault) => {
+                        faults.insert(section.clone(), (arriving.versions[section], fault));
+                    }
+                }
+            }
+        }
+    }
+    (applied, faults)
 }
 
 /// Pins the sections whose content this build refused, so one refusal reads one

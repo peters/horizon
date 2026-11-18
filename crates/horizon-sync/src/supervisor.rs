@@ -70,6 +70,7 @@ mod reset;
 mod secrets;
 mod settings;
 mod state;
+mod store_writes;
 mod view;
 
 pub use live::{LiveHandle, LiveSupervisor};
@@ -352,6 +353,9 @@ pub struct Supervisor {
     stop: Arc<AtomicBool>,
     halt: Arc<Mutex<Option<Halt>>>,
     thread: Option<JoinHandle<()>>,
+    /// The worker that writes the settings store of this computer, so no link waits
+    /// for the file sync of a store.
+    settings_thread: Option<JoinHandle<()>>,
 }
 
 impl Supervisor {
@@ -376,6 +380,10 @@ impl Supervisor {
         handle.requests = ask;
         let stop = Arc::new(AtomicBool::new(false));
         let halt = Arc::new(Mutex::new(None));
+        let settings_thread = Some(
+            store_writes::start(&handle, &stop)
+                .map_err(|error| SyncError::Queue(format!("the thread of the settings store: {error}")))?,
+        );
         let thread = {
             let (handle, stop, halt) = (handle.clone(), Arc::clone(&stop), Arc::clone(&halt));
             thread::Builder::new()
@@ -388,6 +396,7 @@ impl Supervisor {
             stop,
             halt,
             thread: Some(thread),
+            settings_thread,
         })
     }
 
@@ -407,6 +416,9 @@ impl Supervisor {
         self.stop.store(true, Ordering::SeqCst);
         halt(&self.halt);
         if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        if let Some(thread) = self.settings_thread.take() {
             let _ = thread.join();
         }
         reap(&self.halt);

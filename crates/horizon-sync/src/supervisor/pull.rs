@@ -5,7 +5,7 @@
 //! A secret value is written outside the lock of the state, because a file and a
 //! credential store may take a while and no frame of the UI waits for them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use horizon_core::Machine;
 use horizon_core::secret::SecretId;
@@ -13,7 +13,7 @@ use horizon_core::secret::SecretId;
 use super::SyncHandle;
 use super::files::{MirrorFile, MirroredMachine, MirroredSetting};
 use super::secrets::{local_machine_keys, refuse_secrets, reseed_secrets, secret_rows_of, write_secrets};
-use super::settings::{RefusedSection, apply as apply_settings, held_by_store, refuse_settings};
+use super::settings::{RefusedSection, refuse_settings};
 use super::view::merged_records;
 use super::{MIRROR_FORMAT, SyncState, reset};
 use crate::client::PullOutcome;
@@ -65,12 +65,6 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
         }
         (ids, sections, oldest)
     };
-    // The store is read outside the lock: a file is a wait that no frame may share.
-    let (path, generation) = {
-        let state = handle.lock();
-        (state.settings_path.clone(), state.settings_generation)
-    };
-    let holds = path.map_or_else(BTreeSet::new, |path| held_by_store(&path, &written));
     let outcome = {
         let mut state = handle.lock();
         let outcome = state.client.accept_push(reply);
@@ -81,29 +75,27 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
         if let Some(version) = rewind {
             state.client.replay_before(version);
         }
-        // A save that was queued while the store was read is not in `holds`.
-        let read_in_time = state.settings_generation == generation;
+        let mut written_now = false;
         for (section, version, body) in written {
-            // A newer row stays: the server applied this intent again. The version of
-            // this push is a version of the store only when the store holds the content
-            // of the push; otherwise the row of that version comes again.
+            // A newer row stays: the server applied this intent again.
             let seen = state.settings.get(&section).map_or(0, |row| row.version);
-            let applied = state.settings_applied.get(&section).copied().unwrap_or(0);
-            if seen.max(applied) >= version {
+            if seen >= version {
                 continue;
-            }
-            if read_in_time && holds.contains(&section) {
-                state.settings_applied.insert(section.clone(), version);
-            } else {
-                state.client.replay_before(version);
             }
             state.settings.insert(section, MirroredSetting { version, body });
             state.settings_generation = state.settings_generation.wrapping_add(1);
             // The drop of the lock writes the mirror of the settings.
             state.settings_dirty = true;
+            written_now = true;
         }
-        outcome
+        (outcome, written_now)
     };
+    // The worker of the store writes this version and marks it applied when the store
+    // holds it: a version that the store does not hold is no version of this computer.
+    if outcome.1 {
+        handle.apply_store();
+    }
+    let outcome = outcome.0;
     match outcome {
         Ok(outcome) => {
             for (id, refusal) in &outcome.refused {
@@ -200,9 +192,10 @@ pub(super) fn apply_changes(handle: &SyncHandle, changes: &Changes, asked_from: 
         reset = applied.reset,
         "the machine list moved"
     );
-    // The settings of this computer follow the same answer, on this worker thread:
-    // a section of the server becomes the row of the settings store here.
-    apply_settings(handle);
+    // The settings of this computer follow the same answer, and the worker of the
+    // store writes them: the link takes the next frame at once instead of waiting for
+    // the file sync of the store.
+    handle.apply_store();
     Ok(applied)
 }
 

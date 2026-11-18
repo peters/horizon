@@ -130,12 +130,14 @@ except Exception:
 ";
 
 /// A relay that holds the first push of the settings until the test writes
-/// [`RELEASE`], and then the request for changes that follows that push until the
-/// test writes [`RELEASE_PULL`].
+/// [`RELEASE`], and then the answer of changes that the server gives until the test
+/// writes [`RELEASE_PULL`].
 ///
-/// Between the answer of the push and the answer of that request, the version that
-/// the push wrote is not in the mirror of the computer yet. The relay keeps that
-/// window open, so a test can save a setting in it.
+/// A link sends its request for changes before the push of a queue that a worker
+/// filled, so the answer of that request carries the row of the push as soon as the
+/// server applied it. The relay holds the answer instead of the request, and the
+/// version that the push wrote is then not in the mirror of the computer until the
+/// test releases it.
 const HELD_PULL_RELAY: &str = "\
 import os
 import socket
@@ -149,7 +151,7 @@ directory = sys.argv[2]
 held = os.path.join(directory, 'held.log')
 release = os.path.join(directory, 'release')
 pull_release = os.path.join(directory, 'release-pull')
-state = {'pushed': False}
+state = {'released': False}
 
 
 def wait_until(path):
@@ -175,11 +177,7 @@ def outward():
                     with open(held, 'a') as log:
                         log.write('push\\n')
                     wait_until(release)
-                    state['pushed'] = True
-                elif state['pushed'] and (b'\"pull\":' in frame or b'\"wait\":' in frame):
-                    with open(held, 'a') as log:
-                        log.write('request\\n')
-                    wait_until(pull_release)
+                    state['released'] = True
                 sock.sendall(frame)
     except Exception:
         pass
@@ -190,13 +188,25 @@ def outward():
 
 
 threading.Thread(target=outward, daemon=True).start()
+buffer = b''
 try:
     while True:
         data = sock.recv(65536)
         if not data:
             break
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        buffer += data
+        while len(buffer) >= 4:
+            length = int.from_bytes(buffer[:4], 'big')
+            if len(buffer) < 4 + length:
+                break
+            frame = buffer[:4 + length]
+            buffer = buffer[4 + length:]
+            if state['released'] and b'\"changes\":' in frame:
+                with open(held, 'a') as log:
+                    log.write('request\\n')
+                wait_until(pull_release)
+            sys.stdout.buffer.write(frame)
+            sys.stdout.buffer.flush()
 except Exception:
     pass
 ";
@@ -1793,6 +1803,101 @@ fn a_save_while_the_server_is_away_starts_an_attempt_at_once() {
     eventually("the section of the save on the server", || {
         server.setting("appearance").is_some().then_some(())
     });
+    a.stop();
+    server.stop();
+}
+
+/// The write lock of the store of `computer`, held from this process, so no write of
+/// that store finishes while the value stands.
+struct HeldStoreWrite {
+    connection: rusqlite::Connection,
+}
+
+impl HeldStoreWrite {
+    fn take(computer: &Computer) -> Self {
+        let path = horizon_core::config_store::ConfigStore::resolve(&computer.config_path())
+            .path()
+            .to_path_buf();
+        let connection = rusqlite::Connection::open(path).expect("the store of the computer");
+        connection
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("the write lock of the store");
+        Self { connection }
+    }
+}
+
+impl Drop for HeldStoreWrite {
+    fn drop(&mut self) {
+        let _ = self.connection.execute_batch("COMMIT");
+    }
+}
+
+#[test]
+fn a_save_while_the_store_write_of_a_row_waits_names_the_version_of_that_row() {
+    // One write of the settings store is a file sync of 29 to 76 ms on a busy
+    // computer, and the twelve sections of one link took 1.5 to 2.4 s under load. A
+    // link that made that write itself answered no frame while it ran, so the row of
+    // another computer reached the mirror late and a save of the person in that
+    // window named the version of the row before. The link hands the write to the
+    // worker of the store: the save names the version of the row at once, and the
+    // server accepts it while the write of the store still waits for this test.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut a = Computer::start(&home.path().join("a"), &Config::default(), &server.socket);
+    in_step(&a);
+
+    // The person's save writes the store before it queues its intent, so that write
+    // is made here and the lock of the store below stops every later one. The window
+    // that the test opens is the queue of the intent, which is what names a version.
+    let light = config_with_theme(AppearanceTheme::Light);
+    Config::save(&a.config_path(), &light).expect("the store of the save");
+    let held = HeldStoreWrite::take(&a);
+
+    // Another computer changes the section, and the row of that change reaches this
+    // computer while the write of the store is held.
+    push_of_another_computer(
+        &server,
+        "other-2c",
+        1,
+        "appearance",
+        &config_with_theme(AppearanceTheme::Dark),
+    );
+    let version = server
+        .setting("appearance")
+        .expect("the section of the other computer")
+        .0;
+    eventually("the row of the other computer in the mirror", || {
+        (!a.handle().settings_view().in_step()).then_some(())
+    });
+    // The write of that row waits in the store, and the link is free: a link that
+    // made the write itself is inside it at this instant.
+    thread::sleep(Duration::from_millis(300));
+
+    a.settings()
+        .enqueue(&light, &["appearance".to_owned()])
+        .expect("the intent of the save");
+    assert_eq!(
+        a.queued_seen("appearance"),
+        Some(version),
+        "the intent of the save names the version that the server last answered"
+    );
+    eventually_within(
+        Duration::from_secs(3),
+        "the light theme of the server while the write of the store waits",
+        || {
+            server
+                .setting("appearance")
+                .is_some_and(|(_, body)| body["section"]["theme"] == json!("light"))
+                .then_some(())
+        },
+    );
+    drop(held);
+    settled(&a);
+    assert_eq!(
+        a.theme(),
+        AppearanceTheme::Light,
+        "the store of this computer holds the value that the person saved"
+    );
     a.stop();
     server.stop();
 }

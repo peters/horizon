@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        mpsc::{self, Sender},
+        mpsc::{self, Receiver, Sender},
     },
     time::Instant,
 };
@@ -223,6 +223,9 @@ pub(crate) struct SyncState {
     pub(crate) machine_keys: BTreeSet<String>,
     /// The places where this computer keeps its secrets.
     pub(crate) secrets: Arc<dyn SecretTarget>,
+    /// The other end of the requests for a write of the settings store, until the
+    /// supervisor hands it to the worker that writes the store.
+    pub(super) store_requests: Option<Receiver<()>>,
     /// The records of the file store of this computer, until the first pull of
     /// the server tells which of them the server does not have.
     pub(crate) pending_seed: Option<Vec<Machine>>,
@@ -376,6 +379,9 @@ pub struct SyncHandle {
     pub(crate) kick: Sender<()>,
     pub(crate) requests: Sender<(ServerRequest, Sender<ServerReply>)>,
     pub(crate) wake: Arc<dyn Fn() + Send + Sync>,
+    /// One request for each answer that the store does not hold yet. The worker of the
+    /// supervisor writes them, so the link waits for no file sync.
+    pub(super) store_writes: Sender<()>,
 }
 
 impl std::fmt::Debug for SyncHandle {
@@ -422,6 +428,7 @@ impl SyncHandle {
             .collect();
         let (kick, _) = mpsc::channel();
         let (requests, _) = mpsc::channel();
+        let (store_writes, store_requests) = mpsc::channel();
         let handle = Self {
             inner: Arc::new(Mutex::new(SyncState {
                 client,
@@ -455,6 +462,7 @@ impl SyncHandle {
                 settings_dirty: false,
                 settings_generation: 0,
                 mirror_dirty: true,
+                store_requests: Some(store_requests),
                 refused_secrets: BTreeSet::new(),
                 request_since: None,
                 lost_request_since: None,
@@ -467,6 +475,7 @@ impl SyncHandle {
             kick,
             requests,
             wake,
+            store_writes,
         };
         {
             // The first mirror of this computer, and the snapshot that a frame
@@ -842,6 +851,19 @@ impl SyncHandle {
             handle: self,
             state: Some(self.inner.lock().unwrap_or_else(PoisonError::into_inner)),
         }
+    }
+
+    /// Asks the worker of the settings store to write the rows that the mirror of this
+    /// computer holds and its store does not: a file sync is no part of the link.
+    pub(super) fn apply_store(&self) {
+        if self.store_writes.send(()).is_err() {
+            tracing::warn!("the worker of the settings store is away, so its rows wait");
+        }
+    }
+
+    /// The requests of that worker, which the supervisor hands to it when it starts.
+    pub(super) fn take_store_requests(&self) -> Option<Receiver<()>> {
+        self.lock().store_requests.take()
     }
 
     /// The snapshot of `state`, in the place that a frame reads.
