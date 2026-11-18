@@ -75,12 +75,17 @@ pub(in crate::app) struct KeepRunning {
 
 impl HorizonApp {
     /// The choice of the setting, for a platform that can hide the window: a
-    /// toolkit without a hidden window ends Horizon instead of asking.
+    /// toolkit without a hidden window ends Horizon instead of asking. A window
+    /// without a session lease never hides, because no second start could show
+    /// it again: there the choice to keep running asks.
     fn close_choice(&self) -> WindowCloseSetting {
-        if self.platform_hides_windows() {
-            self.template_config.features.when_window_closes
-        } else {
+        let setting = self.template_config.features.when_window_closes;
+        if !self.platform_hides_windows() {
             WindowCloseSetting::Quit
+        } else if setting == WindowCloseSetting::KeepRunning && !self.holds_session_lease() {
+            WindowCloseSetting::Ask
+        } else {
+            setting
         }
     }
 

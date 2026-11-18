@@ -16,6 +16,8 @@ use crate::app::test_support::{
 };
 use crate::theme;
 
+mod no_lease;
+
 /// The sink of a test: it records the notices that Horizon would show.
 #[derive(Clone, Default)]
 struct Recorder {

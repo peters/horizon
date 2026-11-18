@@ -3,7 +3,8 @@
 //!
 //! The ask draws what its counts say, and those counts came with the request. The
 //! first action of a close is the one that Enter takes, the second is the
-//! dangerous one, and a press outside the ask or the escape key cancels it.
+//! dangerous one, and a press outside the ask or the escape key cancels it. A
+//! window without a session lease offers only the dangerous one and `Cancel`.
 
 use egui::{Context, Key, RichText};
 
@@ -29,6 +30,9 @@ impl HorizonApp {
         };
         let (running, from_menu) = (ask.running, ask.from_menu);
         let mut remember = ask.remember;
+        // No second start finds a window without a session lease, so its ask
+        // offers no hide, and no choice to remember for a window that has one.
+        let can_hide = self.holds_session_lease();
         let mut answer = None;
         let id = egui::Id::unique("close_horizon_ask");
         let shown = ask_modal(id).show(ctx, |ui| {
@@ -48,12 +52,14 @@ impl HorizonApp {
                 ui.label(RichText::new(line).size(12.5).color(theme::FG()));
             }
             ui.add_space(10.0);
-            if from_menu {
+            if from_menu || !can_hide {
+                // Enter takes neither action: no key press ends a program.
+                let end = if from_menu { QUIT } else { END_AND_QUIT };
                 ui.horizontal(|ui| {
                     answer = actions(
                         ui,
                         &[
-                            (QUIT, Look::Danger, CloseAnswer::Quit),
+                            (end, Look::Danger, CloseAnswer::Quit),
                             (CANCEL, Look::Plain, CloseAnswer::Cancel),
                         ],
                     );

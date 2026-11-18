@@ -42,6 +42,13 @@ pub(in crate::app) struct FolderRequestPump {
 }
 
 impl HorizonApp {
+    /// Whether this window holds a session lease, which is how a second start of
+    /// this computer finds it. A window that took no session, or one that runs
+    /// with `--ephemeral`, writes no lease: no start can ask it for anything.
+    pub(in crate::app) fn holds_session_lease(&self) -> bool {
+        self.active_session.as_ref().is_some_and(|session| session.persistent)
+    }
+
     /// Takes the folder requests that wait for this window, and applies one per
     /// frame through the folder of a start.
     pub(in crate::app) fn poll_folder_requests(&mut self, ctx: &Context) {
@@ -59,9 +66,8 @@ impl HorizonApp {
         let root = self.session_store.home().root().to_path_buf();
         let now = folder_requests::now_millis();
         // The caller saw the lease of a window of this home, so only a window
-        // that holds one answers it. A window that took no session, or one that
-        // runs with `--ephemeral`, writes no lease and takes no request.
-        if !self.active_session.as_ref().is_some_and(|session| session.persistent) {
+        // that holds one answers it.
+        if !self.holds_session_lease() {
             self.browser_create_host.io.then(
                 move || folder_requests::prune(&root, now),
                 |_, pruned| log_failure(pruned, "prune the folder requests of a window without a lease"),
