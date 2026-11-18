@@ -21,12 +21,16 @@ fn spec(kind: PanelKind) -> FollowSpec {
     }
 }
 
+/// The size of one cell of the terminal font, in points, as the terminal widget
+/// measures it.
+const CELL: [f32; 2] = [7.83, 16.9];
+
 /// A board with one workspace and one follow panel in it.
 fn board_with_a_follow_panel(kind: PanelKind) -> (Board, PanelId, FollowFeed) {
     let mut board = Board::new();
     let workspace = board.create_workspace("shared");
     let id = board
-        .create_follow_panel(workspace, spec(kind))
+        .create_follow_panel(workspace, spec(kind), CELL)
         .expect("a follow panel opens");
     let feed = board.panel(id).and_then(crate::Panel::follow_feed).expect("its feed");
     (board, id, feed)
@@ -55,11 +59,14 @@ fn a_follow_panel_opens_at_the_grid_of_its_stream() {
     assert_eq!(panel.title, "review");
     let terminal = panel.terminal().expect("its terminal");
     assert_eq!((terminal.cols(), terminal.rows()), (100, 30));
-    // The body of the panel holds 100 by 30 cells of 8 by 17 points, beside the
+    // The body of the panel holds 100 by 30 cells of [`CELL`] points, beside the
     // scrollbar and under the title bar.
     assert_eq!(
         panel.layout.size,
-        [100.0 * 8.0 + 20.0 + 16.0, 30.0 * 17.0 + 34.0 + 16.0]
+        [
+            (100.0 + 1.0) * CELL[0] - 1.0 + 20.0 + 16.0,
+            (30.0 + 1.0) * CELL[1] - 1.0 + 34.0 + 16.0
+        ]
     );
     assert_eq!(board.focused, Some(id));
 }

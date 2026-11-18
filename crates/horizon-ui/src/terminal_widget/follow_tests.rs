@@ -38,6 +38,7 @@ impl Follower {
                     rows: GRID.1,
                     typing: true,
                 },
+                [8.0, 17.0],
             )
             .expect("a follow panel opens");
         let feed = board.panel(id).and_then(Panel::follow_feed).expect("its feed");

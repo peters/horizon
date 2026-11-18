@@ -231,17 +231,16 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
         |apps| text(apps[0], panel).contains("GOT:hello") && text(apps[1], follow).contains("GOT:hello"),
     );
 
-    // Each side says in the title bar what the other one does. The chip of the
-    // owner names the computer that typed, and the grid that it holds for it.
+    // Each side says in the title bar what the other one does. The body of the
+    // follow panel of B fits the grid of the panel of A, so the keys of B ask for
+    // no other grid: the chip of the owner names the computer that typed, and no
+    // size that it holds.
     let chip = super::chip_of;
-    assert_eq!(
-        chip(&a, panel).as_deref(),
-        Some("sized by Desk B \u{00b7} typed by Desk B")
-    );
+    assert_eq!(chip(&a, panel).as_deref(), Some("typed by Desk B"));
     frames_until(
         "the chip of the owner names the follower again",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
-        |apps| chip(apps[0], panel).as_deref() == Some("sized by Desk B \u{00b7} seen by Desk B"),
+        |apps| chip(apps[0], panel).as_deref() == Some("seen by Desk B"),
     );
     assert_eq!(chip(&b, follow).as_deref(), Some("on Desk A"));
 

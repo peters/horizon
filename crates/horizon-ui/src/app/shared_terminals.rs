@@ -204,7 +204,8 @@ impl HorizonApp {
             Some(workspace) => workspace,
             None => self.ensure_workspace_visible(ctx),
         };
-        let created = self.board.create_follow_panel(workspace, spec).ok();
+        let cell = crate::terminal_widget::grid_cell_size(ctx);
+        let created = self.board.create_follow_panel(workspace, spec, [cell.x, cell.y]).ok();
         let opened = created.and_then(|panel| {
             let follow = self.board.panel(panel)?;
             Some((panel, follow.local_id.clone(), follow.follow_feed()?))

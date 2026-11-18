@@ -298,7 +298,7 @@ impl HorizonApp {
                         .is_some_and(|body| pointer_position.is_some_and(|position| body.contains(position)))
             })
         });
-        let cell_size = crate::terminal_widget::wheel_cell_size(ctx);
+        let cell_size = crate::terminal_widget::grid_cell_size(ctx);
         let mut pending_scrollback = None;
         let mut scroll_routing = route_canvas_scroll(
             ctx,

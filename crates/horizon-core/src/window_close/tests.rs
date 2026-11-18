@@ -152,6 +152,7 @@ fn only_the_terminal_panels_of_this_computer_count_as_programs() {
                 rows: 24,
                 typing: true,
             },
+            [8.0, 17.0],
         )
         .expect("a follow panel");
 

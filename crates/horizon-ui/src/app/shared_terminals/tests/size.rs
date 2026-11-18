@@ -225,3 +225,58 @@ fn a_grid_for_a_panel_that_this_window_does_not_share_changes_nothing() {
         "the list of the owner keeps the grid of its body"
     );
 }
+
+/// The body of a follow panel fits the grid of its stream in the cell size of the
+/// terminal font, for the least and the greatest panel: the first key that the
+/// person presses in it asks the program of the owner for no other grid.
+#[test]
+fn a_follow_panel_opens_at_a_body_that_fits_the_grid_of_its_stream() {
+    // 65 by 21 is the grid of the live run whose panel opened one column wider,
+    // and the others are the bounds of a follow panel.
+    for (cols, rows) in [(65, 21), (20, 4), (240, 80)] {
+        let mut window = Window::new();
+        let owner = window.owner(OFFSCREEN);
+        window
+            .app
+            .board
+            .panel_mut(owner)
+            .expect("the owner panel")
+            .resize_immediately(rows, cols, 8, 17);
+        // The list of the window names the grid of the owner, and the follow panel
+        // opens at it.
+        let listed = window.id(owner);
+        window.until("the list names the grid of the owner", |app| {
+            app.shared_terminals
+                .found
+                .computers
+                .iter()
+                .flat_map(|computer| computer.panels.iter())
+                .any(|panel| panel.id == listed && (panel.cols, panel.rows) == (cols, rows))
+        });
+        let follow = window.follow(owner);
+        window.shows(follow, "READY");
+        window.settle();
+
+        assert_eq!(
+            grid(&window.app, follow),
+            (cols, rows),
+            "the follow panel shows the grid of the stream"
+        );
+        assert_eq!(
+            fit(&window.app, follow),
+            (cols, rows),
+            "the body of the follow panel fits the grid of the stream"
+        );
+
+        // The person types in the follow panel, and the stream has the grid that
+        // fits its body, so no request for another grid goes out on the link.
+        window.write(follow, b"x");
+        window.frames(3);
+        window.settle();
+        assert!(
+            window.link.relay().resizes.is_empty(),
+            "a key press asks the owner for no other grid: {:?}",
+            window.link.relay().resizes
+        );
+    }
+}

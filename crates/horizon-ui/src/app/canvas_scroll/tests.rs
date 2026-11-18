@@ -632,7 +632,7 @@ fn a_terminal_is_judged_where_the_frames_earlier_events_leave_it() {
     assert!(panel.terminal().expect("terminal").history_size() > 3);
     app.board.panels.push(panel);
 
-    let cell = crate::terminal_widget::wheel_cell_size(&ctx);
+    let cell = crate::terminal_widget::grid_cell_size(&ctx);
     let lines = |lines: f32| WheelStep {
         delta: Vec2::new(0.0, lines),
         unit: MouseWheelUnit::Line,
@@ -780,7 +780,7 @@ fn shift_never_chains_mouse_reporting_or_alternate_scroll_terminals() {
                 !app.panel_scroll_exhausted(
                     PanelId(99),
                     step,
-                    crate::terminal_widget::wheel_cell_size(&ctx),
+                    crate::terminal_widget::grid_cell_size(&ctx),
                     &mut None
                 ),
                 "{escape:?} {modifiers:?}"

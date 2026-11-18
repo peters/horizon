@@ -272,8 +272,10 @@ fn grid_metrics(ctx: &Context) -> GridMetrics {
     }
 }
 
-/// The cell size the terminal widget converts wheel deltas into lines with.
-pub(crate) fn wheel_cell_size(ctx: &Context) -> Vec2 {
+/// The size of one cell of the terminal font, which this widget measures: a wheel
+/// delta counts in lines of this height, and a panel that fits a grid opens at
+/// this size.
+pub(crate) fn grid_cell_size(ctx: &Context) -> Vec2 {
     let metrics = grid_metrics(ctx);
     Vec2::new(metrics.char_width, metrics.line_height)
 }

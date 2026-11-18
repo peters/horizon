@@ -564,13 +564,14 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     window.shows(follow, "GOT:two");
 
     // A new follower gets one screen at once and one a moment later, and the
-    // grid that the person of this computer asked for is one more.
+    // body of its panel fits the grid of the stream, so the keys of the person
+    // ask for no screen of another grid.
     let link = window.link.clone();
     window.until("the second screen of the join", move |_| link.relay().screens >= 2);
     assert_eq!(
         window.link.relay().screens,
-        3,
-        "two screens of the join, and one for the grid that the follower typed at"
+        2,
+        "two screens of the join, and none for the grid that the follower typed at"
     );
 
     // A resize of the owner gives the follower the new grid, once the person of
@@ -969,10 +970,11 @@ fn the_share_of_a_panel_goes_on_after_a_restart_of_its_terminal() {
     window.write(follow, b"after\n");
     window.shows(owner, "GOT:after");
     window.shows(follow, "GOT:after");
-    // The panel is still watched: its chip names the follower that holds the
-    // grid of the program again, after the bytes of that follower.
+    // The panel is still watched: its chip names the follower that sees it
+    // again, and no grid of a follower, because the body of the follow panel fits
+    // the grid that the new terminal has.
     window.until("the chip of the owner", |app| {
-        chip_of(app, owner).as_deref() == Some("sized by Here \u{00b7} seen by Here")
+        chip_of(app, owner).as_deref() == Some("seen by Here")
     });
 }
 
