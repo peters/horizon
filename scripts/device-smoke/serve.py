@@ -18,6 +18,7 @@ import tempfile
 import time
 
 import sandbox
+import second_start
 
 
 # The directory the host X server keeps its socket and keymap files in.
@@ -2085,6 +2086,10 @@ def main():
         # All client helpers see the same masked home and private XDG paths.
         application_process = spawn('horizon', application_command(
             app, config, args.saved_session, args.resume_session, args.plain_start))
+        # The sandbox that a second start enters while this run holds it, so a
+        # procedure shows the window of the candidate again with the same home.
+        second_start.write(args.state, second_start.document(
+            namespace, env, sandbox.without_inherited_horizon(os.environ), app, application_process.pid))
         vnc_log = log_path('vnc').open('wb')
         vnc = spawn_with_log('vnc', ['x11vnc', '-norc', '-no6', '-display', env['DISPLAY'],
                                     '-localhost', '-autoport', '40000', '-viewonly', '-forever',
@@ -2130,8 +2135,10 @@ def main():
     finally:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        # Expire the endpoint before its display number can be reused.
+        # Expire the endpoint before its display number can be reused, and the
+        # sandbox of a second start, which this run no longer holds.
         (args.state / 'target.json').unlink(missing_ok=True)
+        second_start.remove(args.state)
         # Each child's whole process group, since ending bwrap alone leaves the
         # program it runs, and a bus daemon's activated services, running.
         for child in reversed(children):

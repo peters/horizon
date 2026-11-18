@@ -92,6 +92,31 @@ of the earlier run.
 > **CAUTION:** A reused private home holds the credentials, sessions and records
 > of the earlier run. Delete the state path when the task ends.
 
+### Start the candidate again while it runs
+
+A procedure that closes the window of the candidate and starts it again needs
+the second start while the fixture still runs. The fixture writes the values of
+its sandbox into its state folder, and `second_start.py` enters that sandbox with
+the private home and the display of the fixture:
+
+```sh
+python3 scripts/device-smoke/second_start.py --state /tmp/horizon-device-target
+```
+
+The candidate asks the window that runs to show itself, prints
+`Horizon shows its window.`, and ends. The script prints the line of the
+candidate and its status, and it ends with that status. Give the arguments of the
+candidate after `--`:
+
+```sh
+python3 scripts/device-smoke/second_start.py --state /tmp/horizon-device-target -- /path/of/a/folder
+```
+
+A second start refuses when no fixture runs at the state folder. Give `--state`
+the path that the fixture got. Never start the binary of a fixture by its own
+path: only the sandbox of the fixture holds the private home, and a start outside
+it reads the home of the person.
+
 ### Agent programs that outlive the restart
 
 `--keep-agents` writes `features.keep_agents_through_restart` as true in the

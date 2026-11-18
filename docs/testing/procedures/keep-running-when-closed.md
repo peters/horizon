@@ -35,6 +35,12 @@ the programs that the ask counts, and the lines that the ask shows.
 
 - A computer with a desktop, and a build of Horizon from this candidate.
 - A second terminal window on the same desktop, to start Horizon again.
+- In a run inside the fixture of `scripts/device-smoke/README.md`: the state folder
+  of the fixture. Start Horizon again with
+  `python3 scripts/device-smoke/second_start.py --state <state folder>`. The
+  script enters the sandbox and the private home of the fixture and prints the
+  line and the status of that start. Every step that starts Horizon again uses
+  this command in a fixture run.
 - A terminal panel in Horizon that runs a program, for example `sleep 600`.
 - An agent panel that is in the working state, for task KR-2.
 - A workspace that a machine runs, with one terminal panel in it, for task KR-2.
@@ -108,10 +114,12 @@ the programs that the ask counts, and the lines that the ask shows.
    Result: One notification says that Horizon keeps running, that a start of
    Horizon shows the window, and that the Menu of Horizon ends it.
 
-3. Start Horizon again from the second terminal window.
+3. Start Horizon again from the second terminal window, or with the command of
+   section 4 in a fixture run.
 
    Result: The window of Horizon shows and comes to the front. The program of
-   the terminal panel runs.
+   the terminal panel runs. The start prints `Horizon shows its window.` and ends
+   with status 0.
 
 4. Close the main window of Horizon a second time.
 
@@ -147,8 +155,8 @@ the programs that the ask counts, and the lines that the ask shows.
 
    Result: The window goes away, and Horizon keeps running.
 
-3. Start Horizon again, open Settings, and read the row "When the window is
-   closed".
+3. Start Horizon again, as step 3 of task KR-3, open Settings, and read the row
+   "When the window is closed".
 
    Result: The mark is at "Keep Horizon running".
 
