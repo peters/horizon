@@ -131,6 +131,12 @@ impl HorizonApp {
         self.board.attach_output_wake(&self.output_wake);
         self.queue_panel_starts();
         self.apply_browser_host_io();
+        // A hidden window gets no frame, so the request of a second start that
+        // shows it runs here.
+        self.poll_folder_requests(ctx);
+        if self.keep_running.hidden {
+            self.keep_lease_of_hidden_window(ctx);
+        }
         let output = self.board.process_unread_output();
         if output.activity.terminal {
             // One more pass reads the agent states after the output stopped.

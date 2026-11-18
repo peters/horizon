@@ -63,6 +63,13 @@ const MENU: &[MenuEntry] = &[
         action: Some(ToolbarAction::Settings),
         choice: ToolbarAction::Settings,
     },
+    MenuEntry {
+        group: None,
+        title: "Quit Horizon",
+        detail: "End Horizon and every terminal and agent program in it",
+        action: None,
+        choice: ToolbarAction::Quit,
+    },
 ];
 
 impl HorizonApp {
@@ -113,9 +120,9 @@ impl HorizonApp {
             ToolbarAction::QuickNav => shortcuts.command_palette.display_label(label),
             ToolbarAction::RemoteHosts => shortcuts.open_remote_hosts.display_label(label),
             ToolbarAction::Sessions => shortcuts.toggle_sessions.display_label(label),
-            // Set up and the recent agent sessions have no key of their own:
-            // their rows say what they do.
-            ToolbarAction::SetUp | ToolbarAction::RecentSessions => String::new(),
+            // Set up, the recent agent sessions and Quit have no key of their
+            // own: their rows say what they do.
+            ToolbarAction::SetUp | ToolbarAction::RecentSessions | ToolbarAction::Quit => String::new(),
             ToolbarAction::Settings => shortcuts.toggle_settings.display_label(label),
         };
         (!text.is_empty()).then_some(text)

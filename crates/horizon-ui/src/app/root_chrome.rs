@@ -24,6 +24,8 @@ pub(super) enum ToolbarAction {
     RecentSessions,
     SetUp,
     Settings,
+    /// Ends Horizon, whatever the setting of a close of the window says.
+    Quit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

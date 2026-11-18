@@ -21,6 +21,11 @@ impl HorizonApp {
             return;
         }
 
+        if self.hides_the_window_on_close() {
+            self.hide_main_window(ctx);
+            return;
+        }
+
         // Keep the viewport alive while we flush state and stop PTY-backed panels.
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         self.begin_shutdown();

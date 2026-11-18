@@ -186,6 +186,7 @@ impl HorizonApp {
             sidebar_visible: true, sidebar_drag_workspace: None,
             sidebar_list: super::sidebar::ListCache::default(), attention: super::attention::AttentionState::new(session_store.home().root()),
             notifications: super::notify::Notifications::default(),
+            keep_running: super::keep_running::KeepRunning::default(),
             minimap_visible: true, hud_visible: false,
             renaming_workspace: None,
             rename_buffer: String::new(),

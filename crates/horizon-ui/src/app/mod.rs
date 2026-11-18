@@ -55,6 +55,7 @@ mod file_drop;
 mod file_drop_highlight;
 mod folder_requests;
 mod frame_stats;
+mod keep_running;
 mod keyboard_focus;
 mod lifecycle;
 mod machine_agent_open;
@@ -420,6 +421,8 @@ pub struct HorizonApp {
     attention: attention::AttentionState,
     /// The desktop notification of a change that the person did not see.
     notifications: notify::Notifications,
+    /// Whether the main window is hidden, and whether this run said so.
+    keep_running: keep_running::KeepRunning,
     minimap_visible: bool,
     hud_visible: bool,
     renaming_workspace: Option<WorkspaceId>,

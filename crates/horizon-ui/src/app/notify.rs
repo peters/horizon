@@ -12,7 +12,7 @@
 
 use std::time::Instant;
 
-use horizon_core::notify::{Bounds, Change, ChangeKind, DesktopSink, NotificationSetting, Sink, System};
+use horizon_core::notify::{Bounds, Change, ChangeKind, DesktopSink, Notice, NotificationSetting, Sink, System};
 use horizon_core::{Attention, PanelId};
 
 use super::HorizonApp;
@@ -42,6 +42,13 @@ impl Notifications {
     /// Starts the program of this computer, once for the run.
     pub(in crate::app) fn use_desktop_sink(&mut self) {
         self.sink = Some(Box::new(DesktopSink::start()));
+    }
+
+    /// Shows one notice of the run itself, with no bound and no change of a panel.
+    pub(in crate::app) fn show(&self, notice: Notice) {
+        if let Some(sink) = &self.sink {
+            sink.send(notice);
+        }
     }
 
     /// The sentence of the settings row while this computer has no program that
