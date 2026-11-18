@@ -279,7 +279,9 @@ fn draw_history(grid: &Grid<Cell>, out: &mut String) {
     let mut painted = Style::default();
     let mut lines: Vec<String> = Vec::new();
     let mut bytes = 0;
-    for line in (1..=grid.history_size().min(HISTORY_LINES)).map(|above| Line(-i32::try_from(above).unwrap_or(i32::MAX))) {
+    for line in
+        (1..=grid.history_size().min(HISTORY_LINES)).map(|above| Line(-i32::try_from(above).unwrap_or(i32::MAX)))
+    {
         let mut drawn = String::new();
         push_row(&mut drawn, &grid[line], &mut painted, grid.columns(), true);
         if bytes + drawn.len() > HISTORY_BYTES {

@@ -84,7 +84,11 @@ impl Watched {
             link.screen(id, screen.cols, screen.rows, why.fresh(), why.everyone())
                 && link.output(id, &screen.bytes, true)
         });
-        self.screen_at = if sent { None } else { Some((now + NEXT_SCREEN, Why::All)) };
+        self.screen_at = if sent {
+            None
+        } else {
+            Some((now + NEXT_SCREEN, Why::All))
+        };
         if sent {
             self.second_at = self.second_at.filter(|_| !why.everyone());
         }

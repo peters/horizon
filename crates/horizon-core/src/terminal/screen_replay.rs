@@ -72,13 +72,7 @@ pub(super) fn draw_rows_in_place(grid: &Grid<Cell>, out: &mut String) {
 
 /// Draws the cells of `line` from the column that the cursor stands on, and
 /// gives the default pen back. `in_place` is the rule of [`push_cell`].
-pub(super) fn push_row(
-    out: &mut String,
-    line: &Row<Cell>,
-    painted: &mut Style,
-    columns: usize,
-    in_place: bool,
-) {
+pub(super) fn push_row(out: &mut String, line: &Row<Cell>, painted: &mut Style, columns: usize, in_place: bool) {
     if let Some(last_column) = last_painted_column(line, columns) {
         for column in 0..=last_column {
             let cell = &line[Column(column)];

@@ -155,7 +155,12 @@ fn a_screen_that_is_not_fresh_keeps_the_history_of_the_follower() {
     feed.output(b"\x1b[1;1H\x1b[2Knew screen");
     wait_until(
         &mut terminal,
-        |terminal| terminal.viewport_text().first().is_some_and(|line| line == "new screen"),
+        |terminal| {
+            terminal
+                .viewport_text()
+                .first()
+                .is_some_and(|line| line == "new screen")
+        },
         "the new row of the screen",
     );
     assert_eq!(terminal.history_size(), 9, "the history of the follower is kept");

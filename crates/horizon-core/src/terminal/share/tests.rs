@@ -329,7 +329,10 @@ fn a_new_follower_reads_the_lines_above_the_viewport_of_the_owner() {
         "the lines above the viewport lie in the scrollback of the follower"
     );
     assert_eq!(above_lines(&term), above_lines(&owner.lock()));
-    let (oldest, red) = (above_text(&term, i32::try_from(history).expect("a history")), &term.grid()[Line(-10)]);
+    let (oldest, red) = (
+        above_text(&term, i32::try_from(history).expect("a history")),
+        &term.grid()[Line(-10)],
+    );
     assert_eq!(oldest, "red first");
     assert_eq!(
         red[Column(0)].fg,
@@ -339,9 +342,7 @@ fn a_new_follower_reads_the_lines_above_the_viewport_of_the_owner() {
 
     // The lines closest to the viewport are the ones that a person scrolls to.
     let many = screen_with(4, 20, 3000);
-    let lines: String = (1..=HISTORY_LINES + 200).fold(String::new(), |text, line| {
-        format!("{text}line {line}\r\n")
-    });
+    let lines: String = (1..=HISTORY_LINES + 200).fold(String::new(), |text, line| format!("{text}line {line}\r\n"));
     replay_live_bytes(&many, lines.as_bytes());
     assert!(many.lock().grid().history_size() > HISTORY_LINES);
     let short = screen(4, 20);
@@ -359,12 +360,31 @@ fn a_new_follower_reads_the_lines_above_the_viewport_of_the_owner() {
 }
 
 #[test]
+fn a_screen_of_the_alternate_screen_carries_no_lines_above_its_viewport() {
+    let owner = screen(4, 20);
+    let lines: String = (1..=20).fold(String::new(), |text, line| format!("{text}above {line}\r\n"));
+    replay_live_bytes(&owner, lines.as_bytes());
+    assert!(
+        owner.lock().grid().history_size() > 0,
+        "the primary screen has a history"
+    );
+    replay_live_bytes(&owner, b"\x1b[?1049h\x1b[2J\x1b[Halternate");
+
+    let follower = screen(4, 20);
+    follow(&owner, &follower);
+    assert_same(&owner, &follower);
+    assert_eq!(
+        follower.lock().grid().history_size(),
+        0,
+        "a program on the alternate screen sends no history to a new follower"
+    );
+}
+
+#[test]
 fn the_lines_above_the_viewport_of_a_screen_stay_under_their_bound_in_bytes() {
     // A wide grid fills the bound of a screen with fewer lines than the count.
     let owner = screen_with(4, 400, 4000);
-    let lines: String = (1..=1200).fold(String::new(), |text, line| {
-        format!("{text}{line:0>390}\r\n")
-    });
+    let lines: String = (1..=1200).fold(String::new(), |text, line| format!("{text}{line:0>390}\r\n"));
     replay_live_bytes(&owner, lines.as_bytes());
     assert!(owner.lock().grid().history_size() > HISTORY_LINES);
 

@@ -754,7 +754,10 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
         woken,
         |event| matches!(event, LiveEvent::State(LiveState::Down(reason)) if reason.starts_with("live_replaced")),
     );
-    assert!(!handle.output("q1", b"away", false), "nothing is sent while the link is away");
+    assert!(
+        !handle.output("q1", b"away", false),
+        "nothing is sent while the link is away"
+    );
     let list = wait_for(handle, woken, |event| show(event) == "list laptop-a[p1] laptop-b[q1]");
     assert!(
         matches!(&list, LiveEvent::Computers { computers } if computers[1].label == "Laptop B"),
@@ -776,7 +779,10 @@ fn the_handle_sends_its_state_again_on_a_new_link_and_nothing_while_the_link_is_
     a.settle("list laptop-a[] laptop-b[]");
     joined.supervisor.stop();
     assert_eq!(a.next(), "list laptop-a[]");
-    assert!(!handle.screen("q1", 80, 24, false, true), "nothing is sent after a stop");
+    assert!(
+        !handle.screen("q1", 80, 24, false, true),
+        "nothing is sent after a stop"
+    );
 }
 
 #[test]

@@ -127,7 +127,10 @@ fn terminal_bytes_travel_as_base64_and_never_print() {
         replay: false,
     });
     let json = serde_json::to_string(&frame).expect("a frame is JSON");
-    assert_eq!(json, r#"{"live":{"output":{"panel":"p1","data":"G1sxbWhp/w==","replay":false}}}"#);
+    assert_eq!(
+        json,
+        r#"{"live":{"output":{"panel":"p1","data":"G1sxbWhp/w==","replay":false}}}"#
+    );
     assert_eq!(serde_json::from_str::<Frame>(&json).expect("it reads back"), frame);
     let printed = format!("{frame:?}");
     assert!(printed.contains("7 bytes") && !printed.contains("hi"), "{printed}");
@@ -455,11 +458,14 @@ fn a_follower_that_does_not_read_falls_behind_and_its_owner_is_asked_again_when_
     };
     let send = |count| {
         let (panel, data) = (text("p1"), bytes(count));
-        owner.ask(&registry, LiveRequest::Output {
-            panel,
-            data,
-            replay: false,
-        });
+        owner.ask(
+            &registry,
+            LiveRequest::Output {
+                panel,
+                data,
+                replay: false,
+            },
+        );
     };
     owner.ask(&registry, screen(80));
     assert!(matches!(follower.outbox.next(), Next::Event(LiveEvent::Screen { .. })));
@@ -520,9 +526,12 @@ impl Two {
         for link in [&owner, &first, &second] {
             link.take(&registry);
         }
-        owner.ask(&registry, LiveRequest::Panels {
-            panels: vec![panel("p1", true)],
-        });
+        owner.ask(
+            &registry,
+            LiveRequest::Panels {
+                panels: vec![panel("p1", true)],
+            },
+        );
         for link in [&owner, &first, &second] {
             link.take(&registry);
         }
@@ -679,11 +688,14 @@ fn a_follower_that_fell_behind_waits_for_the_screen_that_its_owner_sends() {
     // its output waits for a new screen while the other one reads on.
     for _ in 0..40 {
         let (panel, data) = (text("p1"), bytes(48 * 1024));
-        two.owner.ask(&two.registry, LiveRequest::Output {
-            panel,
-            data,
-            replay: false,
-        });
+        two.owner.ask(
+            &two.registry,
+            LiveRequest::Output {
+                panel,
+                data,
+                replay: false,
+            },
+        );
         first.take(&two.registry);
     }
     assert!(
@@ -708,10 +720,7 @@ fn a_follower_that_fell_behind_waits_for_the_screen_that_its_owner_sends() {
     two.owner.ask(&two.registry, send_output("p1", "back", false));
     assert_eq!(
         stream_of(&behind.take(&two.registry)),
-        [
-            "screen fresh=false everyone=false".to_owned(),
-            "output back".to_owned()
-        ]
+        ["screen fresh=false everyone=false".to_owned(), "output back".to_owned()]
     );
     assert_eq!(
         stream_of(&first.take(&two.registry)),
@@ -746,11 +755,14 @@ fn a_follower_asks_the_owner_for_a_new_screen_at_most_once_a_second() {
     // the output after it. The next request is still inside the second.
     let (name, data) = (text("p1"), bytes(3));
     owner.ask(&registry, send_screen("p1", false, false));
-    owner.ask(&registry, LiveRequest::Output {
-        panel: name,
-        data,
-        replay: false,
-    });
+    owner.ask(
+        &registry,
+        LiveRequest::Output {
+            panel: name,
+            data,
+            replay: false,
+        },
+    );
     assert_eq!(
         stream_of(&follower.take(&registry)),
         ["screen fresh=false everyone=false", "output xxx"],

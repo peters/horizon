@@ -270,16 +270,16 @@ impl LiveLink for StandIn {
     }
 
     fn output(&self, panel: &str, bytes: &[u8], replay: bool) -> bool {
-        let mut relay = self.gated(true);
-        if relay.full {
-            relay.refused += 1;
+        let mut link = self.gated(true);
+        if link.full {
+            link.refused += 1;
             return false;
         }
-        if relay.takes(panel, false, replay, false) {
+        if link.takes(panel, false, replay, false) {
             if !replay {
-                relay.replay.retain(|drawing| drawing != panel);
+                link.replay.retain(|drawing| drawing != panel);
             }
-            relay.events.push(LiveEvent::Output {
+            link.events.push(LiveEvent::Output {
                 owner: THERE.to_owned(),
                 panel: panel.to_owned(),
                 data: LiveBytes(bytes.into()),

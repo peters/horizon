@@ -165,7 +165,9 @@ impl Run {
             LiveEvent::Output { data, .. } => {
                 let head = &data.0[..data.0.len().min(ALT_SCREEN_ENTER.len() + 2)];
                 if std::mem::take(&mut follow.screen_start)
-                    && head.windows(ALT_SCREEN_ENTER.len()).any(|window| window == ALT_SCREEN_ENTER)
+                    && head
+                        .windows(ALT_SCREEN_ENTER.len())
+                        .any(|window| window == ALT_SCREEN_ENTER)
                 {
                     follow.alt = Alt::Joined;
                 }

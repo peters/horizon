@@ -337,9 +337,7 @@ impl State {
                     everyone,
                 });
             }
-            LiveRequest::Output { panel, data, replay }
-                if (1..=MAX_LIVE_OUTPUT_BYTES).contains(&data.0.len()) =>
-            {
+            LiveRequest::Output { panel, data, replay } if (1..=MAX_LIVE_OUTPUT_BYTES).contains(&data.0.len()) => {
                 self.stream(&LiveEvent::Output {
                     owner,
                     panel,
@@ -418,9 +416,8 @@ impl State {
     /// screen reaches the followers that took it. A follower whose link would
     /// pass its ceiling falls behind.
     fn stream(&mut self, event: &LiveEvent) {
-        let (owner, panel) = match event {
-            LiveEvent::Screen { owner, panel, .. } | LiveEvent::Output { owner, panel, .. } => (owner, panel),
-            _ => return,
+        let (LiveEvent::Screen { owner, panel, .. } | LiveEvent::Output { owner, panel, .. }) = event else {
+            return;
         };
         let screen = matches!(event, LiveEvent::Screen { .. });
         let replay = matches!(event, LiveEvent::Output { replay: true, .. });
