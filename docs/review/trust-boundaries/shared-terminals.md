@@ -1,5 +1,5 @@
 ---
-applyTo: "crates/horizon-sync/src/live.rs,crates/horizon-sync/src/live/**,crates/horizon-sync/src/supervisor/live.rs,crates/horizon-sync/tests/live.rs,crates/horizon-pty-tap/src/share.rs,crates/horizon-pty-tap/src/share/**,crates/horizon-core/src/terminal/share.rs,crates/horizon-core/src/terminal/share/**,crates/horizon-core/src/terminal/follow.rs,crates/horizon-core/src/terminal/follow/**,crates/horizon-core/src/terminal/events.rs,crates/horizon-core/src/terminal/resize.rs,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/panel/follow.rs,crates/horizon-core/src/panel/follow/**,crates/horizon-core/src/board/follow.rs,crates/horizon-core/src/config/server.rs,crates/horizon-ui/src/app/shared_terminals.rs,crates/horizon-ui/src/app/shared_terminals/**,crates/horizon-ui/src/app/sidebar/computers.rs,crates/horizon-ui/src/app/settings/server/sharing.rs,crates/horizon-ui/src/app/settings/server/sharing/**,docs/architecture/shared-terminals.md"
+applyTo: "crates/horizon-sync/src/live.rs,crates/horizon-sync/src/live/**,crates/horizon-sync/src/supervisor/live.rs,crates/horizon-sync/tests/live.rs,crates/horizon-pty-tap/src/share.rs,crates/horizon-pty-tap/src/share/**,crates/horizon-core/src/terminal/share.rs,crates/horizon-core/src/terminal/share/**,crates/horizon-core/src/terminal/follow.rs,crates/horizon-core/src/terminal/follow/**,crates/horizon-core/src/terminal/events.rs,crates/horizon-core/src/terminal/resize.rs,crates/horizon-core/src/terminal/lifecycle.rs,crates/horizon-core/src/panel/follow.rs,crates/horizon-core/src/panel/follow/**,crates/horizon-core/src/board/follow.rs,crates/horizon-core/src/config/server.rs,crates/horizon-ui/src/app/shared_terminals.rs,crates/horizon-ui/src/app/shared_terminals/**,crates/horizon-ui/src/app/undrawn.rs,crates/horizon-ui/src/app/sidebar/computers.rs,crates/horizon-ui/src/app/settings/server/sharing.rs,crates/horizon-ui/src/app/settings/server/sharing/**,docs/architecture/shared-terminals.md"
 ---
 
 # Trust boundary of shared terminals
@@ -61,7 +61,18 @@ The sentence is:
   links. The panels of the list of all computers share 192 KiB.
 - **Each frame of bytes has a bound.** `output` holds 1 byte to 48 KiB and
   `typed` holds 1 byte to 16 KiB. The server drops a frame outside its bound.
-  The grid of a `screen` is 1 to 1000 columns and rows.
+  The grid of a `screen` and of a `resize` is 2 to 1000 columns and 1 to 500
+  rows (`horizon_core::bounded_screen_grid`).
+- **A `resize` asks for the grid of the program of the owner.** A follower
+  names a computer and a panel that it follows, and a grid. The server drops a
+  third request in a second for one follower and one panel. The relay passes
+  the request only while the list of the owner says `typing: true` for that
+  panel, and the owner checks its two switches and its own list again. The grid
+  changes the size that the program of the owner reads, so it changes what that
+  program does next. The guarantees below name the place of each check.
+- **A `heartbeat` names nothing.** The hub drops one that a computer sends. It
+  only says that the link is there, so a frame of that kind can change one time
+  and nothing else.
 - **A frame does not name its sender.** The server writes the `owner` of a
   screen and of output from the link that sent the request. It writes the
   `from` and the `label` of typed bytes the same way.
@@ -95,9 +106,11 @@ The sentence is:
   the owner answers its own program.
 - **A follower takes no copy request.** An OSC 52 copy request of those bytes
   does not go to the clipboard of this computer.
-- **A follower takes no resize.** A resize of the panel changes nothing of a
-  follower, and no size goes to the program. Only a `screen` event sets the
-  grid of a follower.
+- **A follower takes no resize of its own grid.** A resize of the panel
+  changes nothing of the terminal of a follower, and no size of that panel goes
+  to the program of the owner. Only a `screen` event sets the grid of a
+  follower. The `resize` request is another rule: a person of a follower gives
+  the program of the owner a grid, and that changes no screen of a follower.
 - **The texts of a stream are cleaned and cut.** The feed keeps 200 characters
   of each text and no control character. The texts are the device name, the
   label, the panel identifier, the title and the reason of an end.
@@ -119,9 +132,27 @@ The sentence is:
   program only while the two switches of this computer are on and the panel is
   in its list. The switches are read at the moment of the event, so a switch
   that the person cleared stops the next typed byte.
-- **The server names the sender, and the owner does not read it.** A `typed`
-  event holds the device name and the label of the link that sent the bytes.
-  The window does not use them.
+- **The server names the sender, and the owner uses the name for its chip.** A
+  `typed` event holds the device name and the label of the link that sent the
+  bytes. The window cuts that text at 80 characters and shows it in the chip of
+  the panel as `typed by <name>`. The name decides nothing: the owner writes
+  the bytes on the two switches and its list, whatever the name says.
+
+## Untrusted: the grid that a follower asks for
+
+- **A grid of one computer reaches the program of another computer.** `resize`
+  carries a computer, a panel and a grid. The relay and the owner each check
+  it, and the guarantees below name the two places.
+- **A program can act on its grid.** A program reads its size. It can print a
+  different screen, stop, or start a command for one size. The person of the
+  owner therefore sees what another computer asked for, and the next key or
+  mouse report of that person gives the program the grid of the body again.
+- **The panel of the owner draws a foreign grid while it holds one.** It draws
+  that grid from the top left of its body and clips what does not fit, and it
+  pushes no size of its own body.
+- **The grid cannot leave the bounds.** `horizon_core::bounded_screen_grid`
+  gives 2 to 1000 columns and 1 to 500 rows for a request, for a panel of a
+  list and for the terminal of a follower.
 
 ## The guarantees
 
@@ -167,8 +198,11 @@ The sentence is:
   `crates/horizon-ui/src/app/shared_terminals/list.rs` lists only a terminal
   with a source. Two computers therefore do not send one terminal in a circle.
 - **A watched panel says so.** The title bar of a panel that another computer
-  follows shows `seen by <name>`, or the count of the followers
-  (`SharedTerminals::chip` of `crates/horizon-ui/src/app/shared_terminals.rs`).
+  follows shows `seen by <name>`, or the count of the followers. It shows
+  `typed by <name>` for 2 seconds after the bytes of that computer arrived, and
+  `sized by <name>` while the program holds the grid of that computer
+  (`SharedTerminals::chip` of `crates/horizon-ui/src/app/shared_terminals.rs`,
+  `Watched::chip_text` of `crates/horizon-ui/src/app/shared_terminals/owner.rs`).
 - **Each shown text is cut.** `shown` of
   `crates/horizon-ui/src/app/shared_terminals.rs` removes control characters
   and keeps 80 characters. The pump uses it where a text of another computer
@@ -182,9 +216,39 @@ The sentence is:
 - **No clipboard.** `Terminal::handle_event` of
   `crates/horizon-core/src/terminal/events.rs` drops the copy request of a
   follower.
-- **No resize.** `Terminal::resize_with_policy` of
-  `crates/horizon-core/src/terminal/resize.rs` returns for a follower.
-  `FollowFeed::screen` is the one place that changes its grid.
+- **The checks of a resize at the relay and at the owner.** `State::resize`
+  of `crates/horizon-sync/src/live/hub.rs` passes a request only while a follow
+  of that follower, owner and panel exists and the listed panel of the owner
+  says `typing: true`. It cuts the grid at `bounded_screen_grid` and passes two
+  requests a second. `Run::resized` of
+  `crates/horizon-ui/src/app/shared_terminals/owner.rs` holds the grid only
+  while both switches are on, the list that the link has names the panel, and
+  one panel of this computer has that identifier and is no follow panel.
+  `ShareSource::hold_grid` of `crates/horizon-core/src/terminal/share.rs`
+  resizes the terminal and sends the size to the program.
+- **The sign of life.** `Alive` of `crates/horizon-sync/src/live/alive.rs` keeps
+  the two times and their three bounds. `sign_of_life` of
+  `crates/horizon-sync/src/live/relay.rs` sends `heartbeat` and ends a silent
+  link with `live_silent`. `LiveHandle::next_batch` and the reader of a link in
+  `crates/horizon-sync/src/supervisor/live.rs` do the same on the side of a
+  computer.
+- **The history of a fresh screen has a bound.** `draw_history` of
+  `crates/horizon-core/src/terminal/share.rs` keeps 1000 lines and 256 KiB of
+  them (`HISTORY_LINES`, `HISTORY_BYTES`). It draws no line above the viewport
+  of a program on the alternate screen.
+- **A screen has a bound and goes out in parts.** `Watched::drain` of
+  `crates/horizon-ui/src/app/shared_terminals/owner.rs` sends no screen above
+  8 MiB (`KEPT_SCREEN_BYTES`). `Watched::send_owed` gives the grid and then the
+  parts of at most 48 KiB, and it waits for the next pass with half a part that
+  the link refused.
+- **No resize of a follower or of a held grid.** `Terminal::resize_with_policy`
+  of `crates/horizon-core/src/terminal/resize.rs` returns for a follower and for
+  a terminal that holds the grid of a follower, so the body of such a panel
+  pushes no size. `FollowFeed::screen` of
+  `crates/horizon-core/src/terminal/follow.rs` is the one place that sets the
+  grid of a follower. `Terminal::release_grid` of
+  `crates/horizon-core/src/terminal/share.rs` is the one place that ends the
+  hold of a grid.
 - **No program.** `Panel::follow` of `crates/horizon-core/src/panel/follow.rs`
   makes the panel from its content and never by the start of a panel. The kind
   of the panel is the shell, so no agent rule applies to it.
@@ -209,7 +273,7 @@ The sentence is:
   outlet holds at most 1 MiB, and it drops all of it above that.
 - **An older server gets no live frame.** `run` of
   `crates/horizon-sync/src/supervisor/live.rs` sends `open` only to a server
-  that answered version 6 or higher.
+  that answered version 9 or higher (`LIVE_PROTOCOL_VERSION`).
 - **A computer gets only the streams that it asked for.** `Inner::accept` of
   the same file drops a `screen` and `output` of a panel that the application
   did not ask to follow. The mark `own` of a list never comes from a frame.
@@ -226,9 +290,10 @@ The sentence is:
   panel out, and the list also holds the agent panels and the `ssh` panels.
 - **Who can type.** Each follower of a panel with `typing: true` can type in it.
   A person who controls one linked computer can therefore run commands on each
-  linked computer that shares a terminal with typing on. The owner does not
-  read the sender of a typed event, and its window shows no mark while another
-  computer types.
+  linked computer that shares a terminal with typing on. The chip of the panel
+  says `typed by <name>` for 2 seconds after the bytes of a computer arrived,
+  but a label is text that a computer chose, so it does not prove which
+  computer sent the bytes.
 - **The server.** The server reads each screen, each byte of output and each
   typed byte that goes through it. A server that another person controls can
   send a `typed` event to an owner. The owner obeys it while its two switches
@@ -257,13 +322,17 @@ The sentence is:
   text of the name of a computer is its device name as the list gave it. The
   bound of that text is the frame bound.
 - **The names in a chip.** The chip `seen by <name>` shows the label that the
-  server gave for a follower. A label is text that a computer chose, so the
-  chip does not prove which computer follows.
+  server gave for a follower, and the chip `typed by <name>` or `sized by
+  <name>` shows the label that the server gave for the computer that typed or
+  that holds the grid. A label is text that a computer chose, so a chip does
+  not prove which computer follows, types or holds a grid.
 - **A record.** Nothing records which computer followed a panel or typed in it.
   The `watchers` event tells the owner which computers follow now.
 - **Availability.** Output can be dropped and a new screen can replace it. The
-  handle drops typed bytes while its link is away. The live link has no
-  keepalive, so a computer that went away can stay in the list.
+  handle drops typed bytes while its link is away. A link that read no frame
+  for 30 seconds ends, so a computer that went away leaves the list in about
+  half a minute. A grid that another computer asked for stays until the person
+  of the owner types in that panel.
 - **A change that the person did not save.** A change of a switch in the
   Settings window applies before **Save**. A person who closes the window
   without **Save** gets the old value back, so a switch that was cleared that
