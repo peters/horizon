@@ -1,8 +1,10 @@
 //! The typing of another computer into a panel of this window: the value of the
 //! newest list, in both directions, and the chip that says who types.
 
+use std::time::{Duration, Instant};
+
 use super::typed_event;
-use super::{OFFSCREEN, Window, chip_of, text};
+use super::{OFFSCREEN, PATIENCE, Window, chip_of, text};
 
 #[test]
 fn a_follow_panel_takes_the_typing_of_the_newest_list_in_both_directions() {
@@ -58,11 +60,24 @@ fn the_chip_of_a_watched_panel_says_who_types_and_goes_back_after_two_seconds() 
     );
 
     // The bytes of another computer reach the program, and the chip says who.
+    // The claim of typing lasts two seconds, and a frame of a loaded computer can
+    // take longer than that: the wait for the chip reads what the pump published,
+    // and the wait for the echo runs after it.
     typed_event(&window.link, &id, b"who\n");
     window.shows(owner, "GOT:who");
-    window.until("the chip of the typed bytes", |app| {
-        chip_of(app, owner).as_deref() == Some("typed by Unknown")
-    });
+    // The chip is the copy that the frame took of what the pump published, and its
+    // claim lasts two seconds: a frame of a loaded computer can take longer than
+    // that, so the person types again in each round of the wait.
+    let deadline = Instant::now() + PATIENCE;
+    while chip_of(&window.app, owner).as_deref() != Some("typed by Unknown") {
+        assert!(
+            Instant::now() < deadline,
+            "the chip of the typed bytes: {:?}",
+            chip_of(&window.app, owner)
+        );
+        typed_event(&window.link, &id, b"who\n");
+        window.frames(1);
+    }
 
     // Two seconds after the last bytes the chip names the followers again.
     window.until("the chip of the followers", |app| {

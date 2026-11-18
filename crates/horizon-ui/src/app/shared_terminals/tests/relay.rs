@@ -17,6 +17,7 @@ use horizon_sync::{ServerInfo, Store, Supervisor, SupervisorConfig, run_server_o
 use super::{OFFSCREEN, PATIENCE, PROGRAM, above_the_viewport, follower_of, frames_until, grid, text};
 use crate::app::HorizonApp;
 use crate::app::server_sync::ServerSync;
+use crate::app::test_support::run_app_frame;
 use crate::app::test_support::test_app_with_startup;
 
 /// The relay of one stand-in `ssh`: the bytes of its standard input and output
@@ -236,9 +237,9 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     // follow panel of B fits the grid of the panel of A, so the keys of B ask for
     // no other grid: the chip of the owner names the computer that typed, and no
     // size that it holds.
-    // The chip is what the pump published, so this wait reads it with no frame:
-    // the claim of typing lasts two seconds, and a frame of a loaded computer can
-    // take longer than that.
+    // The chip is the copy that a frame took of what the pump published, and its
+    // claim lasts two seconds: a frame of a loaded computer can take longer than
+    // that, so the person types again in each round of the wait.
     let chip = super::chip_of;
     let deadline = Instant::now() + PATIENCE;
     while chip(&a, panel).as_deref() != Some("typed by Desk B") {
@@ -247,7 +248,14 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
             "the chip of the owner names the computer that typed: {:?}",
             chip(&a, panel)
         );
-        std::thread::sleep(Duration::from_millis(1));
+        let typed = b
+            .board
+            .panel_mut(follow)
+            .expect("the follow panel")
+            .write_input(b"hello\n");
+        assert!(typed, "the follow panel takes the keys");
+        run_app_frame(&ctx_a, &mut a);
+        run_app_frame(&ctx_b, &mut b);
     }
     frames_until(
         "the chip of the owner names the follower again",

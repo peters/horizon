@@ -240,7 +240,7 @@ fn a_pump_asks_for_a_frame_only_when_what_it_found_changed() {
     window.write(owner, b"one\n");
     window.shows(follow, "GOT:one");
     assert!(
-        asked.load(Ordering::Relaxed) > 0,
+        waits(|| asked.load(Ordering::Relaxed) > 0),
         "the pump asked for the frame of its chips"
     );
 
@@ -380,12 +380,11 @@ fn a_pump_that_waits_in_a_call_of_the_link_does_not_hold_a_frame() {
         let _ = wait.recv_timeout(Duration::from_secs(10));
         link.release();
     });
-    let started = Instant::now();
     window.app.template_config.server.remote_typing = false;
     for _ in 0..5 {
         run_app_frame(&window.ctx, &mut window.app);
     }
-    let frames = started.elapsed();
+    let waiting = window.link.relay().waiting;
     let wanted = window.pump.wanted.lock().unwrap_or_else(PoisonError::into_inner);
     let told = !wanted.typing;
     drop(wanted);
@@ -393,8 +392,8 @@ fn a_pump_that_waits_in_a_call_of_the_link_does_not_hold_a_frame() {
     let _ = done.send(());
     release.join().expect("the helper that lets the link go");
     assert!(
-        frames < Duration::from_secs(2),
-        "five frames took {frames:?} while the pump waited"
+        waiting,
+        "five frames ran while the pump still waited in its call of the link"
     );
     assert!(told, "a frame told the pump the new switch while the pump waited");
     assert!(

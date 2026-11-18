@@ -43,6 +43,12 @@ exit 0
 // computer does, and prints nothing else after its ready line.
 const ECHO_CHILD_ARGS: &str = "printf 'READY'; exec cat";
 
+/// The longest wait for a step of a fixture. It is a hang guard and not a rule of
+/// the product: a loaded computer starts the program of a panel late. The program
+/// printed nothing within the earlier bound of 5 s in 11 of 20 runs of the suite
+/// beside 24 busy loops on a computer at load 60.
+const PATIENCE: Duration = Duration::from_secs(60);
+
 // A program that prints without end, which a frame must not follow.
 const CHATTY_CHILD_ARGS: &str = "i=0\nwhile :; do printf 'row-%s\\n' \"$i\"; i=$((i + 1)); sleep 0.005; done";
 
@@ -110,16 +116,15 @@ impl TerminalHarness {
         }
     }
 
-    /// Returns after a poll that found `text` on the screen and no event that the window did not
-    /// read, so the next frame starts on a quiet terminal. The output can reach the grid before
-    /// this call runs, and then no poll both drains its wakeup and sees it: the unread event says
-    /// whether anything still waits, whatever the speed of the computer.
-    /// `alacritty_terminal` parses PTY bytes and queues its wakeup while it holds the grid lock,
-    /// so each poll retries the snapshot until the grid is free.
+    /// Returns when the screen shows `text` and the last poll of the panel found output, so the
+    /// frame that draws the panel rebuilds its grid. `alacritty_terminal` parses PTY bytes and
+    /// queues its wakeup while it holds the grid lock, so the snapshot retries until the grid is
+    /// free. The output can reach the grid before this call runs, and the poll that found it is
+    /// then one that already ran: a wait for a poll that both drains a wakeup and sees the text
+    /// would wait for a wakeup that a loaded computer never sends again.
     fn wait_for_text(&mut self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         loop {
-            self.panel.process_output();
             let lines = loop {
                 if let Some(lines) = self.panel.terminal().expect("terminal").try_last_lines_text(20) {
                     break lines;
@@ -127,13 +132,13 @@ impl TerminalHarness {
                 assert!(Instant::now() < deadline, "terminal grid stayed busy");
                 std::thread::sleep(Duration::from_millis(1));
             };
-            let unread = self.panel.terminal().expect("terminal").has_unread_event();
-            if lines.contains(text) && !unread {
+            if lines.contains(text) && self.panel.had_recent_output() {
                 return;
             }
+            self.panel.process_output();
             assert!(
                 Instant::now() < deadline,
-                "the screen never showed {text} with no unread event; screen was:\n{}",
+                "the screen never showed {text} after a poll that found output; screen was:\n{}",
                 self.text()
             );
             std::thread::sleep(Duration::from_millis(10));
@@ -146,7 +151,7 @@ impl TerminalHarness {
 
     /// Polls until a poll finds no output, so the next frame has no pending wakeup.
     fn drain_output(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         loop {
             self.panel.process_output();
             if !self.panel.had_recent_output() {
@@ -157,7 +162,7 @@ impl TerminalHarness {
     }
 
     fn wait_for_mouse_mode(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         loop {
             self.panel.process_output();
             let enabled = self
@@ -239,18 +244,17 @@ impl TerminalHarness {
 }
 
 /// One poll can read the echo of both lines of a burst: the text of the second
-/// line is on the screen with no event left to read. The wait takes that text,
-/// where a wait for a poll that both drains a wakeup and sees the text would wait
-/// for a wakeup that a loaded computer never sends again.
+/// line is on the screen, and the poll that found it already ran. The wait takes
+/// that text, where a wait for a poll that both drains a wakeup and sees the text
+/// would wait for a wakeup that a loaded computer never sends again.
 #[test]
 fn a_wait_takes_the_text_that_the_last_poll_left_on_the_screen() {
     let mut harness = TerminalHarness::with_child(ECHO_CHILD_ARGS);
     harness.wait_for_text("READY");
     harness.panel.terminal().expect("terminal").write_input(b"one\ntwo\n");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let quiet_with = |harness: &TerminalHarness, text: &str| {
-        text_of(harness).contains(text) && !harness.panel.terminal().expect("terminal").has_unread_event()
-    };
+    let deadline = Instant::now() + PATIENCE;
+    let quiet_with =
+        |harness: &TerminalHarness, text: &str| text_of(harness).contains(text) && harness.panel.had_recent_output();
     while !quiet_with(&harness, "two") {
         harness.panel.process_output();
         assert!(Instant::now() < deadline, "the program echoes both lines");
@@ -449,7 +453,7 @@ fn the_echo_of_a_key_press_asks_for_its_frame_and_paints_it() {
 
     harness.frame_with_events(vec![Event::Text("a".to_owned())]);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     while wakes.load(Ordering::Relaxed) == 0 {
         assert!(
             Instant::now() < deadline,
@@ -478,7 +482,7 @@ fn a_terminal_that_prints_without_end_asks_for_no_frame_of_its_own() {
     let (wakes, wake) = counting_wake();
     harness.panel.attach_output_wake(&wake);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + PATIENCE;
     let mut printed = 0_usize;
     while printed < 10 {
         harness.panel.process_output();
