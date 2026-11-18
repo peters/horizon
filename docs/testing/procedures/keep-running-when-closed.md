@@ -88,8 +88,10 @@ the programs that the ask counts, and the lines that the ask shows.
 4. Examine the actions of the dialog.
 
    Result: The dialog shows "Keep running in the background" first, with the
-   help line under it. It shows "End them and quit" in red, the action "Cancel",
-   and the box "Remember this choice".
+   help line under it. Its background has the accent color, as the action "Save"
+   of the Settings window has, because Enter takes it. It shows "End them and
+   quit" in red, the action "Cancel" in the plain color, and the box "Remember
+   this choice".
 
 5. Close the main window of Horizon a second time.
 
@@ -207,11 +209,17 @@ the programs that the ask counts, and the lines that the ask shows.
    procedure needs the setting "Keep agent programs running when Horizon
    restarts" for the first line.
 
-4. Select "Cancel".
+4. Examine the actions of the dialog, and press Enter.
+
+   Result: The dialog shows the action "Quit" in red and the action "Cancel" in
+   the plain color. Enter does nothing, because no key press ends a program, and
+   the dialog keeps waiting.
+
+5. Select "Cancel".
 
    Result: The dialog goes away, and Horizon keeps running.
 
-5. Open the Menu, select "Quit Horizon", and select "Quit".
+6. Open the Menu, select "Quit Horizon", and select "Quit".
 
    Result: Horizon ends, and the programs of the panels end.
 
@@ -264,6 +272,8 @@ Run this task on each platform of section 2.
   machine, and the value of the setting is "Ask".
 - The counts of the ask agree with the panels that are open, and a card, an
   editor and a browser panel are not in them.
+- "Keep running in the background" has the accent color, because it is the
+  action that Enter takes, and the action that ends the programs is red.
 - "Keep running in the background" hides the window and ends no program.
 - "End them and quit" and "Quit" end the programs and Horizon.
 - "Cancel", the escape key and a press outside the dialog end no program.

@@ -349,6 +349,8 @@ lane. It needs OpenSSH 9.8 or later, which has the two session programs.
    Result: A new panel opens in the workspace of computer B and has the focus.
    Its title is `Device input test`. Its title bar shows the chip `on Computer
    A`. Its grid shows the text of the panel `Device input test` of computer A.
+   The body of the new panel has the size of the grid of that terminal, so the
+   first key that you press in it changes no size of the panel of computer A.
 
 2. Read the title bar of the panel `Device input test` of computer A.
 
