@@ -973,7 +973,6 @@ and the follow panels of this window.
 | The grid of a screen and of a panel | 2 to 1000 columns, 1 to 500 rows | `bounded_screen_grid` |
 | The lines above the viewport of a fresh screen | 1000 lines, and 256 KiB | `HISTORY_LINES`, `HISTORY_BYTES` |
 | A screen that the pump keeps | 8 MiB | `KEPT_SCREEN_BYTES` |
-| A part of a screen | 48 KiB | `MAX_LIVE_OUTPUT_BYTES` |
 | The tick of the sign of life | 1 second | `Limits::tick` |
 | A heartbeat of a live link | 10 seconds | `Limits::heartbeat` |
 | The silence that ends a live link | 30 seconds | `Limits::silence` |
