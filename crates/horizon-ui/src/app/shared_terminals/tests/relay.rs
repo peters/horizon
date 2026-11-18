@@ -13,7 +13,7 @@ use horizon_core::secret_store::SecretStore;
 use horizon_core::{PanelId, RuntimeState, StartupDecision};
 use horizon_sync::{ServerInfo, Store, Supervisor, SupervisorConfig, run_server_on_unix_socket};
 
-use super::{OFFSCREEN, PROGRAM, above_the_viewport, follower_of, frames_until, text};
+use super::{OFFSCREEN, PROGRAM, above_the_viewport, follower_of, frames_until, grid, text};
 use crate::app::HorizonApp;
 use crate::app::server_sync::ServerSync;
 use crate::app::test_support::test_app_with_startup;
@@ -232,13 +232,16 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     );
 
     // Each side says in the title bar what the other one does. The chip of the
-    // owner names the computer that typed, and then the computer that watches.
+    // owner names the computer that typed, and the grid that it holds for it.
     let chip = super::chip_of;
-    assert_eq!(chip(&a, panel).as_deref(), Some("typed by Desk B"));
+    assert_eq!(
+        chip(&a, panel).as_deref(),
+        Some("sized by Desk B \u{00b7} typed by Desk B")
+    );
     frames_until(
         "the chip of the owner names the follower again",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
-        |apps| chip(apps[0], panel).as_deref() == Some("seen by Desk B"),
+        |apps| chip(apps[0], panel).as_deref() == Some("sized by Desk B \u{00b7} seen by Desk B"),
     );
     assert_eq!(chip(&b, follow).as_deref(), Some("on Desk A"));
 
@@ -335,4 +338,137 @@ fn lists(app: &HorizonApp, id: &str) -> bool {
     computers
         .iter()
         .any(|computer| computer.device == "desk-a" && computer.panels.iter().any(|listed| listed.id == id))
+}
+
+/// The person of one computer types in a terminal of another computer, and the
+/// program of that computer takes the grid of the window that typed: the size of
+/// the program changes, both sides show the same grid, and a third computer that
+/// only watches takes the new grid and keeps its history. The person of the owner
+/// then types, and the size of that panel comes back.
+/// Mutation: drop the relay of the request (no size changes), send the screens of
+/// a new grid to the follower that asked alone (the third computer keeps the old
+/// grid), or keep the hold after the owner typed (the size never comes back).
+#[test]
+fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
+    let home = tempfile::tempdir().expect("the home of the server");
+    let socket = home.path().join("server.sock");
+    let store = Store::open(&home.path().join("server.sqlite")).expect("the store");
+    let server = run_server_on_unix_socket(&socket, store.clone(), &ServerInfo::default()).expect("the socket");
+
+    let program = stand_in(home.path(), &socket);
+    let (_temp_a, ctx_a, mut a) = computer(&program, "desk-a", "Desk A");
+    let (_temp_b, ctx_b, mut b) = computer(&program, "desk-b", "Desk B");
+    let (_temp_c, ctx_c, mut c) = computer(&program, "desk-c", "Desk C");
+    let panel = owner(&mut a);
+    let id = a.board.panel(panel).expect("the owner panel").local_id.clone();
+    frames_until(
+        "B and C list the panel of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| {
+            apps[1]
+                .shared_terminals
+                .found
+                .computers
+                .iter()
+                .any(|computer| computer.device == "desk-a")
+        },
+    );
+
+    // The program of A writes the lines that are the history of a follower.
+    let lines: String = (1..=60).fold(String::new(), |text, line| format!("{text}line {line}\n"));
+    a.board
+        .panel_mut(panel)
+        .expect("the owner panel")
+        .write_input(lines.as_bytes());
+    frames_until(
+        "A shows the last line",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| text(apps[0], panel).contains("GOT:line 60"),
+    );
+
+    // Two computers follow the panel, and the body of the panel of B fits a grid
+    // that is not the grid of the stream.
+    b.open_shared_terminal("desk-a", &id, &ctx_b);
+    let follow_b = follower_of(&b).expect("the follow panel of B");
+    frames_until(
+        "C lists the panel of A again",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| lists(apps[2], &id),
+    );
+    c.open_shared_terminal("desk-a", &id, &ctx_c);
+    let follow_c = follower_of(&c).expect("the follow panel of C");
+    frames_until(
+        "B and C show the screen of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| text(apps[1], follow_b).contains("GOT:line 60") && text(apps[2], follow_c).contains("GOT:line 60"),
+    );
+    b.board
+        .panel_mut(follow_b)
+        .expect("the follow panel")
+        .resize_layout([1000.0, 650.0]);
+    frames_until(
+        "B fits another grid",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| super::size::fit(apps[1], follow_b) != (80, 24),
+    );
+    let asked = super::size::fit(&b, follow_b);
+
+    // The person of B types, so the program of A takes the grid of the window of
+    // B. Both sides show that grid, and the program prints it.
+    b.board
+        .panel_mut(follow_b)
+        .expect("the follow panel")
+        .write_input(b"size\n");
+    frames_until(
+        "A holds the grid of B",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| super::size::shown(apps[0], panel) == (asked.1, asked.0),
+    );
+    frames_until(
+        "C shows the grid of B",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| grid(apps[2], follow_c) == asked,
+    );
+    b.board
+        .panel_mut(follow_b)
+        .expect("the follow panel")
+        .write_input(b"size\n");
+    frames_until(
+        "the program of A reads the grid of B",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| super::size::size(apps[0], panel) == Some((asked.1, asked.0)),
+    );
+    assert_eq!(grid(&b, follow_b), asked, "B shows the grid of its own body");
+    let above = above_the_viewport(&c, follow_c);
+    assert!(
+        above.iter().any(|line| line == "GOT:line 1"),
+        "C keeps its history under a new grid: {} lines",
+        above.len()
+    );
+
+    // The person of A types: the size of the panel of A comes back, and the
+    // program reads it again.
+    a.board
+        .panel_mut(panel)
+        .expect("the owner panel")
+        .write_input(b"size\n");
+    frames_until(
+        "the program of A reads the grid of its own body",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| super::size::size(apps[0], panel) == Some((24, 80)),
+    );
+    frames_until(
+        "B and C show the grid of A",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| grid(apps[1], follow_b) == (80, 24) && grid(apps[2], follow_c) == (80, 24),
+    );
+    assert_eq!(
+        super::size::shown(&a, panel),
+        (24, 80),
+        "the owner pushes the grid of its body"
+    );
+
+    drop((a, b, c));
+    server.stop();
+    store.close();
 }

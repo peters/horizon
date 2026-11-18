@@ -6,6 +6,7 @@ mod name;
 mod no_frame;
 mod relay;
 mod screen;
+mod size;
 mod typing;
 mod window;
 
@@ -38,6 +39,7 @@ const PROGRAM: &str = r#"stty -echo; printf 'READY\n'; while read -r line; do ca
 big) head -c 1300000 /dev/zero | tr '\0' x; printf '\nBIG-DONE\n';;
 alt) printf '\033[?1049hALTERNATE';;
 main) printf '\033[?1049l';;
+size) printf 'SIZE:%s\n' "$(stty size)";;
 *) printf 'GOT:%s\n' "$line";;
 esac; done"#;
 
@@ -559,16 +561,19 @@ fn a_follow_panel_shows_the_owner_terminal_and_types_in_it() {
     window.shows(owner, "GOT:two");
     window.shows(follow, "GOT:two");
 
-    // A new follower gets one screen at once and one a moment later.
+    // A new follower gets one screen at once and one a moment later, and the
+    // grid that the person of this computer asked for is one more.
     let link = window.link.clone();
     window.until("the second screen of the join", move |_| link.relay().screens >= 2);
     assert_eq!(
         window.link.relay().screens,
-        2,
-        "a join asks for two screens and no more"
+        3,
+        "two screens of the join, and one for the grid that the follower typed at"
     );
 
-    // A resize of the owner gives the follower the new grid.
+    // A resize of the owner gives the follower the new grid, once the person of
+    // the owner typed there: that key takes the size back from the follower.
+    window.write(owner, b"\n");
     let owner_panel = window.app.board.panel_mut(owner).expect("the owner");
     owner_panel.resize_immediately(30, 100, 8, 17);
     window.until("the grid of the resize", |app| grid(app, follow) == (100, 30));
@@ -966,10 +971,10 @@ fn the_share_of_a_panel_goes_on_after_a_restart_of_its_terminal() {
     window.write(follow, b"after\n");
     window.shows(owner, "GOT:after");
     window.shows(follow, "GOT:after");
-    // The panel is still watched: its chip names the follower again after the
-    // bytes of that follower.
+    // The panel is still watched: its chip names the follower that holds the
+    // grid of the program again, after the bytes of that follower.
     window.until("the chip of the owner", |app| {
-        chip_of(app, owner).as_deref() == Some("seen by Here")
+        chip_of(app, owner).as_deref() == Some("sized by Here \u{00b7} seen by Here")
     });
 }
 

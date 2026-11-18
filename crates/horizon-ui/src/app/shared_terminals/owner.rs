@@ -84,7 +84,16 @@ impl Watched {
     /// does, and who watches the panel or typed in it last.
     fn chip_text(&self) -> String {
         match &self.sized {
-            Some(name) => format!("sized by {name} \u{00b7} {}", self.chip),
+            Some(name) => format!("sized by {name} \u{00b7} {}", self.watchers_text()),
+            None => self.watchers_text(),
+        }
+    }
+
+    /// What the chip says about the other computers, but not about the size of
+    /// the grid of this panel.
+    fn watchers_text(&self) -> String {
+        match &self.typed {
+            Some((_, name)) => format!("typed by {name}"),
             None => self.chip.clone(),
         }
     }
@@ -199,6 +208,13 @@ impl Run {
             let own = panels.iter().find(|own| own.entry.id == *id);
             let listed = sent.iter().any(|panel| panel.id == *id);
             if let Some(own) = own.filter(|_| listed && !watch.devices.is_empty()) {
+                // The person of this computer typed in the panel: the grid of its
+                // body is back, and the chip stops naming the follower.
+                if watch.sized.is_some() && !own.source.holds_grid() {
+                    watch.sized = None;
+                    *changed = true;
+                    chips.insert(id.clone(), watch.chip_text());
+                }
                 watch.drain(link, id, &own.source, now);
                 let overdue = watch
                     .typed
@@ -294,11 +310,9 @@ impl Run {
         let Some(watch) = self.watched.get_mut(id) else {
             return;
         };
-        // The person of this computer takes the size back to its own body.
-        watch.sized = None;
         let name = shown(typed_name(from, label));
-        self.found.chips.insert(id.to_owned(), format!("typed by {name}"));
         watch.typed = Some((now, name));
+        self.found.chips.insert(id.to_owned(), watch.chip_text());
         self.changed = true;
     }
 

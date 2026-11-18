@@ -191,6 +191,12 @@ impl ShareSource {
         Weak::ptr_eq(&self.term, &other.term)
     }
 
+    /// Whether the program of this terminal holds the grid of a follower now.
+    #[must_use]
+    pub fn holds_grid(&self) -> bool {
+        self.held.get().is_some()
+    }
+
     /// Gives the program of the terminal the grid that a follower holds, and
     /// takes the grid of the terminal for it: the panel of the owner then pushes
     /// no size of its own body, and draws the grid from the top left. The thread
