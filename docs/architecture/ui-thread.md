@@ -62,16 +62,25 @@ in `App::logic` (`HorizonApp::logic_pass` in
   values of egui for this. The count of the complete frames is higher than at
   the last `ui`, and the time of the input is the same. Thus, no work runs two
   times in one frame.
-- **The pass does five things.**
+- **The pass does six things.**
   1. It gives the wake to each terminal that has none.
   2. It starts the program of a panel that a request opened, and it applies
      the answers of the coordination worker.
-  3. It reads the events of each terminal that has one. The answers to the
+  3. It takes the request of a second start of this computer, which shows the
+     window again when Horizon keeps running with its window closed
+     ([`app/keep_running.rs`](../../crates/horizon-ui/src/app/keep_running.rs)).
+     A hidden window gets no frame, so no earlier pass can take that request.
+     The folder of such a request still opens in a frame. The pass also writes
+     the heartbeat of the session lease, and it asks for the next pass 2 s
+     later: a lease that is 15 s old says that no window runs, and a second
+     start would then open a second Horizon. This one timed pass is the only
+     wake that a hidden window asks for.
+  4. It reads the events of each terminal that has one. The answers to the
      questions of a program go out. The title, the status and the end of the
      program are read.
-  4. It runs the window part of the
+  5. It runs the window part of the
      [shared terminals](shared-terminals.md#what-a-window-with-no-frame-does).
-  5. It reads the states of the agent panels, and it sends a desktop notice
+  6. It reads the states of the agent panels, and it sends a desktop notice
      that is due.
 - **The pass costs nothing when nothing asks for it.** It has no timer. A
   terminal asks for it with the first event after the window read that
@@ -131,8 +140,12 @@ nothing does not do it:
 - The session: the switch, the catalog, the pickup, the lease and the save of
   the runtime state. The pump of the device requests saves the state that a
   request changed.
-- The close request of the window (`exit_on_close_request`).
-- The folder of a second `horizon <folder>`.
+- The close request of the window (`exit_on_close_request`). A hidden window
+  gets no close request, because the desktop shows no window to close.
+- The folder of a second `horizon <folder>`. A hidden window shows its window
+  for that request in the pass, and the folder itself opens in a frame.
+- The drawing and the input of the window that comes back. The state of the
+  hidden window is the state of its last frame, and no pass changed it.
 - The idle state of an agent whose program reports no state. The screen of its
   terminal is read only in a pass that took output.
 

@@ -178,7 +178,10 @@ fn quit_horizon_ends_the_program_whatever_the_setting_says() {
             app.shutdown_progress.is_some(),
             "Quit ends the panels with the setting {keep_running}"
         );
-        assert!(!app.keep_running.hidden, "Quit hides nothing with the setting {keep_running}");
+        assert!(
+            !app.keep_running.hidden,
+            "Quit hides nothing with the setting {keep_running}"
+        );
         assert!(recorder.lines().is_empty(), "Quit says nothing about a hide");
     }
 }

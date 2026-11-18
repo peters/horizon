@@ -5,9 +5,10 @@ applyTo: "crates/horizon-core/src/folder_requests.rs,crates/horizon-ui/src/app/f
 # Trust boundary of a folder request
 
 `horizon <folder>` asks a Horizon of the same home to show a folder when one
-already runs. The second start cannot reach the first one in memory, so it
-writes a request into the home and the window that runs reads it. This boundary
-covers the request, the answer and the window that applies them.
+already runs, and a start that names no folder asks that window to show itself.
+The second start cannot reach the first one in memory, so it writes a request
+into the home and the window that runs reads it. This boundary covers the
+request, the answer and the window that applies them.
 
 Read [`first-steps.md`](../first-steps.md) for the command that a person types.
 
@@ -30,7 +31,11 @@ of this computer cannot see or write the folder at all, and a file mode is
    `verb`, `folder` and `requested_at`. The only verb is `show`. A record with
    another verb, another version, a relative folder, a folder that holds a
    control character, or a folder longer than `MAX_FOLDER_BYTES` is removed and
-   applied to nothing.
+   applied to nothing. An empty folder is a request that names no folder: the
+   window shows and raises its window and applies no other work, and it answers
+   `window`. A window that ends with its window answers such a request with
+   `refused` and the reason `keep_running_off`, and the caller then opens its own
+   window as it did before this channel existed.
 2. **No text of a request reaches a command line.** No field of a request
    becomes a program, an argument, an environment value, a preset name or a
    shell word. The window opens what a start with that folder opens: it shows
@@ -70,7 +75,8 @@ of this computer cannot see or write the folder at all, and a file mode is
 8. **A request that no window takes costs the caller a bounded wait.** The
    caller waits `CALLER_WAIT` (5 seconds) for the answer, then removes its own
    files and prints one sentence. It never starts a second window in that case,
-   and it never waits without a bound.
+   and it never waits without a bound. A start that names no folder and reads no
+   answer opens its own window, as a start of this home does today.
 9. **The window never waits on the folder on the UI thread.** Every read,
    claim, write and removal of the channel runs on the coordination worker
    thread, and the frame applies only the folder and the answer. A test runs a

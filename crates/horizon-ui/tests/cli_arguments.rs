@@ -336,10 +336,7 @@ fn a_second_start_that_names_no_folder_shows_the_window_that_runs() {
     let temp = tempfile::tempdir().expect("the home of the test");
     let (horizon_home, _window_store) = home_with_a_running_window(&temp);
 
-    let window = answer_as_the_window(
-        horizon_home.root(),
-        horizon_core::folder_requests::Answer::Window,
-    );
+    let window = answer_as_the_window(horizon_home.root(), horizon_core::folder_requests::Answer::Window);
     let outcome = start_with_home(binary, temp.path(), Some(horizon_home.root()), &[]);
     window.join().expect("the window of this test");
 

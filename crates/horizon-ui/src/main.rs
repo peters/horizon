@@ -626,7 +626,10 @@ fn folder_answer_line(
 
 /// What a start asked the running Horizon to show: its window, or a folder.
 fn shown_thing(folder: Option<&std::path::Path>) -> String {
-    folder.map_or_else(|| "its window".to_owned(), |folder| format!("the folder {}", folder.display()))
+    folder.map_or_else(
+        || "its window".to_owned(),
+        |folder| format!("the folder {}", folder.display()),
+    )
 }
 
 /// Whether a Horizon of this home holds a session now.
