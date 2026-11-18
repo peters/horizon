@@ -427,7 +427,11 @@ fn the_program_of_the_owner_takes_the_grid_of_the_computer_that_typed() {
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
         |apps| super::size::size(apps[0], panel) == Some((asked.1, asked.0)),
     );
-    assert_eq!(grid(&b, follow_b), asked, "B shows the grid of its own body");
+    frames_until(
+        "B shows the grid of its own body",
+        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b), (&ctx_c, &mut c)],
+        |apps| grid(apps[1], follow_b) == asked,
+    );
     let above = above_the_viewport(&c, follow_c);
     assert!(
         above.iter().any(|line| line == "GOT:line 1"),
