@@ -204,9 +204,9 @@ name, the list of each computer and the follows.
 5. **A screen starts the output.** A follower gets the output of a panel only
    after a `screen` of that panel. The server drops a screen and output of a
    panel that no computer follows. A screen with `everyone: true` reaches each
-   follower of the panel, and one with `everyone: false` reaches only the
-   followers that wait for a screen. A `fresh: true` screen makes each of them
-   forget its screen, its history and its modes.
+   follower of the panel that is not behind, and one with `everyone: false`
+   reaches only the followers that wait for a screen. A `fresh: true` screen
+   makes each of them forget its screen, its history and its modes.
 6. **The server names the sender.** The server writes the `owner` of a `screen`
    and of `output` from the link that sent the request. It writes the `from`
    and the `label` of `typed` the same way. A frame cannot name another sender.
@@ -382,9 +382,10 @@ The bytes of a fresh screen have this order:
 1. `ESC c`, a full reset. A terminal that showed an older screen then draws the
    same as a new terminal.
 2. The alternate screen: `CSI ? 1049 h`, when the program is on it.
-3. The lines above the viewport, oldest first, each one followed by `CR LF`.
-   They scroll into the history of the follower, whose viewport then ends under
-   them. A program on the alternate screen has no such lines.
+3. The lines above the viewport, at most 1000 of the ones that are closest to
+   it, each one followed by `CR LF`. They scroll into the history of the
+   follower, whose viewport then ends under them. A program on the alternate
+   screen has no such lines.
 4. The rows of the screen of the program, with the colours of each cell and the
    attributes bold, dim, italic, underline, reverse and strikeout. The screen
    draws a tab cell and hidden text as blanks, so each cell keeps its column.
@@ -740,14 +741,15 @@ and who takes it (`Why` in `owner.rs`).
 |---|---|---|---|---|
 | A new follower came | `true` | `false` | The lines above the viewport, then the rows | The followers that wait for a screen |
 | A follower asked for a screen | `false` | `false` | The rows, in place | The followers that wait for a screen |
-| The second screen of a join, a take that overflowed, a refused screen or output | `false` | `true` | The rows, in place | Each follower of the panel |
+| The second screen of a join, a take that overflowed, a refused screen or output | `false` | `true` | The rows, in place | Each follower of the panel that is not behind |
 
-A fresh screen carries at most 1000 lines above the viewport, oldest first,
-and at most 256 KiB of them (`HISTORY_LINES`, `HISTORY_BYTES`). A program on
-the alternate screen has no history above its viewport, so its fresh screen
-carries none. A screen that is not fresh keeps the history of each follower and
-draws each row at its place. A new grid of the owner stops the outlet, so the
-next take overflows and asks for the third kind of screen.
+A fresh screen carries at most 1000 of the lines that are closest to the
+viewport of the owner, and at most 256 KiB of them (`HISTORY_LINES`,
+`HISTORY_BYTES`), drawn oldest first. A program on the alternate screen has no
+history above its viewport, so its fresh screen carries none. A screen that is
+not fresh keeps the history of each follower and draws each row at its place. A
+new grid of the owner stops the outlet, so the next take overflows and asks for
+the third kind of screen.
 
 The pump keeps the bytes of one screen while the link takes it in parts
 (`Owed`). It gives the link the grid first, then the bytes in parts of at most
@@ -777,9 +779,9 @@ The grid of the program of a panel follows the computer that typed in it last
    the list that the link has names the panel, and a terminal panel of this
    computer has that identifier and is no follow panel.
 4. **The program takes the grid.** `ShareSource::hold_grid` resizes the grid of
-   the terminal, sends the size to the program, and stops the outlet. The next
-   take then overflows, so each follower gets a screen with the new grid, with
-   `fresh: false` and `everyone: true`.
+   the terminal, sends the size to the program, and stops the outlet, when the
+   grid differs from the hold. The next take then overflows, so each follower
+   gets a screen with the new grid, with `fresh: false` and `everyone: true`.
 5. **The panel of the owner holds the grid.** `Terminal::resize_with_policy`
    returns while the grid is held, so the body of the panel pushes no size. The
    widget draws `Terminal::shown_grid` from the top left of the body and clips
