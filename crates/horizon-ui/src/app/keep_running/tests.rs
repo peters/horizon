@@ -166,6 +166,33 @@ fn a_second_start_shows_the_window_again_and_raises_it() {
     assert!(!app.keep_running.hidden, "the window is shown again");
 }
 
+/// A hidden window draws no frame, so the request of a second start reaches the
+/// pass of a window that draws nothing: that pass shows and raises the window.
+#[test]
+fn the_pass_of_a_hidden_window_shows_it_for_a_second_start() {
+    let (_temp, ctx, mut app, _recorder) = app_with(true);
+    let root = app.session_store.home().root().to_path_buf();
+    let _ = commands(&ctx, &mut app, close_request());
+    assert!(app.keep_running.hidden, "the window is hidden");
+
+    let asking_root = root.clone();
+    let caller = std::thread::spawn(move || horizon_core::folder_requests::ask_window(&asking_root));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !caller.is_finished() {
+        app.folder_requests
+            .waiting
+            .store(true, std::sync::atomic::Ordering::Release);
+        crate::app::undrawn::tests::run_logic_pass(&ctx, &mut app);
+        assert!(std::time::Instant::now() < deadline, "the pass showed the window");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let answer = caller.join().expect("the caller").expect("a caller of the channel");
+
+    assert_eq!(answer, Some(horizon_core::folder_requests::Answer::Window));
+    assert!(!app.keep_running.hidden, "the pass showed the window");
+    app.board.shutdown_terminal_panels();
+}
+
 /// The menu ends Horizon with the setting on, and with it off.
 #[test]
 fn quit_horizon_ends_the_program_whatever_the_setting_says() {
