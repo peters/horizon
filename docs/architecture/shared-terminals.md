@@ -478,9 +478,10 @@ panels took the keys of that frame. It does the work that needs the board:
 A window that gets no frame continues each stream on the pump. The part of the
 window runs in the pass that eframe calls in place of a frame:
 [the UI thread guide](ui-thread.md#the-pass-of-a-window-that-draws-no-frame)
-gives its rules. A repaint request wakes that pass. An event of a terminal asks
-for one, and so does the pump when `Found` changed. On Wayland, the pass comes
-250 ms after the request. Thus, these things need no frame:
+gives its rules. An event of a terminal asks for that pass at once. A repaint
+request also wakes it, as the pump makes one when `Found` changed. On Wayland,
+the pass of a repaint request comes 250 ms after the request. Thus, these
+things need no frame:
 
 - The list: a panel that a request opened or closed, a panel that started a
   new terminal, a new title, a new state and a new grid.
@@ -746,10 +747,12 @@ and the follow panels of this window.
 - **A short loss of the sync link.** The join reads the state of the sync link
   one time in each frame. It does not see a sync link that is away for less
   than one frame, and the live link does not start again then.
-- **A window with no frame is 250 ms late on Wayland.** The pass that builds
-  the list and writes the answers of a terminal comes 250 ms after its repaint
-  request, as [What a window with no frame does](#what-a-window-with-no-frame-does)
-  says. eframe sets that time.
+- **A window with no frame can be 250 ms late on Wayland.** An event of a
+  terminal gets its pass at once, up to a bound of about sixty a second. The
+  pass of a repaint request comes 250 ms after the request, as
+  [What a window with no frame does](#what-a-window-with-no-frame-does) says.
+  eframe sets that time. The second build of the list in 250 ms and each event
+  above the bound wait for that pass.
 - **An older server shows nothing.** The state `Unsupported` shows no line and
   no section, so the person cannot tell an older server from a server with no
   other computer.

@@ -78,6 +78,22 @@ in `App::logic` (`HorizonApp::logic_pass` in
   terminal (`Wake::Event`), and only while the window draws nothing. While
   frames run, the poll of a frame reads the events. In the pass, a terminal
   with no event costs one atomic load.
+- **A terminal gets its pass at once.** The 250 ms of eframe are too long for
+  a program that waits for an answer of its terminal. Thus, the wake of a
+  terminal does not ask for a repaint. It sends the wake `TERMINAL_WAKE_PASS`
+  through the proxy of the event loop, as the pump of the device requests
+  does. `user_event` in
+  [`native_window.rs`](../../crates/horizon-ui/src/native_window.rs) then
+  calls `DeviceRequestBridge::pass_on_ui_thread`, and the pass runs with no
+  wait. The window draws nothing from the first pass that eframe runs in place
+  of a frame. Until that pass, an event waits for eframe one time.
+- **The calls at once have a bound.** The events of one terminal join: the
+  terminal asks one time until the window read it. Each call books 16 ms, and
+  no call goes out while 128 ms are booked. Thus, eight calls go at once, and
+  about sixty a second after them. An event above that bound asks for a
+  repaint, and eframe runs its pass as before. A program that prints with no
+  end gets at most about 66 passes a second on Wayland. A call that arrives
+  after a frame ran does nothing, because that frame took the events.
 - **One pass can ask for two more.** After a pass that took output, one pass
   follows 600 ms later: the hook of an agent writes the state of a turn after
   the last output of that turn. After a pass that asked for a read of the
