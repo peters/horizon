@@ -166,11 +166,16 @@ back, and when the name of this computer changes.
 - **`open` makes it.** The first request after the greeting is `open`. The link
   then carries live requests only, and the sync link carries none.
 - **The version of the server decides.** A computer sends a live frame only to
-  a server that answered version 6 or higher in `hello_ok`. With an older
+  a server that answered version 9 or higher in `hello_ok`. With an older
   server, the live link reports `Unsupported` and the sync link does not
   change.
-- **It has no bound of a request.** The bounds of the section above are the
-  bounds of the sync link. No timer ends a live link that is silent.
+- **It has a bound of its own.** A live link sends a `heartbeat` frame while it
+  has no other frame for 10 seconds, and each side ends the link when it read
+  no frame for 30 seconds. The server ends it with `live_silent` and the reason
+  `This computer sent no frame for thirty seconds.` so a computer that went
+  away leaves the list of the others in about half a minute. The two numbers
+  and the frames are in
+  [the page of the shared terminals](shared-terminals.md#the-sign-of-life).
 - **The server stores no frame of it.** The frames of a live link go through
   the memory of the server process, and none reaches the store or a file of the
   server home. Its greeting writes the row of its computer, as the greeting of
@@ -262,6 +267,15 @@ body and the number of sections, and it stores the JSON.
   version is a version of the store only when the store holds the content that the
   push carried. When the person saved the section again, or a row of another
   computer arrived, the row of that version comes again and its content is written.
+- **The link hands each write to a worker of its own.** An answer of the server
+  gives the mirror a row before the store holds it, and one write of the store
+  is a file sync. The link puts the row into a queue and takes the next frame;
+  a worker of the sync supervisor writes the rows in the order of the answers.
+  Every answer that arrived while the last write ran is one write, because the
+  state that the worker reads holds the rows of them all. A link that wrote the
+  store itself answered no frame while it ran, so a save of the person in that
+  window named the version of the row before. The two workers and the wait
+  between them are in [the settings store page](settings-store.md#when-a-write-happens).
 - **A push that loses decides nothing by itself.** A push that the version rule
   refuses moves the mark of the computer back, and the row of the version that
   decided it says whether the value of this computer differs from that row. A row
@@ -495,7 +509,7 @@ one frame.
 | `device_removed` | server | That name, and whether the server held it. |
 | `live` | computer | One request of a live link. [The page of the shared terminals](shared-terminals.md#the-frames) gives the requests. |
 | `live_event` | server | One event of a live link. The same page gives the events. |
-| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits`, `store_failed`, `no_listener`, `wrong_code`, `join_locked`, `name_taken`, `not_logged_in`, `removed`, `not_live`, `live_link`, `live_replaced` or `live_limit`. |
+| `error` | server | A typed error of the link: `frame_too_large`, `bad_frame`, `protocol_version`, `bad_device`, `not_hello`, `too_many_intents`, `too_many_waits`, `store_failed`, `no_listener`, `wrong_code`, `join_locked`, `name_taken`, `not_logged_in`, `removed`, `not_live`, `live_link`, `live_replaced`, `live_limit` or `live_silent`. |
 
 A refusal of one intent is not a link error. It is the `outcome` of that intent:
 `changed_since_seen`, `already_answered`, `too_many`, `invalid_record`,
@@ -521,12 +535,16 @@ A link has two version numbers. The `hello` of a computer names version 4.
 Version 1 has no secret row and no `secrets_lost`. Version 2 has no `join`, no
 token and no invitation. Version 3 has no `setting` object.
 
-The server answers version 6 in `hello_ok`, and it refuses a `hello` above 6.
+The server answers version 9 in `hello_ok`, and it refuses a `hello` above 9.
 Version 5 changes no frame: a server from that version holds an idle wait for
-15 seconds. Version 6 adds the `live` and the `live_event` frames. The `hello`
-stays at version 4, so a server of version 4 or 5 greets a computer of this
-build. A computer sends a live frame only to a server that answered 6 or
-higher.
+15 seconds. Version 6 adds the `live` and the `live_event` frames. Version 7
+adds `fresh`, `everyone` and `replay` to the frames of a screen, so a follower
+knows whether it keeps its history and who takes the screen. Version 8 adds the
+`heartbeat` of both sides. Version 9 adds the `resize` request and the
+`resized` event: the grid that the computer which typed last gives the program
+of a shared panel. The `hello` stays at version 4, so a server of version 4 or
+5 greets a computer of this build. A computer sends a live frame only to a
+server that answered version 9 or higher (`LIVE_PROTOCOL_VERSION`).
 
 ## The secrets, and what the server holds
 

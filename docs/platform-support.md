@@ -161,13 +161,38 @@ function, update this document in the same PR.
     recorded, and no run of the Horizon window with two linked computers was
     watched, so what a person sees is not proven on either system. Test it with
     [the shared terminals procedure](testing/procedures/shared-terminals.md).
-    The server must answer protocol version 6. With an older server the machine
+    The server must answer protocol version 9. With an older server the machine
     list stays in step, and the window shows no section **Computers**.
 
 A shell panel starts the program in the `SHELL` variable. Without `SHELL` it
 starts `/bin/zsh` on macOS and `/bin/bash` on Linux
 (`crates/horizon-core/src/panel/spawn.rs:764-777`). Horizon starts each agent
 through `$SHELL -ic` (`crates/horizon-core/src/panel/spawn.rs:738-742`).
+
+## The open-file limit
+
+A panel holds files: its PTY, the socket or the pipes of its program, and a
+browser or a device panel more. macOS starts a process with 256 open files and
+Linux with 1024. A board of a few dozen panels reaches that limit, and a panel
+that cannot start answers `Too many open files (os error 24)`.
+
+Horizon raises the soft limit of its process once at each start, and once in
+the one place that opens a terminal of a panel
+(`crates/horizon-core/src/open_files.rs`).
+
+| Fact | Value |
+|---|---|
+| The soft limit that a process starts with | 256 on macOS, 1024 on Linux |
+| The most open files that Horizon asks for | 8192 (`CEILING`) |
+| The limit that the program of a panel gets | The limit of the Horizon process |
+
+The hard limit stays as it is, and Horizon never asks for a value at or below
+the limit that the process has, so no call lowers a limit. macOS refuses a
+soft limit above `kern.maxfilesperproc` although the hard limit allows it, so a
+refused value asks for an eighth of the ceiling and then a sixteenth. A kernel
+that refuses every value keeps the limit that the process has, and Horizon
+writes one warning line: a refusal is not fatal. The runner of the tests gives
+a test binary the same ceiling (`scripts/cargo-test-runner.sh`).
 
 ## Machines and their agents
 

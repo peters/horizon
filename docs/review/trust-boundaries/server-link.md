@@ -52,15 +52,17 @@ never on the UI thread.
   before it, a second `hello`, a frame that is not one document of the protocol,
   and a frame above 256 KiB end the link with a typed error frame.
 - **The version is one number of each side.** The `hello` of a computer of this
-  build names version 4. The server of this build answers version 6, and a
-  `hello` above 6 ends the link with `protocol_version`. Version 5 changed no
+  build names version 4. The server of this build answers version 9, and a
+  `hello` above 9 ends the link with `protocol_version`. Version 5 changed no
   frame: a server from that version holds an idle wait for 15 seconds. Version
-  6 adds the two frames of a live link.
+  6 adds the two frames of a live link. Versions 7, 8 and 9 add the facts of a
+  screen, the heartbeat and the grid of a shared program; the page of the
+  shared terminals names each one.
 - **A link carries the store or the shared terminals, not the two.** A link
   whose first request after the greeting is `open` is a live link. A live
   request on another link ends that link with `not_live`. A frame of the store
   on a live link ends it with `live_link`. A computer sends a live frame only to
-  a server that answered version 6 or higher.
+  a server that answered version 9 or higher.
 - **The device name is a claim.** It is 1 to 40 characters of `a-z`, `0-9` and
   `-`, and a name that breaks the rule ends the link. The transport does not prove
   the name: whatever `ssh` let in may claim any device name.
@@ -358,7 +360,9 @@ before that link; they are no proof of who wrote a value.
   killed, reaped and reported `away`, and the next attempt starts on the delays
   of a lost link. A byte stream that stays open and answers nothing is therefore
   not a link that a computer keeps. These bounds are the bounds of the sync
-  link. A live link has no request with a bound.
+  link. A live link has no request with a bound, but each side of it sends a
+  `heartbeat` while it has no other frame for 10 seconds, and 30 seconds of
+  silence ends it with `live_silent`.
 - **The relay of a link ends with its socket.** `horizon --server-link` returns
   as soon as the socket of the server ends or its read or write fails, and its
   entry ends the process there. A server that stops therefore ends the mode of
@@ -384,9 +388,11 @@ before that link; they are no proof of who wrote a value.
   it. That person can also type in each terminal that a computer shares with
   typing on.
   [`shared-terminals.md`](shared-terminals.md) states that boundary.
-- **A live link that went silent.** A live link has no keepalive of its own. A
-  computer that went away stays in the list of the shared terminals until its
-  transport fails or its device opens a new live link.
+- **A live link that went silent.** Each side of a live link ends it when it
+  read no frame for 30 seconds, and the server ends its own side with
+  `live_silent`. A computer that went away therefore leaves the list of the
+  shared terminals in about half a minute, also while a program of this
+  computer holds its transport open under the dead link.
 - **The content of a body of an internal object.** The `probe` kind is bounded in
   number and in frame size, and its body is JSON that the server does not read.
   No person or agent sees it: a later slice replaces it with the kinds that a UI
