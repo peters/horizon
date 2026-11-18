@@ -8,10 +8,9 @@
 //! thread hands them to the writing thread of the link one at a time, so the
 //! frames that wait are counted in one place.
 //!
-//! A third thread is the sign of life of the link ([`Alive`]): it sends a
-//! heartbeat while the link has nothing else to say, and it ends a link whose
-//! computer sent nothing for the bound, so a computer that went away without
-//! closing its transport leaves the list of the other computers.
+//! A third thread is the sign of life of the link: it sends a heartbeat while the
+//! link has nothing else to say, and it ends a link whose computer sent nothing
+//! for the bound.
 
 use std::{
     io::Read,
@@ -19,7 +18,7 @@ use std::{
     thread,
 };
 
-use super::alive::Alive;
+use super::alive::{Alive, Limits};
 use super::outbox::{Next, Outbox, Tag};
 use super::protocol::{LiveEvent, LiveRequest};
 use crate::frame::FrameError;
@@ -61,7 +60,7 @@ pub(crate) fn serve<R: Read>(
         end(LinkErrorCode::LiveLimit, "This server cannot open one more live link.");
         return Ok(());
     }
-    let alive = Arc::new(Alive::default());
+    let alive = Arc::new(Alive::new(Limits::default()));
     let sign = {
         let (alive, outbox, ticket) = (Arc::clone(&alive), Arc::clone(&outbox), Arc::clone(ticket));
         thread::Builder::new()
@@ -99,13 +98,12 @@ pub(crate) fn serve<R: Read>(
     result
 }
 
-/// Keeps the sign of life of one live link: a heartbeat frame while the link has
-/// nothing else to send, and the end of a link whose computer sent nothing for
-/// the bound. The `end` waits for the error frame, so this has a thread of its
-/// own, as the end of a link that the hub names has.
+/// Keeps the sign of life of one live link: a heartbeat while it has nothing else
+/// to send, and the end of a link whose computer sent nothing for the bound. The
+/// `end` waits for the error frame, so this has a thread of its own.
 pub(crate) fn sign_of_life(alive: &Alive, outbox: &Outbox, ticket: &Arc<LinkTicket>) {
     loop {
-        thread::sleep(alive.tick());
+        thread::sleep(alive.limits.tick);
         if outbox.closed() {
             return;
         }

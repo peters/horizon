@@ -173,9 +173,8 @@ pub enum LiveRequest {
         panel: String,
         data: LiveBytes,
     },
-    /// The sign of life of this link. A link that has no other frame for ten
-    /// seconds sends one, so the server ends it within seconds of a computer
-    /// that went away without closing its transport.
+    /// The sign of life of this link: a link with no other frame for ten seconds
+    /// sends one.
     Heartbeat,
 }
 
@@ -228,9 +227,8 @@ pub enum LiveEvent {
         label: String,
         data: LiveBytes,
     },
-    /// The sign of life of the server, for a link that has nothing else to
-    /// carry: a computer that reads none of them for thirty seconds ends the
-    /// link, so a server that went away leaves its list.
+    /// The sign of life of the server, for a link with nothing else to carry: a
+    /// computer that reads none of them for thirty seconds ends the link.
     Heartbeat,
     /// The state of the link changed. The handle of a computer makes this event,
     /// and it does not travel.

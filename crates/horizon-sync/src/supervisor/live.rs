@@ -27,6 +27,7 @@ use super::connect::Halt;
 use super::{End, Greeted, LINK_SLICE, SupervisorConfig};
 use crate::error::SyncError;
 use crate::frame::write_frame;
+use crate::live::alive::Limits;
 use crate::live::protocol::{ID_CHARS, LABEL_CHARS, clean, clean_panels};
 use crate::live::{
     Alive, LiveBytes, LiveEvent, LivePanel, LiveRequest, LiveState, MAX_LIVE_OUTPUT_BYTES, MAX_LIVE_PANELS,
@@ -47,8 +48,7 @@ const BATCH_FRAMES: usize = 32;
 /// How long this computer waits before it asks an older server again.
 const UNSUPPORTED_RETRY: Duration = Duration::from_secs(300);
 /// How long this computer waits before it tries again after the server ended its
-/// live link for another Horizon of the same computer, and the wait after that:
-/// the two programs never make progress while each one replaces the other.
+/// live link for another Horizon of the same computer, and the wait after that.
 const REPLACED_RETRY: Duration = Duration::from_secs(60);
 const REPLACED_RETRY_LONG: Duration = Duration::from_secs(300);
 
@@ -103,8 +103,7 @@ struct Shared {
     /// Told when the writer has work, when events were taken and at a stop.
     changed: Condvar,
     stop: AtomicBool,
-    /// The sign of life of the open link: a heartbeat frame each 10 seconds and
-    /// no link that reads nothing for 30 seconds.
+    /// The sign of life of the open link, and its end when it reads nothing.
     alive: Alive,
     wake: Box<dyn Fn() + Send + Sync>,
 }
@@ -294,8 +293,7 @@ impl Inner {
                 self.follows.remove(&follow);
                 self.sent.remove(&follow);
             }
-            // A heartbeat is the sign of life of the server, and no event of the
-            // application.
+            // A heartbeat is the sign of life of the server, no event of the app.
             LiveEvent::Heartbeat => return,
             _ => {}
         }
@@ -401,7 +399,7 @@ impl Shared {
             }
             inner = self
                 .changed
-                .wait_timeout(inner, self.alive.tick())
+                .wait_timeout(inner, self.alive.limits.tick)
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
@@ -452,7 +450,7 @@ impl LiveSupervisor {
             inner: Mutex::new(inner),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
-            alive: Alive::default(),
+            alive: Alive::new(Limits::default()),
             wake: Box::new(wake),
         });
         let halt = Arc::new(Mutex::new(None));
@@ -609,8 +607,7 @@ fn serve(shared: &Shared, greeted: Greeted, halt_slot: &Arc<Mutex<Option<Halt>>>
 
 #[cfg(test)]
 mod tests {
-    use super::{Again, REPLACED_RETRY, REPLACED_RETRY_LONG, Shared};
-    use crate::live::alive::Limits;
+    use super::{Again, Limits, REPLACED_RETRY, REPLACED_RETRY_LONG, Shared};
     use crate::live::{Alive, LiveRequest};
     use crate::protocol::{Frame, LinkError, LinkErrorCode};
     use std::sync::{Condvar, Mutex, atomic::AtomicBool};
@@ -621,7 +618,7 @@ mod tests {
             inner: Mutex::default(),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
-            alive: Alive::default(),
+            alive: Alive::new(Limits::default()),
             wake: Box::new(|| {}),
         }
     }

@@ -49,8 +49,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// facts of a screen that say whether a follower keeps its history and who takes
 /// the screen, and the mark of the replay of a screen. Version 8 adds the
 /// heartbeat of a live link in both directions, so a computer that went away
-/// without closing its transport leaves the list of the others. A computer of
-/// this build sends no live frame to a server that answered 7 or 6.
+/// leaves the list of the others.
 pub const SERVER_PROTOCOL_VERSION: u32 = 8;
 
 /// The first version of a server that holds an idle wait for fifteen seconds.

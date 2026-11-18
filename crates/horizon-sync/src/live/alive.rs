@@ -1,13 +1,6 @@
-//! The sign of life of one live link, on both sides of it: a heartbeat frame
-//! while the link has nothing else to send, and the end of a link that read
-//! nothing for its bound.
-//!
-//! A computer that goes away without closing its transport stays in the list of
-//! the other computers until that transport fails, which on TCP can take very
-//! long. Each side therefore sends a small frame every [`Limits::heartbeat`]
-//! while the link is idle, and each side ends the link when the other one sent
-//! nothing for [`Limits::silence`]. The transport is closed after the error
-//! frame, so a read that waits ends too.
+//! The sign of life of one live link, on both sides: a heartbeat frame while the
+//! link has nothing else to send, and the end of a link that read nothing for its
+//! bound, so a computer that went away leaves the list of the others.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -15,11 +8,8 @@ use std::time::{Duration, Instant};
 /// The bounds of the sign of life of a live link. A test shortens them.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
-    /// How long one look at the link waits: the smallest of the steps below.
     pub(crate) tick: Duration,
-    /// How long an idle link waits between two heartbeats.
     pub(crate) heartbeat: Duration,
-    /// How long a link may read nothing before it ends.
     pub(crate) silence: Duration,
 }
 
@@ -36,7 +26,7 @@ impl Default for Limits {
 /// When this side of one live link last read a frame and last sent one.
 #[derive(Debug)]
 pub(crate) struct Alive {
-    limits: Limits,
+    pub(crate) limits: Limits,
     times: Mutex<Times>,
 }
 
@@ -60,22 +50,15 @@ impl Alive {
         self.times.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// One frame of the other side arrived.
     pub(crate) fn read(&self) {
         self.times().read = Instant::now();
     }
 
-    /// One frame of this side went to the link.
     pub(crate) fn sent(&self) {
         self.times().sent = Instant::now();
     }
 
-    /// How long one look at the link waits.
-    pub(crate) fn tick(&self) -> Duration {
-        self.limits.tick
-    }
-
-    /// Whether a heartbeat is due, because this side sent nothing for the bound.
+    /// Whether this side sent nothing for the period of a heartbeat.
     pub(crate) fn beat_due(&self) -> bool {
         self.times().sent.elapsed() >= self.limits.heartbeat
     }
@@ -85,17 +68,9 @@ impl Alive {
         self.times().read.elapsed() >= self.limits.silence
     }
 
-    /// The reason of a link that ends because its server went quiet, for the
-    /// person who reads the state of the link.
+    /// The reason of a link that ends because its server went quiet.
     pub(crate) fn quiet_reason(&self) -> String {
-        let seconds = self.limits.silence.as_secs();
-        format!("the server sent no frame for {seconds} seconds")
-    }
-}
-
-impl Default for Alive {
-    fn default() -> Self {
-        Self::new(Limits::default())
+        format!("the server sent no frame for {} seconds", self.limits.silence.as_secs())
     }
 }
 
@@ -138,7 +113,7 @@ mod tests {
         thread::sleep(Duration::from_millis(60));
         assert!(alive.quiet(), "the other side sent nothing for the bound");
         assert_eq!(
-            Alive::default().quiet_reason(),
+            Alive::new(Limits::default()).quiet_reason(),
             "the server sent no frame for 30 seconds"
         );
     }
