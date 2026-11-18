@@ -31,6 +31,9 @@ const LIST_BYTES: usize = 192 * 1024;
 /// How long one follower waits before the owner of one panel is asked again
 /// for a new screen for it.
 pub(crate) const REFRESH_EVERY: Duration = Duration::from_secs(1);
+/// How long one follower waits before it gives the program of one panel another
+/// grid: two requests a second for one follower and one panel.
+pub(crate) const RESIZE_EVERY: Duration = Duration::from_millis(500);
 
 struct Link {
     id: u64,
@@ -60,6 +63,8 @@ struct Follow {
     replay: bool,
     /// When this follower last asked the owner for a new screen.
     refreshed: Option<Instant>,
+    /// When this follower last gave the program of the panel a grid.
+    resized: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -319,6 +324,15 @@ impl State {
                 }
             }
             LiveRequest::Refresh { owner, panel } => self.refresh(device, &owner, &panel),
+            LiveRequest::Resize {
+                owner,
+                panel,
+                cols,
+                rows,
+            } => {
+                let (owner, panel) = (clean(&owner, DEVICE_CHARS), clean(&panel, ID_CHARS));
+                self.resize(device, &owner, &panel, cols, rows);
+            }
             LiveRequest::Screen {
                 panel,
                 cols,
@@ -378,6 +392,7 @@ impl State {
                 relay: Relay::Waiting,
                 replay: false,
                 refreshed: None,
+                resized: None,
             });
             None
         };
@@ -410,6 +425,41 @@ impl State {
             link.outbox.drop_stream(owner, panel);
         }
         self.watchers(owner, panel, true);
+    }
+
+    /// Gives the program of a panel of `owner` the grid that the person of
+    /// `device` typed at, when that computer follows the panel now and the owner
+    /// lets another computer type in it. The grid is cut at the bounds of a screen
+    /// and the relay passes two a second for one follower and one panel. A request
+    /// that comes sooner, and one of a computer that does not follow the panel,
+    /// is dropped.
+    fn resize(&mut self, device: &str, owner: &str, panel: &str, cols: u16, rows: u16) {
+        let typing = |link: &Link| link.panels.iter().any(|listed| listed.id == panel && listed.typing);
+        let now = Instant::now();
+        let due = |follow: &Follow| {
+            let asked = follow.resized.is_some_and(|at| now.duration_since(at) < RESIZE_EVERY);
+            follow.follower == device && follow.owner == owner && follow.panel == panel && !asked
+        };
+        let Some(index) = self.follows.iter().position(due) else {
+            return;
+        };
+        if !self.links.get(owner).is_some_and(typing) {
+            return;
+        }
+        self.follows[index].resized = Some(now);
+        let (cols, rows) = horizon_core::bounded_screen_grid(cols, rows);
+        let (from, label, panel) = (device.to_owned(), self.label(device), panel.to_owned());
+        self.send(
+            owner,
+            LiveEvent::Resized {
+                panel,
+                from,
+                label,
+                cols,
+                rows,
+            },
+            Tag::Kept,
+        );
     }
 
     /// Relays a screen or output of an owner to the followers of that panel. A

@@ -24,7 +24,7 @@
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
 use alacritty_terminal::event_loop::{EventLoopSender, Msg};
@@ -38,7 +38,7 @@ pub use horizon_pty_tap::{ShareOutlet, ShareTake};
 
 use super::screen_replay::{Style, draw_rows, draw_rows_in_place, last_painted_row, push_cell, push_row};
 use super::wake::OutputWakeState;
-use super::{Terminal, TerminalEventProxy};
+use super::{Terminal, TerminalDimensions, TerminalEventProxy, WindowSize};
 use crate::agent_work::WorkOwner;
 
 /// The bounds of the grid of a screen: the server applies them to a `screen` and
@@ -99,6 +99,49 @@ const KEYBOARD: [(TermMode, u8); 5] = [
     (TermMode::REPORT_ASSOCIATED_TEXT, 16),
 ];
 
+/// The grid that a follower of one terminal holds, and the cell size that the
+/// program of the terminal gets with it. The thread that shares the terminal sets
+/// both, and the window of the owner reads them.
+#[derive(Default)]
+pub(super) struct HeldGrid {
+    /// Columns in the high half and rows in the low half, or zero while the
+    /// program has the grid of the body of the panel.
+    grid: AtomicU32,
+    /// The cell width in the high half and the cell height in the low half.
+    cell: AtomicU32,
+}
+
+impl HeldGrid {
+    /// The grid that a follower holds, or `None` for the grid of the body.
+    pub(super) fn get(&self) -> Option<(u16, u16)> {
+        let value = self.grid.load(Ordering::Acquire);
+        let columns = u16::try_from(value >> 16).unwrap_or_default();
+        let rows = u16::try_from(value & 0xffff).unwrap_or_default();
+        (value != 0).then_some((columns, rows))
+    }
+
+    /// Takes or ends the hold, and answers whether the grid changed.
+    fn set(&self, grid: Option<(u16, u16)>) -> bool {
+        let value = grid.map_or(0, |(columns, rows)| (u32::from(columns) << 16) | u32::from(rows));
+        self.grid.swap(value, Ordering::AcqRel) != value
+    }
+
+    /// Takes the cell size of a resize, which the program gets with a grid.
+    pub(super) fn set_cell(&self, width: u16, height: u16) {
+        self.cell
+            .store((u32::from(width) << 16) | u32::from(height), Ordering::Release);
+    }
+
+    fn get_cell(&self) -> (u16, u16) {
+        let cell = self.cell.load(Ordering::Acquire);
+        let (width, height) = (cell >> 16, cell & 0xffff);
+        (
+            u16::try_from(width).unwrap_or_default(),
+            u16::try_from(height).unwrap_or_default(),
+        )
+    }
+}
+
 /// What another thread needs of one terminal to share it: the outlet of its
 /// output, the way to its screen and the way to its program. A terminal gives
 /// it once, and every call is safe on a thread that is not the thread of the
@@ -111,6 +154,7 @@ pub struct ShareSource {
     work: Option<Arc<WorkOwner>>,
     touched: Arc<AtomicBool>,
     wake: Arc<OutputWakeState>,
+    held: Arc<HeldGrid>,
 }
 
 impl ShareSource {
@@ -146,6 +190,32 @@ impl ShareSource {
     pub fn same_terminal(&self, other: &Self) -> bool {
         Weak::ptr_eq(&self.term, &other.term)
     }
+
+    /// Gives the program of the terminal the grid that a follower holds, and
+    /// takes the grid of the terminal for it: the panel of the owner then pushes
+    /// no size of its own body, and draws the grid from the top left. The thread
+    /// that shares the terminal calls this, and a later screen carries the grid.
+    /// Answers whether the grid changed.
+    pub fn hold_grid(&self, cols: u16, rows: u16) -> bool {
+        let Some(term) = self.term.upgrade() else {
+            return false;
+        };
+        let (cols, rows) = bounded_screen_grid(cols, rows);
+        if !self.held.set(Some((cols, rows))) {
+            return false;
+        }
+        let (cell_width, cell_height) = self.held.get_cell();
+        term.lock().resize(TerminalDimensions::new(rows, cols));
+        // The followers draw the grid of the screen that they have.
+        self.outlet.stop();
+        let _ = self.input.send(Msg::Resize(WindowSize {
+            num_lines: rows,
+            num_cols: cols,
+            cell_width,
+            cell_height,
+        }));
+        true
+    }
 }
 
 impl Terminal {
@@ -175,7 +245,36 @@ impl Terminal {
             work: self.work_owner.clone(),
             touched: Arc::clone(&self.work_continuation.touched),
             wake: Arc::clone(&self.output_wake),
+            held: Arc::clone(&self.held_grid),
         })
+    }
+
+    /// Rows and columns of the grid that this terminal shows now: the grid of its
+    /// stream while it follows one, or the grid that a follower of it holds, else
+    /// the grid of its own body.
+    #[must_use]
+    pub fn shown_grid(&self) -> (u16, u16) {
+        self.held_grid
+            .get()
+            .map_or((self.rows, self.cols), |(columns, rows)| (rows, columns))
+    }
+
+    /// Whether the grid of this terminal is not the grid of its own body: it
+    /// follows a stream, or a follower of it holds the size of its program.
+    #[must_use]
+    pub fn shows_foreign_grid(&self) -> bool {
+        self.follow.is_some() || self.held_grid.get().is_some()
+    }
+
+    /// The person of this computer types in the panel, so it takes the size back:
+    /// the grid of the body goes to the terminal and to the program again.
+    pub(super) fn release_grid(&self) {
+        if !self.held_grid.set(None) {
+            return;
+        }
+        self.term.lock().resize(TerminalDimensions::new(self.rows, self.cols));
+        self.share.stop();
+        let _ = self.event_sender.send(Msg::Resize(self.window_size()));
     }
 }
 

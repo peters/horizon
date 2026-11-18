@@ -23,7 +23,9 @@ impl Terminal {
     fn resize_with_policy(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16, immediate: bool) {
         // The grid of a follower is the grid of its stream: only a new screen
         // of the stream changes it, and the program never hears of this panel.
-        if self.follow_spec().is_some() {
+        // A terminal that holds the grid of a follower keeps it too, until the
+        // person of this computer types in it.
+        if self.follow_spec().is_some() || self.held_grid.get().is_some() {
             return;
         }
         let rows = rows.max(1);
@@ -80,6 +82,7 @@ impl Terminal {
     fn send_pty_resize(&mut self) {
         self.pending_pty_resize = None;
         self.pty_resized = true;
+        self.held_grid.set_cell(self.cell_width, self.cell_height);
         let _ = self
             .event_sender
             .send(Msg::Resize(self.window_size()))

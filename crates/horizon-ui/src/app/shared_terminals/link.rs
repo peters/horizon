@@ -25,6 +25,7 @@ live_link! {
     follow(&self, owner: &str, panel: &str);
     unfollow(&self, owner: &str, panel: &str);
     refresh(&self, owner: &str, panel: &str);
+    resize(&self, owner: &str, panel: &str, cols: u16, rows: u16);
     screen(&self, panel: &str, cols: u16, rows: u16, fresh: bool, everyone: bool) -> bool;
     output(&self, panel: &str, bytes: &[u8], replay: bool) -> bool;
     ended(&self, panel: &str);

@@ -219,6 +219,26 @@ impl LiveHandle {
         }
     }
 
+    /// Gives the program of a panel that this computer follows the grid that fits
+    /// the body of the follow panel. The server passes two requests a second for
+    /// one follower and one panel, and drops the rest, as it drops a request that
+    /// comes while the link is away or does not have the follow.
+    pub fn resize(&self, owner: &str, panel: &str, cols: u16, rows: u16) {
+        let follow = (owner.to_owned(), clean(panel, ID_CHARS));
+        if self.shared.lock().sent.contains(&follow) {
+            let (owner, panel) = follow;
+            let _ = self.queue(
+                vec![LiveRequest::Resize {
+                    owner,
+                    panel,
+                    cols,
+                    rows,
+                }],
+                0,
+            );
+        }
+    }
+
     /// The events that arrived since the last call, in their order.
     #[must_use]
     pub fn take_events(&self) -> Vec<LiveEvent> {

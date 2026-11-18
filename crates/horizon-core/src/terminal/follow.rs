@@ -91,6 +91,9 @@ struct State {
     typing: bool,
     /// Columns and rows of the newest screen.
     grid: (u16, u16),
+    /// Columns and rows that fit the body of the panel of this follower, which
+    /// its widget writes: the stream asks for that grid when the person types.
+    fit: (u16, u16),
     /// Why the stream ended, while it has no newer screen.
     ended: Option<String>,
     /// Output was dropped since the newest screen.
@@ -248,6 +251,28 @@ impl FollowFeed {
         self.shared.closed.load(Ordering::Acquire)
     }
 
+    /// The grid of the newest screen of the stream.
+    #[must_use]
+    pub fn grid(&self) -> (u16, u16) {
+        self.shared.state().grid
+    }
+
+    /// The grid that fits the body of the panel of this follower, which its
+    /// widget writes each frame.
+    #[must_use]
+    pub fn fit(&self) -> (u16, u16) {
+        self.shared.state().fit
+    }
+
+    /// Keeps the grid that fits the body of the panel of this follower.
+    pub fn set_fit(&self, cols: u16, rows: u16) {
+        let grid = bounded_screen_grid(cols, rows);
+        let mut state = self.shared.state();
+        if state.fit != grid {
+            state.fit = grid;
+        }
+    }
+
     /// Whether the terminal of this follower shows the alternate screen now.
     #[must_use]
     pub fn on_alternate_screen(&self) -> bool {
@@ -319,6 +344,7 @@ impl Terminal {
                 typed: Vec::new(),
                 typing: spec.typing,
                 grid: (spec.cols, spec.rows),
+                fit: (spec.cols, spec.rows),
                 ended: None,
                 lost: false,
             }),

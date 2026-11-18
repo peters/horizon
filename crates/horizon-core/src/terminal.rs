@@ -274,6 +274,9 @@ pub struct Terminal {
     /// The stream that this terminal shows instead of a program of this
     /// computer. Such a terminal never writes to its link and never resizes.
     follow: Option<follow::Follower>,
+    /// The grid that a follower of this terminal holds, which the pump sets from
+    /// the thread that shares this terminal.
+    held_grid: Arc<share::HeldGrid>,
 }
 
 #[cfg(test)]

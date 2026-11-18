@@ -82,16 +82,21 @@ impl<'a> TerminalView<'a> {
             self.scrollbar_bottom_clearance,
         );
         let viewport = terminal_viewport_size(ui.available_size(), char_width, line_height);
-        // A follow panel keeps the grid of its stream: the widget never asks it
-        // to resize, it draws that grid from the top left of the body, and the
-        // pointer and the scrollbar read the grid that the terminal has.
-        let followed = self.panel.terminal().filter(|_| self.panel.is_follower());
-        let (new_rows, new_cols) = followed.map_or((viewport.rows, viewport.cols), |terminal| {
-            (terminal.rows(), terminal.cols())
-        });
-        if followed.is_none() {
+        // A panel whose grid is not the one of its own body keeps that grid: the
+        // widget never asks it to resize, it draws the grid from the top left of
+        // the body, and the pointer and the scrollbar read that grid. A follow
+        // panel shows the grid of its stream, and a panel whose program a follower
+        // holds shows the grid of that follower.
+        let streamed = self.panel.terminal().filter(|terminal| terminal.shows_foreign_grid());
+        let (new_rows, new_cols) = streamed.map_or((viewport.rows, viewport.cols), |terminal| terminal.shown_grid());
+        if streamed.is_none() {
             self.panel
                 .resize(new_rows, new_cols, viewport.cell_width, viewport.cell_height);
+        }
+        // The body of a follow panel gives the grid that its stream asks for when
+        // the person types in it.
+        if let Some(feed) = self.panel.follow_feed() {
+            feed.set_fit(viewport.cols, viewport.rows);
         }
 
         let interaction = terminal_interaction(ui, layout, self.panel.id.0, interactive);

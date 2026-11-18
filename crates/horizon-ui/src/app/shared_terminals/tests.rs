@@ -70,6 +70,10 @@ struct Relay {
     screens: usize,
     taken: usize,
     refreshes: usize,
+    /// The grids that the follower of this window gave the program.
+    resizes: Vec<(u16, u16)>,
+    /// The grid of every screen that the relay passed on.
+    grids: Vec<(u16, u16)>,
     /// Refuses screens and output, as a link whose queue is full does, and
     /// counts what it refused.
     full: bool,
@@ -251,6 +255,24 @@ impl LiveLink for StandIn {
         }
     }
 
+    /// The relay of a grid that the follower typed at: the owner of the panel
+    /// takes it when it lets another computer type in it. It counts every request,
+    /// also the ones that the owner refuses, as the relay of a server counts none
+    /// that it drops.
+    fn resize(&self, _owner: &str, panel: &str, cols: u16, rows: u16) {
+        let mut relay = self.relay();
+        relay.resizes.push((cols, rows));
+        if relay.follows(panel) && relay.panels.iter().any(|listed| listed.id == panel && listed.typing) {
+            relay.events.push(LiveEvent::Resized {
+                panel: panel.to_owned(),
+                from: HERE.to_owned(),
+                label: "Here".to_owned(),
+                cols,
+                rows,
+            });
+        }
+    }
+
     fn screen(&self, panel: &str, cols: u16, rows: u16, fresh: bool, everyone: bool) -> bool {
         let mut relay = self.gated(true);
         if relay.full || (relay.room > 0 && 64 > relay.room) {
@@ -260,6 +282,7 @@ impl LiveLink for StandIn {
         relay.screens += 1;
         if relay.takes(panel, true, false, everyone) {
             relay.taken += 1;
+            relay.grids.push((cols, rows));
             relay.awaiting.retain(|waiting| waiting != panel);
             relay.replay.push(panel.to_owned());
             relay.events.push(LiveEvent::Screen {

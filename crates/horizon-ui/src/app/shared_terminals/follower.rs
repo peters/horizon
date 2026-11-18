@@ -9,7 +9,7 @@ use horizon_sync::{LiveComputer, LiveEndReason, LiveEvent, LivePanel, MAX_LIVE_P
 
 use super::list::computer_name;
 use super::pump::{FollowPanel, Run};
-use super::shown;
+use super::{LiveLink, shown};
 
 /// The sequence with which the bytes of a screen enter the alternate screen on
 /// which its owner took it: after the reset of a fresh screen, or at the first
@@ -18,6 +18,9 @@ const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
 /// The wait for a screen that this computer asked for before it asks again.
 /// The server passes one request a second and drops the rest.
 const ASK_AGAIN: Duration = Duration::from_millis(1200);
+/// The wait between two grids that this computer gives the program of a panel
+/// that it follows. The server passes two requests a second and drops the rest.
+const ASK_GRID: Duration = Duration::from_millis(500);
 /// The most computers of a list that this window keeps. A server lists 32.
 const MAX_COMPUTERS: usize = 64;
 /// Why every stream ends when the live link of this computer does.
@@ -33,6 +36,13 @@ pub(super) struct Follow {
     alt: Alt,
     /// When this computer asks the owner for a new screen.
     ask_at: Option<Instant>,
+    /// The grid of the newest screen of the stream.
+    grid: (u16, u16),
+    /// The grid that this computer holds: it asked for it and no screen changed
+    /// it away, so a change of the body of the panel asks again.
+    asked: Option<(u16, u16)>,
+    /// When this computer may give the program of the panel another grid.
+    grid_at: Option<Instant>,
 }
 
 /// Whether the newest screen started on the alternate screen of its owner. The
@@ -109,6 +119,9 @@ impl Run {
                 screen_start: false,
                 alt: Alt::No,
                 ask_at: None,
+                grid: wanted.feed.grid(),
+                asked: None,
+                grid_at: None,
             });
         }
     }
@@ -165,6 +178,10 @@ impl Run {
             LiveEvent::Screen { cols, rows, fresh, .. } => {
                 feed.screen(fresh, cols, rows);
                 (follow.ended, follow.screen_start, follow.alt, follow.ask_at) = (false, true, Alt::No, None);
+                // A screen that does not bring the grid that this computer asked
+                // for ends that hold, so the next key press asks again.
+                follow.grid = (cols, rows);
+                follow.asked = follow.asked.filter(|asked| *asked == (cols, rows));
             }
             LiveEvent::Output { data, .. } => {
                 let head = &data.0[..data.0.len().min(ALT_SCREEN_ENTER.len() + 2)];
@@ -188,13 +205,15 @@ impl Run {
 
     /// Runs every follow panel for one pass: what the person typed goes out, a
     /// stream that lost output or left its first alternate screen asks for a
-    /// new screen, and a panel that the person closed is unfollowed.
+    /// new screen, a panel that the person closed is unfollowed, and the grid of
+    /// the body of the panel goes to the program that the person typed at.
     pub(super) fn pump_follows(&mut self, now: Instant) {
         self.drop_closed();
         for follow in &mut self.follows {
             let FollowPanel { device, id, feed, .. } = &follow.panel;
             let typed = feed.take_typed();
-            if !typed.is_empty() {
+            let pressed = !typed.is_empty();
+            if pressed {
                 self.link.typed(device, id, &typed);
             }
             if feed.take_lost() {
@@ -210,6 +229,7 @@ impl Run {
                 self.link.refresh(device, id);
                 follow.ask_at = Some(now + ASK_AGAIN);
             }
+            ask_grid(self.link.as_ref(), follow, pressed, now);
         }
     }
 
@@ -218,7 +238,22 @@ impl Run {
         self.found.computers.clear();
         for follow in &mut self.follows {
             follow.panel.feed.ended(NO_LINK);
-            (follow.ended, follow.ask_at) = (true, None);
+            (follow.ended, follow.ask_at, follow.asked, follow.grid_at) = (true, None, None, None);
         }
     }
+}
+
+/// Gives the program of a panel of another computer the grid of the body of the
+/// panel that follows it, when the person typed in it or this computer holds the
+/// grid and the body changed. The same grid is asked once, and two requests a
+/// second come out of one panel at most.
+fn ask_grid(link: &dyn LiveLink, follow: &mut Follow, typed: bool, now: Instant) {
+    let (fit, holds) = (follow.panel.feed.fit(), follow.asked == Some(follow.grid));
+    let due = follow.grid_at.is_none_or(|at| at <= now);
+    if !due || fit == follow.grid || follow.asked == Some(fit) || !(typed || holds) {
+        return;
+    }
+    let FollowPanel { device, id, .. } = &follow.panel;
+    link.resize(device, id, fit.0, fit.1);
+    (follow.asked, follow.grid_at) = (Some(fit), Some(now + ASK_GRID));
 }

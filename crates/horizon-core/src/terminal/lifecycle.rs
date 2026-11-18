@@ -4,7 +4,7 @@ use super::{
     Arc, Cow, Duration, Error, EventLoop, FairMutex, Instant, Msg, Ordering, OutputWake, OutputWakeState,
     PendingClipboard, PtyOptions, ReplayRestoreState, Result, Shell, Term, Terminal, TerminalDimensions,
     TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust, WindowSize, drain_replay_events, latency, mpsc,
-    replay_live_bytes, replay_terminal_bytes, term, tty,
+    replay_live_bytes, replay_terminal_bytes, share, term, tty,
 };
 
 use horizon_pty_tap::frames::{self, Frame, Hello};
@@ -249,6 +249,7 @@ impl Terminal {
             snapshot: matches!(output, PtyOutput::Discarded),
             holder,
             follow: None,
+            held_grid: Arc::new(share::HeldGrid::default()),
         };
         terminal.process_events();
         Ok(terminal)
@@ -263,6 +264,7 @@ impl Terminal {
         if self.follow_typed(bytes) {
             return;
         }
+        self.release_grid();
         self.work_continuation.note_input(bytes);
         if let Some(owner) = &self.work_owner {
             owner.note_input(bytes);

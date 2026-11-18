@@ -49,15 +49,17 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// facts of a screen that say whether a follower keeps its history and who takes
 /// the screen, and the mark of the replay of a screen. Version 8 adds the
 /// heartbeat of a live link in both directions, so a computer that went away
-/// leaves the list of the others.
-pub const SERVER_PROTOCOL_VERSION: u32 = 8;
+/// leaves the list of the others. Version 9 adds the grid that the computer which
+/// typed last gives the program of a shared panel.
+pub const SERVER_PROTOCOL_VERSION: u32 = 9;
 
 /// The first version of a server that holds an idle wait for fifteen seconds.
 pub const SHORT_WAIT_PROTOCOL_VERSION: u32 = 5;
 
 /// The first version of a server that relays the shared terminals of a live link,
-/// which is [version 8](SERVER_PROTOCOL_VERSION) with the heartbeat of a link.
-pub const LIVE_PROTOCOL_VERSION: u32 = 8;
+/// which is [version 9](SERVER_PROTOCOL_VERSION) with the grid that the computer
+/// which typed last gives the program of a shared panel.
+pub const LIVE_PROTOCOL_VERSION: u32 = 9;
 
 /// The longest device name, and the characters of one: `a-z`, `0-9` and `-`.
 const DEVICE_NAME_CHARS: usize = 40;

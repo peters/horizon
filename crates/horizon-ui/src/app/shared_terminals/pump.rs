@@ -285,6 +285,13 @@ impl Run {
                 label,
                 data,
             } => self.typed(&panel, &data.0, &from, &label, now),
+            LiveEvent::Resized {
+                panel,
+                from,
+                label,
+                cols,
+                rows,
+            } => self.resized(&panel, cols, rows, &from, &label),
             stream => self.stream(stream),
         }
     }

@@ -213,6 +213,13 @@ fn show(event: &LiveEvent) -> String {
             label,
             data,
         } => format!("typed {panel} from {from} ({label}) {}", text(data)),
+        LiveEvent::Resized {
+            panel,
+            from,
+            label,
+            cols,
+            rows,
+        } => format!("resized {panel} {cols}x{rows} from {from} ({label})"),
         LiveEvent::State(state) => format!("state {state:?}"),
         LiveEvent::Heartbeat => "heartbeat".to_owned(),
     }

@@ -144,6 +144,16 @@ pub enum LiveRequest {
         owner: String,
         panel: String,
     },
+    /// The person typed in a panel that this computer follows, and this window
+    /// fits this grid better than the grid of the stream: the program of the
+    /// owner takes the grid until its own person types. The server passes two a
+    /// second for one follower and one panel, inside the bounds of a screen.
+    Resize {
+        owner: String,
+        panel: String,
+        cols: u16,
+        rows: u16,
+    },
     /// A new screen of a panel of this computer. The output that follows draws it.
     Screen {
         panel: String,
@@ -226,6 +236,16 @@ pub enum LiveEvent {
         from: String,
         label: String,
         data: LiveBytes,
+    },
+    /// To the owner: the person of the computer `from` typed in the panel that it
+    /// follows, whose window fits this grid better. The program of the panel takes
+    /// the grid until the person of the owner types there.
+    Resized {
+        panel: String,
+        from: String,
+        label: String,
+        cols: u16,
+        rows: u16,
     },
     /// The sign of life of the server, for a link with nothing else to carry: a
     /// computer that reads none of them for thirty seconds ends the link.

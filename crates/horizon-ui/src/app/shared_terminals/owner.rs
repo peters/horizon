@@ -61,6 +61,9 @@ pub(super) struct Watched {
     /// followers, for the time after those bytes.
     typed: Option<(Instant, String)>,
     chip: String,
+    /// The computer that typed last in the panel of this computer, while its
+    /// program holds the grid that this computer gave it.
+    sized: Option<String>,
 }
 
 /// The bytes of one screen that the link takes in parts, and how far they went.
@@ -77,6 +80,15 @@ struct Owed {
 }
 
 impl Watched {
+    /// The chip of this panel: who holds the size of its program, if a follower
+    /// does, and who watches the panel or typed in it last.
+    fn chip_text(&self) -> String {
+        match &self.sized {
+            Some(name) => format!("sized by {name} \u{00b7} {}", self.chip),
+            None => self.chip.clone(),
+        }
+    }
+
     /// Sends what the followers of this panel need now: a new screen when one
     /// is due, or else the output since the last take.
     fn drain(&mut self, link: &dyn LiveLink, id: &str, source: &ShareSource, now: Instant) {
@@ -195,7 +207,7 @@ impl Run {
                 if overdue {
                     watch.typed = None;
                     *changed = true;
-                    chips.insert(id.clone(), watch.chip.clone());
+                    chips.insert(id.clone(), watch.chip_text());
                 }
                 return true;
             }
@@ -226,6 +238,7 @@ impl Run {
             owed: None,
             typed: None,
             chip: String::new(),
+            sized: None,
         });
         let devices: Vec<String> = watchers.iter().map(|watcher| shown(&watcher.device)).collect();
         let joined = devices.iter().any(|device| !watch.devices.contains(device));
@@ -238,8 +251,31 @@ impl Run {
         }
         watch.devices = devices;
         watch.chip = watched_chip(watchers);
-        self.found.chips.insert(id.to_owned(), watch.chip.clone());
+        self.found.chips.insert(id.to_owned(), watch.chip_text());
         self.changed = true;
+    }
+
+    /// Gives the program of the panel `id` the grid that a follower of it holds,
+    /// after the four checks of a typed byte: both switches are on, the list that
+    /// the link has names the panel, and a panel of this computer has that id and
+    /// is no follow panel. The terminal then pushes no size of its own body, and
+    /// the chip of the panel says who holds the grid.
+    pub(super) fn resized(&mut self, id: &str, cols: u16, rows: u16, from: &str, label: &str) {
+        let allowed = self.wanted.sharing && self.wanted.typing;
+        let listed = self.sent.iter().any(|panel| panel.id == id);
+        let own = self.wanted.panels.iter().find(|own| own.entry.id == id);
+        let Some(own) = own.filter(|_| allowed && listed) else {
+            return;
+        };
+        if !own.source.hold_grid(cols, rows) {
+            return;
+        }
+        let name = shown(typed_name(from, label));
+        if let Some(watch) = self.watched.get_mut(id) {
+            watch.sized = Some(name);
+            self.found.chips.insert(id.to_owned(), watch.chip_text());
+            self.changed = true;
+        }
     }
 
     /// Writes what another computer typed into the program of the panel `id`. The
@@ -258,6 +294,8 @@ impl Run {
         let Some(watch) = self.watched.get_mut(id) else {
             return;
         };
+        // The person of this computer takes the size back to its own body.
+        watch.sized = None;
         let name = shown(typed_name(from, label));
         self.found.chips.insert(id.to_owned(), format!("typed by {name}"));
         watch.typed = Some((now, name));
