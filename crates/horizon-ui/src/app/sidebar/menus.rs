@@ -18,10 +18,6 @@ enum CloseAllChoice {
     Close,
     /// Ask first, because a panel of a machine holds a session that the close ends.
     AskFirst,
-    /// The person read the line and chose to close.
-    Confirm,
-    /// The person dropped the ask.
-    Cancel,
 }
 
 /// The Place section of a workspace menu: the check mark of the current place,
@@ -54,53 +50,29 @@ fn show_place_menu(ui: &mut egui::Ui, entries: &[PlaceEntry]) -> Option<horizon_
     chosen
 }
 
-/// The close-all part of a workspace menu, behind the line that says how many
-/// tmux sessions a close ends.
-fn show_close_all_menu(ui: &mut egui::Ui, machine_panels: usize, confirming: bool) -> CloseAllChoice {
-    let mut choice = CloseAllChoice::None;
-    let close = || {
-        Button::new(
-            egui::RichText::new("Close All Panels")
-                .size(12.0)
-                .color(theme::PALETTE_RED()),
+/// The close-all entry of a workspace menu. A close that ends a tmux session
+/// leaves the menu for the question that the close of one panel asks.
+fn show_close_all_menu(ui: &mut egui::Ui, machine_panels: usize) -> CloseAllChoice {
+    let clicked = ui
+        .add(
+            Button::new(
+                egui::RichText::new("Close All Panels")
+                    .size(12.0)
+                    .color(theme::PALETTE_RED()),
+            )
+            .frame(false),
         )
-        .frame(false)
-    };
-    if confirming {
-        ui.label(
-            egui::RichText::new(format!(
-                "End {machine_panels} tmux session(s) of this workspace's machine?"
-            ))
-            .size(11.0)
-            .color(theme::FG_DIM()),
-        );
-        if ui
-            .add(close())
-            .on_hover_text("The work in the tmux sessions of this panel set ends with it.")
-            .clicked()
-        {
-            choice = CloseAllChoice::Confirm;
-            ui.close();
-        }
-        if ui
-            .add(Button::new(egui::RichText::new("Cancel").size(12.0).color(theme::FG_SOFT())).frame(false))
-            .clicked()
-        {
-            choice = CloseAllChoice::Cancel;
-            ui.close();
-        }
-        return choice;
+        .clicked();
+    if !clicked {
+        return CloseAllChoice::None;
     }
-    if ui.add(close()).clicked() {
-        // A panel on a machine holds work that a close ends, so the menu asks
-        // first, as it does before it forgets a machine.
-        choice = if machine_panels > 0 {
-            CloseAllChoice::AskFirst
-        } else {
-            CloseAllChoice::Close
-        };
+    // A panel on a machine holds work that a close ends, so the menu asks
+    // first, as it does before it forgets a machine.
+    if machine_panels > 0 {
+        CloseAllChoice::AskFirst
+    } else {
+        CloseAllChoice::Close
     }
-    choice
 }
 
 impl HorizonApp {
@@ -110,8 +82,6 @@ impl HorizonApp {
         workspace: &WorkspaceSidebarEntry,
         actions: &mut SidebarActions,
     ) {
-        let confirming_close = self.close_workspace_confirm == Some(workspace.id);
-        let mut open_close_confirm = false;
         // A tooltip layer, as the panel menu uses: the row lives in the sidebar's clipped
         // rectangle, so a menu drawn in the row's own layer is cut to a slice of its width.
         let popup = egui::Popup::context_menu(response)
@@ -189,23 +159,20 @@ impl HorizonApp {
                 actions.remove_empty_workspace = Some(workspace.id);
                 ui.close();
             }
-            match show_close_all_menu(ui, workspace.machine_panels, confirming_close) {
+            match show_close_all_menu(ui, workspace.machine_panels) {
                 CloseAllChoice::Close => {
                     actions.close_all_in_workspace = Some(workspace.id);
                     ui.close();
                 }
-                CloseAllChoice::AskFirst => open_close_confirm = true,
-                CloseAllChoice::Confirm => {
-                    actions.close_all_in_workspace = Some(workspace.id);
-                    self.close_workspace_confirm = None;
+                CloseAllChoice::AskFirst => {
+                    // The question stands above the toolbar of a workspace, so the
+                    // menu closes and leaves the press to it.
+                    self.close_workspace_confirm = Some(workspace.id);
+                    ui.close();
                 }
-                CloseAllChoice::Cancel => self.close_workspace_confirm = None,
                 CloseAllChoice::None => {}
             }
         });
-        if open_close_confirm {
-            self.close_workspace_confirm = Some(workspace.id);
-        }
         if shown.is_some() {
             response
                 .ctx

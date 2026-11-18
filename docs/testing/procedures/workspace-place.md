@@ -240,28 +240,41 @@ forgotten machine is reported.
    Result: The session of the second panel is not in the list. The session of
    the first panel is still there.
 
-6. Right-click the row of the second workspace, click `Close All Panels`, and
-   read the confirm line.
+6. Right-click the row of the second workspace, and click `Close All Panels`.
 
    Result: The workspace holds no panel of the machine any more, so the menu
-   closes its panels at once. Record what it does.
+   closes its panels at once. No question appears. Record what it does.
 
 7. Make one terminal in the second workspace again, then right-click the row of
    the second workspace and click `Close All Panels`.
 
-   Result: The menu shows the line `End 1 tmux session(s) of this workspace's
-   machine?`, then `Close All Panels` and `Cancel`.
+   Result: The menu closes. Horizon shows the question `End 1 tmux session(s) of
+   this workspace's machine?` in the middle of the window, with the red `Close
+   All Panels` and `Cancel`.
 
 8. Click `Cancel`.
 
-   Result: The panel stays, and the session stays in `tmux ls`.
+   Result: The question goes away, the panel stays, and `tmux ls` still lists the
+   session of the panel.
 
-9. Click `Close All Panels` again and then `Close All Panels` in the confirm
-   line.
+9. Click `Close All Panels` in the menu again. Press `Esc`.
 
-   Result: The panel goes away, and its session is not in `tmux ls`.
+   Result: The question goes away, and the panel stays.
 
-10. Make two terminals in the second workspace. Press the close button of the
+10. Click `Close All Panels` in the menu again. Click the canvas beside the
+    question.
+
+    Result: The question goes away, and the panel stays.
+
+11. Drag the canvas up or down until the toolbar of the second workspace is in
+    the middle of the window. Right-click the row of the second workspace, and
+    click `Close All Panels`. Then click the red `Close All Panels` in the
+    question.
+
+    Result: The question takes the press although the toolbar of the workspace
+    is behind it. The panel goes away, and its session is not in `tmux ls`.
+
+12. Make two terminals in the second workspace. Press the close button of the
     titlebar of one of them, then click `Cancel` in the question. Click `Close`
     in the row menu of the other one, and read the question. Then click its red
     `Close`.
@@ -521,7 +534,10 @@ before the workspace had a place.
   keeps the panel and its session, and the red `Close` ends both. A panel of
   this computer closes at once, with no question.
 - A quit of Horizon ends no session of a machine.
-- A workspace that holds a panel of a machine asks before it closes its panels.
+- A workspace that holds a panel of a machine asks `End N tmux session(s) of
+  this workspace's machine?` over the window before it closes its panels. A
+  toolbar of a workspace behind the question takes no press that belongs to its
+  buttons.
 - A forgotten machine gives `machine_unavailable` and makes no panel, and a
   person can put the workspace on this computer again.
 

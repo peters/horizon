@@ -5,8 +5,9 @@
 //! of a closed panel does not fill the machine; quitting Horizon ends none, so
 //! the sessions outlive the window.
 //!
-//! The close of one panel asks first, in the words of the close of a whole
-//! workspace. A panel that holds no session of a machine closes at once.
+//! The close of one panel and the close of the panels of a whole workspace ask
+//! first, in the same words. What ends no tmux session of a machine closes at
+//! once.
 //!
 //! The close asks for the kill and the next frame hands it to the coordination
 //! worker, which runs `ssh` and waits at most ten seconds. A close never waits
@@ -14,12 +15,39 @@
 //! dialog.
 
 use egui::Context;
-use horizon_core::{PanelId, SessionKill};
+use horizon_core::{PanelId, SessionKill, WorkspaceId};
 
 use crate::theme;
 
 use super::HorizonApp;
 use super::util::ask_modal;
+
+/// Draws the question that a close puts to the person: the line that says what
+/// ends, the red button that ends it and `Cancel`. `Some(true)` answers the red
+/// button, `Some(false)` answers `Cancel`, the escape key or a press beside the
+/// question, and `None` is a person who owes no answer yet.
+fn ask_close(ctx: &Context, id: egui::Id, line: &str, red: &str) -> Option<bool> {
+    let mut answer = None;
+    let shown = ask_modal(id).show(ctx, |ui| {
+        ui.label(egui::RichText::new(line).size(12.5).color(theme::FG()));
+        ui.horizontal(|ui| {
+            let buttons = [(red, true, theme::PALETTE_RED()), ("Cancel", false, theme::FG_SOFT())];
+            for (label, closes, tone) in buttons {
+                let button = ui.add(egui::Button::new(egui::RichText::new(label).color(tone)));
+                let button = if closes {
+                    button.on_hover_text("The work in the tmux sessions of this panel set ends with it.")
+                } else {
+                    button
+                };
+                if button.clicked() {
+                    answer = Some(closes);
+                }
+            }
+        });
+    });
+    // A press outside the question, or the escape key, is the `Cancel`.
+    answer.or_else(|| shown.should_close().then_some(false))
+}
 
 impl HorizonApp {
     /// Closes the panel that a person asked to close: at once for a panel that
@@ -61,31 +89,42 @@ impl HorizonApp {
             .panel(panel_id)
             .and_then(|panel| panel.machine().map(str::to_owned))
             .unwrap_or_else(|| "its machine".to_owned());
-        let mut answer = None;
-        let shown = ask_modal(egui::Id::unique("close_panel_confirm")).show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new(format!("End the tmux session of this panel on {machine}?"))
-                    .size(12.5)
-                    .color(theme::FG()),
-            );
-            ui.horizontal(|ui| {
-                let buttons = [
-                    ("Close", true, theme::PALETTE_RED()),
-                    ("Cancel", false, theme::FG_SOFT()),
-                ];
-                for (label, closes, tone) in buttons {
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new(label).color(tone)))
-                        .clicked()
-                    {
-                        answer = Some(closes);
-                    }
-                }
-            });
-        });
-        // A press outside the ask, or the escape key, is the `Cancel`.
-        if let Some(closes) = answer.or_else(|| shown.should_close().then_some(false)) {
+        let line = format!("End the tmux session of this panel on {machine}?");
+        if let Some(closes) = ask_close(ctx, egui::Id::unique("close_panel_confirm"), &line, "Close") {
             self.answer_close_panel(panel_id, closes);
+        }
+    }
+
+    /// The ask of a whole workspace, over the board that it would empty: made only
+    /// while the person owes an answer, so no other frame pays for it.
+    pub(in crate::app) fn show_close_workspace_confirm(&mut self, ctx: &Context) {
+        // A workspace that left on its own, or one whose sessions ended first,
+        // leaves nobody who owes an answer.
+        let owed = self
+            .close_workspace_confirm
+            .map(|workspace_id| (workspace_id, self.board.workspace_sessions(workspace_id).len()))
+            .filter(|(_, sessions)| *sessions > 0);
+        let Some((workspace_id, sessions)) = owed else {
+            self.close_workspace_confirm = None;
+            return;
+        };
+        let line = format!("End {sessions} tmux session(s) of this workspace's machine?");
+        if let Some(closes) = ask_close(
+            ctx,
+            egui::Id::unique("close_workspace_confirm"),
+            &line,
+            "Close All Panels",
+        ) {
+            self.answer_close_workspace(workspace_id, closes);
+        }
+    }
+
+    /// Answers the ask of a whole workspace: its panels end with their sessions,
+    /// or every panel stays where it is.
+    fn answer_close_workspace(&mut self, workspace_id: WorkspaceId, closes: bool) {
+        self.close_workspace_confirm = None;
+        if closes {
+            self.close_workspace_panels(workspace_id);
         }
     }
 

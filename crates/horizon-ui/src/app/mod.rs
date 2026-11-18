@@ -677,6 +677,7 @@ impl eframe::App for HorizonApp {
         if !asked.is_some_and(|panel| self.workspace_is_detached(panel.workspace_id)) {
             self.show_close_panel_confirm(ui.ctx());
         }
+        self.show_close_workspace_confirm(ui.ctx());
         self.show_close_ask(ui.ctx());
         self.render_saved_session_deletion_notice(ui.ctx());
         self.record_root_device_presentation(ui.ctx());

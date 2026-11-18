@@ -555,17 +555,6 @@ fn the_ask_of_a_close_takes_a_press_over_a_workspace_toolbar() {
 }
 
 #[test]
-fn scratch_count_toolbar_frames() {
-    let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
-    app.request_close_panel(panel);
-    for index in 0..8 {
-        let output = frame(&ctx, &mut app, Vec::new());
-        let drawn: Vec<&str> = texts(&output).map(|(text, _)| text).collect();
-        eprintln!("frame {index}: tidy={} texts={drawn:?}", drawn.contains(&"Tidy"));
-    }
-}
-
-#[test]
 fn the_ask_of_a_close_ends_on_escape_and_on_a_press_beside_it() {
     for escape in [true, false] {
         let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
