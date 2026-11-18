@@ -36,7 +36,7 @@ use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle};
 pub use horizon_pty_tap::{ShareOutlet, ShareTake};
 
-use super::screen_replay::{Style, draw_rows, draw_rows_in_place, push_cell, push_row};
+use super::screen_replay::{Style, draw_rows, draw_rows_in_place, last_painted_row, push_cell, push_row};
 use super::wake::OutputWakeState;
 use super::{Terminal, TerminalEventProxy};
 use crate::agent_work::WorkOwner;
@@ -200,6 +200,12 @@ pub(super) fn share_screen_bytes(term: &Term<TerminalEventProxy>, fresh: bool) -
         // The rows are drawn with the modes of a new terminal, and every mode
         // that changes how output is drawn is set after them.
         draw_rows(grid, &mut out, true);
+        // `draw_rows` ends at the last row that paints anything. The rows below
+        // that one take their place too, so that the viewport of the follower
+        // ends at the bottom row, directly under the lines above it.
+        for _ in last_painted_row(grid, grid.screen_lines()) + 1..grid.screen_lines() {
+            out.push_str("\r\n");
+        }
     } else {
         // The follower keeps its history, so the screen may not start with a full
         // reset and may not scroll: each row goes to its own place. The alternate

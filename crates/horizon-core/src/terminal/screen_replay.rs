@@ -60,7 +60,9 @@ pub(super) fn draw_rows(grid: &Grid<Cell>, out: &mut String, in_place: bool) {
 /// first: a screen sets them again after the rows, and one that is not fresh
 /// carries the modes of the owner itself.
 pub(super) fn draw_rows_in_place(grid: &Grid<Cell>, out: &mut String) {
-    out.push_str("\x1b[4l\x1b[?6l\x1b[?7l\x1b[20l");
+    // A line that the screen erases takes the pen of the terminal, so the pen
+    // goes to its default before the first erase.
+    out.push_str("\x1b[0m\x1b[4l\x1b[?6l\x1b[?7l\x1b[20l");
     let mut painted = Style::default();
     for row in 0..grid.screen_lines() {
         let _ = write!(out, "\x1b[{};1H\x1b[2K", row + 1);
@@ -119,7 +121,7 @@ pub(super) fn push_cell(out: &mut String, cell: &Cell, in_place: bool) {
 
 /// The last row of the viewport that paints anything, so the replay ends at the
 /// content instead of scrolling it away with empty rows.
-fn last_painted_row(grid: &Grid<Cell>, rows: usize) -> usize {
+pub(super) fn last_painted_row(grid: &Grid<Cell>, rows: usize) -> usize {
     (0..rows)
         .rev()
         .find(|row| last_painted_column(&grid[Line(i32::try_from(*row).unwrap_or(i32::MAX))], grid.columns()).is_some())

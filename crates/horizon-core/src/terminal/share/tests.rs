@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{self, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
-use super::share_screen_bytes;
+use super::{HISTORY_BYTES, HISTORY_LINES, share_screen_bytes};
 use crate::terminal::support::replay_live_bytes;
 use crate::terminal::{TerminalDimensions, TerminalEventProxy};
 
@@ -24,10 +24,15 @@ type Screen = Arc<FairMutex<Term<TerminalEventProxy>>>;
 /// A terminal without a program, which tracks the keyboard protocol as the
 /// terminal of a shell does.
 fn screen(rows: u16, cols: u16) -> Screen {
+    screen_with(rows, cols, 1000)
+}
+
+/// As [`screen`], with a scrollback of `history` lines.
+fn screen_with(rows: u16, cols: u16, history: usize) -> Screen {
     let (event_tx, _event_rx) = mpsc::channel::<Event>();
     Arc::new(FairMutex::new(Term::new(
         term::Config {
-            scrolling_history: 1000,
+            scrolling_history: history,
             kitty_keyboard: true,
             ..term::Config::default()
         },
@@ -79,6 +84,19 @@ fn seen(cell: &Cell) -> (char, Vec<char>, Color, Color, Flags) {
     }
     let extra = cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default();
     (cell.c, extra, cell.fg, cell.bg, flags)
+}
+
+/// The text of the line `above` rows above the viewport of `term`.
+fn above_text(term: &Term<TerminalEventProxy>, above: i32) -> String {
+    let line = &term.grid()[Line(-above)];
+    let text: String = line[..Column(term.columns())].iter().map(|cell| cell.c).collect();
+    text.trim_end().to_owned()
+}
+
+/// The text of the lines above the viewport of `term`, oldest first.
+fn above_lines(term: &Term<TerminalEventProxy>) -> Vec<String> {
+    let history = i32::try_from(term.grid().history_size()).unwrap_or(i32::MAX);
+    (1..=history).rev().map(|above| above_text(term, above)).collect()
 }
 
 /// The text of every row of `term`, without the blanks at the end of a row.
@@ -287,6 +305,117 @@ fn the_pen_of_the_owner_draws_the_next_output_of_the_follower() {
     assert_eq!(
         follower.lock().grid()[Line(0)][Column(6)].fg,
         Color::Named(NamedColor::Magenta)
+    );
+}
+
+#[test]
+fn a_new_follower_reads_the_lines_above_the_viewport_of_the_owner() {
+    let owner = screen(4, 20);
+    let mut output = String::from("\x1b[31mred\x1b[0m first\r\n");
+    for line in 1..=12 {
+        let _ = write!(output, "line {line}\r\n");
+    }
+    replay_live_bytes(&owner, output.as_bytes());
+    let history = owner.lock().grid().history_size();
+    assert_eq!(history, 10, "the owner scrolled ten lines off its screen");
+
+    let follower = screen(4, 20);
+    follow(&owner, &follower);
+    assert_same(&owner, &follower);
+    let term = follower.lock();
+    assert_eq!(
+        term.grid().history_size(),
+        history,
+        "the lines above the viewport lie in the scrollback of the follower"
+    );
+    assert_eq!(above_lines(&term), above_lines(&owner.lock()));
+    let (oldest, red) = (above_text(&term, i32::try_from(history).expect("a history")), &term.grid()[Line(-10)]);
+    assert_eq!(oldest, "red first");
+    assert_eq!(
+        red[Column(0)].fg,
+        Color::Named(NamedColor::Red),
+        "a line keeps its colours"
+    );
+
+    // The lines closest to the viewport are the ones that a person scrolls to.
+    let many = screen_with(4, 20, 3000);
+    let lines: String = (1..=HISTORY_LINES + 200).fold(String::new(), |text, line| {
+        format!("{text}line {line}\r\n")
+    });
+    replay_live_bytes(&many, lines.as_bytes());
+    assert!(many.lock().grid().history_size() > HISTORY_LINES);
+    let short = screen(4, 20);
+    follow(&many, &short);
+    assert_eq!(
+        short.lock().grid().history_size(),
+        HISTORY_LINES,
+        "a screen carries at most {HISTORY_LINES} lines above the viewport"
+    );
+    assert_eq!(
+        above_text(&short.lock(), 1),
+        above_text(&many.lock(), 1),
+        "the lines closest to the viewport are the ones that a person scrolls to"
+    );
+}
+
+#[test]
+fn the_lines_above_the_viewport_of_a_screen_stay_under_their_bound_in_bytes() {
+    // A wide grid fills the bound of a screen with fewer lines than the count.
+    let owner = screen_with(4, 400, 4000);
+    let lines: String = (1..=1200).fold(String::new(), |text, line| {
+        format!("{text}{line:0>390}\r\n")
+    });
+    replay_live_bytes(&owner, lines.as_bytes());
+    assert!(owner.lock().grid().history_size() > HISTORY_LINES);
+
+    let bytes = share_screen_bytes(&owner.lock(), true);
+    let grid = 4 * 400 * 8;
+    assert!(
+        bytes.len() <= HISTORY_BYTES + grid,
+        "the lines above the viewport stay under {HISTORY_BYTES} bytes, and these took {}",
+        bytes.len()
+    );
+}
+
+#[test]
+fn a_screen_that_is_not_fresh_keeps_the_history_of_the_follower() {
+    let owner = screen(6, 30);
+    let lines: String = (1..=20).fold(String::new(), |text, line| format!("{text}owner {line}\r\n"));
+    replay_live_bytes(&owner, lines.as_bytes());
+    replay_live_bytes(&owner, b"\x1b[?1h\x1b[?2004h\x1b[?25l\x1b[1;7H\x1b[4;3m");
+
+    let follower = screen(6, 30);
+    let old: String = (1..=16).fold(String::new(), |text, line| format!("{text}follower {line}\r\n"));
+    replay_live_bytes(&follower, old.as_bytes());
+    let before = above_lines(&follower.lock());
+    assert!(!before.is_empty(), "the follower has a history of its own");
+
+    let bytes = share_screen_bytes(&owner.lock(), false);
+    replay_live_bytes(&follower, &bytes);
+    assert_same(&owner, &follower);
+    assert_eq!(
+        above_lines(&follower.lock()),
+        before,
+        "a screen that is not fresh leaves the history of the follower alone"
+    );
+
+    // The same through a new grid: the follower takes the larger grid, and the
+    // lines above its viewport are the ones that it had.
+    let wider = screen(8, 40);
+    let wider_lines: String = (1..=24).fold(String::new(), |text, line| format!("{text}owner {line}\r\n"));
+    replay_live_bytes(&wider, wider_lines.as_bytes());
+    // The feed takes the grid of the screen before it parses a byte of it.
+    follower.lock().resize(TerminalDimensions::new(8, 40));
+    let bytes = share_screen_bytes(&wider.lock(), false);
+    replay_live_bytes(&follower, &bytes);
+    assert_same(&wider, &follower);
+    let after = above_lines(&follower.lock());
+    // The grid grows with the rows that the terminal of the follower takes from
+    // its own history, so the lines that stay above the viewport are the same
+    // lines: the new screen loses none of them and adds none.
+    assert!(
+        !after.is_empty() && before.windows(after.len()).any(|run| run == after.as_slice()),
+        "the lines above the viewport survive the new grid: {before:?} then {after:?}"
     );
 }
 
