@@ -591,7 +591,7 @@ fn ask_the_running_window(horizon_home: &horizon_core::HorizonHome, cli_args: &C
     };
     let (line, status) = match requested {
         Ok(Some(answer)) if answers_this_start(&answer) => folder_answer_line(folder, &answer),
-        Ok(Some(_)) | Ok(None) if folder.is_none() => return None,
+        Ok(Some(_) | None) if folder.is_none() => return None,
         Ok(Some(answer)) => folder_answer_line(folder, &answer),
         Ok(None) => (folder_no_answer_sentence(folder), 0),
         Err(error) => (
