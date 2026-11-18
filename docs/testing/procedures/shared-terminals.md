@@ -1109,7 +1109,7 @@ that the share continues while the window of the owner is hidden.
 
    Result: The follow panel shows the command and the line `hidden-share`. A
    start of Horizon shows the hidden window again, as
-   [the keep-running procedure](keep-running-when-closed.md#63-enter-keeps-horizon-running)
+   [the keep-running procedure](keep-running-when-closed.md#63-kr-3--enter-keeps-horizon-running)
    says; this task proves the share of the hidden window alone.
 
 8. Stop the fixture of computer A with Ctrl-C in its terminal.
