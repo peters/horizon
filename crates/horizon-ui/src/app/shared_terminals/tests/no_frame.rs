@@ -3,7 +3,7 @@
 //! pump moves every byte. The other tests are about the pump itself: when it
 //! sleeps, how it stops, and that the window and the pump never hold each other.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
@@ -166,6 +166,62 @@ fn the_pump_sleeps_while_nothing_is_watched_and_nothing_is_followed() {
         "the thread of a sleeping pump ends at the stop"
     );
     assert!(stopped.elapsed() < STOP_BOUND, "the stop took {:?}", stopped.elapsed());
+}
+
+#[test]
+fn a_pump_asks_for_a_frame_only_when_what_it_found_changed() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    let id = window.id(owner);
+    let follow = window.follow(owner);
+    window.shows(follow, "READY");
+
+    // A new pump of the same link, whose requests for a frame the test counts.
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&asked);
+    let shared = Arc::new(pump::Shared::default());
+    window.link.relay().pump = Some(Arc::clone(&shared));
+    window.pump = Arc::clone(&shared);
+    let join = &mut window.app.shared_terminals;
+    shared.want(&join.wanted);
+    let repaint = move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    };
+    let link = Box::new(window.link.clone());
+    join.pump = Some(pump::Pump::start(shared, link, repaint, join.pump.take()).expect("the pump of the test"));
+    window.write(owner, b"one\n");
+    window.shows(follow, "GOT:one");
+    assert!(
+        asked.load(Ordering::Relaxed) > 0,
+        "the pump asked for the frame of its chips"
+    );
+
+    // The second screen of the join went out, and the stream is quiet: the pump
+    // runs on its timer, finds nothing new and asks for no frame.
+    std::thread::sleep(Duration::from_millis(600));
+    let (before, passes) = (asked.load(Ordering::Relaxed), window.passes());
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(window.passes() >= passes + 4, "the pump of a stream runs on its timer");
+    assert_eq!(
+        asked.load(Ordering::Relaxed),
+        before,
+        "a pass that found nothing new asks for no frame"
+    );
+
+    // One more computer watches the panel, so its chip changes.
+    let watcher = |device: &str| LiveWatcher {
+        device: device.to_owned(),
+        label: device.to_owned(),
+    };
+    window.link.relay().events.push(LiveEvent::Watchers {
+        panel: id,
+        watchers: vec![watcher(HERE), watcher("desk-third")],
+        refresh: false,
+    });
+    assert!(
+        waits(|| asked.load(Ordering::Relaxed) > before),
+        "the pump asks for the frame of a new chip"
+    );
 }
 
 #[test]
