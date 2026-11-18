@@ -316,7 +316,10 @@ start one thread for each write.
   the UI applies the outcomes in the same order. A job that must not
   write for a replaced board, for example a claim, takes a board fence when
   the UI sends it. Before it writes, the job checks the fence. If the board
-  was replaced, the job writes nothing.
+  was replaced, the job writes nothing. A worker thread that cannot start does
+  not make the UI thread run its job: the job waits in a queue, and the next
+  job or frame tries a worker again. The jobs keep their order, and the job's
+  outcome still reaches the UI.
 - Horizon reads the size of a dropped editor file on that worker too.
   `queue_dropped_editor_file`
   ([`file_drop/editor_panels.rs`](../../crates/horizon-ui/src/app/file_drop/editor_panels.rs))

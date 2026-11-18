@@ -23,6 +23,8 @@ type Job = Box<dyn FnOnce() -> Option<Then> + Send>;
 
 pub(super) struct HostIo {
     jobs: Option<Sender<Job>>,
+    /// Jobs that no worker took yet, in the order they were asked for.
+    unsent: Vec<Job>,
     /// Says that the worker ran every job and ended.
     drained: Option<Receiver<()>>,
     finish: Sender<Then>,
@@ -39,6 +41,9 @@ pub(super) struct HostIo {
     retired: Arc<AtomicU64>,
     /// The outcome applying now was asked for on a board that was replaced.
     stale: bool,
+    /// A test says that no worker starts, as a computer with no thread left.
+    #[cfg(test)]
+    no_worker: bool,
 }
 
 impl Default for HostIo {
@@ -46,6 +51,7 @@ impl Default for HostIo {
         let (finish, finished) = channel();
         Self {
             jobs: None,
+            unsent: Vec::new(),
             drained: None,
             finish,
             finished,
@@ -55,6 +61,8 @@ impl Default for HostIo {
             replaced: Arc::default(),
             retired: Arc::default(),
             stale: false,
+            #[cfg(test)]
+            no_worker: false,
         }
     }
 }
@@ -66,6 +74,15 @@ impl Drop for HostIo {
         let _flushing = horizon_core::ui_thread::exception("board drop: a replaced board waits for its jobs");
         horizon_core::ui_thread::blocking("the drop of a board waits for its coordination jobs");
         self.jobs = None;
+        // A job that never got a worker cannot run now, and this wait has a
+        // bound: the log names it instead of losing it without a trace.
+        if !self.unsent.is_empty() {
+            tracing::warn!(
+                jobs = self.unsent.len(),
+                "a board that goes leaves jobs that no worker took"
+            );
+            self.unsent.clear();
+        }
         // An exit that already waited waits only for what is left of its bound.
         let wait = self.exit_deadline.map_or(EXIT_FLUSH, |deadline| {
             deadline.saturating_duration_since(Instant::now())
@@ -159,34 +176,66 @@ impl HostIo {
 
     fn submit(&mut self, job: Job) {
         self.outstanding.fetch_add(1, Ordering::AcqRel);
-        let job = match &self.jobs {
-            Some(jobs) => match jobs.send(job) {
-                Ok(()) => return,
-                Err(returned) => returned.0,
-            },
-            None => job,
-        };
-        match self.start() {
-            Ok((jobs, drained)) => {
-                if let Err(returned) = jobs.send(job) {
-                    self.run_here(returned.0);
+        self.hand(job);
+    }
+
+    /// Hands `job` to the worker, after starting one when there is none.
+    ///
+    /// No job runs on the thread that asks for it: the start of a held agent
+    /// program waits up to five seconds for the holder of its program, and the
+    /// thread that asks is the one that draws a frame. A job that gets no
+    /// worker keeps its place, and the next job or frame tries a worker again.
+    fn hand(&mut self, mut job: Job) {
+        loop {
+            match self.worker() {
+                Ok(jobs) => match jobs.send(job) {
+                    Ok(()) => return,
+                    // The worker ended, so the next round starts another one.
+                    Err(returned) => {
+                        job = returned.0;
+                        self.jobs = None;
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(%error, "no worker takes a browser coordination job");
+                    self.unsent.push(job);
+                    return;
                 }
-                self.jobs = Some(jobs);
-                self.drained = Some(drained);
             }
-            // Without a worker the job still runs here, on the calling thread,
-            // as it did before there was one. A process that cannot start a
-            // thread is already failing; running the job keeps its request
-            // answered, which a queue behind a worker that may never start
-            // would not.
-            Err(error) => {
-                tracing::warn!(%error, "could not start the browser coordination worker");
-                self.run_here(job);
+        }
+    }
+
+    /// The worker that takes the coordination jobs, started when there is none.
+    fn worker(&mut self) -> std::io::Result<Sender<Job>> {
+        if let Some(jobs) = &self.jobs {
+            return Ok(jobs.clone());
+        }
+        let (jobs, drained) = self.start()?;
+        self.drained = Some(drained);
+        self.jobs = Some(jobs.clone());
+        Ok(jobs)
+    }
+
+    /// Hands the jobs that waited for a worker to one, in the order they were
+    /// asked for, and starts a worker again that could not start. A frame calls
+    /// it, so a job runs as soon as a worker starts.
+    fn retry_unsent(&mut self) {
+        let mut waiting = std::mem::take(&mut self.unsent).into_iter();
+        while let Some(job) = waiting.next() {
+            self.hand(job);
+            if !self.unsent.is_empty() {
+                // No worker starts now, so the rest wait for the next frame.
+                self.unsent.extend(waiting);
+                return;
             }
         }
     }
 
     fn start(&self) -> std::io::Result<(Sender<Job>, Receiver<()>)> {
+        #[cfg(test)]
+        if self.no_worker {
+            return Err(std::io::Error::other("a test says that no thread starts"));
+        }
         let (jobs, received) = channel::<Job>();
         let (done, drained) = channel();
         let finish = self.finish.clone();
@@ -208,13 +257,6 @@ impl HostIo {
                 let _ = done.send(());
             })?;
         Ok((jobs, drained))
-    }
-
-    fn run_here(&self, job: Job) {
-        if let Some(then) = job() {
-            let _ = self.finish.send(then);
-        }
-        self.outstanding.fetch_sub(1, Ordering::AcqRel);
     }
 
     fn take_finished(&self) -> Vec<Then> {
@@ -254,6 +296,8 @@ fn settle<T>(work: impl FnOnce() -> T) -> Option<T> {
 impl HorizonApp {
     /// Applies, in order, the outcomes of the coordination jobs that finished.
     pub(super) fn apply_browser_host_io(&mut self) -> bool {
+        // A job that no worker took on the frame that asked for it gets one here.
+        self.browser_create_host.io.retry_unsent();
         let finished = self.browser_create_host.io.take_finished();
         let applied = !finished.is_empty();
         for then in finished {
@@ -335,6 +379,23 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "the worker did not finish");
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn a_job_that_gets_no_worker_never_runs_on_the_thread_that_asked() {
+        let mut io = HostIo::default();
+        io.no_worker = true;
+        let (seen, ran) = channel();
+        io.then(move || seen.send(()).unwrap(), |_, _| {});
+        assert!(ran.try_recv().is_err(), "the frame of the person runs no job");
+        assert!(io.busy(), "the job waits for a worker and is not reported as done");
+
+        io.no_worker = false;
+        io.retry_unsent();
+        wait_idle(&io);
+        assert!(ran.try_recv().is_ok(), "the job runs once a worker starts");
+        assert!(ran.try_recv().is_err(), "the job runs once");
+        assert_eq!(io.take_finished().len(), 1, "its outcome still reaches the UI");
     }
 
     #[test]
