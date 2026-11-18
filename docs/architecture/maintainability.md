@@ -298,6 +298,11 @@ when it names one of those kinds.
 - `config/server.rs` owns the three settings of the shared terminals of a
   computer, beside the entry that names the server. It also holds the sentence
   that the window shows for them (`SHARED_TERMINALS_NOTICE`).
+- `open_files.rs` raises the soft limit of open files of this process toward the
+  hard limit at each start, and the one place that opens a terminal of a panel
+  asks again. It never lowers a limit, and a refusal keeps the limit that the
+  process has. The facts of each platform are in
+  [`platform-support.md`](../platform-support.md#the-open-file-limit).
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
   retry/teardown behavior. `browser/manifest.rs` reexports the shared
   `horizon-browser-control::manifest` implementation so existing host callers
@@ -395,8 +400,11 @@ when it names one of those kinds.
   run without a desktop.
 - `live/` owns the shared terminals of a server. `live/protocol.rs` holds the
   frames and their bounds, and `live/hub.rs` is the relay. `live/outbox.rs`
-  holds the frames that wait for one link, and `live/relay.rs` serves one live
-  link. `supervisor/live.rs` is the live link of a computer. No module of `live/`
+  holds the frames that wait for one link, `live/relay.rs` serves one live
+  link, and `live/alive.rs` holds the sign of life of both sides of it.
+  `supervisor/live.rs` is the live link of a computer, and
+  `supervisor/store_writes.rs` is the worker that writes the rows of the
+  settings store that the answers of the link bring. No module of `live/`
   opens the store or a file. The design page is
   [`shared-terminals.md`](shared-terminals.md) and the boundary is
   [`shared-terminals.md`](../review/trust-boundaries/shared-terminals.md).
@@ -488,6 +496,11 @@ when it names one of those kinds.
     answers the pairs and `CanvasConfig::agent_lines` turns the drawing off.
   - `canvas_scroll`: viewport-local scroll gesture ownership and canvas event consumption
   - `canvas_drag`: viewport-local ownership for primary drags starting on empty canvas
+  - `keep_running`: the close of the main window, the ask before it and the
+    hidden window that keeps every program. `keep_running/ask.rs` draws the ask,
+    and the three values of `features.when_window_closes` come from
+    `horizon_core::WindowCloseSetting`. The pass of `undrawn.rs` writes the
+    heartbeat of the lease of a hidden window each 2 seconds.
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI

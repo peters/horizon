@@ -53,6 +53,7 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | toolbar Menu | The **Menu** button at the right of the toolbar and its menu. It holds Quick Nav, Sessions, Remote Hosts and Settings. | More menu, overflow menu |
 | New workspace button | The **New** button in the sidebar header next to **Workspaces**. It makes an empty workspace on this computer. | New menu, + Workspace |
 | host instance | The identity of the Horizon host process that owns the browsers of an agent. Browser tools use it to find the workspace of the agent. It is not a secret. | host ID |
+| hidden window | The main window after a close with **Keep Horizon running**. The programs, the server link and the shared terminals continue. | background window, minimized window |
 | browser runtime root | The directory in `HORIZON_BROWSER_ROOT` with the private browser state of a host. | browser root |
 | browser tools | The `browser_*` MCP tools of an agent. | browser MCP |
 | browser host | The machine whose browser serves a browser panel. The settings entry `browser_host` names its SSH target, or a machine of the machine list, and one profile. | profile host, remote browser |
@@ -111,8 +112,10 @@ thing. Write a UI label exactly as the UI shows it, in bold, for example
 | screen | For a shared terminal: the bytes that draw the grid of the terminal and set its modes. The output after a screen continues it. | snapshot, replay |
 | hub | The part of the server that relays the frames of the live links. | broker, router |
 | Computers section | The section **Computers** of the sidebar. It lists the other computers of the server and the terminals that each one shares. | peers section, shared section |
-| chip | The short text in a small frame at the right of the title of a panel, such as `seen by <name>` or `on <name>`. | label, tag |
+| chip | The short text in a small frame at the right of the title of a panel: `seen by <name>`, `typed by <name>`, `sized by <name>`, `on <name>` or `on <name> · view only`. | label, tag |
 | line of an ended stream | The line below the grid of a follow panel whose stream ended. It gives the cause and says that typed text is not sent. | error line, status line |
+| sign of life | The `heartbeat` frame that each side of a live link sends while it has no other frame for 10 seconds, and the 30 seconds without a frame that end the link. | keepalive, ping |
+| history of a follower | The lines above the viewport that the program of the owner wrote before the follower joined. A fresh screen carries them. | scrollback of a follower, backlog |
 
 ## Technical verbs
 
