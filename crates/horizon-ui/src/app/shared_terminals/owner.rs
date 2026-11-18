@@ -7,7 +7,7 @@
 use std::time::{Duration, Instant};
 
 use horizon_core::ShareSource;
-use horizon_sync::LiveWatcher;
+use horizon_sync::{LiveWatcher, MAX_LIVE_OUTPUT_BYTES};
 
 use super::pump::Run;
 use super::{LiveLink, shown};
@@ -16,6 +16,10 @@ use super::{LiveLink, shown};
 /// one that caught the program in the middle of an escape sequence, and before
 /// the next screen after the link refused one.
 const NEXT_SCREEN: Duration = Duration::from_millis(250);
+/// The most bytes of a screen that the pump keeps while the link takes it in
+/// parts. A screen above it is not sent, and its followers keep the screen that
+/// they have: the cells of a very large grid cannot be bounded by the link.
+const KEPT_SCREEN_BYTES: usize = 8 * 1024 * 1024;
 
 /// Why the next screen of a watched panel goes out, which decides what it holds
 /// and who takes it.
@@ -50,6 +54,23 @@ pub(super) struct Watched {
     /// When the next screen goes out, and why it is due.
     screen_at: Option<(Instant, Why)>,
     second_at: Option<Instant>,
+    /// The screen that this panel still owes the link, while its bytes do not
+    /// fit at once. No output follows a screen that is not whole.
+    owed: Option<Owed>,
+}
+
+/// The bytes of one screen that the link takes in parts, and how far they went.
+struct Owed {
+    cols: u16,
+    rows: u16,
+    fresh: bool,
+    everyone: bool,
+    /// Whether the link has the grid and the facts of this screen.
+    grid: bool,
+    bytes: Vec<u8>,
+    sent: usize,
+    /// The bytes of the next part. A part that the link refuses halves it.
+    part: usize,
 }
 
 impl Watched {
@@ -60,6 +81,12 @@ impl Watched {
         let outlet = source.outlet();
         // A restarted terminal has a new outlet, whose first take asks for a screen.
         outlet.set_wanted(true);
+        if self.owed.is_some() {
+            // The screen that this panel owes goes first, in the order of its
+            // bytes, and the output of the panel waits for it.
+            self.send_owed(link, id);
+            return;
+        }
         let pending = self.screen_at.filter(|(at, _)| *at <= now).map(|(_, why)| why);
         let why = match pending {
             Some(why) => why,
@@ -80,18 +107,59 @@ impl Watched {
         };
         // The screen holds the output that waits in the outlet, so that is dropped.
         let screen = source.screen(why.fresh());
-        let sent = screen.is_some_and(|screen| {
-            link.screen(id, screen.cols, screen.rows, why.fresh(), why.everyone())
-                && link.output(id, &screen.bytes, true)
+        let kept = screen.is_some_and(|screen| {
+            if screen.bytes.len() > KEPT_SCREEN_BYTES {
+                // The pump does not keep a screen above its bound, and a screen
+                // that it does not keep would cycle for ever: the followers keep
+                // the screen that they have.
+                return true;
+            }
+            self.owed = Some(Owed {
+                cols: screen.cols,
+                rows: screen.rows,
+                fresh: why.fresh(),
+                everyone: why.everyone(),
+                grid: false,
+                bytes: screen.bytes,
+                sent: 0,
+                part: MAX_LIVE_OUTPUT_BYTES,
+            });
+            self.send_owed(link, id);
+            true
         });
-        self.screen_at = if sent {
+        self.screen_at = if kept {
             None
         } else {
             Some((now + NEXT_SCREEN, Why::All))
         };
-        if sent {
+        if kept {
             self.second_at = self.second_at.filter(|_| !why.everyone());
         }
+    }
+
+    /// Gives the link the next part of the screen that this panel owes: the grid
+    /// before the first part, then the bytes in the order of the screen. A part
+    /// that the link refuses waits for the next pass with a smaller part, and no
+    /// output of the panel follows a screen that is not whole.
+    fn send_owed(&mut self, link: &dyn LiveLink, id: &str) {
+        let Some(owed) = &mut self.owed else {
+            return;
+        };
+        if !owed.grid {
+            if !link.screen(id, owed.cols, owed.rows, owed.fresh, owed.everyone) {
+                return;
+            }
+            owed.grid = true;
+        }
+        while owed.sent < owed.bytes.len() {
+            let end = (owed.sent + owed.part).min(owed.bytes.len());
+            if !link.output(id, &owed.bytes[owed.sent..end], true) {
+                owed.part = (owed.part / 2).max(1);
+                return;
+            }
+            owed.sent = end;
+        }
+        self.owed = None;
     }
 }
 
@@ -141,6 +209,7 @@ impl Run {
             devices: Vec::new(),
             screen_at: None,
             second_at: None,
+            owed: None,
         });
         let devices: Vec<String> = watchers.iter().map(|watcher| shown(&watcher.device)).collect();
         let joined = devices.iter().any(|device| !watch.devices.contains(device));
