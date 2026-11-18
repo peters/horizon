@@ -69,6 +69,13 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
     let outcome = {
         let mut state = handle.lock();
         let outcome = state.client.accept_push(reply);
+        // The row that decided a refused intent is not in the mirror yet, so a pull is
+        // due. It is marked inside the lock that settles the queue: a person who saves
+        // a section after this frame must name the version of that row, and no frame
+        // may read the link as in step before it comes.
+        if let Some(version) = rewind {
+            state.client.replay_before(version);
+        }
         // A save that was queued while the store was read is not in `holds`.
         let read_in_time = state.settings_generation == generation;
         for (section, version, body) in written {

@@ -292,7 +292,8 @@ impl Client {
     }
 
     /// Makes the next request read from before `version`, so its answer brings
-    /// the row of that version again.
+    /// the row of that version again; the link reads [`LinkState::Behind`] until it
+    /// comes, so a save in that window names that version and not an older one.
     ///
     /// A refusal of a secret names the version that the server decided, and the
     /// value of that version is what the person must see beside the local one: an
@@ -303,6 +304,7 @@ impl Client {
         let Some(target) = version.checked_sub(1) else {
             return;
         };
+        self.link = LinkState::Behind;
         if target < self.state.index {
             self.replay = Some(target);
         }
