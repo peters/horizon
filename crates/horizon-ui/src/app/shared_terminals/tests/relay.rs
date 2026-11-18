@@ -6,6 +6,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::secret::{CredentialVault, SecretVault};
@@ -13,7 +14,7 @@ use horizon_core::secret_store::SecretStore;
 use horizon_core::{PanelId, RuntimeState, StartupDecision};
 use horizon_sync::{ServerInfo, Store, Supervisor, SupervisorConfig, run_server_on_unix_socket};
 
-use super::{OFFSCREEN, PROGRAM, above_the_viewport, follower_of, frames_until, grid, text};
+use super::{OFFSCREEN, PATIENCE, PROGRAM, above_the_viewport, follower_of, frames_until, grid, text};
 use crate::app::HorizonApp;
 use crate::app::server_sync::ServerSync;
 use crate::app::test_support::test_app_with_startup;
@@ -234,18 +235,24 @@ fn a_panel_of_one_computer_is_listed_followed_shown_and_typed_into_at_the_other(
     // Each side says in the title bar what the other one does. The body of the
     // follow panel of B fits the grid of the panel of A, so the keys of B ask for
     // no other grid: the chip of the owner names the computer that typed, and no
-    // size that it holds. The chip comes from the list of the server, which A
-    // reads after the typing of B reached it: a loaded computer reads it late.
+    // size that it holds.
+    // The chip is what the pump published, so this wait reads it with no frame:
+    // the claim of typing lasts two seconds, and a frame of a loaded computer can
+    // take longer than that.
     let chip = super::chip_of;
-    frames_until(
-        "the chip of the owner names the computer that typed",
-        &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
-        |apps| chip(apps[0], panel).as_deref() == Some("typed by Desk B"),
-    );
+    let deadline = Instant::now() + PATIENCE;
+    while chip(&a, panel).as_deref() != Some("typed by Desk B") {
+        assert!(
+            Instant::now() < deadline,
+            "the chip of the owner names the computer that typed: {:?}",
+            chip(&a, panel)
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     frames_until(
         "the chip of the owner names the follower again",
         &mut [(&ctx_a, &mut a), (&ctx_b, &mut b)],
-        |apps| chip(apps[0], panel).as_deref() == Some("seen by Desk B"),
+        |apps| chip(apps[0], panel).as_deref() == Some("sized by Desk B \u{00b7} seen by Desk B"),
     );
     assert_eq!(chip(&b, follow).as_deref(), Some("on Desk A"));
 
