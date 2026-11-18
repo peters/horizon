@@ -219,7 +219,6 @@ impl HorizonApp {
             device,
             id,
             feed,
-            typing,
         };
         self.shared_terminals.wanted.follows.push(follow);
         self.shared_terminals.send_wanted();

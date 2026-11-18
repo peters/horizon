@@ -208,6 +208,17 @@ impl FollowFeed {
         state.flush();
     }
 
+    /// Says whether the bytes of the person go back to the stream now. The list of
+    /// the owner gives this value at each change, so an open panel takes a typing
+    /// that the owner turns on or off. The bytes that wait leave when it is off.
+    pub fn set_typing(&self, typing: bool) {
+        let mut state = self.shared.state();
+        if state.typing != typing {
+            state.typing = typing;
+            state.typed.clear();
+        }
+    }
+
     /// The stream ended. The terminal keeps its last screen, the panel says the
     /// reason in one line, and the bytes of the person are dropped until a new
     /// screen arrives.

@@ -98,7 +98,8 @@ impl Run {
             }
             self.link.follow(&wanted.device, &wanted.id);
             if let Some((computer, panel)) = listed(&self.found.computers, &wanted.device, &wanted.id) {
-                let chip = follow_chip(computer, panel.typing && wanted.typing);
+                let chip = follow_chip(computer, panel.typing);
+                wanted.feed.set_typing(panel.typing);
                 self.found.chips.insert(wanted.local.clone(), chip);
                 self.changed = true;
             }
@@ -138,7 +139,10 @@ impl Run {
             if std::mem::take(ended) {
                 self.link.follow(&panel.device, &panel.id);
             }
-            let chip = follow_chip(computer, shared.typing && panel.typing);
+            // The open panel takes the typing of the newest list, in both
+            // directions, and its chip says which one it is.
+            let chip = follow_chip(computer, shared.typing);
+            panel.feed.set_typing(shared.typing);
             self.found.chips.insert(panel.local.clone(), chip);
         }
     }

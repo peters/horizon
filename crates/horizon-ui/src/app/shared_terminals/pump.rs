@@ -62,8 +62,6 @@ pub(super) struct FollowPanel {
     pub(super) device: String,
     pub(super) id: String,
     pub(super) feed: FollowFeed,
-    /// Whether the person may type, as the panel was opened.
-    pub(super) typing: bool,
 }
 
 /// What the window wants of the pump. A frame writes it, and the pump copies it.

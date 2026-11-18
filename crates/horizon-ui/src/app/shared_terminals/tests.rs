@@ -713,6 +713,44 @@ fn the_two_switches_empty_the_list_and_drop_what_is_typed() {
     window.until("the chip of the owner goes", |app| chip_of(app, owner).is_none());
 }
 
+#[test]
+fn a_follow_panel_takes_the_typing_of_the_newest_list_in_both_directions() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    // The owner lets nobody type when the person opens the panel.
+    window.app.template_config.server.remote_typing = false;
+    let link = window.link.clone();
+    window.until("the list says that nobody types", move |_| {
+        link.relay().panels.first().is_some_and(|panel| !panel.typing)
+    });
+    let follow = window.follow(owner);
+    window.shows(follow, "READY");
+    let view_only = "on There \u{00b7} view only";
+    window.until("the chip of the follow panel", |app| {
+        chip_of(app, follow).as_deref() == Some(view_only)
+    });
+
+    // The owner turns typing on: the open panel takes it, with its chip.
+    window.app.template_config.server.remote_typing = true;
+    window.until("the chip of the follow panel", |app| {
+        chip_of(app, follow).as_deref() == Some("on There")
+    });
+    window.write(follow, b"typed now\n");
+    window.shows(owner, "GOT:typed now");
+
+    // And it loses it again when the owner turns typing off.
+    window.app.template_config.server.remote_typing = false;
+    window.until("the chip of the follow panel", |app| {
+        chip_of(app, follow).as_deref() == Some(view_only)
+    });
+    window.write(follow, b"no longer\n");
+    window.frames(4);
+    assert!(
+        !text(&window.app, owner).contains("GOT:no longer"),
+        "the panel drops the bytes after the owner turned typing off"
+    );
+}
+
 /// Queues a `Typed` event as a server gives it that checks nothing: the link
 /// hands it on as it is, so the owner side is the last guard.
 fn typed_event(link: &StandIn, panel: &str, bytes: &[u8]) {
