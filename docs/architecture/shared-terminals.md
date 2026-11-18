@@ -240,6 +240,23 @@ name, the list of each computer and the follows.
     request that comes sooner, and one of a computer that does not follow the
     panel. [The grid of the program](#the-grid-of-the-program) gives the rule.
 
+### The state of one follow
+
+The relay keeps one state for each follower of a panel (`Relay` in
+`crates/horizon-sync/src/live/hub.rs`):
+
+| State | What the follower gets |
+|---|---|
+| `Waiting` | Nothing of that panel until the owner sends a screen. |
+| `Relaying` | The output of the panel, and the replay of a screen while that screen still arrives. |
+| `Behind` | Nothing of that panel until its link is under 256 KiB (`RESUME_BYTES`), and then a new screen. |
+
+A follow starts in `Waiting`, and a `refresh` that a screen answers puts it
+back there. A screen that the follower takes makes it `Relaying`. A follower
+whose link refuses a screen or the output of the panel goes `Behind`. When
+that link is under `RESUME_BYTES` again, the server asks each owner for a new
+screen and the follow waits for it.
+
 ### The ceiling of one link
 
 At most 1 MiB of frames wait for one live link
