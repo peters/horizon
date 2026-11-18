@@ -202,6 +202,14 @@ pub(crate) fn usize_to_f32(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
+/// The layer of the question that waits for the person behind `id`.
+///
+/// The window draws the toolbar of a workspace in the order of a tooltip, so a
+/// question in the order below it takes no press that lands on such a toolbar.
+pub(super) fn ask_modal(id: egui::Id) -> egui::Modal {
+    egui::Modal::new(id).area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{OverlayExclusion, clamp_panel_size, format_grid_position, primary_shortcut_label};

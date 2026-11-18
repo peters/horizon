@@ -19,6 +19,7 @@ use horizon_core::{PanelId, SessionKill};
 use crate::theme;
 
 use super::HorizonApp;
+use super::util::ask_modal;
 
 impl HorizonApp {
     /// Closes the panel that a person asked to close: at once for a panel that
@@ -61,7 +62,7 @@ impl HorizonApp {
             .and_then(|panel| panel.machine().map(str::to_owned))
             .unwrap_or_else(|| "its machine".to_owned());
         let mut answer = None;
-        let shown = egui::Modal::new(egui::Id::unique("close_panel_confirm")).show(ctx, |ui| {
+        let shown = ask_modal(egui::Id::unique("close_panel_confirm")).show(ctx, |ui| {
             ui.label(
                 egui::RichText::new(format!("End the tmux session of this panel on {machine}?"))
                     .size(12.5)

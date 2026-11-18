@@ -6,6 +6,7 @@ use horizon_core::{AgentSessionBinding, PanelId};
 const PAGE_SIZE: usize = 8;
 
 use super::session_deletion::{SessionDeletionUi, deletion_progress, queue_deletion_request};
+use crate::app::util::ask_modal;
 use crate::{text::truncate_chars, theme};
 
 #[derive(Clone)]
@@ -54,8 +55,7 @@ pub(super) fn render_session_picker(
         state.focus_first |= scope_changed;
     }
     state.last_rendered_frame = ctx.cumulative_frame_nr();
-    let result = egui::Modal::new(id)
-        .area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
+    let result = ask_modal(id)
         .frame(
             egui::Frame::popup(&ctx.global_style())
                 .corner_radius(16.0)

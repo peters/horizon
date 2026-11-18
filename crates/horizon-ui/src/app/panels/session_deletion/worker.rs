@@ -6,6 +6,7 @@ use horizon_core::{AgentSessionBinding, AgentSessionDeletionReport, SessionDelet
 
 use super::{DeletionJob, job_id};
 use crate::app::HorizonApp;
+use crate::app::util::ask_modal;
 
 #[derive(Default)]
 pub(in crate::app) struct SavedSessionDeletionState {
@@ -253,11 +254,8 @@ impl HorizonApp {
         let Some(notice) = self.saved_session_deletion.notice.clone() else {
             return;
         };
-        let acknowledged = egui::Modal::new(egui::Id::unique("saved_session_deletion_notice"))
-            .area(
-                egui::Modal::default_area(egui::Id::unique("saved_session_deletion_notice"))
-                    .order(egui::Order::Tooltip),
-            )
+        let id = egui::Id::unique("saved_session_deletion_notice");
+        let acknowledged = ask_modal(id)
             .show(ctx, |ui| {
                 ui.set_max_width(620.0);
                 ui.heading("Saved conversation recovery");

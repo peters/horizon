@@ -327,6 +327,77 @@ pub(super) fn drew_text(output: &egui::FullOutput, text: &str) -> bool {
         .any(|clipped| matches!(&clipped.shape, egui::epaint::Shape::Text(shape) if shape.galley.text() == text))
 }
 
+/// The centre of the button `label` of the layout toolbar of a workspace, as the
+/// frame drew it: the toolbar is one layer of the canvas that a question must
+/// stand above.
+pub(super) fn toolbar_button(output: &egui::FullOutput, label: &str) -> Pos2 {
+    output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::epaint::Shape::Text(shape) if shape.galley.text() == label => {
+                Some(shape.pos + shape.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the frame draws the toolbar button {label}: {:?}", drawn_texts(output)))
+}
+
+/// Every text that the frame drew.
+fn drawn_texts(output: &egui::FullOutput) -> Vec<&str> {
+    fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a str>) {
+        match shape {
+            egui::epaint::Shape::Text(text) => out.push(text.galley.text()),
+            egui::epaint::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The frame of the layout toolbar of a workspace, which stands under the point
+/// `tidy` of its `Tidy` button.
+fn toolbar_frame(output: &egui::FullOutput, tidy: Pos2) -> Rect {
+    fn walk(shape: &egui::Shape, tidy: Pos2, found: &mut Option<Rect>) {
+        match shape {
+            egui::epaint::Shape::Rect(rect)
+                if rect.corner_radius == egui::CornerRadius::same(10) && rect.rect.contains(tidy) =>
+            {
+                *found = Some(rect.rect);
+            }
+            egui::epaint::Shape::Vec(inner) => inner.iter().for_each(|shape| walk(shape, tidy, found)),
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for clipped in &output.shapes {
+        walk(&clipped.shape, tidy, &mut found);
+    }
+    found.unwrap_or_else(|| panic!("the frame draws the toolbar of the workspace at {tidy:?}"))
+}
+
+/// Moves the view so that the layout toolbar of a workspace stands under `at`, and
+/// draws the frame that puts it there.
+///
+/// Only the height moves: a view that also moves sideways pushes the label of the
+/// workspace under the sidebar, which hides the whole workspace visual.
+pub(super) fn toolbar_under(ctx: &Context, app: &mut HorizonApp, at: Pos2) {
+    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+    let tidy = toolbar_button(&output, "Tidy");
+    let pan = app.canvas_view.pan_offset;
+    app.canvas_view.set_pan_offset([pan[0], pan[1] + at.y - tidy.y]);
+    let output = run_app_frame_with_input(ctx, app, raw_input([1400.0, 900.0], None));
+    let frame = toolbar_frame(&output, toolbar_button(&output, "Tidy"));
+    assert!(
+        frame.contains(at),
+        "the toolbar of the workspace stands under {at:?}: {frame:?}"
+    );
+}
+
 /// The card panel that `card` names, as the canvas draws it this frame.
 pub(super) fn card_panel(app: &HorizonApp, ctx: &Context, card: &str) -> Rect {
     let panel = app

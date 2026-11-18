@@ -307,7 +307,7 @@ fn quitting_horizon_ends_no_session_of_a_machine() {
 use horizon_core::PanelId;
 
 use crate::app::PANEL_TITLEBAR_HEIGHT;
-use crate::app::test_support::{raw_input, run_app_frame_with_input};
+use crate::app::test_support::{raw_input, run_app_frame_with_input, toolbar_under};
 
 /// One frame of the window, as eframe runs it, with `events` as its input.
 fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -523,4 +523,84 @@ fn the_window_of_a_detached_workspace_draws_the_ask_of_its_own_close() {
         app.board.panel(panel).is_some(),
         "the ask ends no panel before the person answers"
     );
+}
+
+#[test]
+fn the_ask_of_a_close_takes_a_press_over_a_workspace_toolbar() {
+    // The toolbar of a workspace is a layer of the window that stands over the
+    // middle of the canvas, where the ask draws its buttons: a press on a button
+    // that a toolbar covers belongs to the ask.
+    for (label, closes) in [("Close", true), ("Cancel", false)] {
+        let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
+        app.request_close_panel(panel);
+        let output = settle(&ctx, &mut app, 2);
+        let button = ask_button(&output, label);
+        toolbar_under(&ctx, &mut app, button);
+
+        press(&ctx, &mut app, button);
+
+        assert_eq!(
+            app.close_panel_confirm, None,
+            "the press on {label} arrives where a workspace toolbar stands"
+        );
+        assert_eq!(
+            app.board.panel(panel).is_some(),
+            !closes,
+            "the answer of the press on {label}"
+        );
+        // The test reads the kill instead of letting the next frame hand it to
+        // the worker that runs ssh.
+        app.session_kills.clear();
+    }
+}
+
+#[test]
+fn scratch_count_toolbar_frames() {
+    let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
+    app.request_close_panel(panel);
+    for index in 0..8 {
+        let output = frame(&ctx, &mut app, Vec::new());
+        let drawn: Vec<&str> = texts(&output).map(|(text, _)| text).collect();
+        eprintln!("frame {index}: tidy={} texts={drawn:?}", drawn.contains(&"Tidy"));
+    }
+}
+
+#[test]
+fn the_ask_of_a_close_ends_on_escape_and_on_a_press_beside_it() {
+    for escape in [true, false] {
+        let (_temp, ctx, mut app, panel) = window_in(WorkspacePlace::Machine("build-1".to_owned()));
+        app.request_close_panel(panel);
+        let output = settle(&ctx, &mut app, 2);
+        let line = texts(&output)
+            .find(|(text, _)| text.starts_with("End the tmux session"))
+            .map(|(_, centre)| centre)
+            .expect("the ask draws its line");
+
+        if escape {
+            frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        } else {
+            // A press beside the ask is the press on its backdrop.
+            press(&ctx, &mut app, egui::Pos2::new(line.x - 260.0, line.y));
+        }
+
+        assert_eq!(
+            app.close_panel_confirm, None,
+            "the escape key or a press beside the ask cancels it"
+        );
+        assert!(
+            app.board.panel(panel).is_some(),
+            "a cancelled ask ends no panel and no session"
+        );
+        assert!(app.session_kills.is_empty(), "a cancelled ask ends no session");
+    }
 }

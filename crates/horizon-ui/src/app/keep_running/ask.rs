@@ -5,10 +5,11 @@
 //! first action of a close is the one that Enter takes, the second is the
 //! dangerous one, and a press outside the ask or the escape key cancels it.
 
-use egui::{Context, Key, Order, RichText};
+use egui::{Context, Key, RichText};
 
 use crate::theme;
 
+use super::super::util::ask_modal;
 use super::{CloseAnswer, HorizonApp};
 
 const CLOSE_HEADING: &str = "Close Horizon?";
@@ -29,62 +30,57 @@ impl HorizonApp {
         let (running, from_menu) = (ask.running, ask.from_menu);
         let mut remember = ask.remember;
         let mut answer = None;
-        // The ask is one layer above the toolbar of a workspace on the canvas, which
-        // the window draws in the order of a tooltip: an ask below it would get no
-        // press that lands on such a toolbar.
         let id = egui::Id::unique("close_horizon_ask");
-        let shown = egui::Modal::new(id)
-            .area(egui::Modal::default_area(id).order(Order::Tooltip))
-            .show(ctx, |ui| {
-                ui.set_max_width(430.0);
-                let heading = if from_menu {
-                    running.quit_question()
-                } else {
-                    CLOSE_HEADING.to_owned()
-                };
-                ui.label(RichText::new(heading).size(13.0).color(theme::FG()));
-                ui.add_space(6.0);
-                for line in running
-                    .programs_line()
-                    .into_iter()
-                    .chain(running.outliving_lines(from_menu))
-                {
-                    ui.label(RichText::new(line).size(12.5).color(theme::FG()));
-                }
-                ui.add_space(10.0);
-                if from_menu {
-                    ui.horizontal(|ui| {
-                        answer = actions(
-                            ui,
-                            &[
-                                (QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
-                                (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
-                            ],
-                        );
-                    });
-                    return;
-                }
-                if action(ui, KEEP_RUNNING, theme::FG()) {
-                    answer = Some(CloseAnswer::KeepRunning);
-                }
-                ui.label(RichText::new(KEEP_RUNNING_HELP).size(11.5).color(theme::FG_SOFT()));
-                ui.add_space(6.0);
+        let shown = ask_modal(id).show(ctx, |ui| {
+            ui.set_max_width(430.0);
+            let heading = if from_menu {
+                running.quit_question()
+            } else {
+                CLOSE_HEADING.to_owned()
+            };
+            ui.label(RichText::new(heading).size(13.0).color(theme::FG()));
+            ui.add_space(6.0);
+            for line in running
+                .programs_line()
+                .into_iter()
+                .chain(running.outliving_lines(from_menu))
+            {
+                ui.label(RichText::new(line).size(12.5).color(theme::FG()));
+            }
+            ui.add_space(10.0);
+            if from_menu {
                 ui.horizontal(|ui| {
                     answer = actions(
                         ui,
                         &[
-                            (END_AND_QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
+                            (QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
                             (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
                         ],
                     );
                 });
-                // The first action is the one that Enter takes.
-                if ui.input(|input| input.key_pressed(Key::Enter)) {
-                    answer.get_or_insert(CloseAnswer::KeepRunning);
-                }
-                ui.add_space(2.0);
-                ui.checkbox(&mut remember, RichText::new(REMEMBER).size(12.0).color(theme::FG()));
+                return;
+            }
+            if action(ui, KEEP_RUNNING, theme::FG()) {
+                answer = Some(CloseAnswer::KeepRunning);
+            }
+            ui.label(RichText::new(KEEP_RUNNING_HELP).size(11.5).color(theme::FG_SOFT()));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                answer = actions(
+                    ui,
+                    &[
+                        (END_AND_QUIT, theme::PALETTE_RED(), CloseAnswer::Quit),
+                        (CANCEL, theme::FG_SOFT(), CloseAnswer::Cancel),
+                    ],
+                );
             });
+            // The first action is the one that Enter takes.
+            if ui.input(|input| input.key_pressed(Key::Enter)) {
+                answer.get_or_insert(CloseAnswer::KeepRunning);
+            }
+            ui.add_space(2.0);
+            ui.checkbox(&mut remember, RichText::new(REMEMBER).size(12.0).color(theme::FG()));
+        });
         if let Some(ask) = self.keep_running.ask.as_mut() {
             ask.remember = remember;
         }

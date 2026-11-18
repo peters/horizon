@@ -29,6 +29,7 @@ use horizon_core::{AgentSessionKey, PanelKind, PickupFolder, PickupList, PickupP
 
 use self::rows::{PickupPress, ROW_GAP, ROW_HEIGHT, folder_header_height};
 use super::HorizonApp;
+use super::util::ask_modal;
 use crate::theme;
 
 /// The words that open the section of the first start page.
@@ -246,8 +247,7 @@ impl HorizonApp {
         let folders = state.list.folders();
         let mut painted = None;
         let mut close = false;
-        let shown = egui::Modal::new(id)
-            .area(egui::Modal::default_area(id).order(egui::Order::Tooltip))
+        let shown = ask_modal(id)
             .frame(
                 egui::Frame::popup(&ctx.global_style())
                     .corner_radius(16.0)

@@ -577,3 +577,27 @@ fn quit_horizon_ends_at_once_when_nothing_runs() {
         assert!(!app.keep_running.hidden, "Quit hides nothing");
     }
 }
+
+/// A workspace toolbar stands in the middle of the canvas, where the ask draws
+/// its buttons: the press on a button that a toolbar covers belongs to the ask.
+#[test]
+fn the_ask_of_a_close_takes_a_press_under_a_workspace_toolbar() {
+    let (_temp, ctx, mut app, _recorder) = app_with(WindowCloseSetting::Ask);
+    let workspace = app.board.create_workspace("Ask");
+    let _ = app
+        .create_panel_with_options(running(PanelOptions::default()), workspace)
+        .expect("a shell panel");
+    warm_up(&ctx, &mut app);
+    let _ = close_frame(&ctx, &mut app);
+    let output = ask_frame(&ctx, &mut app);
+    let button = button(&output, "End them and quit", "Close Horizon?");
+
+    crate::app::test_support::toolbar_under(&ctx, &mut app, button);
+    let _ = press(&ctx, &mut app, button);
+
+    assert!(
+        app.shutdown_progress.is_some(),
+        "the press of End them and quit arrives where a workspace toolbar stands"
+    );
+    assert!(app.keep_running.ask.is_none(), "the ask is answered");
+}
