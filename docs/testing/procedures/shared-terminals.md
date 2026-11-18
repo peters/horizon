@@ -16,9 +16,11 @@ This procedure proves that two computers that follow one Horizon server show
 the terminals of each other and type in them. It proves the section
 **Computers** of the sidebar, the follow panel and the chips of the title bars.
 It proves the name and the two switches of the **Server** tab. It proves what
-the window shows when a panel, a computer or the server goes away. It also
-proves that a computer with no server shares nothing, and that a window that
-the desktop does not show continues its streams.
+the window shows when a panel, a computer or the server goes away. It proves
+the history of a follow panel, the grid that follows the computer that types,
+and the chip of a computer that types. It also proves that a computer with no
+server shares nothing, and that a window that the desktop does not show
+continues its streams.
 
 ## 2. Applicability
 
@@ -29,7 +31,8 @@ the desktop does not show continues its streams.
 - The design is in
   [the page of the shared terminals](../../architecture/shared-terminals.md).
 - This procedure does not test a third computer, the limits of the server, an
-  agent panel, a link of the TCP listener, or macOS.
+  agent panel, a link of the TCP listener, or macOS. ST22 starts a third
+  Horizon program on the test computer, not a third computer.
 
 ## 3. Safety
 
@@ -413,42 +416,59 @@ lane. It needs OpenSSH 9.8 or later, which has the two session programs.
    Result: The two panels show the line `a-b`. One program got the keys of the
    two computers.
 
-### 6.7 ST7: A resize of the owner
+### 6.7 ST7: The grid follows the computer that types
 
-1. On computer B, run `stty size` in the follow panel of `Device input test`.
+1. On computer A, click in the panel `Device input test`, and run `stty size`
+   in that panel.
 
    Result: The two panels show two numbers: the rows and the columns of the
    panel of computer A.
 
 2. Record the two numbers.
 
-   Result: The record holds the grid of the owner before the resize.
+   Result: The record holds the grid of the body of the panel of computer A.
 
-3. On computer A, drag the resize handle of the panel `Device input test`, and
+3. On computer B, click in the follow panel of `Device input test`, and run
+   `stty size` in that panel.
+
+   Result: The two panels show the rows and the columns of the body of the
+   follow panel of computer B. The numbers differ from the record of step 2
+   when the two bodies have different sizes.
+
+4. Read the title bar of the panel `Device input test` of computer A.
+
+   Result: The chip says `sized by Computer B`, followed by `seen by Computer
+   B`. The panel of computer A draws the grid of the body of computer B from
+   its top left corner, and it cuts the cells that do not fit.
+
+5. On computer A, click in the panel `Device input test`, and run `stty size`
+   in that panel.
+
+   Result: The two panels show the numbers of step 2 again. The chip of the
+   panel no longer says `sized by`.
+
+6. On computer A, drag the resize handle of the panel `Device input test`, and
    make the panel wider and higher.
 
    Result: The panel of computer A is larger. The follow panel of computer B
    keeps its own size.
 
-4. On computer B, run `stty size` in the follow panel.
+7. On computer A, run `stty size` in that panel.
 
    Result: The two numbers are larger than the numbers of step 2. If the new
    grid is larger than the follow panel, the follow panel shows the top left
    part of the grid.
 
-5. On computer B, drag the resize handle of the follow panel until the panel
-   shows the full grid.
+8. On computer B, run `stty size` in the follow panel.
 
-   Result: The follow panel is larger.
+   Result: The two numbers are the numbers of step 3 again. The chip of the
+   panel of computer A says `sized by Computer B` again: the computer that
+   typed last gives the program its grid.
 
-6. On computer B, run `stty size` in the follow panel.
+9. On computer B, run `seq -s ' ' 1 150` in the follow panel.
 
-   Result: The two numbers are the numbers of step 4. A follower does not
-   change the grid of the owner.
-
-7. On computer B, run `seq -s ' ' 1 150` in the follow panel.
-
-   Result: The two panels break each line of numbers after the same number.
+   Result: The two panels break each line of numbers after the same column,
+   because one program has one grid.
 
 ### 6.8 ST8: A program on the alternate screen
 
@@ -524,20 +544,12 @@ lane. It needs OpenSSH 9.8 or later, which has the two session programs.
 
 10. Press **Save**.
 
-    Result: In a few seconds, the follow panel of `Live render heartbeat` shows
-    the chip `on Computer A`. The follow panel of `Device input test` still
-    shows `on Computer A · view only`, because it was opened while typing was
-    off.
+    Result: In a few seconds, each open follow panel of computer B shows the
+    chip `on Computer A`. A panel that is open takes the typing of the newest
+    list, so no panel keeps `view only`.
 
-11. On computer B, close the follow panel of `Device input test`.
-
-    Result: The follow panel closes.
-
-12. On computer B, click the row `Device input test` again.
-
-    Result: A new follow panel opens with the chip `on Computer A`.
-
-13. On computer B, run `echo typing-back` in that follow panel.
+11. On computer B, run `echo typing-back` in the follow panel of `Device input
+    test`.
 
     Result: The two panels show the line `typing-back`.
 
@@ -871,8 +883,239 @@ must move each byte then.
    ```
 
    Result: The Device panel of computer A shows the candidate window. The panel
-   `Device input test` shows the line `hidden-b`. The title bars of the two
-   panels show the chip `seen by Computer B`.
+   `Device input test` shows the line `hidden-b`. The title bar of each panel
+   says that Computer B watches it, and the title bar of `Device input test`
+   also says `sized by Computer B`, because the person of computer B typed in
+   it last.
+
+### 6.19 ST19: The history of a follow panel
+
+This task is a best reading of `draw_history` in
+`crates/horizon-core/src/terminal/share.rs`: no run recorded how many lines a
+follow panel keeps above its viewport.
+
+1. On computer A, run `seq 1 300` in the panel `Device input test`.
+
+   Result: The panel of computer A shows the last numbers, and the earlier
+   numbers are above its viewport.
+
+2. On computer B, close the follow panel of `Device input test` if it is open.
+   Then click the row `Device input test` of `Computer A`.
+
+   Result: A new follow panel opens. Its grid shows the same numbers as the
+   panel of computer A.
+
+3. On computer B, put the pointer on the grid of the follow panel and turn the
+   wheel up.
+
+   Result: The follow panel shows the lines above its viewport, and the oldest
+   line that it shows holds `1`. A new follower gets the history of the
+   terminal.
+
+4. On computer B, turn the wheel down until the newest line shows again.
+
+   Result: The follow panel shows the newest line of the grid again.
+
+5. On computer A, drag the resize handle of the panel `Device input test`, and
+   make the panel wider.
+
+   Result: The follow panel gets a new screen with the new grid, and that grid
+   starts at the top left corner of its body.
+
+6. On computer B, turn the wheel up in the follow panel again.
+
+   Result: The follow panel still shows the lines above its viewport, and the
+   oldest line still holds `1`. A screen that is not fresh keeps the history of
+   each follower.
+
+### 6.20 ST20: The chip of a panel that another computer types in
+
+1. On computer A, read the title bar of the panel `Device input test`.
+
+   Result: The chip says `seen by Computer B`, and it does not say `typed by`.
+
+2. On computer B, run `echo chip` in the follow panel of `Device input test`.
+
+   Result: In 2 seconds or less, the title bar of the panel of computer A holds
+   `typed by Computer B`.
+
+3. Wait 3 seconds without a key on either computer, and read that title bar
+   again.
+
+   Result: The chip says `seen by Computer B` again, and no part of it says
+   `typed by`. The name stays for 2 seconds after the last byte.
+
+4. On computer B, type one key in the follow panel, and do not press Enter.
+
+   Result: The title bar of the panel of computer A holds `typed by Computer B`
+   again.
+
+### 6.21 ST21: A computer that vanishes
+
+This task is a best reading: no run recorded the 30 seconds of silence on a
+real server. The fixture starts each child in a process group of its own, so
+the signal reaches the candidate and its `ssh` child, and the transport stays
+open.
+
+1. On computer B, read the section **Computers** of the sidebar.
+
+   Result: The section shows `Computer A` with its two rows.
+
+2. Find the process group of the candidate of computer A:
+
+   ```sh
+   APP=$(python3 - <<'PY'
+   import json, pathlib
+   lab = json.loads(pathlib.Path('/var/tmp/hz-shared-a/lab.json').read_text())
+   for pid in lab['pids']:
+       try:
+           cmd = pathlib.Path(f'/proc/{pid}/cmdline').read_bytes()
+       except OSError:
+           continue
+       if lab['app'].encode() in cmd:
+           print(pid)
+   PY
+   )
+   echo "$APP"
+   ```
+
+   Result: `APP` holds one number: the child of the fixture that runs the
+   candidate.
+
+3. Suspend that child:
+
+   ```sh
+   kill -STOP -- "-$APP"
+   ```
+
+   Result: The candidate window of computer A stops to change, and the fixture
+   stays in the foreground.
+
+4. On computer B, read the section **Computers** each 10 seconds. Do not wait
+   more than 45 seconds.
+
+   Result: In about half a minute, the name `Computer A` and its two rows go
+   away. Each follow panel of computer B shows the line of an ended stream, and
+   the cause is `the other computer is offline`.
+
+5. Continue that child:
+
+   ```sh
+   kill -CONT -- "-$APP"
+   ```
+
+   Result: In one minute or less, each sidebar shows `Computer A` with its two
+   rows again.
+
+6. Read the follow panels of computer B.
+
+   Result: Each follow panel follows again with no click, and the heartbeat
+   lines advance.
+
+### 6.22 ST22: Two programs of one computer
+
+This task is a best reading: no run recorded two Horizon programs with one
+device name. Both programs start on the test computer, with two state paths and
+two displays.
+
+1. Stop the candidate of computer A with Ctrl-C in the fixture terminal.
+
+   Result: The fixture and the candidate stop. The private home stays in the
+   state path.
+
+2. Copy the private home of computer A to a third state path:
+
+   ```sh
+   mkdir -p /var/tmp/hz-shared-c/data
+   cp -a /var/tmp/hz-shared-a/data/home /var/tmp/hz-shared-c/data/home
+   ```
+
+   Result: The third state path holds the device name, the settings and the SSH
+   files of computer A.
+
+3. Start computer A again with the command of setup step 5.
+
+   Result: The candidate window shows the two panels of computer A, and its
+   sidebar says `Server: in step`.
+
+4. Start the third program with the command of setup step 5 and the state path
+   `/var/tmp/hz-shared-c`.
+
+   Result: The fixture starts a second Horizon program with the device name of
+   computer A, and its sidebar says `Server: in step`.
+
+5. Read the sidebar of computer A.
+
+   Result: In a few seconds, the section **Machines** says `Server: in step`
+   and the line `Shared terminals: no link` shows under it, with the reason
+   `another Horizon of this computer holds the live link`.
+
+6. Read the section **Computers** of computer B for one minute.
+
+   Result: The section shows one `Computer A` with its two rows. No row goes
+   away and comes back, because the program that loses the link waits 60
+   seconds before its next attempt.
+
+7. Stop the third program with Ctrl-C in its fixture terminal.
+
+   Result: The fixture and the third program stop.
+
+8. Wait one minute, and read the section **Computers** of computer B.
+
+   Result: Computer A opens a new live link, and the follow panels of computer
+   B follow again with no click.
+
+### 6.23 ST23: The owner window closed with Keep Horizon running
+
+The close of the window and its ask are in
+[the keep-running procedure](keep-running-when-closed.md). This task proves
+that the share continues while the window of the owner is hidden.
+
+1. On computer A, open the Settings window and find the row **When the window
+   is closed** in the **General** tab.
+
+   Result: The row shows the three values **Ask**, **Keep Horizon running** and
+   **Quit Horizon**.
+
+2. Select **Keep Horizon running**, and press **Save**.
+
+   Result: The row keeps the value **Keep Horizon running**.
+
+3. On computer B, click the row `Live render heartbeat` of `Computer A`.
+
+   Result: A follow panel opens, and a new line shows each second.
+
+4. On computer A, close the main window with `alt+F4`.
+
+   > **CAUTION:** THE NEXT STEP TYPES IN A PROGRAM OF COMPUTER A. The program of
+   > a shared terminal runs with the rights of the person of computer A.
+
+   Result: The candidate window goes away at once, and no question shows. The
+   fixture stays in the foreground.
+
+5. Read the Device panel of computer A.
+
+   Result: The Device panel shows the desktop of computer A with no candidate
+   window.
+
+6. On computer B, read the follow panel of `Live render heartbeat` for ten
+   seconds.
+
+   Result: Each second, the follow panel shows a new line. The window of the
+   owner draws no frame, so the share pump moves each byte.
+
+7. On computer B, run `echo hidden-share` in the follow panel of `Device input
+   test`.
+
+   Result: The follow panel shows the command and the line `hidden-share`. A
+   start of Horizon shows the hidden window again, as
+   [the keep-running procedure](keep-running-when-closed.md#63-enter-keeps-horizon-running)
+   says; this task proves the share of the hidden window alone.
+
+8. Stop the fixture of computer A with Ctrl-C in its terminal.
+
+   Result: The candidate ends. Each follow panel of computer B shows the line
+   of an ended stream, and the cause is `the other computer is offline`.
 
 ## 7. Pass criteria
 
@@ -885,7 +1128,9 @@ must move each byte then.
   follow panel has no restart entry.
 - ST5: the follow panel shows the output of the owner each second.
 - ST6: the keys of the two computers go to one program.
-- ST7: the follower gets the new grid of the owner and does not change it.
+- ST7: the program takes the grid of the computer that typed last, the window
+  of the owner draws that grid and cuts it, and a key of the owner takes the
+  grid of its own body back.
 - ST8: the follower shows the screen below the alternate screen after the
   program leaves it.
 - ST9: with typing off, the chip says `view only` and the keys of the follower
@@ -907,6 +1152,14 @@ must move each byte then.
 - ST18: while the window of the owner is minimized, the follower gets the
   output, its keys go to the program, the terminal of the owner answers the
   question of a program, and a new follow panel gets a screen.
+- ST19: a new follower reads the lines above the viewport, and a screen that is
+  not fresh keeps them.
+- ST20: the chip of a panel names the computer that typed, for 2 seconds.
+- ST21: a computer that the desktop stops leaves the list in about half a
+  minute, and it returns with a new link.
+- ST22: one device name in two programs leaves one entry in the list, it does
+  not flap, and the program that loses says so.
+- ST23: a window that is hidden keeps its programs and its share.
 
 ## 8. Cleanup
 
