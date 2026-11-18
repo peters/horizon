@@ -763,6 +763,34 @@ fn typed_event(link: &StandIn, panel: &str, bytes: &[u8]) {
 }
 
 #[test]
+fn the_chip_of_a_watched_panel_says_who_types_and_goes_back_after_two_seconds() {
+    let mut window = Window::new();
+    let owner = window.owner(OFFSCREEN);
+    let follow = window.follow(owner);
+    window.shows(follow, "READY");
+    let id = window.id(owner);
+    window.until("the chip of the owner panel", |app| {
+        chip_of(app, owner).as_deref() == Some("seen by Here")
+    });
+    assert!(
+        window.app.shared_terminals.found.chips.contains_key(&id),
+        "the owner panel is watched"
+    );
+
+    // The bytes of another computer reach the program, and the chip says who.
+    typed_event(&window.link, &id, b"who\n");
+    window.shows(owner, "GOT:who");
+    window.until("the chip of the typed bytes", |app| {
+        chip_of(app, owner).as_deref() == Some("typed by Unknown")
+    });
+
+    // Two seconds after the last bytes the chip names the followers again.
+    window.until("the chip of the followers", |app| {
+        chip_of(app, owner).as_deref() == Some("seen by Here")
+    });
+}
+
+#[test]
 fn typed_bytes_reach_a_program_only_through_the_four_checks_of_the_owner() {
     let mut window = Window::new();
     let owner = window.owner(OFFSCREEN);
@@ -979,11 +1007,11 @@ fn the_share_of_a_panel_goes_on_after_a_restart_of_its_terminal() {
     window.write(follow, b"after\n");
     window.shows(owner, "GOT:after");
     window.shows(follow, "GOT:after");
-    assert_eq!(
-        chip_of(&window.app, owner).as_deref(),
-        Some("seen by Here"),
-        "the panel is still watched"
-    );
+    // The panel is still watched: its chip names the follower again after the
+    // bytes of that follower.
+    window.until("the chip of the owner", |app| {
+        chip_of(app, owner).as_deref() == Some("seen by Here")
+    });
 }
 
 #[test]

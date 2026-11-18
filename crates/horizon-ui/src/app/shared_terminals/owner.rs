@@ -20,6 +20,9 @@ const NEXT_SCREEN: Duration = Duration::from_millis(250);
 /// parts. A screen above it is not sent, and its followers keep the screen that
 /// they have: the cells of a very large grid cannot be bounded by the link.
 const KEPT_SCREEN_BYTES: usize = 8 * 1024 * 1024;
+/// How long the chip of a watched panel says who typed after the last bytes of
+/// that computer arrived.
+const TYPED_CHIP: Duration = Duration::from_secs(2);
 
 /// Why the next screen of a watched panel goes out, which decides what it holds
 /// and who takes it.
@@ -57,6 +60,11 @@ pub(super) struct Watched {
     /// The screen that this panel still owes the link, while its bytes do not
     /// fit at once. No output follows a screen that is not whole.
     owed: Option<Owed>,
+    /// The computer whose bytes arrived last, and when: the chip says so for
+    /// [`TYPED_CHIP`] after them.
+    typed: Option<(Instant, String)>,
+    /// The chip of the followers, for the time after those bytes.
+    chip: String,
 }
 
 /// The bytes of one screen that the link takes in parts, and how far they went.
@@ -163,6 +171,12 @@ impl Watched {
     }
 }
 
+/// The name of the computer that typed, for the chip: its label, or its device
+/// name, cut and cleaned as each other text of another computer.
+fn typed_name<'a>(from: &'a str, label: &'a str) -> &'a str {
+    Some(label).filter(|label| !label.is_empty()).unwrap_or(from)
+}
+
 /// The chip of a watched panel: the computer that watches it, or how many do.
 fn watched_chip(watchers: &[LiveWatcher]) -> String {
     match watchers {
@@ -183,6 +197,15 @@ impl Run {
             let listed = sent.iter().any(|panel| panel.id == *id);
             if let Some(own) = own.filter(|_| listed && !watch.devices.is_empty()) {
                 watch.drain(link, id, &own.source, now);
+                let overdue = watch
+                    .typed
+                    .as_ref()
+                    .is_some_and(|(at, _)| now.saturating_duration_since(*at) >= TYPED_CHIP);
+                if overdue {
+                    watch.typed = None;
+                    *changed = true;
+                    chips.insert(id.clone(), watch.chip.clone());
+                }
                 return true;
             }
             if let Some(own) = own {
@@ -210,6 +233,8 @@ impl Run {
             screen_at: None,
             second_at: None,
             owed: None,
+            typed: None,
+            chip: String::new(),
         });
         let devices: Vec<String> = watchers.iter().map(|watcher| shown(&watcher.device)).collect();
         let joined = devices.iter().any(|device| !watch.devices.contains(device));
@@ -221,22 +246,32 @@ impl Run {
             watch.screen_at = Some((now, Why::Asked));
         }
         watch.devices = devices;
-        self.found.chips.insert(id.to_owned(), watched_chip(watchers));
+        watch.chip = watched_chip(watchers);
+        self.found.chips.insert(id.to_owned(), watch.chip.clone());
         self.changed = true;
     }
 
     /// Writes what another computer typed into the program of the panel `id`. The
     /// link gives the event as the server sent it, so this is the last guard: both
     /// switches are on, the list that the link has names the panel, and a panel of
-    /// this computer has that id. A follow panel has no source and is none.
-    pub(super) fn typed(&self, id: &str, bytes: &[u8]) {
-        let wanted = &self.wanted;
-        let allowed = wanted.sharing && wanted.typing;
+    /// this computer has that id. A follow panel has no source and is none. The
+    /// chip of a panel that somebody watches then says who types, for
+    /// [`TYPED_CHIP`] after the last bytes.
+    pub(super) fn typed(&mut self, id: &str, bytes: &[u8], from: &str, label: &str, now: Instant) {
+        let allowed = self.wanted.sharing && self.wanted.typing;
         let listed = self.sent.iter().any(|panel| panel.id == id);
-        let own = wanted.panels.iter().find(|own| own.entry.id == id);
-        if let Some(own) = own.filter(|_| allowed && listed) {
-            own.source.write_input(bytes);
-        }
+        let own = self.wanted.panels.iter().find(|own| own.entry.id == id);
+        let Some(own) = own.filter(|_| allowed && listed) else {
+            return;
+        };
+        own.source.write_input(bytes);
+        let Some(watch) = self.watched.get_mut(id) else {
+            return;
+        };
+        let name = shown(typed_name(from, label));
+        self.found.chips.insert(id.to_owned(), format!("typed by {name}"));
+        watch.typed = Some((now, name));
+        self.changed = true;
     }
 
     /// Ends every watch, as the end of the link does.

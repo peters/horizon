@@ -279,7 +279,12 @@ impl Run {
                 watchers,
                 refresh,
             } => self.watchers(&panel, &watchers, refresh, now),
-            LiveEvent::Typed { panel, data, .. } => self.typed(&panel, &data.0),
+            LiveEvent::Typed {
+                panel,
+                from,
+                label,
+                data,
+            } => self.typed(&panel, &data.0, &from, &label, now),
             stream => self.stream(stream),
         }
     }
