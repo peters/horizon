@@ -14,7 +14,8 @@ use horizon_core::secret_store::SecretStore;
 use horizon_core::{PanelId, RuntimeState, StartupDecision};
 use horizon_sync::{ServerInfo, Store, Supervisor, SupervisorConfig, run_server_on_unix_socket};
 
-use super::{OFFSCREEN, PATIENCE, PROGRAM, above_the_viewport, follower_of, frames_until, grid, text};
+use super::history::above_the_viewport;
+use super::{OFFSCREEN, PATIENCE, PROGRAM, follower_of, frames_until, grid, text};
 use crate::app::HorizonApp;
 use crate::app::server_sync::ServerSync;
 use crate::app::test_support::run_app_frame;
