@@ -145,11 +145,10 @@ fn texts_with_centre(output: &egui::FullOutput) -> Vec<(&str, egui::Pos2)> {
 /// nearest to the heading, because the toolbar of the window says the word too.
 fn button(output: &egui::FullOutput, label: &str, heading: &str) -> egui::Pos2 {
     let drawn = texts_with_centre(output);
-    let anchor = drawn
-        .iter()
-        .find(|(text, _)| *text == heading)
-        .map(|(_, centre)| *centre)
-        .unwrap_or_else(|| panic!("the ask draws {heading}: {:?}", texts(output)));
+    let anchor = drawn.iter().find(|(text, _)| *text == heading).map_or_else(
+        || panic!("the ask draws {heading}: {:?}", texts(output)),
+        |(_, centre)| *centre,
+    );
     drawn
         .iter()
         .filter(|(text, _)| *text == label)

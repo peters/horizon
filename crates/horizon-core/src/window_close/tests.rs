@@ -37,8 +37,8 @@ fn the_lines_of_the_ask_count_what_runs() {
     let nothing = RunningPrograms::default();
     assert!(nothing.is_empty(), "nothing runs");
     assert_eq!(nothing.programs_line(), None);
-    assert_eq!(nothing.machines_line(), None);
-    assert_eq!(nothing.kept_agents_line(), None);
+    assert!(nothing.outliving_lines(false).is_empty(), "nothing outlives the window");
+    assert!(nothing.outliving_lines(true).is_empty());
     assert_eq!(nothing.quit_question(), "Quit Horizon?");
 
     let one = RunningPrograms {
@@ -75,18 +75,16 @@ fn the_lines_of_the_ask_count_what_runs() {
         on_machines: 2,
         ..RunningPrograms::default()
     };
-    assert_eq!(
-        machines.machines_line().as_deref(),
-        Some("2 panels run on a machine and keep running there.")
-    );
+    let machine_line = "2 panels run on a machine and keep running there.".to_owned();
+    assert_eq!(machines.outliving_lines(false), vec![machine_line.clone()]);
+    assert_eq!(machines.outliving_lines(true), vec![machine_line]);
     assert_eq!(
         RunningPrograms {
             on_machines: 1,
             ..RunningPrograms::default()
         }
-        .machines_line()
-        .as_deref(),
-        Some("1 panel runs on a machine and keeps running there.")
+        .outliving_lines(false),
+        ["1 panel runs on a machine and keeps running there.".to_owned()]
     );
 
     let kept = RunningPrograms {
@@ -94,11 +92,17 @@ fn the_lines_of_the_ask_count_what_runs() {
         kept_agents: 1,
         ..RunningPrograms::default()
     };
+    let kept_line = "Agent programs that are kept through a restart come back at the next start.".to_owned();
     assert_eq!(
-        kept.kept_agents_line().as_deref(),
-        Some("Agent programs that are kept through a restart come back at the next start.")
+        kept.outliving_lines(true),
+        vec![kept_line],
+        "a restart brings the kept agent programs back"
     );
-    assert_eq!(one_agent.kept_agents_line(), None, "no program is kept");
+    assert!(
+        kept.outliving_lines(false).is_empty(),
+        "a close that keeps the window ends no program, so nothing comes back"
+    );
+    assert!(one_agent.outliving_lines(true).is_empty(), "no agent program is kept");
 }
 
 /// The terminal panels of this computer count, with the agents among them; an

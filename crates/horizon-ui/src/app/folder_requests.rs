@@ -305,6 +305,7 @@ mod tests {
         let (_temp, ctx, mut app) = waiting_app();
         let root = app.session_store.home().root().to_path_buf();
         holds_a_lease(&mut app);
+        app.template_config.features.when_window_closes = horizon_core::WindowCloseSetting::Quit;
 
         let asking_root = root.clone();
         let caller = std::thread::spawn(move || {
