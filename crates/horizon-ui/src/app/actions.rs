@@ -64,14 +64,6 @@ enum PresetPickerAction {
     },
 }
 
-fn inherit_workspace_cwd(options: &mut PanelOptions, workspace_cwd: Option<&PathBuf>) {
-    if options.cwd.is_none()
-        && let Some(workspace_cwd) = workspace_cwd
-    {
-        options.cwd = Some(workspace_cwd.clone());
-    }
-}
-
 /// Align attached workspaces into a horizontal row in sidebar order.
 pub(super) fn align_attached_workspaces(
     board: &mut horizon_core::Board,
@@ -138,36 +130,9 @@ mod tests {
         command_palette_panel_entries, command_palette_preset_entries, command_palette_workspace_entries,
         detached_workspace_ids, fullscreen_panel_is_renderable,
     };
-    use super::{
-        DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, inherit_workspace_cwd,
-        workspace_cwd,
-    };
+    use super::{DetachedWorkspaceViewportState, add_panel_position, align_attached_workspaces, workspace_cwd};
     use crate::app::settings::SETTINGS_BAR_HEIGHT;
     use crate::app::{SIDEBAR_WIDTH, TOOLBAR_HEIGHT};
-
-    #[test]
-    fn inherit_workspace_cwd_populates_missing_panel_cwd() {
-        let mut options = PanelOptions::default();
-        let workspace_path = PathBuf::from("/repo");
-
-        inherit_workspace_cwd(&mut options, Some(&workspace_path));
-
-        assert_eq!(options.cwd, Some(workspace_path));
-    }
-
-    #[test]
-    fn inherit_workspace_cwd_preserves_explicit_panel_cwd() {
-        let panel_path = PathBuf::from("/panel");
-        let workspace_path = PathBuf::from("/repo");
-        let mut options = PanelOptions {
-            cwd: Some(panel_path.clone()),
-            ..PanelOptions::default()
-        };
-
-        inherit_workspace_cwd(&mut options, Some(&workspace_path));
-
-        assert_eq!(options.cwd, Some(panel_path));
-    }
 
     #[test]
     fn workspace_cwd_reads_workspace_default_directory() {

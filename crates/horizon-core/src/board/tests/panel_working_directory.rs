@@ -205,6 +205,12 @@ fn a_panel_with_its_own_directory_keeps_it_when_the_workspace_directory_changes(
         )
         .expect("panel with its own directory");
 
+    assert_eq!(
+        board.panel(own_panel).expect("panel").launch_cwd.as_ref(),
+        Some(&own_directory),
+        "a panel that names its directory starts in it, not in the one of its workspace"
+    );
+
     board.set_workspace_directory(workspace_id, Some(&other_directory));
 
     assert_eq!(

@@ -5,7 +5,7 @@ use horizon_core::{
 };
 
 use super::support::preset_panel_options;
-use super::{add_panel_position, inherit_workspace_cwd, workspace_cwd};
+use super::{add_panel_position, workspace_cwd};
 
 /// Whether a new panel of a preset asks where it runs before it opens: only on
 /// this computer, and only when the directory of the workspace is not there. A
@@ -61,8 +61,8 @@ impl HorizonApp {
         workspace_id: WorkspaceId,
         beside: Option<PanelId>,
     ) -> horizon_core::Result<PanelId> {
-        let workspace_cwd = workspace_cwd(&self.board, workspace_id);
-        inherit_workspace_cwd(&mut options, workspace_cwd.as_ref());
+        // The board gives a panel without a directory of its own the directory of
+        // its workspace, on every path that creates one.
         normalize_new_panel_resume(&mut options);
         options.transcript_root.clone_from(&self.transcript_root);
         let kind = options.kind;
