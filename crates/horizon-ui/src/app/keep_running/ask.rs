@@ -1,10 +1,9 @@
 //! The ask that a close of the main window, or `Quit Horizon`, shows while
 //! programs run.
 //!
-//! The ask draws what its counts say, and those counts came with the request: no
-//! frame of the ask counts a panel, and a window without an ask returns here at
-//! once. The first action of a close is the one that Enter takes, the second is
-//! the dangerous one, and a press outside the ask or the escape key cancels it.
+//! The ask draws what its counts say, and those counts came with the request. The
+//! first action of a close is the one that Enter takes, the second is the
+//! dangerous one, and a press outside the ask or the escape key cancels it.
 
 use egui::{Context, Key, Order, RichText};
 

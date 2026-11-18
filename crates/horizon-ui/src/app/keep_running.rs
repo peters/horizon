@@ -1,21 +1,18 @@
 //! What a close of the main window does, and the ask that comes before it.
 //!
-//! The setting `features.when_window_closes` names one of three: Horizon asks
-//! (the default), keeps running behind a hidden window, or quits. A kept window
-//! ends nothing: the terminals, the agent programs, the link to a server and the
-//! shared terminals go on, and the board of the session is saved at the hide. A
-//! workspace window of its own closes as it did.
+//! A kept window ends nothing: the terminals, the agent programs, the link to a
+//! server and the shared terminals go on, and the board of the session is saved
+//! at the hide. A workspace window of its own closes as it did.
 //!
 //! The window is hidden with [`egui::ViewportCommand::Visible`], which egui-winit
-//! passes to `set_visible` of winit 0.30.13. On X11 that unmaps the window and
-//! maps it again with `XMapRaised` to show it; on macOS it orders the window out
-//! and in; on Wayland `set_visible` does nothing, so there a close ends Horizon
-//! and asks nothing.
+//! passes to `set_visible` of winit 0.30.13: on X11 that unmaps the window and
+//! maps it again with `XMapRaised`, on macOS it orders the window out and in, and
+//! on Wayland it does nothing, so there a close ends Horizon and asks nothing.
 //!
 //! A hidden window draws no frame, so this work is a frame's work: the close
 //! request of a window that the desktop shows, and the pass that a hidden window
-//! runs without a frame ([`super::undrawn`]). The ask counts what runs once, when
-//! the close request comes, and no frame of a window without an ask pays for it.
+//! runs without a frame ([`super::undrawn`]). The ask counts once, when the close
+//! request comes.
 
 use std::time::Duration;
 

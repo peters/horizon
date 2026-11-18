@@ -3,9 +3,8 @@
 //!
 //! The setting `features.when_window_closes` is a choice of three: Horizon asks
 //! (the default), keeps running behind a hidden window, or quits. The ask counts
-//! what runs once, when the request comes, and speaks from these words, so the
-//! two dialogs say the same thing with the same numbers. The setting says how
-//! this computer runs its programs, so it stays with this computer.
+//! what runs once, when the request comes, and speaks from these words. The
+//! setting says how this computer runs its programs, so it stays here.
 
 use serde::{Deserialize, Serialize};
 
