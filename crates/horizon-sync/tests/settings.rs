@@ -130,12 +130,13 @@ except Exception:
 ";
 
 /// A relay that holds the first push of the settings until the test writes
-/// [`RELEASE`], and then the answer of changes that the server gives until the test
-/// writes [`RELEASE_PULL`].
+/// [`RELEASE`], and then every answer of changes until the test writes
+/// [`RELEASE_PULL`]. Once the test writes [`ARM_ANSWER`] it holds the answer of a push
+/// as well, so an intent that the test reads stays in the queue of the computer.
 ///
 /// A link sends its request for changes before the push of a queue that a worker
 /// filled, so the answer of that request carries the row of the push as soon as the
-/// server applied it. The relay holds the answer instead of the request, and the
+/// server applied it. The relay holds that answer instead of the request, and the
 /// version that the push wrote is then not in the mirror of the computer until the
 /// test releases it.
 const HELD_PULL_RELAY: &str = "\
@@ -152,6 +153,7 @@ held = os.path.join(directory, 'held.log')
 release = os.path.join(directory, 'release')
 pull_release = os.path.join(directory, 'release-pull')
 state = {'released': False}
+arm = os.path.join(directory, 'arm-answer')
 
 
 def wait_until(path):
@@ -201,7 +203,12 @@ try:
                 break
             frame = buffer[:4 + length]
             buffer = buffer[4 + length:]
+            hold = False
             if state['released'] and b'\"changes\":' in frame:
+                hold = True
+            elif state['released'] and b'\"pushed\":' in frame and os.path.exists(arm):
+                hold = True
+            if hold:
                 with open(held, 'a') as log:
                     log.write('request\\n')
                 wait_until(pull_release)
@@ -981,16 +988,23 @@ fn a_save_before_the_first_pull_back_names_the_version_that_its_push_applied() {
     // The push reached the server and its answer is applied; the request that would
     // bring the row of it back waits in the stand-in.
     held_request(&b);
-    eventually("the answer of the push of this computer", || {
-        matches!(b.handle().state(), LinkState::Behind).then_some(())
-    });
+    // The answer of the push settles the intents of it in the same lock that puts the
+    // rows of them in the mirror, so the queue of this computer without an intent says
+    // that the row of the push is there. No state of the link says it: a link that
+    // started again reads `Behind` as well, and the answer of changes that could bring
+    // the row again is held.
     let applied = server
         .setting("appearance")
         .expect("the push of the appearance reached the server")
         .0;
 
     // The person changes the theme in that window, before the row of the push comes
-    // back.
+    // back. The relay holds the answer of that push, so the intent of the save is in
+    // the queue when the test reads it.
+    eventually("the queue of this computer without the intents of the push", || {
+        b.settings().view().pending().is_empty().then_some(())
+    });
+    arm_answer(&b);
     b.save(&config_with_theme(AppearanceTheme::Light));
     assert_eq!(
         b.queued_seen("appearance"),
@@ -1696,7 +1710,12 @@ fn a_local_section_never_leaves_the_computer_even_when_it_is_asked_for() {
             &["window".to_owned(), "server".to_owned(), "version".to_owned()],
         )
         .expect("no intent of a local section");
-    assert!(b.queued_settings().is_empty(), "no local section enters the queue");
+    // The link writes the queue file after it publishes the state that a frame reads,
+    // and a busy computer writes that file in a second or more: the file is waited
+    // for, and not read at the instant of the state.
+    eventually("the queue of this computer without a section", || {
+        b.queued_settings().is_empty().then_some(())
+    });
     let sections = server.sections();
     for local in ["window", "server", "version"] {
         assert!(!sections.contains(&local.to_owned()), "{local} stays on this computer");
