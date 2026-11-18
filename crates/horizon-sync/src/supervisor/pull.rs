@@ -50,7 +50,12 @@ pub(super) fn accept_pushed(handle: &SyncHandle, reply: &PushReply) {
                 continue;
             };
             if intent.op.kind() == crate::intent::KIND_SETTING {
-                sections.push((intent.op.object_id().to_owned(), refusal.version()));
+                // The body of the intent is the value of the person, so the row that
+                // decides the refusal is compared with it and not with the store: the
+                // row may already be in the store when the refusal arrives.
+                if let Op::SettingPut { id, body } = &intent.op {
+                    sections.push((id.clone(), refusal.version(), body.clone()));
+                }
             } else {
                 ids.push(intent.op.object_id().to_owned());
             }

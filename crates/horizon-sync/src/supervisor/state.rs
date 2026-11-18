@@ -242,11 +242,11 @@ pub(crate) struct SyncState {
     /// one notice and not one for each answer of the server.
     pub(super) settings_refused: BTreeMap<String, u64>,
     /// The sections whose push the server refused, with the version that decided
-    /// the refusal. The row of that version says whether the value of this
-    /// computer differs from the value of the server at all: a refusal alone is no
-    /// loss, because a computer that pushed the value that the server already
-    /// holds kept everything.
-    pub(super) settings_lost_pending: BTreeMap<String, u64>,
+    /// the refusal and the body that this computer pushed. The row of that version
+    /// says whether the value of this computer differs from the value of the server
+    /// at all: a refusal alone is no loss, because a computer that pushed the value
+    /// that the server already holds kept everything.
+    pub(super) settings_lost_pending: BTreeMap<String, (u64, serde_json::Value)>,
     /// The last sentence about a section that this computer did not apply.
     pub(super) settings_refusal: Option<String>,
     /// The file of the mirror of the settings.

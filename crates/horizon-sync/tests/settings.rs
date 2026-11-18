@@ -1288,6 +1288,56 @@ fn a_lost_push_that_names_two_settings_says_the_settings() {
 }
 
 #[test]
+fn a_row_that_arrives_before_the_refusal_of_its_push_still_says_that_the_setting_lost() {
+    // The answer of a push travels beside the request for changes that the same turn
+    // sent, and the answer of that request can come first. The row of another computer
+    // is then in the store before the refusal that names its version, and the section
+    // that waits for the row of that version has no row left to come: without a
+    // decision on the row that this computer already applied, the person never reads
+    // that a value of theirs lost.
+    let home = tempfile::tempdir().expect("a directory");
+    let mut server = Server::start(&home.path().join("server"));
+    let mut b = Computer::start_held_answer(&home.path().join("b"), &Config::default(), &server.socket);
+    in_step(&b);
+
+    server.stop();
+    away(&b);
+    let mut light = config_with_theme(AppearanceTheme::Light);
+    light.overlays.minimap_width = 500.0;
+    b.save(&light);
+    eventually("the two changes in the queue of this computer", || {
+        (b.queued_settings().contains(&"appearance".to_owned()) && b.queued_settings().contains(&"overlays".to_owned()))
+            .then_some(())
+    });
+    let mut dark = config_with_theme(AppearanceTheme::Dark);
+    dark.overlays.minimap_width = 620.0;
+    push_of_another_computer(&server, "other-2c", 1, "appearance", &dark);
+    push_of_another_computer(&server, "other-2c", 2, "overlays", &dark);
+    // The answer of the push of this computer is held, so the rows of the other
+    // computer reach the store before the refusal that names their versions.
+    arm_answer(&b);
+    server.restart();
+    held_answer(&b);
+    eventually("the rows of the other computer in the store", || {
+        (b.theme() == AppearanceTheme::Dark && b.stored().overlays.minimap_width.to_bits() == 620.0_f32.to_bits())
+            .then_some(())
+    });
+    release_answer(&b);
+    settled(&b);
+
+    // The row of the refused version comes back with the answer that the mark of the
+    // refusal asks for, and that answer is what decides the section: the line is read
+    // after it and not at the instant that the link is in step again.
+    let line = eventually("the line of the settings that lost", || b.handle().settings_lost());
+    assert!(
+        line.contains("for the settings appearance, overlays, so this computer takes that value."),
+        "the line names both settings, in the plural: {line}"
+    );
+    b.stop();
+    server.stop();
+}
+
+#[test]
 fn the_first_link_takes_the_value_of_the_server_and_keeps_the_own_one_in_a_backup() {
     let home = tempfile::tempdir().expect("a directory");
     let mut server = Server::start(&home.path().join("server"));

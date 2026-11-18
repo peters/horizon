@@ -255,26 +255,37 @@ fn store_section(rows: &BTreeMap<String, String>, section: &str, defaults: &Conf
 /// keeps its own value; a row with another content replaces the row and names its
 /// section in one line for the person.
 fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
-    let (arriving, versions, mut faults, decided) = {
+    let (arriving, versions, mut faults, decided, lost) = {
         let state = handle.lock();
         let mut arriving = BTreeMap::new();
         let mut versions = BTreeMap::new();
         let mut faults = BTreeMap::new();
         let mut decided = BTreeSet::new();
+        let mut lost: Vec<String> = Vec::new();
         for (section, row) in &state.settings {
             if !settings_sync::is_shared(section) {
                 continue;
+            }
+            // This row is the one that a refusal named, so its content decides
+            // whether this computer lost a value at all. A row that this computer
+            // applied before the refusal came is decided here too: the answer that
+            // carries the row of a refused version can arrive before the refusal
+            // itself, and a section that waits for a row that no answer brings again
+            // would leave the person without the line that says that a value lost.
+            if let Some((refused_at, pushed)) = state.settings_lost_pending.get(section)
+                && row.version >= *refused_at
+            {
+                let held = server_section(section, &row.body);
+                let pushed = server_section(section, pushed);
+                decided.insert(section.clone());
+                if !matches!((held, pushed), (Ok(held), Ok(pushed)) if settings_sync::covers(&held, &pushed)) {
+                    lost.push(section.clone());
+                }
             }
             if state.settings_applied.get(section) == Some(&row.version)
                 || state.settings_refused.get(section) == Some(&row.version)
             {
                 continue;
-            }
-            // This row is the one that the refusal named, so its content decides
-            // whether this computer lost a value at all.
-            let refused_at = state.settings_lost_pending.get(section);
-            if refused_at.is_some_and(|refused_at| row.version >= *refused_at) {
-                decided.insert(section.clone());
             }
             match server_section(section, &row.body) {
                 Ok(value) => {
@@ -286,7 +297,7 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
                 }
             }
         }
-        (arriving, versions, faults, decided)
+        (arriving, versions, faults, decided, lost)
     };
     // A section whose content is the content of this computer is not a change of
     // this computer: it takes the version of the server and writes no row, so no
@@ -296,15 +307,11 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
     let defaults = Config::default();
     let mut applied: BTreeMap<String, u64> = BTreeMap::new();
     let mut writing: BTreeMap<String, Value> = BTreeMap::new();
-    let mut lost: Vec<String> = Vec::new();
     for (section, value) in arriving {
         let own = store_section(&local, &section, &defaults);
         if own.is_some_and(|own| settings_sync::covers(&value, &own)) {
             applied.insert(section.clone(), versions[&section]);
             continue;
-        }
-        if decided.contains(&section) {
-            lost.push(section.clone());
         }
         writing.insert(section, value);
     }
@@ -327,7 +334,7 @@ fn apply_rows(handle: &SyncHandle, store: &ConfigStore) {
             }
         }
     }
-    if applied.is_empty() && faults.is_empty() {
+    if applied.is_empty() && faults.is_empty() && decided.is_empty() {
         return;
     }
     let mut lines = Vec::new();
@@ -424,7 +431,7 @@ fn enqueue_value(state: &mut SyncGuard<'_>, section: &str, config_version: u32, 
 
 /// One section whose push the server refused, with the version that decided the
 /// refusal. A refusal without a version decided the section without a row.
-pub(super) type RefusedSection = (String, Option<u64>);
+pub(super) type RefusedSection = (String, Option<u64>, Value);
 
 /// Writes the line about the settings whose value this computer lost to another
 /// computer: one sentence, and the one setting or the several that it names.
@@ -460,16 +467,18 @@ pub(super) fn refuse_settings(handle: &SyncHandle, refused: &[RefusedSection], r
     if let Some(version) = rewind {
         state.client.replay_before(version);
     }
-    for (section, version) in refused {
+    for (section, version, pushed) in refused {
         match version {
             Some(version) => {
-                state.settings_lost_pending.insert(section.clone(), *version);
+                state
+                    .settings_lost_pending
+                    .insert(section.clone(), (*version, pushed.clone()));
             }
             None => decided_now.push(section.clone()),
         }
     }
     drop(state);
-    for (section, _) in refused {
+    for (section, _, _) in refused {
         tracing::info!(section = %section, "the server refused a setting of this computer");
     }
     if !decided_now.is_empty() {
