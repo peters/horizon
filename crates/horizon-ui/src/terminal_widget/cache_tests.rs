@@ -493,3 +493,126 @@ fn a_terminal_that_prints_without_end_asks_for_no_frame_of_its_own() {
         "output that no key press of a person waits for asks for no frame"
     );
 }
+
+/// The clip rectangles of the drawn texts that contain `text`.
+fn clips_of_text(output: &egui::FullOutput, text: &str) -> Vec<Rect> {
+    output
+        .shapes
+        .iter()
+        .filter(|shape| matches!(&shape.shape, egui::Shape::Text(drawn) if drawn.galley.text().contains(text)))
+        .map(|shape| shape.clip_rect)
+        .collect()
+}
+
+impl TerminalHarness {
+    /// One frame that offers `events` to the terminal, and its shapes.
+    fn frame_shapes(&mut self, events: Vec<Event>) -> egui::FullOutput {
+        let keyboard_events = crate::input::terminal_input_events(&events, Vec::new());
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 300.0))),
+            events,
+            ..RawInput::default()
+        };
+        self.ctx
+            .run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    TerminalView::new(&mut self.panel, Some(&mut self.cache), 0.0).show(
+                        ui,
+                        true,
+                        true,
+                        &mut self.selection_drag,
+                        TerminalKeyboardContext {
+                            keyboard_events: &keyboard_events,
+                            primary_selection: &self.primary_selection,
+                            clipboard_images: &self.clipboard_images,
+                            local_ssh_reconnect_enabled: false,
+                            notice_action: &mut PanelNoticeAction::default(),
+                            take_keyboard_focus: false,
+                        },
+                    );
+                });
+            })
+            .discard_textures()
+    }
+}
+
+// The fixture reports the cell of every mouse report that it reads, without the
+// bytes that would move the cursor of its own screen.
+const REPORT_CHILD_ARGS: &str = r#"stty -echo -icanon min 1 time 0 || exit 1
+printf '\033[?1003h\033[?1006hREADY\n'
+while IFS= read -r -n 1 byte; do
+  case "$byte" in
+    ';'|'M'|'m'|[0-9]) printf '%s' "$byte";;
+  esac
+done
+"#;
+
+/// A panel whose program a follower of another computer holds the grid of draws
+/// that grid from the top left of a larger body, asks for no resize, and reports
+/// the cell of that grid under the pointer. The press of this computer then takes
+/// the size back, because a key or a pointer button of the owner ends the hold.
+/// Mutation: draw the grid of the body instead of `shown_grid` (the report names
+/// a cell beyond the held grid), or call `resize` for a held grid (the body's
+/// grid arrives at the program and `rows` changes).
+#[test]
+fn a_panel_that_holds_a_foreign_grid_draws_it_and_keeps_its_pointer_in_it() {
+    let mut harness = TerminalHarness::with_child(REPORT_CHILD_ARGS);
+    harness.wait_until_screen_shows("READY");
+    harness.wait_for_mouse_mode();
+    let source = harness
+        .panel
+        .terminal()
+        .and_then(horizon_core::Terminal::share_source)
+        .expect("a panel of this computer shares its terminal");
+    assert!(source.hold_grid(40, 8), "the grid changes");
+    let grid = harness.panel.terminal().expect("terminal").shown_grid();
+    assert_eq!(grid, (8, 40), "the terminal takes the grid of the follower");
+
+    let output = harness.frame_shapes(Vec::new());
+    let clips = clips_of_text(&output, "READY");
+    assert!(!clips.is_empty(), "the screen of the program is drawn");
+    let origin = clips[0].min;
+    for clip in clips {
+        assert_eq!(
+            clip.min, origin,
+            "each row of the grid starts at the left edge of the body"
+        );
+    }
+    assert_eq!(
+        harness.panel.terminal().expect("terminal").rows(),
+        16,
+        "the widget asks no resize of a panel that holds a foreign grid"
+    );
+
+    // A press far outside the grid of the follower reports the last cell of that
+    // grid, and not a cell of the larger body.
+    let metrics = super::grid_metrics(&harness.ctx);
+    let beyond = origin + Vec2::new(50.5 * metrics.char_width, 12.5 * metrics.line_height);
+    harness.frame_shapes(vec![Event::PointerMoved(beyond)]);
+    harness.frame_shapes(vec![press(beyond, true)]);
+    harness.frame_shapes(vec![press(beyond, false)]);
+    harness.wait_until_screen_shows("0;40;8M");
+    assert!(
+        !text_of(&harness).contains("0;50;12"),
+        "no cell of the body reaches the program: {:?}",
+        text_of(&harness)
+    );
+    assert!(
+        !harness.panel.terminal().expect("terminal").shows_foreign_grid(),
+        "a button of the person of this computer ends the hold"
+    );
+}
+
+fn press(pos: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// The text of the screen of a harness.
+fn text_of(harness: &TerminalHarness) -> String {
+    harness.panel.terminal().expect("terminal").last_lines_text(20)
+}

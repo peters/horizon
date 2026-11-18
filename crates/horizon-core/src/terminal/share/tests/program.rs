@@ -351,3 +351,54 @@ fn a_share_source_gives_another_thread_the_screen_the_output_and_the_way_to_the_
         std::thread::sleep(Duration::from_millis(2));
     }
 }
+
+/// A share source gives the terminal a grid from the thread that shares it, and
+/// the program reads that grid: each new size of the grid prints it, as `stty
+/// size` does. The terminal then holds a foreign grid, so a resize of the body of
+/// the owner does nothing and the body pushes no size; the person of this
+/// computer takes the size back with one key.
+/// Mutation: drop `hold_grid`'s `Msg::Resize` (the program keeps 24 80), drop its
+/// `term.lock().resize` (the terminal keeps the grid of its body), drop the return
+/// of `resize_with_policy` for a held grid (the grid of the body arrives), or drop
+/// `release_grid` from `write_input` (the grid of the body never comes back).
+#[test]
+fn a_grid_from_the_sharing_thread_reaches_the_program_until_the_person_of_the_owner_types() {
+    let mut terminal = spawn(
+        "stty -echo; trap 'stty size' WINCH; printf 'READY\\n'; while :; do sleep 0.02; done",
+        24,
+        80,
+    );
+    let source = terminal.share_source().expect("a terminal that shares gives a source");
+    wait_for(&mut terminal, "READY");
+
+    // The thread of the pump of this computer gives the program the grid of the
+    // window of the follower, which prints it.
+    let held = std::thread::spawn(move || source.hold_grid(100, 30))
+        .join()
+        .expect("the pump");
+    assert!(held, "the grid changes");
+    assert_eq!(terminal.shown_grid(), (30, 100), "the terminal takes that grid");
+    assert!(terminal.shows_foreign_grid(), "the terminal holds a foreign grid");
+    wait_for(&mut terminal, "30 100");
+
+    // The body of the panel of the owner changes size, and the program hears
+    // nothing of it: the person of the owner did not type.
+    terminal.resize_immediately(40, 120, 8, 16);
+    assert_eq!(terminal.shown_grid(), (30, 100), "the hold keeps the grid");
+    std::thread::sleep(Duration::from_millis(400));
+    terminal.process_events();
+    assert!(
+        !terminal.viewport_text().iter().any(|line| line.contains("40 120")),
+        "the grid of the body reaches no program: {:?}",
+        terminal.viewport_text()
+    );
+
+    // The person of this computer types in the panel: the grid of the body goes
+    // to the terminal and to the program again.
+    terminal.write_input(b"\n");
+    assert!(!terminal.shows_foreign_grid(), "the hold ends with the key");
+    wait_for(&mut terminal, "24 80");
+    terminal.resize_immediately(40, 120, 8, 16);
+    wait_for(&mut terminal, "40 120");
+    assert!(terminal.shutdown_with_timeout(PATIENCE));
+}
